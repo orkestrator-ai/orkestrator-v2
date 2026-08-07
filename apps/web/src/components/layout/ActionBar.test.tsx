@@ -14,7 +14,11 @@ import * as realBackend from "@/lib/backend";
 import * as realKanbanStore from "@/stores/kanbanStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import type { Environment, PrState, Project } from "@/types";
-import type { KanbanTask, OpenCodeModelPreferences } from "@/lib/backend";
+import type {
+  KanbanTask,
+  OpenCodeModelCatalogSnapshot,
+  OpenCodeModelPreferences,
+} from "@/lib/backend";
 import {
   mockToastError as toastErrorMock,
   mockToastSuccess as toastSuccessMock,
@@ -77,6 +81,9 @@ const getOpencodeModelPreferencesMock = mock(
     favorite: [],
     variant: {},
   }),
+);
+const getCachedOpenCodeModelCatalogMock = mock(
+  async (): Promise<OpenCodeModelCatalogSnapshot | null> => null,
 );
 const setEnvironmentPRStoreMock = mock(() => {});
 const createTabMock = mock((_agent: string, _options?: unknown) => true);
@@ -559,6 +566,7 @@ mock.module("@/lib/backend", () => ({
   cancelLoopedReview: cancelLoopedReviewMock,
   deleteLoopedReviewWorkflow: deleteLoopedReviewMock,
   getOpencodeModelPreferences: getOpencodeModelPreferencesMock,
+  getCachedOpenCodeModelCatalog: getCachedOpenCodeModelCatalogMock,
 }));
 
 mock.module("@/stores/kanbanStore", () => ({
@@ -610,6 +618,8 @@ beforeEach(() => {
     favorite: [],
     variant: {},
   }));
+  getCachedOpenCodeModelCatalogMock.mockReset();
+  getCachedOpenCodeModelCatalogMock.mockImplementation(async () => null);
   createTabMock.mockReset();
   createTabMock.mockImplementation(() => true);
   startLoopedReviewMock.mockReset();
@@ -2787,6 +2797,45 @@ describe("ActionBar OpenCode review model preferences", () => {
     expect(getOpencodeModelPreferencesMock).toHaveBeenCalled();
   });
 
+  test("hydrates the project model cache while keeping Default selected", async () => {
+    getCachedOpenCodeModelCatalogMock.mockResolvedValueOnce({
+      schemaVersion: 2,
+      projectId: "project-1",
+      catalogVersion: "catalog-1",
+      updatedAt: "2026-08-07T12:00:00.000Z",
+      models: [{
+        id: "openrouter/cached-model",
+        name: "Cached Model",
+        provider: "openrouter",
+        variants: ["fast"],
+      }],
+    });
+    readyEnvironment();
+    render(<ActionBar />);
+
+    openReviewDialog();
+    chooseOpenCode();
+
+    await waitFor(() => {
+      expect(getCachedOpenCodeModelCatalogMock).toHaveBeenCalledWith("project-1");
+    });
+    expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      .toContain("Default");
+
+    openModelPicker();
+    await waitFor(() => expect(screen.getByText("openrouter/cached-model")).toBeTruthy());
+    expect(screen.getByText("Cached Model")).toBeTruthy();
+
+    fireEvent.keyDown(screen.getByPlaceholderText("Search models or providers…"), {
+      key: "Escape",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(createTabMock).toHaveBeenCalledWith(
+      "opencode",
+      expect.objectContaining({ initialAgentModel: "default" }),
+    );
+  });
+
   test("keeps review launches working when OpenCode preferences cannot be read", async () => {
     getOpencodeModelPreferencesMock.mockRejectedValueOnce(new Error("preferences unavailable"));
     seedOpenCodeCatalog();
@@ -2835,7 +2884,7 @@ describe("ActionBar OpenCode review model preferences", () => {
 
     chooseOpenCode();
     expect(screen.getByRole("combobox", { name: "Model" }).textContent)
-      .toContain("OpenCode A");
+      .toContain("Default");
     openModelPicker();
 
     await waitFor(() => expect(screen.getByText("Favorites")).toBeTruthy());

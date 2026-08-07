@@ -31,6 +31,8 @@ type StartBuildOptions = {
   featurePlanId?: string;
   /** Per-step harness, model and reasoning chosen in the build launcher. */
   steps?: BuildStepConfigs;
+  /** Whether source-ticket comments should be copied into the task snapshot. */
+  includeComments?: boolean;
 };
 
 export type GitHubIssueBuildComment = {
@@ -60,12 +62,13 @@ export type GitHubIssueBuildInput = {
 function linearIssueToTicketInput(
   issue: LinearIssueDetail,
   projectId: string,
+  includeComments = true,
 ): BuildPipelineTicketInput {
   const comments = [
     { text: `Linear issue: ${issue.identifier}` },
     ...(issue.url ? [{ text: `URL: ${issue.url}` }] : []),
     ...(issue.status ? [{ text: `Status: ${issue.status}` }] : []),
-    ...issue.comments.map((comment) => ({
+    ...(includeComments ? issue.comments : []).map((comment) => ({
       text: comment.authorName
         ? `${comment.authorName}: ${comment.body}`
         : comment.body,
@@ -282,7 +285,7 @@ export function useBuildPipeline() {
       environmentType: EnvironmentType,
       options: StartBuildOptions = {},
     ) => startBuildFromTicket(
-      linearIssueToTicketInput(issue, projectId),
+      linearIssueToTicketInput(issue, projectId, options.includeComments ?? true),
       environmentType,
       undefined,
       options,

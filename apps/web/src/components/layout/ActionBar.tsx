@@ -85,9 +85,9 @@ import {
   type ReviewLaunchSelection,
 } from "@/components/review/ReviewLaunchDialog";
 import {
-  buildReviewModelCatalog,
   resolveDefaultReviewTabType,
 } from "@/lib/review-launch-options";
+import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { normalizeOpenCodeModelReferences } from "@/lib/opencode-model-preferences";
 import {
   LazyDialogLoadingFallback,
@@ -286,6 +286,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   // entries and duplicates and yields plain `provider/model` ids. Those ids
   // drive the favorites-first ordering in the searchable OpenCode picker.
   const anyReviewDialogOpen = reviewDialogOpen || loopedReviewDialogOpen;
+  const reviewModelCatalog = useReviewModelCatalog(
+    selectedProjectId ?? "",
+    anyReviewDialogOpen,
+  );
   useEffect(() => {
     if (!anyReviewDialogOpen) return;
     let cancelled = false;
@@ -2048,7 +2052,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             ? config.repositories[selectedProjectId]
             : undefined,
         })}
-        catalog={buildReviewModelCatalog(selectedEnvironmentId ?? undefined)}
+        catalog={reviewModelCatalog}
         preferredModels={{
           claude: config.global.claudeModel,
           codex: config.global.codexModel,
@@ -2076,7 +2080,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             ? config.repositories[selectedProjectId]
             : undefined,
         })}
-        catalog={buildReviewModelCatalog(selectedEnvironmentId ?? undefined)}
+        catalog={reviewModelCatalog}
         preferredModels={{
           claude: config.global.claudeModel,
           codex: config.global.codexModel,

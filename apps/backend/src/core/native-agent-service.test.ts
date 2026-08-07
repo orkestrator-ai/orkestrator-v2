@@ -1206,18 +1206,31 @@ describe("NativeAgentService", () => {
         throw new Error("sync telemetry failure");
       },
     }, async ({ storage, service }) => {
-      for (let index = 0; index < 520; index += 1) {
+      const timestamp = new Date(0).toISOString();
+      const sessions = Object.fromEntries(Array.from({ length: 520 }, (_, index) => {
         const logicalSessionKey = `looped-review:workflow:phase-${index}:Review`;
-        await storage.adoptNativeAgentSession({
-          key: nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey),
+        const key = nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey);
+        return [key, {
+          version: 1,
+          key,
           environmentId: "env-1",
           agent: "codex",
           logicalSessionKey,
           providerSessionId: `provider-${index}`,
           origin: "looped-review",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-        });
-      }
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        }];
+      }));
+      // This test exercises the service's 512-request and 64-observation
+      // bounds, not StorageService's per-record persistence path. Seeding the
+      // valid durable snapshot once avoids 520 serialized rewrites of a growing
+      // JSON file, which could exceed Bun's test timeout under aggregate load.
+      await fs.writeFile(
+        path.join(storage.getDataDir(), "native-agent-sessions.json"),
+        JSON.stringify(sessions),
+      );
       await service.reconcileAgentInteractions();
       expect(internals(service).trackedInteractions.size).toBe(64);
       expect(service.getInteractionObservations()).toHaveLength(64);

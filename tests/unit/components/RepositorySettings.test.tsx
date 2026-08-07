@@ -2,6 +2,7 @@ import { describe, test, expect, mock, beforeEach, afterEach, afterAll } from "b
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import * as realSelect from "@/components/ui/select";
 import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
+import type { OpenCodeModelCatalogSnapshot } from "@/lib/backend";
 
 // ---------------------------------------------------------------------------
 // Mocks — must be declared BEFORE importing the component under test
@@ -21,6 +22,9 @@ const mockUpdateRepositoryConfig = mock((projectId: string, repoConfig: unknown)
   updateRepositoryConfigImpl(projectId, repoConfig)
 );
 const mockUpdateProject = mock(async (project: unknown) => project);
+const mockGetCachedOpenCodeModelCatalog = mock(
+  async (_projectId: string): Promise<OpenCodeModelCatalogSnapshot | null> => null,
+);
 const mockOpenDialog = mock(async () => {
   if (dialogError) {
     throw dialogError;
@@ -32,6 +36,7 @@ const realSelectSnapshot = { ...realSelect };
 mock.module("@/lib/backend", () => ({
   updateRepositoryConfig: mockUpdateRepositoryConfig,
   updateProject: mockUpdateProject,
+  getCachedOpenCodeModelCatalog: mockGetCachedOpenCodeModelCatalog,
 }));
 
 mock.module("@/lib/native/dialog", () => ({
@@ -195,7 +200,7 @@ function resetStores(config = makeConfig()) {
     error: null,
   });
   useClaudeStore.setState({ models: [] });
-  useOpenCodeStore.setState({ models: new Map() });
+  useOpenCodeStore.setState({ models: new Map(), modelSource: new Map() });
   useCodexStore.setState({ models: CODEX_MODELS });
 }
 
@@ -282,6 +287,8 @@ describe("RepositorySettings", () => {
 
     mockUpdateRepositoryConfig.mockClear();
     mockUpdateProject.mockClear();
+    mockGetCachedOpenCodeModelCatalog.mockReset();
+    mockGetCachedOpenCodeModelCatalog.mockImplementation(async () => null);
     mockOpenDialog.mockClear();
     mockToastSuccess.mockClear();
     mockToastError.mockClear();
@@ -398,7 +405,19 @@ describe("RepositorySettings", () => {
       expect(savedConfig.agentStyle).toBeUndefined();
     });
 
-    test("uses OpenCode model variants when the effective agent is OpenCode", () => {
+    test("uses cached OpenCode model variants when the effective agent is OpenCode", async () => {
+      mockGetCachedOpenCodeModelCatalog.mockResolvedValueOnce({
+        schemaVersion: 2,
+        projectId: "project-1",
+        catalogVersion: "catalog-variants",
+        updatedAt: "2026-08-07T12:00:00.000Z",
+        models: [{
+          id: "openai/gpt-5",
+          name: "GPT-5",
+          provider: "openai",
+          variants: ["low", "deep"],
+        }],
+      });
       renderSettings({
         config: {
           global: { defaultAgent: "opencode" } as AppConfig["global"],
@@ -411,33 +430,52 @@ describe("RepositorySettings", () => {
             },
           },
         },
-        prepareStores: () => {
-          useOpenCodeStore.setState({
-            models: new Map([
-              [
-                "env-1",
-                [
-                  {
-                    id: "openai/gpt-5",
-                    name: "GPT-5",
-                    provider: "openai",
-                    variants: ["low", "high", "xhigh"],
-                  },
-                ],
-              ],
-            ]),
-          });
+      });
+
+      await waitFor(() => {
+        const effortSelect = getMockSelects()[3]!;
+        const values = Array.from(effortSelect.options).map((option) => option.value);
+        expect(values).toContain("low");
+        expect(values).toContain("deep");
+        expect(values).not.toContain("xhigh");
+      });
+    });
+
+    test("loads the project-scoped OpenCode model cache", async () => {
+      mockGetCachedOpenCodeModelCatalog.mockResolvedValueOnce({
+        schemaVersion: 2,
+        projectId: "project-1",
+        catalogVersion: "catalog-1",
+        updatedAt: "2026-08-07T12:00:00.000Z",
+        models: [{
+          id: "openrouter/cached-model",
+          name: "Cached Model",
+          provider: "openrouter",
+          variants: ["fast", "deep"],
+        }],
+      });
+      renderSettings({
+        config: {
+          global: { defaultAgent: "opencode" } as AppConfig["global"],
+          repositories: {
+            "project-1": {
+              defaultBranch: "main",
+              prBaseBranch: "main",
+              defaultAgent: "opencode",
+            },
+          },
         },
       });
 
-      const selects = getMockSelects();
-      // Order: [agentStyle, claudeNativeBackend, defaultModel, defaultEffort]
-      const effortSelect = selects[3]!;
-      const values = Array.from(effortSelect.querySelectorAll("option")).map((option) => option.value);
-
-      expect(values).toContain("low");
-      expect(values).toContain("high");
-      expect(values).toContain("xhigh");
+      await waitFor(() => {
+        expect(mockGetCachedOpenCodeModelCatalog).toHaveBeenCalledWith("project-1");
+        expect(screen.queryByText("Start an environment to load available models"))
+          .toBeNull();
+      });
+      const modelSelect = getMockSelects()[2]!;
+      expect(Array.from(modelSelect.options).map((option) => option.value))
+        .toContain("openrouter/cached-model");
+      expect(modelSelect.textContent).toContain("Cached Model");
     });
 
     test("filters Codex efforts by model and clears an unsupported saved effort", async () => {
@@ -477,7 +515,7 @@ describe("RepositorySettings", () => {
       let effortValues = Array.from(effortSelect.options).map((option) => option.value);
       expect(effortValues).not.toContain("max");
       expect(effortValues).not.toContain("ultra");
-      await waitFor(() => expect(effortSelect.value).toBe(""));
+      await waitFor(() => expect(effortSelect.value).toBe("__app_default__"));
 
       const modelSelect = selects[2]!;
       fireEvent.change(modelSelect, { target: { value: "gpt-5.6-sol" } });
@@ -495,6 +533,88 @@ describe("RepositorySettings", () => {
         defaultModel: "gpt-5.6-sol",
         defaultEffort: "ultra",
       }));
+    });
+
+    test("can reset repository model and effort overrides to the agent defaults", async () => {
+      renderSettings({
+        config: {
+          global: { defaultAgent: "codex" } as AppConfig["global"],
+          repositories: {
+            "project-1": {
+              defaultBranch: "main",
+              prBaseBranch: "main",
+              defaultAgent: "codex",
+              defaultModel: "gpt-5.4",
+              defaultEffort: "high",
+            },
+          },
+        },
+      });
+
+      const selects = getMockSelects();
+      fireEvent.change(selects[2]!, { target: { value: "__app_default__" } });
+      fireEvent.change(selects[3]!, { target: { value: "__app_default__" } });
+      fireEvent.click(getSaveButton());
+
+      await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
+      expect(getSavedConfig().defaultModel).toBeUndefined();
+      expect(getSavedConfig().defaultEffort).toBeUndefined();
+    });
+
+    test("clears a model-specific OpenCode effort when only the model is reset", async () => {
+      mockGetCachedOpenCodeModelCatalog.mockResolvedValueOnce({
+        schemaVersion: 2,
+        projectId: "project-1",
+        catalogVersion: "catalog-reset",
+        updatedAt: "2026-08-07T12:00:00.000Z",
+        models: [
+          {
+            id: "openai/global-model",
+            name: "Global Model",
+            provider: "openai",
+            variants: ["low"],
+          },
+          {
+            id: "openai/project-model",
+            name: "Project Model",
+            provider: "openai",
+            variants: ["deep"],
+          },
+        ],
+      });
+      renderSettings({
+        config: {
+          global: {
+            defaultAgent: "opencode",
+            opencodeModel: "openai/global-model",
+          } as AppConfig["global"],
+          repositories: {
+            "project-1": {
+              defaultBranch: "main",
+              prBaseBranch: "main",
+              defaultAgent: "opencode",
+              defaultModel: "openai/project-model",
+              defaultEffort: "deep",
+            },
+          },
+        },
+      });
+
+      await waitFor(() => {
+        const effortValues = Array.from(getMockSelects()[3]!.options)
+          .map((option) => option.value);
+        expect(effortValues).toContain("deep");
+      });
+      fireEvent.change(getMockSelects()[2]!, {
+        target: { value: "__app_default__" },
+      });
+      expect(getMockSelects()[3]!.value).toBe("__app_default__");
+
+      fireEvent.click(getSaveButton());
+
+      await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
+      expect(getSavedConfig().defaultModel).toBeUndefined();
+      expect(getSavedConfig().defaultEffort).toBeUndefined();
     });
 
     test("filters Codex efforts using the inherited global model", () => {

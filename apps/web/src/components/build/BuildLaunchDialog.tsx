@@ -7,6 +7,7 @@ import {
   GitPullRequest,
   Hammer,
   ListChecks,
+  MessageSquare,
   ScanSearch,
   ShieldCheck,
 } from "lucide-react";
@@ -50,6 +51,13 @@ export interface BuildLaunchSelection {
   /** Environment type is a property of the workspace, so it is chosen once. */
   environmentType: EnvironmentType;
   steps: Record<BuildStepKey, BuildLaunchStepSelection>;
+  /** Present when the launcher offers source comments as optional context. */
+  includeComments?: boolean;
+}
+
+export interface BuildLaunchCommentContextOption {
+  count: number;
+  defaultIncluded?: boolean;
 }
 
 const BUILD_STEPS: Array<{
@@ -163,6 +171,8 @@ interface BuildLaunchDialogProps {
   preferredModels?: Partial<Record<LaunchAgent, string>>;
   preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
   favoriteOpenCodeModelIds?: string[];
+  /** Offers source-ticket comments as optional build context. */
+  commentContext?: BuildLaunchCommentContextOption;
   /** Disables the submit button while a start request is in flight. */
   busy?: boolean;
   onConfirm: (selection: BuildLaunchSelection) => void;
@@ -227,6 +237,7 @@ export function BuildLaunchDialog({
   preferredModels,
   preferredReasoningEfforts,
   favoriteOpenCodeModelIds = [],
+  commentContext,
   busy = false,
   onConfirm,
 }: BuildLaunchDialogProps) {
@@ -236,8 +247,12 @@ export function BuildLaunchDialog({
   // On by default: one configuration for the whole pipeline is the common case,
   // and it keeps five extra step sections out of the way until they are wanted.
   const [uniform, setUniform] = useState(true);
+  const [includeComments, setIncludeComments] = useState(
+    commentContext?.defaultIncluded ?? true,
+  );
   const wasOpenRef = useRef(false);
   const environmentGroupId = useId();
+  const commentContextId = useId();
 
   // Reset on the closed→open transition only, so a catalog that arrives while
   // the dialog is open cannot discard a selection the user has already made.
@@ -247,6 +262,7 @@ export function BuildLaunchDialog({
     if (!justOpened) return;
     setEnvironmentType(defaultEnvironmentType);
     setUniform(true);
+    setIncludeComments(commentContext?.defaultIncluded ?? true);
     setSteps(initialSteps(
       defaultAgent,
       catalog,
@@ -255,6 +271,7 @@ export function BuildLaunchDialog({
     ));
   }, [
     catalog,
+    commentContext?.defaultIncluded,
     defaultAgent,
     defaultEnvironmentType,
     open,
@@ -334,6 +351,9 @@ export function BuildLaunchDialog({
     const label = uniform ? "All steps" : title;
     return `${label}: ${step.model?.name ?? steps[key].model} · ${effort}`;
   });
+  const commentContextLabel = commentContext
+    ? `Include ${commentContext.count} comment${commentContext.count === 1 ? "" : "s"} in build context`
+    : "";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -357,6 +377,7 @@ export function BuildLaunchDialog({
             event.preventDefault();
             onConfirm({
               environmentType,
+              ...(commentContext ? { includeComments } : {}),
               steps: Object.fromEntries(BUILD_STEPS.map(({ key }) => [key, {
                 agent: steps[key].agent,
                 model: resolved[key].model?.id ?? steps[key].model,
@@ -416,6 +437,31 @@ export function BuildLaunchDialog({
                 })}
               </div>
             </Step>
+
+            {commentContext && (
+              <div className="mb-4 rounded-lg border border-cyan-400/20 bg-cyan-500/[0.06] px-3 py-2.5 sm:ml-[2.75rem]">
+                <div className="flex items-start gap-2.5">
+                  <Checkbox
+                    id={commentContextId}
+                    checked={includeComments}
+                    onCheckedChange={(checked) => setIncludeComments(checked === true)}
+                    aria-label={commentContextLabel}
+                    className="mt-0.5"
+                  />
+                  <Label htmlFor={commentContextId} className="flex cursor-pointer items-start gap-2.5">
+                    <MessageSquare className="mt-0.5 size-4 shrink-0 text-cyan-300/80" />
+                    <span>
+                      <span className="block text-sm font-medium text-zinc-200">
+                        {commentContextLabel}
+                      </span>
+                      <span className="mt-0.5 block text-[11px] font-normal leading-snug text-zinc-500">
+                        Give the pipeline the discussion attached to this ticket.
+                      </span>
+                    </span>
+                  </Label>
+                </div>
+              </div>
+            )}
 
             <div className="mb-4 rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2.5 sm:ml-[2.75rem]">
               <div className="flex items-start gap-2.5">

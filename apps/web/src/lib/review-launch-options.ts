@@ -49,6 +49,22 @@ const CLAUDE_FALLBACK_MODELS: ReviewModelOption[] = [
   },
 ];
 
+const OPENCODE_DEFAULT_MODEL: ReviewModelOption = {
+  id: "default",
+  name: "Default",
+  description: "Use OpenCode's last selected model",
+  reasoningEfforts: [],
+};
+
+export function includeOpenCodeDefaultModel(
+  models: ReviewModelOption[],
+): ReviewModelOption[] {
+  return [
+    OPENCODE_DEFAULT_MODEL,
+    ...models.filter((model) => model.id !== OPENCODE_DEFAULT_MODEL.id),
+  ];
+}
+
 export function buildReviewModelCatalog(
   environmentId: string | null | undefined,
 ): ReviewModelCatalog {
@@ -88,11 +104,11 @@ export function buildReviewModelCatalog(
             models.findIndex((candidate) => candidate.id === model.id) === index,
         );
   const opencode = liveOpenCodeModels.map((model) => ({
-      id: model.id,
-      name: model.name,
-      description: model.provider,
-      reasoningEfforts: [...(model.variants ?? [])],
-    }));
+    id: model.id,
+    name: model.name,
+    description: model.provider,
+    reasoningEfforts: [...(model.variants ?? [])],
+  }));
 
   return {
     claude: claude.length > 0 ? claude : CLAUDE_FALLBACK_MODELS,

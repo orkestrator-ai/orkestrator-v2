@@ -1078,6 +1078,7 @@ describe("Linear and looped review command behavior", () => {
       updatedAt: "2026-01-01T00:00:00.000Z",
       createdAt: "2025-12-01T00:00:00.000Z",
       url: "https://linear.app/acme/issue/ENG-1",
+      priority: 1,
       priorityLabel: "Urgent",
       sortOrder: 1,
       state: { name: "In Progress", type: "started" },
@@ -1189,6 +1190,7 @@ describe("Linear and looped review command behavior", () => {
       statusType: "started",
       teamKey: "ENG",
       assigneeName: "Ada",
+      priority: 1,
       priorityLabel: "Urgent",
     });
     expect(requests[0]?.headers).toMatchObject({ Authorization: "lin_api_secret" });

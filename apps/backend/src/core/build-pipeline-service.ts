@@ -1280,6 +1280,17 @@ export class BuildPipelineService {
       await this.invoke("run_environment_setup", {
         environmentId: pipeline.environmentId,
       });
+      // Setup temporarily owns the active terminal tab while it installs the
+      // environment. Once that work is finished, move the authoritative pane
+      // selection back to the build surface before starting the first agent
+      // turn. Keeping this in the backend means a renderer that was unmounted
+      // during setup catches up from the persisted layout when it returns.
+      await this.storage.ensureBuildPipelineTab({
+        pipelineId: pipeline.id,
+        taskId: pipeline.taskId,
+        environmentId: pipeline.environmentId,
+        isLocal: pipeline.environmentType === "local",
+      });
       await this.startStage(pipeline, "build", "building");
       return;
     }

@@ -564,6 +564,53 @@ describe("BuildPipelineService", () => {
     });
   });
 
+  test("selects the build tab when setup hands off to the build stage", async () => {
+    await withService(async (service, storage) => {
+      const started = await service.start(startInput());
+      await service.advanceNow(started.id);
+      expect((await pipeline(storage, started.id)).phase).toBe("waiting-for-setup");
+
+      const buildLayout = await storage.getPaneLayout("env-1");
+      const buildRoot = buildLayout?.root as {
+        kind?: unknown;
+        id?: unknown;
+        tabs?: unknown;
+        activeTabId?: unknown;
+      } | undefined;
+      if (
+        !buildLayout
+        || buildRoot?.kind !== "leaf"
+        || typeof buildRoot.id !== "string"
+        || !Array.isArray(buildRoot.tabs)
+      ) {
+        throw new Error("expected a leaf build layout");
+      }
+      await storage.savePaneLayout("env-1", {
+        version: buildLayout.version,
+        containerId: buildLayout.containerId,
+        activePaneId: buildLayout.activePaneId,
+        root: {
+          ...buildRoot,
+          tabs: [
+            ...buildRoot.tabs,
+            { id: "setup-terminal", type: "plain", isSetupTab: true },
+          ],
+          activeTabId: "setup-terminal",
+        },
+      }, buildLayout.revision);
+      expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
+        activeTabId: "setup-terminal",
+      });
+
+      await service.advanceNow(started.id);
+
+      expect((await pipeline(storage, started.id)).phase).toBe("building");
+      expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
+        activeTabId: `build-${started.id}`,
+      });
+    });
+  });
+
   test("canonicalizes immutable admission identity and ignores mutable source metadata", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-canonical-"));
     const firstStorage = new StorageService(dataDir);

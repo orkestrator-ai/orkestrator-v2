@@ -15,6 +15,9 @@ const originalPath = process.env.PATH;
 const originalHome = process.env.HOME;
 const originalHomedir = os.homedir;
 const originalDockerLog = process.env.FAKE_DOCKER_LOG;
+const originalLauncherLog = process.env.FAKE_LAUNCHER_LOG;
+const originalLauncherFailExecutable = process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE;
+const originalLauncherExitCode = process.env.FAKE_LAUNCHER_EXIT_CODE;
 const originalDockerStatus = process.env.FAKE_DOCKER_STATUS;
 const originalDockerPort = process.env.FAKE_DOCKER_PORT;
 const originalDockerFailInfo = process.env.FAKE_DOCKER_FAIL_INFO;
@@ -31,6 +34,7 @@ const originalCodexAgentToolsFingerprint = process.env.FAKE_CODEX_AGENT_TOOLS_FI
 let root = "";
 let binDir = "";
 let commandLog = "";
+let launcherLog = "";
 let fakeHome = "";
 
 const DOCKER_SCRIPT = `#!/bin/sh
@@ -116,8 +120,20 @@ exit 0
 `;
 
 const LAUNCHER_SCRIPT = `#!/bin/sh
-printf '%s %s\n' "\${0##*/}" "$*" >> "$FAKE_DOCKER_LOG"
+printf '%s\\000%s\\000' "\${0##*/}" "$#" >> "$FAKE_LAUNCHER_LOG"
+for arg in "$@"; do
+  printf '%s\\000' "$arg" >> "$FAKE_LAUNCHER_LOG"
+done
+if [ "\${FAKE_LAUNCHER_FAIL_EXECUTABLE:-}" = "\${0##*/}" ]; then
+  printf 'launcher failed\n' >&2
+  exit "\${FAKE_LAUNCHER_EXIT_CODE:-23}"
+fi
 `;
+
+type LauncherInvocation = {
+  executable: string;
+  args: string[];
+};
 
 function environment(overrides: Partial<Environment> = {}): Environment {
   return {
@@ -195,6 +211,25 @@ async function invoke(name: string, args: Record<string, unknown> = {}, context 
 
 async function readCommandLog(): Promise<string> {
   return fs.readFile(commandLog, "utf8").catch(() => "");
+}
+
+async function readLauncherInvocations(): Promise<LauncherInvocation[]> {
+  const serialized = await fs.readFile(launcherLog, "utf8").catch(() => "");
+  const fields = serialized.split("\0");
+  if (fields.at(-1) === "") fields.pop();
+  const invocations: LauncherInvocation[] = [];
+  for (let index = 0; index < fields.length;) {
+    const executable = fields[index++];
+    const argumentCount = Number(fields[index++]);
+    if (!executable || !Number.isSafeInteger(argumentCount) || argumentCount < 0) {
+      throw new Error("Malformed fake launcher record");
+    }
+    const args = fields.slice(index, index + argumentCount);
+    if (args.length !== argumentCount) throw new Error("Truncated fake launcher record");
+    index += argumentCount;
+    invocations.push({ executable, args });
+  }
+  return invocations;
 }
 
 async function waitFor(predicate: () => boolean, description: string): Promise<void> {
@@ -277,6 +312,7 @@ beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-process-command-coverage-"));
   binDir = path.join(root, "bin");
   commandLog = path.join(root, "commands.log");
+  launcherLog = path.join(root, "launchers.log");
   fakeHome = path.join(root, "home");
   await fs.mkdir(binDir, { recursive: true });
   await fs.mkdir(fakeHome, { recursive: true });
@@ -289,6 +325,7 @@ beforeAll(async () => {
   process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
   process.env.HOME = fakeHome;
   process.env.FAKE_DOCKER_LOG = commandLog;
+  process.env.FAKE_LAUNCHER_LOG = launcherLog;
   Object.defineProperty(os, "homedir", { configurable: true, value: () => fakeHome });
 });
 
@@ -296,6 +333,9 @@ beforeEach(async () => {
   registry = createCommandRegistry();
   fixture = createContext();
   await fs.writeFile(commandLog, "");
+  await fs.writeFile(launcherLog, "");
+  delete process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE;
+  delete process.env.FAKE_LAUNCHER_EXIT_CODE;
   delete process.env.FAKE_DOCKER_STATUS;
   delete process.env.FAKE_DOCKER_PORT;
   delete process.env.FAKE_DOCKER_FAIL_INFO;
@@ -323,6 +363,12 @@ afterAll(async () => {
   Object.defineProperty(os, "homedir", { configurable: true, value: originalHomedir });
   if (originalDockerLog === undefined) delete process.env.FAKE_DOCKER_LOG;
   else process.env.FAKE_DOCKER_LOG = originalDockerLog;
+  if (originalLauncherLog === undefined) delete process.env.FAKE_LAUNCHER_LOG;
+  else process.env.FAKE_LAUNCHER_LOG = originalLauncherLog;
+  if (originalLauncherFailExecutable === undefined) delete process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE;
+  else process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE = originalLauncherFailExecutable;
+  if (originalLauncherExitCode === undefined) delete process.env.FAKE_LAUNCHER_EXIT_CODE;
+  else process.env.FAKE_LAUNCHER_EXIT_CODE = originalLauncherExitCode;
   if (originalDockerStatus === undefined) delete process.env.FAKE_DOCKER_STATUS;
   else process.env.FAKE_DOCKER_STATUS = originalDockerStatus;
   if (originalDockerPort === undefined) delete process.env.FAKE_DOCKER_PORT;
@@ -900,15 +946,75 @@ describe("process and platform command behavior", () => {
     await invoke("open_in_editor", { containerId: "container-b", editor: "vscode" });
     await invoke("open_local_in_editor", { path: "/tmp/project", editor: "code" });
 
-    const log = await readCommandLog();
+    const invocations = await readLauncherInvocations();
     const browserLauncher = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer.exe" : "xdg-open";
-    expect(log).toContain(`${browserLauncher} https://example.com/path?q=one&next=two`);
-    if (process.platform === "darwin") expect(log).toContain("open -R /tmp/project/file.ts");
-    else if (process.platform === "win32") expect(log).toContain("explorer /select, /tmp/project/file.ts");
-    else expect(log).toContain("xdg-open /tmp/project");
-    expect(log).toContain("cursor --folder-uri vscode-remote://attached-container+636f6e7461696e65722d61/workspace");
-    expect(log).toContain("code --folder-uri vscode-remote://attached-container+636f6e7461696e65722d62/workspace");
-    expect(log).toContain("code /tmp/project");
+    expect(invocations).toContainEqual({
+      executable: browserLauncher,
+      args: ["https://example.com/path?q=one&next=two"],
+    });
+    expect(invocations).toContainEqual(process.platform === "darwin"
+      ? { executable: "open", args: ["-R", "/tmp/project/file.ts"] }
+      : process.platform === "win32"
+        ? { executable: "explorer", args: ["/select,", "/tmp/project/file.ts"] }
+        : { executable: "xdg-open", args: ["/tmp/project"] });
+    expect(invocations).toContainEqual({
+      executable: "cursor",
+      args: ["--folder-uri", "vscode-remote://attached-container+636f6e7461696e65722d61/workspace"],
+    });
+    expect(invocations).toContainEqual({
+      executable: "code",
+      args: ["--folder-uri", "vscode-remote://attached-container+636f6e7461696e65722d62/workspace"],
+    });
+    expect(invocations).toContainEqual({ executable: "code", args: ["/tmp/project"] });
+  });
+
+  test.each([
+    ["missing container id", { editor: "vscode" }, "containerId"],
+    ["non-string container id", { containerId: 42, editor: "vscode" }, "containerId"],
+    ["missing editor", { containerId: "container-a" }, "editor"],
+    ["non-string editor", { containerId: "container-a", editor: false }, "editor"],
+  ] as const)("rejects invalid editor launch input: %s", async (_label, args, field) => {
+    await expect(invoke("open_in_editor", args)).rejects.toThrow(field);
+    expect(await readLauncherInvocations()).toEqual([]);
+  });
+
+  test("propagates editor launcher exit and spawn failures", async () => {
+    process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE = "cursor";
+    process.env.FAKE_LAUNCHER_EXIT_CODE = "23";
+    const exitFailure = await invoke("open_in_editor", {
+      containerId: "container-a",
+      editor: "cursor",
+    }).catch((error: unknown) => error) as {
+      message?: string;
+      exitCode?: number | null;
+      executableMissing?: boolean;
+    };
+    expect(exitFailure).toMatchObject({
+      message: "launcher failed",
+      exitCode: 23,
+      executableMissing: false,
+    });
+
+    delete process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE;
+    const codePath = path.join(binDir, "code");
+    const hiddenCodePath = path.join(binDir, "code.hidden");
+    const fixturePath = process.env.PATH;
+    await fs.rename(codePath, hiddenCodePath);
+    process.env.PATH = binDir;
+    try {
+      const spawnFailure = await invoke("open_in_editor", {
+        containerId: "container-b",
+        editor: "vscode",
+      }).catch((error: unknown) => error) as {
+        executableMissing?: boolean;
+        exitCode?: number | null;
+      };
+      expect(spawnFailure).toMatchObject({ executableMissing: true, exitCode: null });
+    } finally {
+      if (fixturePath === undefined) delete process.env.PATH;
+      else process.env.PATH = fixturePath;
+      await fs.rename(hiddenCodePath, codePath);
+    }
   });
 
   test("resolves domains and validate_domains delegates to the same behavior", async () => {

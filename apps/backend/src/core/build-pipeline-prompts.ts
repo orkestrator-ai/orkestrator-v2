@@ -11,6 +11,12 @@ const ADDRESS_REVIEW_FINDINGS_PREFIX =
 const ADDRESS_REVIEW_FINDINGS_TAIL =
   "Run the relevant validation. Stage only related safe files and commit every relevant fix before finishing.";
 
+function numberedComment(text: string, index: number): string {
+  const marker = `${index + 1}. `;
+  const continuationIndent = " ".repeat(marker.length);
+  return `${marker}${text.replace(/\r\n|\r|\n/g, `\n${continuationIndent}`)}`;
+}
+
 function ticketContext(task: TaskSnapshot): string {
   return [
     `**Title**: ${task.title}`,
@@ -19,7 +25,7 @@ function ticketContext(task: TaskSnapshot): string {
       ? `**Acceptance Criteria**:\n${task.acceptanceCriteria}`
       : "",
     task.comments.length
-      ? `**Comments**:\n${task.comments.map((comment, index) => `${index + 1}. ${comment.text}`).join("\n")}`
+      ? `**Comments**:\n${task.comments.map((comment, index) => numberedComment(comment.text, index)).join("\n")}`
       : "",
     task.images.length
       ? `**Attached Images**: ${task.images.map((image) => image.filename).join(", ")}`

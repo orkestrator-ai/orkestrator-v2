@@ -20,7 +20,10 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import * as realBackend from "@/lib/backend";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
-import { mockToastError } from "../../../../../tests/mocks/sonner";
+import {
+  mockToastError,
+  mockToastSuccess,
+} from "../../../../../tests/mocks/sonner";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
 
 const realBackendSnapshot = { ...realBackend };
@@ -94,7 +97,7 @@ const retryReviewMock = mock(async (pipelineId: string) => ({
   phase: "reviewing" as const,
   backendRevision: 13,
 }));
-const retryStageMock = mock(async (pipelineId: string) => ({
+const retryStageMock = mock(async (pipelineId: string): Promise<BuildPipeline> => ({
   ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
   phase: "building" as const,
   error: undefined,
@@ -530,7 +533,12 @@ describe("BuildChatTab presentation", () => {
     }} />);
   }
 
-  beforeEach(cleanup);
+  beforeEach(() => {
+    cleanup();
+    retryStageMock.mockClear();
+    mockToastError.mockClear();
+    mockToastSuccess.mockClear();
+  });
 
   test("marks the shown stage as selected in the stage list", async () => {
     renderTab(reviewed);
@@ -847,6 +855,57 @@ describe("BuildChatTab presentation", () => {
       .toBeNull();
     fireEvent.click(retry);
     await waitFor(() => expect(retryStageMock).toHaveBeenCalledWith(reviewed.id));
+  });
+
+  test("shows a retry rejection and re-enables the failed-stage control", async () => {
+    retryStageMock.mockRejectedValueOnce(new Error("retry command unavailable"));
+    renderTab({
+      ...reviewed,
+      phase: "failed",
+      error: "The prompt was never dispatched",
+      failureContext: { phase: "building", kind: "prompt-dispatch" },
+      backendRevision: 58,
+    });
+
+    const retry = screen.getByRole("button", {
+      name: "Retry Build Stage",
+    }) as HTMLButtonElement;
+    fireEvent.click(retry);
+
+    await waitFor(() => expect(retry.disabled).toBe(false));
+    expect(mockToastError).toHaveBeenCalledWith("Failed to restart the stage", {
+      description: "retry command unavailable",
+    });
+    expect(mockToastSuccess).not.toHaveBeenCalledWith("Failed stage restarted");
+  });
+
+  test("reports a retry that resolves to another failed snapshot", async () => {
+    const failedAgain: BuildPipeline = {
+      ...reviewed,
+      phase: "failed",
+      error: "fresh session could not be created",
+      failureContext: { phase: "building", kind: "stage-transition" },
+      backendRevision: 59,
+    };
+    retryStageMock.mockResolvedValueOnce(failedAgain);
+    renderTab({
+      ...reviewed,
+      phase: "failed",
+      error: "The prompt was never dispatched",
+      failureContext: { phase: "building", kind: "prompt-dispatch" },
+      backendRevision: 58,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry Build Stage" }));
+
+    await waitFor(() => {
+      expect(useBuildPipelineStore.getState().pipelines.get(reviewed.id))
+        .toEqual(failedAgain);
+    });
+    expect(mockToastError).toHaveBeenCalledWith("Failed to restart the stage", {
+      description: "fresh session could not be created",
+    });
+    expect(mockToastSuccess).not.toHaveBeenCalledWith("Failed stage restarted");
   });
 
   test("badges no stage that declined nothing", () => {

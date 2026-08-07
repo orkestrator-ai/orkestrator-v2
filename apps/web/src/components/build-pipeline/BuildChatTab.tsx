@@ -283,8 +283,15 @@ export function BuildChatTab({
     if (!pipeline || controlPending) return;
     setControlPending(true);
     try {
-      replacePipeline(await backend.retryBuildPipelineStage(pipeline.id));
+      const updated = await backend.retryBuildPipelineStage(pipeline.id);
+      replacePipeline(updated);
       pinnedSessionRef.current = false;
+      if (updated.phase === "failed") {
+        toast.error("Failed to restart the stage", {
+          description: updated.error ?? "The stage failed again before it could restart",
+        });
+        return;
+      }
       toast.success("Failed stage restarted");
     } catch (error) {
       toast.error("Failed to restart the stage", {

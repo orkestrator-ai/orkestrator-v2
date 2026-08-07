@@ -120,6 +120,17 @@ history rather than two partial ones.
 - **Isolated rerun:** `bun test tests/unit/electron/commands.test.ts` -> 362 passed, 1 skipped, 0 failed; the target passed in 195.34 ms
 - **Hypothesis:** The aggregate failure exhausted the cache-repopulation deadline while the same behavior completed quickly in isolation. This is consistent with aggregate scheduling or filesystem-watcher latency, but no narrower root cause has been reproduced.
 
+## `remote gateway > delivers backend events to authenticated event streams` (`tests/unit/electron/gateway.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-07
+- **Original command:** `bun run test` (root group: `bun test tests --parallel=4`); reproduced while isolating that group with `bun test tests --parallel=4`
+- **Worker configuration:** Four Bun workers in the root group; the original run also executed workspace, bridge, protocol-lockfile, and iOS groups, and the confirming root-group run overlapped independent bridge and protocol/iOS isolation commands
+- **Failure:** The test exceeded Bun's 5,000 ms timeout (duration: 5,000.73 ms)
+- **Suite counts:** Root group: 3,749 total, 3,747 passed, 1 skipped, 1 failed across 142 files with 16,070 assertions
+- **Isolated rerun:** `bun test tests/unit/electron/gateway.test.ts` -> 174 passed, 0 failed; the target passed in 18.30 ms and the file completed in 6.27 seconds
+- **Hypothesis:** The event-stream assertion is load-sensitive under concurrent suite execution. The same test completed in tens of milliseconds when its owning file ran alone, but no narrower scheduler, socket, or event-ordering trigger has been reproduced, so no product or test fix is claimed yet.
+
 ## `Electron backend command registry > starting a stopped environment resumes backend PR polling` (`tests/unit/electron/commands.test.ts`)
 
 - **Status:** open

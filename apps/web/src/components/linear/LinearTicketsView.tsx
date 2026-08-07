@@ -4,9 +4,8 @@ import {
   ArrowLeft,
   CalendarClock,
   Check,
-  Container,
   ExternalLink,
-  FolderGit2,
+  Hammer,
   Loader2,
   MessageSquare,
   RefreshCw,
@@ -30,6 +29,11 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
+import {
+  BuildLaunchDialog,
+  type BuildLaunchSelection,
+} from "@/components/build/BuildLaunchDialog";
+import { useBuildLaunchOptions } from "@/hooks/useBuildLaunchOptions";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { useDurableComposeDraft } from "@/hooks/useDurableComposeDraft";
 import {
@@ -47,7 +51,6 @@ import {
   retryBuildPipelineCompletionComment,
 } from "@/lib/backend";
 import { cn } from "@/lib/utils";
-import type { EnvironmentType } from "@/types";
 import type { LinearConnectionStatus, LinearIssueComment, LinearIssueDetail, LinearIssueListItem } from "@/types/linear";
 
 interface LinearTicketsViewProps {
@@ -215,7 +218,8 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
   const [detailState, setDetailState] = useState<LoadState>("idle");
   const [detailError, setDetailError] = useState<string | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
-  const [startingType, setStartingType] = useState<EnvironmentType | null>(null);
+  const [buildDialogOpen, setBuildDialogOpen] = useState(false);
+  const [isBuildStarting, setIsBuildStarting] = useState(false);
   const [retryingCompletionComment, setRetryingCompletionComment] =
     useState(false);
   const [commentBody, setCommentBody, clearCommentDraft] = useDurableComposeDraft({
@@ -242,6 +246,8 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
   const pipelines = useBuildPipelineStore((state) => state.pipelines);
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
   const { startBuildFromLinearIssue, navigateToPipeline } = buildPipeline;
+  const { catalog: launchCatalog, defaults: launchDefaults } =
+    useBuildLaunchOptions(projectId, selectedIssueId !== null);
 
   const loadConnection = useCallback(async () => {
     const requestId = connectionRequestRef.current + 1;
@@ -317,6 +323,7 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
   }, [filteredIssues]);
 
   const selectedPipeline = selectedIssueId ? getIssuePipeline(pipelines, selectedIssueId) : undefined;
+  const hasActiveBuild = isActivePipeline(selectedPipeline);
   const selectedIssueSummary = selectedIssueId ? issues.find((issue) => issue.id === selectedIssueId) : undefined;
 
   const loadDetail = useCallback(async (issueId: string) => {
@@ -353,7 +360,7 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
     setDetail(null);
     setDetailError(null);
     setDetailState("idle");
-    setStartingType(null);
+    setBuildDialogOpen(false);
     setCommentError(null);
     setCommentState("idle");
   };
@@ -367,13 +374,32 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
     });
   };
 
-  const handleStartBuild = async (type: EnvironmentType) => {
+  const handleStartBuild = async (selection: BuildLaunchSelection) => {
     if (!detail) return;
-    setStartingType(type);
+    // A build can be admitted by another tab while this launcher is open. Read
+    // the authoritative store again at confirmation time so a stale render can
+    // never submit configuration that the backend will discard in favour of the
+    // already-active admission.
+    const activePipeline = getIssuePipeline(
+      useBuildPipelineStore.getState().pipelines,
+      detail.id,
+    );
+    if (activePipeline && isActivePipeline(activePipeline)) {
+      setBuildDialogOpen(false);
+      await navigateToPipeline(activePipeline);
+      return;
+    }
+    setBuildDialogOpen(false);
+    setIsBuildStarting(true);
     try {
-      await startBuildFromLinearIssue(detail, projectId, type);
+      await startBuildFromLinearIssue(
+        detail,
+        projectId,
+        selection.environmentType,
+        { steps: selection.steps },
+      );
     } finally {
-      setStartingType(null);
+      setIsBuildStarting(false);
     }
   };
 
@@ -618,28 +644,15 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={!!startingType || isActivePipeline(selectedPipeline)}
-                    onClick={() => void handleStartBuild("containerized")}
+                    disabled={isBuildStarting || hasActiveBuild}
+                    onClick={() => setBuildDialogOpen(true)}
                   >
-                    {startingType === "containerized" ? (
+                    {isBuildStarting ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : (
-                      <Container className="h-3.5 w-3.5" />
+                      <Hammer className="h-3.5 w-3.5" />
                     )}
-                    Build Container
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={!!startingType || isActivePipeline(selectedPipeline)}
-                    onClick={() => void handleStartBuild("local")}
-                  >
-                    {startingType === "local" ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <FolderGit2 className="h-3.5 w-3.5" />
-                    )}
-                    Build Local
+                    Build…
                   </Button>
                   {selectedPipeline?.environmentId && (
                     <Button
@@ -708,6 +721,14 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
             )}
           </div>
         </ScrollArea>
+        <BuildLaunchDialog
+          open={buildDialogOpen}
+          onOpenChange={setBuildDialogOpen}
+          catalog={launchCatalog}
+          busy={isBuildStarting || hasActiveBuild}
+          {...launchDefaults}
+          onConfirm={(selection) => void handleStartBuild(selection)}
+        />
       </div>
     );
   }

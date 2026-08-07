@@ -116,6 +116,10 @@ export async function addProject(gitUrl: string, localPath?: string): Promise<Pr
   return invoke<Project>("add_project", { gitUrl, localPath });
 }
 
+export async function createProjectFromScratch(localPath: string): Promise<Project> {
+  return invoke<Project>("create_project_from_scratch", { localPath });
+}
+
 export async function removeProject(projectId: string): Promise<void> {
   return invoke("remove_project", { projectId });
 }

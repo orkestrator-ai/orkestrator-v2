@@ -5,6 +5,7 @@ import {
 } from "../../../apps/web/src/stores/projectStore";
 import type { Project } from "../../../apps/web/src/types";
 import { createMockProject } from "../utils/testFactories";
+import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
 import * as realResourceSync from "../../../apps/web/src/lib/resource-sync";
 
 const realResourceSyncSnapshot = { ...realResourceSync };
@@ -15,6 +16,14 @@ const capturedResyncHandlers = new Set<ResourceResyncHandler>();
 const mockGetProjects = mock<() => Promise<Project[]>>(() => Promise.resolve([]));
 const mockAddProject = mock<(gitUrl: string, localPath?: string) => Promise<Project>>((gitUrl) =>
   Promise.resolve(createMockProject({ id: "new-project-id", name: "test-repo", gitUrl }))
+);
+const mockCreateProjectFromScratch = mock<(localPath: string) => Promise<Project>>((localPath) =>
+  Promise.resolve(createMockProject({
+    id: "scratch-project-id",
+    name: "scratch-repo",
+    gitUrl: "git@github.com:test/scratch-repo.git",
+    localPath,
+  }))
 );
 const mockRemoveProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
 const mockValidateGitUrl = mock<(url: string) => Promise<boolean>>(() => Promise.resolve(true));
@@ -30,6 +39,7 @@ const mockUpdateProject = mock<
 mock.module("@/lib/backend", () => ({
   getProjects: mockGetProjects,
   addProject: mockAddProject,
+  createProjectFromScratch: mockCreateProjectFromScratch,
   removeProject: mockRemoveProject,
   validateGitUrl: mockValidateGitUrl,
   reorderProjects: mockReorderProjects,
@@ -81,6 +91,7 @@ describe("useProjects", () => {
     // Reset mocks
     mockGetProjects.mockClear();
     mockAddProject.mockClear();
+    mockCreateProjectFromScratch.mockClear();
     mockRemoveProject.mockClear();
     mockValidateGitUrl.mockClear();
     mockReorderProjects.mockClear();
@@ -90,6 +101,14 @@ describe("useProjects", () => {
     mockGetProjects.mockImplementation(() => Promise.resolve([]));
     mockAddProject.mockImplementation((gitUrl: string) =>
       Promise.resolve(createMockProject({ id: "new-project-id", name: "test-repo", gitUrl }))
+    );
+    mockCreateProjectFromScratch.mockImplementation((localPath: string) =>
+      Promise.resolve(createMockProject({
+        id: "scratch-project-id",
+        name: "scratch-repo",
+        gitUrl: "git@github.com:test/scratch-repo.git",
+        localPath,
+      }))
     );
     mockRemoveProject.mockImplementation(() => Promise.resolve());
     mockValidateGitUrl.mockImplementation(() => Promise.resolve(true));
@@ -175,6 +194,90 @@ describe("useProjects", () => {
     // Verify error state is set
     expect(result.current.error).toBe("Failed to add");
     expect(result.current.projects).toHaveLength(0);
+  });
+
+  test("createProjectFromScratch exposes loading, stores the project, and reports success", async () => {
+    let resolveCreation!: (project: Project) => void;
+    mockCreateProjectFromScratch.mockImplementation(
+      () => new Promise<Project>((resolve) => {
+        resolveCreation = resolve;
+      }),
+    );
+
+    const { result } = renderHook(() => useProjects());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    let creation!: Promise<Project>;
+    act(() => {
+      creation = result.current.createProjectFromScratch("  /repos/new-project  ");
+    });
+
+    expect(mockCreateProjectFromScratch).toHaveBeenCalledWith("  /repos/new-project  ");
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.error).toBeNull();
+
+    const createdProject = createMockProject({
+      id: "scratch-project-id",
+      name: "scratch-repo",
+      gitUrl: "git@github.com:test/scratch-repo.git",
+      localPath: "/repos/new-project",
+    });
+    await act(async () => {
+      resolveCreation(createdProject);
+      expect(await creation).toEqual(createdProject);
+    });
+
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.projects).toEqual([createdProject]);
+    expect(mockToastSuccess).toHaveBeenCalledWith("Project created", {
+      description: "scratch-repo",
+    });
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  test("createProjectFromScratch preserves Error failures and reports them", async () => {
+    mockCreateProjectFromScratch.mockRejectedValue(new Error("GitHub authentication failed"));
+    const { result } = renderHook(() => useProjects());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    let thrownError: Error | undefined;
+    try {
+      await act(async () => {
+        await result.current.createProjectFromScratch("/repos/new-project");
+      });
+    } catch (error) {
+      thrownError = error as Error;
+    }
+
+    expect(thrownError?.message).toBe("GitHub authentication failed");
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.error).toBe("GitHub authentication failed");
+    expect(result.current.projects).toEqual([]);
+    expect(mockToastError).toHaveBeenCalledWith("Failed to create project", {
+      description: "GitHub authentication failed",
+    });
+    expect(mockToastSuccess).not.toHaveBeenCalled();
+  });
+
+  test("createProjectFromScratch normalizes non-Error failures", async () => {
+    mockCreateProjectFromScratch.mockRejectedValue({ reason: "unavailable" });
+    const { result } = renderHook(() => useProjects());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    let thrownError: Error | undefined;
+    try {
+      await act(async () => {
+        await result.current.createProjectFromScratch("/repos/new-project");
+      });
+    } catch (error) {
+      thrownError = error as Error;
+    }
+
+    expect(thrownError?.message).toBe("Failed to create project");
+    expect(result.current.error).toBe("Failed to create project");
+    expect(mockToastError).toHaveBeenCalledWith("Failed to create project", {
+      description: "Failed to create project",
+    });
   });
 
   test("removeProject removes a project successfully", async () => {
@@ -554,6 +657,51 @@ describe("useProjects", () => {
     });
 
     expect(result.current.projects.map((project) => project.id)).toEqual(["new-project-id"]);
+  });
+
+  test("does not let a mount snapshot overwrite a completed scratch creation", async () => {
+    let resolveSnapshot!: (projects: Project[]) => void;
+    mockGetProjects.mockImplementation(
+      () => new Promise<Project[]>((resolve) => {
+        resolveSnapshot = resolve;
+      }),
+    );
+
+    const { result } = renderHook(() => useProjects());
+
+    await act(async () => {
+      await result.current.createProjectFromScratch("/repos/scratch-repo");
+    });
+    expect(result.current.projects.map((project) => project.id)).toEqual(["scratch-project-id"]);
+
+    await act(async () => {
+      resolveSnapshot([]);
+    });
+
+    expect(result.current.projects.map((project) => project.id)).toEqual(["scratch-project-id"]);
+  });
+
+  test("ignores a failed load that became obsolete after scratch creation", async () => {
+    let rejectSnapshot!: (error: Error) => void;
+    mockGetProjects.mockImplementation(
+      () => new Promise<Project[]>((_, reject) => {
+        rejectSnapshot = reject;
+      }),
+    );
+
+    const { result } = renderHook(() => useProjects());
+
+    await act(async () => {
+      await result.current.createProjectFromScratch("/repos/scratch-repo");
+    });
+    expect(result.current.error).toBeNull();
+
+    await act(async () => {
+      rejectSnapshot(new Error("obsolete load failure"));
+    });
+
+    expect(result.current.error).toBeNull();
+    expect(result.current.projects.map((project) => project.id)).toEqual(["scratch-project-id"]);
   });
 
   test("a post-mutation load supersedes an older in-flight snapshot", async () => {

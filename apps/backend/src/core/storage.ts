@@ -1570,6 +1570,8 @@ export class StorageService {
   /** Process identity: client revision knowledge never crosses this boundary. */
   private readonly resourceGeneration = randomBytes(16).toString("hex");
   private writeQueue = Promise.resolve();
+  private projectMutationQueue: Promise<unknown> = Promise.resolve();
+  private readonly projectCreationMutationQueues = new Map<string, Promise<unknown>>();
   private environmentMutationQueue: Promise<unknown> = Promise.resolve();
   private configMutationQueue: Promise<unknown> = Promise.resolve();
   private openCodeModelCatalogMutationQueue: Promise<unknown> = Promise.resolve();
@@ -1950,6 +1952,70 @@ export class StorageService {
     return next;
   }
 
+  /**
+   * Serializes every projects.json read-modify-write in this process and across
+   * backend processes sharing the same data directory.
+   */
+  private enqueueProjectMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.projectsFile(),
+        "project storage",
+      );
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.projectMutationQueue.then(run, run);
+    this.projectMutationQueue = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  /**
+   * Reserves one canonical local path for the complete repository creation
+   * transaction. The hashed lock filename avoids putting user paths in storage
+   * or logs while still coordinating backend processes that share dataDir.
+   *
+   * The timings are sized for the critical section rather than for a JSON
+   * write: creation spans `git init`, a commit, `gh repo create` and a push,
+   * whose timeouts total 310s. A waiter must therefore outlast a legitimate
+   * holder, and the stale threshold must survive a holder whose event loop
+   * stalls — otherwise two backends enter and one rolls back the other's work.
+   */
+  private static readonly PROJECT_CREATION_LOCK_STALE_MS = 90_000;
+  private static readonly PROJECT_CREATION_LOCK_TIMEOUT_MS = 360_000;
+
+  async withProjectCreationLock<T>(
+    canonicalProjectPath: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const key = createHash("sha256").update(canonicalProjectPath).digest("hex");
+    const target = this.file(path.join("project-creation-locks", key));
+    const previous = this.projectCreationMutationQueues.get(key) ?? Promise.resolve();
+    const run = async () => {
+      const release = await this.acquireMutationLock(target, "project creation", {
+        staleMs: StorageService.PROJECT_CREATION_LOCK_STALE_MS,
+        acquireTimeoutMs: StorageService.PROJECT_CREATION_LOCK_TIMEOUT_MS,
+      });
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = previous.then(run, run);
+    const settled = next.then(() => undefined, () => undefined);
+    this.projectCreationMutationQueues.set(key, settled);
+    void settled.finally(() => {
+      if (this.projectCreationMutationQueues.get(key) === settled) {
+        this.projectCreationMutationQueues.delete(key);
+      }
+    });
+    return next;
+  }
+
   private enqueueConfigMutation<T>(operation: () => Promise<T>): Promise<T> {
     const run = async () => {
       const release = await this.acquireConfigMutationLock();
@@ -2083,13 +2149,24 @@ export class StorageService {
     return next;
   }
 
+  /**
+   * `staleMs` and `acquireTimeoutMs` must both exceed the critical section they
+   * guard. The defaults suit a JSON read-modify-write; a caller that holds the
+   * lock across child processes has to raise them, or a waiter will steal the
+   * lock from a live holder whose event loop merely stalled (machine sleep is
+   * the realistic case) and both will enter at once.
+   */
   private async acquireMutationLock(
     targetPath: string,
     description: string,
+    options: { staleMs?: number; acquireTimeoutMs?: number } = {},
   ): Promise<() => Promise<void>> {
+    const staleMs = options.staleMs ?? 15_000;
+    const acquireTimeoutMs = options.acquireTimeoutMs ?? 20_000;
+    const heartbeatMs = Math.max(1_000, Math.floor(staleMs / 3));
     const lockPath = `${targetPath}.lock`;
     const token = randomUUID();
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + acquireTimeoutMs;
     await fs.mkdir(path.dirname(lockPath), { recursive: true });
 
     while (true) {
@@ -2104,7 +2181,7 @@ export class StorageService {
         }
         const heartbeat = setInterval(() => {
           void handle.utimes(new Date(), new Date()).catch(() => undefined);
-        }, 5_000);
+        }, heartbeatMs);
         heartbeat.unref();
         return async () => {
           clearInterval(heartbeat);
@@ -2116,7 +2193,7 @@ export class StorageService {
         const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
         if (code !== "EEXIST") throw error;
         const stat = await fs.stat(lockPath).catch(() => null);
-        if (stat && Date.now() - stat.mtimeMs > 15_000) {
+        if (stat && Date.now() - stat.mtimeMs > staleMs) {
           await fs.rm(lockPath, { force: true });
           continue;
         }
@@ -2309,24 +2386,39 @@ export class StorageService {
     return projects.sort((a, b) => a.order - b.order);
   }
 
-  async addProject(project: Project): Promise<Project> {
-    const projects = await this.loadProjects();
-    if (projects.some((candidate) => candidate.gitUrl === project.gitUrl)) {
-      throw new Error(`Duplicate project URL: ${project.gitUrl}`);
-    }
+  /**
+   * `validate` runs inside the projects.json critical section, so a caller that
+   * must reject against the *current* stored set — a duplicate local path, say
+   * — cannot be raced by a concurrent writer between its own check and this
+   * insert.
+   */
+  async addProject(
+    project: Project,
+    validate?: (projects: Project[]) => void | Promise<void>,
+  ): Promise<Project> {
+    const added = await this.enqueueProjectMutation(async () => {
+      const projects = await this.loadProjects();
+      if (projects.some((candidate) => candidate.gitUrl === project.gitUrl)) {
+        throw new Error(`Duplicate project URL: ${project.gitUrl}`);
+      }
+      if (validate) await validate(projects);
 
-    project.order = Math.max(-1, ...projects.map((item) => item.order)) + 1;
-    projects.push(project);
-    await this.saveJson(this.projectsFile(), projects);
+      project.order = Math.max(-1, ...projects.map((item) => item.order)) + 1;
+      projects.push(project);
+      await this.saveJson(this.projectsFile(), projects);
+      return project;
+    });
     this.announce("project", project.id);
-    return project;
+    return added;
   }
 
   async removeProject(projectId: string): Promise<void> {
-    const projects = await this.loadProjects();
-    const filtered = projects.filter((project) => project.id !== projectId);
-    if (filtered.length === projects.length) throw new Error(`Project not found: ${projectId}`);
-    await this.saveJson(this.projectsFile(), filtered);
+    await this.enqueueProjectMutation(async () => {
+      const projects = await this.loadProjects();
+      const filtered = projects.filter((project) => project.id !== projectId);
+      if (filtered.length === projects.length) throw new Error(`Project not found: ${projectId}`);
+      await this.saveJson(this.projectsFile(), filtered);
+    });
     await this.deleteComposeDraftsByProject(projectId);
     this.announce("project", projectId);
   }
@@ -2336,32 +2428,38 @@ export class StorageService {
   }
 
   async updateProject(projectId: string, updates: Partial<Pick<Project, "name" | "localPath">>): Promise<Project> {
-    const projects = await this.loadProjects();
-    const project = projects.find((candidate) => candidate.id === projectId);
-    if (!project) throw new Error(`Project not found: ${projectId}`);
-    if (typeof updates.name === "string") project.name = updates.name;
-    if ("localPath" in updates) project.localPath = updates.localPath ?? null;
-    await this.saveJson(this.projectsFile(), projects);
+    const project = await this.enqueueProjectMutation(async () => {
+      const projects = await this.loadProjects();
+      const project = projects.find((candidate) => candidate.id === projectId);
+      if (!project) throw new Error(`Project not found: ${projectId}`);
+      if (typeof updates.name === "string") project.name = updates.name;
+      if ("localPath" in updates) project.localPath = updates.localPath ?? null;
+      await this.saveJson(this.projectsFile(), projects);
+      return project;
+    });
     this.announce("project", projectId);
     return project;
   }
 
   async reorderProjects(projectIds: string[]): Promise<Project[]> {
-    const projects = await this.loadProjects();
-    const provided = new Set(projectIds);
-    for (const [index, id] of projectIds.entries()) {
-      const project = projects.find((candidate) => candidate.id === id);
-      if (project) project.order = index;
-    }
+    const projects = await this.enqueueProjectMutation(async () => {
+      const projects = await this.loadProjects();
+      const provided = new Set(projectIds);
+      for (const [index, id] of projectIds.entries()) {
+        const project = projects.find((candidate) => candidate.id === id);
+        if (project) project.order = index;
+      }
 
-    let order = projectIds.length;
-    for (const project of projects) {
-      if (!provided.has(project.id)) project.order = order++;
-    }
+      let order = projectIds.length;
+      for (const project of projects) {
+        if (!provided.has(project.id)) project.order = order++;
+      }
 
-    await this.saveJson(this.projectsFile(), projects);
+      await this.saveJson(this.projectsFile(), projects);
+      return projects.sort((a, b) => a.order - b.order);
+    });
     for (const project of projects) this.announce("project", project.id);
-    return projects.sort((a, b) => a.order - b.order);
+    return projects;
   }
 
   async loadEnvironments(): Promise<Environment[]> {

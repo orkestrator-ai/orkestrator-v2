@@ -66,6 +66,7 @@ const stopEnvironmentMock = mock(async () => {});
 const restartEnvironmentMock = mock(async () => {});
 const reorderEnvironmentsMock = mock(async () => {});
 const addProjectMock = mock(async () => {});
+const createProjectFromScratchMock = mock(async () => {});
 const removeProjectMock = mock(async () => {});
 const updateProjectMock = mock(async () => {});
 const reorderProjectsMock = mock(async () => {});
@@ -87,6 +88,7 @@ mock.module("@/hooks/useProjects", () => ({
   useProjects: () => ({
     projects: projectsValue,
     addProject: addProjectMock,
+    createProjectFromScratch: createProjectFromScratchMock,
     removeProject: removeProjectMock,
     updateProject: updateProjectMock,
     reorderProjects: reorderProjectsMock,
@@ -228,6 +230,7 @@ describe("HierarchicalSidebar", () => {
     restartEnvironmentMock.mockClear();
     reorderEnvironmentsMock.mockClear();
     addProjectMock.mockClear();
+    createProjectFromScratchMock.mockClear();
     removeProjectMock.mockClear();
     updateProjectMock.mockClear();
     reorderProjectsMock.mockClear();
@@ -1573,15 +1576,60 @@ describe("HierarchicalSidebar", () => {
     fireEvent.change(await screen.findByLabelText(/Git URL/i), {
       target: { value: "https://github.com/acme/new.git" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add Project" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add project" }));
 
     await screen.findByText("repository already exists");
     expect(addProjectMock).toHaveBeenCalledWith("https://github.com/acme/new.git", undefined);
-    expect(screen.getByRole("heading", { name: "Add Project" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Add project" })).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Add Project" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add project" }));
     await waitFor(() => expect(addProjectMock).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  test("creates a scratch project through the add project dialog", async () => {
+    render(<HierarchicalSidebar />);
+
+    fireEvent.click(screen.getByTitle("Add project"));
+    fireEvent.mouseDown(await screen.findByRole("tab", { name: "Create new" }), { button: 0 });
+    fireEvent.change(screen.getByLabelText(/Project path/i), {
+      target: { value: "  /repos/new-project  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create project" }));
+
+    await waitFor(() => {
+      expect(createProjectFromScratchMock).toHaveBeenCalledWith("/repos/new-project");
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(addProjectMock).not.toHaveBeenCalled();
+  });
+
+  test("keeps the scratch dialog open and propagates creation errors", async () => {
+    createProjectFromScratchMock.mockRejectedValueOnce(new Error("remote creation failed"));
+    const originalConsoleError = console.error;
+    const consoleErrorMock = mock(() => undefined);
+    console.error = consoleErrorMock as typeof console.error;
+
+    try {
+      render(<HierarchicalSidebar />);
+
+      fireEvent.click(screen.getByTitle("Add project"));
+      fireEvent.mouseDown(await screen.findByRole("tab", { name: "Create new" }), { button: 0 });
+      fireEvent.change(screen.getByLabelText(/Project path/i), {
+        target: { value: "/repos/new-project" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Create project" }));
+
+      expect((await screen.findByRole("alert")).textContent).toContain("remote creation failed");
+      expect(createProjectFromScratchMock).toHaveBeenCalledWith("/repos/new-project");
+      expect(screen.getByRole("heading", { name: "Add project" })).toBeTruthy();
+      expect(consoleErrorMock).toHaveBeenCalledWith(
+        "Failed to create project:",
+        expect.any(Error),
+      );
+    } finally {
+      console.error = originalConsoleError;
+    }
   });
 
   test("opens repository settings from the project context menu", async () => {

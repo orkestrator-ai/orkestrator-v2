@@ -330,7 +330,16 @@ export function HierarchicalSidebar() {
   const [settingsProjectId, setSettingsProjectId] = useState<string | null>(null);
   const isMobile = useMediaQuery("(max-width: 767px)");
 
-  const { projects, addProject, removeProject, updateProject, reorderProjects, validateGitUrl, isLoading: projectsLoading } = useProjects();
+  const {
+    projects,
+    addProject,
+    createProjectFromScratch,
+    removeProject,
+    updateProject,
+    reorderProjects,
+    validateGitUrl,
+    isLoading: projectsLoading,
+  } = useProjects();
   const {
     allEnvironments,
     loadEnvironments,
@@ -516,6 +525,15 @@ export function HierarchicalSidebar() {
     } catch (err) {
       console.error("Failed to add project:", err);
       throw err; // Re-throw so the dialog can handle it
+    }
+  };
+
+  const handleCreateProject = async (localPath: string) => {
+    try {
+      await createProjectFromScratch(localPath);
+    } catch (err) {
+      console.error("Failed to create project:", err);
+      throw err;
     }
   };
 
@@ -1012,6 +1030,7 @@ export function HierarchicalSidebar() {
         open={showAddProjectDialog}
         onOpenChange={setShowAddProjectDialog}
         onAdd={handleAddProject}
+        onCreate={handleCreateProject}
         validateGitUrl={validateGitUrl}
       />
 

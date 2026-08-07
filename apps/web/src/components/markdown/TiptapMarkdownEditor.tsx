@@ -9,6 +9,7 @@ import {
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import {
   createMarkdownExtensions,
+  restoreMarkdownFrontmatter,
   splitMarkdownFrontmatter,
 } from "./tiptap-extensions";
 
@@ -41,9 +42,12 @@ export const TiptapMarkdownEditor = forwardRef<
   const onChangeRef = useRef(onChange);
   const onSaveRef = useRef(onSave);
   const onParseErrorRef = useRef(onParseError);
-  const { frontmatter, body } = splitMarkdownFrontmatter(markdown);
-  const frontmatterRef = useRef(frontmatter);
-  frontmatterRef.current = frontmatter;
+  // useEditor owns its initial document for this component instance. Keep the
+  // matching frontmatter stable as the controlled store echoes rich edits
+  // back through `markdown`; re-splitting those echoes could reinterpret body
+  // thematic breaks as newly introduced metadata.
+  const initialMarkdownRef = useRef(splitMarkdownFrontmatter(markdown));
+  const { frontmatter, body } = initialMarkdownRef.current;
 
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -53,20 +57,23 @@ export const TiptapMarkdownEditor = forwardRef<
 
   const syncEditorToStore = useCallback((): string | null => {
     const currentEditor = editorRef.current;
-    if (!currentEditor || currentEditor.isDestroyed || !hasPendingChangesRef.current) {
-      return null;
-    }
-
     if (syncTimerRef.current) {
       clearTimeout(syncTimerRef.current);
       syncTimerRef.current = null;
     }
 
-    const currentMarkdown = frontmatterRef.current + currentEditor.getMarkdown();
+    if (!currentEditor || currentEditor.isDestroyed || !hasPendingChangesRef.current) {
+      return null;
+    }
+
+    const currentMarkdown = restoreMarkdownFrontmatter(
+      frontmatter,
+      currentEditor.getMarkdown(),
+    );
     hasPendingChangesRef.current = false;
     onChangeRef.current(currentMarkdown);
     return currentMarkdown;
-  }, []);
+  }, [frontmatter]);
 
   useImperativeHandle(ref, () => ({
     flushPendingChanges: syncEditorToStore,
@@ -131,7 +138,7 @@ export const TiptapMarkdownEditor = forwardRef<
         }
         hasPendingChangesRef.current = false;
         onChangeRef.current(
-          frontmatterRef.current + destroyedEditor.getMarkdown(),
+          restoreMarkdownFrontmatter(frontmatter, destroyedEditor.getMarkdown()),
         );
       }
       editorRef.current = null;
@@ -147,10 +154,6 @@ export const TiptapMarkdownEditor = forwardRef<
   useEffect(() => {
     return () => {
       syncEditorToStore();
-      if (syncTimerRef.current) {
-        clearTimeout(syncTimerRef.current);
-        syncTimerRef.current = null;
-      }
     };
   }, [syncEditorToStore]);
 

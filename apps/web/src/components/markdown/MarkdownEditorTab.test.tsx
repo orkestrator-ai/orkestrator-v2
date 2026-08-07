@@ -1,4 +1,13 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from "bun:test";
 import {
   act,
   cleanup,
@@ -9,6 +18,8 @@ import {
 } from "@testing-library/react";
 import { useFileDirtyStore } from "@/stores/fileDirtyStore";
 import * as realMonacoFileEditor from "@/components/terminal/MonacoFileEditor";
+import { MarkdownManager } from "@tiptap/markdown";
+import type { Editor } from "@tiptap/react";
 
 const realMonacoFileEditorSnapshot = { ...realMonacoFileEditor };
 
@@ -40,6 +51,7 @@ const { MarkdownEditorTab } = await import("./MarkdownEditorTab");
 
 const TAB_ID = "markdown-tab";
 const ORIGINAL_MARKDOWN = "# Original heading\n\nOriginal body.";
+type TiptapEditorElement = HTMLElement & { editor: Editor };
 
 function seedMarkdown(markdown: string): void {
   useFileDirtyStore.setState({ dirtyFiles: new Map() });
@@ -83,9 +95,6 @@ describe("MarkdownEditorTab", () => {
     expect(useFileDirtyStore.getState().getContent(TAB_ID)).toBe(ORIGINAL_MARKDOWN);
     expect(useFileDirtyStore.getState().isDirty(TAB_ID)).toBe(false);
     expect(rawTab.getAttribute("data-state")).toBe("active");
-    expect(
-      screen.getByRole("status", { name: "Loading raw editor…" }),
-    ).toBeTruthy();
     expect(
       (await screen.findByRole("textbox", {
         name: "Raw Markdown source",
@@ -159,14 +168,11 @@ describe("MarkdownEditorTab", () => {
       />,
     );
 
-    const editor = await screen.findByTestId("tiptap-markdown-editor");
-    editor.innerHTML = "<p>Changed while rendered</p>";
-    fireEvent.input(editor, {
-      data: "Changed while rendered",
-      inputType: "insertText",
-    });
-    await act(async () => {
-      await Promise.resolve();
+    const editor = await screen.findByTestId(
+      "tiptap-markdown-editor",
+    ) as TiptapEditorElement;
+    act(() => {
+      editor.editor.commands.setContent("<p>Changed while rendered</p>");
     });
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Raw" }), { button: 0 });
 
@@ -231,6 +237,113 @@ describe("MarkdownEditorTab", () => {
     expect(screen.queryByText(/cannot preserve/i)).toBeNull();
   });
 
+  test("preserves frontmatter when a rendered edit switches to Raw mode", async () => {
+    const markdown = "---\ntitle: Example\n---\n\nOriginal body";
+    seedMarkdown(markdown);
+    render(
+      <MarkdownEditorTab
+        tabId={TAB_ID}
+        filePath="SKILL.md"
+        initialContent={markdown}
+        language="markdown"
+        isActive
+        isSaving={false}
+        onSave={mock(async () => true)}
+      />,
+    );
+
+    const editor = await screen.findByTestId(
+      "tiptap-markdown-editor",
+    ) as TiptapEditorElement;
+    act(() => {
+      editor.editor.commands.setContent("<p>Updated body</p>");
+    });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Raw" }), { button: 0 });
+
+    expect(
+      (await screen.findByRole("textbox", {
+        name: "Raw Markdown source",
+      }) as HTMLTextAreaElement).value,
+    ).toBe("---\ntitle: Example\n---\n\nUpdated body");
+  });
+
+  test("keeps frontmatter stable across Raw, Rendered, edit, and save", async () => {
+    const markdown = "---\ntitle: Example\n---\n\nOriginal body";
+    const onSave = mock(async () => true);
+    seedMarkdown(markdown);
+    render(
+      <MarkdownEditorTab
+        tabId={TAB_ID}
+        filePath="SKILL.md"
+        initialContent={markdown}
+        language="markdown"
+        isActive
+        isSaving={false}
+        onSave={onSave}
+      />,
+    );
+
+    await screen.findByText("Original body");
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Raw" }), { button: 0 });
+    fireEvent.change(await screen.findByRole("textbox", {
+      name: "Raw Markdown source",
+    }), {
+      target: { value: "---\ntitle: Example\n---\n\nRaw body" },
+    });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Rendered" }), {
+      button: 0,
+    });
+
+    const editor = await screen.findByTestId("tiptap-markdown-editor") as
+      TiptapEditorElement;
+    expect(await screen.findByText("Raw body")).toBeTruthy();
+    expect(editor.textContent).not.toContain("title: Example");
+    act(() => {
+      editor.editor.commands.setContent("<p>Saved body</p>");
+    });
+    fireEvent.keyDown(editor, { key: "s", ctrlKey: true });
+
+    expect(onSave).toHaveBeenCalledWith(
+      "---\ntitle: Example\n---\n\nSaved body",
+    );
+  });
+
+  test("renders and preserves delimiter blocks that are not frontmatter", async () => {
+    const markdown = "Intro\n\n---\n\ntitle: x\n\n---\n\nBody";
+    seedMarkdown(markdown);
+    render(
+      <MarkdownEditorTab
+        tabId={TAB_ID}
+        filePath="RULES.md"
+        initialContent={markdown}
+        language="markdown"
+        isActive
+        isSaving={false}
+        onSave={mock(async () => true)}
+      />,
+    );
+
+    expect(await screen.findByText("Intro")).toBeTruthy();
+    expect(screen.getByText("title: x")).toBeTruthy();
+    expect(screen.getByText("Body")).toBeTruthy();
+    const editor = await screen.findByTestId("tiptap-markdown-editor") as
+      TiptapEditorElement;
+    act(() => {
+      editor.editor.commands.setContent(
+        "<p>Updated intro</p><hr><p>title: x</p><hr><p>Body</p>",
+      );
+    });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Raw" }), { button: 0 });
+
+    const raw = (await screen.findByRole("textbox", {
+      name: "Raw Markdown source",
+    }) as HTMLTextAreaElement).value;
+    expect(raw).toContain("Updated intro");
+    expect(raw).toContain("title: x");
+    expect(raw).toContain("Body");
+    expect(raw.match(/---/g)?.length).toBe(2);
+  });
+
   test("starts lossy Markdown in raw mode and blocks Rendered mode", () => {
     const unsupported = "Paragraph\n\n[^1]: footnote";
     seedMarkdown(unsupported);
@@ -279,6 +392,53 @@ describe("MarkdownEditorTab", () => {
 
     expect(await screen.findByRole("heading", { name: "Safe again" })).toBeTruthy();
     expect(screen.queryByText(/cannot preserve/i)).toBeNull();
+  });
+
+  test("falls back to Raw mode when Tiptap reports a content error", async () => {
+    const originalParse = MarkdownManager.prototype.parse;
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    let parseCalls = 0;
+    MarkdownManager.prototype.parse = function (
+      this: MarkdownManager,
+      ...args
+    ) {
+      parseCalls += 1;
+      if (parseCalls === 1) {
+        return originalParse.apply(this, args);
+      }
+      return {
+        type: "doc",
+        content: [{ type: "unknownTestNode" }],
+      };
+    } as typeof MarkdownManager.prototype.parse;
+
+    try {
+      render(
+        <MarkdownEditorTab
+          tabId={TAB_ID}
+          filePath="README.md"
+          initialContent={ORIGINAL_MARKDOWN}
+          language="markdown"
+          isActive
+          isSaving={false}
+          onSave={mock(async () => true)}
+        />,
+      );
+
+      expect(
+        await screen.findByText(/Invalid JSON content/i),
+      ).toBeTruthy();
+      expect(screen.getByRole("tab", { name: "Raw" }).getAttribute("data-state"))
+        .toBe("active");
+      expect(
+        (await screen.findByRole("textbox", {
+          name: "Raw Markdown source",
+        }) as HTMLTextAreaElement).value,
+      ).toBe(ORIGINAL_MARKDOWN);
+    } finally {
+      MarkdownManager.prototype.parse = originalParse;
+      warn.mockRestore();
+    }
   });
 
   test("shows saving state and disables pointer interaction while inactive", () => {

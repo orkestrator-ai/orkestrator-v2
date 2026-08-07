@@ -23,6 +23,10 @@ import {
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import * as backend from "@/lib/backend";
 import { hydrateBuildPipeline } from "@/lib/build-pipeline-persistence";
+import {
+  hideRawStructuredReviewMessages,
+  showOnlyFinalVerificationMessage,
+} from "@/lib/structured-review-messages";
 import { useVirtuosoScrollState } from "@/hooks";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -210,18 +214,30 @@ export function BuildChatTab({
   // Snapshots written before per-step harnesses carry no session agent.
   const agentType = selectedSession?.agent ?? pipeline?.agentType;
   const messages = useMemo(
-    () =>
-      agentType
-        ? toPipelineTranscript(
-            selectedSession?.messages,
-            agentType,
-            selectedSession?.startedAt ?? new Date().toISOString(),
-            selectedSession?.interactionTranscript,
-          )
-        : [],
+    () => {
+      if (!agentType) return [];
+      const transcript = toPipelineTranscript(
+        selectedSession?.messages,
+        agentType,
+        selectedSession?.startedAt ?? new Date().toISOString(),
+        selectedSession?.interactionTranscript,
+      );
+      if (selectedSession?.phase === "review") {
+        return hideRawStructuredReviewMessages(transcript);
+      }
+      if (selectedSession?.phase === "verify") {
+        return showOnlyFinalVerificationMessage(
+          transcript,
+          selectedSession.status === "idle",
+        );
+      }
+      return transcript;
+    },
     [
       agentType,
       selectedSession?.messages,
+      selectedSession?.phase,
+      selectedSession?.status,
       selectedSession?.startedAt,
       selectedSession?.interactionTranscript,
     ],

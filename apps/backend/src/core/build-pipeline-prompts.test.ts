@@ -111,7 +111,11 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("## Step 4: Test Coverage Review");
     expect(prompt).toContain("git diff origin/main...HEAD");
     expect(prompt).toContain("provider-enforced JSON Schema");
-    expect(prompt).toContain("Return only the provider-enforced structured report");
+    expect(prompt).toContain("Use ordinary prose for interim progress updates");
+    expect(prompt).toContain("Never emit a partial or provisional structured report");
+    expect(prompt).toContain(
+      "make the final assistant message the only provider-enforced structured report",
+    );
     expect(prompt).not.toContain("## Output Format");
     expect(prompt).not.toContain("## Summary of change");
     expect(prompt).toContain(
@@ -291,6 +295,9 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("may write generated artifacts and tool caches");
     expect(prompt).toContain("Do not edit source files or create commits");
     expect(prompt).toContain("If relevant work is uncommitted");
+    expect(prompt).toContain("Use ordinary prose for interim progress updates");
+    expect(prompt).toContain("Never emit a partial or provisional verification verdict");
+    expect(prompt).toContain("make the final assistant message the only JSON object");
     expect(prompt).toContain('{"complete":true,"rationale":"..."}');
     expect(prompt).toContain("Use Bun.");
   });

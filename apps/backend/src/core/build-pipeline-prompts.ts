@@ -139,7 +139,7 @@ export function verificationPrompt(
     ticketContext(pipeline.taskSnapshot),
     notes ? `**Project Notes**:\n${notes}` : "",
     `Compare against origin/${targetBranch}. Run the relevant validation; it may write generated artifacts and tool caches. Do not edit source files or create commits. If relevant work is uncommitted or any acceptance criterion is unmet, report failure.`,
-    'Respond only with JSON: {"complete":true,"rationale":"..."}',
+    'Use ordinary prose for interim progress updates. Never emit a partial or provisional verification verdict. After every validation command and tool call has finished, make the final assistant message the only JSON object, matching the provider-enforced schema: {"complete":true,"rationale":"..."}',
   ].filter(Boolean).join("\n\n");
 }
 

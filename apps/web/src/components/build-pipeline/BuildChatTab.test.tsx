@@ -564,6 +564,155 @@ describe("BuildChatTab presentation", () => {
     await waitFor(() => expect(screen.queryByLabelText(reportLabel)).toBeNull());
   });
 
+  test("hides provisional transcript reports and shows the authoritative report once", async () => {
+    const provisional = JSON.stringify({
+      ...TEST_STRUCTURED_REVIEW_REPORT,
+      issues: [],
+      testCoverageGaps: [],
+      verdict: {
+        ready: "no",
+        reasoning: "Review work is still in progress.",
+      },
+    });
+    const final = JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT);
+    renderTab({
+      ...reviewed,
+      sessions: reviewed.sessions.map((session) =>
+        session.phase === "review"
+          ? {
+              ...session,
+              messages: [{
+                id: "review-answer",
+                role: "assistant",
+                content: final,
+                parts: [
+                  { type: "text", content: provisional },
+                  {
+                    type: "tool-invocation",
+                    content: "git diff --stat",
+                    toolName: "shell",
+                    toolState: "success",
+                  },
+                  { type: "text", content: final },
+                ],
+              }],
+            }
+          : session
+      ),
+    });
+
+    fireEvent.click(screen.getByText("Review Session"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Structured review report")).toBeTruthy());
+
+    expect(screen.getAllByText("Structured review report")).toHaveLength(1);
+    expect(screen.queryByText(/Ready: no/)).toBeNull();
+    expect(listProps.messages[0]?.parts).toEqual([
+      expect.objectContaining({
+        type: "tool-invocation",
+        content: "git diff --stat",
+      }),
+    ]);
+  });
+
+  test("shows only the completed turn's final verification verdict", async () => {
+    const inspecting = JSON.stringify({
+      complete: false,
+      rationale: "I am inspecting the committed diff.",
+    });
+    const testing = JSON.stringify({
+      complete: false,
+      rationale: "The branch is clean; I am running tests now.",
+    });
+    const final = JSON.stringify({
+      complete: true,
+      rationale: "All acceptance criteria and validation checks passed.",
+    });
+    renderTab({
+      ...pipeline,
+      verificationResult: "pass",
+      verificationFeedback: "All acceptance criteria and validation checks passed.",
+      sessions: [
+        pipeline.sessions[0]!,
+        {
+          ...pipeline.sessions[1]!,
+          agent: "codex",
+          messages: [{
+            id: "verification-answer",
+            role: "assistant",
+            content: final,
+            parts: [
+              { type: "text", content: inspecting },
+              {
+                type: "tool-invocation",
+                content: "bun test",
+                toolName: "bash",
+                toolState: "success",
+              },
+              { type: "text", content: testing },
+              {
+                type: "tool-invocation",
+                content: "bun run build",
+                toolName: "bash",
+                toolState: "success",
+              },
+              { type: "text", content: final },
+            ],
+          }],
+        },
+      ],
+    });
+
+    expect(screen.queryByText("Verification failed")).toBeNull();
+    expect(screen.getAllByText("Verification passed")).toHaveLength(1);
+    expect(
+      listProps.messages[0]?.parts
+        .filter((part: { type: string }) => part.type === "tool-invocation")
+        .map((part: { content: string }) => part.content),
+    ).toEqual(["bun test", "bun run build"]);
+  });
+
+  test("does not call a provisional running verdict a verification failure", () => {
+    const inspecting = JSON.stringify({
+      complete: false,
+      rationale: "I am inspecting the committed diff.",
+    });
+    renderTab({
+      ...pipeline,
+      phase: "verifying",
+      sessions: [
+        pipeline.sessions[0]!,
+        {
+          ...pipeline.sessions[1]!,
+          agent: "codex",
+          status: "running",
+          messages: [{
+            id: "verification-answer",
+            role: "assistant",
+            content: inspecting,
+            parts: [
+              { type: "text", content: inspecting },
+              {
+                type: "tool-invocation",
+                content: "bun test",
+                toolName: "bash",
+                toolState: "pending",
+              },
+            ],
+          }],
+        },
+      ],
+    });
+
+    expect(screen.queryByText("Verification failed")).toBeNull();
+    expect(listProps.messages[0]?.parts).toEqual([
+      expect.objectContaining({
+        type: "tool-invocation",
+        content: "bun test",
+      }),
+    ]);
+  });
+
   test("keeps the report's sections collapsed and its JSON out of the transcript", async () => {
     renderTab(reviewed);
     fireEvent.click(screen.getByText("Review Session"));

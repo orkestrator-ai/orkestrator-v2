@@ -301,7 +301,6 @@ describe("LinearTicketsView", () => {
         identifier: "ENG-URGENT",
         title: "Urgent ticket",
         status: "Todo",
-        priority: 1,
         priorityLabel: "Urgent",
         createdAt: "2026-06-20T12:00:00.000Z",
         updatedAt: "2026-06-21T12:00:00.000Z",
@@ -316,6 +315,15 @@ describe("LinearTicketsView", () => {
         createdAt: "2026-06-30T12:00:00.000Z",
         updatedAt: "2026-06-25T12:00:00.000Z",
       },
+      {
+        id: "issue-unprioritized",
+        identifier: "ENG-NONE",
+        title: "Unprioritized ticket",
+        status: "Todo",
+        priority: 0,
+        priorityLabel: "No priority",
+        updatedAt: "2026-07-01T12:00:00.000Z",
+      },
     ];
     getLinearIssuesMock.mockResolvedValue(sortableIssues);
     const visibleTitles = () =>
@@ -324,18 +332,33 @@ describe("LinearTicketsView", () => {
     renderLinearTicketsView();
 
     await screen.findByText("Urgent ticket");
-    expect(visibleTitles()).toEqual(["Urgent ticket", "High ticket", "Low ticket"]);
+    expect(visibleTitles()).toEqual([
+      "Urgent ticket",
+      "High ticket",
+      "Low ticket",
+      "Unprioritized ticket",
+    ]);
 
     fireEvent.click(screen.getByRole("combobox", { name: "Order Linear tickets by" }));
     fireEvent.click(await screen.findByRole("option", { name: "Created date" }));
     await waitFor(() => {
-      expect(visibleTitles()).toEqual(["High ticket", "Low ticket", "Urgent ticket"]);
+      expect(visibleTitles()).toEqual([
+        "High ticket",
+        "Low ticket",
+        "Urgent ticket",
+        "Unprioritized ticket",
+      ]);
     });
 
     fireEvent.click(screen.getByRole("combobox", { name: "Order Linear tickets by" }));
     fireEvent.click(await screen.findByRole("option", { name: "Updated date" }));
     await waitFor(() => {
-      expect(visibleTitles()).toEqual(["Low ticket", "High ticket", "Urgent ticket"]);
+      expect(visibleTitles()).toEqual([
+        "Unprioritized ticket",
+        "Low ticket",
+        "High ticket",
+        "Urgent ticket",
+      ]);
     });
   });
 

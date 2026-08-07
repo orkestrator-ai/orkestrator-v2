@@ -5852,7 +5852,7 @@ describe("ClaudeChatTab", () => {
       expect(screen.queryByTestId("claude-background-task-hold")).toBeNull();
     });
 
-    test("does not show a hold card for live tasks unless the response is ready", async () => {
+    test("shows retained live tasks even after the session returns to idle", async () => {
       mockGetSession.mockResolvedValue(serverSession({
         completionBlockedByBackgroundTasks: false,
       }) as any);
@@ -5862,7 +5862,7 @@ describe("ClaudeChatTab", () => {
         expect(useClaudeStore.getState().backgroundTasks.get(SESSION_KEY)?.["task-1"]?.status)
           .toBe("running"),
       );
-      expect(screen.queryByTestId("claude-background-task-hold")).toBeNull();
+      expect(screen.getByTestId("claude-background-task-hold")).toBeTruthy();
     });
 
     test("rehydrates a named terminal TaskStop row after the tab remounts", async () => {
@@ -6287,7 +6287,11 @@ describe("ClaudeChatTab", () => {
         expect(
           useClaudeStore.getState().completionBlockedByBackgroundTasks.get(SESSION_KEY),
         ).toBe(true);
-        expect(screen.getByText("Response ready · 1 background task still running")).toBeTruthy();
+        const runningTaskCard = screen.getByTestId("claude-background-task-hold");
+        expect(runningTaskCard.textContent).toContain(
+          "Response in progress · 1 background task running",
+        );
+        expect(runningTaskCard.textContent).not.toContain("The response is complete");
 
         channel.push({
           type: "session.idle",
@@ -6299,7 +6303,100 @@ describe("ClaudeChatTab", () => {
             useClaudeStore.getState().completionBlockedByBackgroundTasks.has(SESSION_KEY),
           ).toBe(false);
         });
-        expect(screen.queryByTestId("claude-background-task-hold")).toBeNull();
+        await waitFor(() => {
+          expect(screen.getByTestId("claude-background-task-hold").textContent).toContain(
+            "Response ready · 1 background task still running",
+          );
+        });
+
+        act(() => {
+          useClaudeStore.getState().setSessionLoading(SESSION_KEY, true);
+        });
+        await waitFor(() => {
+          expect(screen.getByTestId("claude-background-task-hold").textContent).toContain(
+            "Response in progress · 1 background task running",
+          );
+        });
+        channel.push({
+          type: "session.error",
+          sessionId: "session-1",
+          data: { error: "Follow-up failed" },
+        });
+        await waitFor(() => {
+          const failedTaskCard = screen.getByTestId("claude-background-task-hold");
+          expect(failedTaskCard.textContent).toContain(
+            "Response ended · 1 background task still running",
+          );
+          expect(failedTaskCard.textContent).not.toContain("The response is complete");
+          expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.error).toBe(
+            "Follow-up failed",
+          );
+        });
+
+        channel.push({
+          type: "session.updated",
+          sessionId: "session-1",
+          data: { status: "running" },
+        } as any);
+        await waitFor(() => {
+          expect(screen.getByTestId("claude-background-task-hold").textContent).toContain(
+            "Response in progress · 1 background task running",
+          );
+          expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.error).toBeUndefined();
+        });
+        channel.push({
+          type: "session.idle",
+          sessionId: "session-1",
+          data: { success: true },
+        } as any);
+        await waitFor(() => {
+          expect(screen.getByTestId("claude-background-task-hold").textContent).toContain(
+            "Response ready · 1 background task still running",
+          );
+        });
+
+        act(() => {
+          useClaudeStore.getState().setBackgroundTasks(SESSION_KEY, {
+            "bg-1": { id: "bg-1", status: "completed", description: "Long build" },
+          });
+        });
+        await waitFor(() => {
+          expect(screen.queryByTestId("claude-background-task-hold")).toBeNull();
+        });
+      });
+    });
+
+    test("sending a new prompt clears the previous turn's error", async () => {
+      await withChannel(async (channel) => {
+        act(() => {
+          useClaudeStore.getState().setBackgroundTasks(SESSION_KEY, {
+            "bg-1": { id: "bg-1", status: "running", description: "Long build" },
+          });
+        });
+        channel.push({
+          type: "session.error",
+          sessionId: "session-1",
+          data: { error: "Previous turn failed" },
+        });
+        await waitFor(() => {
+          expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.error).toBe(
+            "Previous turn failed",
+          );
+          expect(screen.getByTestId("claude-background-task-hold").textContent).toContain(
+            "Response ended · 1 background task still running",
+          );
+        });
+
+        // The error belongs to a turn the user has moved on from. Leaving it set
+        // keeps the hold card reporting a failure for the turn now in flight.
+        await submitClaudePrompt("try again");
+
+        await waitFor(() => {
+          expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.error).toBeUndefined();
+          expect(screen.getByTestId("claude-background-task-hold").textContent).toContain(
+            "Response in progress · 1 background task running",
+          );
+        });
       });
     });
 

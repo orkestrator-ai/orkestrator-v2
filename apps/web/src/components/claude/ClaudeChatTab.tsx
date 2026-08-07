@@ -871,12 +871,6 @@ export function ClaudeChatTab({
       [sessionKey],
     ),
   );
-  const completionBlockedByBackgroundTasks = useClaudeStore(
-    useCallback(
-      (state) => state.completionBlockedByBackgroundTasks.get(sessionKey) === true,
-      [sessionKey],
-    ),
-  );
   const liveBackgroundTasks = useMemo(
     () => Object.values(backgroundTasks).filter(
       (task) => task.status === "pending" || task.status === "running" || task.status === "paused",
@@ -1954,6 +1948,7 @@ export function ClaudeChatTab({
                * Terminal transitions still use session.idle/session.error.
                */
               if (sessionUpdate?.status === "running") {
+                setSessionError(sessionTabId, undefined);
                 setSessionLoading(
                   sessionTabId,
                   true,
@@ -2023,6 +2018,9 @@ export function ClaudeChatTab({
             if (isFinalEvent) {
               setSessionLoading(sessionTabId, false);
               setCompletionBlockedByBackgroundTasks(sessionTabId, false);
+              if (eventType === "session.idle") {
+                setSessionError(sessionTabId, undefined);
+              }
             }
 
             if (eventType === "session.title-updated") {
@@ -2048,6 +2046,7 @@ export function ClaudeChatTab({
               } else {
                 errorMsg = "An unknown error occurred";
               }
+              setSessionError(sessionTabId, errorMsg);
               const errorMessage = {
                 id: `${ERROR_MESSAGE_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2)}`,
                 role: "assistant" as const,
@@ -2339,6 +2338,7 @@ export function ClaudeChatTab({
         timestamp: new Date().toISOString(),
       };
       addMessage(sessionKey, userMessage);
+      setSessionError(sessionKey, undefined);
       setSessionLoading(sessionKey, true);
 
       // If this is the first message and the environment still has a default timestamp name,
@@ -2441,6 +2441,7 @@ export function ClaudeChatTab({
       getSelectedModel,
       addMessage,
       removeMessage,
+      setSessionError,
       setSessionLoading,
       handoff.pendingHistory,
       discoveredSlashCommands,
@@ -2970,10 +2971,11 @@ export function ClaudeChatTab({
       }
       pinnedAccessory={
         session
-        && completionBlockedByBackgroundTasks
         && liveBackgroundTasks.length > 0 ? (
           <ClaudeBackgroundTaskHoldCard
             tasks={liveBackgroundTasks}
+            responseInProgress={session.isLoading}
+            responseFailed={Boolean(session.error)}
             onStopTask={handleStopBackgroundTask}
           />
         ) : null

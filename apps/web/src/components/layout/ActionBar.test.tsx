@@ -1273,35 +1273,51 @@ describe("ActionBar editor and run commands", () => {
 
 describe("ActionBar toolbar interactions", () => {
   test("opens global, Docker, repository, and environment settings", async () => {
+    const asyncDialogOptions = { timeout: 10_000 };
     render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Global settings" }));
     expect(
       screen.getByRole("status", { name: "Loading global settings…" }),
     ).toBeTruthy();
-    expect(await screen.findByText("Global settings dialog")).toBeTruthy();
+    expect(
+      await screen.findByText("Global settings dialog", undefined, asyncDialogOptions),
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Docker configuration" }));
-    expect(await screen.findByText("Docker configuration dialog")).toBeTruthy();
+    expect(
+      await screen.findByText("Docker configuration dialog", undefined, asyncDialogOptions),
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
-    expect(await screen.findByText("Repository settings for repo")).toBeTruthy();
+    expect(
+      await screen.findByText("Repository settings for repo", undefined, asyncDialogOptions),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Update mock repository" }));
     await waitFor(() => expect(updateProjectMock).toHaveBeenCalledWith({
       ...selectedProject,
       name: "updated-repo",
-    }));
+    }), asyncDialogOptions);
 
     fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
-    expect(await screen.findByText("Environment settings for feature-env")).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "Environment settings for feature-env",
+        undefined,
+        asyncDialogOptions,
+      ),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Update mock environment" }));
     expect(updateEnvironmentMock).toHaveBeenCalledWith(
       "env-1",
       expect.objectContaining({ id: "env-1", name: "updated-env" }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Restart mock environment" }));
-    await waitFor(() => expect(recreateEnvironmentMock).toHaveBeenCalledWith("env-1"));
-  });
+    await waitFor(
+      () => expect(recreateEnvironmentMock).toHaveBeenCalledWith("env-1"),
+      asyncDialogOptions,
+    );
+  }, 60_000);
 
   test("dismisses repository and environment settings through onOpenChange", async () => {
     render(<ActionBar />);

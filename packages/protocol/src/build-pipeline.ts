@@ -116,23 +116,16 @@ export type BuildExecutionMode = "plan" | "build";
 /**
  * The execution mode a session phase runs under on one harness.
  *
- * `review` and `verify` only need to read the workspace, and Codex enforces that
- * with a read-only sandbox. Claude cannot be held to the same guarantee: its
- * `plan` permission mode injects the `ExitPlanMode` approval protocol, which
- * waits for a human to approve before work continues — in a pipeline with nobody
- * to answer, a plan-mode review would simply stall. OpenCode's `plan` agent is
- * likewise a chat-oriented surface rather than a sandbox.
- *
- * The difference is therefore real and cannot be flattened by forcing a mode. It
- * lives here so the supervisor that applies it and the launcher that discloses
- * it read the same definition and cannot drift.
+ * Validation in any phase may write compiler output, snapshots, coverage data,
+ * generated artifacts, or tool caches. Every unattended pipeline session
+ * therefore runs in build mode on every harness. Phase prompts remain
+ * responsible for forbidding source edits and commits in review-only stages.
  */
 export function executionModeForSessionPhase(
-  phase: PipelineSessionPhase,
-  agent: BuildPipelineAgent,
+  _phase: PipelineSessionPhase,
+  _agent: BuildPipelineAgent,
 ): BuildExecutionMode {
-  const readOnly = phase === "review" || phase === "verify";
-  return readOnly && agent === "codex" ? "plan" : "build";
+  return "build";
 }
 
 /**

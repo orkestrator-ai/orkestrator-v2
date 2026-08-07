@@ -1503,7 +1503,7 @@ describe("per-step model placeholders", () => {
 });
 
 describe("per-step execution modes", () => {
-  test("sandboxes review and verify on Codex and states build mode elsewhere", async () => {
+  test("keeps every Codex stage writable for validation", async () => {
     await withService(async ({ service, storage, providerFor }) => {
       const codex = providerFor("codex");
       const started = await service.start({
@@ -1522,18 +1522,16 @@ describe("per-step execution modes", () => {
       // the sandbox a stage runs under is one decision in one place.
       expect(codex.createdModes).toEqual([
         ["build", "build"],
-        ["review", "plan"],
-        ["verify", "plan"],
+        ["review", "build"],
+        ["verify", "build"],
         ["pr", "build"],
       ]);
-      expect(codex.sentModes).toEqual(["build", "plan", "plan", "build"]);
+      expect(codex.sentModes).toEqual(["build", "build", "build", "build"]);
     });
   });
 
-  test("keeps a harness that cannot be sandboxed in build mode", async () => {
+  test("keeps every Claude stage in build mode", async () => {
     await withService(async ({ service, storage, providerFor }) => {
-      // Claude's plan mode waits on `ExitPlanMode` approval, which a pipeline
-      // has nobody to give, so a plan-mode review would stall rather than run.
       const claude = providerFor("claude");
       const started = await service.start({
         ...startInput(),
@@ -1553,7 +1551,7 @@ describe("per-step execution modes", () => {
     });
   });
 
-  test("addressing review findings overrides the review stage's read-only mode", async () => {
+  test("keeps the writable review session in build mode when addressing findings", async () => {
     await withService(async ({ service, storage, providerFor }) => {
       const codex = providerFor("codex");
       codex.structured = async <T>(
@@ -1590,9 +1588,10 @@ describe("per-step execution modes", () => {
       });
       await advanceToStage(service, storage, started.id, "verify");
 
-      // The review session is reused to write the fixes, so that turn has to
-      // leave the read-only sandbox the review itself ran in.
-      expect(codex.sentModes.slice(0, 3)).toEqual(["build", "plan", "build"]);
+      // The review session is reused to write the fixes. It already has write
+      // access for validation, and the addressing turn explicitly stays in
+      // build mode as well.
+      expect(codex.sentModes.slice(0, 3)).toEqual(["build", "build", "build"]);
     });
   });
 });

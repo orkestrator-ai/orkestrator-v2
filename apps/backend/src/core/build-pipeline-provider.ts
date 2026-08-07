@@ -144,11 +144,9 @@ export interface ProviderCreateSessionOptions {
   /** Second layer of idempotency: bridges derive a stable session id from it. */
   clientSessionKey?: string;
   /**
-   * Execution mode for the session, overriding what the phase implies.
-   *
-   * Several distinct phases collapse onto `review`, which would otherwise create
-   * a read-only Codex session for a phase that has to commit changes. The caller
-   * knows which; the phase alone does not.
+   * Execution mode for the session. Pipeline stages default to build mode
+   * because validation tools may write generated files and caches; specialized
+   * callers can still request plan mode explicitly.
    */
   mode?: ProviderExecutionMode;
   /**
@@ -807,13 +805,12 @@ class HttpBridgeProvider implements BuildPipelineProvider {
   }
 
   async createSession(
-    phase: PipelineSessionPhase,
+    _phase: PipelineSessionPhase,
     label: string,
     options: ProviderCreateSessionOptions = {},
   ): Promise<string> {
     const clientSessionKey = options.clientSessionKey;
-    const mode = options.mode
-      ?? (phase === "review" || phase === "verify" ? "plan" : "build");
+    const mode = options.mode ?? "build";
     const response = await bridgeFetch(
       this.connection,
       "/session/create",
@@ -914,9 +911,8 @@ class HttpBridgeProvider implements BuildPipelineProvider {
 
   /**
    * Codex stores execution mode on the session rather than accepting it on the
-   * prompt route. A review's addressing turn deliberately stays in the same
-   * thread for context, so switch that idle thread from read-only plan mode to
-   * build mode before dispatching the fixes.
+   * prompt route. Reused workflow threads can move between plan and build
+   * turns, so reconcile the idle thread before dispatching when needed.
    */
   private async ensureCodexMode(
     sessionId: string,

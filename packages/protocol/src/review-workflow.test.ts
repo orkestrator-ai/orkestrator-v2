@@ -947,7 +947,7 @@ describe("review body assembly", () => {
     expect(structured).not.toContain("## Output Format");
   });
 
-  test("supports a read-only preparation contract for automated build reviews", () => {
+  test("supports a non-modifying preparation contract for automated build reviews", () => {
     const body = buildReviewBody({
       targetBranch: "main",
       preparationMode: "verify-clean",
@@ -955,8 +955,9 @@ describe("review body assembly", () => {
       allowClarifyingQuestions: false,
     });
 
-    expect(body).toContain("## Step 1: Establish the read-only review snapshot");
-    expect(body).toContain("Do not modify files or create another commit");
+    expect(body).toContain("## Step 1: Establish the automated review snapshot");
+    expect(body).toContain("Do not edit source files or create another commit");
+    expect(body).toContain("Validation commands may write generated artifacts and tool caches");
     expect(body).toContain("isolated temporary worktree pinned to that head");
     expect(body).toContain("Enforce the snapshot precondition from Step 1");
     expect(body).not.toContain("Create one rollback commit");

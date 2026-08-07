@@ -77,7 +77,7 @@ describe("buildReviewBody", () => {
     expect(interactive).toContain("8. Ask a clarifying question only when the answer would materially change");
 
     expect(automated).toContain("provider-enforced output schema");
-    expect(automated).toContain("## Step 1: Establish the read-only review snapshot");
+    expect(automated).toContain("## Step 1: Establish the automated review snapshot");
     expect(automated).toContain("## Output contract");
     expect(automated).not.toContain("## Output Format");
     expect(automated).not.toContain("### 1. [P0|P1|P2]");

@@ -76,7 +76,7 @@ export function reviewPrompt(
   worktree: ReviewWorktreeSnapshot = { status: "unknown", reason: "not probed" },
 ): string {
   return [
-    "You are performing an automated read-only code review for this ticket. Fix the review snapshot first, then overlap independent validation and analysis where supported.",
+    "You are performing an automated code review for this ticket. Fix the review snapshot first, then overlap independent validation and analysis where supported.",
     ticketContext(pipeline.taskSnapshot),
     notes ? `**Project Notes**:\n${notes}` : "",
     worktreeSnapshotSection(worktree),
@@ -87,7 +87,7 @@ export function reviewPrompt(
       allowClarifyingQuestions: false,
       outputFormat: "structured",
     }),
-    "The provider enforces the structured review schema. This review is read-only; do not modify files or create commits.",
+    "The provider enforces the structured review schema. Do not edit source files or create commits. Validation commands may write generated artifacts and tool caches.",
     "Begin by running the git commands required to understand the current state.",
   ].filter(Boolean).join("\n\n");
 }
@@ -114,7 +114,7 @@ export function verificationPrompt(
     "Verify the committed branch changes against this ticket:",
     ticketContext(pipeline.taskSnapshot),
     notes ? `**Project Notes**:\n${notes}` : "",
-    `Compare against origin/${targetBranch}. Verification is read-only. If relevant work is uncommitted or any acceptance criterion is unmet, report failure.`,
+    `Compare against origin/${targetBranch}. Run the relevant validation; it may write generated artifacts and tool caches. Do not edit source files or create commits. If relevant work is uncommitted or any acceptance criterion is unmet, report failure.`,
     'Respond only with JSON: {"complete":true,"rationale":"..."}',
   ].filter(Boolean).join("\n\n");
 }

@@ -1726,10 +1726,10 @@ export class BuildPipelineService {
     const step = sessionPhase
       ? await this.stepSettings(pipeline, sessionPhase)
       : undefined;
-    // `addressing` re-uses the review session to write code, so its override
-    // wins over the phase's own read-only mode. Everything else re-states the
-    // mode the session was opened with, so a redispatch cannot land a turn in a
-    // different sandbox than the one that was interrupted.
+    // `addressing` re-uses the review session to write code, so it explicitly
+    // requires build mode even though review now has the same mode for
+    // validation. Everything else re-states the mode the session was opened
+    // with, so a redispatch cannot land in a different sandbox.
     const mode = executionModeOverrideForPhase(attempt.phase)
       ?? (sessionPhase && step
         ? executionModeForSessionPhase(sessionPhase, step.agent)

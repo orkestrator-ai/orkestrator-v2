@@ -1467,13 +1467,9 @@ describe("verification verdict contract", () => {
 });
 
 describe("execution mode policy", () => {
-  test("sandboxes only the read-only stages, and only where that is possible", () => {
-    // Codex holds review and verify to a read-only sandbox. Claude and OpenCode
-    // cannot be held to it — Claude's plan mode waits on `ExitPlanMode` approval
-    // that a pipeline has nobody to give — so they stay in build mode and the
-    // launcher discloses the difference instead.
-    expect(executionModeForSessionPhase("review", "codex")).toBe("plan");
-    expect(executionModeForSessionPhase("verify", "codex")).toBe("plan");
+  test("keeps every validation stage writable on every harness", () => {
+    expect(executionModeForSessionPhase("review", "codex")).toBe("build");
+    expect(executionModeForSessionPhase("verify", "codex")).toBe("build");
     expect(executionModeForSessionPhase("review", "claude")).toBe("build");
     expect(executionModeForSessionPhase("verify", "claude")).toBe("build");
     expect(executionModeForSessionPhase("review", "opencode")).toBe("build");

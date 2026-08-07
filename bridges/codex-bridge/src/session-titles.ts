@@ -266,8 +266,15 @@ async function runCodexTitleCommand(
     const timeoutMs = options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
     const terminationGraceMs = options.terminationGraceMs ?? DEFAULT_TERMINATION_GRACE_MS;
     const maxOutputBytes = options.maxOutputBytes ?? MAX_COMMAND_OUTPUT_LENGTH;
+    // This hermetic helper cannot execute project tools and does not need the
+    // developer's GitHub identity. Keep the managed credential scoped to the
+    // real app-server generation that serves user sessions.
+    const environment = { ...process.env };
+    delete environment.GITHUB_TOKEN;
+    delete environment.GH_TOKEN;
     const child = spawn(codexPath, args, {
       detached: process.platform !== "win32",
+      env: environment,
       stdio: ["pipe", "pipe", "pipe"],
     });
     const stdoutChunks: Buffer[] = [];

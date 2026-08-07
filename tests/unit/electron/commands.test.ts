@@ -12300,6 +12300,7 @@ exit 0
         expect(execLog).toContain("export CODEX_BRIDGE_TOKEN=");
         expect(execLog).toContain("export CODEX_MAX_CONCURRENT_THREADS_PER_SESSION=9");
         expect(execLog).toContain("setsid bun /opt/codex-bridge/dist/index.js");
+        expect(execLog).not.toContain("unset GITHUB_TOKEN GH_TOKEN");
         expect(execLog).not.toContain("setsid node");
       });
     } finally {

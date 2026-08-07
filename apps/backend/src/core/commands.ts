@@ -9471,7 +9471,6 @@ export function createCommandRegistry(
             : "rm -f /tmp/codex-agent-tools-fingerprint"}
           source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
           orkestrator_source_runtime_env 2>/dev/null || true
-          unset GITHUB_TOKEN GH_TOKEN
           export PORT=${CODEX_BRIDGE_PORT}
           export HOSTNAME=0.0.0.0
           export CWD=/workspace

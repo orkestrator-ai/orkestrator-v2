@@ -3516,7 +3516,7 @@ export class AppServerRuntime {
     this.registry.assertNoActiveTurn(context);
 
     // 2. A persistent child snapshots its environment at launch, so re-read
-    //    PATH-ish variables and restart before dispatching if they moved.
+    //    managed runtime variables and restart before dispatching if they moved.
     const generationBeforeDrain = this.options.engine.info().generation;
     // This thread is excluded from its own drain. The wait runs inside the
     // supervisor's `drainPromise` and every RPC queues behind it, so waiting on

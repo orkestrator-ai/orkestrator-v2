@@ -196,6 +196,7 @@ interface Harness {
   }>;
   serverRequests: Array<{ request: InboundServerRequest; generation: number }>;
   generationReady: Array<{ generation: number; previous: number }>;
+  spawnEnvironments: NodeJS.ProcessEnv[];
 }
 
 function harness(
@@ -213,6 +214,7 @@ function harness(
   const notifications: Harness["notifications"] = [];
   const serverRequests: Harness["serverRequests"] = [];
   const generationReady: Harness["generationReady"] = [];
+  const spawnEnvironments: NodeJS.ProcessEnv[] = [];
   let spawnIndex = 0;
   let currentFingerprint = "sha256:initial";
 
@@ -235,9 +237,12 @@ function harness(
     onStateChange: (state, detail) => states.push({ state, detail }),
     onGenerationReady: (generation, previous) =>
       generationReady.push({ generation, previous }),
-    spawnProcess: (() => {
+    spawnProcess: ((_command: string, _args: string[], spawnOptions: {
+      env?: NodeJS.ProcessEnv;
+    }) => {
       const behaviour = options.behaviours?.[spawnIndex] ?? {};
       spawnIndex += 1;
+      spawnEnvironments.push({ ...spawnOptions.env });
       const child = new FakeChild(
         behaviour.pid ?? 1000 + spawnIndex,
         behaviour,
@@ -258,6 +263,7 @@ function harness(
     notifications,
     serverRequests,
     generationReady,
+    spawnEnvironments,
   };
 }
 
@@ -274,6 +280,26 @@ describe("startup", () => {
     const written = h.children[0]!.stdin.parsed();
     expect(written[0]!.method).toBe("initialize");
     expect(written[1]!.method).toBe("initialized");
+  });
+
+  test("passes managed GitHub credentials to the app-server generation", async () => {
+    const originalGitHubToken = process.env.GITHUB_TOKEN;
+    const originalGhToken = process.env.GH_TOKEN;
+    process.env.GITHUB_TOKEN = "managed-token";
+    process.env.GH_TOKEN = "managed-token";
+
+    try {
+      const h = harness();
+      await h.supervisor.ensureReady();
+
+      expect(h.spawnEnvironments[0]?.GITHUB_TOKEN).toBe("managed-token");
+      expect(h.spawnEnvironments[0]?.GH_TOKEN).toBe("managed-token");
+    } finally {
+      if (originalGitHubToken === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = originalGitHubToken;
+      if (originalGhToken === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = originalGhToken;
+    }
   });
 
   test("declares capabilities that keep unsupported server requests out of the flow", async () => {

@@ -281,6 +281,32 @@ printf '%s\n' '{"title":"Improve Codex session names"}' > "$out"`);
     expect(readFileSync(stdinPath, "utf8")).toContain("Show better session names");
   });
 
+  test("does not expose managed GitHub credentials to title generation", async () => {
+    const executable = createExecutable(`
+if [ -n "\${GITHUB_TOKEN:-}" ] || [ -n "\${GH_TOKEN:-}" ]; then exit 42; fi
+out=""
+previous=""
+for argument in "$@"; do
+  if [ "$previous" = "--output-last-message" ]; then out="$argument"; fi
+  previous="$argument"
+done
+printf '%s\n' '{"title":"Credential-free title"}' > "$out"`);
+    const originalGitHubToken = process.env.GITHUB_TOKEN;
+    const originalGhToken = process.env.GH_TOKEN;
+    process.env.GITHUB_TOKEN = "managed-token";
+    process.env.GH_TOKEN = "managed-token";
+
+    try {
+      await expect(generateSessionTitleWithCodexExec(executable, "prompt"))
+        .resolves.toBe("Credential-free title");
+    } finally {
+      if (originalGitHubToken === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = originalGitHubToken;
+      if (originalGhToken === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = originalGhToken;
+    }
+  });
+
   test("falls back to stdout when the output file is absent", async () => {
     const executable = createExecutable(`printf '%s\n' '{"title":"Stdout title"}'`);
     await expect(generateSessionTitleWithCodexExec(executable, "prompt"))

@@ -95,6 +95,10 @@ import {
   type BridgeModel,
   type BridgeReasoningEffort,
 } from "./models-cache.js";
+import {
+  applyRuntimeEnvironmentOutput,
+  refreshRuntimeEnvironment,
+} from "./runtime-env.js";
 
 // The normalized message model and the item renderer live in ./messages so both
 // engines share one implementation. Re-exported here because existing importers
@@ -276,24 +280,7 @@ scheduleReplayRetentionDrop();
 /** Interval for the idle-thread sweep. */
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const codexRawLogDir = normalizeOptionalEnvPath("ORKESTRATOR_CODEX_RAW_LOG_DIR");
-const RUNTIME_ENV_SCRIPT_ENV = "ORKESTRATOR_RUNTIME_ENV_SCRIPT";
-const DEFAULT_RUNTIME_ENV_SCRIPT = "/usr/local/bin/orkestrator-runtime-env.sh";
 const RECOVERY_TRANSCRIPT_CHAR_LIMIT = 40_000;
-const RUNTIME_ENV_VARIABLES = new Set([
-  "PATH",
-  "BUN_INSTALL",
-  "CARGO_HOME",
-  "GOPATH",
-  "PNPM_HOME",
-  "DENO_INSTALL",
-  "PYENV_ROOT",
-  "RYE_HOME",
-  "UV_TOOL_BIN_DIR",
-  "VOLTA_HOME",
-  "NVM_DIR",
-  "FNM_DIR",
-  "BASH_ENV",
-]);
 
 function normalizeOptionalEnvPath(name: string): string | null {
   const value = process.env[name]?.trim();
@@ -351,65 +338,6 @@ function isTrustedBridgeOrigin(origin: string | undefined): boolean {
 
 function isPublicHealthRequest(method: string, path: string): boolean {
   return method === "GET" && path === "/global/health";
-}
-
-function getRuntimeEnvironmentScriptPath(): string {
-  return process.env[RUNTIME_ENV_SCRIPT_ENV]?.trim() || DEFAULT_RUNTIME_ENV_SCRIPT;
-}
-
-function applyRuntimeEnvironmentOutput(output: string): string[] {
-  const updated: string[] = [];
-
-  for (const line of output.split("\n")) {
-    const separatorIndex = line.indexOf("=");
-    if (separatorIndex <= 0) {
-      continue;
-    }
-
-    const name = line.slice(0, separatorIndex);
-    if (!RUNTIME_ENV_VARIABLES.has(name)) {
-      continue;
-    }
-
-    const value = line.slice(separatorIndex + 1);
-    if (value.length === 0 || process.env[name] === value) {
-      continue;
-    }
-
-    process.env[name] = value;
-    updated.push(name);
-  }
-
-  return updated;
-}
-
-async function refreshRuntimeEnvironment(
-  run: typeof execFile = execFile,
-): Promise<void> {
-  try {
-    const runtimeEnvScript = getRuntimeEnvironmentScriptPath();
-    const { stdout } = await run(
-      "/bin/sh",
-      [
-        "-c",
-        `if [ -f "$${RUNTIME_ENV_SCRIPT_ENV}" ]; then . "$${RUNTIME_ENV_SCRIPT_ENV}" 2>/dev/null || true; orkestrator_source_runtime_env 2>/dev/null || true; fi; env`,
-      ],
-      {
-        env: {
-          ...process.env,
-          [RUNTIME_ENV_SCRIPT_ENV]: runtimeEnvScript,
-        },
-        maxBuffer: 256 * 1024,
-      },
-    );
-
-    const updated = applyRuntimeEnvironmentOutput(stdout);
-    if (updated.length > 0) {
-      console.error("[codex-bridge] Refreshed runtime environment:", updated.join(", "));
-    }
-  } catch (error) {
-    console.error("[codex-bridge] Failed to refresh runtime environment:", error);
-  }
 }
 
 function sanitizeLogFileComponent(value: string): string {

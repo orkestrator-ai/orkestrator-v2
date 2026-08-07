@@ -483,8 +483,8 @@ export class AppServerSupervisor {
   private async start(): Promise<Generation> {
     this.setState("starting");
 
-    // Re-read PATH-ish variables *before* launch: the child snapshots them and
-    // cannot see later changes.
+    // Re-read managed runtime variables *before* launch: the child snapshots
+    // them and cannot see later changes.
     await (this.options.refreshEnvironment ?? refreshRuntimeEnvironment)();
     if (this.stopping) throw new AppServerUnavailableError("stopped");
     const environmentFingerprint = this.fingerprintEnvironment();
@@ -736,9 +736,9 @@ export class AppServerSupervisor {
   }
 
   /**
-   * The developer's PATH changed, so the running child is serving stale tool
-   * lookups. Restart, but only between turns: callers pass a predicate that
-   * reports whether any turn is still active.
+   * The managed runtime environment changed, so the running child is serving
+   * stale tool lookups or credentials. Restart, but only between turns: callers
+   * pass a predicate that reports whether any turn is still active.
    */
   async ensureEnvironmentIsCurrent(options: {
     hasActiveTurns: () => boolean;

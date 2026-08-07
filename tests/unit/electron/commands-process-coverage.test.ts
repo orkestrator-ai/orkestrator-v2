@@ -897,6 +897,7 @@ describe("process and platform command behavior", () => {
     await expect(invoke("open_in_browser", { url: "file:///tmp/private" })).rejects.toThrow("Unsupported browser URL protocol");
     await invoke("reveal_in_file_manager", { path: "/tmp/project/file.ts" });
     await invoke("open_in_editor", { containerId: "container-a", editor: "cursor" });
+    await invoke("open_in_editor", { containerId: "container-b", editor: "vscode" });
     await invoke("open_local_in_editor", { path: "/tmp/project", editor: "code" });
 
     const log = await readCommandLog();
@@ -905,7 +906,8 @@ describe("process and platform command behavior", () => {
     if (process.platform === "darwin") expect(log).toContain("open -R /tmp/project/file.ts");
     else if (process.platform === "win32") expect(log).toContain("explorer /select, /tmp/project/file.ts");
     else expect(log).toContain("xdg-open /tmp/project");
-    expect(log).toContain("cursor vscode-remote://attached-container+636f6e7461696e65722d61/workspace");
+    expect(log).toContain("cursor --folder-uri vscode-remote://attached-container+636f6e7461696e65722d61/workspace");
+    expect(log).toContain("code --folder-uri vscode-remote://attached-container+636f6e7461696e65722d62/workspace");
     expect(log).toContain("code /tmp/project");
   });
 

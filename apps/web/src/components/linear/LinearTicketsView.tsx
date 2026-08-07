@@ -291,8 +291,11 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
   const pipelines = useBuildPipelineStore((state) => state.pipelines);
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
   const { startBuildFromLinearIssue, navigateToPipeline } = buildPipeline;
-  const { catalog: launchCatalog, defaults: launchDefaults } =
-    useBuildLaunchOptions(projectId, selectedIssueId !== null);
+  const {
+    catalog: launchCatalog,
+    defaults: launchDefaults,
+    favoriteOpenCodeModelIds,
+  } = useBuildLaunchOptions(projectId, selectedIssueId !== null);
 
   const loadConnection = useCallback(async () => {
     const requestId = connectionRequestRef.current + 1;
@@ -775,6 +778,7 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
           open={buildDialogOpen}
           onOpenChange={setBuildDialogOpen}
           catalog={launchCatalog}
+          favoriteOpenCodeModelIds={favoriteOpenCodeModelIds}
           busy={isBuildStarting || hasActiveBuild}
           commentContext={detail && detail.comments.length > 0
             ? { count: detail.comments.length }

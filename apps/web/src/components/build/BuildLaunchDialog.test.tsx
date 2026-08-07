@@ -296,6 +296,42 @@ describe("BuildLaunchDialog", () => {
       .toContain("Claude A");
   });
 
+  test("uses the searchable favorite-aware model picker for OpenCode", () => {
+    const openCodeCatalog: AgentModelCatalog = {
+      ...catalog,
+      opencode: [
+        {
+          id: "provider/model-a",
+          name: "OpenCode A",
+          description: "Provider A",
+          reasoningEfforts: [],
+        },
+        {
+          id: "provider/model-b",
+          name: "OpenCode B",
+          description: "Provider B",
+          reasoningEfforts: [],
+        },
+      ],
+    };
+    const { onConfirm } = renderDialog({
+      catalog: openCodeCatalog,
+      defaultAgent: "opencode",
+      favoriteOpenCodeModelIds: ["provider/model-b"],
+    });
+
+    const trigger = screen.getByRole("combobox", { name: "All steps model" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    const search = screen.getByRole("searchbox", { name: "Search OpenCode models" });
+    const options = screen.getAllByRole("menuitemradio");
+    expect(options[0]?.textContent).toContain("OpenCode B");
+
+    fireEvent.change(search, { target: { value: "model-a" } });
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /OpenCode A/ }));
+    submit();
+    expect(onConfirm.mock.calls[0]![0].steps.build.model).toBe("provider/model-a");
+  });
+
   test("disables reasoning for a model that has no effort levels", () => {
     renderDialog();
 

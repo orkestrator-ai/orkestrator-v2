@@ -7,7 +7,13 @@ import {
 import {
   type CachedOpenCodeModel,
   getCachedOpenCodeModelCatalog,
+  getOpencodeModelPreferences,
+  type OpenCodeModelPreferences,
 } from "@/lib/backend";
+import {
+  EMPTY_OPENCODE_MODEL_PREFERENCES,
+  openCodeModelRefToId,
+} from "@/lib/opencode-model-preferences";
 import {
   useConfigStore,
   useEnvironmentStore,
@@ -129,6 +135,44 @@ export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
     [config, projectHasLocalPath, projectId],
   );
   const catalog = useProjectModelCatalog(projectId, enabled);
+  const [openCodeModelPreferences, setOpenCodeModelPreferences] =
+    useState<OpenCodeModelPreferences>(EMPTY_OPENCODE_MODEL_PREFERENCES);
 
-  return { catalog, defaults };
+  useEffect(() => {
+    let cancelled = false;
+    setOpenCodeModelPreferences(EMPTY_OPENCODE_MODEL_PREFERENCES);
+    if (!enabled) return () => { cancelled = true; };
+    void getOpencodeModelPreferences()
+      .then((preferences) => {
+        if (
+          !cancelled
+          && preferences
+          && Array.isArray(preferences.favorite)
+          && Array.isArray(preferences.recent)
+        ) {
+          setOpenCodeModelPreferences(preferences);
+        }
+      })
+      .catch((error) => {
+        console.warn(
+          "[useBuildLaunchOptions] Failed to load OpenCode model preferences:",
+          error,
+        );
+      });
+    return () => { cancelled = true; };
+  }, [enabled, projectId]);
+
+  const favoriteOpenCodeModelIds = useMemo(() => {
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const favorite of openCodeModelPreferences.favorite) {
+      const id = openCodeModelRefToId(favorite);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+    }
+    return ids;
+  }, [openCodeModelPreferences.favorite]);
+
+  return { catalog, defaults, favoriteOpenCodeModelIds };
 }

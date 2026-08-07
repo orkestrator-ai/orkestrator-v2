@@ -162,8 +162,11 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
 
   const isCreateMode = !!createForProjectId;
   const buildProjectId = createForProjectId ?? task?.projectId ?? "";
-  const { catalog: launchCatalog, defaults: launchDefaults } =
-    useBuildLaunchOptions(buildProjectId, open);
+  const {
+    catalog: launchCatalog,
+    defaults: launchDefaults,
+    favoriteOpenCodeModelIds,
+  } = useBuildLaunchOptions(buildProjectId, open);
 
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState("");
@@ -880,6 +883,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
           open={buildDialogOpen}
           onOpenChange={setBuildDialogOpen}
           catalog={launchCatalog}
+          favoriteOpenCodeModelIds={favoriteOpenCodeModelIds}
           busy={isBuildStarting}
           {...launchDefaults}
           onConfirm={(selection) => void handleCreateAndBuild(selection)}
@@ -1145,6 +1149,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
         open={buildDialogOpen}
         onOpenChange={setBuildDialogOpen}
         catalog={launchCatalog}
+        favoriteOpenCodeModelIds={favoriteOpenCodeModelIds}
         busy={isBuildStarting}
         {...launchDefaults}
         onConfirm={handleBuildConfirmed}

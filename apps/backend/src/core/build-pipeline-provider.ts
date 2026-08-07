@@ -100,6 +100,139 @@ function openCodeMessageIdScope(
 }
 
 /**
+ * OpenCode 1.18.x accepts the legacy `format: { type: "json_schema" }`
+ * request, but then its own legacy transcript route cannot decode the stored
+ * user message. That makes every later `session.messages()` call return 400,
+ * which strands a pipeline in reconnect recovery even after the turn finished.
+ *
+ * Keep the transcript readable by expressing the same contract in the prompt.
+ * The provider adapter parses only the correlated assistant's text back into a
+ * value; the workflow layer still performs the authoritative shape validation.
+ */
+function openCodeStructuredPrompt(prompt: string, schema: JsonSchema): string {
+  return `${prompt}\n\n## Required OpenCode output\n\nReturn only one JSON value matching this JSON Schema. Do not wrap it in Markdown or add commentary.\n\n${JSON.stringify(schema)}`;
+}
+
+// Bounds for the prose-wrapped JSON recovery scan. The scan is a last-resort
+// tolerance for models that wrap the required JSON value in a sentence; the
+// bounds keep pathological output from becoming unbounded work.
+const OPEN_CODE_STRUCTURED_RECOVERY_CHARS = 16 * 1024;
+const OPEN_CODE_STRUCTURED_RECOVERY_CANDIDATES = 16;
+
+/**
+ * Try to parse `candidate` as a JSON value. `undefined` is the sentinel for
+ * "not JSON" because `JSON.parse` never produces `undefined`.
+ */
+function tryParseJson(candidate: string): unknown {
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Extract the well-formed JSON document that begins at `start` in `text`, if
+ * one exists, by tracking bracket balance outside of string literals.
+ */
+function parseJsonDocumentAt(
+  text: string,
+  start: number,
+): { value: unknown; end: number } | undefined {
+  const open = text[start];
+  if (open !== "{" && open !== "[") return undefined;
+  const close = open === "{" ? "}" : "]";
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === open) {
+      depth += 1;
+    } else if (ch === close) {
+      depth -= 1;
+      if (depth === 0) {
+        const value = tryParseJson(text.slice(start, i + 1));
+        return value === undefined ? undefined : { value, end: i };
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Last-resort recovery for a model that wrapped the required JSON document in
+ * prose (a lead-in sentence or a trailing summary). Successful outer documents
+ * are skipped as whole spans so their nested objects and arrays cannot replace
+ * them. The last well-formed outer document wins, and arbitrary prose is never
+ * interpreted as JSON.
+ */
+function lastWellFormedJson(text: string): unknown {
+  const scanned = text.slice(0, OPEN_CODE_STRUCTURED_RECOVERY_CHARS);
+  let failedCandidates = 0;
+  let recovered: unknown;
+  for (let i = 0; i < scanned.length; i++) {
+    const ch = scanned[i];
+    if (ch !== "{" && ch !== "[") continue;
+    const parsed = parseJsonDocumentAt(scanned, i);
+    if (parsed !== undefined) {
+      recovered = parsed.value;
+      i = parsed.end;
+      continue;
+    }
+    failedCandidates += 1;
+    if (failedCandidates >= OPEN_CODE_STRUCTURED_RECOVERY_CANDIDATES) break;
+  }
+  return recovered;
+}
+
+function parseOpenCodeStructuredText(parts: unknown): unknown {
+  if (!Array.isArray(parts)) throw new Error("OpenCode returned no structured text");
+  const text = parts
+    .flatMap((part) => {
+      const candidate = asRecord(part);
+      return candidate?.type === "text" && typeof candidate.text === "string"
+        ? [candidate.text]
+        : [];
+    })
+    .join("")
+    .trim();
+  if (!text) throw new Error("OpenCode returned no structured text");
+
+  // The prompt asks for a bare JSON value; accept it verbatim.
+  const exact = tryParseJson(text);
+  if (exact !== undefined) return exact;
+
+  // One exact JSON fence is harmless presentation formatting. Arbitrary prose
+  // is not searched for JSON here — the bounded recovery below accepts only
+  // balanced JSON documents, never prose.
+  const fenced = text.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i)?.[1]?.trim();
+  if (fenced !== undefined) {
+    const fencedValue = tryParseJson(fenced);
+    if (fencedValue !== undefined) return fencedValue;
+  }
+
+  // Models occasionally wrap the value in a sentence or append a summary.
+  // Recover the last well-formed JSON document before giving up.
+  const recovered = lastWellFormedJson(text);
+  if (recovered !== undefined) return recovered;
+
+  throw new Error("OpenCode returned malformed structured text");
+}
+
+/**
  * Validate a bridge-supplied activity token before it can reach the durable
  * projection. An unrecognized value must fail loudly: coercing it to `idle`
  * would silently retire a spinner for a turn that is still running.
@@ -2054,7 +2187,10 @@ class OpenCodeProvider implements BuildPipelineProvider {
     prompt: string,
     options: ProviderSendOptions,
   ): Promise<void> {
-    const parts: Array<Record<string, unknown>> = [{ type: "text", text: prompt }];
+    const shapedPrompt = options.schema
+      ? openCodeStructuredPrompt(prompt, options.schema)
+      : prompt;
+    const parts: Array<Record<string, unknown>> = [{ type: "text", text: shapedPrompt }];
     // OpenCode accepts inline data, so its images need no staging. Attachments
     // that arrive already staged are referenced by path instead.
     for (const image of options.images ?? []) {
@@ -2113,9 +2249,6 @@ class OpenCodeProvider implements BuildPipelineProvider {
             : undefined,
           agent: options.mode ?? "build",
           variant: options.effort ?? this.connection.effort,
-          format: options.schema
-            ? { type: "json_schema", schema: options.schema, retryCount: 2 }
-            : undefined,
         }, this.requestOptions());
       } catch (error) {
         // The request may have reached OpenCode before the response was lost.
@@ -2871,13 +3004,17 @@ class OpenCodeProvider implements BuildPipelineProvider {
       return info.role === "assistant" && info.parentID === providerMessageId;
     });
     if (!assistant) return null;
-    const info = (assistant as { info: Record<string, unknown> }).info as {
+    const assistantRecord = assistant as {
+      info: Record<string, unknown>;
+      parts?: unknown;
+    };
+    const info = assistantRecord.info as {
       error?: unknown;
       structured?: unknown;
       time?: { completed?: unknown };
     };
     if (!info.time?.completed) return null;
-    if (info.error || info.structured === undefined) {
+    if (info.error) {
       return {
         ok: false,
         provider: "opencode",
@@ -2890,11 +3027,29 @@ class OpenCodeProvider implements BuildPipelineProvider {
         },
       };
     }
+    let value: unknown;
+    try {
+      value = info.structured === undefined
+        ? parseOpenCodeStructuredText(assistantRecord.parts)
+        : info.structured;
+    } catch {
+      return {
+        ok: false,
+        provider: "opencode",
+        requestId,
+        error: {
+          code: "malformed_output",
+          message: "OpenCode did not produce a valid JSON result",
+          provider: "opencode",
+          retryable: true,
+        },
+      };
+    }
     return {
       ok: true,
       provider: "opencode",
       requestId,
-      value: info.structured as T,
+      value: value as T,
     };
   }
 

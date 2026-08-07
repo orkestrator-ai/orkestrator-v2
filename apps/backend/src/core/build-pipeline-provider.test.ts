@@ -3861,7 +3861,162 @@ describe("OpenCode build pipeline provider", () => {
       await expect(provider.structured("owned-session", "request-1")).resolves
         .toMatchObject({
           ok: false,
-          error: { code: "provider_error", retryable: true },
+          error: { code: "malformed_output", retryable: true },
+        });
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("parses correlated JSON text when OpenCode structured formats are disabled", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      const parentID = expectedOpenCodeMessageId("request-1");
+      fake.setMessagesResponse({
+        data: [{
+          info: {
+            role: "assistant",
+            parentID,
+            time: { completed: 1 },
+          },
+          parts: [{ type: "text", text: '{"complete":true}' }],
+        }],
+      });
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: true } });
+
+      fake.setMessagesResponse({
+        data: [{
+          info: {
+            role: "assistant",
+            parentID,
+            time: { completed: 1 },
+          },
+          parts: [{ type: "text", text: '```json\n{"complete":false}\n```' }],
+        }],
+      });
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: false } });
+
+      fake.setMessagesResponse({
+        data: [{
+          info: {
+            role: "assistant",
+            parentID,
+            time: { completed: 1 },
+          },
+          parts: [{ type: "text", text: "Here is the result: {\"complete\":true}" }],
+        }],
+      });
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: true } });
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("recovers a prose-wrapped JSON document without interpreting arbitrary prose", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      const parentID = expectedOpenCodeMessageId("request-1");
+      const reply = (text: string) => ({
+        data: [{
+          info: {
+            role: "assistant",
+            parentID,
+            time: { completed: 1 },
+          },
+          parts: [{ type: "text", text }],
+        }],
+      });
+
+      // A trailing summary after the required JSON value is the common recovery case.
+      fake.setMessagesResponse(reply('{"complete":true}\n\nAll checks passed.'));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: true } });
+
+      // A lead-in sentence before the JSON value.
+      fake.setMessagesResponse(reply('The result is {"complete":false}'));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: false } });
+
+      // The last well-formed document wins when prose contains several.
+      fake.setMessagesResponse(reply('Example {"nope":1}. Answer {"complete":true}.'));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: true } });
+
+      // Nested values belong to the outer schema result and must not replace it
+      // merely because their opening delimiter occurs later in the response.
+      fake.setMessagesResponse(reply(
+        'Result: {"complete":true,"commandsRun":[{"command":"bun test","result":"passed"}]} Done.',
+      ));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({
+          ok: true,
+          value: {
+            complete: true,
+            commandsRun: [{ command: "bun test", result: "passed" }],
+          },
+        });
+
+      fake.setMessagesResponse(reply(
+        'Candidates: [{"id":1,"metadata":{"selected":false}},{"id":2}] Done.',
+      ));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({
+          ok: true,
+          value: [
+            { id: 1, metadata: { selected: false } },
+            { id: 2 },
+          ],
+        });
+
+      // A multiline document inside a fence, and a fence without the trailing
+      // newline before the closing backticks, are still recovered.
+      fake.setMessagesResponse(reply('```json\n{\n  "complete": false\n}\n```'));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: false } });
+
+      fake.setMessagesResponse(reply('```json\n{"complete":true}```'));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: true } });
+
+      // Streaming can split a message across several text parts; joining them
+      // must still recover the document.
+      fake.setMessagesResponse({
+        data: [{
+          info: {
+            role: "assistant",
+            parentID,
+            time: { completed: 1 },
+          },
+          parts: [
+            { type: "text", text: 'Here is the result: {"compl' },
+            { type: "reasoning", text: "ignored" },
+            { type: "text", text: 'ete":true}' },
+          ],
+        }],
+      });
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: true } });
+
+      // Bare JSON primitives pass through for the workflow layer to validate.
+      fake.setMessagesResponse(reply("true"));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: true });
+
+      fake.setMessagesResponse(reply("42"));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: 42 });
+
+      // Prose with no JSON document is still rejected rather than guessed.
+      fake.setMessagesResponse(reply("I could not verify the build."));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({
+          ok: false,
+          error: { code: "malformed_output", retryable: true },
         });
     } finally {
       await provider.dispose?.();
@@ -4657,7 +4812,7 @@ describe("OpenCode build pipeline provider dispatch", () => {
     }
   });
 
-  test("passes a structured schema through as a json_schema format", async () => {
+  test("puts a structured schema in the prompt without poisoning OpenCode transcripts", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);
     try {
@@ -4667,11 +4822,13 @@ describe("OpenCode build pipeline provider dispatch", () => {
         schema,
       });
 
-      expect(fake.promptCalls[0]!.format).toEqual({
-        type: "json_schema",
-        schema,
-        retryCount: 2,
-      });
+      expect(fake.promptCalls[0]!.format).toBeUndefined();
+      expect(fake.promptCalls[0]!.parts).toEqual([{
+        type: "text",
+        text: expect.stringContaining(JSON.stringify(schema)),
+      }]);
+      expect(String((fake.promptCalls[0]!.parts as Array<{ text?: string }>)[0]?.text))
+        .toContain("Return only one JSON value matching this JSON Schema");
     } finally {
       await provider.dispose?.();
     }

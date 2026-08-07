@@ -634,7 +634,14 @@ export function RepositorySettings({
                 {availableModels.length > 0 ? (
                   <Select
                     value={defaultModel || APP_DEFAULT}
-                    onValueChange={(value) => setDefaultModel(value === APP_DEFAULT ? "" : value)}
+                    onValueChange={(value) => {
+                      const nextModel = value === APP_DEFAULT ? "" : value;
+                      setDefaultModel(nextModel);
+                      // Effort overrides are model-specific. Inheriting another
+                      // model while retaining this model's effort can persist an
+                      // invalid pair that the backend later applies directly.
+                      if (!nextModel) setDefaultEffort("");
+                    }}
                     disabled={isSaving}
                   >
                     <SelectTrigger id="defaultModel"><SelectValue placeholder="Use agent default" /></SelectTrigger>

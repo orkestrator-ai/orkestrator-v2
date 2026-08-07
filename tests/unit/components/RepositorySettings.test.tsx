@@ -561,6 +561,62 @@ describe("RepositorySettings", () => {
       expect(getSavedConfig().defaultEffort).toBeUndefined();
     });
 
+    test("clears a model-specific OpenCode effort when only the model is reset", async () => {
+      mockGetCachedOpenCodeModelCatalog.mockResolvedValueOnce({
+        schemaVersion: 2,
+        projectId: "project-1",
+        catalogVersion: "catalog-reset",
+        updatedAt: "2026-08-07T12:00:00.000Z",
+        models: [
+          {
+            id: "openai/global-model",
+            name: "Global Model",
+            provider: "openai",
+            variants: ["low"],
+          },
+          {
+            id: "openai/project-model",
+            name: "Project Model",
+            provider: "openai",
+            variants: ["deep"],
+          },
+        ],
+      });
+      renderSettings({
+        config: {
+          global: {
+            defaultAgent: "opencode",
+            opencodeModel: "openai/global-model",
+          } as AppConfig["global"],
+          repositories: {
+            "project-1": {
+              defaultBranch: "main",
+              prBaseBranch: "main",
+              defaultAgent: "opencode",
+              defaultModel: "openai/project-model",
+              defaultEffort: "deep",
+            },
+          },
+        },
+      });
+
+      await waitFor(() => {
+        const effortValues = Array.from(getMockSelects()[3]!.options)
+          .map((option) => option.value);
+        expect(effortValues).toContain("deep");
+      });
+      fireEvent.change(getMockSelects()[2]!, {
+        target: { value: "__app_default__" },
+      });
+      expect(getMockSelects()[3]!.value).toBe("__app_default__");
+
+      fireEvent.click(getSaveButton());
+
+      await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
+      expect(getSavedConfig().defaultModel).toBeUndefined();
+      expect(getSavedConfig().defaultEffort).toBeUndefined();
+    });
+
     test("filters Codex efforts using the inherited global model", () => {
       renderSettings({
         config: {

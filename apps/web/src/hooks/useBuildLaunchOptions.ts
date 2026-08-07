@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { buildLaunchDefaults } from "@/lib/build-launch-options";
-import { buildReviewModelCatalog } from "@/lib/review-launch-options";
+import {
+  buildReviewModelCatalog,
+  includeOpenCodeDefaultModel,
+} from "@/lib/review-launch-options";
 import {
   type CachedOpenCodeModel,
   getCachedOpenCodeModelCatalog,
@@ -34,18 +37,8 @@ function normalizeCachedOpenCodeModels(value: unknown): CachedOpenCodeModel[] | 
   return value as CachedOpenCodeModel[];
 }
 
-/** Shared defaults and repository-scoped model catalog for every build launcher. */
-export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
-  const config = useConfigStore((state) => state.config);
-  const projects = useProjectStore((state) => state.projects);
-  const projectHasLocalPath = Boolean(
-    projects.find((project) => project.id === projectId)?.localPath,
-  );
-  const defaults = useMemo(
-    () => buildLaunchDefaults(config, projectId, projectHasLocalPath),
-    [config, projectHasLocalPath, projectId],
-  );
-
+/** Repository-scoped model catalog shared by launchers and repository settings. */
+export function useProjectModelCatalog(projectId: string, enabled: boolean) {
   // These subscriptions keep the memoized catalog current when a native agent
   // publishes its models after the launcher has mounted.
   const claudeModels = useClaudeStore((state) => state.models);
@@ -70,7 +63,7 @@ export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
         }
       })
       .catch((error) => {
-        console.warn("[useBuildLaunchOptions] Failed to load cached OpenCode models:", error);
+        console.warn("[useProjectModelCatalog] Failed to load cached OpenCode models:", error);
       });
     return () => { cancelled = true; };
   }, [enabled, projectId]);
@@ -111,6 +104,31 @@ export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
       })),
     };
   }, [claudeModels, codexModels, projectOpenCodeModels]);
+
+  return catalog;
+}
+
+/** Review keeps an explicit "use OpenCode's last model" choice above the cache. */
+export function useReviewModelCatalog(projectId: string, enabled: boolean) {
+  const catalog = useProjectModelCatalog(projectId, enabled);
+  return useMemo(() => ({
+    ...catalog,
+    opencode: includeOpenCodeDefaultModel(catalog.opencode),
+  }), [catalog]);
+}
+
+/** Shared defaults and repository-scoped model catalog for every build launcher. */
+export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
+  const config = useConfigStore((state) => state.config);
+  const projects = useProjectStore((state) => state.projects);
+  const projectHasLocalPath = Boolean(
+    projects.find((project) => project.id === projectId)?.localPath,
+  );
+  const defaults = useMemo(
+    () => buildLaunchDefaults(config, projectId, projectHasLocalPath),
+    [config, projectHasLocalPath, projectId],
+  );
+  const catalog = useProjectModelCatalog(projectId, enabled);
 
   return { catalog, defaults };
 }

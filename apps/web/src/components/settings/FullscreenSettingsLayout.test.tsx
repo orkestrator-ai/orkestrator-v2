@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { FullscreenSettingsLayout } from "./FullscreenSettingsLayout";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 afterEach(cleanup);
 
@@ -80,6 +87,32 @@ describe("FullscreenSettingsLayout", () => {
 
     expect(screen.getByText("section:network")).toBeTruthy();
     expect(selector.textContent).toContain("Network");
+  });
+
+  test("raises descendant select portals above the fullscreen surface", () => {
+    const onValueChange = mock(() => undefined);
+    render(
+      <FullscreenSettingsLayout open onOpenChange={() => undefined} title="Settings" menuItems={menuItems}>
+        {() => (
+          <Select value="one" onValueChange={onValueChange}>
+            <SelectTrigger aria-label="Nested setting"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="one">One</SelectItem>
+              <SelectItem value="two">Two</SelectItem>
+            </SelectContent>
+          </Select>
+        )}
+      </FullscreenSettingsLayout>,
+    );
+
+    const selector = screen.getByRole("combobox", { name: "Nested setting" });
+    fireEvent.keyDown(selector, { key: "Enter" });
+    const option = screen.getByRole("option", { name: "Two" });
+    expect(option.closest('[data-slot="select-content"]')?.className)
+      .toContain("z-[70]");
+
+    fireEvent.click(option);
+    expect(onValueChange).toHaveBeenCalledWith("two");
   });
 
   test("uses Escape to close the mobile selector before closing settings", () => {

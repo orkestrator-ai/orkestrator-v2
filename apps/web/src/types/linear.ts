@@ -17,8 +17,10 @@ export interface LinearIssueListItem {
   title: string;
   status: string;
   statusType?: string;
+  statusPosition?: number;
   sortOrder?: number;
   priority?: number;
+  prioritySortOrder?: number;
   updatedAt: string;
   createdAt?: string;
   url?: string;

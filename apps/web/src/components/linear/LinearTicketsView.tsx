@@ -74,7 +74,7 @@ interface LinearTicketsViewContentProps extends LinearTicketsViewProps {
 }
 
 type LoadState = "idle" | "loading" | "loaded" | "error";
-type IssueOrder = "priority" | "createdAt" | "updatedAt";
+type IssueOrder = "manual" | "priority" | "createdAt" | "updatedAt";
 
 const isStringDraft = (value: unknown): value is string => typeof value === "string";
 const isBlankDraft = (value: string): boolean => value.length === 0;
@@ -114,23 +114,84 @@ const PRIORITY_BY_LABEL: Record<string, number> = {
   low: 4,
 };
 
+const STATUS_TYPE_ORDER: Record<string, number> = {
+  triage: 0,
+  backlog: 1,
+  unstarted: 2,
+  started: 3,
+  completed: 4,
+  canceled: 5,
+  duplicate: 6,
+};
+
+type StatusOrderKey = { typeOrder: number; position?: number };
+
+// Workflow states belong to a team, so the same status name can arrive with a
+// different type or position per team. Collapse each name to its lowest key so
+// section order depends only on the loaded issues, never on which issue happens
+// to sort first under the current ticket order or status filter.
+function buildStatusOrder(issues: LinearIssueListItem[]): Map<string, StatusOrderKey> {
+  const statusOrder = new Map<string, StatusOrderKey>();
+  for (const issue of issues) {
+    const typeOrder = STATUS_TYPE_ORDER[issue.statusType ?? ""] ?? Number.MAX_SAFE_INTEGER;
+    const current = statusOrder.get(issue.status);
+    if (!current || typeOrder < current.typeOrder) {
+      statusOrder.set(issue.status, { typeOrder, position: issue.statusPosition });
+      continue;
+    }
+    if (typeOrder !== current.typeOrder || issue.statusPosition === undefined) continue;
+    if (current.position === undefined || issue.statusPosition < current.position) {
+      statusOrder.set(issue.status, { typeOrder, position: issue.statusPosition });
+    }
+  }
+  return statusOrder;
+}
+
+function compareStatusOrder(
+  aStatus: string,
+  bStatus: string,
+  statusOrder: Map<string, StatusOrderKey>,
+): number {
+  const a = statusOrder.get(aStatus);
+  const b = statusOrder.get(bStatus);
+  const aTypeOrder = a?.typeOrder ?? Number.MAX_SAFE_INTEGER;
+  const bTypeOrder = b?.typeOrder ?? Number.MAX_SAFE_INTEGER;
+  if (aTypeOrder !== bTypeOrder) return aTypeOrder - bTypeOrder;
+
+  const aPosition = a?.position;
+  const bPosition = b?.position;
+  if (aPosition !== undefined && bPosition !== undefined && aPosition !== bPosition) {
+    return aPosition - bPosition;
+  }
+  if (aPosition !== undefined && bPosition === undefined) return -1;
+  if (aPosition === undefined && bPosition !== undefined) return 1;
+  return aStatus.localeCompare(bStatus);
+}
+
 function compareIssueOrder(
   a: LinearIssueListItem,
   b: LinearIssueListItem,
   order: IssueOrder,
 ): number {
+  if (order === "manual") return 0;
+
   if (order === "priority") {
     const aPriority = a.priority && a.priority > 0
       ? a.priority
-      : PRIORITY_BY_LABEL[a.priorityLabel?.toLowerCase() ?? ""];
+      : PRIORITY_BY_LABEL[a.priorityLabel?.toLowerCase() ?? ""] ?? 5;
     const bPriority = b.priority && b.priority > 0
       ? b.priority
-      : PRIORITY_BY_LABEL[b.priorityLabel?.toLowerCase() ?? ""];
-    if (aPriority !== undefined && bPriority !== undefined) {
-      return aPriority - bPriority;
+      : PRIORITY_BY_LABEL[b.priorityLabel?.toLowerCase() ?? ""] ?? 5;
+    if (aPriority !== bPriority) return aPriority - bPriority;
+    if (
+      a.prioritySortOrder !== undefined
+      && b.prioritySortOrder !== undefined
+      && a.prioritySortOrder !== b.prioritySortOrder
+    ) {
+      return a.prioritySortOrder - b.prioritySortOrder;
     }
-    if (aPriority !== undefined) return -1;
-    if (bPriority !== undefined) return 1;
+    if (a.prioritySortOrder !== undefined && b.prioritySortOrder === undefined) return -1;
+    if (a.prioritySortOrder === undefined && b.prioritySortOrder !== undefined) return 1;
     return 0;
   }
 
@@ -257,7 +318,7 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
   const [issuesState, setIssuesState] = useState<LoadState>("idle");
   const [issuesError, setIssuesError] = useState<string | null>(null);
   const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(new Set());
-  const [issueOrder, setIssueOrder] = useState<IssueOrder>("priority");
+  const [issueOrder, setIssueOrder] = useState<IssueOrder>("manual");
   const [selectedIssueId, setSelectedIssueId] = useState<string | null>(null);
   const [detail, setDetail] = useState<LinearIssueDetail | null>(null);
   const [detailState, setDetailState] = useState<LoadState>("idle");
@@ -347,13 +408,16 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
     void loadIssues();
   }, [loadIssues]);
 
+  const statusOrder = useMemo(() => buildStatusOrder(issues), [issues]);
+
   const statusCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const issue of issues) {
       counts.set(issue.status, (counts.get(issue.status) ?? 0) + 1);
     }
-    return Array.from(counts.entries()).sort(([a], [b]) => a.localeCompare(b));
-  }, [issues]);
+    return Array.from(counts.entries()).sort(([a], [b]) =>
+      compareStatusOrder(a, b, statusOrder));
+  }, [issues, statusOrder]);
 
   const filteredIssues = useMemo(() => {
     if (selectedStatuses.size === 0) return issues;
@@ -369,8 +433,9 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
       group.push(issue);
       groups.set(issue.status, group);
     }
-    return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b));
-  }, [filteredIssues, issueOrder]);
+    return Array.from(groups.entries()).sort(([a], [b]) =>
+      compareStatusOrder(a, b, statusOrder));
+  }, [filteredIssues, issueOrder, statusOrder]);
 
   const selectedPipeline = selectedIssueId ? getIssuePipeline(pipelines, selectedIssueId) : undefined;
   const hasActiveBuild = isActivePipeline(selectedPipeline);
@@ -878,6 +943,7 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent align="end">
+                    <SelectItem value="manual">Linear board</SelectItem>
                     <SelectItem value="priority">Priority</SelectItem>
                     <SelectItem value="createdAt">Created date</SelectItem>
                     <SelectItem value="updatedAt">Updated date</SelectItem>

@@ -13,12 +13,11 @@ import {
 } from "@/components/ui/select";
 import { useConfigStore } from "@/stores";
 import { useClaudeStore } from "@/stores/claudeStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useCodexStore } from "@/stores/codexStore";
+import { useProjectModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import * as backend from "@/lib/backend";
 import { cn } from "@/lib/utils";
 import type { ClaudeModel, ClaudeEffortLevel } from "@/lib/claude-client";
-import type { OpenCodeModel } from "@/lib/opencode-client";
 import type { CodexReasoningEffort } from "@/lib/codex-client";
 import { CODEX_MODELS } from "@/lib/codex-client";
 import { Loader2, Network, Plus, Trash2, FolderOpen, ExternalLink, FileText, Bot, Settings2, GitBranch } from "lucide-react";
@@ -84,8 +83,8 @@ export function RepositorySettings({
 
   // Pull cached models from stores
   const claudeModels = useClaudeStore((s) => s.models);
-  const openCodeModelsMap = useOpenCodeStore((s) => s.models);
   const codexModels = useCodexStore((s) => s.models);
+  const projectModelCatalog = useProjectModelCatalog(project.id, open);
 
   const existingConfig = getRepositoryConfig(project.id);
   const initialConfig = existingConfig ?? DEFAULT_CONFIG;
@@ -406,18 +405,9 @@ export function RepositorySettings({
         return models.map((m) => ({ id: m.id, name: m.name }));
       }
       case "opencode": {
-        // Flatten all cached opencode models from any environment
-        const allModels: OpenCodeModel[] = [];
-        const seenIds = new Set<string>();
-        for (const models of openCodeModelsMap.values()) {
-          for (const m of models) {
-            if (!seenIds.has(m.id)) {
-              seenIds.add(m.id);
-              allModels.push(m);
-            }
-          }
-        }
-        return allModels.map((m) => ({ id: m.id, name: m.name }));
+        return projectModelCatalog.opencode
+          .filter((model) => model.id !== "default")
+          .map((model) => ({ id: model.id, name: model.name }));
       }
       case "codex": {
         const models = codexModels.length > 0 ? codexModels : CODEX_MODELS;
@@ -426,7 +416,7 @@ export function RepositorySettings({
       default:
         return [];
     }
-  }, [effectiveAgent, claudeModels, openCodeModelsMap, codexModels]);
+  }, [effectiveAgent, claudeModels, projectModelCatalog.opencode, codexModels]);
 
   const selectedCodexModel = useMemo(() => {
     if (effectiveAgent !== "codex") return undefined;
@@ -449,12 +439,14 @@ export function RepositorySettings({
         return CLAUDE_EFFORT_LEVELS;
       }
       case "opencode": {
-        // Find the selected model and use its variants
-        for (const models of openCodeModelsMap.values()) {
-          const model = models.find((m) => m.id === defaultModel);
-          if (model?.variants && model.variants.length > 0) {
-            return model.variants.map((v) => ({ value: v, label: v.charAt(0).toUpperCase() + v.slice(1) }));
-          }
+        const model = projectModelCatalog.opencode.find(
+          (candidate) => candidate.id === defaultModel,
+        );
+        if (model?.reasoningEfforts.length) {
+          return model.reasoningEfforts.map((variant) => ({
+            value: variant,
+            label: variant.charAt(0).toUpperCase() + variant.slice(1),
+          }));
         }
         return OPENCODE_DEFAULT_VARIANTS.map((v) => ({ value: v, label: v.charAt(0).toUpperCase() + v.slice(1) }));
       }
@@ -467,7 +459,7 @@ export function RepositorySettings({
       default:
         return [];
     }
-  }, [effectiveAgent, defaultModel, claudeModels, openCodeModelsMap, selectedCodexModel]);
+  }, [effectiveAgent, defaultModel, claudeModels, projectModelCatalog.opencode, selectedCodexModel]);
 
   useEffect(() => {
     if (
@@ -640,18 +632,32 @@ export function RepositorySettings({
               <div className="grid gap-2">
                 <Label htmlFor="defaultModel">Default Model</Label>
                 {availableModels.length > 0 ? (
-                  <Select value={defaultModel} onValueChange={setDefaultModel} disabled={isSaving}>
+                  <Select
+                    value={defaultModel || APP_DEFAULT}
+                    onValueChange={(value) => setDefaultModel(value === APP_DEFAULT ? "" : value)}
+                    disabled={isSaving}
+                  >
                     <SelectTrigger id="defaultModel"><SelectValue placeholder="Use agent default" /></SelectTrigger>
-                    <SelectContent>{availableModels.map((model) => (<SelectItem key={model.id} value={model.id}>{model.name}</SelectItem>))}</SelectContent>
+                    <SelectContent>
+                      <SelectItem value={APP_DEFAULT}>Use agent default</SelectItem>
+                      {availableModels.map((model) => (<SelectItem key={model.id} value={model.id}>{model.name}</SelectItem>))}
+                    </SelectContent>
                   </Select>
                 ) : (<p className="text-xs text-muted-foreground italic">Start an environment to load available models</p>)}
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="defaultEffort">Default Effort Level</Label>
                 {availableEffortLevels.length > 0 ? (
-                  <Select value={defaultEffort} onValueChange={setDefaultEffort} disabled={isSaving}>
+                  <Select
+                    value={defaultEffort || APP_DEFAULT}
+                    onValueChange={(value) => setDefaultEffort(value === APP_DEFAULT ? "" : value)}
+                    disabled={isSaving}
+                  >
                     <SelectTrigger id="defaultEffort"><SelectValue placeholder="Use agent default" /></SelectTrigger>
-                    <SelectContent>{availableEffortLevels.map((level) => (<SelectItem key={level.value} value={level.value}>{level.label}</SelectItem>))}</SelectContent>
+                    <SelectContent>
+                      <SelectItem value={APP_DEFAULT}>Use agent default</SelectItem>
+                      {availableEffortLevels.map((level) => (<SelectItem key={level.value} value={level.value}>{level.label}</SelectItem>))}
+                    </SelectContent>
                   </Select>
                 ) : (<p className="text-xs text-muted-foreground italic">No effort levels available for this agent</p>)}
               </div>

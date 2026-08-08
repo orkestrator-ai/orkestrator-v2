@@ -539,6 +539,26 @@ describe("HTTP build pipeline provider", () => {
     );
   });
 
+  test("preserves the session failure detail from the claude session route", async () => {
+    const { provider } = httpProvider(() => Response.json({
+      status: "error",
+      error: "claude declined mid-turn",
+    }));
+
+    await expect(provider.status("session-1")).rejects.toThrow(
+      "The claude session failed: claude declined mid-turn",
+    );
+  });
+
+  test("falls back to a plain error status when the session failure detail is empty", async () => {
+    const { provider } = httpProvider(() => Response.json({
+      status: "error",
+      error: "   ",
+    }), codexConnection);
+
+    await expect(provider.status("session-1")).resolves.toBe("error");
+  });
+
   test("maps missing and malformed HTTP transcripts to an empty list", async () => {
     const missing = httpProvider(() => new Response(null, { status: 404 }));
     await expect(missing.provider.messages("session-1")).resolves.toEqual([]);

@@ -1411,7 +1411,6 @@ export class BuildPipelineService {
       throw new Error(`The ${session.label.toLowerCase()} is no longer available`);
     }
     if (status === "error") {
-      session.status = "error";
       throw new Error(`The ${session.label.toLowerCase()} failed`);
     }
     if (status === "blocked") {

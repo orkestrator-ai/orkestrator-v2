@@ -2215,6 +2215,92 @@ describe("BuildPipelineService", () => {
     });
   });
 
+  test("retries a failed PR stage in a fresh session", async () => {
+    await withService(async (service, storage, provider) => {
+      const { started, session: firstSession } = await startBuilding(
+        service,
+        storage,
+      );
+      await mutateStored(storage, started.id, (candidate) => {
+        candidate.phase = "failed";
+        candidate.error = "The pr session failed";
+        candidate.failureContext = {
+          phase: "creating-pr",
+          kind: "stage-transition",
+          sessionId: firstSession.sdkSessionId,
+        };
+        candidate.sessions[candidate.currentSessionIndex]!.status = "error";
+      });
+
+      const retried = await service.retryStage(started.id);
+
+      expect(retried).toMatchObject({
+        phase: "creating-pr",
+        currentSessionIndex: 1,
+      });
+      expect(retried.error).toBeUndefined();
+      expect(retried.failureContext).toBeUndefined();
+      expect(retried.stageRetryRequested).toBeUndefined();
+      expect(retried.sessions).toHaveLength(2);
+      expect(retried.sessions[0]).toMatchObject({
+        sdkSessionId: firstSession.sdkSessionId,
+        status: "error",
+      });
+      expect(retried.sessions[1]).toMatchObject({
+        phase: "pr",
+        status: "running",
+      });
+      expect(retried.sessions[1]?.sdkSessionId)
+        .not.toBe(firstSession.sdkSessionId);
+      expect(provider.created.at(-1)?.phase).toBe("pr");
+      expect(provider.sent.at(-1)?.sessionId)
+        .toBe(retried.sessions[1]?.sdkSessionId);
+    });
+  });
+
+  test("retries a failed conflict-resolution stage in a fresh session", async () => {
+    await withService(async (service, storage, provider) => {
+      const { started, session: firstSession } = await startBuilding(
+        service,
+        storage,
+      );
+      await mutateStored(storage, started.id, (candidate) => {
+        candidate.phase = "failed";
+        candidate.error = "The conflict resolution failed";
+        candidate.failureContext = {
+          phase: "resolving-conflicts",
+          kind: "stage-transition",
+          sessionId: firstSession.sdkSessionId,
+        };
+        candidate.sessions[candidate.currentSessionIndex]!.status = "error";
+      });
+
+      const retried = await service.retryStage(started.id);
+
+      expect(retried).toMatchObject({
+        phase: "resolving-conflicts",
+        currentSessionIndex: 1,
+      });
+      expect(retried.error).toBeUndefined();
+      expect(retried.failureContext).toBeUndefined();
+      expect(retried.stageRetryRequested).toBeUndefined();
+      expect(retried.sessions).toHaveLength(2);
+      expect(retried.sessions[0]).toMatchObject({
+        sdkSessionId: firstSession.sdkSessionId,
+        status: "error",
+      });
+      expect(retried.sessions[1]).toMatchObject({
+        phase: "resolve-conflicts",
+        status: "running",
+      });
+      expect(retried.sessions[1]?.sdkSessionId)
+        .not.toBe(firstSession.sdkSessionId);
+      expect(provider.created.at(-1)?.phase).toBe("resolve-conflicts");
+      expect(provider.sent.at(-1)?.sessionId)
+        .toBe(retried.sessions[1]?.sdkSessionId);
+    });
+  });
+
   test("forwards unattended interaction metadata and keeps pending blocked work parked", async () => {
     await withService(async (service, storage, provider) => {
       const started = await service.start(startInput());

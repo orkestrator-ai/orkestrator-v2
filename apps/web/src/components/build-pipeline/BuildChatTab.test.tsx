@@ -14,7 +14,10 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { MAX_PIPELINE_USER_MESSAGE_LENGTH } from "@orkestrator/protocol/build-pipeline";
+import {
+  MAX_PIPELINE_USER_MESSAGE_LENGTH,
+  type ResumableBuildPhase,
+} from "@orkestrator/protocol/build-pipeline";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import * as realBackend from "@/lib/backend";
@@ -906,6 +909,36 @@ describe("BuildChatTab presentation", () => {
       description: "fresh session could not be created",
     });
     expect(mockToastSuccess).not.toHaveBeenCalledWith("Failed stage restarted");
+  });
+
+  test("labels the failed-stage retry for every resumable phase", () => {
+    const cases: Array<[ResumableBuildPhase, string]> = [
+      ["creating-environment", "Retry Environment Creation"],
+      ["starting-environment", "Retry Environment Start"],
+      ["waiting-for-setup", "Retry Setup"],
+      ["building", "Retry Build Stage"],
+      ["reviewing", "Retry Review Stage"],
+      ["addressing", "Retry Address Stage"],
+      ["verifying", "Retry Verification Stage"],
+      ["fixing", "Retry Fix Stage"],
+      ["creating-pr", "Retry PR Stage"],
+      ["resolving-conflicts", "Retry Conflict Resolution"],
+    ];
+    for (const [phase, label] of cases) {
+      cleanup();
+      renderTab({
+        ...reviewed,
+        phase: "failed",
+        error: "stage failed",
+        failureContext: {
+          phase,
+          kind: "stage-transition",
+          sessionId: "failed-session",
+        },
+        backendRevision: 60,
+      });
+      expect(screen.getByRole("button", { name: label })).toBeTruthy();
+    }
   });
 
   test("badges no stage that declined nothing", () => {

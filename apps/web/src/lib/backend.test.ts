@@ -601,6 +601,7 @@ describe("backend setup wrappers", () => {
     await backendWrappers.retryBuildPipelineCompletionComment("pipeline-1");
     await backendWrappers.sendBuildPipelineMessage("pipeline-1", "ship it");
     await backendWrappers.retryBuildPipelineReview("pipeline-1");
+    await backendWrappers.retryBuildPipelineStage("pipeline-1");
     await backendWrappers.retryBuildPipelineInteractionFailure("pipeline-1");
     const legacySnapshots = [{ id: "legacy-pipeline" }];
     await backendWrappers.importLegacyBuildPipelines(
@@ -621,6 +622,7 @@ describe("backend setup wrappers", () => {
         text: "ship it",
       }],
       ["retry_build_pipeline_review", { pipelineId: "pipeline-1" }],
+      ["retry_build_pipeline_stage", { pipelineId: "pipeline-1" }],
       ["retry_build_pipeline_interaction_failure", {
         pipelineId: "pipeline-1",
       }],

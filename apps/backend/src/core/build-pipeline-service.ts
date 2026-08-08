@@ -110,6 +110,19 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * A stage failed before its new session was durably recorded.
+ *
+ * The durable current session still belongs to the preceding stage in this
+ * case, so the terminal failure handler must not attribute the error to it.
+ */
+class PreSessionStageStartError extends Error {
+  constructor(error: unknown, readonly phase: ResumableBuildPhase) {
+    super(errorMessage(error));
+    this.name = "PreSessionStageStartError";
+  }
+}
+
 function canonicalAdmissionSource(
   source: BuildPipelineSource | undefined,
 ): Record<string, unknown> | null {
@@ -1045,6 +1058,48 @@ export class BuildPipelineService {
     return (await this.requireRecord(pipelineId)).snapshot as BuildPipeline;
   }
 
+  /** Starts a fresh attempt for the non-interactive stage that failed. */
+  async retryStage(pipelineId: string): Promise<BuildPipeline> {
+    let rejection: Error | undefined;
+    await this.mutate(pipelineId, (candidate) => {
+      if (
+        candidate.phase !== "failed"
+        || !candidate.failureContext
+        || candidate.failureContext.kind === "interactive-request"
+      ) {
+        rejection = new Error("This build has no failed stage to retry");
+        return;
+      }
+      const phase = candidate.failureContext.phase;
+      candidate.phase = phase;
+      if (sessionPhaseFor(phase)) {
+        candidate.stageRetryRequested = true;
+      } else {
+        delete candidate.stageRetryRequested;
+      }
+      const failedSession = sessionForCurrentPhase(candidate);
+      if (
+        failedSession
+        && failedSession.sdkSessionId === candidate.failureContext.sessionId
+      ) {
+        failedSession.status = "error";
+      }
+      delete candidate.error;
+      delete candidate.failureContext;
+      delete candidate.reconnectAttempt;
+      delete candidate.pendingPromptAttempt;
+      delete candidate.activePromptContext;
+      delete candidate.reviewRetryRequested;
+      delete candidate.interactionRetryRequested;
+      delete candidate.stallWarning;
+      delete candidate.completionCommentStatus;
+      delete candidate.completionCommentError;
+    });
+    if (rejection) throw rejection;
+    await this.runLocked(pipelineId);
+    return (await this.requireRecord(pipelineId)).snapshot as BuildPipeline;
+  }
+
   async retryInteractionFailure(pipelineId: string): Promise<BuildPipeline> {
     let rejection: Error | undefined;
     await this.mutate(pipelineId, (candidate) => {
@@ -1099,6 +1154,8 @@ export class BuildPipelineService {
       delete pipeline.activePromptContext;
       delete pipeline.pendingUserMessages;
       delete pipeline.reviewRetryRequested;
+      delete pipeline.stageRetryRequested;
+      delete pipeline.interactionRetryRequested;
       delete pipeline.stallWarning;
     });
     // `provider()` records attribution for reconnect handling while a pipeline
@@ -1292,6 +1349,15 @@ export class BuildPipelineService {
         isLocal: pipeline.environmentType === "local",
       });
       await this.startStage(pipeline, "build", "building");
+      return;
+    }
+
+    if (pipeline.stageRetryRequested) {
+      const phase = pipeline.phase as ResumableBuildPhase;
+      const sessionPhase = sessionPhaseFor(phase);
+      if (!sessionPhase) throw new Error(`Cannot retry pipeline phase ${phase}`);
+      delete pipeline.stageRetryRequested;
+      await this.startStage(pipeline, sessionPhase, phase);
       return;
     }
 
@@ -1731,110 +1797,117 @@ export class BuildPipelineService {
       mode?: ProviderExecutionMode;
     },
   ): Promise<void> {
-    if (sessionPhase === "build") {
-      await this.updateKanbanLifecycle(pipeline, {
-        status: "in-progress",
-        comment: "🔨 Build started",
+    const dispatch = await (async () => {
+      if (sessionPhase === "build") {
+        await this.updateKanbanLifecycle(pipeline, {
+          status: "in-progress",
+          comment: "🔨 Build started",
+        });
+      }
+      // Probed before the provider session exists so an unestablishable Git state
+      // fails the stage without leaving a session behind or spending a turn on a
+      // review that could never be certified.
+      const validationWorktree = !override
+          && (sessionPhase === "review" || sessionPhase === "verify")
+        ? await this.validationBaseline(pipeline, sessionPhase)
+        : undefined;
+      const { agent, model, effort } = await this.stepSettings(pipeline, sessionPhase);
+      const provider = await this.provider(pipeline, agent);
+      const label = SESSION_LABELS[sessionPhase];
+      // Stated rather than left to each provider's own default, so the sandbox a
+      // stage runs under is one decision in one place and does not move when a
+      // step pins a different harness.
+      const mode = override?.mode
+        ?? executionModeOverrideForPhase(phase)
+        ?? executionModeForSessionPhase(sessionPhase, agent);
+      const sessionKey = `${pipeline.id}:${sessionPhase}:${pipeline.iteration}:${randomUUID()}`;
+      // Codex binds model and effort at session creation, Claude and OpenCode at
+      // prompt dispatch, so a per-step selection has to be supplied at both.
+      const sessionId = await provider.createSession(sessionPhase, label, {
+        model,
+        effort,
+        mode,
+        interaction: {
+          origin: "build-pipeline",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          phase: sessionPhase,
+          workflowId: pipeline.id,
+          provider: agent,
+          fence: sessionKey,
+        },
       });
-    }
-    // Probed before the provider session exists so an unestablishable Git state
-    // fails the stage without leaving a session behind or spending a turn on a
-    // review that could never be certified.
-    const validationWorktree = !override
-        && (sessionPhase === "review" || sessionPhase === "verify")
-      ? await this.validationBaseline(pipeline, sessionPhase)
-      : undefined;
-    const { agent, model, effort } = await this.stepSettings(pipeline, sessionPhase);
-    const provider = await this.provider(pipeline, agent);
-    const label = SESSION_LABELS[sessionPhase];
-    // Stated rather than left to each provider's own default, so the sandbox a
-    // stage runs under is one decision in one place and does not move when a
-    // step pins a different harness.
-    const mode = override?.mode
-      ?? executionModeOverrideForPhase(phase)
-      ?? executionModeForSessionPhase(sessionPhase, agent);
-    const sessionKey = `${pipeline.id}:${sessionPhase}:${pipeline.iteration}:${randomUUID()}`;
-    // Codex binds model and effort at session creation, Claude and OpenCode at
-    // prompt dispatch, so a per-step selection has to be supplied at both.
-    const sessionId = await provider.createSession(sessionPhase, label, {
-      model,
-      effort,
-      mode,
-      interaction: {
+      provider.registerSession?.(sessionId, {
         origin: "build-pipeline",
         interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         phase: sessionPhase,
         workflowId: pipeline.id,
         provider: agent,
         fence: sessionKey,
-      },
-    });
-    provider.registerSession?.(sessionId, {
-      origin: "build-pipeline",
-      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-      phase: sessionPhase,
-      workflowId: pipeline.id,
-      provider: agent,
-      fence: sessionKey,
-    });
-    const stagePrompt = override
-      ? { prompt: override.prompt, images: override.images }
-      : await this.promptFor(pipeline, sessionPhase, agent, validationWorktree);
-    const prompt = withUnattendedPolicy(stagePrompt.prompt);
-    const { schema, images } = stagePrompt;
-    const requestId = randomUUID();
-    const promptStartedAt = new Date().toISOString();
-    const session: PipelineSession = {
-      phase: sessionPhase,
-      agent,
-      origin: "build-pipeline",
-      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-      iteration: pipeline.iteration,
-      sessionKey,
-      sdkSessionId: sessionId,
-      status: "running",
-      startedAt: new Date().toISOString(),
-      turnStartedAt: promptStartedAt,
-      label,
-      messages: [],
-      messageRevision: 0,
-      structuredRequestId: schema !== undefined ? requestId : undefined,
-      validationHeadAtStart: validationWorktree?.head,
-      validationWorktreeStatusAtStart: validationWorktree?.status,
-      validationUncommittedPathsAtStart: validationWorktree
-        ? (validationWorktree.status === "dirty" ? [...validationWorktree.paths] : [])
-        : undefined,
-    };
-    pipeline.sessions.push(session);
-    pipeline.currentSessionIndex = pipeline.sessions.length - 1;
-    pipeline.phase = phase;
-    delete pipeline.error;
-    delete pipeline.failureContext;
+      });
+      const stagePrompt = override
+        ? { prompt: override.prompt, images: override.images }
+        : await this.promptFor(pipeline, sessionPhase, agent, validationWorktree);
+      const prompt = withUnattendedPolicy(stagePrompt.prompt);
+      const { schema, images } = stagePrompt;
+      const requestId = randomUUID();
+      const promptStartedAt = new Date().toISOString();
+      const session: PipelineSession = {
+        phase: sessionPhase,
+        agent,
+        origin: "build-pipeline",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        iteration: pipeline.iteration,
+        sessionKey,
+        sdkSessionId: sessionId,
+        status: "running",
+        startedAt: new Date().toISOString(),
+        turnStartedAt: promptStartedAt,
+        label,
+        messages: [],
+        messageRevision: 0,
+        structuredRequestId: schema !== undefined ? requestId : undefined,
+        validationHeadAtStart: validationWorktree?.head,
+        validationWorktreeStatusAtStart: validationWorktree?.status,
+        validationUncommittedPathsAtStart: validationWorktree
+          ? (validationWorktree.status === "dirty" ? [...validationWorktree.paths] : [])
+          : undefined,
+      };
+      pipeline.sessions.push(session);
+      pipeline.currentSessionIndex = pipeline.sessions.length - 1;
+      pipeline.phase = phase;
+      delete pipeline.error;
+      delete pipeline.failureContext;
 
-    pipeline.pendingPromptAttempt = {
-      id: randomUUID(),
-      sessionId,
-      requestId,
-      phase,
-      prompt,
-      useTaskImages: images.length > 0,
-      structuredReview: schema !== undefined,
-      startedAt: promptStartedAt,
-    };
-    pipeline.activePromptContext = {
-      phase,
-      kind: "prompt-dispatch",
-      sessionId,
-      prompt,
-      useTaskImages: images.length > 0,
-      requestId,
-      structuredReview: schema !== undefined,
-    };
-    if (phase === "reviewing") {
-      pipeline.structuredReviewRequestId = requestId;
-      delete pipeline.structuredReview;
-    }
-    await this.save(pipeline, pipeline.backendRevision);
+      pipeline.pendingPromptAttempt = {
+        id: randomUUID(),
+        sessionId,
+        requestId,
+        phase,
+        prompt,
+        useTaskImages: images.length > 0,
+        structuredReview: schema !== undefined,
+        startedAt: promptStartedAt,
+      };
+      pipeline.activePromptContext = {
+        phase,
+        kind: "prompt-dispatch",
+        sessionId,
+        prompt,
+        useTaskImages: images.length > 0,
+        requestId,
+        structuredReview: schema !== undefined,
+      };
+      if (phase === "reviewing") {
+        pipeline.structuredReviewRequestId = requestId;
+        delete pipeline.structuredReview;
+      }
+      await this.save(pipeline, pipeline.backendRevision);
+      return { provider, sessionId, prompt, requestId, images, schema, model, effort, mode };
+    })().catch((error: unknown) => {
+      if (error instanceof ProviderUnavailableError) throw error;
+      throw new PreSessionStageStartError(error, phase);
+    });
+    const { provider, sessionId, prompt, requestId, images, schema, model, effort, mode } = dispatch;
     try {
       await provider.send(sessionId, prompt, {
         requestId,
@@ -3151,12 +3224,21 @@ export class BuildPipelineService {
     pipeline.backendRevision = record.revision;
     pipeline.error = errorMessage(error);
     pipeline.failureContext = {
-      phase: pipeline.phase as ResumableBuildPhase,
+      phase: error instanceof PreSessionStageStartError
+        ? error.phase
+        : pipeline.phase as ResumableBuildPhase,
       kind: "stage-transition",
-      sessionId: sessionForCurrentPhase(pipeline)?.sdkSessionId,
+      sessionId: error instanceof PreSessionStageStartError
+        ? undefined
+        : sessionForCurrentPhase(pipeline)?.sdkSessionId,
     };
+    const failedSession = error instanceof PreSessionStageStartError
+      ? undefined
+      : sessionForCurrentPhase(pipeline);
+    if (failedSession) failedSession.status = "error";
     pipeline.phase = "failed";
     delete pipeline.pendingPromptAttempt;
+    delete pipeline.stageRetryRequested;
     delete pipeline.stallWarning;
     this.provisioningPrompts.delete(pipeline.id);
     this.lastProviderAgent.delete(pipeline.id);

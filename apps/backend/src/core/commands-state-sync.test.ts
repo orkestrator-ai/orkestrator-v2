@@ -2683,6 +2683,10 @@ describe("build pipeline commands", () => {
       operation: "retry-review",
       id,
     }));
+    const retryStage = mock(async (id: string) => ({
+      operation: "retry-stage",
+      id,
+    }));
     const retryInteractionFailure = mock(async (id: string) => ({
       operation: "retry-interaction",
       id,
@@ -2696,6 +2700,7 @@ describe("build pipeline commands", () => {
       remove,
       sendMessage,
       retryReview,
+      retryStage,
       retryInteractionFailure,
     } as unknown as NonNullable<CommandContext["buildPipelines"]>;
 
@@ -2722,6 +2727,9 @@ describe("build pipeline commands", () => {
       await expect(invoke("retry_build_pipeline_review", {
         pipelineId: "pipeline-1",
       })).resolves.toEqual({ operation: "retry-review", id: "pipeline-1" });
+      await expect(invoke("retry_build_pipeline_stage", {
+        pipelineId: "pipeline-1",
+      })).resolves.toEqual({ operation: "retry-stage", id: "pipeline-1" });
       await expect(invoke("retry_build_pipeline_interaction_failure", {
         pipelineId: "pipeline-1",
       })).resolves.toEqual({ operation: "retry-interaction", id: "pipeline-1" });
@@ -2742,6 +2750,7 @@ describe("build pipeline commands", () => {
       expect(sendMessage)
         .toHaveBeenCalledWith("pipeline-1", "also update the README");
       expect(retryReview).toHaveBeenCalledWith("pipeline-1");
+      expect(retryStage).toHaveBeenCalledWith("pipeline-1");
       expect(retryInteractionFailure).toHaveBeenCalledWith("pipeline-1");
     }, { buildPipelines: supervisor });
   });
@@ -2836,6 +2845,7 @@ describe("build pipeline commands", () => {
           text: "hello",
         }],
         ["retry_build_pipeline_review", { pipelineId: "pipeline-1" }],
+        ["retry_build_pipeline_stage", { pipelineId: "pipeline-1" }],
         ["retry_build_pipeline_interaction_failure", {
           pipelineId: "pipeline-1",
         }],

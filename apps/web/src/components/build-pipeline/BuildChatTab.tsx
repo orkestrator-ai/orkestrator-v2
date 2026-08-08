@@ -71,6 +71,19 @@ const AGENT_LABELS: Record<string, string> = {
   opencode: "OpenCode",
 };
 
+const RETRY_STAGE_LABELS: Record<string, string> = {
+  "creating-environment": "Retry Environment Creation",
+  "starting-environment": "Retry Environment Start",
+  "waiting-for-setup": "Retry Setup",
+  building: "Retry Build Stage",
+  reviewing: "Retry Review Stage",
+  addressing: "Retry Address Stage",
+  verifying: "Retry Verification Stage",
+  fixing: "Retry Fix Stage",
+  "creating-pr": "Retry PR Stage",
+  "resolving-conflicts": "Retry Conflict Resolution",
+};
+
 /**
  * Where each key moves the stage selection.
  *
@@ -266,6 +279,29 @@ export function BuildChatTab({
     }
   };
 
+  const retryStage = async (): Promise<void> => {
+    if (!pipeline || controlPending) return;
+    setControlPending(true);
+    try {
+      const updated = await backend.retryBuildPipelineStage(pipeline.id);
+      replacePipeline(updated);
+      pinnedSessionRef.current = false;
+      if (updated.phase === "failed") {
+        toast.error("Failed to restart the stage", {
+          description: updated.error ?? "The stage failed again before it could restart",
+        });
+        return;
+      }
+      toast.success("Failed stage restarted");
+    } catch (error) {
+      toast.error("Failed to restart the stage", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setControlPending(false);
+    }
+  };
+
   const sendMessage = async (): Promise<void> => {
     const text = draft.trim();
     if (!pipeline || !text || sendPending) return;
@@ -296,7 +332,11 @@ export function BuildChatTab({
   const active = !["paused", "complete", "failed"].includes(pipeline.phase);
   const interactionFailure = pipeline.phase === "failed"
     && pipeline.failureContext?.kind === "interactive-request";
+  const canRetryStage = pipeline.phase === "failed"
+    && Boolean(pipeline.failureContext)
+    && !interactionFailure;
   const canRetryReview = pipeline.phase !== "complete"
+    && pipeline.phase !== "failed"
     && !interactionFailure
     && pipeline.sessions.length > 0
     && Boolean(pipeline.environmentId);
@@ -396,6 +436,18 @@ export function BuildChatTab({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
+          {canRetryStage && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={controlPending}
+              onClick={() => void retryStage()}
+            >
+              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+              {RETRY_STAGE_LABELS[pipeline.failureContext!.phase]
+                ?? "Retry Failed Stage"}
+            </Button>
+          )}
           {canRetryReview && (
             <Button
               size="sm"

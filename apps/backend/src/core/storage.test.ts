@@ -403,6 +403,121 @@ describe("pane layout intent persistence", () => {
     });
   });
 
+  test("prevents a stale durable setup selection from overriding the build handoff", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1", { environmentType: "local" });
+      environment.id = "env-stale-durable-setup-focus";
+      await storage.addEnvironment(environment);
+      const initial = await storage.ensureBuildPipelineTab({
+        pipelineId: "pipeline-1",
+        taskId: "task-1",
+        environmentId: environment.id,
+        isLocal: true,
+      });
+      const beforeSetup = persistedInput(initial);
+      const withSetup = structuredClone(beforeSetup);
+      if (withSetup.root.kind !== "leaf") throw new Error("expected a leaf layout");
+      const setupTab = {
+        id: "setup-terminal",
+        type: "plain",
+        isSetupTab: true,
+      };
+      withSetup.root.tabs.push(setupTab);
+      withSetup.root.activeTabId = "setup-terminal";
+      const setupSelected = await storage.applyPaneLayoutIntent(
+        environment.id,
+        beforeSetup,
+        withSetup,
+        { activeTabIds: { default: "setup-terminal" } },
+      );
+
+      await storage.updateEnvironment(environment.id, {
+        setupScriptsComplete: true,
+        setupPhase: "ready",
+      });
+      const buildSelected = await storage.ensureBuildPipelineTab({
+        pipelineId: "pipeline-1",
+        taskId: "task-1",
+        environmentId: environment.id,
+        isLocal: true,
+      });
+      const staleSetupSelection = persistedInput(setupSelected);
+      const saved = await storage.applyPaneLayoutIntent(
+        environment.id,
+        staleSetupSelection,
+        staleSetupSelection,
+        { activeTabIds: { default: "setup-terminal" } },
+      );
+
+      expect(saved.revision).toBe(buildSelected.revision + 1);
+      expect(saved.root).toMatchObject({
+        kind: "leaf",
+        activeTabId: "build-pipeline-1",
+        tabs: expect.arrayContaining([
+          expect.objectContaining({ id: "setup-terminal", isSetupTab: true }),
+        ]),
+      });
+    });
+  });
+
+  test("prevents stale setup focus from overriding an agent-tab handoff", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1", { environmentType: "local" });
+      environment.id = "env-agent-setup-handoff";
+      await storage.addEnvironment(environment);
+      const setupLayout = layout("setup-terminal", ["setup-terminal"]);
+      if (setupLayout.root.kind !== "leaf") throw new Error("expected a leaf layout");
+      const setupTab = {
+        id: "setup-terminal",
+        type: "plain",
+        isSetupTab: true,
+      };
+      setupLayout.root.tabs[0] = setupTab;
+      const setupSelected = await storage.applyPaneLayoutIntent(
+        environment.id,
+        setupLayout,
+        setupLayout,
+        { activeTabIds: { "pane-1": "setup-terminal" } },
+      );
+
+      await storage.updateEnvironment(environment.id, {
+        setupScriptsComplete: true,
+        setupPhase: "ready",
+      });
+      const agentBase = persistedInput(setupSelected);
+      const agentDesired = structuredClone(agentBase);
+      if (agentDesired.root.kind !== "leaf") throw new Error("expected a leaf layout");
+      agentDesired.root.tabs.push({
+        id: "startup-agent",
+        type: "codex-native",
+      });
+      agentDesired.root.activeTabId = "startup-agent";
+      const agentSelected = await storage.applyPaneLayoutIntent(
+        environment.id,
+        agentBase,
+        agentDesired,
+        { activeTabIds: { "pane-1": "startup-agent" } },
+      );
+      const staleSetupSelection = persistedInput(setupSelected);
+      const saved = await storage.applyPaneLayoutIntent(
+        environment.id,
+        staleSetupSelection,
+        staleSetupSelection,
+        { activeTabIds: { "pane-1": "setup-terminal" } },
+      );
+
+      expect(saved.revision).toBe(agentSelected.revision + 1);
+      expect(saved.root).toMatchObject({
+        kind: "leaf",
+        activeTabId: "startup-agent",
+        tabs: expect.arrayContaining([
+          expect.objectContaining({ id: "setup-terminal", isSetupTab: true }),
+          expect.objectContaining({ id: "startup-agent", type: "codex-native" }),
+        ]),
+      });
+    });
+  });
+
   test("rejects malformed and stale generations without consuming a revision", async () => {
     await withTemporaryStorage(async (storage) => {
       const environment = createEnvironment("project-1");

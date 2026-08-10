@@ -3587,21 +3587,40 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     expect(toggleFilesPanelMock).toHaveBeenCalledTimes(1);
   });
 
-  test("does not create tabs after the maximum tab count is reached", () => {
-    currentTabCount = 10;
+  test("reports the tab limit for every tab-creating shortcut", async () => {
+    currentTabCount = 9;
     currentWorkspaceReady = true;
-    render(<ActionBar />);
+    readContainerFileMock.mockResolvedValueOnce({ content: '{"run":["bun test"]}' });
+    const { rerender } = render(<ActionBar />);
+    await waitFor(() => expect(
+      screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
+    ).toBe("false"));
+
+    currentTabCount = 10;
+    rerender(<ActionBar />);
+    await waitFor(() => expect(
+      screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
+    ).toBe("true"));
 
     for (const key of ["t", "n", "m", "r", "p"]) {
-      fireEvent.keyDown(window, { key, code: `Key${key.toUpperCase()}`, metaKey: true });
+      toastErrorMock.mockClear();
+      const event = createEvent.keyDown(window, {
+        key,
+        code: `Key${key.toUpperCase()}`,
+        metaKey: true,
+      });
+      fireEvent(window, event);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(toastErrorMock).toHaveBeenCalledTimes(1);
+      expect(toastErrorMock).toHaveBeenCalledWith("Tab limit reached", {
+        description: "You can have up to 10 tabs open. Close a tab and try again.",
+        id: "tab-limit-reached",
+      });
     }
 
     expect(createTabMock).not.toHaveBeenCalled();
     expect(startLoopedReviewMock).not.toHaveBeenCalled();
-    expect(toastErrorMock).toHaveBeenCalledWith("Tab limit reached", {
-      description: "You can have up to 10 tabs open. Close a tab and try again.",
-      id: "tab-limit-reached",
-    });
     expect((screen.getByRole("button", { name: "Code review" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "Looped code review" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "New terminal tab" }) as HTMLButtonElement).disabled).toBe(true);

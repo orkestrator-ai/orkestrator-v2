@@ -1743,12 +1743,6 @@ export function TerminalContainer({
       if (!canCreateForContainer && !canCreateForLocal) return;
 
       const allTabs = getAllTabs(environmentId);
-      if (allTabs.length >= MAX_TABS) {
-        console.debug("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
-        showTabLimitReachedToast(MAX_TABS);
-        return;
-      }
-
       // Check if file is already open - need to match both path AND diff mode
       // Note: This intentionally allows the same file to be open twice if one is in
       // diff mode and one is in regular file mode, as they serve different purposes
@@ -1764,6 +1758,12 @@ export function TerminalContainer({
           usePaneLayoutStore.getState().setActiveTab(pane.id, existingTab.id, environmentId);
           console.debug("[TerminalContainer] Activated existing tab:", existingTab.id, "in pane:", pane.id);
         }
+        return;
+      }
+
+      if (allTabs.length >= MAX_TABS) {
+        console.debug("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
+        showTabLimitReachedToast(MAX_TABS);
         return;
       }
 

@@ -287,24 +287,37 @@ describe("bridge readiness command", () => {
   });
 
   test("keeps retryable local startup races inside the durable wait", async () => {
-    await withCommands(async (invoke) => {
-      await expect(invoke("await_bridge_ready", {
-        environmentId: "e1",
-        agent: "codex",
-        timeoutMs: 1_000,
-      })).resolves.toEqual({
-        status: "timed-out",
-        error: {
-          message: "codex bridge did not become ready before the caller deadline",
-          retryable: true,
-          retryAfterMs: 1_000,
-        },
+    await withCommands(async (invoke, _storage, _dataDir, commands) => {
+      const startedAt = Date.now();
+      let clockReads = 0;
+      const now = spyOn(Date, "now").mockImplementation(
+        () => clockReads++ === 0 ? startedAt : startedAt + 1_000,
+      );
+      commands.set("start_local_codex_server_cmd", async () => {
+        throw { message: "not ready", retryable: true, retryAfterMs: 500 };
       });
+
+      try {
+        await expect(invoke("await_bridge_ready", {
+          environmentId: "e1",
+          agent: "codex",
+          timeoutMs: 1_000,
+        })).resolves.toEqual({
+          status: "timed-out",
+          error: {
+            message: "codex bridge did not become ready before the caller deadline",
+            retryable: true,
+            retryAfterMs: 1_000,
+          },
+        });
+      } finally {
+        now.mockRestore();
+      }
     }, {
       environment: {
         status: "running",
         setupPhase: "ready",
-        worktreePath: null,
+        worktreePath: "/tmp/ready-worktree",
         createdAt: new Date().toISOString(),
       },
     });

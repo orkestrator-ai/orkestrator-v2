@@ -121,7 +121,11 @@ describe("review workflow contract", () => {
     expect(body).toContain("git diff origin/main...HEAD");
     expect(body).toContain("## Step 4: Test Coverage Review");
     expect(body).toContain("provider-enforced JSON Schema");
-    expect(body).toContain("Return only the provider-enforced structured report");
+    expect(body).toContain("Use ordinary prose for interim progress updates");
+    expect(body).toContain("Never emit a partial or provisional structured report");
+    expect(body).toContain(
+      "make the final assistant message the only provider-enforced structured report",
+    );
     expect(body).not.toContain("## Output Format");
     expect(body).not.toContain("## Summary of change");
     expect(body).toContain(

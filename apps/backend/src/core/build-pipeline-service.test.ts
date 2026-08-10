@@ -1028,6 +1028,15 @@ describe("BuildPipelineService", () => {
       ]);
       expect(completed.sessions.every((session) =>
         Array.isArray(session.messages))).toBe(true);
+      expect(completed.sessions.map((session) => [
+        session.phase,
+        session.structuredResultStatus,
+      ])).toEqual([
+        ["build", undefined],
+        ["review", "accepted"],
+        ["verify", "accepted"],
+        ["pr", undefined],
+      ]);
       expect(provider.sent).toHaveLength(4);
       const verificationDispatch = provider.sent.find((entry) =>
         provider.phases.get(entry.sessionId) === "verify"
@@ -1096,6 +1105,8 @@ describe("BuildPipelineService", () => {
       expect(review.prompt).toContain(
         "the backend confirmed the environment worktree was clean when this review started",
       );
+      expect((await pipeline(storage, started.id)).sessions.at(-1))
+        .toMatchObject({ structuredResultStatus: "pending" });
     });
   });
 

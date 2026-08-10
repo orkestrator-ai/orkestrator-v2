@@ -34,8 +34,10 @@ describe("structured verification prompt", () => {
   test("requests the provider-enforced complete/rationale payload", () => {
     const prompt = verificationPrompt(pipeline(), "", "main");
 
+    expect(prompt).toContain("Use ordinary prose for interim progress updates");
+    expect(prompt).toContain("Never emit a partial or provisional verification verdict");
     expect(prompt).toContain(
-      'Respond only with JSON: {"complete":true,"rationale":"..."}',
+      'make the final assistant message the only JSON object, matching the provider-enforced schema: {"complete":true,"rationale":"..."}',
     );
     expect(prompt).toContain("Compare against origin/main");
   });

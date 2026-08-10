@@ -178,6 +178,17 @@ history rather than two partial ones.
 - **Fix:** Normalize a shared-probe timeout at the per-caller boundary. Regardless of whether the shared retry continuation or the caller timer wins at the deadline, `await_bridge_ready` now returns the caller-specific timeout with `retryAfterMs: 1000`; ready and terminal failure results remain unchanged.
 - **Verification:** The clock-controlled regression, which deterministically makes the shared timeout settle first, passed 100/100 with `bun test src/core/commands-state-sync.test.ts --test-name-pattern "keeps retryable local startup races inside the durable wait" --rerun-each 100` from `apps/backend`. The owning file passed 93 tests with 432 assertions under `--parallel`; backend typechecking passed; and the final `bun run test` aggregate passed every workspace, root, bridge, protocol-lockfile, and iOS group (40 iOS tests).
 
+## `initial prompt attachment command > does not prune through a staging-directory replacement race` (`apps/backend/src/core/commands-state-sync.test.ts:717`)
+
+- **Status:** open
+- **Date observed:** 2026-08-08
+- **Original command:** `bun run test` (workspace backend group, `bun test src tests --parallel=2`)
+- **Worker configuration:** Two Bun workers in the backend package while the web, web-public, protocol, root, and bridge groups ran concurrently
+- **Suite counts:** 1,519 backend tests, 1,518 passed and 1 failed
+- **Failure:** Expected an error containing `symlink or non-directory ancestor`, but received `Confined file write failed (exit 73)`
+- **Isolated rerun:** `bun test src/core/commands-state-sync.test.ts` from `apps/backend` -> 93 passed, 0 failed with 432 assertions in 8.52 s; the target passed in 56.61 ms
+- **Hypothesis:** Aggregate scheduling changes when the staged directory replacement becomes visible. Both observed messages are fail-closed outcomes, but the aggregate run reached the later confined-write failure before the test's expected ancestor-validation branch, so the race-sensitive assertion does not yet identify a product safety failure.
+
 ## `container runtime environment wiring > Codex configuration copy helpers reject destination root, parent, and file symlinks` (`tests/unit/runtime-env-wiring.test.ts`)
 
 - **Status:** resolved

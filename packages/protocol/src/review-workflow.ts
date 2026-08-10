@@ -966,7 +966,7 @@ The preceding build stage is responsible for committing the change. Do not edit 
   const outputSection = outputFormat === "structured"
     ? `## Output contract
 
-Return only the provider-enforced structured report. Populate every field from reviewed evidence, use empty arrays where appropriate, and never invent commands, results, files, or line references.`
+Use ordinary prose for interim progress updates. Never emit a partial or provisional structured report. After every validation command, tool call, and subagent has finished, make the final assistant message the only provider-enforced structured report. Populate every field from reviewed evidence, use empty arrays where appropriate, and never invent commands, results, files, or line references.`
     : `## Output Format
 
 Produce the report below in this exact section order. Use Markdown headers so it renders cleanly in any terminal. Every named \`##\` section is required; do not omit, merge, or rename one, even when there are no issues.

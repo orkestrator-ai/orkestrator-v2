@@ -521,11 +521,11 @@ describe("pane-layout binding", () => {
       revision: 7,
     }));
 
-    let emitSetupComplete: ((environmentId: string) => void) | null = null;
+    let emitSetupComplete: ((environmentId: string, success?: boolean) => void) | null = null;
     const listen = mock(async (event: string, handler: (e: { payload: unknown }) => void) => {
       if (event === "environment-setup-complete") {
-        emitSetupComplete = (environmentId) =>
-          handler({ payload: { environment_id: environmentId } });
+        emitSetupComplete = (environmentId, success = true) =>
+          handler({ payload: { environment_id: environmentId, success } });
       }
       return () => {};
     });
@@ -545,6 +545,75 @@ describe("pane-layout binding", () => {
     expect(getPaneLayout).toHaveBeenCalledWith("env-1");
     expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId)
       .toBe("build-pipe-1");
+
+    // A failed setup publishes the same event. The backend is still the
+    // authority on what the layout should be, so re-reading it is correct there
+    // too — what must not happen is the refresh being skipped or throwing.
+    getPaneLayout.mockClear();
+    emitSetupComplete!("env-1", false);
+    await tick();
+    expect(getPaneLayout).toHaveBeenCalledWith("env-1");
+  });
+
+  test("stops observing setup completion once detached", async () => {
+    detach?.();
+    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+
+    const getPaneLayout = mock(async () => null);
+    let emitSetupComplete: ((environmentId: string) => void) | null = null;
+    const unlisten = mock(() => {});
+    const listen = mock(async (event: string, handler: (e: { payload: unknown }) => void) => {
+      if (event === "environment-setup-complete") {
+        emitSetupComplete = (environmentId) =>
+          handler({ payload: { environment_id: environmentId } });
+      }
+      return unlisten;
+    });
+
+    const stop = startTestStoreResourceSync({
+      getPaneLayout: getPaneLayout as never,
+      listen: listen as never,
+    });
+    await tick();
+
+    stop();
+    expect(unlisten).toHaveBeenCalled();
+
+    // Even if a frame is already in flight when the subscription is torn down,
+    // it must not reach into stores this sync no longer owns.
+    getPaneLayout.mockClear();
+    emitSetupComplete!("env-1");
+    await tick();
+    expect(getPaneLayout).not.toHaveBeenCalled();
+  });
+
+  test("detaches a setup-completion listener that resolves after disposal", async () => {
+    detach?.();
+
+    let resolveListen: ((stop: () => void) => void) | null = null;
+    const unlisten = mock(() => {});
+    const listen = mock(
+      (event: string) =>
+        event === "environment-setup-complete"
+          ? new Promise<() => void>((resolve) => {
+            resolveListen = resolve;
+          })
+          : Promise.resolve(() => {}),
+    );
+
+    const stop = startTestStoreResourceSync({
+      getPaneLayout: (mock(async () => null)) as never,
+      listen: listen as never,
+    });
+
+    // Disposal wins the race: the subscription does not exist yet, so the only
+    // place it can be cleaned up is the resolution handler itself. Without that,
+    // the listener outlives the sync it belongs to.
+    stop();
+    expect(unlisten).not.toHaveBeenCalled();
+    resolveListen!(unlisten);
+    await tick();
+    expect(unlisten).toHaveBeenCalled();
   });
 
   test("replays a change that arrives while initial layout hydration is pending", async () => {

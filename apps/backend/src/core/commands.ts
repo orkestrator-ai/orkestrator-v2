@@ -4674,7 +4674,7 @@ async function startEnvironmentOnce(
     const config = await storage.loadConfig();
     const githubToken = await resolveContainerGitHubToken(config.global);
     await syncContainerGitHubCredential(containerId, githubToken);
-    await syncContainerClaudeCredentialBestEffort(containerId);
+    await syncContainerClaudeCredentialBestEffort(containerId, config.global);
     const hostEntryPort = environment.entryPort ? await getHostPort(containerId, environment.entryPort) : null;
     const updated = await storage.updateEnvironment(environment.id, {
       status: "running",
@@ -7440,15 +7440,36 @@ async function syncContainerClaudeCredential(
 }
 
 /**
+ * Resolves the credential to deliver, honouring the user's opt-out.
+ *
+ * The gate is checked before the Keychain is read, not after: the point of
+ * turning this off is that a long-lived host OAuth token never enters an
+ * environment that runs untrusted repository code, so it must not be read into
+ * this process either. Absent means on, matching `useHostGitHubCredentials`.
+ */
+async function resolveContainerClaudeCredentials(
+  globalConfig: AppConfig["global"],
+): Promise<string | undefined> {
+  if (globalConfig.useHostClaudeCredentials === false) return undefined;
+  return getHostClaudeCredentials();
+}
+
+/**
  * Best-effort variant used on the environment start path.
  *
  * A credential that cannot be delivered leaves the agent logged out, which the
  * agent itself reports clearly. Failing the whole environment start over it
  * would be a worse outcome, so this only warns — and never with the payload.
  */
-async function syncContainerClaudeCredentialBestEffort(containerId: string): Promise<void> {
+async function syncContainerClaudeCredentialBestEffort(
+  containerId: string,
+  globalConfig: AppConfig["global"],
+): Promise<void> {
   try {
-    await syncContainerClaudeCredential(containerId, await getHostClaudeCredentials());
+    await syncContainerClaudeCredential(
+      containerId,
+      await resolveContainerClaudeCredentials(globalConfig),
+    );
   } catch (error) {
     console.warn(
       "[commands] Failed to sync Claude credentials into container:",
@@ -9405,7 +9426,7 @@ export function createCommandRegistry(
       id,
       await resolveContainerGitHubToken(config.global),
     );
-    await syncContainerClaudeCredentialBestEffort(id);
+    await syncContainerClaudeCredentialBestEffort(id, config.global);
   });
   register("docker_stop_container", ({ containerId }) => runCommand("docker", ["stop", asString(containerId, "containerId")], { timeoutMs: 60_000 }).then(() => undefined));
   register("docker_remove_container", ({ containerId }) => runCommand("docker", ["rm", "-f", asString(containerId, "containerId")], { timeoutMs: 60_000 }).then(() => undefined));
@@ -12456,6 +12477,7 @@ export const __testing = {
   buildSyncContainerGitHubCredentialCommand,
   buildSyncContainerClaudeCredentialCommand,
   getHostClaudeCredentials,
+  resolveContainerClaudeCredentials,
   buildOpenCodeGitHubEnvironmentPluginSource,
   OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT,
   CLAUDE_GITHUB_ENV_FINGERPRINT,

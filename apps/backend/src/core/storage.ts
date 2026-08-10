@@ -1408,6 +1408,7 @@ export function defaultConfig(): AppConfig {
       containerResources: { cpuCores: 2, memoryGb: 4 },
       envFilePatterns: [".env", ".env.local"],
       useHostGitHubCredentials: true,
+      useHostClaudeCredentials: true,
       allowedDomains: [...DEFAULT_ALLOWED_DOMAINS],
       defaultAgent: "claude",
       opencodeModel: "opencode/claude-sonnet-5",

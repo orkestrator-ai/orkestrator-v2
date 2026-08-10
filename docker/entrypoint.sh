@@ -27,6 +27,36 @@ log_progress() {
 # agent passes its own display name as the fourth argument so warnings name the
 # agent whose state was skipped.
 #
+# Every skip is both warned about individually and accumulated, because a single
+# warning line scrolls past in a wall of setup output. Losing an allowlisted
+# entry is not cosmetic — a host that symlinks ~/.claude/commands into a dotfiles
+# repo (ordinary) gets a container with none of its custom commands — so each
+# agent block ends with one consolidated line naming everything it dropped.
+AGENT_COPY_SKIPPED=""
+
+agent_copy_warn() {
+    local relative_path="$1"
+    local message="$2"
+    local suffix="${3:-}"
+
+    log_progress "Warning: $message: $relative_path${suffix:+ $suffix}"
+    AGENT_COPY_SKIPPED="${AGENT_COPY_SKIPPED:+$AGENT_COPY_SKIPPED, }$relative_path"
+}
+
+# Emits the consolidated summary for one agent and re-arms the accumulator for
+# the next. Callers invoke this even when nothing was skipped, so the reset is
+# unconditional; a leaked entry would otherwise be re-reported under the wrong
+# agent's name.
+report_agent_copy_skips() {
+    local label="$1"
+
+    if [ -n "${AGENT_COPY_SKIPPED:-}" ]; then
+        log_progress "  $label host config NOT copied into this container: $AGENT_COPY_SKIPPED"
+        log_progress "  (symlinked, oversized or unreadable entries are skipped by design - see the warnings above)"
+    fi
+    AGENT_COPY_SKIPPED=""
+}
+
 # Allowlist entries can be nested ("plugins/cache"), so testing only the final
 # component leaves every parent free to be a link: a symlinked "plugins" holding
 # a real "cache" passed that test and let find/cp resolve straight into excluded
@@ -120,7 +150,7 @@ copy_agent_file() {
     # a link anywhere along the path could turn an allowlisted name into an
     # arbitrary rollout, log, credential, or other host file.
     if agent_source_path_has_symlink "$source_root" "$relative_path"; then
-        log_progress "Warning: Skipping symlinked $label file: $relative_path"
+        agent_copy_warn "$relative_path" "Skipping symlinked $label file"
         return 0
     fi
 
@@ -129,7 +159,7 @@ copy_agent_file() {
     fi
 
     if agent_destination_path_has_symlink "$destination_root" "$relative_path"; then
-        log_progress "Warning: Skipping $label file with symlinked destination: $relative_path"
+        agent_copy_warn "$relative_path" "Skipping $label file with symlinked destination"
         return 0
     fi
 
@@ -139,40 +169,40 @@ copy_agent_file() {
             ;;
     esac
     file_bytes="$(wc -c < "$source_path" 2>/dev/null)" || {
-        log_progress "Warning: Failed to inspect $label file: $relative_path"
+        agent_copy_warn "$relative_path" "Failed to inspect $label file"
         return 0
     }
     # BSD wc pads its count with leading spaces; GNU wc does not.
     file_bytes="${file_bytes##*[[:space:]]}"
     if [ "$file_bytes" -gt "$max_bytes" ]; then
-        log_progress "Warning: Skipping oversized $label file: $relative_path"
+        agent_copy_warn "$relative_path" "Skipping oversized $label file"
         return 0
     fi
 
     if [ -d "$destination_path" ]; then
-        log_progress "Warning: Failed to copy $label file: $relative_path (destination is a directory)"
+        agent_copy_warn "$relative_path" "Failed to copy $label file" "(destination is a directory)"
         return 0
     fi
     destination_parent="$(dirname "$destination_path")"
     if ! mkdir -p "$destination_parent" 2>/dev/null; then
-        log_progress "Warning: Failed to create destination for $label file: $relative_path"
+        agent_copy_warn "$relative_path" "Failed to create destination for $label file"
         return 0
     fi
     # Recheck after mkdir, then copy to a fresh regular file and rename it into
     # place. In particular, cp never receives the allowlisted destination leaf,
     # so it cannot follow an auth.json/config.toml link if one is present.
     if agent_destination_path_has_symlink "$destination_root" "$relative_path"; then
-        log_progress "Warning: Skipping $label file with symlinked destination: $relative_path"
+        agent_copy_warn "$relative_path" "Skipping $label file with symlinked destination"
         return 0
     fi
     temporary_path="$(mktemp "$destination_parent/.agent-copy.XXXXXX" 2>/dev/null)" || {
-        log_progress "Warning: Failed to create destination for $label file: $relative_path"
+        agent_copy_warn "$relative_path" "Failed to create destination for $label file"
         return 0
     }
     if ! cp "$source_path" "$temporary_path" 2>/dev/null ||
         ! mv -f "$temporary_path" "$destination_path" 2>/dev/null; then
         rm -f "$temporary_path" 2>/dev/null || true
-        log_progress "Warning: Failed to copy $label file: $relative_path"
+        agent_copy_warn "$relative_path" "Failed to copy $label file"
     fi
 }
 
@@ -200,7 +230,7 @@ copy_agent_directory() {
     # can otherwise make "skills" or the "plugins" parent of "plugins/cache"
     # point at excluded runtime state.
     if agent_source_path_has_symlink "$source_root" "$relative_path"; then
-        log_progress "Warning: Skipping symlinked $label directory: $relative_path"
+        agent_copy_warn "$relative_path" "Skipping symlinked $label directory"
         return 0
     fi
 
@@ -209,7 +239,7 @@ copy_agent_directory() {
     fi
 
     if agent_destination_path_has_symlink "$destination_root" "$relative_path"; then
-        log_progress "Warning: Skipping $label directory with symlinked destination: $relative_path"
+        agent_copy_warn "$relative_path" "Skipping $label directory with symlinked destination"
         return 0
     fi
 
@@ -243,67 +273,67 @@ copy_agent_directory() {
     case "$head_status" in
         0) ;;
         *)
-            log_progress "Warning: Failed to inspect $label directory: $relative_path"
+            agent_copy_warn "$relative_path" "Failed to inspect $label directory"
             return 0
             ;;
     esac
     entry_count="${#entry_marks}"
     if [ "$entry_count" -gt "$max_entries" ]; then
-        log_progress "Warning: Skipping oversized $label directory: $relative_path"
+        agent_copy_warn "$relative_path" "Skipping oversized $label directory"
         return 0
     fi
     if [ "$find_status" -ne 0 ]; then
-        log_progress "Warning: Failed to inspect $label directory: $relative_path"
+        agent_copy_warn "$relative_path" "Failed to inspect $label directory"
         return 0
     fi
     found_symlink="$(find -P "$source_path" -type l -exec printf x \; -quit 2>/dev/null)" || {
-        log_progress "Warning: Failed to inspect $label directory: $relative_path"
+        agent_copy_warn "$relative_path" "Failed to inspect $label directory"
         return 0
     }
     if [ -n "$found_symlink" ]; then
-        log_progress "Warning: Skipping $label directory containing symlink: $relative_path"
+        agent_copy_warn "$relative_path" "Skipping $label directory containing symlink"
         return 0
     fi
     # Same reason as above: a partial du failure still prints an undercounted
     # total, so du's status has to be read before the total is parsed.
     directory_kib="$(du -sk "$source_path" 2>/dev/null)" || {
-        log_progress "Warning: Failed to inspect $label directory: $relative_path"
+        agent_copy_warn "$relative_path" "Failed to inspect $label directory"
         return 0
     }
     directory_kib="${directory_kib%%[!0-9]*}"
     case "$directory_kib" in
         ''|*[!0-9]*)
-            log_progress "Warning: Failed to inspect $label directory: $relative_path"
+            agent_copy_warn "$relative_path" "Failed to inspect $label directory"
             return 0
             ;;
     esac
     if [ "$directory_kib" -gt "$max_kib" ]; then
-        log_progress "Warning: Skipping oversized $label directory: $relative_path"
+        agent_copy_warn "$relative_path" "Skipping oversized $label directory"
         return 0
     fi
 
     if [ -e "$destination_path" ] && [ ! -d "$destination_path" ]; then
-        log_progress "Warning: Failed to copy $label directory: $relative_path (destination is not a directory)"
+        agent_copy_warn "$relative_path" "Failed to copy $label directory" "(destination is not a directory)"
         return 0
     fi
     if ! mkdir -p "$destination_path" 2>/dev/null; then
-        log_progress "Warning: Failed to create destination for $label directory: $relative_path"
+        agent_copy_warn "$relative_path" "Failed to create destination for $label directory"
         return 0
     fi
     if agent_destination_path_has_symlink "$destination_root" "$relative_path"; then
-        log_progress "Warning: Skipping $label directory with symlinked destination: $relative_path"
+        agent_copy_warn "$relative_path" "Skipping $label directory with symlinked destination"
         return 0
     fi
     found_symlink="$(find -P "$destination_path" -type l -exec printf x \; -quit 2>/dev/null)" || {
-        log_progress "Warning: Failed to inspect $label directory destination: $relative_path"
+        agent_copy_warn "$relative_path" "Failed to inspect $label directory destination"
         return 0
     }
     if [ -n "$found_symlink" ]; then
-        log_progress "Warning: Skipping $label directory containing destination symlink: $relative_path"
+        agent_copy_warn "$relative_path" "Skipping $label directory containing destination symlink"
         return 0
     fi
     if ! cp -R "$source_path/." "$destination_path/" 2>/dev/null; then
-        log_progress "Warning: Failed to copy $label directory: $relative_path"
+        agent_copy_warn "$relative_path" "Failed to copy $label directory"
     fi
 }
 
@@ -357,6 +387,7 @@ if [ -d /claude-config ]; then
     done
 
     log_progress "  Config files copied"
+    report_agent_copy_skips Claude
 fi
 
 # Create credentials.json from the host's Claude Code credential.
@@ -373,6 +404,16 @@ if [ -n "$CLAUDE_OAUTH_CREDENTIALS" ] && [ "$CLAUDE_OAUTH_CREDENTIALS" != "{}" ]
     echo "$CLAUDE_OAUTH_CREDENTIALS" > "$HOME/.claude/.credentials.json"
     chmod 600 "$HOME/.claude/.credentials.json"
     log_progress "Injected credentials from CLAUDE_OAUTH_CREDENTIALS"
+# Nothing orders this block against the backend's sync: it runs concurrently
+# with the entrypoint, and the `/claude-config` copy above can take long enough
+# for the sync to land first. The mounted copy is the weaker source — on macOS
+# the backend prefers the Keychain, so a stale on-disk `.credentials.json` here
+# would replace the fresh token with the expired one and reproduce the exact
+# "Not logged in" symptom this whole path exists to fix. Whoever wrote a
+# non-empty credential first wins, and the sync re-runs on every start anyway.
+elif [ -s "$HOME/.claude/.credentials.json" ]; then
+    chmod 600 "$HOME/.claude/.credentials.json"
+    echo "Credential already present (backend sync); leaving it in place"
 else
     # Linux hosts keep the credential on disk, so the mount can carry it.
     if [ -f /claude-config/.credentials.json ]; then
@@ -586,6 +627,7 @@ if [ -d /opencode-data ]; then
     done
 
     chmod 600 "$HOME/.local/share/opencode/auth.json" 2>/dev/null || true
+    report_agent_copy_skips OpenCode
     if [ -n "$DEBUG" ]; then
         echo "Copied OpenCode data files:"
         ls -la "$HOME/.local/share/opencode/"
@@ -655,6 +697,7 @@ if [ -d /codex-home ]; then
     done
 
     chmod 600 "$HOME/.codex/auth.json" 2>/dev/null || true
+    report_agent_copy_skips Codex
     if [ -n "$DEBUG" ]; then
         echo "Copied Codex files:"
         ls -la "$HOME/.codex/" | head -40

@@ -12,6 +12,7 @@ const DEFAULT_CONFIG: AppConfig = {
     },
     envFilePatterns: [".env.local", ".env"],
     useHostGitHubCredentials: true,
+    useHostClaudeCredentials: true,
     allowedDomains: [
       // Package registries and runtimes
       "registry.npmjs.org",

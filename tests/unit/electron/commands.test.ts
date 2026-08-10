@@ -798,38 +798,61 @@ printf '%s\\n' '{"slug":"${slug}"}' > "$out"
 
 async function withFakeDocker(
   scriptBody: string,
-  run: (logs: { all: string; rm: string; exec: string }) => Promise<void>,
-  // Starting a container syncs the host's Claude Code credential into it, which
-  // on macOS means reading the login Keychain. Without this stub the suite would
-  // read the developer's real OAuth token and write it into these logs. Exit 1
-  // is what `security` reports for a missing item, so the lookup falls through.
+  run: (logs: { all: string; rm: string; exec: string; home: string }) => Promise<void>,
+  // Starting a container syncs the host's Claude Code credential into it. On
+  // macOS that reads the login Keychain; everywhere else — and on macOS whenever
+  // the Keychain lookup fails — it reads `~/.claude/.credentials.json`. Stubbing
+  // only `security` would leave that second path pointed at the developer's real
+  // home, so `HOME` is redirected too (see below). Exit 1 is what `security`
+  // reports for a missing item, so the default stub falls through to the (empty)
+  // fake home and the lookup yields nothing on every platform.
   securityScriptBody = "#!/bin/sh\nexit 1\n",
+  // Contents to seed at `$HOME/.claude/.credentials.json` in the fake home.
+  // Supplying this is how a test exercises the non-darwin resolution path.
+  claudeCredentialsOnDisk?: string,
 ): Promise<void> {
   const root = await createTempDir("ork-electron-fake-docker-");
   const binDir = path.join(root, "bin");
+  const home = path.join(root, "home");
   const all = path.join(root, "docker.log");
   const rm = path.join(root, "docker-rm.log");
   const exec = path.join(root, "docker-exec.log");
   await fs.mkdir(binDir, { recursive: true });
+  await fs.mkdir(home, { recursive: true });
   await fs.writeFile(path.join(binDir, "docker"), scriptBody);
   await fs.chmod(path.join(binDir, "docker"), 0o755);
   await fs.writeFile(path.join(binDir, "security"), securityScriptBody);
   await fs.chmod(path.join(binDir, "security"), 0o755);
+  if (claudeCredentialsOnDisk !== undefined) {
+    await fs.mkdir(path.join(home, ".claude"), { recursive: true });
+    await fs.writeFile(
+      path.join(home, ".claude", ".credentials.json"),
+      claudeCredentialsOnDisk,
+    );
+  }
 
   const originalPath = process.env.PATH;
+  const originalHome = process.env.HOME;
   const originalDockerLog = process.env.FAKE_DOCKER_LOG;
   const originalDockerRmLog = process.env.FAKE_DOCKER_RM_LOG;
   const originalDockerExecLog = process.env.FAKE_DOCKER_EXEC_LOG;
   process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
+  // `os.homedir()` honours $HOME on POSIX, which is what `getHostClaudeCredentials`
+  // resolves against. Redirecting it keeps the developer's real credential out of
+  // the fake-docker logs written under /tmp, and makes every home-derived path in
+  // these tests hermetic rather than dependent on the machine running them.
+  process.env.HOME = home;
   process.env.FAKE_DOCKER_LOG = all;
   process.env.FAKE_DOCKER_RM_LOG = rm;
   process.env.FAKE_DOCKER_EXEC_LOG = exec;
 
   try {
-    await run({ all, rm, exec });
+    await run({ all, rm, exec, home });
   } finally {
     if (originalPath === undefined) delete process.env.PATH;
     else process.env.PATH = originalPath;
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
     if (originalDockerLog === undefined) delete process.env.FAKE_DOCKER_LOG;
     else process.env.FAKE_DOCKER_LOG = originalDockerLog;
     if (originalDockerRmLog === undefined) delete process.env.FAKE_DOCKER_RM_LOG;
@@ -6200,24 +6223,11 @@ exit 1
     });
   });
 
-  test("delivers the host Claude credential into the container on start", async () => {
-    const environment = createEnvironment({
-      id: "env-claude-cred",
-      environmentType: "containerized",
-      containerId: "container-1",
-      status: "stopped",
-    });
-    const { context } = createContext(environment);
-    context.storage.loadConfig = mock(async () => ({
-      version: "1.0.0",
-      global: { useHostGitHubCredentials: false, githubToken: "" },
-      repositories: {},
-    }));
-    const commands = createCommandRegistry();
-    const credential = '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-from-keychain"}}';
-
-    await withFakeDocker(
-      `#!/bin/sh
+  // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
+  // consults the Keychain; elsewhere resolution starts at the on-disk credential.
+  // Seeding both with the same payload keeps these tests asserting the same thing
+  // on every platform instead of silently depending on the developer's OS.
+  const CLAUDE_CREDENTIAL_SYNC_DOCKER_SCRIPT = `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "start" ]; then exit 0; fi
 if [ "$1" = "exec" ]; then
@@ -6227,7 +6237,33 @@ if [ "$1" = "exec" ]; then
   exit 0
 fi
 exit 1
-`,
+`;
+
+  function claudeCredentialSyncContext(
+    globalConfig: Record<string, unknown> = {},
+  ): ReturnType<typeof createContext> {
+    const environment = createEnvironment({
+      id: "env-claude-cred",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "stopped",
+    });
+    const created = createContext(environment);
+    created.context.storage.loadConfig = mock(async () => ({
+      version: "1.0.0",
+      global: { useHostGitHubCredentials: false, githubToken: "", ...globalConfig },
+      repositories: {},
+    }));
+    return created;
+  }
+
+  test("delivers the host Claude credential into the container on start", async () => {
+    const { context } = claudeCredentialSyncContext();
+    const commands = createCommandRegistry();
+    const credential = '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-from-host"}}';
+
+    await withFakeDocker(
+      CLAUDE_CREDENTIAL_SYNC_DOCKER_SCRIPT,
       async (logs) => {
         await commands.get("docker_start_container")?.({ containerId: "container-1" }, context);
 
@@ -6240,9 +6276,83 @@ exit 1
         expect(calls).toContain("/home/node/.claude/.credentials.json");
         // The token must never be passed as an argv value a `ps` or
         // `docker inspect` could read.
-        expect(calls).not.toContain("sk-ant-oat01-from-keychain");
+        expect(calls).not.toContain("sk-ant-oat01-from-host");
       },
       `#!/bin/sh\nprintf '%s' '${credential}'\n`,
+      credential,
+    );
+  });
+
+  test("does not read or deliver the host credential when the user opted out", async () => {
+    const { context } = claudeCredentialSyncContext({ useHostClaudeCredentials: false });
+    const commands = createCommandRegistry();
+    const credential = '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-opted-out"}}';
+
+    await withFakeDocker(
+      CLAUDE_CREDENTIAL_SYNC_DOCKER_SCRIPT,
+      async (logs) => {
+        await commands.get("docker_start_container")?.({ containerId: "container-1" }, context);
+
+        // The opt-out has to short-circuit before the Keychain read, not after:
+        // its whole point is that the host token never enters this process, let
+        // alone an environment running untrusted repository code. The GitHub
+        // sync pipes its own (empty) payload, so the stdin log exists either
+        // way — what must be absent is the Claude credential itself.
+        const input = existsSync(`${logs.exec}.stdin`)
+          ? await fs.readFile(`${logs.exec}.stdin`, "utf8")
+          : "";
+        expect(input).not.toContain("claudeAiOauth");
+        const calls = await fs.readFile(logs.all, "utf8");
+        expect(calls).not.toContain("/home/node/.claude/.credentials.json");
+        expect(calls).not.toContain("sk-ant-oat01-opted-out");
+        // The GitHub sync still runs, so this is an opt-out and not a start that
+        // silently skipped credential delivery altogether.
+        expect(calls).toContain("exec -i container-1");
+      },
+      // Both sources are armed; neither may be consulted.
+      `#!/bin/sh\nprintf '%s' '${credential}'\n`,
+      credential,
+    );
+  });
+
+  test("a failed Claude credential sync does not fail the container start", async () => {
+    const { context } = claudeCredentialSyncContext();
+    const commands = createCommandRegistry();
+    const credential = '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-undeliverable"}}';
+
+    await withFakeDocker(
+      // `start` succeeds; the credential sync exec is the one that fails. The
+      // GitHub sync exec must still be allowed through so this test isolates the
+      // best-effort contract rather than failing earlier for another reason.
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "start" ]; then exit 0; fi
+if [ "$1" = "exec" ]; then
+  if [ "$2" = "--user" ]; then exit 0; fi
+  payload="$(cat)"
+  case "$payload" in
+    *claudeAiOauth*)
+      printf 'exec failed\\n' >&2
+      exit 17
+      ;;
+  esac
+  exit 0
+fi
+exit 1
+`,
+      async (logs) => {
+        // A credential that cannot be delivered leaves the agent logged out and
+        // saying so. Failing the whole start over it is the worse outcome.
+        await expect(
+          commands.get("docker_start_container")?.({ containerId: "container-1" }, context),
+        ).resolves.toBeUndefined();
+
+        const calls = await fs.readFile(logs.all, "utf8");
+        expect(calls).toContain("start container-1");
+        expect(calls).not.toContain("sk-ant-oat01-undeliverable");
+      },
+      `#!/bin/sh\nprintf '%s' '${credential}'\n`,
+      credential,
     );
   });
 

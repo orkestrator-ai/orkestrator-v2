@@ -55,6 +55,8 @@ function runShell(
 
 const AGENT_HELPER_SED =
   "/^log_progress() {/,/^}$/p; " +
+  "/^agent_copy_warn() {/,/^}$/p; " +
+  "/^report_agent_copy_skips() {/,/^}$/p; " +
   "/^agent_source_path_has_symlink() {/,/^}$/p; " +
   "/^agent_destination_path_has_symlink() {/,/^}$/p; " +
   "/^copy_agent_file() {/,/^}$/p; " +
@@ -283,6 +285,121 @@ copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" CLAUDE.md Claude
     });
   });
 
+  describe("Claude credential resolution inside the container", () => {
+    // Nothing orders the entrypoint against the backend's `docker exec` sync;
+    // they run concurrently. Extract the real block and drive each ordering.
+    function runCredentialBlock(
+      dir: string,
+      options: { mount?: string; existing?: string; envValue?: string },
+    ): { stdout: string; exitCode: number | null; credential: string | null } {
+      const home = join(dir, "home");
+      const mount = join(dir, "claude-config");
+      mkdirSync(join(home, ".claude"), { recursive: true });
+      mkdirSync(mount, { recursive: true });
+      if (options.mount !== undefined) {
+        writeFileSync(join(mount, ".credentials.json"), options.mount);
+      }
+      if (options.existing !== undefined) {
+        writeFileSync(join(home, ".claude", ".credentials.json"), options.existing);
+      }
+
+      const entrypointPath = join(repoRoot, "docker", "entrypoint.sh");
+      const result = runShell(
+        `
+set -e
+block="$(sed -n '/^if \\[ -n "\\$CLAUDE_OAUTH_CREDENTIALS" \\]/,/^fi$/p' ${shellQuote(entrypointPath)} | sed "s#/claude-config#\\$AGENT_TEST_MOUNT#g")"
+[ -n "$block" ] || { echo "harness failed to extract the credential block"; exit 9; }
+log_progress() { echo "$1"; }
+eval "$block"
+`,
+        {
+          HOME: home,
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          AGENT_TEST_MOUNT: mount,
+          ...(options.envValue === undefined
+            ? {}
+            : { CLAUDE_OAUTH_CREDENTIALS: options.envValue }),
+        },
+      );
+
+      let credential: string | null = null;
+      try {
+        credential = readFileSync(join(home, ".claude", ".credentials.json"), "utf8");
+      } catch {
+        credential = null;
+      }
+      return { stdout: result.stdout, exitCode: result.exitCode, credential };
+    }
+
+    test("leaves a credential the backend already synced in place", () => {
+      withTempDir((dir) => {
+        // On macOS the backend prefers the Keychain, so the mounted copy is the
+        // weaker source. Letting it win reproduces the "Not logged in" symptom
+        // this whole path exists to fix.
+        const result = runCredentialBlock(dir, {
+          existing: '{"claudeAiOauth":{"accessToken":"fresh-from-keychain"}}',
+          mount: '{"claudeAiOauth":{"accessToken":"stale-on-disk"}}',
+        });
+
+        expect(result.exitCode).toBe(0);
+        expect(result.credential).toContain("fresh-from-keychain");
+        expect(result.credential).not.toContain("stale-on-disk");
+        expect(result.stdout).toContain("Credential already present");
+      });
+    });
+
+    test("copies the mounted credential when the sync has not landed yet", () => {
+      withTempDir((dir) => {
+        // Linux hosts keep the credential on disk, so the mount is the only
+        // source; the entrypoint must still work when it wins the race.
+        const result = runCredentialBlock(dir, {
+          mount: '{"claudeAiOauth":{"accessToken":"from-mount"}}',
+        });
+
+        expect(result.exitCode).toBe(0);
+        expect(result.credential).toContain("from-mount");
+        expect(result.stdout).toContain("Copied credentials from host");
+      });
+    });
+
+    test("treats an empty pre-existing credential as absent", () => {
+      withTempDir((dir) => {
+        // A zero-byte file is a failed write, not a login. `-s` is what makes
+        // this differ from `-f`, which would strand the container logged out.
+        const result = runCredentialBlock(dir, {
+          existing: "",
+          mount: '{"claudeAiOauth":{"accessToken":"from-mount"}}',
+        });
+
+        expect(result.exitCode).toBe(0);
+        expect(result.credential).toContain("from-mount");
+      });
+    });
+
+    test("reports when neither the mount nor the sync has provided anything", () => {
+      withTempDir((dir) => {
+        const result = runCredentialBlock(dir, {});
+
+        expect(result.exitCode).toBe(0);
+        expect(result.credential).toBeNull();
+        expect(result.stdout).toContain("awaiting the backend credential sync");
+      });
+    });
+
+    test("an explicit CLAUDE_OAUTH_CREDENTIALS still overrides both sources", () => {
+      withTempDir((dir) => {
+        const result = runCredentialBlock(dir, {
+          envValue: '{"claudeAiOauth":{"accessToken":"from-env"}}',
+          existing: '{"claudeAiOauth":{"accessToken":"already-synced"}}',
+          mount: '{"claudeAiOauth":{"accessToken":"from-mount"}}',
+        });
+
+        expect(result.exitCode).toBe(0);
+        expect(result.credential).toContain("from-env");
+      });
+    });
+  });
+
   test("container startup copies only bounded OpenCode state", () => {
     const entrypoint = read("docker/entrypoint.sh");
 
@@ -309,6 +426,53 @@ copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" CLAUDE.md Claude
     // host cannot run in the Linux container.
     expect(entrypoint).not.toContain("cp -r /opencode-config/.");
     expect(entrypoint).toContain("! -name node_modules");
+  });
+
+  test("OpenCode config copy merges user-authored entries and drops node_modules", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "opencode-config");
+      const destination = join(dir, "destination");
+      mkdirSync(join(source, "plugin"), { recursive: true });
+      mkdirSync(join(source, "node_modules", "some-dep"), { recursive: true });
+      mkdirSync(destination, { recursive: true });
+      writeFileSync(join(source, "opencode.json"), "{\"config\":true}\n");
+      writeFileSync(join(source, ".hidden"), "dotfiles are user-authored too\n");
+      writeFileSync(join(source, "plugin", "custom.ts"), "export default {}\n");
+      writeFileSync(join(source, "node_modules", "some-dep", "binary.node"), "mach-o\n");
+
+      // Extract the real command rather than restating it, so a future edit to
+      // the entrypoint cannot drift away from what this asserts.
+      const entrypointPath = join(repoRoot, "docker", "entrypoint.sh");
+      const harness = `
+set -e
+copy="$(sed -n '/^    find \\/opencode-config /,/^        echo "Warning: Some config files could not be copied/p' ${shellQuote(entrypointPath)} | sed "s#/opencode-config#\\$AGENT_TEST_SOURCE#g; s#\\"\\$HOME/.config/opencode/\\"#\\"\\$AGENT_TEST_DESTINATION/\\"#g")"
+[ -n "$copy" ] || { echo "harness failed to extract the copy command"; exit 9; }
+eval "$copy"
+# Re-running is the container-restart path: the entrypoint runs on every start.
+eval "$copy"
+printf 'continued'
+`;
+
+      const result = runShell(harness, {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        AGENT_TEST_SOURCE: source,
+        AGENT_TEST_DESTINATION: destination,
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("continued");
+      expect(readFileSync(join(destination, "opencode.json"), "utf8")).toBe("{\"config\":true}\n");
+      // `-mindepth 1` without `-name '.*'` handling would silently drop dotfiles.
+      expect(readFileSync(join(destination, ".hidden"), "utf8"))
+        .toBe("dotfiles are user-authored too\n");
+      // A second start must merge into the existing directory, not nest a copy
+      // inside it or fail outright.
+      expect(readFileSync(join(destination, "plugin", "custom.ts"), "utf8"))
+        .toBe("export default {}\n");
+      expect(() => statSync(join(destination, "plugin", "plugin"))).toThrow();
+      // Mach-O dependencies from a macOS host cannot run in the Linux container.
+      expect(() => statSync(join(destination, "node_modules"))).toThrow();
+    });
   });
 
   test("OpenCode data copy takes the credential and skips the session database", () => {
@@ -379,6 +543,77 @@ copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" auth.json OpenCod
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("Warning: Skipping symlinked OpenCode file: auth.json");
       expect(result.stdout).not.toContain("Codex");
+    });
+  });
+
+  test("each agent block ends with a consolidated list of what it did not copy", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      const destination = join(dir, "destination");
+      const outside = join(dir, "outside");
+      mkdirSync(join(outside, "real"), { recursive: true });
+      mkdirSync(source, { recursive: true });
+      writeFileSync(join(source, "CLAUDE.md"), "kept\n");
+      symlinkSync(outside, join(source, "commands"));
+      symlinkSync(join(outside, "real"), join(source, "agents"));
+
+      const result = runShell(
+        agentCopyHelperHarness(`
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" CLAUDE.md Claude
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" commands Claude
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" agents Claude
+report_agent_copy_skips Claude
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      // An individual warning scrolls past in a wall of setup output; losing
+      // your custom commands is not something to discover three prompts later.
+      expect(result.stdout).toContain(
+        "Claude host config NOT copied into this container: commands, agents",
+      );
+      // What did copy is not named in the summary.
+      expect(result.stdout).not.toContain("CLAUDE.md, ");
+      expect(readFileSync(join(destination, "CLAUDE.md"), "utf8")).toBe("kept\n");
+    });
+  });
+
+  test("the skip summary stays silent when everything copied, and does not leak between agents", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      const destination = join(dir, "destination");
+      const outside = join(dir, "outside");
+      mkdirSync(outside, { recursive: true });
+      mkdirSync(source, { recursive: true });
+      writeFileSync(join(source, "CLAUDE.md"), "kept\n");
+      symlinkSync(outside, join(source, "commands"));
+
+      const result = runShell(
+        agentCopyHelperHarness(`
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" commands Claude
+report_agent_copy_skips Claude
+printf -- '--- next agent ---\\n'
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" CLAUDE.md Codex
+report_agent_copy_skips Codex
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      const [claudePhase, codexPhase] = result.stdout.split("--- next agent ---");
+      expect(claudePhase).toContain("Claude host config NOT copied");
+      // Reporting Claude's skip again under Codex's name would be worse than
+      // saying nothing: it accuses the wrong agent of losing state.
+      expect(codexPhase).not.toContain("NOT copied");
     });
   });
 
@@ -1063,7 +1298,7 @@ printf "continued"
         `
 set -e
 log_progress() { :; }
-eval "$(sed -n '/^agent_source_path_has_symlink() {/,/^}$/p; /^agent_destination_path_has_symlink() {/,/^}$/p; /^copy_agent_file() {/,/^}$/p; /^copy_agent_directory() {/,/^}$/p' ${shellQuote(entrypoint)})"
+eval "$(sed -n '/^agent_copy_warn() {/,/^}$/p; /^report_agent_copy_skips() {/,/^}$/p; /^agent_source_path_has_symlink() {/,/^}$/p; /^agent_destination_path_has_symlink() {/,/^}$/p; /^copy_agent_file() {/,/^}$/p; /^copy_agent_directory() {/,/^}$/p' ${shellQuote(entrypoint)})"
 codex_setup="$(sed -n '/^# Set up Codex configuration$/,/^log_progress "Codex configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/codex-home#\\$AGENT_TEST_SOURCE#g")"
 eval "$codex_setup"
 `,

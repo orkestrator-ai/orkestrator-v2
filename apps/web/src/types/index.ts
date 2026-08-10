@@ -450,6 +450,8 @@ export interface GlobalConfig {
   githubTokenConfigured?: boolean;
   /** Reuse the host's active `gh auth login` token for container GitHub access. */
   useHostGitHubCredentials?: boolean;
+  /** Deliver the host's Claude Code OAuth credential into containers. */
+  useHostClaudeCredentials?: boolean;
   /** Domains allowed when environments are in restricted network mode */
   allowedDomains: string[];
   /** Preferred editor for opening containers (VS Code or Cursor) */

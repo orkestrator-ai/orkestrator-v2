@@ -8,17 +8,18 @@
  * These tests cover the host-side resolution and the in-container write that
  * closes that gap.
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 const { __testing } = await import("../../apps/backend/src/core/commands");
 const {
   buildSyncContainerClaudeCredentialCommand,
   getHostClaudeCredentials,
+  resolveContainerClaudeCredentials,
 } = __testing;
 
 function withTempDir<T>(fn: (dir: string) => T): T {
@@ -154,5 +155,139 @@ describe("host Claude credential resolution", () => {
       await write(dir, contents);
       expect(await getHostClaudeCredentials("linux", dir)).toBeUndefined();
     });
+  });
+});
+
+describe("host Claude credential resolution on macOS", () => {
+  // The Keychain is the whole reason this function exists, and it is also the
+  // branch a Linux CI box would never execute. Stubbing `security` on PATH and
+  // passing the platform explicitly exercises it on any host.
+  const originalPath = process.env.PATH;
+  afterEach(() => {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  });
+
+  const KEYCHAIN = JSON.stringify({
+    claudeAiOauth: { accessToken: "sk-ant-oat01-keychain", expiresAt: 2 },
+  });
+  const ON_DISK = JSON.stringify({
+    claudeAiOauth: { accessToken: "sk-ant-oat01-on-disk", expiresAt: 1 },
+  });
+
+  const stubSecurity = (dir: string, body: string): void => {
+    const binDir = join(dir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(binDir, "security"), body);
+    chmodSync(join(binDir, "security"), 0o755);
+    process.env.PATH = `${binDir}${delimiter}${originalPath ?? ""}`;
+  };
+
+  const writeOnDisk = async (home: string, contents: string): Promise<void> => {
+    await fs.mkdir(join(home, ".claude"), { recursive: true });
+    await fs.writeFile(join(home, ".claude", ".credentials.json"), contents);
+  };
+
+  test("prefers the Keychain over a stale on-disk credential", async () => {
+    await withTempDirAsync(async (dir) => {
+      // Claude Code refreshes the Keychain entry; a leftover `.credentials.json`
+      // can be months old. Delivering the stale one is what looks like a logout.
+      stubSecurity(dir, `#!/bin/sh\nprintf '%s' '${KEYCHAIN}'\n`);
+      await writeOnDisk(dir, ON_DISK);
+      expect(await getHostClaudeCredentials("darwin", dir)).toBe(KEYCHAIN);
+    });
+  });
+
+  test("passes the Keychain service name the security tool expects", async () => {
+    await withTempDirAsync(async (dir) => {
+      const argvLog = join(dir, "argv.log");
+      stubSecurity(dir, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${argvLog}'\nprintf '%s' '${KEYCHAIN}'\n`);
+      await getHostClaudeCredentials("darwin", dir);
+      expect(readFileSync(argvLog, "utf8")).toBe(
+        "find-generic-password -s Claude Code-credentials -w\n",
+      );
+    });
+  });
+
+  test("falls back to disk when the Keychain lookup fails", async () => {
+    await withTempDirAsync(async (dir) => {
+      // Exit 1 is a missing item; it is also what a declined access prompt looks
+      // like from here. Neither is a reason to give up on a usable disk copy.
+      stubSecurity(dir, "#!/bin/sh\nexit 1\n");
+      await writeOnDisk(dir, ON_DISK);
+      expect(await getHostClaudeCredentials("darwin", dir)).toBe(ON_DISK);
+    });
+  });
+
+  test("falls back to disk when the Keychain holds an unusable payload", async () => {
+    await withTempDirAsync(async (dir) => {
+      stubSecurity(dir, "#!/bin/sh\nprintf '%s' '{}'\n");
+      await writeOnDisk(dir, ON_DISK);
+      expect(await getHostClaudeCredentials("darwin", dir)).toBe(ON_DISK);
+    });
+  });
+
+  test("returns undefined when neither source has a usable credential", async () => {
+    await withTempDirAsync(async (dir) => {
+      stubSecurity(dir, "#!/bin/sh\nexit 1\n");
+      expect(await getHostClaudeCredentials("darwin", dir)).toBeUndefined();
+    });
+  });
+
+  test("does not consult the Keychain on a non-darwin platform", async () => {
+    await withTempDirAsync(async (dir) => {
+      const argvLog = join(dir, "argv.log");
+      stubSecurity(dir, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${argvLog}'\nprintf '%s' '${KEYCHAIN}'\n`);
+      await writeOnDisk(dir, ON_DISK);
+      expect(await getHostClaudeCredentials("linux", dir)).toBe(ON_DISK);
+      expect(() => statSync(argvLog)).toThrow();
+    });
+  });
+});
+
+describe("host Claude credential opt-out", () => {
+  const originalPath = process.env.PATH;
+  afterEach(() => {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  });
+
+  const globalConfig = (
+    overrides: Record<string, unknown> = {},
+  ): Parameters<typeof resolveContainerClaudeCredentials>[0] =>
+    ({ allowedDomains: [], ...overrides }) as Parameters<
+      typeof resolveContainerClaudeCredentials
+    >[0];
+
+  test("resolves nothing, and reads nothing, when explicitly disabled", async () => {
+    await withTempDirAsync(async (dir) => {
+      // A stub that would fail the test if it ever ran: the gate must be checked
+      // before the host is read, so the token never enters this process at all.
+      const binDir = join(dir, "bin");
+      const argvLog = join(dir, "argv.log");
+      mkdirSync(binDir, { recursive: true });
+      writeFileSync(
+        join(binDir, "security"),
+        `#!/bin/sh\nprintf '%s\\n' "$*" >> '${argvLog}'\nprintf '%s' '${CREDENTIAL}'\n`,
+      );
+      chmodSync(join(binDir, "security"), 0o755);
+      process.env.PATH = `${binDir}${delimiter}${originalPath ?? ""}`;
+
+      expect(
+        await resolveContainerClaudeCredentials(
+          globalConfig({ useHostClaudeCredentials: false }),
+        ),
+      ).toBeUndefined();
+      expect(() => statSync(argvLog)).toThrow();
+    });
+  });
+
+  test("treats an absent setting as enabled, matching the GitHub credential gate", async () => {
+    // Existing installs have no such key persisted; they must keep working.
+    const resolved = await resolveContainerClaudeCredentials(globalConfig());
+    const explicit = await resolveContainerClaudeCredentials(
+      globalConfig({ useHostClaudeCredentials: true }),
+    );
+    expect(resolved).toBe(explicit);
   });
 });

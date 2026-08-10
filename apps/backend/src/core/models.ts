@@ -395,6 +395,12 @@ export interface PersistedBuildPipeline {
 export type NativeAgentProvider = "claude" | "codex" | "opencode";
 export const NATIVE_AGENT_SESSION_VERSION = 1 as const;
 
+export interface OpenCodeIncompleteTurnNotice {
+  kind: "failed" | "exhausted";
+  assistantMessageId: string;
+  updatedAt: string;
+}
+
 /**
  * Durable mapping between a logical UI tab and the provider session that owns
  * its transcript. The backend creates this mapping atomically, so any number of
@@ -410,6 +416,8 @@ export interface PersistedNativeAgentSession {
   origin: AgentInteractionOrigin;
   interactionPolicy: AgentInteractionPolicy;
   dispatchedRequestIds?: string[];
+  /** Content-free authoritative outcome rehydrated by every OpenCode tab. */
+  openCodeIncompleteTurnNotice?: OpenCodeIncompleteTurnNotice;
   createdAt: string;
   updatedAt: string;
 }

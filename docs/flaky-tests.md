@@ -61,6 +61,19 @@ history rather than two partial ones.
 - **Fix:** This working change gives the asynchronous dialog and callback assertions an explicit ten-second wait budget, plus a matching outer test timeout, without removing or weakening any product assertion.
 - **Verification:** The exact test passed 20/20 times across four concurrent Bun processes with `seq 1 20 | xargs -P 4 -I% bun test --cwd apps/web src/components/layout/ActionBar.test.tsx --test-name-pattern 'opens global, Docker, repository, and environment settings'`. The complete owning file then passed 143/143 with `bun test --cwd apps/web src/components/layout/ActionBar.test.tsx --parallel`.
 
+## `ActionBar workflow tabs > allows ordinary review clicks after long-press suppression expires` (`apps/web/src/components/layout/ActionBar.test.tsx`)
+
+- **Status:** resolved
+- **Date observed:** 2026-08-10
+- **Original command:** `bun run test` (workspace web group: `bun test src --parallel=2`); reproduced with `TURBO_FORCE=true ORKESTRATOR_TEST_WORKERS=2 turbo run test:workspace --cwd . --filter=@orkestrator/web --filter=@orkestrator/backend --filter=@orkestrator/web-public --filter=@orkestrator/protocol --concurrency=2 --cache-dir .turbo`
+- **Worker configuration:** Two Bun workers per workspace package with Turbo workspace concurrency 2; the original run also overlapped the root, bridge, and protocol-lockfile groups.
+- **Failure:** The synchronous dialog lookup failed after the test's 575 ms sleep because the 550 ms long-press callback had not committed its React update yet; failed duration 597.82 ms in the reproduced workspace run.
+- **Suite counts:** Web package: 5,448 total, 5,446 passed, 1 skipped, 1 failed with 18,311 assertions.
+- **Isolated rerun:** `bun test --cwd apps/web src/components/layout/ActionBar.test.tsx` -> 147 passed, 0 failed with 542 assertions in 12.24 s; the target passed in 1,617.34 ms.
+- **Root cause:** The test assumed that sleeping 25 ms past the long-press timer guaranteed both the timer callback and its React state update had completed. Under aggregate scheduling load, the sleep resolved before the dialog update was observable.
+- **Fix:** Retain the real long-press gesture and timing, then use a bounded Testing Library wait for the dialog before measuring the one-second click-suppression window.
+- **Verification:** `bun test --cwd apps/web src/components/layout/ActionBar.test.tsx --test-name-pattern 'allows ordinary review clicks after long-press suppression expires' --rerun-each 20` -> 20 passed, 0 failed; the exact test completed in 1,613.89-1,660.81 ms. The final `bun run test` aggregate on 2026-08-10 passed every workspace, root, bridge, protocol-lockfile, and iOS group.
+
 ## `startWorktreeWatcher > observes a real file write` (`tests/unit/backend/worktree-watcher.test.ts:237`)
 
 - **Status:** resolved
@@ -178,16 +191,19 @@ history rather than two partial ones.
 - **Fix:** Normalize a shared-probe timeout at the per-caller boundary. Regardless of whether the shared retry continuation or the caller timer wins at the deadline, `await_bridge_ready` now returns the caller-specific timeout with `retryAfterMs: 1000`; ready and terminal failure results remain unchanged.
 - **Verification:** The clock-controlled regression, which deterministically makes the shared timeout settle first, passed 100/100 with `bun test src/core/commands-state-sync.test.ts --test-name-pattern "keeps retryable local startup races inside the durable wait" --rerun-each 100` from `apps/backend`. The owning file passed 93 tests with 432 assertions under `--parallel`; backend typechecking passed; and the final `bun run test` aggregate passed every workspace, root, bridge, protocol-lockfile, and iOS group (40 iOS tests).
 
-## `initial prompt attachment command > does not prune through a staging-directory replacement race` (`apps/backend/src/core/commands-state-sync.test.ts:717`)
+## Initial prompt attachment symlink rejection diagnostics (`apps/backend/src/core/commands-state-sync.test.ts`)
 
-- **Status:** open
-- **Date observed:** 2026-08-08
+- **Status:** resolved
+- **Date observed:** 2026-08-08; recurred 2026-08-10
+- **Tests:** `initial prompt attachment command > does not prune through a staging-directory replacement race` and `initial prompt attachment command > rejects symlink ancestors without modifying their external target`
 - **Original command:** `bun run test` (workspace backend group, `bun test src tests --parallel=2`)
 - **Worker configuration:** Two Bun workers in the backend package while the web, web-public, protocol, root, and bridge groups ran concurrently
-- **Suite counts:** 1,519 backend tests, 1,518 passed and 1 failed
-- **Failure:** Expected an error containing `symlink or non-directory ancestor`, but received `Confined file write failed (exit 73)`
-- **Isolated rerun:** `bun test src/core/commands-state-sync.test.ts` from `apps/backend` -> 93 passed, 0 failed with 432 assertions in 8.52 s; the target passed in 56.61 ms
-- **Hypothesis:** Aggregate scheduling changes when the staged directory replacement becomes visible. Both observed messages are fail-closed outcomes, but the aggregate run reached the later confined-write failure before the test's expected ancestor-validation branch, so the race-sensitive assertion does not yet identify a product safety failure.
+- **Suite counts:** First observation: 1,519 backend tests, 1,518 passed and 1 failed. 2026-08-10 reproduction: 1,556 total, 1,555 passed and 1 failed with 5,858 assertions.
+- **Failure:** Expected an error containing `symlink or non-directory ancestor`, but received `Confined file write failed (exit 73)`; the 2026-08-10 recurrence failed the static ancestor test in 29.26 ms.
+- **Isolated rerun:** `bun test src/core/commands-state-sync.test.ts` from `apps/backend` -> 93 passed, 0 failed with 432 assertions in 8.52 s after the first observation. On 2026-08-10, `bun test --cwd apps/backend src/core/commands-state-sync.test.ts` -> 94 passed, 0 failed with 436 assertions in 7.10 s; the recurrent target passed in 27.19 ms.
+- **Root cause:** `writeFromPinnedRoot` settled its child process on `exit`, which may fire before the final stderr `data` event. The confined helper correctly denied the symlink with exit code 73, but aggregate scheduling sometimes let the parent format the error before it had received the helper's `symlink or non-directory ancestor` diagnostic.
+- **Fix:** Settle the confined writer on the child process `close` event, which occurs after its stdio streams close, preserving the fail-closed diagnostic without weakening the external-target assertions.
+- **Verification:** `bun test --cwd apps/backend src/core/commands-state-sync.test.ts --test-name-pattern 'rejects symlink ancestors|does not prune through' --rerun-each 30` -> 90 passed, 0 failed; `bun test --cwd apps/backend src/core/path-safety.test.ts --test-name-pattern 'rejects a symlinked ancestor' --rerun-each 30` -> 30 passed, 0 failed. The final `bun run test` aggregate on 2026-08-10 passed every workspace, root, bridge, protocol-lockfile, and iOS group.
 
 ## `container runtime environment wiring > Codex configuration copy helpers reject destination root, parent, and file symlinks` (`tests/unit/runtime-env-wiring.test.ts`)
 

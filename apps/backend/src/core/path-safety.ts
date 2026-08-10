@@ -228,7 +228,10 @@ async function writeFromPinnedRoot(
       if (stderr.length < 1_024) stderr += chunk.toString().slice(0, 1_024 - stderr.length);
     });
     child.once("error", reject);
-    child.once("exit", (code) => {
+    // `exit` can precede the final stderr data event. Settle on `close`, which
+    // fires after the stdio streams close, so a fail-closed helper diagnostic
+    // is not nondeterministically replaced by the bare exit code.
+    child.once("close", (code) => {
       if (code === 0) resolve();
       else reject(new Error(`Confined file write failed (${stderr || `exit ${code}`})`));
     });

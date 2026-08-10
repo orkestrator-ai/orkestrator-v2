@@ -2293,7 +2293,9 @@ describe("ActionBar workflow tabs", () => {
       clientY: 24,
     });
     await new Promise((resolve) => setTimeout(resolve, 575));
-    expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
+    }, { timeout: 10_000 });
 
     await new Promise((resolve) => setTimeout(resolve, 1_025));
     fireEvent.click(reviewButton);

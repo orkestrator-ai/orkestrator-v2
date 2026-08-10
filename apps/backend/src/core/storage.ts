@@ -799,6 +799,21 @@ function isPersistedNativeAgentSession(
         && value.dispatchedRequestIds.every(isNonBlankString)
       )
     )
+    && (
+      value.openCodeIncompleteTurnNotice === undefined
+      || (
+        isRecord(value.openCodeIncompleteTurnNotice)
+        && (
+          value.openCodeIncompleteTurnNotice.kind === "failed"
+          || value.openCodeIncompleteTurnNotice.kind === "exhausted"
+        )
+        && isNonBlankString(
+          value.openCodeIncompleteTurnNotice.assistantMessageId,
+        )
+        && typeof value.openCodeIncompleteTurnNotice.updatedAt === "string"
+        && Number.isFinite(Date.parse(value.openCodeIncompleteTurnNotice.updatedAt))
+      )
+    )
     && typeof value.createdAt === "string"
     && Number.isFinite(Date.parse(value.createdAt))
     && typeof value.updatedAt === "string"
@@ -4686,7 +4701,13 @@ export class StorageService {
   async dispatchNativeAgentPromptOnce(
     key: string,
     requestId: string,
-    dispatch: (session: PersistedNativeAgentSession) => Promise<void>,
+    dispatch: (
+      session: PersistedNativeAgentSession,
+    ) => Promise<void | {
+      dispatched: false;
+      openCodeIncompleteTurnNotice?:
+        PersistedNativeAgentSession["openCodeIncompleteTurnNotice"] | null;
+    }>,
   ): Promise<{
     session: PersistedNativeAgentSession;
     dispatched: boolean;
@@ -4709,9 +4730,31 @@ export class StorageService {
       // stable request id. If the process dies after provider acceptance but
       // before this write, recovery retries the same id rather than inventing a
       // second turn.
-      await dispatch(session);
+      const outcome = await dispatch(session);
+      if (outcome?.dispatched === false) {
+        if (outcome.openCodeIncompleteTurnNotice === undefined) {
+          if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
+          return { session, dispatched: false };
+        }
+        const updated: PersistedNativeAgentSession = {
+          ...session,
+          ...(outcome.openCodeIncompleteTurnNotice === null
+            ? { openCodeIncompleteTurnNotice: undefined }
+            : {
+                openCodeIncompleteTurnNotice:
+                  outcome.openCodeIncompleteTurnNotice,
+              }),
+          updatedAt: nowIso(),
+        };
+        sessions[key] = updated;
+        await this.saveNativeAgentSessions(sessions, opaque);
+        this.announce("native-agent-session", session.environmentId);
+        return { session: updated, dispatched: false };
+      }
       const updated: PersistedNativeAgentSession = {
         ...session,
+        // Any successfully accepted prompt supersedes a prior recovery notice.
+        openCodeIncompleteTurnNotice: undefined,
         dispatchedRequestIds: [
           ...(session.dispatchedRequestIds ?? []).slice(-999),
           requestId,
@@ -4722,6 +4765,51 @@ export class StorageService {
       await this.saveNativeAgentSessions(sessions, opaque);
       this.announce("native-agent-session", session.environmentId);
       return { session: updated, dispatched: true };
+    });
+  }
+
+  async setOpenCodeIncompleteTurnNotice(
+    key: string,
+    providerSessionId: string,
+    notice: PersistedNativeAgentSession["openCodeIncompleteTurnNotice"] | null,
+  ): Promise<boolean> {
+    if (
+      !isNonBlankString(key)
+      || !isNonBlankString(providerSessionId)
+      || (
+        notice !== null
+        && (
+          !notice
+          || !isNonBlankString(notice.assistantMessageId)
+          || !["failed", "exhausted"].includes(notice.kind)
+          || !Number.isFinite(Date.parse(notice.updatedAt))
+        )
+      )
+    ) {
+      throw new Error("OpenCode incomplete-turn notice is invalid");
+    }
+    return this.enqueueNativeAgentSessionMutation(async () => {
+      const loaded = await this.loadNativeAgentSessions();
+      const { sessions, opaque, migrated } = loaded;
+      this.assertReadableNativeAgentSession(loaded, key);
+      const session = sessions[key];
+      if (!session || session.providerSessionId !== providerSessionId) {
+        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
+        return false;
+      }
+      if (notice === null && session.openCodeIncompleteTurnNotice === undefined) {
+        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
+        return true;
+      }
+      const updated: PersistedNativeAgentSession = {
+        ...session,
+        openCodeIncompleteTurnNotice: notice ?? undefined,
+        updatedAt: nowIso(),
+      };
+      sessions[key] = updated;
+      await this.saveNativeAgentSessions(sessions, opaque);
+      this.announce("native-agent-session", session.environmentId);
+      return true;
     });
   }
 

@@ -318,6 +318,12 @@ export interface ProviderSendOptions {
   fastMode?: boolean;
   /** Claude sub-agent selected for this prompt. */
   subAgent?: string;
+  /**
+   * OpenCode execution agent for this prompt (`build`, `plan`, or a custom
+   * agent). Takes precedence over the coarser {@link mode} mapping so a
+   * continuation can rejoin a turn under the exact agent it ran with.
+   */
+  executionAgent?: string;
   includeLocalSettings?: boolean;
   promptSuggestions?: boolean;
   /** Overrides the connection default for this prompt only. */
@@ -362,7 +368,10 @@ export interface BuildPipelineProvider {
     sessionIds: readonly string[],
   ): Promise<Map<string, ProviderActivityState>>;
   readonly interactions?: AgentInteractionProviderCapability;
-  messages(sessionId: string): Promise<unknown[]>;
+  messages(
+    sessionId: string,
+    options?: { limit?: number },
+  ): Promise<unknown[]>;
   structured<T>(
     sessionId: string,
     requestId: string,
@@ -2253,7 +2262,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
           model: modelParts && modelParts.length > 1
             ? { providerID: modelParts[0]!, modelID: modelParts.slice(1).join("/") }
             : undefined,
-          agent: options.mode ?? "build",
+          agent: options.executionAgent ?? options.mode ?? "build",
           variant: options.effort ?? this.connection.effort,
         }, this.requestOptions());
       } catch (error) {
@@ -2955,14 +2964,27 @@ class OpenCodeProvider implements BuildPipelineProvider {
     }
   }
 
-  async messages(sessionId: string): Promise<unknown[]> {
+  async messages(
+    sessionId: string,
+    options: { limit?: number } = {},
+  ): Promise<unknown[]> {
     try {
+      const limit = options.limit;
+      if (
+        limit !== undefined
+        && (!Number.isSafeInteger(limit) || limit <= 0 || limit > OPEN_CODE_MESSAGE_HISTORY_LIMIT)
+      ) {
+        throw new RangeError("OpenCode transcript limit is invalid");
+      }
       const response = await this.client.session.messages(
-        { sessionID: sessionId },
+        { sessionID: sessionId, ...(limit === undefined ? {} : { limit }) },
         this.requestOptions(),
       );
       assertSdkResponse(response, "OpenCode transcript read");
-      return Array.isArray(response.data) ? response.data : [];
+      if (limit === undefined) {
+        return Array.isArray(response.data) ? response.data : [];
+      }
+      return [...boundedOpenCodeMessageHistory(response.data, { count: limit })];
     } catch (error) {
       throw new ProviderUnavailableError("OpenCode transcript is unavailable", {
         cause: error,

@@ -12,6 +12,7 @@ import * as realStalledTurnWatchdog from "@/hooks/useStalledTurnWatchdog";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import * as realOpenCodeClient from "@/lib/opencode-client";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
+import { dispatchResourceChange } from "@/lib/resource-sync";
 
 // Snapshot the real sibling modules before we install stubs so we can restore
 // them when this file finishes. Without this, Bun's global mock.module cache
@@ -119,7 +120,6 @@ import type {
   OpenCodeModel,
   OpenCodeModelDefaults,
   OpenCodeModelsResponse,
-  OpenCodeMessage,
   PermissionRequest,
   QuestionRequest,
 } from "@/lib/opencode-client";
@@ -130,7 +130,6 @@ import {
 } from "@/lib/chat/client-only-messages";
 import {
   ERROR_MESSAGE_PREFIX,
-  OPENCODE_INCOMPLETE_TURN_CONTINUATION,
   SYSTEM_MESSAGE_PREFIX,
 } from "@/lib/opencode-client";
 import type {
@@ -260,6 +259,36 @@ const mockEnsureNativeAgentSession = mock(async () => {
     dispatchedRequestIds: [],
   };
 });
+const mockGetNativeAgentSession = mock(async (): Promise<any> => ({
+  version: 1 as const,
+  key: "native-session-key",
+  environmentId: ENVIRONMENT_ID,
+  agent: "opencode" as const,
+  logicalSessionKey: SESSION_KEY,
+  providerSessionId: "session-1",
+  origin: "interactive-native" as const,
+  interactionPolicy: {
+    version: 1 as const,
+    mode: "interactive" as const,
+    input: "await-user" as const,
+    authorization: "await-user" as const,
+    unknown: "deny-and-fail" as const,
+  },
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+}));
+type OpenCodeManualPromptClaim = {
+  environmentId: string;
+  logicalSessionKey: string;
+  providerSessionId: string;
+  requestId: string;
+};
+const mockClaimOpenCodeManualPrompt = mock<
+  (_input: OpenCodeManualPromptClaim) => Promise<void>
+>(async () => undefined);
+const mockReleaseOpenCodeManualPrompt = mock<
+  (_input: OpenCodeManualPromptClaim) => Promise<void>
+>(async () => undefined);
 
 const openCodeClientModuleFactory = () => ({
   ...realOpenCodeClientSnapshot,
@@ -292,7 +321,10 @@ mock.module("@/lib/opencode-client", openCodeClientModuleFactory);
 mock.module("@/lib/backend", () => ({
   awaitBridgeReady: mockAwaitBridgeReady,
   adoptNativeAgentSession: mockAdoptNativeAgentSession,
+  claimOpenCodeManualPrompt: mockClaimOpenCodeManualPrompt,
   ensureNativeAgentSession: mockEnsureNativeAgentSession,
+  getNativeAgentSession: mockGetNativeAgentSession,
+  releaseOpenCodeManualPrompt: mockReleaseOpenCodeManualPrompt,
   claimPromptQueueHead: mockClaimPromptQueueHead,
   acknowledgePromptQueueClaim: mock(async (queueKey, environmentId, claimToken) => {
     mockOutstandingQueueClaims.delete(claimToken);
@@ -846,6 +878,29 @@ describe("OpenCodeChatTab", () => {
     });
     mockAdoptNativeAgentSession.mockClear();
     mockEnsureNativeAgentSession.mockClear();
+    mockGetNativeAgentSession.mockReset();
+    mockGetNativeAgentSession.mockImplementation(async () => ({
+      version: 1 as const,
+      key: "native-session-key",
+      environmentId: ENVIRONMENT_ID,
+      agent: "opencode" as const,
+      logicalSessionKey: SESSION_KEY,
+      providerSessionId: "session-1",
+      origin: "interactive-native" as const,
+      interactionPolicy: {
+        version: 1 as const,
+        mode: "interactive" as const,
+        input: "await-user" as const,
+        authorization: "await-user" as const,
+        unknown: "deny-and-fail" as const,
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }));
+    mockClaimOpenCodeManualPrompt.mockReset();
+    mockClaimOpenCodeManualPrompt.mockResolvedValue(undefined);
+    mockReleaseOpenCodeManualPrompt.mockReset();
+    mockReleaseOpenCodeManualPrompt.mockResolvedValue(undefined);
     mockSendPrompt.mockClear();
     mockSendPrompt.mockImplementation(async () => ({
       success: true,
@@ -989,6 +1044,87 @@ describe("OpenCodeChatTab", () => {
         undefined,
         "ready-token",
       ));
+  });
+
+  test("rehydrates an exhausted incomplete-turn notice on mount", async () => {
+    mockGetNativeAgentSession.mockResolvedValue({
+      version: 1,
+      key: "native-session-key",
+      environmentId: ENVIRONMENT_ID,
+      agent: "opencode",
+      logicalSessionKey: SESSION_KEY,
+      providerSessionId: "session-1",
+      origin: "interactive-native",
+      interactionPolicy: {
+        version: 1,
+        mode: "interactive",
+        input: "await-user",
+        authorization: "await-user",
+        unknown: "deny-and-fail",
+      },
+      openCodeIncompleteTurnNotice: {
+        kind: "exhausted",
+        assistantMessageId: "assistant-exhausted",
+        updatedAt: "2026-08-10T10:03:00.000Z",
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-08-10T10:03:00.000Z",
+    });
+
+    render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages.at(-1))
+        .toMatchObject({
+          id: "error-incomplete-backend-assistant-exhausted",
+          role: "assistant",
+          content: expect.stringContaining("after one automatic continuation"),
+        });
+    });
+  });
+
+  test("applies and clears authoritative recovery notices from resource changes", async () => {
+    render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await waitFor(() => expect(mockGetNativeAgentSession).toHaveBeenCalled());
+
+    const persisted = await mockGetNativeAgentSession();
+    mockGetNativeAgentSession.mockResolvedValue({
+      ...persisted,
+      openCodeIncompleteTurnNotice: {
+        kind: "failed",
+        assistantMessageId: "assistant-failed",
+        updatedAt: "2026-08-10T10:04:00.000Z",
+      },
+    });
+    dispatchResourceChange({
+      resource: "native-agent-session",
+      id: ENVIRONMENT_ID,
+      revision: 500,
+    });
+
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages.at(-1))
+        .toMatchObject({
+          id: "error-incomplete-backend-assistant-failed",
+          content: expect.stringContaining("could not send"),
+        });
+    });
+
+    const current = await mockGetNativeAgentSession();
+    mockGetNativeAgentSession.mockResolvedValue({
+      ...current,
+      openCodeIncompleteTurnNotice: undefined,
+    });
+    dispatchResourceChange({
+      resource: "native-agent-session",
+      id: ENVIRONMENT_ID,
+      revision: 501,
+    });
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages.some(
+        (message) => message.id.startsWith("error-incomplete-backend-"),
+      )).toBe(false);
+    });
   });
 
   test.each([
@@ -1261,6 +1397,16 @@ describe("OpenCodeChatTab", () => {
     await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
     expect(mockSendPrompt.mock.calls[0]?.[2]).toContain(`"id": "${handoffId}"`);
     expect(mockSendPrompt.mock.calls[0]?.[3]?.attachments).toHaveLength(1);
+    const claim = mockClaimOpenCodeManualPrompt.mock.calls[0]?.[0];
+    expect(claim).toMatchObject({
+      environmentId: ENVIRONMENT_ID,
+      logicalSessionKey: SESSION_KEY,
+      providerSessionId: "session-1",
+    });
+    expect(mockSendPrompt.mock.calls[0]?.[3]?.requestId).toBe(claim?.requestId);
+    await waitFor(() => {
+      expect(mockReleaseOpenCodeManualPrompt).toHaveBeenCalledWith(claim);
+    });
   });
 
   test("keeps handoff history pending after a rejected send and retries with it", async () => {
@@ -1330,6 +1476,7 @@ describe("OpenCodeChatTab", () => {
       expect(session?.messages.some(
         (message) => message.id.startsWith("optimistic-") || message.id.startsWith("error-"),
       )).toBe(false);
+      expect(mockReleaseOpenCodeManualPrompt).toHaveBeenCalledTimes(1);
     });
 
     fireEvent.click(screen.getByTestId("opencode-send"));
@@ -2266,57 +2413,6 @@ describe("OpenCodeChatTab", () => {
           isLoading: true,
           loadingStartedAt: Date.parse(turnStartedAt),
         });
-      });
-    });
-
-    test("continues an incomplete idle snapshot once without waiting for an SSE edge", async () => {
-      const originalUser: OpenCodeMessage = {
-        id: "reconnect-user-incomplete",
-        role: "user",
-        content: "Finish after reconnect",
-        parts: [{ type: "text", content: "Finish after reconnect" }],
-        createdAt: "2026-08-10T10:00:00.000Z",
-      };
-      const incompleteAssistant: OpenCodeMessage = {
-        id: "reconnect-assistant-incomplete",
-        role: "assistant",
-        content: "",
-        parts: [{ type: "thinking", content: "The final summary is still pending" }],
-        createdAt: "2026-08-10T10:01:00.000Z",
-        modelId: "opencode-go/deepseek-v4-flash",
-        finishReason: "unknown",
-      };
-      mockGetSessionMessages.mockResolvedValue([
-        originalUser,
-        incompleteAssistant,
-      ]);
-      mockGetSessionStatus.mockResolvedValue("idle");
-
-      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
-
-      await waitFor(() => {
-        expect(mockSendPrompt).toHaveBeenCalledWith(
-          MOCK_CLIENT,
-          "session-1",
-          OPENCODE_INCOMPLETE_TURN_CONTINUATION,
-          expect.objectContaining({
-            model: "opencode-go/deepseek-v4-flash",
-          }),
-        );
-      });
-      expect(mockSendPrompt).toHaveBeenCalledTimes(1);
-      expect(useOpenCodeStore.getState().getSession(SESSION_KEY)).toMatchObject({
-        isLoading: true,
-      });
-
-      // A later authoritative refresh can still be older than the accepted
-      // continuation. The optimistic marker must preserve loading and dedupe.
-      await act(async () => {
-        await capturedManualRefresh?.({ manual: true });
-      });
-      expect(mockSendPrompt).toHaveBeenCalledTimes(1);
-      expect(useOpenCodeStore.getState().getSession(SESSION_KEY)).toMatchObject({
-        isLoading: true,
       });
     });
 
@@ -3766,10 +3862,11 @@ describe("OpenCodeChatTab", () => {
       MOCK_CLIENT,
       "session-1",
       composeText,
-      {
+      expect.objectContaining({
         model: "openai/gpt-5",
         variant: undefined,
         mode: "build",
+        requestId: expect.any(String),
         attachments: [
           {
             type: "image",
@@ -3778,7 +3875,7 @@ describe("OpenCodeChatTab", () => {
             filename: "screenshot.png",
           },
         ],
-      },
+      }),
     );
   });
 
@@ -5701,502 +5798,6 @@ describe("OpenCodeChatTab", () => {
         expect(messages[0]?.id).toBe("server-inplace");
         expect(messages[0]?.parts.map((part) => part.type)).toEqual(["text", "file"]);
       });
-
-      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
-      channel.close();
-    });
-
-    test("automatically continues one unknown reasoning-only finish", async () => {
-      const originalUser: OpenCodeMessage = {
-        id: "user-original",
-        role: "user",
-        content: "Finish the task",
-        parts: [{ type: "text", content: "Finish the task" }],
-        createdAt: "2026-08-10T10:00:00.000Z",
-      };
-      const incompleteAssistant: OpenCodeMessage = {
-        id: "assistant-incomplete",
-        role: "assistant",
-        content: "",
-        parts: [{ type: "thinking", content: "I still need to summarize" }],
-        createdAt: "2026-08-10T10:01:00.000Z",
-        modelId: "opencode-go/deepseek-v4-flash",
-        finishReason: "unknown",
-      };
-      mockGetSessionMessages.mockResolvedValue([
-        originalUser,
-        incompleteAssistant,
-      ]);
-      useOpenCodeStore.getState().setSelectedVariant(SESSION_KEY, "low");
-      useOpenCodeStore.getState().setSelectedAgent(SESSION_KEY, "build");
-
-      const channel = eventChannel();
-      mockSubscribeToEvents.mockResolvedValue(channel.stream);
-      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
-      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
-      mockSendPrompt.mockClear();
-
-      channel.push({
-        type: "session.idle",
-        properties: { sessionID: "session-1" },
-      });
-
-      await waitFor(() => {
-        expect(mockSendPrompt).toHaveBeenCalledWith(
-          MOCK_CLIENT,
-          "session-1",
-          OPENCODE_INCOMPLETE_TURN_CONTINUATION,
-          {
-            model: "opencode-go/deepseek-v4-flash",
-            variant: "low",
-            mode: "build",
-            agent: "build",
-            directory: undefined,
-          },
-        );
-      });
-      const recoveredSession = useOpenCodeStore.getState().getSession(SESSION_KEY);
-      expect(recoveredSession?.isLoading).toBe(true);
-      expect(recoveredSession?.messages.at(-1)).toMatchObject({
-        role: "user",
-        content: OPENCODE_INCOMPLETE_TURN_CONTINUATION,
-      });
-
-      // A duplicate terminal edge while the continuation echo is in flight
-      // must not dispatch a second recovery.
-      channel.push({
-        type: "session.status",
-        properties: { sessionID: "session-1", status: { type: "idle" } },
-      });
-      await flushReactMicrotasks();
-      expect(mockSendPrompt).toHaveBeenCalledTimes(1);
-
-      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
-      channel.close();
-    });
-
-    test("cleans up the optimistic continuation when automatic dispatch fails", async () => {
-      const originalUser: OpenCodeMessage = {
-        id: "user-before-failed-continuation",
-        role: "user",
-        content: "Finish the task",
-        parts: [{ type: "text", content: "Finish the task" }],
-        createdAt: "2026-08-10T10:00:00.000Z",
-      };
-      const incompleteAssistant: OpenCodeMessage = {
-        id: "assistant-before-failed-continuation",
-        role: "assistant",
-        content: "",
-        parts: [{ type: "thinking", content: "I still need to summarize" }],
-        createdAt: "2026-08-10T10:01:00.000Z",
-        finishReason: "unknown",
-      };
-      mockGetSessionMessages.mockResolvedValue([
-        originalUser,
-        incompleteAssistant,
-      ]);
-      mockSendPrompt.mockResolvedValue({
-        success: false,
-        error: "transport unavailable",
-      });
-
-      const channel = eventChannel();
-      mockSubscribeToEvents.mockResolvedValue(channel.stream);
-      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
-      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
-      mockSendPrompt.mockClear();
-
-      channel.push({
-        type: "session.idle",
-        properties: { sessionID: "session-1" },
-      });
-
-      await waitFor(() => {
-        const recoveredSession = useOpenCodeStore
-          .getState()
-          .getSession(SESSION_KEY);
-        expect(recoveredSession?.isLoading).toBe(false);
-        expect(recoveredSession?.messages.some(
-          (message) => message.id.startsWith(
-            `${OPTIMISTIC_MESSAGE_PREFIX}incomplete-`,
-          ),
-        )).toBe(false);
-        expect(recoveredSession?.messages.at(-1)).toMatchObject({
-          id: `${ERROR_MESSAGE_PREFIX}incomplete-send-assistant-before-failed-continuation`,
-          role: "assistant",
-        });
-        expect(recoveredSession?.messages.at(-1)?.content).toContain(
-          "transport unavailable",
-        );
-      });
-      expect(mockSendPrompt).toHaveBeenCalledTimes(1);
-
-      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
-      channel.close();
-    });
-
-    test("retries a failed continuation after the shared client is replaced", async () => {
-      const originalUser: OpenCodeMessage = {
-        id: "user-before-client-replacement",
-        role: "user",
-        content: "Finish the task",
-        parts: [{ type: "text", content: "Finish the task" }],
-        createdAt: "2026-08-10T10:00:00.000Z",
-      };
-      const incompleteAssistant: OpenCodeMessage = {
-        id: "assistant-before-client-replacement",
-        role: "assistant",
-        content: "",
-        parts: [{ type: "thinking", content: "I still need to summarize" }],
-        createdAt: "2026-08-10T10:01:00.000Z",
-        finishReason: "unknown",
-      };
-      mockGetSessionMessages.mockResolvedValue([
-        originalUser,
-        incompleteAssistant,
-      ]);
-      const firstDispatch = deferred<{
-        success: boolean;
-        error?: string;
-      }>();
-      mockSendPrompt.mockImplementationOnce(() => firstDispatch.promise);
-
-      const channel = eventChannel();
-      mockSubscribeToEvents.mockResolvedValue(channel.stream);
-      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
-      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
-
-      channel.push({
-        type: "session.idle",
-        properties: { sessionID: "session-1" },
-      });
-      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
-
-      const replacementClient = {
-        baseUrl: "http://127.0.0.1:10000",
-      };
-      act(() => {
-        useOpenCodeStore.getState().setClient(
-          ENVIRONMENT_ID,
-          replacementClient as any,
-        );
-      });
-      firstDispatch.resolve({
-        success: false,
-        error: "obsolete client transport",
-      });
-      await flushReactMicrotasks();
-
-      const strandedSession = useOpenCodeStore
-        .getState()
-        .getSession(SESSION_KEY);
-      expect(strandedSession?.isLoading).toBe(true);
-      expect(strandedSession?.messages.some(
-        (message) => message.id ===
-          `${OPTIMISTIC_MESSAGE_PREFIX}incomplete-assistant-before-client-replacement`,
-      )).toBe(true);
-
-      mockGetSessionStatus.mockResolvedValue("idle");
-      await act(async () => {
-        await capturedManualRefresh?.({ manual: true });
-      });
-
-      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2));
-      expect(mockSendPrompt.mock.calls[1]?.[0]).toBe(replacementClient);
-      const recoveredSession = useOpenCodeStore
-        .getState()
-        .getSession(SESSION_KEY);
-      expect(recoveredSession?.isLoading).toBe(true);
-      expect(recoveredSession?.messages.filter(
-        (message) => message.id ===
-          `${OPTIMISTIC_MESSAGE_PREFIX}incomplete-assistant-before-client-replacement`,
-      )).toHaveLength(1);
-      expect(recoveredSession?.messages.some(
-        (message) => message.id ===
-          `${ERROR_MESSAGE_PREFIX}incomplete-send-assistant-before-client-replacement`,
-      )).toBe(false);
-
-      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
-      channel.close();
-    });
-
-    test("surfaces an interruption instead of looping after the continuation also finishes unknown", async () => {
-      const continuationUser: OpenCodeMessage = {
-        id: "user-continuation",
-        role: "user",
-        content: OPENCODE_INCOMPLETE_TURN_CONTINUATION,
-        parts: [{ type: "text", content: OPENCODE_INCOMPLETE_TURN_CONTINUATION }],
-        createdAt: "2026-08-10T10:02:00.000Z",
-      };
-      const incompleteRetry: OpenCodeMessage = {
-        id: "assistant-incomplete-retry",
-        role: "assistant",
-        content: "",
-        parts: [{ type: "thinking", content: "Still no conclusion" }],
-        createdAt: "2026-08-10T10:03:00.000Z",
-        modelId: "opencode-go/deepseek-v4-flash",
-        finishReason: "unknown",
-      };
-      mockGetSessionMessages.mockResolvedValue([
-        continuationUser,
-        incompleteRetry,
-      ]);
-
-      const channel = eventChannel();
-      mockSubscribeToEvents.mockResolvedValue(channel.stream);
-      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
-      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
-      mockSendPrompt.mockClear();
-
-      channel.push({
-        type: "session.idle",
-        properties: { sessionID: "session-1" },
-      });
-
-      await waitFor(() => {
-        const message = useOpenCodeStore
-          .getState()
-          .getSession(SESSION_KEY)?.messages.at(-1);
-        expect(message?.id).toBe(
-          `${ERROR_MESSAGE_PREFIX}incomplete-assistant-incomplete-retry`,
-        );
-        expect(message?.content).toContain("after one automatic continuation");
-      });
-      expect(mockSendPrompt).not.toHaveBeenCalled();
-
-      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
-      channel.close();
-    });
-
-    test("recovers an accepted continuation whose echo never reached the server transcript", async () => {
-      const originalUser: OpenCodeMessage = {
-        id: "user-lost-acceptance",
-        role: "user",
-        content: "Finish the task",
-        parts: [{ type: "text", content: "Finish the task" }],
-        createdAt: "2026-08-10T10:00:00.000Z",
-      };
-      const incompleteAssistant: OpenCodeMessage = {
-        id: "assistant-lost-acceptance",
-        role: "assistant",
-        content: "",
-        parts: [{ type: "thinking", content: "I still need to summarize" }],
-        createdAt: "2026-08-10T10:01:00.000Z",
-        finishReason: "unknown",
-      };
-      // A marker whose acceptance was acknowledged but whose echo never landed
-      // (the server restarted before persisting it). It is old enough that the
-      // idle snapshot treats it as lost instead of waiting forever.
-      const strandedMarker: OpenCodeMessage = {
-        id: `${OPTIMISTIC_MESSAGE_PREFIX}incomplete-assistant-lost-acceptance`,
-        role: "user",
-        content: OPENCODE_INCOMPLETE_TURN_CONTINUATION,
-        parts: [{ type: "text", content: OPENCODE_INCOMPLETE_TURN_CONTINUATION }],
-        createdAt: "2026-08-01T00:00:00.000Z",
-      };
-      useOpenCodeStore.getState().setMessages(SESSION_KEY, [
-        originalUser,
-        incompleteAssistant,
-        strandedMarker,
-      ]);
-      useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true);
-      mockGetSessionMessages.mockResolvedValue([
-        originalUser,
-        incompleteAssistant,
-      ]);
-      mockGetSessionStatus.mockResolvedValue("idle");
-      mockSendPrompt.mockClear();
-
-      const channel = eventChannel();
-      mockSubscribeToEvents.mockResolvedValue(channel.stream);
-      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
-
-      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
-      expect(mockSendPrompt).toHaveBeenCalledWith(
-        MOCK_CLIENT,
-        "session-1",
-        OPENCODE_INCOMPLETE_TURN_CONTINUATION,
-        expect.anything(),
-      );
-      const recoveredSession = useOpenCodeStore.getState().getSession(SESSION_KEY);
-      expect(recoveredSession?.isLoading).toBe(true);
-      expect(recoveredSession?.messages.some(
-        (message) => message.id ===
-          `${OPTIMISTIC_MESSAGE_PREFIX}incomplete-assistant-lost-acceptance`,
-      )).toBe(true);
-
-      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
-      channel.close();
-    });
-
-    test("does not auto-continue a turn the user stopped", async () => {
-      const originalUser: OpenCodeMessage = {
-        id: "user-stopped",
-        role: "user",
-        content: "Finish the task",
-        parts: [{ type: "text", content: "Finish the task" }],
-        createdAt: "2026-08-10T10:00:00.000Z",
-      };
-      const incompleteAssistant: OpenCodeMessage = {
-        id: "assistant-stopped",
-        role: "assistant",
-        content: "",
-        parts: [{ type: "thinking", content: "I still need to summarize" }],
-        createdAt: "2026-08-10T10:01:00.000Z",
-        finishReason: "unknown",
-      };
-      const stoppedMarker: OpenCodeMessage = {
-        id: `${SYSTEM_MESSAGE_PREFIX}stopped-test`,
-        role: "system",
-        content: TURN_STOPPED_BY_USER,
-        parts: [{ type: "text", content: TURN_STOPPED_BY_USER }],
-        createdAt: "2026-08-10T10:02:00.000Z",
-      };
-      useOpenCodeStore.getState().setMessages(SESSION_KEY, [
-        originalUser,
-        incompleteAssistant,
-        stoppedMarker,
-      ]);
-      mockGetSessionMessages.mockResolvedValue([originalUser, incompleteAssistant]);
-      mockGetSessionStatus.mockResolvedValue("idle");
-      mockSendPrompt.mockClear();
-
-      const channel = eventChannel();
-      mockSubscribeToEvents.mockResolvedValue(channel.stream);
-      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
-
-      await waitFor(() => expect(mockGetSessionStatus).toHaveBeenCalled());
-      await flushReactMicrotasks();
-      expect(mockSendPrompt).not.toHaveBeenCalled();
-      expect(useOpenCodeStore.getState().getSession(SESSION_KEY)?.isLoading).toBe(false);
-
-      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
-      channel.close();
-    });
-
-    test("falls back to the selected model when the incomplete assistant reports none", async () => {
-      const originalUser: OpenCodeMessage = {
-        id: "user-no-model",
-        role: "user",
-        content: "Finish the task",
-        parts: [{ type: "text", content: "Finish the task" }],
-        createdAt: "2026-08-10T10:00:00.000Z",
-      };
-      const incompleteAssistant: OpenCodeMessage = {
-        id: "assistant-no-model",
-        role: "assistant",
-        content: "",
-        parts: [{ type: "thinking", content: "I still need to summarize" }],
-        createdAt: "2026-08-10T10:01:00.000Z",
-        finishReason: "unknown",
-      };
-      mockGetSessionMessages.mockResolvedValue([originalUser, incompleteAssistant]);
-      mockGetSessionStatus.mockResolvedValue("idle");
-      mockSendPrompt.mockClear();
-
-      const channel = eventChannel();
-      mockSubscribeToEvents.mockResolvedValue(channel.stream);
-      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
-
-      await waitFor(() =>
-        expect(mockSendPrompt).toHaveBeenCalledWith(
-          MOCK_CLIENT,
-          "session-1",
-          OPENCODE_INCOMPLETE_TURN_CONTINUATION,
-          expect.objectContaining({ model: "openai/gpt-5" }),
-        ),
-      );
-
-      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
-      channel.close();
-    });
-
-    test("maps a 'default' selected model to no model override", async () => {
-      const originalUser: OpenCodeMessage = {
-        id: "user-default-model",
-        role: "user",
-        content: "Finish the task",
-        parts: [{ type: "text", content: "Finish the task" }],
-        createdAt: "2026-08-10T10:00:00.000Z",
-      };
-      const incompleteAssistant: OpenCodeMessage = {
-        id: "assistant-default-model",
-        role: "assistant",
-        content: "",
-        parts: [{ type: "thinking", content: "I still need to summarize" }],
-        createdAt: "2026-08-10T10:01:00.000Z",
-        finishReason: "unknown",
-      };
-      mockGetSessionMessages.mockResolvedValue([originalUser, incompleteAssistant]);
-      mockGetSessionStatus.mockResolvedValue("idle");
-      useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, "default");
-      mockSendPrompt.mockClear();
-
-      const channel = eventChannel();
-      mockSubscribeToEvents.mockResolvedValue(channel.stream);
-      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
-
-      await waitFor(() => {
-        expect(mockSendPrompt).toHaveBeenCalledTimes(1);
-        const options = mockSendPrompt.mock.calls[0]?.[3] as Record<string, unknown>;
-        expect(options).toBeDefined();
-        expect(options.model).toBeUndefined();
-      });
-
-      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
-      channel.close();
-    });
-
-    test("does not clear a newer busy edge when the automatic continuation dispatch fails", async () => {
-      const originalUser: OpenCodeMessage = {
-        id: "user-busy-race",
-        role: "user",
-        content: "Finish the task",
-        parts: [{ type: "text", content: "Finish the task" }],
-        createdAt: "2026-08-10T10:00:00.000Z",
-      };
-      const incompleteAssistant: OpenCodeMessage = {
-        id: "assistant-busy-race",
-        role: "assistant",
-        content: "",
-        parts: [{ type: "thinking", content: "I still need to summarize" }],
-        createdAt: "2026-08-10T10:01:00.000Z",
-        finishReason: "unknown",
-      };
-      mockGetSessionMessages.mockResolvedValue([originalUser, incompleteAssistant]);
-      mockGetSessionStatus.mockResolvedValue("idle");
-      const pendingDispatch = deferred<{ success: boolean; error?: string }>();
-      mockSendPrompt.mockImplementationOnce(() => pendingDispatch.promise);
-
-      const channel = eventChannel();
-      mockSubscribeToEvents.mockResolvedValue(channel.stream);
-      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
-      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
-
-      // A newer busy edge (e.g. a backend-dispatched queued turn) lands while
-      // the continuation dispatch is still in flight.
-      channel.push({
-        type: "session.status",
-        properties: { sessionID: "session-1", status: { type: "busy" } },
-      });
-      await waitFor(() =>
-        expect(useOpenCodeStore.getState().getSession(SESSION_KEY)?.isLoading).toBe(true),
-      );
-
-      await act(async () => {
-        pendingDispatch.resolve({ success: false, error: "transport unavailable" });
-        await pendingDispatch.promise;
-      });
-      await flushReactMicrotasks();
-
-      const recoveredSession = useOpenCodeStore.getState().getSession(SESSION_KEY);
-      expect(recoveredSession?.isLoading).toBe(true);
-      expect(recoveredSession?.messages.some(
-        (message) => message.id.startsWith(`${OPTIMISTIC_MESSAGE_PREFIX}incomplete-`),
-      )).toBe(false);
-      expect(recoveredSession?.messages.some(
-        (message) => message.id.startsWith(`${ERROR_MESSAGE_PREFIX}incomplete-send-`),
-      )).toBe(true);
 
       useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
       channel.close();

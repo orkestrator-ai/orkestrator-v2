@@ -267,6 +267,11 @@ export interface PersistedNativeAgentSession {
   origin: AgentInteractionOrigin;
   interactionPolicy: AgentInteractionPolicy;
   dispatchedRequestIds?: string[];
+  openCodeIncompleteTurnNotice?: {
+    kind: "failed" | "exhausted";
+    assistantMessageId: string;
+    updatedAt: string;
+  };
   createdAt: string;
   updatedAt: string;
 }

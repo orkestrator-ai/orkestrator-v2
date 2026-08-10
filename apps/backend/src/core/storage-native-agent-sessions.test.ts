@@ -715,6 +715,34 @@ describe("StorageService native agent sessions", () => {
     });
   });
 
+  test("persists recovery notices without journaling and clears them on dispatch", async () => {
+    await withStorage(async (first) => {
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
+      const notice = {
+        kind: "exhausted" as const,
+        assistantMessageId: "assistant-1",
+        updatedAt: "2026-08-10T10:00:00.000Z",
+      };
+      const skipped = await first.dispatchNativeAgentPromptOnce(
+        input.key,
+        "recovery-1",
+        async () => ({ dispatched: false, openCodeIncompleteTurnNotice: notice }),
+      );
+      expect(skipped.dispatched).toBe(false);
+      expect(skipped.session.dispatchedRequestIds).toBeUndefined();
+      expect(skipped.session.openCodeIncompleteTurnNotice).toEqual(notice);
+
+      const accepted = await first.dispatchNativeAgentPromptOnce(
+        input.key,
+        "manual-1",
+        async () => undefined,
+      );
+      expect(accepted.dispatched).toBe(true);
+      expect(accepted.session.openCodeIncompleteTurnNotice).toBeUndefined();
+      expect(accepted.session.dispatchedRequestIds).toEqual(["manual-1"]);
+    });
+  });
+
   test("conditionally invalidates only the provider session that was checked", async () => {
     await withStorage(async (first) => {
       await first.getOrCreateNativeAgentSession(input, async () => "provider-session");

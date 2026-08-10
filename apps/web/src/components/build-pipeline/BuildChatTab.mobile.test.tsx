@@ -7,6 +7,7 @@ import {
   test,
 } from "bun:test";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -14,13 +15,54 @@ import {
   within,
 } from "@testing-library/react";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
+import * as realHooks from "@/hooks";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import {
+  emitViewportChange,
   restoreMatchMedia,
   setMobileViewport,
 } from "../../../../../tests/mocks/match-media";
+import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
 
+const realHooksSnapshot = { ...realHooks };
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
+
+/**
+ * The options the tab handed `useVirtuosoScrollState`, newest last.
+ *
+ * `isActive` is the whole contract between the layout and the transcript's
+ * scroll state — hiding the transcript has to deactivate it exactly as a tab
+ * switch does, which is what re-locks it to the live bottom on return. Nothing
+ * about that reaches the DOM, so it is recorded here rather than asserted on
+ * rendered output.
+ */
+interface ScrollStateOptions {
+  isActive?: boolean;
+  persistKey?: string;
+  stickToBottomOnActivation?: boolean;
+}
+
+const scrollStateOptions: ScrollStateOptions[] = [];
+
+/*
+ * Only `useVirtuosoScrollState` is replaced; everything else in the barrel —
+ * `useMediaQuery` above all, which is what decides the layout under test —
+ * stays real. The real hook drives react-virtuoso through refs that never
+ * resolve under happy-dom, so its own behaviour belongs to its own suite.
+ */
+mock.module("@/hooks", () => ({
+  ...realHooksSnapshot,
+  useVirtuosoScrollState: (options: ScrollStateOptions) => {
+    scrollStateOptions.push(options);
+    return {
+      isAtBottom: true,
+      isAtBottomRef: { current: true },
+      scrollToBottom: () => {},
+      virtuosoRef: { current: null },
+      scrollProps: {},
+    };
+  },
+}));
 
 /*
  * react-virtuoso measures a real viewport, so its rows never render under
@@ -29,12 +71,13 @@ const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
  */
 mock.module("@/components/chat/VirtualizedMessageList", () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  VirtualizedMessageList: ({ messages, renderMessage, emptyState }: any) => (
+  VirtualizedMessageList: ({ messages, renderMessage, emptyState, footer }: any) => (
     <div>
       {messages.length === 0 ? emptyState : null}
       {messages.map((message: unknown, index: number) => (
         <div key={index}>{renderMessage(index, message, null)}</div>
       ))}
+      {footer}
     </div>
   ),
 }));
@@ -42,6 +85,7 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
 const { BuildChatTab } = await import("./BuildChatTab");
 
 afterAll(() => {
+  mock.module("@/hooks", () => realHooksSnapshot);
   mock.module(
     "@/components/chat/VirtualizedMessageList",
     () => realVirtualizedMessageListSnapshot,
@@ -103,16 +147,57 @@ const pipeline: BuildPipeline = {
   controller: "backend",
 };
 
-function renderTab() {
+/**
+ * The same build after a review produced a report, with the pipeline advanced
+ * past it — the shape that renders the report hint, because the stage holding
+ * the report is not the stage on screen.
+ */
+const reviewed: BuildPipeline = {
+  ...pipeline,
+  sessions: [
+    pipeline.sessions[0]!,
+    {
+      phase: "review",
+      iteration: 0,
+      sessionKey: "review-key",
+      sdkSessionId: "review-session",
+      status: "idle",
+      startedAt: "2026-07-29T00:00:30.000Z",
+      label: "Review Session",
+      structuredRequestId: "review-request",
+      structuredResultStatus: "accepted",
+      messages: [{
+        id: "review-answer",
+        role: "assistant",
+        parts: [{ type: "text", content: "The review is complete" }],
+      }],
+    },
+    pipeline.sessions[1]!,
+  ],
+  currentSessionIndex: 2,
+  structuredReview: TEST_STRUCTURED_REVIEW_REPORT,
+  structuredReviewRequestId: "review-request",
+  backendRevision: 40,
+};
+
+function renderPipeline(next: BuildPipeline) {
+  useBuildPipelineStore.setState({
+    pipelines: new Map([[next.id, next]]),
+    buildEnvironmentIds: new Set([next.environmentId]),
+  });
   render(<BuildChatTab
     data={{
-      pipelineId: pipeline.id,
-      environmentId: pipeline.environmentId,
-      taskId: pipeline.taskId,
+      pipelineId: next.id,
+      environmentId: next.environmentId,
+      taskId: next.taskId,
       isLocal: true,
     }}
     isActive
   />);
+}
+
+function renderTab() {
+  renderPipeline(pipeline);
 }
 
 /** The mobile switcher, scoped so its tabs never collide with the stage tabs. */
@@ -134,8 +219,16 @@ function stageTab(name: string): HTMLElement | null {
   return within(list).queryByRole("tab", { name: new RegExp(name) });
 }
 
+/** The options behind the transcript on screen right now. */
+function lastScrollState(): ScrollStateOptions {
+  const last = scrollStateOptions.at(-1);
+  if (!last) throw new Error("The transcript's scroll state was never created.");
+  return last;
+}
+
 beforeEach(() => {
   cleanup();
+  scrollStateOptions.length = 0;
   useBuildPipelineStore.setState({
     pipelines: new Map([[pipeline.id, pipeline]]),
     buildEnvironmentIds: new Set([pipeline.environmentId]),
@@ -176,6 +269,23 @@ describe("BuildChatTab on a phone", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
+  test("deactivates the transcript's scroll state while the stage list is on screen", () => {
+    renderTab();
+    expect(lastScrollState().isActive).toBe(true);
+
+    fireEvent.click(viewTabs().getByRole("tab", { name: "Stages" }));
+
+    // Hiding the transcript has to deactivate it exactly as switching tabs
+    // does. Leaving it active would keep it following a stream nobody can see
+    // and skip the re-lock that brings the user back to the live bottom.
+    expect(lastScrollState().isActive).toBe(false);
+    expect(lastScrollState().stickToBottomOnActivation).toBe(true);
+
+    fireEvent.click(viewTabs().getByRole("tab", { name: "Verification Session" }));
+
+    expect(lastScrollState().isActive).toBe(true);
+  });
+
   test("brings the transcript forward when a stage is chosen", () => {
     renderTab();
     fireEvent.click(viewTabs().getByRole("tab", { name: "Stages" }));
@@ -187,6 +297,53 @@ describe("BuildChatTab on a phone", () => {
     ).toBe("true");
     expect(stageTab("Verification Session")).toBeNull();
     expect(screen.getByText("Implementation complete")).toBeTruthy();
+  });
+
+  test("hands focus to the transcript tab when the stage list that held it hides", () => {
+    renderTab();
+    fireEvent.click(viewTabs().getByRole("tab", { name: "Stages" }));
+    const chosen = stageTab("Build Session")!;
+    chosen.focus();
+    fireEvent.click(chosen);
+
+    // Hiding the element that holds focus drops focus to <body>, and the next
+    // Tab would restart from the top of the document. Compared by id rather
+    // than by node: a failed element-identity assertion makes the runner
+    // serialize both DOM subtrees, which crashes it instead of reporting.
+    expect(document.activeElement?.id).toBe(
+      viewTabs().getByRole("tab", { name: "Build Session" }).id,
+    );
+  });
+
+  test("leaves focus alone when the stage list was not holding it", () => {
+    renderTab();
+    const stages = viewTabs().getByRole("tab", { name: "Stages" });
+    fireEvent.click(stages);
+    stages.focus();
+    fireEvent.click(stageTab("Build Session")!);
+
+    // A tap leaves focus where the pointer put it, and moving it would be a
+    // change the user did not ask for.
+    expect(document.activeElement?.id).toBe(stages.id);
+  });
+
+  test("brings the transcript forward when the review report hint is chosen", () => {
+    cleanup();
+    renderPipeline(reviewed);
+    fireEvent.click(viewTabs().getByRole("tab", { name: "Stages" }));
+    expect(stageTab("Review Session")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /The review reported/ }));
+
+    // The hint sits above the switcher so it is reachable from either half,
+    // and it is a request to read a stage — so it moves the view like a pick
+    // in the stage list does.
+    expect(stageTab("Review Session")).toBeNull();
+    expect(
+      viewTabs().getByRole("tab", { name: "Review Session" })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(screen.getByText("The review is complete")).toBeTruthy();
   });
 
   test("browses the stage list with arrow keys without leaving it", () => {
@@ -208,10 +365,12 @@ describe("BuildChatTab on a phone", () => {
       { key: "ArrowLeft" },
     );
 
-    expect(
-      viewTabs().getByRole("tab", { name: "Stages" }).getAttribute("aria-selected"),
-    ).toBe("true");
+    const stages = viewTabs().getByRole("tab", { name: "Stages" });
+    expect(stages.getAttribute("aria-selected")).toBe("true");
     expect(stageTab("Build Session")).toBeTruthy();
+    // A tablist moves focus with the selection, so the next arrow key keeps
+    // walking the switcher rather than starting over from the document.
+    expect(document.activeElement?.id).toBe(stages.id);
   });
 
   test("keeps an unsent draft while the stage list is on screen", () => {
@@ -227,6 +386,40 @@ describe("BuildChatTab on a phone", () => {
   });
 });
 
+describe("BuildChatTab across the breakpoint", () => {
+  beforeEach(() => setMobileViewport(true));
+
+  test("widening past the breakpoint puts both halves back on screen", () => {
+    renderTab();
+    fireEvent.click(viewTabs().getByRole("tab", { name: "Stages" }));
+    expect(lastScrollState().isActive).toBe(false);
+
+    act(() => emitViewportChange(false));
+
+    // Nothing left to choose between, so the switcher goes away with the
+    // constraint that produced it.
+    expect(screen.queryByRole("tablist", { name: "Build view" })).toBeNull();
+    expect(stageTab("Build Session")).toBeTruthy();
+    expect(screen.getByText("All criteria pass")).toBeTruthy();
+    // The transcript is on screen again, so it follows the stream again.
+    expect(lastScrollState().isActive).toBe(true);
+  });
+
+  test("narrowing again returns to the half the user last chose", () => {
+    renderTab();
+    fireEvent.click(viewTabs().getByRole("tab", { name: "Stages" }));
+    act(() => emitViewportChange(false));
+    act(() => emitViewportChange(true));
+
+    expect(
+      viewTabs().getByRole("tab", { name: "Stages" }).getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(stageTab("Build Session")).toBeTruthy();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(lastScrollState().isActive).toBe(false);
+  });
+});
+
 describe("BuildChatTab on a desktop", () => {
   beforeEach(() => setMobileViewport(false));
 
@@ -237,5 +430,20 @@ describe("BuildChatTab on a desktop", () => {
     expect(stageTab("Build Session")).toBeTruthy();
     expect(screen.getByText("All criteria pass")).toBeTruthy();
     expect(screen.getByRole("textbox")).toBeTruthy();
+    expect(lastScrollState().isActive).toBe(true);
+  });
+
+  test("choosing a stage neither hides anything nor moves focus", () => {
+    renderTab();
+    const chosen = stageTab("Build Session")!;
+    chosen.focus();
+    fireEvent.click(chosen);
+
+    // The mobile-only view switch has nothing to hide here, so the stage list
+    // keeps both the selection and the focus that made it.
+    expect(document.activeElement?.id).toBe(chosen.id);
+    expect(stageTab("Verification Session")).toBeTruthy();
+    expect(screen.getByText("Implementation complete")).toBeTruthy();
+    expect(lastScrollState().isActive).toBe(true);
   });
 });

@@ -233,12 +233,23 @@ export function BuildChatTab({
       stickToBottomOnActivation: true,
     });
 
+  // A `useId` value is legal in an id and in an ARIA reference whatever
+  // punctuation React puts in it; only a CSS selector would object, which is
+  // why the keyboard handlers below reach for `getElementById` rather than
+  // `querySelector`.
+  const transcriptPanelId = `${instanceId}transcript`;
+  const stagesPanelId = `${instanceId}stages`;
+  const stageTabId = (sessionKey: string) => `${instanceId}stage-${sessionKey}`;
+  const mobileViewTabId = (view: MobileView) => `${instanceId}view-${view}`;
+  const mobileViewPanelId = (view: MobileView) =>
+    view === "stages" ? stagesPanelId : transcriptPanelId;
+
   const pinSession = useCallback((sessionId: string) => {
     pinnedSessionRef.current = true;
     setSelectedSessionId(sessionId);
   }, []);
 
-  const selectSession = useCallback((sessionId: string) => {
+  const selectSession = (sessionId: string) => {
     pinSession(sessionId);
     // Choosing a stage is a request to read it, so on a phone the transcript
     // comes forward with it. Only an explicit choice does this: the effect
@@ -246,7 +257,19 @@ export function BuildChatTab({
     // must not yank the user out of the stage list they are reading. Arrow-key
     // navigation is the same — it browses the list, so it uses `pinSession`.
     setMobileView("transcript");
-  }, [pinSession]);
+    if (!isMobile) return;
+    // The stage list is about to be hidden, and hiding the element that holds
+    // focus drops focus to `<body>` — the next Tab would restart from the top
+    // of the document, which loses a keyboard user's place entirely. Hand it
+    // instead to the tab that now names what is on screen. Only when the stage
+    // list actually held focus: a tap leaves focus elsewhere, and moving it
+    // then would be a change the user did not ask for.
+    const focused = document.activeElement;
+    if (!focused || !document.getElementById(stagesPanelId)?.contains(focused)) {
+      return;
+    }
+    document.getElementById(mobileViewTabId("transcript"))?.focus();
+  };
 
   // The store is a cache of a backend-owned record, and the only other loader
   // is App's one-shot per-project hydration. If that failed or has not run for
@@ -476,16 +499,6 @@ export function BuildChatTab({
         label: issueCountLabel(pipeline.structuredReview.issues.length),
       }
     : undefined;
-  // A `useId` value is legal in an id and in an ARIA reference whatever
-  // punctuation React puts in it; only a CSS selector would object, which is
-  // why the keyboard handler below reaches for `getElementById` rather than
-  // `querySelector`.
-  const transcriptPanelId = `${instanceId}transcript`;
-  const stagesPanelId = `${instanceId}stages`;
-  const stageTabId = (sessionKey: string) => `${instanceId}stage-${sessionKey}`;
-  const mobileViewTabId = (view: MobileView) => `${instanceId}view-${view}`;
-  const mobileViewPanelId = (view: MobileView) =>
-    view === "stages" ? stagesPanelId : transcriptPanelId;
   const mobileViewLabels: Record<MobileView, string> = {
     stages: "Stages",
     // Naming the stage on the tab is the only thing that says which transcript

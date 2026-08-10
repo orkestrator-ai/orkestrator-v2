@@ -273,6 +273,16 @@ export interface PipelineSession {
    * A turn that ends without ever producing one would otherwise poll forever.
    */
   structuredWaitStartedAt?: string;
+  /**
+   * How many times this session has been asked to re-emit a structured report
+   * that failed contract validation.
+   *
+   * Counted on the session rather than the pipeline because a repair replaces
+   * one session's report: a retried or later review stage opens a new session
+   * and starts from zero, while a model that cannot satisfy the contract inside
+   * this one is stopped after a bounded number of attempts.
+   */
+  structuredReportRepairAttempts?: number;
   /** Durable, content-free interaction totals for this stage attempt. */
   interactionSummary?: AgentInteractionWorkflowSummary;
   /** Convenience projection used by stage badges and completion summaries. */
@@ -702,6 +712,8 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     && hasValidValidationWorktreeBaseline(value)
     && (value.structuredWaitStartedAt === undefined
       || isIsoDate(value.structuredWaitStartedAt))
+    && (value.structuredReportRepairAttempts === undefined
+      || isNonNegativeInteger(value.structuredReportRepairAttempts))
     && (value.interactionSummary === undefined
       || isAgentInteractionWorkflowSummary(value.interactionSummary))
     && (value.autoDeclineCount === undefined

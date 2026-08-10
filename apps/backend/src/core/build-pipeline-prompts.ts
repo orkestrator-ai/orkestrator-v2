@@ -3,7 +3,10 @@ import type {
   TaskSnapshot,
 } from "@orkestrator/protocol/build-pipeline";
 import { buildReviewBody } from "@orkestrator/protocol/review-workflow";
-import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import type {
+  ReviewContractValidationIssue,
+  StructuredReviewReport,
+} from "@orkestrator/protocol/structured-review";
 import { promptCarrierJson } from "./build-pipeline-handoff.js";
 
 const ADDRESS_REVIEW_FINDINGS_PREFIX =
@@ -110,6 +113,43 @@ export function reviewPrompt(
     "The provider enforces the structured review schema. Do not edit source files or create commits. Validation commands may write generated artifacts and tool caches.",
     "Begin by running the git commands required to understand the current state.",
   ].filter(Boolean).join("\n\n");
+}
+
+/**
+ * Keeps a report that broke the contract in many places at once from crowding
+ * the instruction out of the repair prompt.
+ */
+export const MAX_REPORTED_CONTRACT_ISSUES = 25;
+
+/**
+ * Asks a reviewer to re-emit a report the backend rejected.
+ *
+ * The failures are contract violations the provider's own JSON schema cannot
+ * express — cross-field totals, duplicate ids, enum values — so the model has no
+ * way to learn about them except by being told. Every issue the validator raised
+ * is listed, because fixing only the first one produces another rejected report
+ * and burns another attempt.
+ */
+export function structuredReportRepairPrompt(
+  issues: readonly ReviewContractValidationIssue[],
+  attempt: number,
+  maxAttempts: number,
+): string {
+  const shown = issues.slice(0, MAX_REPORTED_CONTRACT_ISSUES);
+  const omitted = issues.length - shown.length;
+  return [
+    "Your review analysis was accepted. Only the structured report you emitted was rejected: it did not satisfy the review report contract, which enforces rules the JSON schema alone cannot express.",
+    [
+      "**Validation errors** (every one of these must be fixed):",
+      ...shown.map((issue) => `- \`${issue.path}\` (${issue.code}): ${issue.message}`),
+      omitted > 0
+        ? `- …and ${omitted} further ${omitted === 1 ? "error" : "errors"} of the same kind.`
+        : "",
+    ].filter(Boolean).join("\n"),
+    "Emit the corrected report now as this turn's structured result. Send the complete report, not a patch, a diff, or a description of what changed — the rejected one has been discarded.",
+    "Do not repeat the review, re-run validation, or edit any file. Keep the findings, severities, counts, and judgements you already established, and change only what the errors above require.",
+    `This is repair attempt ${attempt} of ${maxAttempts}; the build fails if the report is still invalid after the last one.`,
+  ].join("\n\n");
 }
 
 export function addressPrompt(report: StructuredReviewReport): string {

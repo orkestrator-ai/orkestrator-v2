@@ -119,8 +119,8 @@ function safeHttpUrl(value: string | undefined): string | null {
   }
 }
 
-/** The rail's run state, mirroring the build pipeline's stage icons. */
-type StageState = "running" | "error" | "done";
+/** The rail's run state, mirroring the workflow rather than only nested status. */
+type StageState = "running" | "paused" | "stopped" | "error" | "done";
 
 /**
  * One entry in the stage rail.
@@ -147,16 +147,38 @@ const passStageId = (round: number, pass: number) => `pass:${round}:${pass}`;
 const archiveStageId = (archive: ArchivedReviewPool) =>
   `archive:${archive.round}:${archive.fixedAt}:${archive.fixSessionId}`;
 
-function roundState(status: LoopedReviewRound["status"]): StageState {
-  if (status === "failed") return "error";
-  if (status === "completed") return "done";
+function roundState(
+  workflow: LoopedReviewWorkflow,
+  round: LoopedReviewRound,
+): StageState {
+  if (round.status === "failed") return "error";
+  if (round.status === "completed") return "done";
+  if (round.round === workflow.currentRound && workflow.phase === "paused") return "paused";
+  if (round.round === workflow.currentRound && workflow.phase === "cancelled") return "stopped";
   return "running";
 }
 
-function passState(status: LoopedReviewPass["status"]): StageState {
-  if (status === "failed") return "error";
-  if (status === "completed") return "done";
+function passState(
+  workflow: LoopedReviewWorkflow,
+  pass: LoopedReviewPass,
+): StageState {
+  if (pass.status === "failed") return "error";
+  if (pass.status === "completed") return "done";
+  const isActivePass = workflow.activeSessionId === pass.sessionId;
+  // Old snapshots can predate the backend's persisted failed-pass status. The
+  // workflow and active-session fence still identify the pass that stopped, so
+  // the renderer must not show it spinning forever after a failure.
+  if (isActivePass && workflow.phase === "failed") return "error";
+  if (isActivePass && workflow.phase === "paused") return "paused";
+  if (isActivePass && workflow.phase === "cancelled") return "stopped";
   return "running";
+}
+
+function stageStatusLabel(state: StageState, status: string): string {
+  if (state === "paused") return `paused · ${status}`;
+  if (state === "stopped") return `cancelled · ${status}`;
+  if (state === "error" && status !== "failed") return `failed · ${status}`;
+  return status;
 }
 
 function buildStages(workflow: LoopedReviewWorkflow): ReviewStage[] {
@@ -175,23 +197,26 @@ function buildStages(workflow: LoopedReviewWorkflow): ReviewStage[] {
   }
 
   for (const round of workflow.rounds) {
+    const state = roundState(workflow, round);
     stages.push({
       kind: "round",
       id: roundStageId(round.round),
       label: `Round ${round.round}`,
-      sublabel: `${round.status} · allowance ${round.allowance}`,
-      state: roundState(round.status),
+      sublabel: `${stageStatusLabel(state, round.status)} · allowance ${round.allowance}`,
+      state,
       round,
     });
     for (const pass of round.passes) {
+      const state = passState(workflow, pass);
+      const status = stageStatusLabel(state, pass.status);
       stages.push({
         kind: "pass",
         id: passStageId(round.round, pass.pass),
         label: `Round ${round.round} · Pass ${pass.pass}`,
         sublabel: pass.report
-          ? `${pass.status} · ${countLabel(pass.report.issues.length, "issue")}`
-          : pass.status,
-        state: passState(pass.status),
+          ? `${status} · ${countLabel(pass.report.issues.length, "issue")}`
+          : status,
+        state,
         round,
         pass,
       });
@@ -259,6 +284,12 @@ function followedStageId(
 function StageStateIcon({ state }: { state: StageState }) {
   if (state === "running") {
     return <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />;
+  }
+  if (state === "paused") {
+    return <Pause className="h-3.5 w-3.5 text-amber-400" />;
+  }
+  if (state === "stopped") {
+    return <Square className="h-3.5 w-3.5 text-muted-foreground" />;
   }
   if (state === "error") {
     return <AlertCircle className="h-3.5 w-3.5 text-destructive" />;
@@ -865,7 +896,7 @@ export function LoopedReviewTab({
                           onClick={() =>
                             selectStage(passStageId(selectedStage.round.round, pass.pass))}
                         >
-                          <StageStateIcon state={passState(pass.status)} />
+                          <StageStateIcon state={passState(workflow, pass)} />
                           <span className="min-w-0 flex-1 truncate text-xs font-medium">
                             Pass {pass.pass}
                           </span>

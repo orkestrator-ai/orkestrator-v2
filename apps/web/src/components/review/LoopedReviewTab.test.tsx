@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useEffect } from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
+import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import { TerminalProvider, useTerminalContext } from "@/contexts";
-import { useLoopedReviewStore, type LoopedReviewWorkflow } from "@/stores/loopedReviewStore";
+import {
+  useLoopedReviewStore,
+  type LoopedReviewSession,
+  type LoopedReviewWorkflow,
+} from "@/stores/loopedReviewStore";
 import { loopedReviewFixture } from "@/test/looped-review-fixture";
 import {
   LoopedReviewTab,
@@ -311,7 +316,154 @@ const poolGap = {
   poolId: "gap-1", file: "src/controller.ts", untestedBehavior: "restart mid-dispatch",
 };
 
+const stageReport: StructuredReviewReport = {
+  reviewScope: {
+    targetBranch: "main", baseRef: "origin/main...HEAD", commit: null,
+    filesReviewed: ["src/controller.ts"], filesSkipped: [], filesLeftUncommitted: [],
+    commandsRun: [], commandsNotRun: [], limitations: [],
+  },
+  whatChanged: {
+    overview: "Reviewed the transition.", before: "The transition was unchecked.",
+    after: "The transition is checked.", keyCodeChanges: [], userImpact: "Safer retries.",
+  },
+  riskProfile: {
+    changeTypes: ["bugfix"], riskAreas: ["workflow"], overallRisk: "medium",
+    reasoning: "The workflow state changes asynchronously.",
+  },
+  testResults: { total: 1, passed: 1, failed: 0, notRun: 0, failures: [] },
+  strengths: [], issues: [], testCoverageGaps: [],
+  verdict: { ready: "yes", reasoning: "No issues remain." },
+  summaryOfChange: "Checks the transition.",
+  reviewSummary: "No high-confidence issues were found in the reviewed scope.",
+};
+
+function discoverySession(
+  id: string,
+  pass: number,
+  status: LoopedReviewSession["status"] = "running",
+): LoopedReviewSession {
+  return {
+    id, phase: "discovery", round: 1, pass,
+    sessionKey: `session-key-${pass}`, providerSessionId: `provider-${pass}`,
+    requestIds: [], origin: "looped-review",
+    interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+    status, startedAt: "2026-08-03T00:00:00.000Z",
+  };
+}
+
 describe("LoopedReviewTab content rendering", () => {
+  test("builds every stage, follows active work, and pins keyboard navigation", async () => {
+    const firstSession = discoverySession("session-1", 1, "idle");
+    const activeSession = discoverySession("session-2", 2);
+    const passes = [{
+      pass: 1, sessionId: firstSession.id, status: "completed" as const,
+      report: stageReport, startedAt: "2026-08-03T00:00:00.000Z",
+      completedAt: "2026-08-03T00:01:00.000Z",
+    }, {
+      pass: 2, sessionId: activeSession.id, status: "reconciling" as const,
+      report: stageReport, startedAt: "2026-08-03T00:02:00.000Z",
+    }];
+    const workflow = loopedReviewFixture({
+      id: data.workflowId, phase: "reconciling", currentPass: 2,
+      activeSessionId: activeSession.id, sessions: [firstSession, activeSession],
+      rounds: [{
+        round: 1, allowance: 6, status: "reviewing",
+        passes, startedAt: "2026-08-03T00:00:00.000Z",
+      }],
+      archivedPools: [{
+        round: 1, fixedAt: "2026-08-03T00:03:00.000Z", fixSessionId: "fix-session-1",
+        pool: { issues: [], coverageGaps: [] },
+      }],
+    });
+    useLoopedReviewStore.getState().replaceWorkflow(workflow);
+    render(<LoopedReviewTab data={data} isActive hydrateWorkflow={mock(async () => workflow)} />);
+
+    const overviewTab = screen.getByRole("tab", { name: /Overview/ });
+    const firstPassTab = screen.getByRole("tab", { name: /Round 1 · Pass 1/ });
+    const activePassTab = screen.getByRole("tab", { name: /Round 1 · Pass 2/ });
+    const archiveTab = screen.getByRole("tab", { name: /Round 1 · Fix/ });
+    await waitFor(() => expect(activePassTab.getAttribute("aria-selected")).toBe("true"));
+    expect(screen.getByLabelText("Round 1, pass 2 report")).toBeTruthy();
+
+    fireEvent.keyDown(activePassTab, { key: "Home" });
+    expect(overviewTab.getAttribute("aria-selected")).toBe("true");
+    fireEvent.keyDown(overviewTab, { key: "End" });
+    expect(archiveTab.getAttribute("aria-selected")).toBe("true");
+    fireEvent.keyDown(archiveTab, { key: "ArrowUp" });
+    expect(activePassTab.getAttribute("aria-selected")).toBe("true");
+    fireEvent.keyDown(activePassTab, { key: "ArrowUp" });
+    expect(firstPassTab.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(firstPassTab);
+
+    // A backend update still points at pass 2, but the user's valid selection
+    // remains pinned until that stage disappears from the snapshot.
+    act(() => {
+      useLoopedReviewStore.getState().replaceWorkflow({ ...workflow, backendRevision: 2 });
+    });
+    await waitFor(() => expect(firstPassTab.getAttribute("aria-selected")).toBe("true"));
+    act(() => {
+      useLoopedReviewStore.getState().replaceWorkflow({
+        ...workflow,
+        backendRevision: 3,
+        rounds: [{ ...workflow.rounds[0]!, passes: [passes[1]!] }],
+      });
+    });
+    await waitFor(() => expect(activePassTab.getAttribute("aria-selected")).toBe("true"));
+  });
+
+  test("renders paused, failed, and cancelled active passes without a running spinner", async () => {
+    const activeSession = discoverySession("session-1", 1);
+    const pass = {
+      pass: 1, sessionId: activeSession.id, status: "discovering" as const,
+      startedAt: "2026-08-03T00:00:00.000Z",
+    };
+    const paused = loopedReviewFixture({
+      id: data.workflowId, phase: "paused", pausedFromPhase: "discovering",
+      currentPass: 1, activeSessionId: activeSession.id, sessions: [activeSession],
+      rounds: [{
+        round: 1, allowance: 6, status: "reviewing", passes: [pass],
+        startedAt: "2026-08-03T00:00:00.000Z",
+      }],
+    });
+    useLoopedReviewStore.getState().replaceWorkflow(paused);
+    render(<LoopedReviewTab data={data} isActive hydrateWorkflow={mock(async () => paused)} />);
+
+    const passTab = screen.getByRole("tab", { name: /Round 1 · Pass 1/ });
+    await waitFor(() => expect(passTab.textContent).toContain("paused"));
+    expect(passTab.querySelector(".animate-spin")).toBeNull();
+
+    // Legacy snapshots can carry an errored active session while the nested pass
+    // still says `discovering`; the workflow failure remains authoritative.
+    act(() => {
+      useLoopedReviewStore.getState().replaceWorkflow({
+        ...paused,
+        phase: "failed",
+        pausedFromPhase: undefined,
+        failure: {
+          code: "provider", message: "provider disconnected", retryPhase: "discovering",
+          occurredAt: "2026-08-03T00:01:00.000Z",
+        },
+        sessions: [{ ...activeSession, status: "error" }],
+        rounds: [{ ...paused.rounds[0]!, status: "failed" }],
+        backendRevision: 2,
+      });
+    });
+    await waitFor(() => expect(passTab.textContent).toContain("failed"));
+    expect(passTab.querySelector(".animate-spin")).toBeNull();
+
+    act(() => {
+      useLoopedReviewStore.getState().replaceWorkflow({
+        ...paused,
+        phase: "cancelled",
+        pausedFromPhase: undefined,
+        sessions: [{ ...activeSession, status: "cancelled" }],
+        backendRevision: 3,
+      });
+    });
+    await waitFor(() => expect(passTab.textContent).toContain("cancelled"));
+    expect(passTab.querySelector(".animate-spin")).toBeNull();
+  });
+
   test("renders pooled issues with their category, symbol and alternatives", () => {
     const workflow = loopedReviewFixture({
       id: data.workflowId, phase: "fixing",
@@ -374,7 +526,11 @@ describe("LoopedReviewTab content rendering", () => {
 
   test("renders archived pools with duplicate fix notes and their fix session", () => {
     const workflow = loopedReviewFixture({
-      id: data.workflowId, phase: "discovering",
+      id: data.workflowId, phase: "preparing", currentRound: 2,
+      rounds: [{
+        round: 2, allowance: 3, status: "preparing", passes: [],
+        startedAt: "2026-08-03T00:04:00.000Z",
+      }],
       archivedPools: [{
         round: 1, fixedAt: "2026-08-03T00:00:00.000Z", fixSessionId: "fix-session-1",
         pool: { issues: [poolIssue], coverageGaps: [] },
@@ -493,7 +649,9 @@ describe("LoopedReviewTab command guards", () => {
 
     // A running review publishes a new revision roughly once a second. That
     // must not erase the error the user is still reading.
-    useLoopedReviewStore.getState().replaceWorkflow({ ...running, backendRevision: 99 });
+    act(() => {
+      useLoopedReviewStore.getState().replaceWorkflow({ ...running, backendRevision: 99 });
+    });
     await waitFor(() => {
       expect(screen.getByText("lease lost")).toBeTruthy();
     });

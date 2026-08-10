@@ -3924,6 +3924,74 @@ describe("BuildPipelineService", () => {
     });
   });
 
+  test("fails the review when a repair turn itself fails provider-side", async () => {
+    await withService(async (service, storage, provider) => {
+      let reports = 0;
+      provider.structured = async <T>(
+        _sessionId: string,
+        requestId: string,
+      ): Promise<StructuredOutputResult<T>> => {
+        reports += 1;
+        if (reports === 1) {
+          // Schema-valid but contract-invalid: the failure count disagrees with
+          // the failure details, so the report is rejected and a repair is asked
+          // for. The provider error comes on the repair turn itself.
+          return {
+            ok: true,
+            provider: "claude",
+            requestId,
+            value: {
+              ...cleanReview,
+              testResults: {
+                total: 2,
+                passed: 1,
+                failed: 1,
+                notRun: 0,
+                failures: [],
+              },
+            } as T,
+          };
+        }
+        return {
+          ok: false,
+          provider: "claude",
+          requestId,
+          error: {
+            code: "provider_error",
+            message: "the review provider did not produce a structured result",
+            provider: "claude",
+            retryable: true,
+          },
+        };
+      };
+      const started = await service.start(startInput());
+      for (
+        let pass = 0;
+        pass < 8 && (await pipeline(storage, started.id)).phase !== "failed";
+        pass += 1
+      ) {
+        await service.advanceNow(started.id);
+      }
+
+      const failed = await pipeline(storage, started.id);
+      expect(failed).toMatchObject({
+        phase: "failed",
+        error: expect.stringContaining("did not produce a structured result"),
+      });
+      // One original report plus one repair turn; the provider error on the
+      // repair is not repaired again, because no report was ever emitted for it.
+      expect(reports).toBe(2);
+      const reviews = failed.sessions.filter((session) => session.phase === "review");
+      expect(reviews).toHaveLength(1);
+      expect(reviews[0]?.structuredReportRepairAttempts).toBe(1);
+      // The single repair was dispatched and still carried the report schema.
+      const repairs = provider.sent.filter((sent) =>
+        sent.prompt.includes("repair attempt 1 of 3"));
+      expect(repairs).toHaveLength(1);
+      expect(repairs[0]?.schema).toBe(STRUCTURED_REVIEW_REPORT_JSON_SCHEMA);
+    });
+  });
+
   for (const [label, legacyMessage, expectedRequestId] of [
     [
       "nested provider metadata",

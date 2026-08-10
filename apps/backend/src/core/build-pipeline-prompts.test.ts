@@ -430,6 +430,41 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("\\u0026");
   });
 
+  test("structuredReportRepairPrompt reports omission and truncation in the same frame", () => {
+    // More issues than the cap, with the first (included) issue carrying an
+    // overlong message: a report that breaks many rules in many ways is what
+    // makes the frame both omit overflow and shorten an overlong field at once,
+    // and both must be reported so the reviewer knows the list was edited.
+    const oversized = "a".repeat(2_000);
+    const issues = Array.from(
+      { length: MAX_REPORTED_CONTRACT_ISSUES + 1 },
+      (_, index) =>
+        contractIssue({
+          path: `$.issues[${index}].title`,
+          message: index === 0
+            ? `Duplicate value "${oversized}" is not allowed.`
+            : "Failure details count must equal failed.",
+        }),
+    );
+    const prompt = structuredReportRepairPrompt(issues, 1, 3);
+
+    expect(prompt).toContain(
+      `The frame lists ${MAX_REPORTED_CONTRACT_ISSUES} of the ${issues.length} validation errors, covering every distinct error code`,
+    );
+    expect(prompt).toContain("1 further error was omitted");
+    expect(prompt).toContain(
+      "1 included error has an overlong path or message shortened",
+    );
+    // The truncated payload never reaches the frame, and the surviving prefix
+    // stays fenced rather than becoming instruction prose.
+    expect(prompt).not.toContain(oversized);
+    expect(prompt).toContain("… [truncated]");
+    expect(prompt.split("</structured-review-contract-errors-json>"))
+      .toHaveLength(2);
+    expect(Buffer.byteLength(prompt, "utf8"))
+      .toBeLessThanOrEqual(MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES);
+  });
+
   test("verificationPrompt permits validation outputs but forbids source edits", () => {
     const prompt = verificationPrompt(
       pipeline(),

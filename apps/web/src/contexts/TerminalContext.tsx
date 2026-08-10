@@ -23,6 +23,8 @@ export const MAX_TABS = 9;
 
 // Options for creating a tab
 export interface CreateTabOptions {
+  /** Caller-owned ID used to bind durable backend work to the tab before it mounts. */
+  tabId?: string;
   /** Initial prompt to send to agent (only for claude/opencode tabs) */
   initialPrompt?: string;
   /** Initial commands to execute (only for plain terminal tabs) */

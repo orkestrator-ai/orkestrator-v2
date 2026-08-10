@@ -1613,7 +1613,12 @@ export function TerminalContainer({
         return true;
       }
 
-      const newTabId = createUniqueTabId("tab");
+      const requestedTabId = options?.tabId?.trim();
+      const newTabId = requestedTabId || createUniqueTabId("tab");
+      if (allTabs.some((tab) => tab.id === newTabId)) {
+        console.warn("[TerminalContainer] Refusing duplicate tab ID:", newTabId);
+        return false;
+      }
       const launchModeOverride = options?.agentLaunchMode;
       const shouldUseOpenCodeNative =
         type === "opencode" &&

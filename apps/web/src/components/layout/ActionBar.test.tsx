@@ -87,6 +87,11 @@ const getCachedOpenCodeModelCatalogMock = mock(
 );
 const setEnvironmentPRStoreMock = mock(() => {});
 const createTabMock = mock((_agent: string, _options?: unknown) => true);
+const enqueuePromptQueueMessageMock = mock(async (
+  _queueKey: string,
+  _environmentId: string,
+  _message: unknown,
+) => ({}));
 const startedLoopedWorkflow = { id: "looped-workflow-1", phase: "preparing" as const };
 const cancelledLoopedWorkflow = { id: "looped-workflow-1", phase: "cancelled" as const };
 const startLoopedReviewMock = mock(async (_options: unknown) => startedLoopedWorkflow);
@@ -567,6 +572,7 @@ mock.module("@/lib/backend", () => ({
   deleteLoopedReviewWorkflow: deleteLoopedReviewMock,
   getOpencodeModelPreferences: getOpencodeModelPreferencesMock,
   getCachedOpenCodeModelCatalog: getCachedOpenCodeModelCatalogMock,
+  enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,
 }));
 
 mock.module("@/stores/kanbanStore", () => ({
@@ -622,6 +628,8 @@ beforeEach(() => {
   getCachedOpenCodeModelCatalogMock.mockImplementation(async () => null);
   createTabMock.mockReset();
   createTabMock.mockImplementation(() => true);
+  enqueuePromptQueueMessageMock.mockReset();
+  enqueuePromptQueueMessageMock.mockImplementation(async () => ({}));
   startLoopedReviewMock.mockReset();
   startLoopedReviewMock.mockImplementation(async () => startedLoopedWorkflow);
   installLoopedWorkflowMock.mockReset();
@@ -1690,7 +1698,7 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
-  test("embeds the saved review instruction and resolves its target branch", () => {
+  test("durably queues the saved review instruction against the created tab", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
@@ -1702,16 +1710,55 @@ describe("ActionBar workflow tabs", () => {
     render(<ActionBar />);
     fireEvent.keyDown(window, { key: "r", code: "KeyR", metaKey: true });
 
-    expect(createTabMock).toHaveBeenCalledWith(
-      "codex",
+    const tabOptions = createTabMock.mock.calls.at(-1)?.[1] as { tabId?: string };
+    expect(tabOptions).toMatchObject({
+      displayTitle: "Review",
+      isReviewTab: true,
+    });
+    expect(tabOptions).not.toHaveProperty("initialPrompt");
+    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+      `codex\u0000env-env-1:${tabOptions.tabId}`,
+      "env-1",
       expect.objectContaining({
-        initialPrompt: expect.stringContaining(
+        id: `initial-prompt:env-1:${tabOptions.tabId}`,
+        text: expect.stringContaining(
           'User review instruction (JSON string): "Inspect origin/main...HEAD for release blockers."',
         ),
-        displayTitle: "Review",
-        isReviewTab: true,
+        mode: "build",
       }),
-    );
+    ));
+  });
+
+  test("hands an OpenCode review to the backend before an environment switch", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      defaultAgent: "opencode",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    const view = render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Code review" }));
+    const tabOptions = createTabMock.mock.calls.at(-1)?.[1] as { tabId?: string };
+
+    currentSelectedEnvironmentId = "env-2";
+    currentOtherEnvironments = [{
+      ...selectedEnvironment,
+      id: "env-2",
+      name: "other-environment",
+    }];
+    view.rerender(<ActionBar />);
+
+    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+      `opencode\u0000env-env-1:${tabOptions.tabId}`,
+      "env-1",
+      expect.objectContaining({
+        id: `initial-prompt:env-1:${tabOptions.tabId}`,
+        mode: "build",
+        text: expect.stringContaining("Security and instruction hierarchy"),
+      }),
+    ));
   });
 
   test("names PR, resolve, and push workflow tabs", async () => {
@@ -3603,18 +3650,19 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     expect((screen.getByRole("button", { name: "New terminal tab" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  test("falls back to the built-in review prompt for malformed config state", () => {
+  test("falls back to the built-in review prompt for malformed config state", async () => {
     currentReviewPrompt = 123 as never;
     render(<ActionBar />);
 
     fireEvent.keyDown(window, { key: "r", code: "KeyR", metaKey: true });
 
-    expect(createTabMock).toHaveBeenCalledWith(
-      "codex",
+    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+      expect.stringMatching(/^codex\u0000env-env-1:tab-/),
+      "env-1",
       expect.objectContaining({
-        initialPrompt: expect.stringContaining("Security and instruction hierarchy"),
+        text: expect.stringContaining("Security and instruction hierarchy"),
       }),
-    );
+    ));
   });
 });
 

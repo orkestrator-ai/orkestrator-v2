@@ -7035,6 +7035,7 @@ describe("TerminalContainer", () => {
           <CreateTabHarness
             type="codex"
             options={{
+              tabId: "review-tab-owned-by-launcher",
               agentLaunchMode: "native",
               displayTitle: "Review",
               initialAgentModel: "gpt-5.6-sol",
@@ -7051,6 +7052,7 @@ describe("TerminalContainer", () => {
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const created = env.root.tabs.find((t) => t.type === "codex-native");
         expect(created).toMatchObject({
+          id: "review-tab-owned-by-launcher",
           displayTitle: "Review",
           initialAgentModel: "gpt-5.6-sol",
           initialReasoningEffort: "xhigh",

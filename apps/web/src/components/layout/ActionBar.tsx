@@ -89,6 +89,9 @@ import {
 } from "@/lib/review-launch-options";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { normalizeOpenCodeModelReferences } from "@/lib/opencode-model-preferences";
+import { promptQueueKey } from "@/lib/prompt-queue-persistence";
+import { createSessionKey } from "@/lib/utils";
+import { createUuid } from "@/lib/uuid";
 import {
   LazyDialogLoadingFallback,
   LazyLoadBoundary,
@@ -477,7 +480,12 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       initialReasoningEffort?: string;
     },
   ) => {
-    if (!createTab || !selectedProjectId || !canCreateTab) return;
+    if (
+      !createTab
+      || !selectedEnvironmentId
+      || !selectedProjectId
+      || !canCreateTab
+    ) return;
 
     const repoConfig = config.repositories[selectedProjectId];
     const targetBranch = repoConfig?.prBaseBranch || "main";
@@ -486,14 +494,81 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       config.global.reviewInstruction,
     );
 
-    createTab(agentOverride || defaultAgent, {
-      initialPrompt: reviewPrompt,
+    const agent = agentOverride || defaultAgent;
+    const tabId = `tab-${createUuid()}`;
+    const created = createTab(agent, {
+      tabId,
       displayTitle: "Review",
       isReviewTab: true,
       agentLaunchMode: "native",
       ...launchOptions,
     });
-  }, [createTab, selectedProjectId, canCreateTab, config.repositories, config.global.reviewInstruction, defaultAgent]);
+    if (!created) {
+      toast.error("Could not open review", {
+        description: "The environment is not ready or the maximum tab count was reached.",
+      });
+      return;
+    }
+
+    const requestId = `initial-prompt:${selectedEnvironmentId}:${tabId}`;
+    const logicalSessionKey = createSessionKey(selectedEnvironmentId, tabId);
+    const model = launchOptions?.initialAgentModel === "default"
+      ? undefined
+      : launchOptions?.initialAgentModel;
+    const reasoningEffort = launchOptions?.initialReasoningEffort;
+    const queuedReview = agent === "claude"
+      ? {
+          id: requestId,
+          requestId,
+          text: reviewPrompt,
+          attachments: [],
+          model,
+          effort: reasoningEffort ?? "high",
+          planModeEnabled: false,
+          fastModeEnabled: false,
+        }
+      : agent === "codex"
+        ? {
+            id: requestId,
+            requestId,
+            text: reviewPrompt,
+            attachments: [],
+            model,
+            reasoningEffort: reasoningEffort ?? "medium",
+            mode: "build" as const,
+            fastMode: false,
+          }
+        : {
+            id: requestId,
+            requestId,
+            text: reviewPrompt,
+            attachments: [],
+            model,
+            variant: reasoningEffort,
+            mode: "build" as const,
+          };
+
+    // Do not await UI lifecycle work after this hand-off. The queue mutation is
+    // durable and wakes the backend dispatcher, so unmounting this ActionBar or
+    // switching environments cannot delay the review until the tab is opened.
+    void backend.enqueuePromptQueueMessage(
+      promptQueueKey(agent, logicalSessionKey),
+      selectedEnvironmentId,
+      queuedReview,
+    ).catch((error) => {
+      toast.error("Could not start review", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }, [
+    canCreateTab,
+    config.global.reviewInstruction,
+    config.repositories,
+    createTab,
+    defaultAgent,
+    selectedEnvironmentId,
+    selectedProjectId,
+  ]);
 
   const openReviewDialog = useCallback(() => {
     if (!selectedEnvironment || !canCreateTab) return;

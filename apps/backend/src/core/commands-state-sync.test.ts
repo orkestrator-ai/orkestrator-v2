@@ -1433,6 +1433,23 @@ describe("durable tab teardown commands", () => {
 });
 
 describe("prompt queue commands", () => {
+  test("wakes the native dispatcher after durable enqueue", async () => {
+    const notifyPromptQueueChanged = mock((_queueKey: string) => undefined);
+    await withCommands(async (invoke) => {
+      await invoke("enqueue_prompt_queue_message", {
+        queueKey: "opencode\u0000env-e1:review-tab",
+        environmentId: "e1",
+        message: { id: "review-1", text: "Review" },
+      });
+
+      expect(notifyPromptQueueChanged).toHaveBeenCalledWith(
+        "opencode\u0000env-e1:review-tab",
+      );
+    }, {
+      nativeAgents: { notifyPromptQueueChanged } as never,
+    });
+  });
+
   test("mutates and reads back a backend-owned queue", async () => {
     await withCommands(async (invoke) => {
       await expect(invoke("enqueue_prompt_queue_message", {

@@ -506,6 +506,18 @@ export class NativeAgentService {
     return result.session;
   }
 
+  /**
+   * Wake the durable queue worker after an intent-level queue mutation.
+   *
+   * The periodic scan remains the crash/restart safety net, but a newly queued
+   * interactive prompt should not wait for that timer. The worker owns all
+   * provider I/O and its per-queue task map coalesces concurrent notifications.
+   */
+  notifyPromptQueueChanged(queueKey: string): void {
+    if (this.stopped || !nonBlank(queueKey)) return;
+    void this.drainPromptQueue(queueKey);
+  }
+
   async shutdown(): Promise<void> {
     this.stopped = true;
     if (this.launchTimer) clearInterval(this.launchTimer);

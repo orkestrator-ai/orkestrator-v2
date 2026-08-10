@@ -5385,6 +5385,41 @@ describe("NativeAgentService", () => {
   });
 
   describe("queue draining", () => {
+    test("starts a newly persisted queue immediately when notified", async () => {
+      let markDispatched!: () => void;
+      const dispatched = new Promise<void>((resolve) => {
+        markDispatched = resolve;
+      });
+      const { provider, send } = createProviderStub("opencode", {
+        send: async () => {
+          markDispatched();
+        },
+      });
+      await withService({
+        prefix: "orkestrator-native-drain-notified-",
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        const queueKey = "opencode\u0000env-env-1:review-tab";
+        await storage.savePromptQueue(queueKey, "env-1", [{
+          id: "initial-prompt:env-1:review-tab",
+          text: "Review the change",
+          mode: "build",
+        }]);
+
+        service.notifyPromptQueueChanged(queueKey);
+        await dispatched;
+
+        expect(send).toHaveBeenCalledWith(
+          "provider-session",
+          "Review the change",
+          expect.objectContaining({
+            requestId: "initial-prompt:env-1:review-tab",
+            mode: "build",
+          }),
+        );
+      });
+    });
+
     test("drains two queued prompts in prompt and request order", async () => {
       const dispatched: Array<{ prompt: string; requestId: string }> = [];
       const { provider, send } = createProviderStub("codex", {

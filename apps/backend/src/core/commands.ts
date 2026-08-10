@@ -10356,12 +10356,19 @@ export function createCommandRegistry(
   );
   register(
     "enqueue_prompt_queue_message",
-    ({ queueKey, environmentId, message }, { storage }) =>
-      storage.enqueuePromptQueueMessage(
-        asString(queueKey, "queueKey"),
+    async ({ queueKey, environmentId, message }, { storage, nativeAgents }) => {
+      const key = asString(queueKey, "queueKey");
+      const queue = await storage.enqueuePromptQueueMessage(
+        key,
         asString(environmentId, "environmentId"),
         message,
-      ),
+      );
+      // Persistence is the hand-off edge. From here the backend owns dispatch,
+      // even if the renderer changes environment or the destination tab never
+      // mounts. Optional chaining keeps lightweight command harnesses working.
+      nativeAgents?.notifyPromptQueueChanged?.(key);
+      return queue;
+    },
   );
   register(
     "requeue_prompt_queue_message",

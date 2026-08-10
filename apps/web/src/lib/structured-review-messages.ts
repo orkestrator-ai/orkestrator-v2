@@ -69,19 +69,6 @@ function showOnlyFinalPayloadMessage(
 }
 
 /**
- * Provider transcripts may echo schema-constrained payloads as JSON while the
- * turn is still working. The pipeline's validated report remains available in
- * its report view, so the review transcript removes report-shaped JSON from
- * ordinary progress. This is presentation filtering, never a success or
- * validation fallback.
- */
-export function hideRawStructuredReviewMessages(
-  messages: NativeMessage[],
-): NativeMessage[] {
-  return showOnlyFinalPayloadMessage(messages, "structured-review", false);
-}
-
-/**
  * Retain only an accepted historical review's final structured report.
  * Current reports render through the dedicated pipeline-owned report view.
  */

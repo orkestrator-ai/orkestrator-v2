@@ -841,6 +841,150 @@ describe("BuildChatTab presentation", () => {
     expect(screen.queryByText("Still reviewing.")).toBeNull();
   });
 
+  test("reveals a legacy historical review only while the pipeline still holds its report", async () => {
+    const provisional = JSON.stringify({
+      ...TEST_STRUCTURED_REVIEW_REPORT,
+      verdict: { ready: "no", reasoning: "Still reviewing." },
+    });
+    const historical = JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT);
+    // A snapshot written before `structuredResultStatus` existed: the stage is
+    // idle and the pipeline has moved on, so the fallback decides from the
+    // pipeline's own bookkeeping rather than provider activity.
+    const legacyReview = {
+      ...reviewSession,
+      structuredResultStatus: undefined,
+      sessionKey: "legacy-review-key",
+      sdkSessionId: "legacy-review-session",
+      label: "Legacy Review Session",
+      messages: [{
+        id: "legacy-review-answer",
+        role: "assistant",
+        content: historical,
+        parts: [
+          { type: "text", content: provisional },
+          { type: "text", content: historical },
+        ],
+      }],
+    };
+    const latestReview = {
+      ...reviewSession,
+      sessionKey: "latest-review-key",
+      sdkSessionId: "latest-review-session",
+      structuredRequestId: "latest-review-request",
+      label: "Latest Review Session",
+    };
+
+    renderTab({
+      ...reviewed,
+      sessions: [
+        pipeline.sessions[0]!,
+        legacyReview,
+        latestReview,
+        pipeline.sessions[1]!,
+      ],
+      currentSessionIndex: 3,
+      structuredReviewRequestId: "latest-review-request",
+    });
+
+    fireEvent.click(screen.getByText("Legacy Review Session"));
+    await waitFor(() =>
+      expect(screen.getByText("Structured review report")).toBeTruthy());
+    expect(listProps.messages[0]?.parts.map((part: { content: string }) => part.content))
+      .toEqual([historical]);
+    expect(screen.queryByText("Still reviewing.")).toBeNull();
+
+    cleanup();
+    renderTab({
+      ...reviewed,
+      sessions: [
+        pipeline.sessions[0]!,
+        legacyReview,
+        latestReview,
+        pipeline.sessions[1]!,
+      ],
+      currentSessionIndex: 3,
+      // A retry deletes the accepted report before the replacement review lands,
+      // so the legacy stage's last payload was never authoritative.
+      structuredReview: undefined,
+      structuredReviewRequestId: undefined,
+    });
+
+    fireEvent.click(screen.getByText("Legacy Review Session"));
+    expect(screen.queryByText("Structured review report")).toBeNull();
+    expect(listProps.messages).toEqual([]);
+  });
+
+  test("reveals a legacy completed verification only while the verdict is recorded", () => {
+    const provisional = JSON.stringify({
+      complete: false,
+      rationale: "I am inspecting the committed diff.",
+    });
+    const final = JSON.stringify({
+      complete: true,
+      rationale: "All acceptance criteria and validation checks passed.",
+    });
+    const legacyVerify = {
+      ...pipeline.sessions[1]!,
+      agent: "codex" as const,
+      structuredResultStatus: undefined,
+      messages: [{
+        id: "verification-answer",
+        role: "assistant",
+        content: final,
+        parts: [
+          { type: "text", content: provisional },
+          {
+            type: "tool-invocation",
+            content: "bun test",
+            toolName: "bash",
+            toolState: "success",
+          },
+          { type: "text", content: final },
+        ],
+      }],
+    };
+    const prSession = {
+      phase: "pr" as const,
+      iteration: 0,
+      sessionKey: "pr-key",
+      sdkSessionId: "pr-session",
+      status: "idle" as const,
+      startedAt: "2026-07-29T00:03:00.000Z",
+      label: "PR Session",
+      messages: [],
+    };
+
+    renderTab({
+      ...pipeline,
+      verificationResult: "pass",
+      verificationFeedback: "All acceptance criteria and validation checks passed.",
+      currentSessionIndex: 2,
+      sessions: [pipeline.sessions[0]!, legacyVerify, prSession],
+    });
+    fireEvent.click(screen.getByText("Verification Session"));
+    expect(screen.queryByText("Verification failed")).toBeNull();
+    expect(screen.getAllByText("Verification passed")).toHaveLength(1);
+    expect(
+      listProps.messages[0]?.parts
+        .filter((part: { type: string }) => part.type === "tool-invocation")
+        .map((part: { content: string }) => part.content),
+    ).toEqual(["bun test"]);
+
+    cleanup();
+    renderTab({
+      ...pipeline,
+      verificationResult: undefined,
+      verificationFeedback: undefined,
+      currentSessionIndex: 2,
+      sessions: [pipeline.sessions[0]!, legacyVerify, prSession],
+    });
+    fireEvent.click(screen.getByText("Verification Session"));
+    expect(screen.queryByText("Verification failed")).toBeNull();
+    expect(listProps.messages[0]?.parts).toEqual([
+      expect.objectContaining({ type: "tool-invocation", content: "bun test" }),
+    ]);
+  });
+
   test("keeps the report's sections collapsed and its JSON out of the transcript", async () => {
     renderTab(reviewed);
     fireEvent.click(screen.getByText("Review Session"));

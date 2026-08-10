@@ -1,54 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
 import {
-  hideRawStructuredReviewMessages,
   showOnlyFinalStructuredReviewMessage,
   showOnlyFinalVerificationMessage,
 } from "./structured-review-messages";
-
-describe("hideRawStructuredReviewMessages", () => {
-  test("hides validated raw report JSON while preserving tools and ordinary text", () => {
-    const raw = JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT);
-    const messages = hideRawStructuredReviewMessages([
-      {
-        id: "structured",
-        role: "assistant",
-        content: raw,
-        parts: [{ type: "text", content: raw }],
-        createdAt: "2026-07-25T00:00:00.000Z",
-      },
-      {
-        id: "ordinary",
-        role: "assistant",
-        content: "Reviewing the diff",
-        parts: [
-          { type: "thinking", content: "Checking retries" },
-          { type: "text", content: "Reviewing the diff" },
-        ],
-        createdAt: "2026-07-25T00:00:01.000Z",
-      },
-    ]);
-
-    expect(messages).toHaveLength(1);
-    expect(messages[0]?.id).toBe("ordinary");
-    expect(messages[0]?.parts).toHaveLength(2);
-  });
-
-  test("does not hide malformed or merely JSON-looking plaintext", () => {
-    const messages = hideRawStructuredReviewMessages([{
-      id: "incomplete",
-      role: "assistant",
-      content: "{\"reviewSummary\":\"not a complete report\"}",
-      parts: [{
-        type: "text",
-        content: "{\"reviewSummary\":\"not a complete report\"}",
-      }],
-      createdAt: "2026-07-25T00:00:00.000Z",
-    }]);
-
-    expect(messages).toHaveLength(1);
-  });
-});
 
 describe("showOnlyFinalStructuredReviewMessage", () => {
   test("keeps only an accepted historical review's final report", () => {
@@ -91,6 +46,55 @@ describe("showOnlyFinalStructuredReviewMessage", () => {
       parts: [{ type: "text", content: report }],
       createdAt: "2026-08-07T22:00:00.000Z",
     }], false)).toEqual([]);
+  });
+
+  test("keeps only the final report across multiple assistant messages", () => {
+    const first = JSON.stringify({
+      ...TEST_STRUCTURED_REVIEW_REPORT,
+      verdict: { ready: "no", reasoning: "First pass." },
+    });
+    const second = JSON.stringify({
+      ...TEST_STRUCTURED_REVIEW_REPORT,
+      verdict: { ready: "no", reasoning: "Second pass after tooling." },
+    });
+    const final = JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT);
+    const messages = showOnlyFinalStructuredReviewMessage([
+      {
+        id: "review-1",
+        role: "assistant",
+        content: "",
+        parts: [{ type: "text", content: first }],
+        createdAt: "2026-08-07T21:00:00.000Z",
+      },
+      {
+        id: "review-2",
+        role: "assistant",
+        content: "",
+        parts: [
+          { type: "text", content: second },
+          { type: "text", content: "More investigation" },
+        ],
+        createdAt: "2026-08-07T22:00:00.000Z",
+      },
+      {
+        id: "review-3",
+        role: "assistant",
+        content: final,
+        parts: [{ type: "text", content: final }],
+        createdAt: "2026-08-07T23:00:00.000Z",
+      },
+    ], true);
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0]?.id).toBe("review-2");
+    expect(messages[0]?.parts.map((part) => part.content)).toEqual([
+      "More investigation",
+    ]);
+    expect(messages[1]?.id).toBe("review-3");
+    expect(messages[1]?.content).toBe("");
+    expect(messages[1]?.parts.map((part) => part.content)).toEqual([final]);
+    expect(JSON.stringify(messages)).not.toContain("First pass.");
+    expect(JSON.stringify(messages)).not.toContain("Second pass.");
   });
 });
 

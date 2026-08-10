@@ -118,6 +118,32 @@ function reviewReportSession(
   );
 }
 
+/**
+ * Whether the pipeline's own bookkeeping confirms a legacy session's structured
+ * result was accepted.
+ *
+ * `structuredResultStatus` predates old snapshots, so an idle stage the
+ * pipeline has advanced past is the only pointer — but it is not enough on its
+ * own: a retry or cancellation can advance the pipeline past a stage whose
+ * result was never accepted, and revealing that stage's last provisional
+ * payload would look like a real verdict. The report and verdict fields are
+ * exactly the record of an accepted outcome, and a retry clears both, so their
+ * presence is that confirmation.
+ */
+function hasAcceptedResultEvidence(
+  session: PipelineSession | undefined,
+  pipeline: BuildPipeline | undefined,
+): boolean {
+  if (!session || !pipeline) return false;
+  if (session.phase === "review") {
+    return pipeline.structuredReview !== undefined;
+  }
+  if (session.phase === "verify") {
+    return pipeline.verificationResult !== undefined;
+  }
+  return false;
+}
+
 function issueCountLabel(count: number): string {
   return `${count} issue${count === 1 ? "" : "s"}`;
 }
@@ -219,8 +245,10 @@ export function BuildChatTab({
       && selectedSession.sessionKey === reportSession.sessionKey,
   );
   // New snapshots state this authority explicitly. For old persisted builds,
-  // an idle stage that the pipeline has advanced past is the closest safe
-  // equivalent: the current stage is deliberately excluded because pause,
+  // an idle stage the pipeline has advanced past is the closest evidence, and
+  // only when the pipeline's own accepted-result bookkeeping confirms it — a
+  // retry or cancellation can advance the pipeline past a stage whose result
+  // was never accepted, and the current stage is excluded because pause,
   // cancellation and result-finalization waits all leave it idle too.
   const structuredResultAccepted = Boolean(
     selectedSession?.structuredResultStatus === "accepted"
@@ -229,6 +257,7 @@ export function BuildChatTab({
         && selectedSession?.status === "idle"
         && selectedSessionIndex >= 0
         && selectedSessionIndex < (pipeline?.currentSessionIndex ?? -1)
+        && hasAcceptedResultEvidence(selectedSession, pipeline)
       ),
   );
   // The harness this session actually ran on, not the pipeline's build agent:

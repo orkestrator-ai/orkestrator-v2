@@ -39,6 +39,11 @@ import {
   stagePromptImages,
   type PromptAttachment,
 } from "./prompt-attachments.js";
+import {
+  inspectOpenCodeIncompleteTurn,
+  openCodeIncompleteTurnRequestId,
+  OPENCODE_INCOMPLETE_TURN_CONTINUATION,
+} from "./opencode-turn-recovery.js";
 
 const PROVIDER_REPORTED_INTERACTION_GRACE_MS = 60_000;
 
@@ -81,6 +86,13 @@ export interface DispatchNativeAgentPromptInput
   mode?: ProviderExecutionMode;
   fastMode?: boolean;
   subAgent?: string;
+  /**
+   * OpenCode execution agent for this prompt (`build`, `plan`, or a custom
+   * agent). Distinct from {@link EnsureNativeAgentSessionInput.agent}, which
+   * selects the provider. Incomplete-turn recovery uses this to continue a
+   * stalled turn under the same agent it originally ran with.
+   */
+  executionAgent?: string;
   includeLocalSettings?: boolean;
   promptSuggestions?: boolean;
 }
@@ -259,6 +271,8 @@ export class NativeAgentService {
     string,
     { providerSessionId: string; state: AgentActivityState }
   >();
+  /** In-flight incomplete-turn recoveries, coalesced per durable session. */
+  private readonly openCodeRecoveryTasks = new Map<string, Promise<void>>();
   /**
    * Environments whose exact completion edge has not yet reached the PR
    * monitor. Delivery is retried by later sweeps, while the set coalesces
@@ -487,6 +501,7 @@ export class NativeAgentService {
               mode: input.mode,
               fastMode: input.fastMode,
               subAgent: input.subAgent,
+              executionAgent: input.executionAgent,
               includeLocalSettings: input.includeLocalSettings,
               promptSuggestions: input.promptSuggestions,
               model: input.model,
@@ -525,10 +540,15 @@ export class NativeAgentService {
     if (this.interactionTimer) clearInterval(this.interactionTimer);
     this.interactionTimer = null;
     await Promise.allSettled([...this.scanTasks]);
-    while (this.launchTasks.size > 0 || this.queueTasks.size > 0) {
+    while (
+      this.launchTasks.size > 0
+      || this.queueTasks.size > 0
+      || this.openCodeRecoveryTasks.size > 0
+    ) {
       await Promise.allSettled([
         ...this.launchTasks.values(),
         ...this.queueTasks.values(),
+        ...this.openCodeRecoveryTasks.values(),
       ]);
     }
     await Promise.allSettled(
@@ -1458,6 +1478,20 @@ export class NativeAgentService {
         state,
       });
     }
+    /*
+     * Incomplete-turn recovery hangs off exactly this backend-observed edge so
+     * it works with no mounted renderer. Unattended origins are excluded: the
+     * build pipeline and looped review own their sessions' turn lifecycles and
+     * an injected continuation would corrupt their dispatch accounting.
+     */
+    if (
+      session.agent === "opencode"
+      && session.origin !== "build-pipeline"
+      && session.origin !== "looped-review"
+      && isAgentTurnEndTransition({ previousState: previous, state })
+    ) {
+      this.scheduleOpenCodeIncompleteTurnRecovery(session);
+    }
     const sources = activityByEnvironment.get(session.environmentId) ?? {};
     sources[session.key] = {
       state,
@@ -1499,6 +1533,98 @@ export class NativeAgentService {
         () => worker(),
       ),
     );
+  }
+
+  /** Coalesce concurrent turn-end edges onto one recovery pass per session. */
+  private scheduleOpenCodeIncompleteTurnRecovery(
+    session: PersistedNativeAgentSession,
+  ): void {
+    if (this.stopped || this.openCodeRecoveryTasks.has(session.key)) return;
+    const task = this.recoverOpenCodeIncompleteTurnOnce(session)
+      .catch((error) => {
+        // Transient faults are not retried on a timer: the durable request id
+        // makes a retry safe, and the next observed turn-end edge provides it.
+        console.warn(
+          `[native-agent] OpenCode incomplete-turn recovery for ${session.environmentId} failed:`,
+          error instanceof Error ? error.name : "unknown error",
+        );
+      })
+      .finally(() => {
+        if (this.openCodeRecoveryTasks.get(session.key) === task) {
+          this.openCodeRecoveryTasks.delete(session.key);
+        }
+      });
+    this.openCodeRecoveryTasks.set(session.key, task);
+  }
+
+  /**
+   * Continue an OpenCode turn that ended incomplete, at most once per stall.
+   *
+   * The authoritative transcript is both the detector and the loop bound: the
+   * stalled shape (`unknown` finish, reasoning only, no error, no pending
+   * tools) must be present, and the fixed continuation prompt as the latest
+   * user turn means recovery already ran and stalled again — that turn is left
+   * for the user. Dispatch itself goes through the durable per-request-id
+   * journal, so a re-observed edge or a backend restart cannot double-send.
+   */
+  private async recoverOpenCodeIncompleteTurnOnce(
+    session: PersistedNativeAgentSession,
+  ): Promise<void> {
+    if (this.stopped) return;
+    // A queued user prompt supersedes an automatic continuation: the queue
+    // drainer is about to drive the session with the user's own words.
+    const queue = await this.storage.getPromptQueue(
+      `${session.agent}\0${session.logicalSessionKey}`,
+    );
+    if (queue && (queue.messages.length > 0 || queue.inFlight !== undefined)) {
+      return;
+    }
+    const environment = await this.storage.getEnvironment(session.environmentId);
+    if (
+      !environment
+      || environment.deletionRequestedAt
+      || !isEnvironmentReadyForAgents(environment)
+    ) {
+      return;
+    }
+    // The mapping may have been replaced since the sweep observed the edge; a
+    // continuation must never reach a different provider session.
+    const durable = await this.storage.getNativeAgentSession(session.key);
+    if (durable?.providerSessionId !== session.providerSessionId) return;
+
+    const provider = await this.observeProvider({
+      environmentId: session.environmentId,
+      agent: session.agent,
+      logicalSessionKey: session.logicalSessionKey,
+    });
+    if (!provider) return;
+    const messages = await provider.messages(session.providerSessionId);
+    if (this.stopped) return;
+    const recovery = inspectOpenCodeIncompleteTurn(messages);
+    if (!recovery) return;
+    if (recovery.action === "exhausted") {
+      console.warn(
+        `[native-agent] OpenCode turn for ${session.environmentId} ended incomplete again after an automatic continuation; leaving it for the user`,
+      );
+      return;
+    }
+
+    console.warn(
+      `[native-agent] Continuing an incomplete OpenCode turn for ${session.environmentId}`,
+    );
+    await this.dispatchPrompt({
+      environmentId: session.environmentId,
+      agent: session.agent,
+      logicalSessionKey: session.logicalSessionKey,
+      origin: session.origin,
+      interactionPolicy: session.interactionPolicy,
+      prompt: OPENCODE_INCOMPLETE_TURN_CONTINUATION,
+      requestId: openCodeIncompleteTurnRequestId(recovery.assistantMessageId),
+      model: recovery.modelId,
+      // Reproduce the stalled turn's execution agent so the continuation runs
+      // under the same system prompt and tool policy.
+      executionAgent: recovery.agent,
+    });
   }
 
   /**

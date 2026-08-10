@@ -318,6 +318,12 @@ export interface ProviderSendOptions {
   fastMode?: boolean;
   /** Claude sub-agent selected for this prompt. */
   subAgent?: string;
+  /**
+   * OpenCode execution agent for this prompt (`build`, `plan`, or a custom
+   * agent). Takes precedence over the coarser {@link mode} mapping so a
+   * continuation can rejoin a turn under the exact agent it ran with.
+   */
+  executionAgent?: string;
   includeLocalSettings?: boolean;
   promptSuggestions?: boolean;
   /** Overrides the connection default for this prompt only. */
@@ -2253,7 +2259,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
           model: modelParts && modelParts.length > 1
             ? { providerID: modelParts[0]!, modelID: modelParts.slice(1).join("/") }
             : undefined,
-          agent: options.mode ?? "build",
+          agent: options.executionAgent ?? options.mode ?? "build",
           variant: options.effort ?? this.connection.effort,
         }, this.requestOptions());
       } catch (error) {

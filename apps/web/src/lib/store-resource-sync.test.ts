@@ -616,6 +616,38 @@ describe("pane-layout binding", () => {
     expect(unlisten).toHaveBeenCalled();
   });
 
+  test("warns and keeps the sync alive when observing setup completion fails", async () => {
+    detach?.();
+
+    // A native bridge that throws while subscribing must not take down the
+    // whole store sync: the ordinary resource-change feed still works, and the
+    // handoff still converges through it.
+    const listen = mock(async () => {
+      throw new Error("native bridge unavailable");
+    });
+    const warn = mock((_args: unknown[]) => {});
+    const originalWarn = console.warn;
+    console.warn = warn;
+    try {
+      const stop = startTestStoreResourceSync({
+        getPaneLayout: (mock(async () => null)) as never,
+        listen: listen as never,
+      });
+      await tick();
+
+      // The rejection is contained and attributed to the subscription it came
+      // from, rather than surfacing as an unhandled rejection.
+      expect(warn).toHaveBeenCalled();
+      const message = String(warn.mock.calls[0]?.[0] ?? "");
+      expect(message).toContain("Failed to observe setup completion");
+
+      // The sync remains usable and tears down cleanly despite the failure.
+      expect(() => stop()).not.toThrow();
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
   test("replays a change that arrives while initial layout hydration is pending", async () => {
     detach?.();
     useEnvironmentStore.setState({ environments: [environment("env-1")] });

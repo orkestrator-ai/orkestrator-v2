@@ -60,7 +60,8 @@ const AGENT_HELPER_SED =
   "/^agent_source_path_has_symlink() {/,/^}$/p; " +
   "/^agent_destination_path_has_symlink() {/,/^}$/p; " +
   "/^copy_agent_file() {/,/^}$/p; " +
-  "/^copy_agent_directory() {/,/^}$/p";
+  "/^copy_agent_directory() {/,/^}$/p; " +
+  "/^copy_agent_directory_entries() {/,/^}$/p";
 
 function agentCopyHelperHarness(body: string): string {
   const entrypoint = join(repoRoot, "docker", "entrypoint.sh");
@@ -170,11 +171,16 @@ describe("container runtime environment wiring", () => {
     // none of them should reappear for any agent.
     for (const mount of ["/claude-config", "/codex-home", "/opencode-data"]) {
       expect(entrypoint).toContain(`copy_agent_file ${mount}`);
-      expect(entrypoint).toContain(`copy_agent_directory ${mount}`);
       expect(entrypoint).not.toContain(`find ${mount} -maxdepth 1 -type f`);
       expect(entrypoint).not.toContain(`cp -r ${mount}/.`);
       expect(entrypoint).not.toContain(`cp -R ${mount}/.`);
     }
+    // Codex keeps the strict whole-directory copy for its platform-binary-heavy
+    // dirs; Claude and OpenCode user-authored directories copy per-entry so a
+    // single symlinked or oversized entry cannot drop the whole directory.
+    expect(entrypoint).toContain("copy_agent_directory /codex-home");
+    expect(entrypoint).toContain("copy_agent_directory_entries /claude-config");
+    expect(entrypoint).toContain("copy_agent_directory_entries /opencode-data");
     // Each call site names its agent so a skipped file is attributable.
     for (const label of ["Claude", "Codex", "OpenCode"]) {
       expect(entrypoint).toMatch(
@@ -225,7 +231,7 @@ for file in CLAUDE.md settings.local.json; do
   copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" "$file" Claude
 done
 for dir in commands agents ide plugins; do
-  copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" "$dir" Claude
+  copy_agent_directory_entries "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" "$dir" Claude
 done
 `),
         {
@@ -282,6 +288,91 @@ copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" CLAUDE.md Claude
       expect(result.stdout).toContain("Warning: Skipping Claude file with symlinked destination: CLAUDE.md");
       expect(() => statSync(join(destination, "commands", "leaked.txt"))).toThrow();
       expect(readFileSync(plantedTarget, "utf8")).toBe("original\n");
+    });
+  });
+
+  test("one symlinked command no longer drops the whole commands directory", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      const destination = join(dir, "destination");
+      const outside = join(dir, "outside");
+      mkdirSync(join(source, "commands"), { recursive: true });
+      mkdirSync(outside, { recursive: true });
+      writeFileSync(join(outside, "secret.md"), "host content outside the tree\n");
+      writeFileSync(join(source, "commands", "kept.md"), "kept\n");
+      writeFileSync(join(source, "commands", "second.md"), "second\n");
+      // A dotfile manager symlinking one command into the repo is ordinary. The
+      // whole-directory helper used to reject the entire `commands` dir over
+      // this single link; the per-entry walker must skip just the link.
+      symlinkSync(join(outside, "secret.md"), join(source, "commands", "linked.md"));
+
+      const result = runShell(
+        agentCopyHelperHarness(`
+copy_agent_directory_entries "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" commands Claude
+report_agent_copy_skips Claude
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Skipping symlinked Claude entry: commands/linked.md");
+      // The real commands survive.
+      expect(readFileSync(join(destination, "commands", "kept.md"), "utf8")).toBe("kept\n");
+      expect(readFileSync(join(destination, "commands", "second.md"), "utf8")).toBe("second\n");
+      // The link is skipped, not followed, so no host content escapes the mount.
+      expect(() => statSync(join(destination, "commands", "linked.md"))).toThrow();
+      expect(() => statSync(join(destination, "commands", "secret.md"))).toThrow();
+      // The consolidated summary names the skipped entry so it is not silent.
+      expect(result.stdout).toContain("commands/linked.md");
+    });
+  });
+
+  test("an oversized or symlinked subdirectory is skipped on its own, not the whole tree", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      const destination = join(dir, "destination");
+      const outside = join(dir, "outside");
+      mkdirSync(join(source, "storage", "kept"), { recursive: true });
+      mkdirSync(join(source, "storage", "huge"), { recursive: true });
+      mkdirSync(outside, { recursive: true });
+      writeFileSync(join(source, "storage", "kept", "a.json"), "kept\n");
+      writeFileSync(join(outside, "b.json"), "outside\n");
+      // A symlinked plugin record inside the storage tree.
+      symlinkSync(outside, join(source, "storage", "linked"));
+      // A subdirectory that exceeds the per-directory entry cap.
+      for (let index = 0; index < 6; index += 1) {
+        writeFileSync(join(source, "storage", "huge", `entry-${index}`), "x\n");
+      }
+
+      const result = runShell(
+        agentCopyHelperHarness(`
+AGENT_COPY_MAX_DIRECTORY_ENTRIES=3
+copy_agent_directory_entries "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" storage OpenCode
+report_agent_copy_skips OpenCode
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      // The sibling that is portable still lands.
+      expect(readFileSync(join(destination, "storage", "kept", "a.json"), "utf8")).toBe("kept\n");
+      // The symlinked subdirectory is skipped as an entry, never followed.
+      expect(result.stdout).toContain("Skipping symlinked OpenCode entry: storage/linked");
+      expect(() => statSync(join(destination, "storage", "linked", "b.json"))).toThrow();
+      // The oversized subdirectory is skipped on its own.
+      expect(result.stdout).toContain("Skipping oversized OpenCode directory: storage/huge");
+      expect(() => statSync(join(destination, "storage", "huge"))).toThrow();
+      // Both are named in the consolidated summary.
+      expect(result.stdout).toContain("storage/linked");
+      expect(result.stdout).toContain("storage/huge");
     });
   });
 
@@ -408,7 +499,7 @@ eval "$block"
     // -wal/-shm siblings) was copied into every container on every start.
     expect(entrypoint).not.toContain("find /opencode-data -maxdepth 1 -type f");
     expect(entrypoint).toContain("copy_agent_file /opencode-data");
-    expect(entrypoint).toContain("copy_agent_directory /opencode-data");
+    expect(entrypoint).toContain("copy_agent_directory_entries /opencode-data");
 
     for (const allowlisted of ["auth.json", "account.json", "storage", "snapshot"]) {
       expect(entrypoint).toMatch(
@@ -497,7 +588,7 @@ for file in auth.json account.json; do
   copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" "$file" OpenCode
 done
 for dir in storage snapshot; do
-  copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" "$dir" OpenCode
+  copy_agent_directory_entries "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" "$dir" OpenCode
 done
 `),
         {
@@ -1320,6 +1411,131 @@ eval "$codex_setup"
       expect(statSync(join(destination, "auth.json")).mode & 0o777).toBe(0o600);
       expect(() => statSync(join(destination, "plugins", ".plugin-appserver"))).toThrow();
       expect(() => statSync(join(destination, "sessions"))).toThrow();
+    });
+  });
+
+  test("Claude setup block copies the allowlist, skips history, and drops only the symlinked command", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "claude-config");
+      const home = join(dir, "home");
+      const outside = join(dir, "outside");
+      mkdirSync(join(source, "commands"), { recursive: true });
+      mkdirSync(join(source, "projects"), { recursive: true });
+      mkdirSync(outside, { recursive: true });
+      writeFileSync(join(source, "CLAUDE.md"), "global instructions\n");
+      writeFileSync(join(source, "settings.local.json"), "{\"local\":true}\n");
+      writeFileSync(join(source, "history.jsonl"), "{\"display\":\"secret prompt\"}\n");
+      writeFileSync(join(source, "daemon.log"), "log\n");
+      writeFileSync(join(source, ".credentials.json"), "{\"claudeAiOauth\":{\"accessToken\":\"from-mount\"}}");
+      writeFileSync(join(source, "commands", "kept.md"), "kept\n");
+      writeFileSync(join(outside, "secret.md"), "host content outside the tree\n");
+      symlinkSync(join(outside, "secret.md"), join(source, "commands", "linked.md"));
+      writeFileSync(join(source, "projects", "host.jsonl"), "host state\n");
+
+      const entrypoint = join(repoRoot, "docker", "entrypoint.sh");
+      const result = runShell(
+        agentCopyHelperHarness(`
+claude_setup="$(sed -n '/^log_progress "Setting up Claude Code configuration..."$/,/^log_progress "Claude Code configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/claude-config#\\$AGENT_TEST_SOURCE#g")"
+[ -n "$claude_setup" ] || { echo "harness failed to extract the Claude block"; exit 9; }
+eval "$claude_setup"
+`),
+        {
+          HOME: home,
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          AGENT_TEST_SOURCE: source,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      // The allowlisted config lands in the container home.
+      expect(readFileSync(join(home, ".claude", "CLAUDE.md"), "utf8")).toBe("global instructions\n");
+      expect(readFileSync(join(home, ".claude", "settings.local.json"), "utf8")).toBe("{\"local\":true}\n");
+      // settings.json is rewritten by the block with the container's own settings.
+      expect(readFileSync(join(home, ".claude", "settings.json"), "utf8")).toContain("bypassPermissions");
+      // No backend sync has run, so the mounted credential is the fallback source.
+      expect(readFileSync(join(home, ".claude", ".credentials.json"), "utf8"))
+        .toContain("from-mount");
+      expect(statSync(join(home, ".claude", ".credentials.json")).mode & 0o777).toBe(0o600);
+      // The real command survives; only the symlinked one is skipped.
+      expect(readFileSync(join(home, ".claude", "commands", "kept.md"), "utf8")).toBe("kept\n");
+      expect(() => statSync(join(home, ".claude", "commands", "linked.md"))).toThrow();
+      expect(() => statSync(join(home, ".claude", "commands", "secret.md"))).toThrow();
+      // Host history and per-project transcripts never enter the container. The
+      // entrypoint itself creates an empty `projects` scratch dir for Claude, so
+      // it is the host's per-project content that must be absent, not the dir.
+      for (const excluded of ["history.jsonl", "daemon.log"]) {
+        expect(() => statSync(join(home, ".claude", excluded))).toThrow();
+      }
+      expect(() => statSync(join(home, ".claude", "projects", "host.jsonl"))).toThrow();
+      // The per-entry skip is surfaced in the consolidated summary.
+      expect(result.stdout).toContain("commands/linked.md");
+    });
+  });
+
+  test("OpenCode setup block merges user config, skips the database, and copies data per-entry", () => {
+    withTempDir((dir) => {
+      const config = join(dir, "opencode-config");
+      const data = join(dir, "opencode-data");
+      const state = join(dir, "opencode-state");
+      const model = join(dir, "opencode-model");
+      const home = join(dir, "home");
+      const outside = join(dir, "outside");
+      mkdirSync(join(config, "plugin"), { recursive: true });
+      mkdirSync(join(config, "node_modules", "some-dep"), { recursive: true });
+      mkdirSync(join(data, "storage"), { recursive: true });
+      mkdirSync(join(data, "snapshot"), { recursive: true });
+      mkdirSync(join(data, "log"), { recursive: true });
+      mkdirSync(outside, { recursive: true });
+      writeFileSync(join(config, "opencode.json"), "{\"config\":true}\n");
+      writeFileSync(join(config, "plugin", "custom.ts"), "export default {}\n");
+      writeFileSync(join(config, "node_modules", "some-dep", "binary.node"), "mach-o\n");
+      writeFileSync(join(data, "auth.json"), "{\"token\":\"opencode\"}\n", { mode: 0o600 });
+      writeFileSync(join(data, "account.json"), "{\"account\":\"test\"}\n");
+      writeFileSync(join(data, "opencode.db"), "x".repeat(1024 * 1024));
+      writeFileSync(join(data, "storage", "kept.json"), "kept\n");
+      writeFileSync(join(data, "snapshot", "kept.json"), "kept\n");
+      writeFileSync(join(outside, "leaked.json"), "outside\n");
+      symlinkSync(join(outside, "leaked.json"), join(data, "storage", "linked.json"));
+      writeFileSync(join(data, "log", "huge.log"), "runtime log\n");
+
+      const entrypoint = join(repoRoot, "docker", "entrypoint.sh");
+      const result = runShell(
+        agentCopyHelperHarness(`
+opencode_setup="$(sed -n '/^log_progress "Setting up OpenCode configuration..."$/,/^log_progress "OpenCode configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/opencode-config#\\$AGENT_TEST_CONFIG#g; s#/opencode-data#\\$AGENT_TEST_DATA#g; s#/opencode-state#\\$AGENT_TEST_STATE#g; s#/opencode-model.json#\\$AGENT_TEST_MODEL.json#g")"
+[ -n "$opencode_setup" ] || { echo "harness failed to extract the OpenCode block"; exit 9; }
+eval "$opencode_setup"
+`),
+        {
+          HOME: home,
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          AGENT_TEST_CONFIG: config,
+          AGENT_TEST_DATA: data,
+          AGENT_TEST_STATE: state,
+          AGENT_TEST_MODEL: model,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      // User-authored config merges; Mach-O node_modules is the one exclusion.
+      expect(readFileSync(join(home, ".config", "opencode", "opencode.json"), "utf8"))
+        .toBe("{\"config\":true}\n");
+      expect(readFileSync(join(home, ".config", "opencode", "plugin", "custom.ts"), "utf8"))
+        .toBe("export default {}\n");
+      expect(() => statSync(join(home, ".config", "opencode", "node_modules"))).toThrow();
+      // Credential rides the mount; the multi-GB session database does not.
+      expect(readFileSync(join(home, ".local", "share", "opencode", "auth.json"), "utf8"))
+        .toBe("{\"token\":\"opencode\"}\n");
+      expect(readFileSync(join(home, ".local", "share", "opencode", "account.json"), "utf8"))
+        .toBe("{\"account\":\"test\"}\n");
+      expect(() => statSync(join(home, ".local", "share", "opencode", "opencode.db"))).toThrow();
+      // Data directories copy per-entry: real records land, the symlinked one
+      // is skipped individually, and the excluded runtime dir never appears.
+      expect(readFileSync(join(home, ".local", "share", "opencode", "storage", "kept.json"), "utf8"))
+        .toBe("kept\n");
+      expect(readFileSync(join(home, ".local", "share", "opencode", "snapshot", "kept.json"), "utf8"))
+        .toBe("kept\n");
+      expect(() => statSync(join(home, ".local", "share", "opencode", "storage", "linked.json"))).toThrow();
+      expect(() => statSync(join(home, ".local", "share", "opencode", "log"))).toThrow();
     });
   });
 

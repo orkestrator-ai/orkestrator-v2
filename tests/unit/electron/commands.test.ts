@@ -6274,6 +6274,12 @@ exit 1
         expect(input).toContain(credential);
         const calls = await fs.readFile(logs.all, "utf8");
         expect(calls).toContain("/home/node/.claude/.credentials.json");
+        // The sync runs as the image's default user (node), not `--user root`:
+        // the `exec -i <id> bash -lc` argv form proves no --user flag precedes
+        // the container id, so the credential lands owned by the agent's user.
+        // The single `--user root` exec is the project-files access repair.
+        expect(calls).toContain("exec -i container-1 bash -lc");
+        expect(calls.match(/exec --user root container-1/g)).toHaveLength(1);
         // The token must never be passed as an argv value a `ps` or
         // `docker inspect` could read.
         expect(calls).not.toContain("sk-ant-oat01-from-host");

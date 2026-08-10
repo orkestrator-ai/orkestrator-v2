@@ -337,6 +337,72 @@ copy_agent_directory() {
     fi
 }
 
+# User-authored extension directories (Claude's commands/agents/ide/plugins,
+# OpenCode's storage/snapshot) copy per-entry rather than all-or-nothing.
+# A dotfiles manager symlinking one file into ~/.claude/commands is ordinary;
+# the strict directory helper above would reject the whole directory over that
+# single link and silently drop every custom command. This walker copies each
+# regular file and subdirectory independently through the bounded helpers, so
+# one symlinked or oversized entry is skipped on its own and the rest still
+# lands. The directory itself must still not be a link, and the destination
+# must stay link-free, exactly as with copy_agent_directory.
+copy_agent_directory_entries() {
+    local source_root="$1"
+    local destination_root="$2"
+    local relative_path="$3"
+    # Display name of the calling agent, used only in warnings.
+    local label="${4:-Agent}"
+    local source_path="$source_root/$relative_path"
+    local destination_path="$destination_root/$relative_path"
+    local max_entries="${AGENT_COPY_MAX_DIRECTORY_ENTRIES:-5000}"
+    local entry_count=0
+    local entry
+    local entry_name
+
+    if agent_source_path_has_symlink "$source_root" "$relative_path"; then
+        agent_copy_warn "$relative_path" "Skipping symlinked $label directory"
+        return 0
+    fi
+
+    if [ ! -d "$source_path" ]; then
+        return 0
+    fi
+
+    if agent_destination_path_has_symlink "$destination_root" "$relative_path"; then
+        agent_copy_warn "$relative_path" "Skipping $label directory with symlinked destination"
+        return 0
+    fi
+
+    case "$max_entries" in
+        ''|*[!0-9]*)
+            max_entries=5000
+            ;;
+    esac
+
+    # `-print0` keeps filenames with spaces or newlines intact. `-P` (the
+    # default) never dereferences the source tree, so a symlinked entry is
+    # reported as a link and skipped rather than followed out of the mount.
+    # Entries are delegated with the full agent-relative path so the warnings
+    # and the consolidated summary name them the same way as every other skip.
+    while IFS= read -r -d '' entry || [ -n "$entry" ]; do
+        entry_count=$((entry_count + 1))
+        if [ "$entry_count" -gt "$max_entries" ]; then
+            agent_copy_warn "$relative_path" "Skipping remainder of oversized $label directory"
+            break
+        fi
+        entry_name="${entry#$source_path/}"
+        if [ -L "$entry" ]; then
+            agent_copy_warn "$relative_path/$entry_name" "Skipping symlinked $label entry"
+            continue
+        fi
+        if [ -f "$entry" ]; then
+            copy_agent_file "$source_root" "$destination_root" "$relative_path/$entry_name" "$label"
+        elif [ -d "$entry" ]; then
+            copy_agent_directory "$source_root" "$destination_root" "$relative_path/$entry_name" "$label"
+        fi
+    done < <(find -P "$source_path" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+}
+
 log_progress "=== Claude Code Environment Initializing ==="
 
 # Initialize firewall if running with NET_ADMIN capability
@@ -374,16 +440,18 @@ if [ -d /claude-config ]; then
         copy_agent_file /claude-config "$HOME/.claude" "$file" Claude
     done
 
-    # User-authored extensions. Routed through the shared helper so a symlinked
+    # User-authored extensions. Routed through the shared helpers so a symlinked
     # entry cannot resolve into excluded runtime state, and so a destination link
     # planted by an earlier workload in a reused container is not written through.
+    # These copy per-entry: a dotfiles manager symlinking one command file is
+    # ordinary, and the rest of the directory must still land in the container.
     for dir in \
         commands \
         agents \
         ide \
         plugins
     do
-        copy_agent_directory /claude-config "$HOME/.claude" "$dir" Claude
+        copy_agent_directory_entries /claude-config "$HOME/.claude" "$dir" Claude
     done
 
     log_progress "  Config files copied"
@@ -610,8 +678,10 @@ if [ -d /opencode-data ]; then
     # which reaches multiple GB and is not portable state a fresh container needs.
     # The previous `find -maxdepth 1 -type f` copied every top-level file, so that
     # database (and its -wal/-shm siblings) was copied on every single start.
-    # Allowlist the portable inputs instead, and reuse the Codex copy helpers so
-    # OpenCode gets the same symlink, size and entry-count bounds.
+    # Allowlist the portable inputs instead, and route them through the shared
+    # copy helpers so OpenCode gets the same symlink, size and entry-count
+    # bounds. The data directories copy per-entry so a symlinked or oversized
+    # record in one cannot drop the whole storage tree.
     for file in \
         auth.json \
         account.json
@@ -623,7 +693,7 @@ if [ -d /opencode-data ]; then
         storage \
         snapshot
     do
-        copy_agent_directory /opencode-data "$HOME/.local/share/opencode" "$dir" OpenCode
+        copy_agent_directory_entries /opencode-data "$HOME/.local/share/opencode" "$dir" OpenCode
     done
 
     chmod 600 "$HOME/.local/share/opencode/auth.json" 2>/dev/null || true

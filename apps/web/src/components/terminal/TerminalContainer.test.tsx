@@ -5585,6 +5585,10 @@ describe("TerminalContainer", () => {
         expect(tabs).toHaveLength(MAX_TABS);
         expect(tabs.some((tab) => tab.type === "file")).toBe(false);
       });
+      expect(mockToastError).toHaveBeenCalledWith("Tab limit reached", {
+        description: `You can have up to ${MAX_TABS} tabs open. Close a tab and try again.`,
+        id: "tab-limit-reached",
+      });
     });
   });
 
@@ -6197,6 +6201,10 @@ describe("TerminalContainer", () => {
 
       await waitFor(() => expect(refused).toHaveBeenCalledWith(false));
       expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(MAX_TABS);
+      expect(mockToastError).toHaveBeenCalledWith("Tab limit reached", {
+        description: `You can have up to ${MAX_TABS} tabs open. Close a tab and try again.`,
+        id: "tab-limit-reached",
+      });
     });
 
     test("plain terminal tabs receive displayTitle", async () => {
@@ -6655,6 +6663,10 @@ describe("TerminalContainer", () => {
         usePaneLayoutStore.getState().getAllTabs("env-visible").some((tab) => tab.type === "browser"),
       ).toBe(false);
       expect(environment?.activePaneId).toBe("right");
+      expect(mockToastError).toHaveBeenCalledWith("Tab limit reached", {
+        description: `You can have up to ${MAX_TABS} tabs open. Close a tab and try again.`,
+        id: "tab-limit-reached",
+      });
     });
 
     test("rejects terminal links while stopped or locally not ready without pane mutation", async () => {

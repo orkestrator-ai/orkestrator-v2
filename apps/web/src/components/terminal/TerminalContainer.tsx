@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/context-menu";
 import { FilePlus2, Play, Terminal as TerminalIcon } from "lucide-react";
 import { toast } from "sonner";
+import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
 import {
@@ -1523,6 +1524,7 @@ export function TerminalContainer({
       const allTabs = getAllTabs(environmentId);
       if (allTabs.length >= MAX_TABS) {
         console.debug("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
+        showTabLimitReachedToast(MAX_TABS);
         return false;
       }
 
@@ -1583,6 +1585,7 @@ export function TerminalContainer({
       const allTabs = getAllTabs(environmentId);
       if (allTabs.length >= MAX_TABS) {
         console.debug("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
+        showTabLimitReachedToast(MAX_TABS);
         return false;
       }
 
@@ -1742,6 +1745,7 @@ export function TerminalContainer({
       const allTabs = getAllTabs(environmentId);
       if (allTabs.length >= MAX_TABS) {
         console.debug("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
+        showTabLimitReachedToast(MAX_TABS);
         return;
       }
 

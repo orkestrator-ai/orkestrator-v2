@@ -78,6 +78,7 @@ import * as backend from "@/lib/backend";
 import { useKanbanStore, findTaskForEnvironment } from "@/stores/kanbanStore";
 import { getEnvironmentBrowserUrl, getEnvironmentPortAddress } from "@/lib/environment-address";
 import { isGatewayBrowserPreviewSupported } from "@/lib/gateway-url";
+import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
 import { cn } from "@/lib/utils";
 import {
   ReviewLaunchDialog,
@@ -895,32 +896,44 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       // (Ctrl+T/N/O are commonly used by browsers and other apps on Windows/Linux)
       if (!e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
 
+      const reportTabLimit = () => {
+        if (tabCount < MAX_TABS || !createTab || !selectedEnvironment) return false;
+        e.preventDefault();
+        showTabLimitReachedToast(MAX_TABS);
+        return true;
+      };
+
       switch (e.key.toLowerCase()) {
         case "t":
+          if (reportTabLimit()) break;
           if (canCreateTab) {
             e.preventDefault();
             createTab?.("plain");
           }
           break;
         case "n":
+          if (reportTabLimit()) break;
           if (canCreateTab) {
             e.preventDefault();
             createTab?.("claude");
           }
           break;
         case "m":
+          if (reportTabLimit()) break;
           if (canCreateTab) {
             e.preventDefault();
             createTab?.("opencode");
           }
           break;
         case "r":
+          if (selectedProjectId && reportTabLimit()) break;
           if (canCreateTab && selectedProjectId) {
             e.preventDefault();
             handleReview();
           }
           break;
         case "p":
+          if (hasRunCommands && reportTabLimit()) break;
           if (canRunCommands) {
             e.preventDefault();
             handleRun();
@@ -964,6 +977,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     selectedEnvironment,
     selectedProjectId,
     handleReview,
+    hasRunCommands,
     canRunCommands,
     handleRun,
     toggleFilesPanel,

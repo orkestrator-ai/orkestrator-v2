@@ -3598,6 +3598,10 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
 
     expect(createTabMock).not.toHaveBeenCalled();
     expect(startLoopedReviewMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).toHaveBeenCalledWith("Tab limit reached", {
+      description: "You can have up to 10 tabs open. Close a tab and try again.",
+      id: "tab-limit-reached",
+    });
     expect((screen.getByRole("button", { name: "Code review" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "Looped code review" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "New terminal tab" }) as HTMLButtonElement).disabled).toBe(true);

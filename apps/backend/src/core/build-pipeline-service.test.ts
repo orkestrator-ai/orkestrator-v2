@@ -3824,6 +3824,69 @@ describe("BuildPipelineService", () => {
     });
   });
 
+  test("accepts a report repaired on the last permitted attempt", async () => {
+    await withService(async (service, storage, provider) => {
+      let reports = 0;
+      provider.structured = async <T>(
+        sessionId: string,
+        requestId: string,
+      ): Promise<StructuredOutputResult<T>> => {
+        if (provider.phases.get(sessionId) !== "review") {
+          return {
+            ok: true,
+            provider: "claude",
+            requestId,
+            value: { complete: true, rationale: "All criteria pass." } as T,
+          };
+        }
+        reports += 1;
+        // Rejected three times, corrected on the third and final repair — the
+        // path where the attempt counter is read back from a persisted value
+        // rather than from an absent one.
+        return {
+          ok: true,
+          provider: "claude",
+          requestId,
+          value: (reports <= 3
+            ? { ...cleanReview, riskProfile: { ...cleanReview.riskProfile, overallRisk: "severe" } }
+            : cleanReview) as T,
+        };
+      };
+      const started = await service.start(startInput());
+      for (
+        let pass = 0;
+        pass < 12 && (await pipeline(storage, started.id)).phase !== "verifying";
+        pass += 1
+      ) {
+        await service.advanceNow(started.id);
+      }
+
+      const advanced = await pipeline(storage, started.id);
+      expect(advanced.phase).toBe("verifying");
+      expect(advanced.structuredReview).toEqual(cleanReview);
+      expect(reports).toBe(4);
+      const reviews = advanced.sessions.filter((session) => session.phase === "review");
+      expect(reviews).toHaveLength(1);
+      expect(reviews[0]).toMatchObject({
+        structuredReportRepairAttempts: 3,
+        structuredResultStatus: "accepted",
+      });
+      // Each repair is its own turn under its own request id, and the last one
+      // is the id the accepted report was read from.
+      const repairs = provider.sent.filter((sent) =>
+        sent.prompt.includes("$.riskProfile.overallRisk"));
+      expect(repairs).toHaveLength(3);
+      expect(new Set(repairs.map((sent) => sent.requestId)).size).toBe(3);
+      expect(repairs.at(-1)?.requestId).toBe(reviews[0]!.structuredRequestId);
+      expect(repairs.map((sent) => sent.sessionId)).toEqual(
+        Array.from({ length: 3 }, () => reviews[0]!.sdkSessionId),
+      );
+      expect(repairs.map((sent) =>
+        sent.prompt.includes(`repair attempt ${repairs.indexOf(sent) + 1} of 3`)
+      )).toEqual([true, true, true]);
+    });
+  });
+
   test("fails the review once the bounded report repairs are exhausted", async () => {
     await withService(async (service, storage, provider) => {
       let reports = 0;

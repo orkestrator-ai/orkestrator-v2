@@ -20,7 +20,10 @@ import {
   MAX_PIPELINE_USER_MESSAGES,
   VERIFICATION_VERDICT_SCHEMA,
 } from "@orkestrator/protocol/build-pipeline";
-import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import {
+  STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+  type StructuredReviewReport,
+} from "@orkestrator/protocol/structured-review";
 import type {
   JsonSchema,
   StructuredOutputResult,
@@ -613,6 +616,58 @@ describe("BuildPipelineService structured results", () => {
         advanced.sessions.every((session) =>
           session.structuredWaitStartedAt === undefined),
       ).toBe(true);
+    });
+  });
+
+  test("retries a lost report repair under the same id without spending a second attempt", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const built = await startBuilding(service, storage);
+      await service.advanceNow(built.id);
+      expect((await snapshot(storage, built.id)).phase).toBe("reviewing");
+
+      // Schema-valid, contract-invalid: the failure count disagrees with the
+      // failure details, so the report is rejected and a repair is asked for.
+      provider.structuredResult = {
+        ok: true,
+        provider: "claude",
+        requestId: "review-request",
+        value: {
+          ...cleanReview,
+          testResults: { total: 2, passed: 1, failed: 1, notRun: 0, failures: [] },
+        },
+      };
+      provider.sendErrors = [new AmbiguousPromptDispatchError("response lost")];
+      await service.advanceNow(built.id);
+
+      const pending = await snapshot(storage, built.id);
+      expect(pending.phase).toBe("reviewing");
+      expect(pending.pendingPromptAttempt?.phase).toBe("reviewing");
+      expect(pending.pendingPromptAttempt?.structuredReview).toBe(true);
+      const requestId = pending.pendingPromptAttempt!.requestId;
+      expect(pending.structuredReviewRequestId).toBe(requestId);
+      const reviewSession = pending.sessions.at(-1)!;
+      expect(reviewSession.structuredReportRepairAttempts).toBe(1);
+      expect(reviewSession.structuredResultStatus).toBe("pending");
+      // The bridge may already have taken the repair, so nothing was sent twice.
+      expect(provider.sent.some((entry) => entry.requestId === requestId))
+        .toBe(false);
+
+      await service.advanceNow(built.id);
+
+      const retried = await snapshot(storage, built.id);
+      expect(retried.pendingPromptAttempt).toBeUndefined();
+      const dispatches = provider.sent.filter((entry) =>
+        entry.requestId === requestId
+      );
+      // Exactly one dispatch, under the original id, still carrying the report
+      // schema — and redispatching is not a new attempt against the budget.
+      expect(dispatches).toHaveLength(1);
+      expect(dispatches[0]?.schema).toBe(STRUCTURED_REVIEW_REPORT_JSON_SCHEMA);
+      expect(dispatches[0]?.sessionId).toBe(reviewSession.sdkSessionId);
+      expect(dispatches[0]?.prompt).toContain("repair attempt 1 of 3");
+      expect(retried.sessions.at(-1)?.structuredReportRepairAttempts).toBe(1);
+      expect(retried.sessions.filter((session) => session.phase === "review"))
+        .toHaveLength(1);
     });
   });
 

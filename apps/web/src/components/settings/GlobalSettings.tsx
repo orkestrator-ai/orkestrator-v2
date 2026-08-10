@@ -90,6 +90,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [useHostGitHubCredentials, setUseHostGitHubCredentials] = useState(
     global.useHostGitHubCredentials ?? true
   );
+  const [useHostClaudeCredentials, setUseHostClaudeCredentials] = useState(
+    global.useHostClaudeCredentials ?? true
+  );
   const [githubToken, setGithubToken] = useState("");
   const [clearGithubToken, setClearGithubToken] = useState(false);
   const [allowedDomains, setAllowedDomains] = useState(
@@ -184,6 +187,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setEnvPatterns(global.envFilePatterns.join(", "));
     setAnthropicApiKey(global.anthropicApiKey || "");
     setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
+    setUseHostClaudeCredentials(global.useHostClaudeCredentials ?? true);
     setGithubToken(pendingGitHubCredentialEditRef.current?.token ?? "");
     setClearGithubToken(pendingGitHubCredentialEditRef.current?.clear ?? false);
     setAllowedDomains((global.allowedDomains || []).join("\n"));
@@ -281,6 +285,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       envPatterns !== global.envFilePatterns.join(", ") ||
       anthropicApiKey !== (global.anthropicApiKey || "") ||
       useHostGitHubCredentials !== (global.useHostGitHubCredentials ?? true) ||
+      useHostClaudeCredentials !== (global.useHostClaudeCredentials ?? true) ||
       githubToken.trim().length > 0 ||
       clearGithubToken ||
       githubCredentialPropagationPending ||
@@ -310,7 +315,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     if (changed) {
       setSaveSuccess(false);
     }
-  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, useHostGitHubCredentials, githubToken, clearGithubToken, githubCredentialPropagationPending, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, codexMaxConcurrentThreads, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewInstruction, webClientApplyError, gatewayToken, savedGatewayToken, global]);
+  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, useHostGitHubCredentials, useHostClaudeCredentials, githubToken, clearGithubToken, githubCredentialPropagationPending, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, codexMaxConcurrentThreads, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewInstruction, webClientApplyError, gatewayToken, savedGatewayToken, global]);
 
   // Validate domains on change
   const validateDomainsLocally = useCallback((domainsText: string) => {
@@ -390,6 +395,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         allowedDomains: string[];
         anthropicApiKey?: string;
         useHostGitHubCredentials: boolean;
+        useHostClaudeCredentials: boolean;
         preferredEditor?: PreferredEditor;
         defaultAgent: DefaultAgent;
         opencodeModel: string;
@@ -421,6 +427,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         envFilePatterns: patterns,
         allowedDomains: domains,
         useHostGitHubCredentials,
+        useHostClaudeCredentials,
         preferredEditor,
         defaultAgent,
         opencodeModel,
@@ -564,6 +571,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setEnvPatterns(global.envFilePatterns.join(", "));
     setAnthropicApiKey(global.anthropicApiKey || "");
     setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
+    setUseHostClaudeCredentials(global.useHostClaudeCredentials ?? true);
     setGithubToken("");
     setClearGithubToken(false);
     // Reset is an explicit discard. Without this the retained edit would be
@@ -918,6 +926,51 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
                 <a href="https://github.com/settings/tokens?type=beta" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
                   github.com/settings/tokens
                 </a>
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Claude Code credentials */}
+      <div className="space-y-3">
+        <div>
+          <h3 className="text-sm font-medium text-foreground">Claude Code Credentials</h3>
+          <p className="text-xs text-muted-foreground mt-1">
+            Controls whether containerized environments start signed in to Claude Code.
+          </p>
+        </div>
+        <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/50">
+          <div className="flex items-center justify-between gap-6 p-4">
+            <div className="min-w-0 space-y-1">
+              <Label htmlFor="use-host-claude-credentials" className="flex items-center gap-2 text-sm font-medium">
+                <Terminal className="h-3.5 w-3.5 text-emerald-400" />
+                Use host Claude Code credentials
+              </Label>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Copies this computer&apos;s Claude Code login into each container on start. On macOS it is read from the login Keychain.
+              </p>
+            </div>
+            <Switch
+              id="use-host-claude-credentials"
+              aria-label="Use host Claude Code credentials"
+              checked={useHostClaudeCredentials}
+              disabled={isSaving}
+              onCheckedChange={setUseHostClaudeCredentials}
+            />
+          </div>
+
+          {useHostClaudeCredentials ? (
+            <div className="border-t border-zinc-800 bg-emerald-500/[0.04] px-4 py-3">
+              <p className="text-xs text-muted-foreground">
+                Containers reuse your host login. The credential is written owner-only and refreshed on every start.
+              </p>
+            </div>
+          ) : (
+            <div className="border-t border-zinc-800 bg-amber-500/[0.04] px-4 py-3">
+              <p className="text-xs text-muted-foreground">
+                Your host token stays on this computer. Run{" "}
+                <code className="font-mono text-zinc-300">claude /login</code> inside a container to sign it in.
               </p>
             </div>
           )}

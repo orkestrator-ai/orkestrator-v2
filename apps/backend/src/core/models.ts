@@ -564,6 +564,14 @@ export interface AppConfig {
     githubToken?: string;
     /** Reuse the host's active `gh auth login` token for container GitHub access. */
     useHostGitHubCredentials?: boolean;
+    /**
+     * Deliver the host's Claude Code OAuth credential into containers.
+     *
+     * Defaults to on, which is what keeps a container agent signed in. Turning
+     * it off keeps a long-lived host token out of environments that run
+     * untrusted repository code, at the cost of an in-container `claude /login`.
+     */
+    useHostClaudeCredentials?: boolean;
     allowedDomains: string[];
     preferredEditor?: "vscode" | "cursor";
     defaultAgent: DefaultAgent;

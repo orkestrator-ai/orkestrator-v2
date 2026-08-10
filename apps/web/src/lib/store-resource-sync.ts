@@ -9,6 +9,7 @@ import {
   onResourceResync,
   type ResourceResyncRequest,
 } from "@/lib/resource-sync";
+import { listen, type UnlistenFn } from "@/lib/native/events";
 import {
   adoptPersistedPaneLayout,
   onPaneLayoutWriteSettled,
@@ -61,6 +62,12 @@ interface StoreResourceSyncOptions {
   getPaneLayout?: typeof getPaneLayout;
   adoptPaneLayout?: typeof adoptPersistedPaneLayout;
   onPaneLayoutWriteSettled?: typeof onPaneLayoutWriteSettled;
+  listen?: typeof listen;
+}
+
+/** Only the identity is needed here; the environment body is read authoritatively. */
+interface EnvironmentSetupCompletePayload {
+  environment_id: string;
 }
 
 interface DeferredPaneLayoutRefresh {
@@ -251,6 +258,34 @@ export function startStoreResourceSync(
       requestPaneLayoutRefresh(environmentId);
     },
   ));
+
+  // Setup completion is the one moment the backend deliberately moves the
+  // authoritative selection off the setup terminal and onto the build surface
+  // (build-pipeline-service `waiting-for-setup` -> `ensureBuildPipelineTab`).
+  // That handoff is published as an ordinary `pane-layout` announcement, so a
+  // client that was mid-write, mid-hydration or briefly disconnected can miss
+  // the single frame that carries it and sit on the setup tab while the agent
+  // works out of sight. Re-read the authoritative layout on the completion
+  // event itself so the handoff never depends on one frame surviving.
+  {
+    let unlisten: UnlistenFn | null = null;
+    void (options.listen ?? listen)<EnvironmentSetupCompletePayload>(
+      "environment-setup-complete",
+      ({ payload }) => {
+        if (disposed) return;
+        requestPaneLayoutRefresh(payload.environment_id);
+      },
+    ).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    }).catch((error) => {
+      console.warn(
+        "[store-resource-sync] Failed to observe setup completion:",
+        error,
+      );
+    });
+    unsubscribes.push(() => unlisten?.());
+  }
 
   unsubscribes.push(usePaneLayoutStore.subscribe((state, previous) => {
     for (const [environmentId, deferred] of [...deferredPaneLayoutRefreshes]) {

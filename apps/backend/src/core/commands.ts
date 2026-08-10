@@ -336,6 +336,8 @@ const CONTAINER_INTERACTIVE_SHELL_COMMAND = [
   "exec zsh -l",
 ].join("\n");
 const CONTAINER_GITHUB_CREDENTIAL_FILE = "/tmp/orkestrator-ai/github-token";
+const CONTAINER_CLAUDE_CREDENTIAL_FILE = "/home/node/.claude/.credentials.json";
+const HOST_CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const CLAUDE_GITHUB_CREDENTIAL_FILE_ENV = "ORKESTRATOR_GITHUB_CREDENTIAL_FILE";
 const CLAUDE_GITHUB_ENV_FINGERPRINT_FILE =
   "/tmp/orkestrator-ai/claude-github-env-fingerprint";
@@ -4672,6 +4674,7 @@ async function startEnvironmentOnce(
     const config = await storage.loadConfig();
     const githubToken = await resolveContainerGitHubToken(config.global);
     await syncContainerGitHubCredential(containerId, githubToken);
+    await syncContainerClaudeCredentialBestEffort(containerId, config.global);
     const hostEntryPort = environment.entryPort ? await getHostPort(containerId, environment.entryPort) : null;
     const updated = await storage.updateEnvironment(environment.id, {
       status: "running",
@@ -7326,6 +7329,155 @@ async function syncContainerGitHubCredential(
   );
 }
 
+/**
+ * Materializes the host's Claude Code OAuth credential inside a container.
+ *
+ * Unlike Codex, whose token lives in `~/.codex/auth.json` and therefore rides
+ * the read-only `/codex-home` mount straight into the container, Claude Code on
+ * macOS keeps its credential in the login Keychain. Nothing under `~/.claude` is
+ * copied by the entrypoint because nothing is there, which is why a container
+ * agent reported "Not logged in - Please run /login" while Codex was signed in.
+ *
+ * The payload is piped over stdin rather than passed as a `docker create` env
+ * var: an env var is readable from `docker inspect` and `/proc/1/environ` for
+ * the life of the container, and would go stale the first time the OAuth token
+ * refreshed. Syncing on every start also re-arms a refreshed token.
+ */
+function buildSyncContainerClaudeCredentialCommand(
+  credentialFile = CONTAINER_CLAUDE_CREDENTIAL_FILE,
+): string {
+  return `
+  set -e
+  credential_file=${quoteShell(credentialFile)}
+  credential_dir="$(dirname "$credential_file")"
+  umask 077
+  mkdir -p "$credential_dir"
+  payload="$(cat)"
+  # An empty payload means the host had nothing to offer. Leave any credential
+  # already inside the container alone rather than logging the agent out.
+  if [ -z "$payload" ]; then
+    exit 0
+  fi
+  credential_tmp="$(mktemp "$credential_dir/.credentials.XXXXXX")"
+  trap 'rm -f "$credential_tmp"' EXIT
+  printf '%s' "$payload" > "$credential_tmp"
+  chmod 600 "$credential_tmp"
+  mv -f "$credential_tmp" "$credential_file"
+  credential_tmp=
+  trap - EXIT
+  unset payload
+`;
+}
+
+const SYNC_CONTAINER_CLAUDE_CREDENTIAL_COMMAND =
+  buildSyncContainerClaudeCredentialCommand();
+
+/**
+ * Reads the host's Claude Code credential, preferring the macOS Keychain.
+ *
+ * Returns the raw credential JSON, or undefined when the host has no usable
+ * credential. A non-JSON or empty Keychain payload is discarded rather than
+ * forwarded, so a corrupt entry cannot overwrite a working in-container login.
+ */
+export async function getHostClaudeCredentials(
+  platform: NodeJS.Platform = process.platform,
+  homeDir: string = os.homedir(),
+): Promise<string | undefined> {
+  const isUsable = (value: string | undefined): string | undefined => {
+    const trimmed = value?.trim();
+    if (!trimmed || trimmed === "{}") return undefined;
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return undefined;
+      }
+      return Object.keys(parsed as Record<string, unknown>).length > 0
+        ? trimmed
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  if (platform === "darwin") {
+    try {
+      const { stdout } = await runCommand(
+        "security",
+        ["find-generic-password", "-s", HOST_CLAUDE_KEYCHAIN_SERVICE, "-w"],
+        { timeoutMs: 10_000 },
+      );
+      const fromKeychain = isUsable(stdout);
+      if (fromKeychain) return fromKeychain;
+    } catch {
+      // No Keychain entry, or the user declined the access prompt. Fall through
+      // to the on-disk credential, which is where Linux hosts keep it anyway.
+    }
+  }
+
+  try {
+    return isUsable(
+      await fs.readFile(path.join(homeDir, ".claude", ".credentials.json"), "utf-8"),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+async function syncContainerClaudeCredential(
+  containerId: string,
+  credentials: string | undefined,
+): Promise<void> {
+  if (!credentials) return;
+  await runCommand(
+    "docker",
+    ["exec", "-i", containerId, "bash", "-lc", SYNC_CONTAINER_CLAUDE_CREDENTIAL_COMMAND],
+    {
+      stdin: credentials,
+      timeoutMs: 30_000,
+      redactValues: [credentials],
+    },
+  );
+}
+
+/**
+ * Resolves the credential to deliver, honouring the user's opt-out.
+ *
+ * The gate is checked before the Keychain is read, not after: the point of
+ * turning this off is that a long-lived host OAuth token never enters an
+ * environment that runs untrusted repository code, so it must not be read into
+ * this process either. Absent means on, matching `useHostGitHubCredentials`.
+ */
+async function resolveContainerClaudeCredentials(
+  globalConfig: AppConfig["global"],
+): Promise<string | undefined> {
+  if (globalConfig.useHostClaudeCredentials === false) return undefined;
+  return getHostClaudeCredentials();
+}
+
+/**
+ * Best-effort variant used on the environment start path.
+ *
+ * A credential that cannot be delivered leaves the agent logged out, which the
+ * agent itself reports clearly. Failing the whole environment start over it
+ * would be a worse outcome, so this only warns — and never with the payload.
+ */
+async function syncContainerClaudeCredentialBestEffort(
+  containerId: string,
+  globalConfig: AppConfig["global"],
+): Promise<void> {
+  try {
+    await syncContainerClaudeCredential(
+      containerId,
+      await resolveContainerClaudeCredentials(globalConfig),
+    );
+  } catch (error) {
+    console.warn(
+      "[commands] Failed to sync Claude credentials into container:",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
 // `docker cp` behaves like `cp -a`: it preserves the staging tree's modes and
 // makes files copied into a container root-owned. The staging root comes from
 // `mkdtemp` (0700), so the image's `node` user cannot even traverse
@@ -9274,6 +9426,7 @@ export function createCommandRegistry(
       id,
       await resolveContainerGitHubToken(config.global),
     );
+    await syncContainerClaudeCredentialBestEffort(id, config.global);
   });
   register("docker_stop_container", ({ containerId }) => runCommand("docker", ["stop", asString(containerId, "containerId")], { timeoutMs: 60_000 }).then(() => undefined));
   register("docker_remove_container", ({ containerId }) => runCommand("docker", ["rm", "-f", asString(containerId, "containerId")], { timeoutMs: 60_000 }).then(() => undefined));
@@ -12322,6 +12475,9 @@ export const __testing = {
   buildContainerGitStatusScript,
   parseHeadCommit,
   buildSyncContainerGitHubCredentialCommand,
+  buildSyncContainerClaudeCredentialCommand,
+  getHostClaudeCredentials,
+  resolveContainerClaudeCredentials,
   buildOpenCodeGitHubEnvironmentPluginSource,
   OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT,
   CLAUDE_GITHUB_ENV_FINGERPRINT,

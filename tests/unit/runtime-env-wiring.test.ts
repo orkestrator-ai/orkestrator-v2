@@ -53,21 +53,24 @@ function runShell(
   };
 }
 
-const CODEX_HELPER_SED =
+const AGENT_HELPER_SED =
   "/^log_progress() {/,/^}$/p; " +
-  "/^codex_path_has_symlink() {/,/^}$/p; " +
-  "/^codex_destination_path_has_symlink() {/,/^}$/p; " +
-  "/^copy_codex_file() {/,/^}$/p; " +
-  "/^copy_codex_directory() {/,/^}$/p";
+  "/^agent_copy_warn() {/,/^}$/p; " +
+  "/^report_agent_copy_skips() {/,/^}$/p; " +
+  "/^agent_source_path_has_symlink() {/,/^}$/p; " +
+  "/^agent_destination_path_has_symlink() {/,/^}$/p; " +
+  "/^copy_agent_file() {/,/^}$/p; " +
+  "/^copy_agent_directory() {/,/^}$/p; " +
+  "/^copy_agent_directory_entries() {/,/^}$/p";
 
-function codexCopyHelperHarness(body: string): string {
+function agentCopyHelperHarness(body: string): string {
   const entrypoint = join(repoRoot, "docker", "entrypoint.sh");
   // The copy helpers warn through log_progress, so the harness needs the real
   // helper plus a PROGRESS_FILE. Tests that care about the progress file pass
   // their own; the rest discard that half of the output.
   return `
 set -e
-eval "$(sed -n '${CODEX_HELPER_SED}' ${shellQuote(entrypoint)})"
+eval "$(sed -n '${AGENT_HELPER_SED}' ${shellQuote(entrypoint)})"
 PROGRESS_FILE="\${PROGRESS_FILE:-/dev/null}"
 ${body}
 `;
@@ -110,8 +113,8 @@ describe("container runtime environment wiring", () => {
   test("container startup copies only bounded Codex configuration state", () => {
     const entrypoint = read("docker/entrypoint.sh");
 
-    expect(entrypoint).toContain("copy_codex_file /codex-home");
-    expect(entrypoint).toContain("copy_codex_directory /codex-home");
+    expect(entrypoint).toContain("copy_agent_file /codex-home");
+    expect(entrypoint).toContain("copy_agent_directory /codex-home");
     for (const allowlistedFile of [
       "auth.json",
       "config.toml",
@@ -137,9 +140,9 @@ describe("container runtime environment wiring", () => {
         new RegExp(`^[ \\t]*${allowlistedDirectory.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`, "m"),
       );
     }
-    expect(entrypoint).toContain("CODEX_COPY_MAX_FILE_BYTES");
-    expect(entrypoint).toContain("CODEX_COPY_MAX_DIRECTORY_ENTRIES");
-    expect(entrypoint).toContain("CODEX_COPY_MAX_DIRECTORY_KIB");
+    expect(entrypoint).toContain("AGENT_COPY_MAX_FILE_BYTES");
+    expect(entrypoint).toContain("AGENT_COPY_MAX_DIRECTORY_ENTRIES");
+    expect(entrypoint).toContain("AGENT_COPY_MAX_DIRECTORY_KIB");
     expect(entrypoint).not.toContain("cp -r /codex-home/.");
     expect(entrypoint).not.toContain("cp -R /codex-home/.");
 
@@ -160,6 +163,551 @@ describe("container runtime environment wiring", () => {
     }
   });
 
+  test("every agent copies host state through the shared bounded helpers", () => {
+    const entrypoint = read("docker/entrypoint.sh");
+
+    // One mechanism for all three agents. An unguarded `find -maxdepth 1 -type f`
+    // or a bare recursive `cp` of a mounted home is what these helpers replaced;
+    // none of them should reappear for any agent.
+    for (const mount of ["/claude-config", "/codex-home", "/opencode-data"]) {
+      expect(entrypoint).toContain(`copy_agent_file ${mount}`);
+      expect(entrypoint).not.toContain(`find ${mount} -maxdepth 1 -type f`);
+      expect(entrypoint).not.toContain(`cp -r ${mount}/.`);
+      expect(entrypoint).not.toContain(`cp -R ${mount}/.`);
+    }
+    // Codex keeps the strict whole-directory copy for its platform-binary-heavy
+    // dirs; Claude and OpenCode user-authored directories copy per-entry so a
+    // single symlinked or oversized entry cannot drop the whole directory.
+    expect(entrypoint).toContain("copy_agent_directory /codex-home");
+    expect(entrypoint).toContain("copy_agent_directory_entries /claude-config");
+    expect(entrypoint).toContain("copy_agent_directory_entries /opencode-data");
+    // Each call site names its agent so a skipped file is attributable.
+    for (const label of ["Claude", "Codex", "OpenCode"]) {
+      expect(entrypoint).toMatch(
+        new RegExp(`copy_agent_(file|directory) [^\\n]*\\s${label}$`, "m"),
+      );
+    }
+  });
+
+  test("container startup copies only bounded Claude configuration state", () => {
+    const entrypoint = read("docker/entrypoint.sh");
+
+    for (const allowlisted of ["CLAUDE.md", "settings.local.json", "commands", "agents", "ide", "plugins"]) {
+      expect(entrypoint).toMatch(
+        new RegExp(`^[ \\t]*${allowlisted.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`, "m"),
+      );
+    }
+    // history.jsonl is the host's rolling prompt history, including pasted
+    // content, across every project. The old unbounded top-level file copy swept
+    // it into every container; it must never be allowlisted back in.
+    for (const excluded of ["history.jsonl", "daemon.log", "stats-cache.json", "projects", "jobs", "file-history"]) {
+      expect(entrypoint).not.toMatch(
+        new RegExp(`^[ \\t]*${excluded.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`, "m"),
+      );
+    }
+    // settings.json is rewritten below with the container's bypass-permissions
+    // settings, so copying the host copy first was immediately discarded.
+    expect(entrypoint).toContain("cat > \"$HOME/.claude/settings.json\"");
+    expect(entrypoint).not.toMatch(/^[ \t]*settings\.json[ \t]*\\?$/m);
+  });
+
+  test("Claude data copy takes config and skips host history", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      const destination = join(dir, "destination");
+      mkdirSync(join(source, "commands"), { recursive: true });
+      mkdirSync(join(source, "projects"), { recursive: true });
+      writeFileSync(join(source, "CLAUDE.md"), "global instructions\n");
+      writeFileSync(join(source, "settings.local.json"), "{\"local\":true}\n");
+      writeFileSync(join(source, "history.jsonl"), "{\"display\":\"secret prompt\"}\n");
+      writeFileSync(join(source, "daemon.log"), "log\n");
+      writeFileSync(join(source, "stats-cache.json"), "{}\n");
+      writeFileSync(join(source, "commands", "kept.md"), "kept\n");
+      writeFileSync(join(source, "projects", "host.jsonl"), "host state\n");
+
+      const result = runShell(
+        agentCopyHelperHarness(`
+for file in CLAUDE.md settings.local.json; do
+  copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" "$file" Claude
+done
+for dir in commands agents ide plugins; do
+  copy_agent_directory_entries "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" "$dir" Claude
+done
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(readFileSync(join(destination, "CLAUDE.md"), "utf8")).toBe("global instructions\n");
+      expect(readFileSync(join(destination, "settings.local.json"), "utf8")).toBe("{\"local\":true}\n");
+      expect(readFileSync(join(destination, "commands", "kept.md"), "utf8")).toBe("kept\n");
+
+      for (const excluded of ["history.jsonl", "daemon.log", "stats-cache.json", "projects"]) {
+        expect(() => statSync(join(destination, excluded))).toThrow();
+      }
+    });
+  });
+
+  test("Claude copy refuses a symlinked host directory and a planted destination link", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      const destination = join(dir, "destination");
+      const outside = join(dir, "outside");
+      mkdirSync(outside, { recursive: true });
+      mkdirSync(destination, { recursive: true });
+      mkdirSync(source, { recursive: true });
+      writeFileSync(join(outside, "leaked.txt"), "host data outside the tree\n");
+      // A dotfile manager symlinking ~/.claude/commands into a dotfiles repo is
+      // ordinary; a plain `cp -r` followed it straight out of the mounted tree.
+      symlinkSync(outside, join(source, "commands"));
+      writeFileSync(join(source, "CLAUDE.md"), "real\n");
+      // A previous workload in a reused container can plant this; plain `cp`
+      // wrote through it.
+      const plantedTarget = join(dir, "planted-target");
+      writeFileSync(plantedTarget, "original\n");
+      symlinkSync(plantedTarget, join(destination, "CLAUDE.md"));
+
+      const result = runShell(
+        agentCopyHelperHarness(`
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" commands Claude
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" CLAUDE.md Claude
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Warning: Skipping symlinked Claude directory: commands");
+      expect(result.stdout).toContain("Warning: Skipping Claude file with symlinked destination: CLAUDE.md");
+      expect(() => statSync(join(destination, "commands", "leaked.txt"))).toThrow();
+      expect(readFileSync(plantedTarget, "utf8")).toBe("original\n");
+    });
+  });
+
+  test("one symlinked command no longer drops the whole commands directory", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      const destination = join(dir, "destination");
+      const outside = join(dir, "outside");
+      mkdirSync(join(source, "commands"), { recursive: true });
+      mkdirSync(outside, { recursive: true });
+      writeFileSync(join(outside, "secret.md"), "host content outside the tree\n");
+      writeFileSync(join(source, "commands", "kept.md"), "kept\n");
+      writeFileSync(join(source, "commands", "second.md"), "second\n");
+      // A dotfile manager symlinking one command into the repo is ordinary. The
+      // whole-directory helper used to reject the entire `commands` dir over
+      // this single link; the per-entry walker must skip just the link.
+      symlinkSync(join(outside, "secret.md"), join(source, "commands", "linked.md"));
+
+      const result = runShell(
+        agentCopyHelperHarness(`
+copy_agent_directory_entries "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" commands Claude
+report_agent_copy_skips Claude
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Skipping symlinked Claude entry: commands/linked.md");
+      // The real commands survive.
+      expect(readFileSync(join(destination, "commands", "kept.md"), "utf8")).toBe("kept\n");
+      expect(readFileSync(join(destination, "commands", "second.md"), "utf8")).toBe("second\n");
+      // The link is skipped, not followed, so no host content escapes the mount.
+      expect(() => statSync(join(destination, "commands", "linked.md"))).toThrow();
+      expect(() => statSync(join(destination, "commands", "secret.md"))).toThrow();
+      // The consolidated summary names the skipped entry so it is not silent.
+      expect(result.stdout).toContain("commands/linked.md");
+    });
+  });
+
+  test("an oversized or symlinked subdirectory is skipped on its own, not the whole tree", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      const destination = join(dir, "destination");
+      const outside = join(dir, "outside");
+      mkdirSync(join(source, "storage", "kept"), { recursive: true });
+      mkdirSync(join(source, "storage", "huge"), { recursive: true });
+      mkdirSync(outside, { recursive: true });
+      writeFileSync(join(source, "storage", "kept", "a.json"), "kept\n");
+      writeFileSync(join(outside, "b.json"), "outside\n");
+      // A symlinked plugin record inside the storage tree.
+      symlinkSync(outside, join(source, "storage", "linked"));
+      // A subdirectory that exceeds the per-directory entry cap.
+      for (let index = 0; index < 6; index += 1) {
+        writeFileSync(join(source, "storage", "huge", `entry-${index}`), "x\n");
+      }
+
+      const result = runShell(
+        agentCopyHelperHarness(`
+AGENT_COPY_MAX_DIRECTORY_ENTRIES=3
+copy_agent_directory_entries "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" storage OpenCode
+report_agent_copy_skips OpenCode
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      // The sibling that is portable still lands.
+      expect(readFileSync(join(destination, "storage", "kept", "a.json"), "utf8")).toBe("kept\n");
+      // The symlinked subdirectory is skipped as an entry, never followed.
+      expect(result.stdout).toContain("Skipping symlinked OpenCode entry: storage/linked");
+      expect(() => statSync(join(destination, "storage", "linked", "b.json"))).toThrow();
+      // The oversized subdirectory is skipped on its own.
+      expect(result.stdout).toContain("Skipping oversized OpenCode directory: storage/huge");
+      expect(() => statSync(join(destination, "storage", "huge"))).toThrow();
+      // Both are named in the consolidated summary.
+      expect(result.stdout).toContain("storage/linked");
+      expect(result.stdout).toContain("storage/huge");
+    });
+  });
+
+  describe("Claude credential resolution inside the container", () => {
+    // Nothing orders the entrypoint against the backend's `docker exec` sync;
+    // they run concurrently. Extract the real block and drive each ordering.
+    function runCredentialBlock(
+      dir: string,
+      options: { mount?: string; existing?: string; envValue?: string },
+    ): { stdout: string; exitCode: number | null; credential: string | null } {
+      const home = join(dir, "home");
+      const mount = join(dir, "claude-config");
+      mkdirSync(join(home, ".claude"), { recursive: true });
+      mkdirSync(mount, { recursive: true });
+      if (options.mount !== undefined) {
+        writeFileSync(join(mount, ".credentials.json"), options.mount);
+      }
+      if (options.existing !== undefined) {
+        writeFileSync(join(home, ".claude", ".credentials.json"), options.existing);
+      }
+
+      const entrypointPath = join(repoRoot, "docker", "entrypoint.sh");
+      const result = runShell(
+        `
+set -e
+block="$(sed -n '/^if \\[ -n "\\$CLAUDE_OAUTH_CREDENTIALS" \\]/,/^fi$/p' ${shellQuote(entrypointPath)} | sed "s#/claude-config#\\$AGENT_TEST_MOUNT#g")"
+[ -n "$block" ] || { echo "harness failed to extract the credential block"; exit 9; }
+log_progress() { echo "$1"; }
+eval "$block"
+`,
+        {
+          HOME: home,
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          AGENT_TEST_MOUNT: mount,
+          ...(options.envValue === undefined
+            ? {}
+            : { CLAUDE_OAUTH_CREDENTIALS: options.envValue }),
+        },
+      );
+
+      let credential: string | null = null;
+      try {
+        credential = readFileSync(join(home, ".claude", ".credentials.json"), "utf8");
+      } catch {
+        credential = null;
+      }
+      return { stdout: result.stdout, exitCode: result.exitCode, credential };
+    }
+
+    test("leaves a credential the backend already synced in place", () => {
+      withTempDir((dir) => {
+        // On macOS the backend prefers the Keychain, so the mounted copy is the
+        // weaker source. Letting it win reproduces the "Not logged in" symptom
+        // this whole path exists to fix.
+        const result = runCredentialBlock(dir, {
+          existing: '{"claudeAiOauth":{"accessToken":"fresh-from-keychain"}}',
+          mount: '{"claudeAiOauth":{"accessToken":"stale-on-disk"}}',
+        });
+
+        expect(result.exitCode).toBe(0);
+        expect(result.credential).toContain("fresh-from-keychain");
+        expect(result.credential).not.toContain("stale-on-disk");
+        expect(result.stdout).toContain("Credential already present");
+      });
+    });
+
+    test("copies the mounted credential when the sync has not landed yet", () => {
+      withTempDir((dir) => {
+        // Linux hosts keep the credential on disk, so the mount is the only
+        // source; the entrypoint must still work when it wins the race.
+        const result = runCredentialBlock(dir, {
+          mount: '{"claudeAiOauth":{"accessToken":"from-mount"}}',
+        });
+
+        expect(result.exitCode).toBe(0);
+        expect(result.credential).toContain("from-mount");
+        expect(result.stdout).toContain("Copied credentials from host");
+      });
+    });
+
+    test("treats an empty pre-existing credential as absent", () => {
+      withTempDir((dir) => {
+        // A zero-byte file is a failed write, not a login. `-s` is what makes
+        // this differ from `-f`, which would strand the container logged out.
+        const result = runCredentialBlock(dir, {
+          existing: "",
+          mount: '{"claudeAiOauth":{"accessToken":"from-mount"}}',
+        });
+
+        expect(result.exitCode).toBe(0);
+        expect(result.credential).toContain("from-mount");
+      });
+    });
+
+    test("reports when neither the mount nor the sync has provided anything", () => {
+      withTempDir((dir) => {
+        const result = runCredentialBlock(dir, {});
+
+        expect(result.exitCode).toBe(0);
+        expect(result.credential).toBeNull();
+        expect(result.stdout).toContain("awaiting the backend credential sync");
+      });
+    });
+
+    test("an explicit CLAUDE_OAUTH_CREDENTIALS still overrides both sources", () => {
+      withTempDir((dir) => {
+        const result = runCredentialBlock(dir, {
+          envValue: '{"claudeAiOauth":{"accessToken":"from-env"}}',
+          existing: '{"claudeAiOauth":{"accessToken":"already-synced"}}',
+          mount: '{"claudeAiOauth":{"accessToken":"from-mount"}}',
+        });
+
+        expect(result.exitCode).toBe(0);
+        expect(result.credential).toContain("from-env");
+      });
+    });
+  });
+
+  test("container startup copies only bounded OpenCode state", () => {
+    const entrypoint = read("docker/entrypoint.sh");
+
+    // `find /opencode-data -maxdepth 1 -type f` copied every top-level file,
+    // which meant the host's multi-GB opencode.db session database (plus its
+    // -wal/-shm siblings) was copied into every container on every start.
+    expect(entrypoint).not.toContain("find /opencode-data -maxdepth 1 -type f");
+    expect(entrypoint).toContain("copy_agent_file /opencode-data");
+    expect(entrypoint).toContain("copy_agent_directory_entries /opencode-data");
+
+    for (const allowlisted of ["auth.json", "account.json", "storage", "snapshot"]) {
+      expect(entrypoint).toMatch(
+        new RegExp(`^[ \\t]*${allowlisted.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`, "m"),
+      );
+    }
+    for (const excluded of ["opencode.db", "opencode.db-wal", "opencode.db-shm"]) {
+      expect(entrypoint).not.toMatch(
+        new RegExp(`^[ \\t]*${excluded.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`, "m"),
+      );
+    }
+
+    // node_modules under the config directory holds bun-installed plugin
+    // dependencies built for the host platform; Mach-O binaries from a macOS
+    // host cannot run in the Linux container.
+    expect(entrypoint).not.toContain("cp -r /opencode-config/.");
+    expect(entrypoint).toContain("! -name node_modules");
+  });
+
+  test("OpenCode config copy merges user-authored entries and drops node_modules", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "opencode-config");
+      const destination = join(dir, "destination");
+      mkdirSync(join(source, "plugin"), { recursive: true });
+      mkdirSync(join(source, "node_modules", "some-dep"), { recursive: true });
+      mkdirSync(destination, { recursive: true });
+      writeFileSync(join(source, "opencode.json"), "{\"config\":true}\n");
+      writeFileSync(join(source, ".hidden"), "dotfiles are user-authored too\n");
+      writeFileSync(join(source, "plugin", "custom.ts"), "export default {}\n");
+      writeFileSync(join(source, "node_modules", "some-dep", "binary.node"), "mach-o\n");
+
+      // Extract the real command rather than restating it, so a future edit to
+      // the entrypoint cannot drift away from what this asserts.
+      const entrypointPath = join(repoRoot, "docker", "entrypoint.sh");
+      const harness = `
+set -e
+copy="$(sed -n '/^    find \\/opencode-config /,/^        echo "Warning: Some config files could not be copied/p' ${shellQuote(entrypointPath)} | sed "s#/opencode-config#\\$AGENT_TEST_SOURCE#g; s#\\"\\$HOME/.config/opencode/\\"#\\"\\$AGENT_TEST_DESTINATION/\\"#g")"
+[ -n "$copy" ] || { echo "harness failed to extract the copy command"; exit 9; }
+eval "$copy"
+# Re-running is the container-restart path: the entrypoint runs on every start.
+eval "$copy"
+printf 'continued'
+`;
+
+      const result = runShell(harness, {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        AGENT_TEST_SOURCE: source,
+        AGENT_TEST_DESTINATION: destination,
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("continued");
+      expect(readFileSync(join(destination, "opencode.json"), "utf8")).toBe("{\"config\":true}\n");
+      // `-mindepth 1` without `-name '.*'` handling would silently drop dotfiles.
+      expect(readFileSync(join(destination, ".hidden"), "utf8"))
+        .toBe("dotfiles are user-authored too\n");
+      // A second start must merge into the existing directory, not nest a copy
+      // inside it or fail outright.
+      expect(readFileSync(join(destination, "plugin", "custom.ts"), "utf8"))
+        .toBe("export default {}\n");
+      expect(() => statSync(join(destination, "plugin", "plugin"))).toThrow();
+      // Mach-O dependencies from a macOS host cannot run in the Linux container.
+      expect(() => statSync(join(destination, "node_modules"))).toThrow();
+    });
+  });
+
+  test("OpenCode data copy takes the credential and skips the session database", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      const destination = join(dir, "destination");
+      mkdirSync(join(source, "storage"), { recursive: true });
+      mkdirSync(join(source, "snapshot"), { recursive: true });
+      mkdirSync(join(source, "log"), { recursive: true });
+      writeFileSync(join(source, "auth.json"), "{\"token\":\"opencode\"}\n", { mode: 0o600 });
+      writeFileSync(join(source, "account.json"), "{\"account\":\"test\"}\n");
+      writeFileSync(join(source, "opencode.db"), "x".repeat(1024 * 1024));
+      writeFileSync(join(source, "opencode.db-wal"), "wal");
+      writeFileSync(join(source, "opencode.db-shm"), "shm");
+      writeFileSync(join(source, "storage", "kept.json"), "kept\n");
+      writeFileSync(join(source, "snapshot", "kept.json"), "kept\n");
+      writeFileSync(join(source, "log", "huge.log"), "runtime log\n");
+
+      const result = runShell(
+        agentCopyHelperHarness(`
+for file in auth.json account.json; do
+  copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" "$file" OpenCode
+done
+for dir in storage snapshot; do
+  copy_agent_directory_entries "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" "$dir" OpenCode
+done
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      // OpenCode's credential is a plain file, so unlike Claude it rides the
+      // existing mount — this is what keeps container OpenCode logged in.
+      expect(readFileSync(join(destination, "auth.json"), "utf8")).toBe("{\"token\":\"opencode\"}\n");
+      expect(readFileSync(join(destination, "account.json"), "utf8")).toBe("{\"account\":\"test\"}\n");
+      expect(readFileSync(join(destination, "storage", "kept.json"), "utf8")).toBe("kept\n");
+      expect(readFileSync(join(destination, "snapshot", "kept.json"), "utf8")).toBe("kept\n");
+
+      for (const excluded of ["opencode.db", "opencode.db-wal", "opencode.db-shm", "log"]) {
+        expect(() => statSync(join(destination, excluded))).toThrow();
+      }
+    });
+  });
+
+  test("OpenCode copy warnings name OpenCode rather than Codex", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      const destination = join(dir, "destination");
+      mkdirSync(source, { recursive: true });
+      writeFileSync(join(source, "real.json"), "{}\n");
+      symlinkSync(join(source, "real.json"), join(source, "auth.json"));
+
+      const result = runShell(
+        agentCopyHelperHarness(`
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" auth.json OpenCode
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Warning: Skipping symlinked OpenCode file: auth.json");
+      expect(result.stdout).not.toContain("Codex");
+    });
+  });
+
+  test("each agent block ends with a consolidated list of what it did not copy", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      const destination = join(dir, "destination");
+      const outside = join(dir, "outside");
+      mkdirSync(join(outside, "real"), { recursive: true });
+      mkdirSync(source, { recursive: true });
+      writeFileSync(join(source, "CLAUDE.md"), "kept\n");
+      symlinkSync(outside, join(source, "commands"));
+      symlinkSync(join(outside, "real"), join(source, "agents"));
+
+      const result = runShell(
+        agentCopyHelperHarness(`
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" CLAUDE.md Claude
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" commands Claude
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" agents Claude
+report_agent_copy_skips Claude
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      // An individual warning scrolls past in a wall of setup output; losing
+      // your custom commands is not something to discover three prompts later.
+      expect(result.stdout).toContain(
+        "Claude host config NOT copied into this container: commands, agents",
+      );
+      // What did copy is not named in the summary.
+      expect(result.stdout).not.toContain("CLAUDE.md, ");
+      expect(readFileSync(join(destination, "CLAUDE.md"), "utf8")).toBe("kept\n");
+    });
+  });
+
+  test("the skip summary stays silent when everything copied, and does not leak between agents", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      const destination = join(dir, "destination");
+      const outside = join(dir, "outside");
+      mkdirSync(outside, { recursive: true });
+      mkdirSync(source, { recursive: true });
+      writeFileSync(join(source, "CLAUDE.md"), "kept\n");
+      symlinkSync(outside, join(source, "commands"));
+
+      const result = runShell(
+        agentCopyHelperHarness(`
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" commands Claude
+report_agent_copy_skips Claude
+printf -- '--- next agent ---\\n'
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" CLAUDE.md Codex
+report_agent_copy_skips Codex
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      const [claudePhase, codexPhase] = result.stdout.split("--- next agent ---");
+      expect(claudePhase).toContain("Claude host config NOT copied");
+      // Reporting Claude's skip again under Codex's name would be worse than
+      // saying nothing: it accuses the wrong agent of losing state.
+      expect(codexPhase).not.toContain("NOT copied");
+    });
+  });
+
   test("Codex configuration copy helpers overwrite changed inputs and merge repeatably", () => {
     withTempDir((dir) => {
       const source = join(dir, "source");
@@ -171,14 +719,14 @@ describe("container runtime environment wiring", () => {
       writeFileSync(join(source, "sessions", "rollout.jsonl"), "large runtime state\n");
 
       let result = runShell(
-        codexCopyHelperHarness(`
-copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" auth.json
-copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+        agentCopyHelperHarness(`
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" auth.json Codex
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
 `),
         {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
-          CODEX_TEST_SOURCE: source,
-          CODEX_TEST_DESTINATION: destination,
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
         },
       );
 
@@ -191,14 +739,14 @@ copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
       writeFileSync(join(source, "auth.json"), "{\"token\":\"changed\"}\n");
       writeFileSync(join(source, "skills", "review", "SKILL.md"), "changed\n");
       result = runShell(
-        codexCopyHelperHarness(`
-copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" auth.json
-copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+        agentCopyHelperHarness(`
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" auth.json Codex
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
 `),
         {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
-          CODEX_TEST_SOURCE: source,
-          CODEX_TEST_DESTINATION: destination,
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
         },
       );
 
@@ -220,17 +768,17 @@ copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
       symlinkSync("sessions", join(source, "skills"));
 
       const result = runShell(
-        codexCopyHelperHarness(`
-copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" missing.toml
-copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" missing
-copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" auth.json
-copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+        agentCopyHelperHarness(`
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" missing.toml Codex
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" missing Codex
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" auth.json Codex
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
 printf "continued"
 `),
         {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
-          CODEX_TEST_SOURCE: source,
-          CODEX_TEST_DESTINATION: destination,
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
         },
       );
 
@@ -260,14 +808,14 @@ printf "continued"
       );
 
       const result = runShell(
-        codexCopyHelperHarness(`
-copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+        agentCopyHelperHarness(`
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
 printf "continued"
 `),
         {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
-          CODEX_TEST_SOURCE: source,
-          CODEX_TEST_DESTINATION: destination,
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
         },
       );
 
@@ -295,15 +843,15 @@ printf "continued"
       symlinkSync("sessions", join(source, "plugins"));
 
       const result = runShell(
-        codexCopyHelperHarness(`
-copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" plugins/cache
-copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" plugins/config.toml
+        agentCopyHelperHarness(`
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" plugins/cache Codex
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" plugins/config.toml Codex
 printf "continued"
 `),
         {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
-          CODEX_TEST_SOURCE: source,
-          CODEX_TEST_DESTINATION: destination,
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
         },
       );
 
@@ -333,14 +881,14 @@ printf "continued"
       const rootLink = join(dir, "destination-root-link");
       symlinkSync(external, rootLink);
       const rootResult = runShell(
-        codexCopyHelperHarness(`
-copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" auth.json
+        agentCopyHelperHarness(`
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" auth.json Codex
 printf "root-continued"
 `),
         {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
-          CODEX_TEST_SOURCE: source,
-          CODEX_TEST_DESTINATION: rootLink,
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: rootLink,
         },
       );
       expect(rootResult.exitCode).toBe(0);
@@ -356,15 +904,15 @@ printf "root-continued"
       mkdirSync(linkedParentTarget);
       symlinkSync(linkedParentTarget, join(parentDestination, "plugins"));
       const parentResult = runShell(
-        codexCopyHelperHarness(`
-copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" plugins/config.toml
-copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" plugins/cache
+        agentCopyHelperHarness(`
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" plugins/config.toml Codex
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" plugins/cache Codex
 printf "parent-continued"
 `),
         {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
-          CODEX_TEST_SOURCE: source,
-          CODEX_TEST_DESTINATION: parentDestination,
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: parentDestination,
         },
       );
       expect(parentResult.exitCode).toBe(0);
@@ -387,15 +935,15 @@ printf "parent-continued"
       symlinkSync(linkedAuthTarget, join(leafDestination, "auth.json"));
       symlinkSync(linkedConfigTarget, join(leafDestination, "config.toml"));
       const leafResult = runShell(
-        codexCopyHelperHarness(`
-copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" auth.json
-copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" config.toml
+        agentCopyHelperHarness(`
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" auth.json Codex
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" config.toml Codex
 printf "leaf-continued"
 `),
         {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
-          CODEX_TEST_SOURCE: source,
-          CODEX_TEST_DESTINATION: leafDestination,
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: leafDestination,
         },
       );
       expect(leafResult.exitCode).toBe(0);
@@ -424,14 +972,14 @@ printf "leaf-continued"
       symlinkSync(external, join(destination, "skills", "review"));
 
       const result = runShell(
-        codexCopyHelperHarness(`
-copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+        agentCopyHelperHarness(`
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
 printf "continued"
 `),
         {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
-          CODEX_TEST_SOURCE: source,
-          CODEX_TEST_DESTINATION: destination,
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
         },
       );
 
@@ -455,18 +1003,18 @@ printf "continued"
       writeFileSync(join(source, "skills", "two"), "2");
 
       const result = runShell(
-        codexCopyHelperHarness(`
-copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" config.toml
-copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+        agentCopyHelperHarness(`
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" config.toml Codex
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
 printf "continued"
 `),
         {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
-          CODEX_TEST_SOURCE: source,
-          CODEX_TEST_DESTINATION: destination,
-          CODEX_COPY_MAX_FILE_BYTES: "4",
-          CODEX_COPY_MAX_DIRECTORY_ENTRIES: "1",
-          CODEX_COPY_MAX_DIRECTORY_KIB: "1024",
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
+          AGENT_COPY_MAX_FILE_BYTES: "4",
+          AGENT_COPY_MAX_DIRECTORY_ENTRIES: "1",
+          AGENT_COPY_MAX_DIRECTORY_KIB: "1024",
         },
       );
 
@@ -494,7 +1042,7 @@ printf "continued"
       writeFileSync(
         join(fakeBin, "find"),
         `#!/bin/bash
-for entry in "$CODEX_TEST_SOURCE"/skills/*; do
+for entry in "$AGENT_TEST_SOURCE"/skills/*; do
   if ! /usr/bin/printf '.'; then
     exit 141
   fi
@@ -506,15 +1054,15 @@ touch "$CODEX_COMPLETION_MARKER"
       chmodSync(join(fakeBin, "find"), 0o755);
 
       const result = runShell(
-        codexCopyHelperHarness(`
-copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+        agentCopyHelperHarness(`
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
 printf "continued"
 `),
         {
           PATH: `${fakeBin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
-          CODEX_TEST_SOURCE: source,
-          CODEX_TEST_DESTINATION: destination,
-          CODEX_COPY_MAX_DIRECTORY_ENTRIES: "3",
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
+          AGENT_COPY_MAX_DIRECTORY_ENTRIES: "3",
           CODEX_VISIT_LOG: visitLog,
           CODEX_COMPLETION_MARKER: completionMarker,
         },
@@ -538,17 +1086,17 @@ printf "continued"
       writeFileSync(join(source, "skills", "big.bin"), "x".repeat(256 * 1024));
 
       const result = runShell(
-        codexCopyHelperHarness(`
-copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+        agentCopyHelperHarness(`
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
 printf "continued"
 `),
         {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
-          CODEX_TEST_SOURCE: source,
-          CODEX_TEST_DESTINATION: destination,
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
           // Generous entry cap so only the size cap can reject this directory.
-          CODEX_COPY_MAX_DIRECTORY_ENTRIES: "1000",
-          CODEX_COPY_MAX_DIRECTORY_KIB: "8",
+          AGENT_COPY_MAX_DIRECTORY_ENTRIES: "1000",
+          AGENT_COPY_MAX_DIRECTORY_KIB: "8",
         },
       );
 
@@ -568,16 +1116,16 @@ printf "continued"
       writeFileSync(join(source, "skills", "new\nline.md"), "newline\n");
 
       const result = runShell(
-        codexCopyHelperHarness(`
-copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+        agentCopyHelperHarness(`
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
 printf "continued"
 `),
         {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
-          CODEX_TEST_SOURCE: source,
-          CODEX_TEST_DESTINATION: destination,
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
           // Exactly the real entry count. A line-based count sees four.
-          CODEX_COPY_MAX_DIRECTORY_ENTRIES: "2",
+          AGENT_COPY_MAX_DIRECTORY_ENTRIES: "2",
         },
       );
 
@@ -598,18 +1146,18 @@ printf "continued"
       writeFileSync(join(source, "skills", "SKILL.md"), "skill\n");
 
       const result = runShell(
-        codexCopyHelperHarness(`
-copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" config.toml
-copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+        agentCopyHelperHarness(`
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" config.toml Codex
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
 printf "continued"
 `),
         {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
-          CODEX_TEST_SOURCE: source,
-          CODEX_TEST_DESTINATION: destination,
-          CODEX_COPY_MAX_FILE_BYTES: "not-a-number",
-          CODEX_COPY_MAX_DIRECTORY_ENTRIES: "many",
-          CODEX_COPY_MAX_DIRECTORY_KIB: "1e6",
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
+          AGENT_COPY_MAX_FILE_BYTES: "not-a-number",
+          AGENT_COPY_MAX_DIRECTORY_ENTRIES: "many",
+          AGENT_COPY_MAX_DIRECTORY_KIB: "1e6",
         },
       );
 
@@ -635,14 +1183,14 @@ printf "continued"
       writeFileSync(progressFile, "");
 
       const result = runShell(
-        codexCopyHelperHarness(`
-copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" auth.json
+        agentCopyHelperHarness(`
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" auth.json Codex
 printf "continued"
 `),
         {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
-          CODEX_TEST_SOURCE: source,
-          CODEX_TEST_DESTINATION: destination,
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
           PROGRESS_FILE: progressFile,
         },
       );
@@ -667,15 +1215,15 @@ printf "continued"
       writeFileSync(join(destination, "skills"), "destination conflict\n");
 
       const conflictResult = runShell(
-        codexCopyHelperHarness(`
-copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" auth.json
-copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+        agentCopyHelperHarness(`
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" auth.json Codex
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
 printf "continued"
 `),
         {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
-          CODEX_TEST_SOURCE: source,
-          CODEX_TEST_DESTINATION: destination,
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: destination,
         },
       );
 
@@ -687,15 +1235,15 @@ printf "continued"
       const blockedDestination = join(dir, "blocked-destination");
       writeFileSync(blockedDestination, "not a directory\n");
       const mkdirResult = runShell(
-        codexCopyHelperHarness(`
-copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" auth.json
-copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+        agentCopyHelperHarness(`
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" auth.json Codex
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
 printf "continued"
 `),
         {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
-          CODEX_TEST_SOURCE: source,
-          CODEX_TEST_DESTINATION: blockedDestination,
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: blockedDestination,
         },
       );
 
@@ -710,15 +1258,15 @@ printf "continued"
       writeFileSync(join(fakeBin, "cp"), "#!/bin/sh\nexit 1\n");
       chmodSync(join(fakeBin, "cp"), 0o755);
       const copyResult = runShell(
-        codexCopyHelperHarness(`
-copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" auth.json
-copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+        agentCopyHelperHarness(`
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" auth.json Codex
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
 printf "continued"
 `),
         {
           PATH: `${fakeBin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
-          CODEX_TEST_SOURCE: source,
-          CODEX_TEST_DESTINATION: copyFailureDestination,
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: copyFailureDestination,
         },
       );
 
@@ -750,15 +1298,15 @@ printf "continued"
       function run(name: string, script: string, destinationName: string) {
         const destination = join(dir, destinationName);
         const result = runShell(
-          codexCopyHelperHarness(`
-copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" auth.json
-copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+          agentCopyHelperHarness(`
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" auth.json Codex
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
 printf "continued"
 `),
           {
             PATH: pathWithFake(name, script),
-            CODEX_TEST_SOURCE: source,
-            CODEX_TEST_DESTINATION: destination,
+            AGENT_TEST_SOURCE: source,
+            AGENT_TEST_DESTINATION: destination,
           },
         );
         return { result, destination };
@@ -790,14 +1338,14 @@ printf "continued"
       chmodSync(join(duNonNumericBin, "du"), 0o755);
       const nonNumericDestination = join(dir, "du-non-numeric-destination");
       const nonNumeric = runShell(
-        codexCopyHelperHarness(`
-copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+        agentCopyHelperHarness(`
+copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
 printf "continued"
 `),
         {
           PATH: `${duNonNumericBin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
-          CODEX_TEST_SOURCE: source,
-          CODEX_TEST_DESTINATION: nonNumericDestination,
+          AGENT_TEST_SOURCE: source,
+          AGENT_TEST_DESTINATION: nonNumericDestination,
         },
       );
       expect(nonNumeric.exitCode).toBe(0);
@@ -841,14 +1389,14 @@ printf "continued"
         `
 set -e
 log_progress() { :; }
-eval "$(sed -n '/^codex_path_has_symlink() {/,/^}$/p; /^codex_destination_path_has_symlink() {/,/^}$/p; /^copy_codex_file() {/,/^}$/p; /^copy_codex_directory() {/,/^}$/p' ${shellQuote(entrypoint)})"
-codex_setup="$(sed -n '/^# Set up Codex configuration$/,/^log_progress "Codex configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/codex-home#\\$CODEX_TEST_SOURCE#g")"
+eval "$(sed -n '/^agent_copy_warn() {/,/^}$/p; /^report_agent_copy_skips() {/,/^}$/p; /^agent_source_path_has_symlink() {/,/^}$/p; /^agent_destination_path_has_symlink() {/,/^}$/p; /^copy_agent_file() {/,/^}$/p; /^copy_agent_directory() {/,/^}$/p' ${shellQuote(entrypoint)})"
+codex_setup="$(sed -n '/^# Set up Codex configuration$/,/^log_progress "Codex configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/codex-home#\\$AGENT_TEST_SOURCE#g")"
 eval "$codex_setup"
 `,
         {
           HOME: home,
           PATH: process.env.PATH ?? "/usr/bin:/bin",
-          CODEX_TEST_SOURCE: source,
+          AGENT_TEST_SOURCE: source,
         },
       );
 
@@ -863,6 +1411,131 @@ eval "$codex_setup"
       expect(statSync(join(destination, "auth.json")).mode & 0o777).toBe(0o600);
       expect(() => statSync(join(destination, "plugins", ".plugin-appserver"))).toThrow();
       expect(() => statSync(join(destination, "sessions"))).toThrow();
+    });
+  });
+
+  test("Claude setup block copies the allowlist, skips history, and drops only the symlinked command", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "claude-config");
+      const home = join(dir, "home");
+      const outside = join(dir, "outside");
+      mkdirSync(join(source, "commands"), { recursive: true });
+      mkdirSync(join(source, "projects"), { recursive: true });
+      mkdirSync(outside, { recursive: true });
+      writeFileSync(join(source, "CLAUDE.md"), "global instructions\n");
+      writeFileSync(join(source, "settings.local.json"), "{\"local\":true}\n");
+      writeFileSync(join(source, "history.jsonl"), "{\"display\":\"secret prompt\"}\n");
+      writeFileSync(join(source, "daemon.log"), "log\n");
+      writeFileSync(join(source, ".credentials.json"), "{\"claudeAiOauth\":{\"accessToken\":\"from-mount\"}}");
+      writeFileSync(join(source, "commands", "kept.md"), "kept\n");
+      writeFileSync(join(outside, "secret.md"), "host content outside the tree\n");
+      symlinkSync(join(outside, "secret.md"), join(source, "commands", "linked.md"));
+      writeFileSync(join(source, "projects", "host.jsonl"), "host state\n");
+
+      const entrypoint = join(repoRoot, "docker", "entrypoint.sh");
+      const result = runShell(
+        agentCopyHelperHarness(`
+claude_setup="$(sed -n '/^log_progress "Setting up Claude Code configuration..."$/,/^log_progress "Claude Code configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/claude-config#\\$AGENT_TEST_SOURCE#g")"
+[ -n "$claude_setup" ] || { echo "harness failed to extract the Claude block"; exit 9; }
+eval "$claude_setup"
+`),
+        {
+          HOME: home,
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          AGENT_TEST_SOURCE: source,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      // The allowlisted config lands in the container home.
+      expect(readFileSync(join(home, ".claude", "CLAUDE.md"), "utf8")).toBe("global instructions\n");
+      expect(readFileSync(join(home, ".claude", "settings.local.json"), "utf8")).toBe("{\"local\":true}\n");
+      // settings.json is rewritten by the block with the container's own settings.
+      expect(readFileSync(join(home, ".claude", "settings.json"), "utf8")).toContain("bypassPermissions");
+      // No backend sync has run, so the mounted credential is the fallback source.
+      expect(readFileSync(join(home, ".claude", ".credentials.json"), "utf8"))
+        .toContain("from-mount");
+      expect(statSync(join(home, ".claude", ".credentials.json")).mode & 0o777).toBe(0o600);
+      // The real command survives; only the symlinked one is skipped.
+      expect(readFileSync(join(home, ".claude", "commands", "kept.md"), "utf8")).toBe("kept\n");
+      expect(() => statSync(join(home, ".claude", "commands", "linked.md"))).toThrow();
+      expect(() => statSync(join(home, ".claude", "commands", "secret.md"))).toThrow();
+      // Host history and per-project transcripts never enter the container. The
+      // entrypoint itself creates an empty `projects` scratch dir for Claude, so
+      // it is the host's per-project content that must be absent, not the dir.
+      for (const excluded of ["history.jsonl", "daemon.log"]) {
+        expect(() => statSync(join(home, ".claude", excluded))).toThrow();
+      }
+      expect(() => statSync(join(home, ".claude", "projects", "host.jsonl"))).toThrow();
+      // The per-entry skip is surfaced in the consolidated summary.
+      expect(result.stdout).toContain("commands/linked.md");
+    });
+  });
+
+  test("OpenCode setup block merges user config, skips the database, and copies data per-entry", () => {
+    withTempDir((dir) => {
+      const config = join(dir, "opencode-config");
+      const data = join(dir, "opencode-data");
+      const state = join(dir, "opencode-state");
+      const model = join(dir, "opencode-model");
+      const home = join(dir, "home");
+      const outside = join(dir, "outside");
+      mkdirSync(join(config, "plugin"), { recursive: true });
+      mkdirSync(join(config, "node_modules", "some-dep"), { recursive: true });
+      mkdirSync(join(data, "storage"), { recursive: true });
+      mkdirSync(join(data, "snapshot"), { recursive: true });
+      mkdirSync(join(data, "log"), { recursive: true });
+      mkdirSync(outside, { recursive: true });
+      writeFileSync(join(config, "opencode.json"), "{\"config\":true}\n");
+      writeFileSync(join(config, "plugin", "custom.ts"), "export default {}\n");
+      writeFileSync(join(config, "node_modules", "some-dep", "binary.node"), "mach-o\n");
+      writeFileSync(join(data, "auth.json"), "{\"token\":\"opencode\"}\n", { mode: 0o600 });
+      writeFileSync(join(data, "account.json"), "{\"account\":\"test\"}\n");
+      writeFileSync(join(data, "opencode.db"), "x".repeat(1024 * 1024));
+      writeFileSync(join(data, "storage", "kept.json"), "kept\n");
+      writeFileSync(join(data, "snapshot", "kept.json"), "kept\n");
+      writeFileSync(join(outside, "leaked.json"), "outside\n");
+      symlinkSync(join(outside, "leaked.json"), join(data, "storage", "linked.json"));
+      writeFileSync(join(data, "log", "huge.log"), "runtime log\n");
+
+      const entrypoint = join(repoRoot, "docker", "entrypoint.sh");
+      const result = runShell(
+        agentCopyHelperHarness(`
+opencode_setup="$(sed -n '/^log_progress "Setting up OpenCode configuration..."$/,/^log_progress "OpenCode configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/opencode-config#\\$AGENT_TEST_CONFIG#g; s#/opencode-data#\\$AGENT_TEST_DATA#g; s#/opencode-state#\\$AGENT_TEST_STATE#g; s#/opencode-model.json#\\$AGENT_TEST_MODEL.json#g")"
+[ -n "$opencode_setup" ] || { echo "harness failed to extract the OpenCode block"; exit 9; }
+eval "$opencode_setup"
+`),
+        {
+          HOME: home,
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          AGENT_TEST_CONFIG: config,
+          AGENT_TEST_DATA: data,
+          AGENT_TEST_STATE: state,
+          AGENT_TEST_MODEL: model,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      // User-authored config merges; Mach-O node_modules is the one exclusion.
+      expect(readFileSync(join(home, ".config", "opencode", "opencode.json"), "utf8"))
+        .toBe("{\"config\":true}\n");
+      expect(readFileSync(join(home, ".config", "opencode", "plugin", "custom.ts"), "utf8"))
+        .toBe("export default {}\n");
+      expect(() => statSync(join(home, ".config", "opencode", "node_modules"))).toThrow();
+      // Credential rides the mount; the multi-GB session database does not.
+      expect(readFileSync(join(home, ".local", "share", "opencode", "auth.json"), "utf8"))
+        .toBe("{\"token\":\"opencode\"}\n");
+      expect(readFileSync(join(home, ".local", "share", "opencode", "account.json"), "utf8"))
+        .toBe("{\"account\":\"test\"}\n");
+      expect(() => statSync(join(home, ".local", "share", "opencode", "opencode.db"))).toThrow();
+      // Data directories copy per-entry: real records land, the symlinked one
+      // is skipped individually, and the excluded runtime dir never appears.
+      expect(readFileSync(join(home, ".local", "share", "opencode", "storage", "kept.json"), "utf8"))
+        .toBe("kept\n");
+      expect(readFileSync(join(home, ".local", "share", "opencode", "snapshot", "kept.json"), "utf8"))
+        .toBe("kept\n");
+      expect(() => statSync(join(home, ".local", "share", "opencode", "storage", "linked.json"))).toThrow();
+      expect(() => statSync(join(home, ".local", "share", "opencode", "log"))).toThrow();
     });
   });
 

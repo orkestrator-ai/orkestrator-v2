@@ -634,12 +634,16 @@ describe("BuildPipelineService structured results", () => {
         requestId: "review-request",
         value: {
           ...cleanReview,
-          reviewScope: {
-            ...cleanReview.reviewScope,
-            // Validator messages quote unknown fields. Make that value large
-            // enough to prove the durable pending attempt stores the bounded
-            // frame, not the raw provider-controlled string.
-            ["<&oversized>".repeat(20_000)]: "ignored",
+          riskProfile: {
+            ...cleanReview.riskProfile,
+            // The schema permits arbitrary risk-area strings, while the
+            // contract rejects duplicates and quotes the repeated value. Make
+            // it large enough to prove the durable pending attempt stores the
+            // bounded frame, not the raw provider-controlled string.
+            riskAreas: [
+              "<&oversized>".repeat(20_000),
+              "<&oversized>".repeat(20_000),
+            ],
           },
           testResults: { total: 2, passed: 1, failed: 1, notRun: 0, failures: [] },
         },

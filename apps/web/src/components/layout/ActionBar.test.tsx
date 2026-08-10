@@ -148,6 +148,12 @@ const selectedProject: Project = {
 
 let currentEnvironment: Environment = selectedEnvironment;
 let currentSelectedEnvironmentId: string | null = selectedEnvironment.id;
+let currentClaudeModel = "claude-default-model";
+let currentClaudeFastModeDefault = false;
+let currentCodexModel = "codex-default-model";
+let currentCodexReasoningEffort = "medium";
+let currentCodexFastModeDefault = false;
+let currentOpenCodeModel = "opencode/default-model";
 let currentSelectedProjectId: string | null = selectedProject.id;
 /**
  * Environments and projects that exist in the store but are not the current
@@ -418,6 +424,12 @@ mock.module("@/stores", () => ({
         defaultAgent?: "claude" | "opencode" | "codex";
         preferredEditor?: "vscode" | "cursor";
         reviewInstruction?: string;
+        claudeModel?: string;
+        claudeNativeFastModeDefault?: boolean;
+        codexModel: string;
+        codexReasoningEffort: string;
+        codexNativeFastModeDefault?: boolean;
+        opencodeModel: string;
       };
       repositories: Record<string, { prBaseBranch?: string }>;
     };
@@ -429,6 +441,12 @@ mock.module("@/stores", () => ({
             defaultAgent: currentDefaultAgent,
             preferredEditor: currentPreferredEditor,
             reviewInstruction: currentReviewPrompt,
+            claudeModel: currentClaudeModel,
+            claudeNativeFastModeDefault: currentClaudeFastModeDefault,
+            codexModel: currentCodexModel,
+            codexReasoningEffort: currentCodexReasoningEffort,
+            codexNativeFastModeDefault: currentCodexFastModeDefault,
+            opencodeModel: currentOpenCodeModel,
           },
           repositories: currentRepositoryConfig,
         },
@@ -692,6 +710,12 @@ beforeEach(() => {
   currentFilesPanelOpen = false;
   currentReviewPrompt = undefined;
   currentDefaultAgent = "codex";
+  currentClaudeModel = "claude-default-model";
+  currentClaudeFastModeDefault = false;
+  currentCodexModel = "codex-default-model";
+  currentCodexReasoningEffort = "medium";
+  currentCodexFastModeDefault = false;
+  currentOpenCodeModel = "opencode/default-model";
   currentPreferredEditor = "vscode";
   currentRepositoryConfig = { "project-1": { prBaseBranch: "main" } };
   currentWorkspaceReady = false;
@@ -1706,6 +1730,9 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: null,
     };
     currentReviewPrompt = "Inspect origin/{{targetBranch}}...HEAD for release blockers.";
+    currentCodexModel = "gpt-review-default";
+    currentCodexReasoningEffort = "xhigh";
+    currentCodexFastModeDefault = true;
 
     render(<ActionBar />);
     fireEvent.keyDown(window, { key: "r", code: "KeyR", metaKey: true });
@@ -1713,9 +1740,11 @@ describe("ActionBar workflow tabs", () => {
     const tabOptions = createTabMock.mock.calls.at(-1)?.[1] as { tabId?: string };
     expect(tabOptions).toMatchObject({
       displayTitle: "Review",
+      initialPrompt: expect.stringContaining(
+        'User review instruction (JSON string): "Inspect origin/main...HEAD for release blockers."',
+      ),
       isReviewTab: true,
     });
-    expect(tabOptions).not.toHaveProperty("initialPrompt");
     await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
       `codex\u0000env-env-1:${tabOptions.tabId}`,
       "env-1",
@@ -1724,7 +1753,36 @@ describe("ActionBar workflow tabs", () => {
         text: expect.stringContaining(
           'User review instruction (JSON string): "Inspect origin/main...HEAD for release blockers."',
         ),
+        model: "gpt-review-default",
+        reasoningEffort: "xhigh",
         mode: "build",
+        fastMode: true,
+      }),
+    ));
+  });
+
+  test("preserves Claude model and fast-mode defaults in a one-click review", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      defaultAgent: "claude",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentClaudeModel = "claude-review-default";
+    currentClaudeFastModeDefault = true;
+
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Code review" }));
+
+    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+      expect.stringMatching(/^claude\u0000env-env-1:tab-/),
+      "env-1",
+      expect.objectContaining({
+        model: "claude-review-default",
+        effort: "high",
+        planModeEnabled: false,
+        fastModeEnabled: true,
       }),
     ));
   });
@@ -1737,6 +1795,7 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
+    currentOpenCodeModel = "openai/review-default";
     const view = render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Code review" }));
@@ -1755,9 +1814,37 @@ describe("ActionBar workflow tabs", () => {
       "env-1",
       expect.objectContaining({
         id: `initial-prompt:env-1:${tabOptions.tabId}`,
+        model: "openai/review-default",
         mode: "build",
         text: expect.stringContaining("Security and instruction hierarchy"),
       }),
+    ));
+  });
+
+  test("retains the launch prompt when durable review enqueue fails", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    enqueuePromptQueueMessageMock.mockRejectedValueOnce(
+      new Error("backend unavailable"),
+    );
+
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Code review" }));
+
+    expect(createTabMock).toHaveBeenCalledWith(
+      "codex",
+      expect.objectContaining({
+        initialPrompt: expect.stringContaining("Security and instruction hierarchy"),
+        isReviewTab: true,
+      }),
+    );
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not start review",
+      expect.objectContaining({ description: "backend unavailable" }),
     ));
   });
 

@@ -92,6 +92,7 @@ import { normalizeOpenCodeModelReferences } from "@/lib/opencode-model-preferenc
 import { promptQueueKey } from "@/lib/prompt-queue-persistence";
 import { createSessionKey } from "@/lib/utils";
 import { createUuid } from "@/lib/uuid";
+import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   LazyDialogLoadingFallback,
   LazyLoadBoundary,
@@ -498,6 +499,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     const tabId = `tab-${createUuid()}`;
     const created = createTab(agent, {
       tabId,
+      // Keep a renderer-owned fallback until the durable queue mutation
+      // succeeds. If persistence fails, the native tab can still retry the
+      // launch instead of becoming an empty, unrecoverable review tab.
+      initialPrompt: reviewPrompt,
       displayTitle: "Review",
       isReviewTab: true,
       agentLaunchMode: "native",
@@ -512,10 +517,17 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
     const requestId = `initial-prompt:${selectedEnvironmentId}:${tabId}`;
     const logicalSessionKey = createSessionKey(selectedEnvironmentId, tabId);
-    const model = launchOptions?.initialAgentModel === "default"
+    const preferredModel = agent === "claude"
+      ? config.global.claudeModel
+      : agent === "codex"
+        ? config.global.codexModel
+        : config.global.opencodeModel;
+    const requestedModel = launchOptions?.initialAgentModel ?? preferredModel;
+    const model = requestedModel === "default"
       ? undefined
-      : launchOptions?.initialAgentModel;
-    const reasoningEffort = launchOptions?.initialReasoningEffort;
+      : requestedModel;
+    const reasoningEffort = launchOptions?.initialReasoningEffort
+      ?? (agent === "codex" ? config.global.codexReasoningEffort : undefined);
     const queuedReview = agent === "claude"
       ? {
           id: requestId,
@@ -525,7 +537,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           model,
           effort: reasoningEffort ?? "high",
           planModeEnabled: false,
-          fastModeEnabled: false,
+          fastModeEnabled: config.global.claudeNativeFastModeDefault ?? false,
         }
       : agent === "codex"
         ? {
@@ -536,7 +548,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             model,
             reasoningEffort: reasoningEffort ?? "medium",
             mode: "build" as const,
-            fastMode: false,
+            fastMode: config.global.codexNativeFastModeDefault ?? false,
           }
         : {
             id: requestId,
@@ -555,13 +567,28 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       promptQueueKey(agent, logicalSessionKey),
       selectedEnvironmentId,
       queuedReview,
-    ).catch((error) => {
+    ).then(() => {
+      // Persistence is now authoritative. Remove the renderer fallback before
+      // a later remount can mistake it for an undispatched launch. Both paths
+      // use the same request id, so a mount racing this acknowledgement remains
+      // provider-idempotent.
+      usePaneLayoutStore.getState().clearTabInitialPrompt(
+        tabId,
+        selectedEnvironmentId,
+      );
+    }).catch((error) => {
       toast.error("Could not start review", {
         description: error instanceof Error ? error.message : String(error),
       });
     });
   }, [
     canCreateTab,
+    config.global.claudeModel,
+    config.global.claudeNativeFastModeDefault,
+    config.global.codexModel,
+    config.global.codexNativeFastModeDefault,
+    config.global.codexReasoningEffort,
+    config.global.opencodeModel,
     config.global.reviewInstruction,
     config.repositories,
     createTab,

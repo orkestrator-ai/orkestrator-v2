@@ -7062,6 +7062,46 @@ describe("TerminalContainer", () => {
       });
     });
 
+    test("refuses a duplicate caller-owned tab id", async () => {
+      const firstResult = mock((_created: boolean) => {});
+      const duplicateResult = mock((_created: boolean) => {});
+      const options = {
+        tabId: "caller-owned-review-tab",
+        agentLaunchMode: "native" as const,
+        displayTitle: "Review",
+      };
+
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateTabHarness
+            type="codex"
+            options={options}
+            onResult={firstResult}
+          />
+          <CreateTabHarness
+            type="codex"
+            options={options}
+            onResult={duplicateResult}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => {
+        expect(firstResult).toHaveBeenCalledWith(true);
+        expect(duplicateResult).toHaveBeenCalledWith(false);
+      });
+      expect(
+        usePaneLayoutStore.getState().getAllTabs("env-visible")
+          .filter((tab) => tab.id === options.tabId),
+      ).toHaveLength(1);
+    });
+
     test("carries one-shot review options through every agent launch mode", async () => {
       const launchCases = [
         { type: "claude", mode: "cli", title: "Claude CLI review", expectedType: "claude" },

@@ -30,6 +30,7 @@ import type {
 } from "@orkestrator/protocol/structured-output";
 import { StorageService } from "./storage.js";
 import { BuildPipelineService } from "./build-pipeline-service.js";
+import { MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES } from "./build-pipeline-prompts.js";
 import {
   AmbiguousPromptDispatchError,
   PromptRejectedError,
@@ -633,6 +634,13 @@ describe("BuildPipelineService structured results", () => {
         requestId: "review-request",
         value: {
           ...cleanReview,
+          reviewScope: {
+            ...cleanReview.reviewScope,
+            // Validator messages quote unknown fields. Make that value large
+            // enough to prove the durable pending attempt stores the bounded
+            // frame, not the raw provider-controlled string.
+            ["<&oversized>".repeat(20_000)]: "ignored",
+          },
           testResults: { total: 2, passed: 1, failed: 1, notRun: 0, failures: [] },
         },
       };
@@ -643,6 +651,9 @@ describe("BuildPipelineService structured results", () => {
       expect(pending.phase).toBe("reviewing");
       expect(pending.pendingPromptAttempt?.phase).toBe("reviewing");
       expect(pending.pendingPromptAttempt?.structuredReview).toBe(true);
+      expect(Buffer.byteLength(pending.pendingPromptAttempt!.prompt, "utf8"))
+        .toBeLessThanOrEqual(MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES);
+      expect(pending.pendingPromptAttempt!.prompt).toContain("… [truncated]");
       const requestId = pending.pendingPromptAttempt!.requestId;
       expect(pending.structuredReviewRequestId).toBe(requestId);
       const reviewSession = pending.sessions.at(-1)!;

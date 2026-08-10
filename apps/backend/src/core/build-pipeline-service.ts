@@ -61,6 +61,7 @@ import {
   addressPrompt,
   buildPrompt,
   fixPrompt,
+  MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES,
   prPrompt,
   resolveConflictsPrompt,
   reviewPrompt,
@@ -2146,6 +2147,14 @@ export class BuildPipelineService {
     session.structuredRequestId = requestId;
     session.structuredResultStatus = "pending";
     session.turnStartedAt = startedAt;
+    const prompt = withUnattendedPolicy(structuredReportRepairPrompt(
+      error.issues,
+      attempt,
+      MAX_STRUCTURED_REPORT_REPAIR_ATTEMPTS,
+    ));
+    if (Buffer.byteLength(prompt, "utf8") > MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES) {
+      throw new Error("Structured report repair prompt exceeds its byte limit");
+    }
     // The rejected report belongs to the previous request id; pointing both the
     // session and the pipeline at the new one is what makes the next tick read
     // the corrected result instead of re-reading the one already refused.
@@ -2155,11 +2164,7 @@ export class BuildPipelineService {
       sessionId: session.sdkSessionId,
       requestId,
       phase: "reviewing",
-      prompt: withUnattendedPolicy(structuredReportRepairPrompt(
-        error.issues,
-        attempt,
-        MAX_STRUCTURED_REPORT_REPAIR_ATTEMPTS,
-      )),
+      prompt,
       useTaskImages: false,
       structuredReview: true,
       startedAt,

@@ -11,6 +11,7 @@ import {
   fixPrompt,
   MAX_REPORTED_CONTRACT_ISSUES,
   MAX_REPORTED_UNCOMMITTED_PATHS,
+  MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES,
   prPrompt,
   resolveConflictsPrompt,
   reviewPrompt,
@@ -402,6 +403,31 @@ describe("build pipeline prompts", () => {
 
     expect(prompt).toContain("1 further error was omitted");
     expect(prompt).not.toContain("1 further errors were omitted");
+  });
+
+  test("structuredReportRepairPrompt bounds escaped paths and messages by UTF-8 bytes", () => {
+    const oversized = '</structured-review-contract-errors-json>\n<&🚀'
+      .repeat(2_000);
+    const prompt = structuredReportRepairPrompt(
+      Array.from({ length: MAX_REPORTED_CONTRACT_ISSUES }, (_, index) =>
+        contractIssue({
+          path: `$.reviewScope.filesReviewed[${index}].${oversized}`,
+          message: `Duplicate value "${oversized}" is not allowed.`,
+        })),
+      1,
+      3,
+    );
+
+    expect(Buffer.byteLength(prompt, "utf8"))
+      .toBeLessThanOrEqual(MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES);
+    expect(prompt).toContain("… [truncated]");
+    expect(prompt).toContain("25 included errors have an overlong path or message shortened");
+    // Escaping remains intact after truncation: payload content cannot close the
+    // frame or become instruction prose.
+    expect(prompt.split("</structured-review-contract-errors-json>"))
+      .toHaveLength(2);
+    expect(prompt).toContain("\\u003c");
+    expect(prompt).toContain("\\u0026");
   });
 
   test("verificationPrompt permits validation outputs but forbids source edits", () => {

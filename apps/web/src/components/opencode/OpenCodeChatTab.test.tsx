@@ -2269,6 +2269,57 @@ describe("OpenCodeChatTab", () => {
       });
     });
 
+    test("continues an incomplete idle snapshot once without waiting for an SSE edge", async () => {
+      const originalUser: OpenCodeMessage = {
+        id: "reconnect-user-incomplete",
+        role: "user",
+        content: "Finish after reconnect",
+        parts: [{ type: "text", content: "Finish after reconnect" }],
+        createdAt: "2026-08-10T10:00:00.000Z",
+      };
+      const incompleteAssistant: OpenCodeMessage = {
+        id: "reconnect-assistant-incomplete",
+        role: "assistant",
+        content: "",
+        parts: [{ type: "thinking", content: "The final summary is still pending" }],
+        createdAt: "2026-08-10T10:01:00.000Z",
+        modelId: "opencode-go/deepseek-v4-flash",
+        finishReason: "unknown",
+      };
+      mockGetSessionMessages.mockResolvedValue([
+        originalUser,
+        incompleteAssistant,
+      ]);
+      mockGetSessionStatus.mockResolvedValue("idle");
+
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() => {
+        expect(mockSendPrompt).toHaveBeenCalledWith(
+          MOCK_CLIENT,
+          "session-1",
+          OPENCODE_INCOMPLETE_TURN_CONTINUATION,
+          expect.objectContaining({
+            model: "opencode-go/deepseek-v4-flash",
+          }),
+        );
+      });
+      expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+      expect(useOpenCodeStore.getState().getSession(SESSION_KEY)).toMatchObject({
+        isLoading: true,
+      });
+
+      // A later authoritative refresh can still be older than the accepted
+      // continuation. The optimistic marker must preserve loading and dedupe.
+      await act(async () => {
+        await capturedManualRefresh?.({ manual: true });
+      });
+      expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+      expect(useOpenCodeStore.getState().getSession(SESSION_KEY)).toMatchObject({
+        isLoading: true,
+      });
+    });
+
     test("preserves existing messages when the server returns an empty snapshot", async () => {
       const existingMessage = nativeMessage("existing-reconnect");
       useOpenCodeStore.getState().setMessages(SESSION_KEY, [existingMessage]);
@@ -5677,6 +5728,151 @@ describe("OpenCodeChatTab", () => {
       });
       await flushReactMicrotasks();
       expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("cleans up the optimistic continuation when automatic dispatch fails", async () => {
+      const originalUser: OpenCodeMessage = {
+        id: "user-before-failed-continuation",
+        role: "user",
+        content: "Finish the task",
+        parts: [{ type: "text", content: "Finish the task" }],
+        createdAt: "2026-08-10T10:00:00.000Z",
+      };
+      const incompleteAssistant: OpenCodeMessage = {
+        id: "assistant-before-failed-continuation",
+        role: "assistant",
+        content: "",
+        parts: [{ type: "thinking", content: "I still need to summarize" }],
+        createdAt: "2026-08-10T10:01:00.000Z",
+        finishReason: "unknown",
+      };
+      mockGetSessionMessages.mockResolvedValue([
+        originalUser,
+        incompleteAssistant,
+      ]);
+      mockSendPrompt.mockResolvedValue({
+        success: false,
+        error: "transport unavailable",
+      });
+
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+      mockSendPrompt.mockClear();
+
+      channel.push({
+        type: "session.idle",
+        properties: { sessionID: "session-1" },
+      });
+
+      await waitFor(() => {
+        const recoveredSession = useOpenCodeStore
+          .getState()
+          .getSession(SESSION_KEY);
+        expect(recoveredSession?.isLoading).toBe(false);
+        expect(recoveredSession?.messages.some(
+          (message) => message.id.startsWith(
+            `${OPTIMISTIC_MESSAGE_PREFIX}incomplete-`,
+          ),
+        )).toBe(false);
+        expect(recoveredSession?.messages.at(-1)).toMatchObject({
+          id: `${ERROR_MESSAGE_PREFIX}incomplete-send-assistant-before-failed-continuation`,
+          role: "assistant",
+        });
+        expect(recoveredSession?.messages.at(-1)?.content).toContain(
+          "transport unavailable",
+        );
+      });
+      expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("retries a failed continuation after the shared client is replaced", async () => {
+      const originalUser: OpenCodeMessage = {
+        id: "user-before-client-replacement",
+        role: "user",
+        content: "Finish the task",
+        parts: [{ type: "text", content: "Finish the task" }],
+        createdAt: "2026-08-10T10:00:00.000Z",
+      };
+      const incompleteAssistant: OpenCodeMessage = {
+        id: "assistant-before-client-replacement",
+        role: "assistant",
+        content: "",
+        parts: [{ type: "thinking", content: "I still need to summarize" }],
+        createdAt: "2026-08-10T10:01:00.000Z",
+        finishReason: "unknown",
+      };
+      mockGetSessionMessages.mockResolvedValue([
+        originalUser,
+        incompleteAssistant,
+      ]);
+      const firstDispatch = deferred<{
+        success: boolean;
+        error?: string;
+      }>();
+      mockSendPrompt.mockImplementationOnce(() => firstDispatch.promise);
+
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      channel.push({
+        type: "session.idle",
+        properties: { sessionID: "session-1" },
+      });
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+
+      const replacementClient = {
+        baseUrl: "http://127.0.0.1:10000",
+      };
+      act(() => {
+        useOpenCodeStore.getState().setClient(
+          ENVIRONMENT_ID,
+          replacementClient as any,
+        );
+      });
+      firstDispatch.resolve({
+        success: false,
+        error: "obsolete client transport",
+      });
+      await flushReactMicrotasks();
+
+      const strandedSession = useOpenCodeStore
+        .getState()
+        .getSession(SESSION_KEY);
+      expect(strandedSession?.isLoading).toBe(true);
+      expect(strandedSession?.messages.some(
+        (message) => message.id ===
+          `${OPTIMISTIC_MESSAGE_PREFIX}incomplete-assistant-before-client-replacement`,
+      )).toBe(true);
+
+      mockGetSessionStatus.mockResolvedValue("idle");
+      await act(async () => {
+        await capturedManualRefresh?.({ manual: true });
+      });
+
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2));
+      expect(mockSendPrompt.mock.calls[1]?.[0]).toBe(replacementClient);
+      const recoveredSession = useOpenCodeStore
+        .getState()
+        .getSession(SESSION_KEY);
+      expect(recoveredSession?.isLoading).toBe(true);
+      expect(recoveredSession?.messages.filter(
+        (message) => message.id ===
+          `${OPTIMISTIC_MESSAGE_PREFIX}incomplete-assistant-before-client-replacement`,
+      )).toHaveLength(1);
+      expect(recoveredSession?.messages.some(
+        (message) => message.id ===
+          `${ERROR_MESSAGE_PREFIX}incomplete-send-assistant-before-client-replacement`,
+      )).toBe(false);
 
       useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
       channel.close();

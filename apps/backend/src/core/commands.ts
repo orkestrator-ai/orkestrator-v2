@@ -345,17 +345,6 @@ const CLAUDE_GITHUB_ENV_FINGERPRINT = createHash("sha256")
 const OPENCODE_GITHUB_ENV_PLUGIN_PATH = "/home/node/.config/opencode/plugins/orkestrator-github-env.js";
 const OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT_FILE =
   "/tmp/orkestrator-ai/opencode-github-env-plugin-fingerprint";
-/**
- * Orkestrator native sessions are intentionally non-interactive at the
- * OpenCode permission layer. OS/container boundaries still apply; this only
- * prevents OpenCode from parking a background turn on an approval that its tab
- * may not currently be mounted to display.
- *
- * Inline config merges after global and project config, so this overrides only
- * the permission policy while preserving the user's providers, models, agents,
- * plugins, and other OpenCode settings.
- */
-const OPENCODE_MANAGED_CONFIG_CONTENT = JSON.stringify({ permission: "allow" });
 
 function buildOpenCodeGitHubEnvironmentPluginSource(
   credentialFile = CONTAINER_GITHUB_CREDENTIAL_FILE,
@@ -385,8 +374,6 @@ const OPENCODE_GITHUB_ENV_PLUGIN_SOURCE =
   buildOpenCodeGitHubEnvironmentPluginSource();
 const OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT = createHash("sha256")
   .update(OPENCODE_GITHUB_ENV_PLUGIN_SOURCE)
-  .update("\0")
-  .update(OPENCODE_MANAGED_CONFIG_CONTENT)
   .digest("hex");
 
 function withContainerRuntimeCredential(command: string): string {
@@ -5725,7 +5712,6 @@ async function startLocalServerUnlocked(
 
   if (kind === "opencode") {
     command = resolveOpenCodeBinary(context);
-    env.OPENCODE_CONFIG_CONTENT = OPENCODE_MANAGED_CONFIG_CONTENT;
   } else if (kind === "claude") {
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "claude-bridge");
@@ -7561,7 +7547,6 @@ async function startContainerOpenCodeServer(
     unset GITHUB_TOKEN GH_TOKEN
     export OPENCODE_SERVER_USERNAME=opencode
     export OPENCODE_SERVER_PASSWORD=${quoteShell(authToken)}
-    export OPENCODE_CONFIG_CONTENT=${quoteShell(OPENCODE_MANAGED_CONFIG_CONTENT)}
     setsid opencode serve --port ${OPENCODE_SERVER_PORT} --hostname 0.0.0.0 > /tmp/opencode-serve.log 2>&1 &
   `, [authToken]);
   await waitForHealth(
@@ -12272,7 +12257,6 @@ export const __testing = {
   parseHeadCommit,
   buildSyncContainerGitHubCredentialCommand,
   buildOpenCodeGitHubEnvironmentPluginSource,
-  OPENCODE_MANAGED_CONFIG_CONTENT,
   OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT,
   CLAUDE_GITHUB_ENV_FINGERPRINT,
   countLocalFileLines,

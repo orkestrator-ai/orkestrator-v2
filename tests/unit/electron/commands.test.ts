@@ -12257,7 +12257,7 @@ exit 0
     }
   });
 
-  test("launches the local opencode server through the managed toolchain cache", async () => {
+  test("launches managed local OpenCode without overriding inherited configuration", async () => {
     const appRoot = await createTempDir("ork-electron-app-opencode-");
     const toolchainBinDir = await createTempDir("ork-electron-tools-opencode-");
     const worktreePath = await createTempDir("ork-electron-worktree-opencode-");
@@ -12297,15 +12297,20 @@ exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:h
     context.toolchainBinDir = toolchainBinDir;
 
     const commands = createCommandRegistry();
-    await expect(commands.get("check_opencode_cli")?.({}, context)).resolves.toBe(true);
-    const result = await commands.get("start_local_opencode_server_cmd")?.({ environmentId: environment.id }, context) as {
-      port: number;
-      pid: number;
-      wasRunning: boolean;
-      authToken: string;
-    };
+    const previousOpenCodeConfigContent = process.env.OPENCODE_CONFIG_CONTENT;
+    const userOpenCodeConfigContent = JSON.stringify({
+      permission: { bash: "deny", external_directory: "deny" },
+    });
+    process.env.OPENCODE_CONFIG_CONTENT = userOpenCodeConfigContent;
 
     try {
+      await expect(commands.get("check_opencode_cli")?.({}, context)).resolves.toBe(true);
+      const result = await commands.get("start_local_opencode_server_cmd")?.({ environmentId: environment.id }, context) as {
+        port: number;
+        pid: number;
+        wasRunning: boolean;
+        authToken: string;
+      };
       expect(result.wasRunning).toBe(false);
       expect(result.port).toBeGreaterThan(0);
       expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -12315,12 +12320,17 @@ exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:h
           `Basic ${Buffer.from(`opencode:${result.authToken}`).toString("base64")}`,
       })).resolves.toBe(true);
       expect(await fs.readFile(markerPath, "utf8")).toContain("used serve --port");
-      expect(JSON.parse(await fs.readFile(configMarkerPath, "utf8"))).toEqual({
-        permission: "allow",
-      });
+      expect(await fs.readFile(configMarkerPath, "utf8")).toBe(
+        userOpenCodeConfigContent,
+      );
       expect(updates).toContainEqual({ localOpencodePort: result.port, opencodePid: result.pid });
     } finally {
       await commands.get("stop_local_opencode_server_cmd")?.({ environmentId: environment.id }, context);
+      if (previousOpenCodeConfigContent === undefined) {
+        delete process.env.OPENCODE_CONFIG_CONTENT;
+      } else {
+        process.env.OPENCODE_CONFIG_CONTENT = previousOpenCodeConfigContent;
+      }
     }
   });
 
@@ -12639,9 +12649,7 @@ exit 0
         expect(execLog).toContain(
           "/home/node/.config/opencode/plugins/orkestrator-github-env.js",
         );
-        expect(execLog).toContain(
-          `export OPENCODE_CONFIG_CONTENT='${commandTesting.OPENCODE_MANAGED_CONFIG_CONTENT}'`,
-        );
+        expect(execLog).not.toContain("OPENCODE_CONFIG_CONTENT");
         expect(execLog).toContain("unset GITHUB_TOKEN GH_TOKEN");
       });
     } finally {

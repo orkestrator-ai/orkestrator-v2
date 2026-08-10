@@ -1262,6 +1262,52 @@ const startInput = {
 };
 
 describe("LoopedReviewService lifecycle guards", () => {
+  test("persists a failed discovery pass and restores its phase on retry", async () => {
+    await harness(async (service, storage) => {
+      const now = "2026-08-03T00:00:00.000Z";
+      const session = {
+        id: "session-1", phase: "discovery" as const, round: 1, pass: 1,
+        sessionKey: "session-key", providerSessionId: "provider-1",
+        requestIds: [], origin: "looped-review" as const,
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        status: "running" as const, startedAt: now,
+      };
+      await storage.saveLoopedReviewWorkflow(
+        "workflow-1", "env-1", LOOPED_REVIEW_WORKFLOW_VERSION, workflowFixture({
+          phase: "reconciling",
+          currentPass: 1,
+          activeSessionId: session.id,
+          sessions: [session],
+          rounds: [{
+            round: 1,
+            allowance: 1,
+            status: "reviewing",
+            passes: [{
+              pass: 1,
+              sessionId: session.id,
+              status: "reconciling",
+              report: cleanReport,
+              startedAt: now,
+            }],
+            startedAt: now,
+          }],
+        }), 0,
+      );
+
+      const internal = service as unknown as {
+        fail(workflowId: string, error: unknown): Promise<void>;
+      };
+      await internal.fail("workflow-1", new Error("reconciliation transport failed"));
+      const failed = await snapshot(storage, "workflow-1");
+      expect(failed.phase).toBe("failed");
+      expect(failed.rounds[0]?.passes[0]?.status).toBe("failed");
+
+      const retried = await service.retry("workflow-1");
+      expect(retried.phase).toBe("reconciling");
+      expect(retried.rounds[0]?.passes[0]?.status).toBe("reconciling");
+    });
+  });
+
   test("refuses a second concurrent review on the same environment", async () => {
     await harness(async (service, storage) => {
       const first = await service.start(startInput);

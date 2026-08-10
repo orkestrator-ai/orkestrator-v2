@@ -485,6 +485,16 @@ export class LoopedReviewService {
       const round = current.rounds.find((entry) => entry.round === current.currentRound);
       if (round) round.status = current.phase === "preparing" ? "preparing"
         : current.phase === "fixing" ? "fixing" : current.phase === "creating-pr" ? "completed" : "reviewing";
+      const activeSession = current.sessions.find((entry) => entry.id === current.activeSessionId);
+      const activePass = activeSession?.phase === "discovery"
+        ? round?.passes.find((entry) => entry.sessionId === activeSession.id)
+        : undefined;
+      // `fail()` persists a failed pass so every renderer can rehydrate the same
+      // authoritative state. A retry that keeps that pass must restore the phase
+      // it is about to resume instead of leaving the rail permanently failed.
+      if (activePass && (current.phase === "discovering" || current.phase === "reconciling")) {
+        activePass.status = current.phase;
+      }
     });
     void this.advanceNow(workflowId);
     return workflow;
@@ -1474,7 +1484,13 @@ export class LoopedReviewService {
       workflow.pr = { ...workflow.pr, status: "failed", error: message(error) };
     }
     const round = workflow.rounds.find((entry) => entry.round === workflow.currentRound);
-    if (round) round.status = "failed";
+    if (round) {
+      round.status = "failed";
+      if (session?.phase === "discovery") {
+        const pass = round.passes.find((entry) => entry.sessionId === session.id);
+        if (pass) pass.status = "failed";
+      }
+    }
     if (!preserve) {
       delete workflow.dispatch;
       delete workflow.structuredWait;

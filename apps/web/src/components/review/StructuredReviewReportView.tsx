@@ -26,11 +26,18 @@ import { cn } from "@/lib/utils";
 // Re-exported for the callers that already reach for it here.
 export { structuredReviewVerdictSummary };
 
-const severityStyles: Record<ReviewIssue["severity"], string> = {
+/**
+ * Shared so the looped-review pool renders a P1 exactly as the report does. A
+ * second hand-written copy would drift, and the two surfaces sit one click
+ * apart.
+ */
+export const reviewSeverityStyles: Record<ReviewIssue["severity"], string> = {
   P0: "border-red-500/40 bg-red-500/8 text-red-300",
   P1: "border-amber-500/40 bg-amber-500/8 text-amber-300",
   P2: "border-sky-500/35 bg-sky-500/8 text-sky-300",
 };
+
+const severityStyles = reviewSeverityStyles;
 
 function location(file: string, line: number | null): string {
   return line ? `${file}:${line}` : file;

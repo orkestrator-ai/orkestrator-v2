@@ -27,7 +27,7 @@ import {
   showOnlyFinalStructuredReviewMessage,
   showOnlyFinalVerificationMessage,
 } from "@/lib/structured-review-messages";
-import { useVirtuosoScrollState } from "@/hooks";
+import { useMediaQuery, useVirtuosoScrollState } from "@/hooks";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
@@ -103,6 +103,22 @@ const STAGE_TAB_KEYS: Record<string, number | "first" | "last"> = {
   Home: "first",
   End: "last",
 };
+
+/** Viewports narrower than this get the one-at-a-time layout. */
+const MOBILE_MEDIA_QUERY = "(max-width: 767px)";
+
+/**
+ * The two halves of the desktop split, which a phone shows one at a time.
+ *
+ * A 240px stage rail beside a transcript leaves neither readable on a ~390px
+ * screen, so on mobile each takes the full width and a tab bar chooses between
+ * them. Both stay mounted: hiding is a CSS concern, and unmounting the
+ * transcript would throw away its virtualized scroll position every time the
+ * user glanced at the stage list.
+ */
+const MOBILE_VIEWS = ["stages", "transcript"] as const;
+
+type MobileView = (typeof MOBILE_VIEWS)[number];
 
 /**
  * The stage that owns the structured review report.
@@ -192,6 +208,13 @@ export function BuildChatTab({
   const [controlPending, setControlPending] = useState(false);
   const [draft, setDraft] = useState("");
   const [sendPending, setSendPending] = useState(false);
+  const isMobile = useMediaQuery(MOBILE_MEDIA_QUERY);
+  // The transcript, not the stage list, is what a build tab is opened to read —
+  // it runs unattended, so the useful thing on arrival is what the agent is
+  // doing now. The stage list is one tap away.
+  const [mobileView, setMobileView] = useState<MobileView>("transcript");
+  const stagesVisible = !isMobile || mobileView === "stages";
+  const transcriptVisible = !isMobile || mobileView === "transcript";
   // Distinguishes "the user picked this stage" from "we auto-followed the
   // pipeline". Without it the first automatic pick — the build stage — pins the
   // transcript there for the rest of the run, because it stays a valid session.
@@ -199,7 +222,10 @@ export function BuildChatTab({
   const hydrationAttemptedFor = useRef<string | null>(null);
   const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } =
     useVirtuosoScrollState({
-      isActive,
+      // Switching to the stage list on a phone hides the transcript as
+      // completely as switching tabs does, so it deactivates the same way —
+      // which is also what makes coming back re-lock to the live bottom.
+      isActive: isActive && transcriptVisible,
       persistKey: `build-pipeline:${data.pipelineId}`,
       environmentId: data.environmentId,
       // A build runs unattended, so returning to the tab should show what the
@@ -207,10 +233,54 @@ export function BuildChatTab({
       stickToBottomOnActivation: true,
     });
 
-  const selectSession = useCallback((sessionId: string) => {
+  // A `useId` value is legal in an id and in an ARIA reference whatever
+  // punctuation React puts in it; only a CSS selector would object, which is
+  // why the keyboard handlers below reach for `getElementById` rather than
+  // `querySelector`.
+  const transcriptPanelId = `${instanceId}transcript`;
+  const stagesPanelId = `${instanceId}stages`;
+  const stageTabId = (sessionKey: string) => `${instanceId}stage-${sessionKey}`;
+  const mobileViewTabId = (view: MobileView) => `${instanceId}view-${view}`;
+  const mobileViewPanelId = (view: MobileView) =>
+    view === "stages" ? stagesPanelId : transcriptPanelId;
+
+  const pinSession = useCallback((sessionId: string) => {
     pinnedSessionRef.current = true;
     setSelectedSessionId(sessionId);
   }, []);
+
+  const selectSession = (
+    sessionId: string,
+    disappearingTrigger?: HTMLElement,
+  ) => {
+    pinSession(sessionId);
+    // Choosing a stage is a request to read it, so on a phone the transcript
+    // comes forward with it. Only an explicit choice does this: the effect
+    // below re-selects as the pipeline advances, and following the pipeline
+    // must not yank the user out of the stage list they are reading. Arrow-key
+    // navigation is the same — it browses the list, so it uses `pinSession`.
+    setMobileView("transcript");
+    if (!isMobile) return;
+    // The stage list is about to be hidden, and hiding the element that holds
+    // focus drops focus to `<body>` — the next Tab would restart from the top
+    // of the document, which loses a keyboard user's place entirely. Hand it
+    // instead to the tab that now names what is on screen. Do this only when
+    // the stage list or a caller-supplied disappearing trigger actually held
+    // focus: a tap can leave focus elsewhere, and moving it then would be a
+    // change the user did not ask for.
+    const focused = document.activeElement;
+    const focusWillDisappear = Boolean(
+      focused
+        && (
+          document.getElementById(stagesPanelId)?.contains(focused)
+          || focused === disappearingTrigger
+        ),
+    );
+    if (!focusWillDisappear) {
+      return;
+    }
+    document.getElementById(mobileViewTabId("transcript"))?.focus();
+  };
 
   // The store is a cache of a backend-owned record, and the only other loader
   // is App's one-shot per-project hydration. If that failed or has not run for
@@ -440,12 +510,12 @@ export function BuildChatTab({
         label: issueCountLabel(pipeline.structuredReview.issues.length),
       }
     : undefined;
-  // A `useId` value is legal in an id and in an ARIA reference whatever
-  // punctuation React puts in it; only a CSS selector would object, which is
-  // why the keyboard handler below reaches for `getElementById` rather than
-  // `querySelector`.
-  const transcriptPanelId = `${instanceId}transcript`;
-  const stageTabId = (sessionKey: string) => `${instanceId}stage-${sessionKey}`;
+  const mobileViewLabels: Record<MobileView, string> = {
+    stages: "Stages",
+    // Naming the stage on the tab is the only thing that says which transcript
+    // is behind it — the header shows the pipeline's phase, not the selection.
+    transcript: selectedSession?.label ?? "Transcript",
+  };
 
   /**
    * Move the selection to another stage from the keyboard.
@@ -477,8 +547,30 @@ export function BuildChatTab({
           % pipeline.sessions.length;
     const target = pipeline.sessions[next];
     if (!target || target.sdkSessionId === selectedSessionId) return;
-    selectSession(target.sdkSessionId);
+    pinSession(target.sdkSessionId);
     document.getElementById(stageTabId(target.sessionKey))?.focus();
+  };
+
+  /**
+   * Move between the two mobile views from the keyboard.
+   *
+   * Same contract as the stage list: taking `role="tab"` promises arrow keys,
+   * and with two tabs both directions simply wrap onto the other one.
+   */
+  const moveMobileViewFocus = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = STAGE_TAB_KEYS[event.key];
+    if (step === undefined) return;
+    event.preventDefault();
+    const current = MOBILE_VIEWS.indexOf(mobileView);
+    const next = step === "first"
+      ? 0
+      : step === "last"
+        ? MOBILE_VIEWS.length - 1
+        : (current + step + MOBILE_VIEWS.length) % MOBILE_VIEWS.length;
+    const target = MOBILE_VIEWS[next];
+    if (!target || target === mobileView) return;
+    setMobileView(target);
+    document.getElementById(mobileViewTabId(target))?.focus();
   };
 
   return (
@@ -577,7 +669,11 @@ export function BuildChatTab({
         <button
           type="button"
           className="flex w-full items-center gap-2 border-b border-cyan-500/20 bg-cyan-500/5 px-4 py-2 text-left text-xs text-cyan-200/90 transition-colors hover:bg-cyan-500/10"
-          onClick={() => selectSession(reviewReportHint.session.sdkSessionId)}
+          onClick={(event) =>
+            selectSession(
+              reviewReportHint.session.sdkSessionId,
+              event.currentTarget,
+            )}
         >
           <ClipboardCheck className="h-3.5 w-3.5 shrink-0" />
           <span className="min-w-0 truncate">
@@ -587,8 +683,59 @@ export function BuildChatTab({
         </button>
       )}
 
+      {isMobile && (
+        <div
+          role="tablist"
+          aria-label="Build view"
+          className="flex shrink-0 gap-1 border-b border-border/40 bg-zinc-900/40 p-1"
+          onKeyDown={moveMobileViewFocus}
+        >
+          {MOBILE_VIEWS.map((view) => {
+            const selected = mobileView === view;
+            return (
+              <button
+                key={view}
+                id={mobileViewTabId(view)}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                aria-controls={mobileViewPanelId(view)}
+                tabIndex={selected ? 0 : -1}
+                className={cn(
+                  "min-h-9 min-w-0 flex-1 truncate rounded px-3 text-xs transition-colors",
+                  selected
+                    ? "bg-zinc-800/85 text-foreground shadow-sm"
+                    : "text-muted-foreground",
+                )}
+                onClick={() => setMobileView(view)}
+              >
+                {mobileViewLabels[view]}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <div className="flex min-h-0 flex-1">
-        <ScrollArea className="w-60 shrink-0 border-r border-border/40 bg-zinc-900/40">
+        <ScrollArea
+          id={stagesPanelId}
+          hidden={!stagesVisible}
+          // On mobile this half is a panel of the view switcher above. On
+          // desktop nothing selects it, so it takes no tab semantics there.
+          {...(isMobile
+            ? {
+                role: "tabpanel",
+                "aria-labelledby": mobileViewTabId("stages"),
+              }
+            : {})}
+          className={cn(
+            "bg-zinc-900/40",
+            // `hidden` has to be the utility, not just the attribute: the
+            // attribute's base-layer rule loses to any display utility.
+            !stagesVisible && "hidden",
+            isMobile ? "w-full" : "w-60 shrink-0 border-r border-border/40",
+          )}
+        >
           <div
             className="space-y-1 p-2"
             role="tablist"
@@ -661,11 +808,16 @@ export function BuildChatTab({
         </ScrollArea>
 
         <div
-          className="@container relative flex min-w-0 flex-1 flex-col"
+          className={cn(
+            "@container relative min-w-0 flex-1",
+            transcriptVisible ? "flex flex-col" : "hidden",
+          )}
           id={transcriptPanelId}
+          hidden={!transcriptVisible}
           role="tabpanel"
           // A tabpanel is named by its own tab; only the no-selection case,
-          // which has no tab to point at, needs a literal label.
+          // which has no tab to point at, needs a literal label. On mobile the
+          // view switcher's tab already names it after the same stage.
           {...(selectedSession
             ? { "aria-labelledby": stageTabId(selectedSession.sessionKey) }
             : { "aria-label": "Build stage transcript" })}
@@ -719,10 +871,11 @@ export function BuildChatTab({
         </div>
       </div>
 
-      {(canSendMessage || !isAtBottom) && (
+      {transcriptVisible && (canSendMessage || !isAtBottom) && (
         // The native tabs dock their composer as a floating card rather than a
         // bordered footer strip, so this matches that shape instead of drawing
-        // another rule across the pane.
+        // another rule across the pane. It addresses the transcript, so on a
+        // phone it goes with it rather than eating a third of the stage list.
         <div className="shrink-0 px-3 pt-2 pb-4">
           {!isAtBottom && (
             <div className="mx-auto mb-1 flex w-full max-w-[56rem] justify-end">

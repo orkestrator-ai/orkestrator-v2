@@ -28,7 +28,8 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
-  parseStructuredReviewReport,
+  safeParseStructuredReviewReport,
+  type ReviewContractValidationError,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import {
@@ -60,9 +61,11 @@ import {
   addressPrompt,
   buildPrompt,
   fixPrompt,
+  MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES,
   prPrompt,
   resolveConflictsPrompt,
   reviewPrompt,
+  structuredReportRepairPrompt,
   verificationPrompt,
   type ObservedWorktreeSnapshot,
   type ReviewWorktreeSnapshot,
@@ -386,6 +389,19 @@ const DEFAULT_RECONNECT_DEADLINE_MS = 5 * 60_000;
  * idle forever — so polling it without a deadline is a silent livelock.
  */
 const DEFAULT_STRUCTURED_RESULT_DEADLINE_MS = 2 * 60_000;
+
+/**
+ * How many times a review session may be asked to re-emit a report that failed
+ * contract validation before the stage fails.
+ *
+ * A rejected report is not a rejected review: the analysis behind it took a full
+ * turn and is usually sound, and only its shape is wrong. Asking the same
+ * session for a corrected report is far cheaper than restarting the stage, and
+ * the reviewer is told exactly which rules it broke. The count is bounded
+ * because a model that cannot satisfy the contract will not start doing so on
+ * the tenth attempt, and an unbounded loop is indistinguishable from a hang.
+ */
+const MAX_STRUCTURED_REPORT_REPAIR_ATTEMPTS = 3;
 
 /**
  * Minimum spacing between transcript-only snapshot writes for a running turn.
@@ -2080,9 +2096,14 @@ export class BuildPipelineService {
     await this.assertValidationWorktreeUnchanged(pipeline, session);
     delete session.structuredWaitStartedAt;
     if (!result.ok) throw new Error(result.error.message);
-    const report = parseStructuredReviewReport(result.value, {
+    const parsed = safeParseStructuredReviewReport(result.value, {
       allowLegacyTestResults: true,
     });
+    if (!parsed.success) {
+      await this.repairStructuredReport(pipeline, provider, session, parsed.error);
+      return;
+    }
+    const report = parsed.data;
     session.structuredResultStatus = "accepted";
     pipeline.structuredReview = report;
     if (report.issues.length || report.testCoverageGaps.length) {
@@ -2090,6 +2111,67 @@ export class BuildPipelineService {
       return;
     }
     await this.startStage(pipeline, "verify", "verifying");
+  }
+
+  /**
+   * Asks the review session to re-emit a report the contract rejected.
+   *
+   * The failures this covers are the ones the provider's JSON schema cannot
+   * catch — totals that disagree with the arrays they count, duplicate ids,
+   * out-of-range confidences — so the reviewer has no way to know it produced an
+   * unusable report unless it is told. It is told here, in the session that
+   * still holds the whole review, rather than by restarting a stage that already
+   * spent its turn reaching the right conclusions.
+   *
+   * The corrected report is a new turn under a new structured request id, so it
+   * goes out through the same durable attempt every other prompt uses: a
+   * dispatch whose response is lost is retried under that id rather than
+   * delivered twice. The session's validation baseline is untouched, so the
+   * repair turn is certified against the same worktree state the review was.
+   */
+  private async repairStructuredReport(
+    pipeline: BuildPipeline,
+    provider: BuildPipelineProvider,
+    session: PipelineSession,
+    error: ReviewContractValidationError,
+  ): Promise<void> {
+    const attempt = (session.structuredReportRepairAttempts ?? 0) + 1;
+    if (attempt > MAX_STRUCTURED_REPORT_REPAIR_ATTEMPTS) {
+      throw new Error(
+        `${error.message} The review could not produce a valid report in ${MAX_STRUCTURED_REPORT_REPAIR_ATTEMPTS} repair attempts.`,
+      );
+    }
+    const requestId = randomUUID();
+    const startedAt = new Date().toISOString();
+    session.structuredReportRepairAttempts = attempt;
+    session.structuredRequestId = requestId;
+    session.structuredResultStatus = "pending";
+    session.turnStartedAt = startedAt;
+    const prompt = withUnattendedPolicy(structuredReportRepairPrompt(
+      error.issues,
+      attempt,
+      MAX_STRUCTURED_REPORT_REPAIR_ATTEMPTS,
+    ));
+    if (Buffer.byteLength(prompt, "utf8") > MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES) {
+      throw new Error("Structured report repair prompt exceeds its byte limit");
+    }
+    // The rejected report belongs to the previous request id; pointing both the
+    // session and the pipeline at the new one is what makes the next tick read
+    // the corrected result instead of re-reading the one already refused.
+    pipeline.structuredReviewRequestId = requestId;
+    pipeline.pendingPromptAttempt = {
+      id: randomUUID(),
+      sessionId: session.sdkSessionId,
+      requestId,
+      phase: "reviewing",
+      prompt,
+      useTaskImages: false,
+      structuredReview: true,
+      startedAt,
+    };
+    delete pipeline.stallWarning;
+    await this.save(pipeline, pipeline.backendRevision);
+    await this.dispatchPending(pipeline, provider);
   }
 
   private async finishVerification(

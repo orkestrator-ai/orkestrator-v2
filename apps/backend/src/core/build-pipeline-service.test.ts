@@ -22,7 +22,10 @@ import {
   UNATTENDED_AGENT_INTERACTION_POLICY,
   type AgentInteractionRequest,
 } from "@orkestrator/protocol/agent-interactions";
-import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import {
+  STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+  type StructuredReviewReport,
+} from "@orkestrator/protocol/structured-review";
 import type {
   JsonSchema,
   StructuredOutputResult,
@@ -3754,25 +3757,238 @@ describe("BuildPipelineService", () => {
     });
   });
 
-  test("rejects malformed structured review output instead of advancing", async () => {
+  test("repairs a report that broke the contract without restarting the review", async () => {
     await withService(async (service, storage, provider) => {
+      let reports = 0;
+      provider.structured = async <T>(
+        sessionId: string,
+        requestId: string,
+      ): Promise<StructuredOutputResult<T>> => {
+        if (provider.phases.get(sessionId) !== "review") {
+          return {
+            ok: true,
+            provider: "claude",
+            requestId,
+            value: { complete: true, rationale: "All criteria pass." } as T,
+          };
+        }
+        reports += 1;
+        return {
+          ok: true,
+          provider: "claude",
+          requestId,
+          // Schema-valid but contract-invalid: the failure count disagrees with
+          // the failure details, which no JSON schema can express.
+          value: (reports === 1
+            ? {
+              ...cleanReview,
+              testResults: {
+                total: 2,
+                passed: 1,
+                failed: 1,
+                notRun: 0,
+                failures: [],
+              },
+            }
+            : cleanReview) as T,
+        };
+      };
+      const started = await service.start(startInput());
+      for (
+        let pass = 0;
+        pass < 8 && (await pipeline(storage, started.id)).phase !== "verifying";
+        pass += 1
+      ) {
+        await service.advanceNow(started.id);
+      }
+
+      const advanced = await pipeline(storage, started.id);
+      expect(advanced.phase).toBe("verifying");
+      expect(advanced.structuredReview).toEqual(cleanReview);
+      // The repair is a second turn in the first review session, not a new one.
+      const reviews = advanced.sessions.filter((session) => session.phase === "review");
+      expect(reviews).toHaveLength(1);
+      expect(reviews[0]).toMatchObject({
+        structuredReportRepairAttempts: 1,
+        structuredResultStatus: "accepted",
+      });
+      const repair = provider.sent.find((sent) =>
+        sent.prompt.includes("Failure details count must equal failed."));
+      expect(repair).toMatchObject({
+        sessionId: reviews[0]!.sdkSessionId,
+        requestId: reviews[0]!.structuredRequestId,
+        schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+      });
+      expect(repair!.prompt).toContain("$.testResults.failures");
+      expect(repair!.prompt).toContain("repair attempt 1 of 3");
+    });
+  });
+
+  test("accepts a report repaired on the last permitted attempt", async () => {
+    await withService(async (service, storage, provider) => {
+      let reports = 0;
+      provider.structured = async <T>(
+        sessionId: string,
+        requestId: string,
+      ): Promise<StructuredOutputResult<T>> => {
+        if (provider.phases.get(sessionId) !== "review") {
+          return {
+            ok: true,
+            provider: "claude",
+            requestId,
+            value: { complete: true, rationale: "All criteria pass." } as T,
+          };
+        }
+        reports += 1;
+        // Rejected three times, corrected on the third and final repair — the
+        // path where the attempt counter is read back from a persisted value
+        // rather than from an absent one.
+        return {
+          ok: true,
+          provider: "claude",
+          requestId,
+          value: (reports <= 3
+            ? { ...cleanReview, riskProfile: { ...cleanReview.riskProfile, overallRisk: "severe" } }
+            : cleanReview) as T,
+        };
+      };
+      const started = await service.start(startInput());
+      for (
+        let pass = 0;
+        pass < 12 && (await pipeline(storage, started.id)).phase !== "verifying";
+        pass += 1
+      ) {
+        await service.advanceNow(started.id);
+      }
+
+      const advanced = await pipeline(storage, started.id);
+      expect(advanced.phase).toBe("verifying");
+      expect(advanced.structuredReview).toEqual(cleanReview);
+      expect(reports).toBe(4);
+      const reviews = advanced.sessions.filter((session) => session.phase === "review");
+      expect(reviews).toHaveLength(1);
+      expect(reviews[0]).toMatchObject({
+        structuredReportRepairAttempts: 3,
+        structuredResultStatus: "accepted",
+      });
+      // Each repair is its own turn under its own request id, and the last one
+      // is the id the accepted report was read from.
+      const repairs = provider.sent.filter((sent) =>
+        sent.prompt.includes("$.riskProfile.overallRisk"));
+      expect(repairs).toHaveLength(3);
+      expect(new Set(repairs.map((sent) => sent.requestId)).size).toBe(3);
+      expect(repairs.at(-1)?.requestId).toBe(reviews[0]!.structuredRequestId);
+      expect(repairs.map((sent) => sent.sessionId)).toEqual(
+        Array.from({ length: 3 }, () => reviews[0]!.sdkSessionId),
+      );
+      expect(repairs.map((sent) =>
+        sent.prompt.includes(`repair attempt ${repairs.indexOf(sent) + 1} of 3`)
+      )).toEqual([true, true, true]);
+    });
+  });
+
+  test("fails the review once the bounded report repairs are exhausted", async () => {
+    await withService(async (service, storage, provider) => {
+      let reports = 0;
       provider.structured = async <T>(
         _sessionId: string,
         requestId: string,
-      ): Promise<StructuredOutputResult<T>> => ({
-        ok: true,
-        provider: "claude",
-        requestId,
-        value: { issues: "not-an-array" } as T,
-      });
+      ): Promise<StructuredOutputResult<T>> => {
+        reports += 1;
+        return {
+          ok: true,
+          provider: "claude",
+          requestId,
+          value: { issues: "not-an-array" } as T,
+        };
+      };
       const started = await service.start(startInput());
-      for (let pass = 0; pass < 4; pass += 1) {
+      for (
+        let pass = 0;
+        pass < 12 && (await pipeline(storage, started.id)).phase !== "failed";
+        pass += 1
+      ) {
         await service.advanceNow(started.id);
       }
-      expect(await pipeline(storage, started.id)).toMatchObject({
+
+      const failed = await pipeline(storage, started.id);
+      expect(failed).toMatchObject({
         phase: "failed",
-        error: expect.any(String),
+        error: expect.stringContaining("3 repair attempts"),
       });
+      // One original report plus exactly three repairs, all in one session.
+      expect(reports).toBe(4);
+      const reviews = failed.sessions.filter((session) => session.phase === "review");
+      expect(reviews).toHaveLength(1);
+      expect(reviews[0]?.structuredReportRepairAttempts).toBe(3);
+    });
+  });
+
+  test("fails the review when a repair turn itself fails provider-side", async () => {
+    await withService(async (service, storage, provider) => {
+      let reports = 0;
+      provider.structured = async <T>(
+        _sessionId: string,
+        requestId: string,
+      ): Promise<StructuredOutputResult<T>> => {
+        reports += 1;
+        if (reports === 1) {
+          // Schema-valid but contract-invalid: the failure count disagrees with
+          // the failure details, so the report is rejected and a repair is asked
+          // for. The provider error comes on the repair turn itself.
+          return {
+            ok: true,
+            provider: "claude",
+            requestId,
+            value: {
+              ...cleanReview,
+              testResults: {
+                total: 2,
+                passed: 1,
+                failed: 1,
+                notRun: 0,
+                failures: [],
+              },
+            } as T,
+          };
+        }
+        return {
+          ok: false,
+          provider: "claude",
+          requestId,
+          error: {
+            code: "provider_error",
+            message: "the review provider did not produce a structured result",
+            provider: "claude",
+            retryable: true,
+          },
+        };
+      };
+      const started = await service.start(startInput());
+      for (
+        let pass = 0;
+        pass < 8 && (await pipeline(storage, started.id)).phase !== "failed";
+        pass += 1
+      ) {
+        await service.advanceNow(started.id);
+      }
+
+      const failed = await pipeline(storage, started.id);
+      expect(failed).toMatchObject({
+        phase: "failed",
+        error: expect.stringContaining("did not produce a structured result"),
+      });
+      // One original report plus one repair turn; the provider error on the
+      // repair is not repaired again, because no report was ever emitted for it.
+      expect(reports).toBe(2);
+      const reviews = failed.sessions.filter((session) => session.phase === "review");
+      expect(reviews).toHaveLength(1);
+      expect(reviews[0]?.structuredReportRepairAttempts).toBe(1);
+      // The single repair was dispatched and still carried the report schema.
+      const repairs = provider.sent.filter((sent) =>
+        sent.prompt.includes("repair attempt 1 of 3"));
+      expect(repairs).toHaveLength(1);
+      expect(repairs[0]?.schema).toBe(STRUCTURED_REVIEW_REPORT_JSON_SCHEMA);
     });
   });
 

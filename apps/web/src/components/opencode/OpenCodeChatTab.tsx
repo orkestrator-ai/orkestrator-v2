@@ -64,6 +64,8 @@ import {
   carryOverOpenCodeSubagentHydration,
   mergeOpenCodeMessageInfo,
   mergeOpenCodeSubagentTranscript,
+  inspectOpenCodeIncompleteTurn,
+  OPENCODE_INCOMPLETE_TURN_CONTINUATION,
   ERROR_MESSAGE_PREFIX,
   SYSTEM_MESSAGE_PREFIX,
   type PermissionRequest,
@@ -215,6 +217,9 @@ function isOpenCodeTurnActive(status: string | null): boolean {
  * handler that has to consume the flag.
  */
 const locallyStoppedSessions = new Set<string>();
+
+const OPENCODE_INCOMPLETE_TURN_EXHAUSTED =
+  "OpenCode stopped before producing a final response after one automatic continuation. Send “Continue” to resume manually, or switch models if this keeps happening.";
 
 /** Test seam — the module-level set outlives any one component instance. */
 export function __resetOpenCodeLocalStopsForTest(): void {
@@ -1709,6 +1714,83 @@ export function OpenCodeChatTab({
         !abortController.signal.aborted &&
         reloadGenerationByKey.get(reloadKey) === generation;
 
+      /**
+       * OpenCode 1.18.x exits its prompt loop when a provider maps the finish
+       * reason to `unknown`, even if the assistant emitted only reasoning and
+       * never produced a final answer. Recover once with a new continuation
+       * turn rather than replaying the original prompt (which could repeat
+       * tool side effects).
+       *
+       * The optimistic continuation is also the in-flight dedupe marker. The
+       * store preserves client-only messages across transcript snapshots, and
+       * the backend echo replaces it once accepted, so duplicate idle frames
+       * cannot dispatch the recovery twice.
+       */
+      const recoverIncompleteTurn = async (
+        sessionId: string,
+        sessionKey: string,
+      ) => {
+        const state = useOpenCodeStore.getState();
+        const currentSession = state.sessions.get(sessionKey);
+        if (currentSession?.sessionId !== sessionId) return;
+
+        const recovery = inspectOpenCodeIncompleteTurn(currentSession.messages);
+        if (!recovery) return;
+
+        if (recovery.action === "exhausted") {
+          state.addMessage(sessionKey, {
+            id: `${ERROR_MESSAGE_PREFIX}incomplete-${recovery.assistantMessageId}`,
+            role: "assistant",
+            content: OPENCODE_INCOMPLETE_TURN_EXHAUSTED,
+            parts: [{ type: "text", content: OPENCODE_INCOMPLETE_TURN_EXHAUSTED }],
+            createdAt: new Date().toISOString(),
+          });
+          return;
+        }
+
+        const optimisticContinuation = createOptimisticNativeMessage(
+          `${OPTIMISTIC_MESSAGE_PREFIX}incomplete-${recovery.assistantMessageId}`,
+          OPENCODE_INCOMPLETE_TURN_CONTINUATION,
+        );
+        state.addMessage(sessionKey, optimisticContinuation);
+        state.setSessionLoading(sessionKey, true);
+
+        const selectedModelValue =
+          recovery.modelId ?? state.getSelectedModel(sessionKey);
+        const result = await sendPrompt(
+          sdkClient,
+          sessionId,
+          OPENCODE_INCOMPLETE_TURN_CONTINUATION,
+          {
+            model:
+              selectedModelValue === "default"
+                ? undefined
+                : selectedModelValue,
+            variant: state.getSelectedVariant(sessionKey),
+            mode: state.getSelectedMode(sessionKey),
+            agent: state.getSelectedAgent(sessionKey),
+            directory: slashCommandDirectory,
+          },
+        );
+
+        const latestState = useOpenCodeStore.getState();
+        if (latestState.sessions.get(sessionKey)?.sessionId !== sessionId) return;
+        if (result.success) return;
+
+        latestState.removeMessage(sessionKey, optimisticContinuation.id);
+        latestState.addMessage(sessionKey, {
+          id: `${ERROR_MESSAGE_PREFIX}incomplete-send-${recovery.assistantMessageId}`,
+          role: "assistant",
+          content: `OpenCode stopped before its final response, and Orkestrator could not send the automatic continuation: ${translateOpenCodeSendError(result.error)}`,
+          parts: [{
+            type: "text",
+            content: `OpenCode stopped before its final response, and Orkestrator could not send the automatic continuation: ${translateOpenCodeSendError(result.error)}`,
+          }],
+          createdAt: new Date().toISOString(),
+        });
+        latestState.setSessionLoading(sessionKey, false);
+      };
+
       try {
         const eventStream = await subscribeToEvents(sdkClient);
         if (!eventStream || abortController.signal.aborted) {
@@ -1979,6 +2061,9 @@ export function OpenCodeChatTab({
                 idsBeforeFetch,
               );
               setMessages(sessionKey, reconciledMessages);
+              if (includeSubagents) {
+                await recoverIncompleteTurn(sessionId, sessionKey);
+              }
               if (currentSession.isLoading) {
                 setSessionLoading(
                   sessionKey,
@@ -2642,6 +2727,7 @@ export function OpenCodeChatTab({
       removePendingPermission,
       removePendingQuestion,
       syncPendingRequests,
+      slashCommandDirectory,
     ],
   );
   startSharedEventSubscriptionRef.current = startSharedEventSubscription;

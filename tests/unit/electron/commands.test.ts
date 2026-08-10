@@ -12263,11 +12263,13 @@ exit 0
     const worktreePath = await createTempDir("ork-electron-worktree-opencode-");
 
     const markerPath = path.join(toolchainBinDir, "opencode-was-used.log");
+    const configMarkerPath = path.join(toolchainBinDir, "opencode-config-content.json");
     const opencodeWrapperPath = path.join(toolchainBinDir, "opencode");
     await fs.writeFile(
       opencodeWrapperPath,
       `#!/bin/sh
 printf 'used %s\\n' "$*" >> "${markerPath}"
+printf '%s' "$OPENCODE_CONFIG_CONTENT" > "${configMarkerPath}"
 PORT=""
 HOST="127.0.0.1"
 while [ "$#" -gt 0 ]; do
@@ -12313,6 +12315,9 @@ exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:h
           `Basic ${Buffer.from(`opencode:${result.authToken}`).toString("base64")}`,
       })).resolves.toBe(true);
       expect(await fs.readFile(markerPath, "utf8")).toContain("used serve --port");
+      expect(JSON.parse(await fs.readFile(configMarkerPath, "utf8"))).toEqual({
+        permission: "allow",
+      });
       expect(updates).toContainEqual({ localOpencodePort: result.port, opencodePid: result.pid });
     } finally {
       await commands.get("stop_local_opencode_server_cmd")?.({ environmentId: environment.id }, context);
@@ -12633,6 +12638,9 @@ exit 0
         expect(execLog).toContain("pkill -f '[o]pencode serve'");
         expect(execLog).toContain(
           "/home/node/.config/opencode/plugins/orkestrator-github-env.js",
+        );
+        expect(execLog).toContain(
+          `export OPENCODE_CONFIG_CONTENT='${commandTesting.OPENCODE_MANAGED_CONFIG_CONTENT}'`,
         );
         expect(execLog).toContain("unset GITHUB_TOKEN GH_TOKEN");
       });

@@ -23,6 +23,7 @@ import {
   getSessionStatus,
   getStructuredOutput,
   hasOpenCodeSubagentSession,
+  inspectOpenCodeIncompleteTurn,
   isOpenCodeMessageAbortedError,
   listSessions,
   lookupSessionStatus,
@@ -30,6 +31,7 @@ import {
   mergeOpenCodeSubagentTranscript,
   normalizeOpenCodeMessage,
   normalizeOpenCodePart,
+  OPENCODE_INCOMPLETE_TURN_CONTINUATION,
   rejectQuestion,
   replyToPermission,
   replyToQuestion,
@@ -2755,6 +2757,91 @@ describe("opencode-client normalizeOpenCodeMessage", () => {
   test("returns null for non-object input", () => {
     expect(normalizeOpenCodeMessage(null)).toBeNull();
     expect(normalizeOpenCodeMessage(42)).toBeNull();
+  });
+
+  test("preserves the final step finish reason without rendering it as content", () => {
+    const message = normalizeOpenCodeMessage({
+      info: { id: "unknown-finish", role: "assistant" },
+      parts: [
+        { id: "reasoning", messageID: "unknown-finish", type: "reasoning", text: "Working" },
+        { id: "first-finish", messageID: "unknown-finish", type: "step-finish", reason: "tool-calls" },
+        { id: "final-finish", messageID: "unknown-finish", type: "step-finish", reason: "unknown" },
+      ],
+    });
+
+    expect(message?.finishReason).toBe("unknown");
+    expect(message?.content).toBe("");
+    expect(message?.parts.map((part) => part.type)).toEqual(["thinking"]);
+  });
+});
+
+describe("opencode-client incomplete turn recovery", () => {
+  const user = (content: string): OpenCodeMessage => ({
+    id: `user-${content}`,
+    role: "user",
+    content,
+    parts: [{ type: "text", content }],
+    createdAt: "2026-08-10T10:00:00.000Z",
+  });
+  const assistant = (
+    overrides: Partial<OpenCodeMessage> = {},
+  ): OpenCodeMessage => ({
+    id: "assistant-unknown",
+    role: "assistant",
+    content: "",
+    parts: [{ type: "thinking", content: "Still working" }],
+    createdAt: "2026-08-10T10:01:00.000Z",
+    finishReason: "unknown",
+    modelId: "opencode-go/deepseek-v4-flash",
+    ...overrides,
+  });
+
+  test("continues an unknown reasoning-only finish once", () => {
+    expect(inspectOpenCodeIncompleteTurn([
+      user("Implement the feature"),
+      assistant(),
+    ])).toEqual({
+      action: "continue",
+      assistantMessageId: "assistant-unknown",
+      modelId: "opencode-go/deepseek-v4-flash",
+    });
+  });
+
+  test("does not recover usable text, other finish reasons, errors, or pending work", () => {
+    expect(inspectOpenCodeIncompleteTurn([
+      user("Implement the feature"),
+      assistant({ content: "Done", parts: [{ type: "text", content: "Done" }] }),
+    ])).toBeNull();
+    expect(inspectOpenCodeIncompleteTurn([
+      user("Implement the feature"),
+      assistant({ finishReason: "stop" }),
+    ])).toBeNull();
+    expect(inspectOpenCodeIncompleteTurn([
+      user("Implement the feature"),
+      assistant({ hasError: true }),
+    ])).toBeNull();
+    expect(inspectOpenCodeIncompleteTurn([
+      user("Implement the feature"),
+      assistant({
+        parts: [{
+          type: "tool-invocation",
+          content: "bash",
+          toolName: "bash",
+          toolState: "pending",
+        }],
+      }),
+    ])).toBeNull();
+  });
+
+  test("marks a second consecutive unknown finish as exhausted", () => {
+    expect(inspectOpenCodeIncompleteTurn([
+      user(OPENCODE_INCOMPLETE_TURN_CONTINUATION),
+      assistant({ id: "assistant-retry" }),
+    ])).toEqual({
+      action: "exhausted",
+      assistantMessageId: "assistant-retry",
+      modelId: "opencode-go/deepseek-v4-flash",
+    });
   });
 });
 

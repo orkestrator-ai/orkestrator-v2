@@ -11688,6 +11688,14 @@ export function createCommandRegistry(
       shared = created;
     }
     const wait = shared.promise;
+    const callerTimedOut = (): AwaitBridgeReadyResult => ({
+      status: "timed-out",
+      error: {
+        message: `${agent} bridge did not become ready before the caller deadline`,
+        retryable: true,
+        retryAfterMs: 1_000,
+      },
+    });
 
     return new Promise<AwaitBridgeReadyResult>((resolve, reject) => {
       let settled = false;
@@ -11695,16 +11703,13 @@ export function createCommandRegistry(
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        resolve(result);
+        // The shared probe and its longest-lived caller expire at the same
+        // absolute deadline. If the probe continuation wins that timer race,
+        // keep its internal startup-window result from changing the caller's
+        // public timeout contract.
+        resolve(result.status === "timed-out" ? callerTimedOut() : result);
       };
-      const timer = setTimeout(() => finish({
-        status: "timed-out",
-        error: {
-          message: `${agent} bridge did not become ready before the caller deadline`,
-          retryable: true,
-          retryAfterMs: 1_000,
-        },
-      }), timeoutMs);
+      const timer = setTimeout(() => finish(callerTimedOut()), timeoutMs);
       timer.unref?.();
       void wait.then(finish, (error) => {
         if (settled) return;

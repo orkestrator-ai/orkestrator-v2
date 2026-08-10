@@ -238,6 +238,16 @@ let incompleteTurnRecoveryOwnerByMarker = new WeakMap<
 const OPENCODE_INCOMPLETE_TURN_EXHAUSTED =
   "OpenCode stopped before producing a final response after one automatic continuation. Send “Continue” to resume manually, or switch models if this keeps happening.";
 
+/**
+ * How long an accepted continuation marker may sit un-echoed before an idle
+ * snapshot treats the acceptance as lost. OpenCode appends the echoed user
+ * message to the session as soon as a prompt is accepted, so a marker that is
+ * neither echoed nor retired after this window was acknowledged by a server
+ * that died before persisting it. Retiring it lets the recovery make one
+ * bounded re-dispatch instead of wedging the turn loading forever.
+ */
+const OPENCODE_INCOMPLETE_RECOVERY_RETRY_AFTER_MS = 30_000;
+
 /** Test seam — module-level coordination outlives any one component instance. */
 export function __resetOpenCodeLocalStopsForTest(): void {
   locallyStoppedSessions.clear();
@@ -910,21 +920,37 @@ export function OpenCodeChatTab({
       const owner = incompleteTurnRecoveryOwnerByMarker.get(
         existingContinuation,
       );
-      if (
-        !owner
-        || owner.client === sdkClient
-        || owner.state !== "failed"
-      ) {
+      const continuationEchoed = currentSession.messages.some(
+        (message) =>
+          message.role === "user"
+          && !message.id.startsWith(OPTIMISTIC_MESSAGE_PREFIX)
+          && normalizeMessageContent(message.content)
+            === OPENCODE_INCOMPLETE_TURN_CONTINUATION,
+      );
+      const markerStale =
+        Date.now() - new Date(existingContinuation.createdAt).getTime()
+          >= OPENCODE_INCOMPLETE_RECOVERY_RETRY_AFTER_MS;
+      const retryableFailedDispatch =
+        !!owner
+        && owner.client !== sdkClient
+        && owner.state === "failed";
+      const retryableLostAcceptance =
+        !continuationEchoed
+        && markerStale
+        && (!owner || owner.state === "accepted");
+      if (!retryableFailedDispatch && !retryableLostAcceptance) {
         // An overlapping idle snapshot can predate the continuation's backend
-        // echo. Keep the turn busy while the optimistic marker owns dispatch.
+        // echo, and a fresh accepted prompt may still stream it. Keep the turn
+        // busy while the optimistic marker owns dispatch.
         state.setSessionLoading(targetSessionKey, true);
         return;
       }
 
-      // The current client supplied an authoritative idle snapshot after the
-      // marker's original client definitively failed its dispatch. Retire only
-      // that owned marker, then inspect the refreshed transcript so this client
-      // can make one replacement attempt.
+      // Retire only that owned marker, then inspect the refreshed transcript
+      // so this client can make one replacement attempt. Failed dispatches
+      // never reached the backend; a lost acceptance was acknowledged but
+      // never echoed back (the server died before persisting it), so a stale
+      // un-echoed marker would otherwise wedge the turn loading forever.
       incompleteTurnRecoveryOwnerByMarker.delete(existingContinuation);
       state.removeMessage(targetSessionKey, existingContinuation.id);
       const refreshedState = useOpenCodeStore.getState();
@@ -962,6 +988,8 @@ export function OpenCodeChatTab({
     );
     state.addMessage(targetSessionKey, optimisticContinuation);
     state.setSessionLoading(targetSessionKey, true);
+    const loadingRevisionAtDispatch =
+      useOpenCodeStore.getState().sessionLoadingRevisions.get(targetSessionKey) ?? 0;
     const recoveryOwner: IncompleteTurnRecoveryOwner = {
       client: sdkClient,
       state: "pending",
@@ -1018,7 +1046,15 @@ export function OpenCodeChatTab({
       parts: [{ type: "text", content: errorContent }],
       createdAt: new Date().toISOString(),
     });
-    latestState.setSessionLoading(targetSessionKey, false);
+    // Clear only the loading this dispatch owns. If a newer lifecycle edge
+    // (e.g. a backend-dispatched queued turn) advanced the revision while the
+    // continuation was in flight, that turn's busy state must not be clobbered.
+    if (
+      (latestState.sessionLoadingRevisions.get(targetSessionKey) ?? 0)
+        === loadingRevisionAtDispatch
+    ) {
+      latestState.setSessionLoading(targetSessionKey, false);
+    }
   }, [environmentId, slashCommandDirectory]);
 
   const refreshSessionFromServer = useCallback(async (

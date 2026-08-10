@@ -48,6 +48,7 @@ import {
   type OpenCodeMessage,
   type OpenCodeModel,
 } from "./opencode-client";
+import { TURN_STOPPED_BY_USER } from "@/lib/chat/client-only-messages";
 import { StructuredOutputReadUnavailableError } from "@orkestrator/protocol/structured-output";
 import { OPEN_CODE_MESSAGE_HISTORY_LIMIT } from "@orkestrator/protocol/opencode-message-id";
 
@@ -2840,6 +2841,52 @@ describe("opencode-client incomplete turn recovery", () => {
     ])).toEqual({
       action: "exhausted",
       assistantMessageId: "assistant-retry",
+      modelId: "opencode-go/deepseek-v4-flash",
+    });
+  });
+
+  test("omits modelId when the assistant message reports none", () => {
+    expect(inspectOpenCodeIncompleteTurn([
+      user("Implement the feature"),
+      assistant({ modelId: undefined }),
+    ])).toEqual({
+      action: "continue",
+      assistantMessageId: "assistant-unknown",
+    });
+  });
+
+  test("does not recover a turn carrying the client stop marker", () => {
+    expect(inspectOpenCodeIncompleteTurn([
+      user("Implement the feature"),
+      assistant(),
+      {
+        id: "system-stop",
+        role: "system",
+        content: TURN_STOPPED_BY_USER,
+        parts: [{ type: "text", content: TURN_STOPPED_BY_USER }],
+        createdAt: "2026-08-10T10:02:00.000Z",
+      },
+    ])).toBeNull();
+  });
+
+  test("still recovers a later turn after a stale stop marker from an earlier turn", () => {
+    // The stop marker belongs to the previous turn and sits before the latest
+    // user message, so it must not block the current turn's recovery.
+    expect(inspectOpenCodeIncompleteTurn([
+      user("First task"),
+      assistant({ id: "assistant-first" }),
+      {
+        id: "system-stop",
+        role: "system",
+        content: TURN_STOPPED_BY_USER,
+        parts: [{ type: "text", content: TURN_STOPPED_BY_USER }],
+        createdAt: "2026-08-10T10:02:00.000Z",
+      },
+      user("Second task"),
+      assistant({ id: "assistant-second" }),
+    ])).toEqual({
+      action: "continue",
+      assistantMessageId: "assistant-second",
       modelId: "opencode-go/deepseek-v4-flash",
     });
   });

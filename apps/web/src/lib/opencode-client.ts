@@ -1149,6 +1149,8 @@ export function normalizeOpenCodeMessage(rawMessage: unknown): OpenCodeMessage |
  * Recovery is intentionally conservative:
  * - final assistant text means the turn is usable, even if its reason is odd;
  * - a pending tool/subagent means continuing could overlap side effects;
+ * - a client stop marker in the turn means the user aborted it and the turn
+ *   must not be auto-continued;
  * - the fixed continuation prompt is allowed only once consecutively.
  */
 export function inspectOpenCodeIncompleteTurn(
@@ -1164,6 +1166,16 @@ export function inspectOpenCodeIncompleteTurn(
   if (latestUserIndex < 0) return null;
 
   const turnMessages = messages.slice(latestUserIndex + 1);
+
+  // OpenCode server transcripts carry only user/assistant roles. A system row
+  // in the tail of the current turn is this client's stop marker (the
+  // "Query stopped by user." row), so continuing here would re-run work the
+  // user deliberately aborted. Stale stop markers from earlier turns sit
+  // before the latest user message and are not part of the turn's tail.
+  if (turnMessages.some((message) => message.role === "system")) {
+    return null;
+  }
+
   const latestAssistant = [...turnMessages]
     .reverse()
     .find((message) => message.role === "assistant");

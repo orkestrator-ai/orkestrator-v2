@@ -6019,6 +6019,57 @@ describe("CodexChatTab", () => {
     expect(useCodexStore.getState().promptDispatchClaims.has(SESSION_KEY)).toBe(false);
   });
 
+  test("clears the durably queued launch prompt once the tab's own dispatch is accepted", async () => {
+    const initialPrompt = "Review the change after the launch race";
+    const launchRequestId = `initial-prompt:${ENVIRONMENT_ID}:${TAB_ID}`;
+    seedPaneLayout(initialPrompt);
+    // The durable queue already holds the launch prompt (ActionBar enqueued it)
+    // while this tab mounts and wins the dispatch race.
+    useCodexStore.setState((state) => ({
+      ...state,
+      messageQueue: new Map(state.messageQueue).set(SESSION_KEY, [{
+        id: launchRequestId,
+        text: initialPrompt,
+        attachments: [],
+        model: MOCK_MODELS[0]!.id,
+        mode: "build",
+        reasoningEffort: "medium",
+        fastMode: false,
+      }]),
+    }));
+    mockGetSessionMessages.mockResolvedValue([{
+      id: "server-race-prompt",
+      role: "user",
+      content: initialPrompt,
+      parts: [{ type: "text", content: initialPrompt }],
+      createdAt: "2026-07-28T12:00:00.000Z",
+    }]);
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        initialPrompt={initialPrompt}
+      />,
+    );
+
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+    expect((mockSendPrompt.mock.calls[0]?.[3] as { requestId?: string }).requestId)
+      .toBe(launchRequestId);
+
+    // The accepted dispatch must retire the matching durable queue head so it
+    // neither lingers in the projection nor gets re-promoted into the composer.
+    await waitFor(() =>
+      expect(mockRemovePromptQueueMessage).toHaveBeenCalledWith(
+        `codex\u0000${SESSION_KEY}`,
+        ENVIRONMENT_ID,
+        launchRequestId,
+      )
+    );
+    expect(useCodexStore.getState().messageQueue.get(SESSION_KEY)).toEqual([]);
+  });
+
   test("dispatches and displays an initial prompt once under StrictMode", async () => {
     const initialPrompt = "Run the strict launch audit";
     seedPaneLayout(initialPrompt);
@@ -8113,6 +8164,57 @@ describe("CodexChatTab", () => {
       expect(state.selectedReasoningEffort.get(SESSION_KEY)).toBe("medium");
       expect(state.fastMode.get(SESSION_KEY)).toBe(false);
     });
+  });
+
+  test("does not re-promote a launch prompt the tab already sent when stopping", async () => {
+    const initialPrompt = "Review the change after the launch race";
+    const launchRequestId = `initial-prompt:${ENVIRONMENT_ID}:${TAB_ID}`;
+    seedPaneLayout(initialPrompt);
+    mockGetSessionMessages.mockResolvedValue([{
+      id: "server-gate-prompt",
+      role: "user",
+      content: initialPrompt,
+      parts: [{ type: "text", content: initialPrompt }],
+      createdAt: "2026-07-28T12:00:00.000Z",
+    }]);
+    mockSendPrompt.mockImplementation(async () => ({ status: "processing" }));
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        initialPrompt={initialPrompt}
+      />,
+    );
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+
+    // The durable queue still holds the launch prompt (the acceptance-time
+    // clear could not reach the backend). The promote gate must keep it out of
+    // the composer so a duplicate review cannot be sent.
+    useCodexStore.setState((state) => ({
+      ...state,
+      messageQueue: new Map(state.messageQueue).set(SESSION_KEY, [{
+        id: launchRequestId,
+        text: initialPrompt,
+        attachments: [],
+        model: MOCK_MODELS[0]!.id,
+        mode: "build",
+        reasoningEffort: "medium",
+        fastMode: false,
+      }]),
+    }));
+
+    fireEvent.click(screen.getByTestId("codex-stop"));
+    await waitFor(() => expect(mockAbortSession).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(useCodexStore.getState().draftText.get(SESSION_KEY) ?? "").toBe("");
+    expect(
+      useCodexStore.getState().messageQueue.get(SESSION_KEY)?.map((message) => message.text),
+    ).toEqual([initialPrompt]);
   });
 
   test("does not dispatch a queued prompt while a stop is being promoted", async () => {

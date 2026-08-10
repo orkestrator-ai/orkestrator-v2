@@ -87,6 +87,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupBlocked } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import {
+  clearQueuedLaunchPrompt,
   enqueueAgentPrompt,
   transferAgentPromptToComposeDraft,
 } from "@/lib/prompt-queue-sources";
@@ -1538,6 +1539,14 @@ export function ClaudeChatTab({
               && success.turnStartedAt !== undefined
             ) {
               setSessionLoading(sessionKey, true, success.turnStartedAt);
+              // The tab won the launch race: the same request id is queued
+              // durably, so clear the head before it can be re-promoted as a
+              // prompt that was never sent.
+              void clearQueuedLaunchPrompt(
+                "claude",
+                sessionKey,
+                `initial-prompt:${environmentId}:${tabId}`,
+              );
             }
           } else {
             // No initial prompt - just set up the session normally
@@ -2487,6 +2496,13 @@ export function ClaudeChatTab({
 
     const head = store.getQueuedMessages(sessionKey)[0];
     if (!head) return;
+    // Never re-promote a launch prompt this tab already sent. The durable queue
+    // can still hold the same request id until the backend drain reconciles the
+    // dispatch race, and surfacing it would invite a duplicate send.
+    if (
+      head.id === `initial-prompt:${environmentId}:${tabId}`
+      && initialPromptSentRef.current
+    ) return;
     const nextMessage = await transferAgentPromptToComposeDraft<QueuedMessage>(
       "claude",
       sessionKey,
@@ -2503,7 +2519,7 @@ export function ClaudeChatTab({
     store.setEffort(sessionKey, nextMessage.effort);
     store.setPlanMode(sessionKey, nextMessage.planModeEnabled);
     store.setFastMode(sessionKey, nextMessage.fastModeEnabled);
-  }, [sessionKey]);
+  }, [environmentId, sessionKey, tabId]);
 
   // Handle stopping the current query
   const handleStop = useCallback(async () => {

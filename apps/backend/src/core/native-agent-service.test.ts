@@ -41,6 +41,19 @@ const refusingInvoke: Invoke = async <T>(command: string): Promise<T> => {
   throw new Error(`Unexpected backend command: ${command}`);
 };
 
+/** Polls until a fire-and-forget drain pass has observable side effects. */
+async function waitForCondition(
+  condition: () => boolean | Promise<boolean>,
+): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (!(await condition())) {
+    if (Date.now() > deadline) {
+      throw new Error("Timed out waiting for background drain work");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 function createProviderStub(
   agent: BuildPipelineAgent,
   behaviour: {
@@ -5449,6 +5462,78 @@ describe("NativeAgentService", () => {
         expect(queue).toMatchObject({ messages: [] });
         expect(queue?.inFlight).toBeUndefined();
         expect(queue?.dispatchError).toBeUndefined();
+      });
+    });
+
+    test("re-drains a coalesced notification once the in-flight pass settles", async () => {
+      const dispatched: Array<{ prompt: string; requestId: string }> = [];
+      let releaseFirstSend!: () => void;
+      const firstSendBlocked = new Promise<void>((resolve) => {
+        releaseFirstSend = resolve;
+      });
+      const { provider } = createProviderStub("codex", {
+        send: async (_sessionId, prompt, options) => {
+          dispatched.push({ prompt, requestId: options.requestId });
+          if (dispatched.length === 1) {
+            // Keep the first drain pass in flight so the notification for the
+            // second message coalesces onto it instead of starting a new pass.
+            await firstSendBlocked;
+          }
+        },
+      });
+      await withService({
+        prefix: "orkestrator-native-drain-recheck-",
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        const queueKey = "codex\u0000env-env-1:tab-1";
+        await storage.savePromptQueue(queueKey, "env-1", [
+          { id: "row-1", requestId: "request-1", text: "First prompt" },
+        ]);
+
+        service.notifyPromptQueueChanged(queueKey);
+        await waitForCondition(() => dispatched.length === 1);
+
+        // The second message lands while the first drain pass is still in
+        // flight. The notification coalesces onto it, so only the follow-up
+        // pass scheduled by drainPromptQueue can pick the new head up.
+        await storage.enqueuePromptQueueMessage(queueKey, "env-1", {
+          id: "row-2",
+          requestId: "request-2",
+          text: "Second prompt",
+        });
+        service.notifyPromptQueueChanged(queueKey);
+
+        releaseFirstSend();
+        await waitForCondition(async () => {
+          const queue = await storage.getPromptQueue(queueKey);
+          return queue?.messages.length === 0 && queue?.inFlight === undefined;
+        });
+
+        expect(dispatched).toEqual([
+          { prompt: "First prompt", requestId: "request-1" },
+          { prompt: "Second prompt", requestId: "request-2" },
+        ]);
+        const queue = await storage.getPromptQueue(queueKey);
+        expect(queue).toMatchObject({ messages: [] });
+        expect(queue?.inFlight).toBeUndefined();
+      });
+    });
+
+    test("does not create a provider session when notified about an empty queue", async () => {
+      const { provider, createSession } = createProviderStub("codex");
+      await withService({
+        prefix: "orkestrator-native-drain-empty-",
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        const queueKey = "codex\u0000env-env-1:tab-1";
+        await storage.savePromptQueue(queueKey, "env-1", []);
+
+        service.notifyPromptQueueChanged(queueKey);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        expect(createSession).not.toHaveBeenCalled();
+        const queue = await storage.getPromptQueue(queueKey);
+        expect(queue).toMatchObject({ messages: [] });
       });
     });
 

@@ -4105,6 +4105,48 @@ describe("OpenCodeChatTab", () => {
     });
   });
 
+  test("clears the durably queued launch prompt once the tab's own dispatch is accepted", async () => {
+    const initialPrompt = "Review the change after the launch race";
+    const launchRequestId = `initial-prompt:${ENVIRONMENT_ID}:${TAB_ID}`;
+    seedPaneLayout();
+    // The durable queue already holds the launch prompt while this tab mounts
+    // and wins the dispatch race.
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
+      id: launchRequestId,
+      text: initialPrompt,
+      attachments: [],
+      model: undefined,
+      mode: "build",
+    });
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        initialPrompt={initialPrompt}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        "session-1",
+        initialPrompt,
+        expect.objectContaining({ requestId: launchRequestId }),
+      )
+    );
+
+    await waitFor(() =>
+      expect(mockRemovePromptQueueMessage).toHaveBeenCalledWith(
+        `opencode\u0000${SESSION_KEY}`,
+        ENVIRONMENT_ID,
+        launchRequestId,
+      )
+    );
+    expect(useOpenCodeStore.getState().messageQueue.get(SESSION_KEY)).toEqual([]);
+  });
+
   test("honours launch options against a warm client's live catalog without refetching", async () => {
     const initialPrompt = "Review with the requested model";
     seedPaneLayout(undefined, {

@@ -100,6 +100,7 @@ import { requireCodexForkPlanEntry } from "./codex-message-fork";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupBlocked } from "@/lib/setup-commands";
 import {
+  clearQueuedLaunchPrompt,
   enqueueAgentPrompt,
   transferAgentPromptToComposeDraft,
 } from "@/lib/prompt-queue-sources";
@@ -917,6 +918,7 @@ export function CodexChatTab({
         // holding stale launch props cannot dispatch the same prompt again.
         store.claimPromptDispatch(sessionKey, pending.requestId);
         clearTabInitialPrompt(tabId, environmentId);
+        void clearQueuedLaunchPrompt("codex", sessionKey, initialPromptRequestId);
       }
       return;
     }
@@ -1352,6 +1354,10 @@ export function CodexChatTab({
 
     const head = store.getQueuedMessages(sessionKey)[0];
     if (!head) return;
+    // Never re-promote a launch prompt this tab already sent. The durable queue
+    // can still hold the same request id until the backend drain reconciles the
+    // dispatch race, and surfacing it would invite a duplicate send.
+    if (head.id === initialPromptRequestId && initialPromptSent) return;
     const nextMessage = await transferAgentPromptToComposeDraft<CodexQueuedMessage>(
       "codex",
       sessionKey,
@@ -1369,7 +1375,7 @@ export function CodexChatTab({
     store.setSelectedMode(sessionKey, nextMessage.mode);
     store.setSelectedReasoningEffort(sessionKey, nextMessage.reasoningEffort);
     store.setFastMode(sessionKey, nextMessage.fastMode);
-  }, [sessionKey]);
+  }, [initialPromptRequestId, initialPromptSent, sessionKey]);
 
   const handleStop = useCallback(async () => {
     if (!client || !session?.sessionId) return;
@@ -3162,6 +3168,10 @@ export function CodexChatTab({
       if (result === "accepted") {
         accepted = true;
         clearTabInitialPrompt(tabId, environmentId);
+        // The tab won the launch race: this same request id is queued durably
+        // and the backend drain may still be reconciling it. Clear the head so
+        // it neither lingers in the projection nor gets re-promoted.
+        void clearQueuedLaunchPrompt("codex", sessionKey, initialPromptRequestId);
       }
     }).catch((error) => {
       console.error("[CodexChatTab] Failed to dispatch initial prompt:", error);

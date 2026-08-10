@@ -126,6 +126,29 @@ export async function retryAgentPromptQueueDispatch(
   await retryPromptQueueDispatch(source, sessionKey);
 }
 
+/**
+ * Drops a launch prompt from the durable queue once the renderer's own dispatch
+ * of that request id was accepted. When a tab mounts before the backend enqueue
+ * settles, both paths carry the same request id; the tab winning that race would
+ * otherwise leave the head queued, where it lingers in the projection and can be
+ * re-promoted as a prompt that was never sent. Best effort: if the queue or
+ * backend is unavailable, the periodic scan reconciles the head on its next pass.
+ */
+export async function clearQueuedLaunchPrompt(
+  agent: "claude" | "codex" | "opencode",
+  sessionKey: string,
+  launchRequestId: string,
+): Promise<void> {
+  try {
+    await removeAgentPrompt(agent, sessionKey, launchRequestId);
+  } catch (error) {
+    console.debug(
+      `[prompt-queue] Could not clear already-sent launch prompt ${launchRequestId}:`,
+      error,
+    );
+  }
+}
+
 function sourceFor<TItem extends QueuedItem>(
   agent: string,
 ): PromptQueueSource<TItem> | null {

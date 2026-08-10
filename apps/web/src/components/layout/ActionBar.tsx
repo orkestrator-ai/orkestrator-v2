@@ -89,6 +89,10 @@ import {
 } from "@/lib/review-launch-options";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { normalizeOpenCodeModelReferences } from "@/lib/opencode-model-preferences";
+import { promptQueueKey } from "@/lib/prompt-queue-persistence";
+import { createSessionKey } from "@/lib/utils";
+import { createUuid } from "@/lib/uuid";
+import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   LazyDialogLoadingFallback,
   LazyLoadBoundary,
@@ -477,7 +481,12 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       initialReasoningEffort?: string;
     },
   ) => {
-    if (!createTab || !selectedProjectId || !canCreateTab) return;
+    if (
+      !createTab
+      || !selectedEnvironmentId
+      || !selectedProjectId
+      || !canCreateTab
+    ) return;
 
     const repoConfig = config.repositories[selectedProjectId];
     const targetBranch = repoConfig?.prBaseBranch || "main";
@@ -486,14 +495,107 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       config.global.reviewInstruction,
     );
 
-    createTab(agentOverride || defaultAgent, {
+    const agent = agentOverride || defaultAgent;
+    const tabId = `tab-${createUuid()}`;
+    const created = createTab(agent, {
+      tabId,
+      // Keep a renderer-owned fallback until the durable queue mutation
+      // succeeds. If persistence fails, the native tab can still retry the
+      // launch instead of becoming an empty, unrecoverable review tab.
       initialPrompt: reviewPrompt,
       displayTitle: "Review",
       isReviewTab: true,
       agentLaunchMode: "native",
       ...launchOptions,
     });
-  }, [createTab, selectedProjectId, canCreateTab, config.repositories, config.global.reviewInstruction, defaultAgent]);
+    if (!created) {
+      toast.error("Could not open review", {
+        description: "The environment is not ready or the maximum tab count was reached.",
+      });
+      return;
+    }
+
+    const requestId = `initial-prompt:${selectedEnvironmentId}:${tabId}`;
+    const logicalSessionKey = createSessionKey(selectedEnvironmentId, tabId);
+    const preferredModel = agent === "claude"
+      ? config.global.claudeModel
+      : agent === "codex"
+        ? config.global.codexModel
+        : config.global.opencodeModel;
+    const requestedModel = launchOptions?.initialAgentModel ?? preferredModel;
+    const model = requestedModel === "default"
+      ? undefined
+      : requestedModel;
+    const reasoningEffort = launchOptions?.initialReasoningEffort
+      ?? (agent === "codex" ? config.global.codexReasoningEffort : undefined);
+    const queuedReview = agent === "claude"
+      ? {
+          id: requestId,
+          requestId,
+          text: reviewPrompt,
+          attachments: [],
+          model,
+          effort: reasoningEffort ?? "high",
+          planModeEnabled: false,
+          fastModeEnabled: config.global.claudeNativeFastModeDefault ?? false,
+        }
+      : agent === "codex"
+        ? {
+            id: requestId,
+            requestId,
+            text: reviewPrompt,
+            attachments: [],
+            model,
+            reasoningEffort: reasoningEffort ?? "medium",
+            mode: "build" as const,
+            fastMode: config.global.codexNativeFastModeDefault ?? false,
+          }
+        : {
+            id: requestId,
+            requestId,
+            text: reviewPrompt,
+            attachments: [],
+            model,
+            variant: reasoningEffort,
+            mode: "build" as const,
+          };
+
+    // Do not await UI lifecycle work after this hand-off. The queue mutation is
+    // durable and wakes the backend dispatcher, so unmounting this ActionBar or
+    // switching environments cannot delay the review until the tab is opened.
+    void backend.enqueuePromptQueueMessage(
+      promptQueueKey(agent, logicalSessionKey),
+      selectedEnvironmentId,
+      queuedReview,
+    ).then(() => {
+      // Persistence is now authoritative. Remove the renderer fallback before
+      // a later remount can mistake it for an undispatched launch. Both paths
+      // use the same request id, so a mount racing this acknowledgement remains
+      // provider-idempotent.
+      usePaneLayoutStore.getState().clearTabInitialPrompt(
+        tabId,
+        selectedEnvironmentId,
+      );
+    }).catch((error) => {
+      toast.error("Could not start review", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }, [
+    canCreateTab,
+    config.global.claudeModel,
+    config.global.claudeNativeFastModeDefault,
+    config.global.codexModel,
+    config.global.codexNativeFastModeDefault,
+    config.global.codexReasoningEffort,
+    config.global.opencodeModel,
+    config.global.reviewInstruction,
+    config.repositories,
+    createTab,
+    defaultAgent,
+    selectedEnvironmentId,
+    selectedProjectId,
+  ]);
 
   const openReviewDialog = useCallback(() => {
     if (!selectedEnvironment || !canCreateTab) return;

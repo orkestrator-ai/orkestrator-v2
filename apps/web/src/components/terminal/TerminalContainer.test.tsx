@@ -7035,6 +7035,7 @@ describe("TerminalContainer", () => {
           <CreateTabHarness
             type="codex"
             options={{
+              tabId: "review-tab-owned-by-launcher",
               agentLaunchMode: "native",
               displayTitle: "Review",
               initialAgentModel: "gpt-5.6-sol",
@@ -7051,6 +7052,7 @@ describe("TerminalContainer", () => {
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const created = env.root.tabs.find((t) => t.type === "codex-native");
         expect(created).toMatchObject({
+          id: "review-tab-owned-by-launcher",
           displayTitle: "Review",
           initialAgentModel: "gpt-5.6-sol",
           initialReasoningEffort: "xhigh",
@@ -7058,6 +7060,46 @@ describe("TerminalContainer", () => {
           isReviewTab: true,
         });
       });
+    });
+
+    test("refuses a duplicate caller-owned tab id", async () => {
+      const firstResult = mock((_created: boolean) => {});
+      const duplicateResult = mock((_created: boolean) => {});
+      const options = {
+        tabId: "caller-owned-review-tab",
+        agentLaunchMode: "native" as const,
+        displayTitle: "Review",
+      };
+
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateTabHarness
+            type="codex"
+            options={options}
+            onResult={firstResult}
+          />
+          <CreateTabHarness
+            type="codex"
+            options={options}
+            onResult={duplicateResult}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => {
+        expect(firstResult).toHaveBeenCalledWith(true);
+        expect(duplicateResult).toHaveBeenCalledWith(false);
+      });
+      expect(
+        usePaneLayoutStore.getState().getAllTabs("env-visible")
+          .filter((tab) => tab.id === options.tabId),
+      ).toHaveLength(1);
     });
 
     test("carries one-shot review options through every agent launch mode", async () => {

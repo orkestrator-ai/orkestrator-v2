@@ -506,6 +506,18 @@ export class NativeAgentService {
     return result.session;
   }
 
+  /**
+   * Wake the durable queue worker after an intent-level queue mutation.
+   *
+   * The periodic scan remains the crash/restart safety net, but a newly queued
+   * interactive prompt should not wait for that timer. The worker owns all
+   * provider I/O and its per-queue task map coalesces concurrent notifications.
+   */
+  notifyPromptQueueChanged(queueKey: string): void {
+    if (this.stopped || !nonBlank(queueKey)) return;
+    void this.drainPromptQueue(queueKey);
+  }
+
   async shutdown(): Promise<void> {
     this.stopped = true;
     if (this.launchTimer) clearInterval(this.launchTimer);
@@ -1608,15 +1620,27 @@ export class NativeAgentService {
   private async drainPromptQueue(queueKey: string): Promise<void> {
     if (this.stopped) return;
     const existing = this.queueTasks.get(queueKey);
-    if (existing) return existing;
-    const task = this.drainPromptQueueOnce(queueKey)
-      .finally(() => {
-        if (this.queueTasks.get(queueKey) === task) {
-          this.queueTasks.delete(queueKey);
-        }
-      });
-    this.queueTasks.set(queueKey, task);
-    return task;
+    if (!existing) {
+      const task = this.drainPromptQueueOnce(queueKey)
+        .finally(() => {
+          if (this.queueTasks.get(queueKey) === task) {
+            this.queueTasks.delete(queueKey);
+          }
+        });
+      this.queueTasks.set(queueKey, task);
+      return task;
+    }
+    // Coalesce concurrent notifications onto the in-flight pass, but guarantee
+    // a fresh pass after it settles: that pass may already have read the queue
+    // before this notification's mutation was persisted, so only a follow-up
+    // pass is certain to see the new head. The in-flight pass removes itself
+    // from the task map before these follow-ups run, so any number of
+    // notifications collapse onto a single extra pass rather than one per
+    // notification.
+    return existing.finally(() => {
+      if (this.queueTasks.has(queueKey)) return;
+      void this.drainPromptQueue(queueKey);
+    });
   }
 
   private async drainPromptQueueOnce(queueKey: string): Promise<void> {
@@ -1650,6 +1674,7 @@ export class NativeAgentService {
     }
     const queue = await this.storage.getPromptQueue(queueKey);
     if (!queue || queue.dispatchError) return;
+    if (queue.inFlight === undefined && queue.messages.length === 0) return;
     const environment = await this.assertEnvironmentLive(queue.environmentId);
     // The launch path has always required this; so must the drain path. A
     // stopped or still-provisioning environment must not be started by a

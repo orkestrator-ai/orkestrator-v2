@@ -1356,6 +1356,53 @@ describe("ClaudeChatTab", () => {
     });
   });
 
+  test("clears the durably queued launch prompt once the tab's own dispatch is accepted", async () => {
+    const initialPrompt = "Run the initial Claude task";
+    const launchRequestId = `initial-prompt:${ENVIRONMENT_ID}:${TAB_ID}`;
+    useClaudeStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+      messageQueue: new Map(state.messageQueue).set(SESSION_KEY, [{
+        id: launchRequestId,
+        text: initialPrompt,
+        attachments: [],
+        effort: "high",
+        planModeEnabled: false,
+        fastModeEnabled: false,
+      }]),
+    }));
+    seedPaneLayout(undefined, initialPrompt);
+    mockSendPrompt.mockResolvedValue({
+      ok: true,
+      outcome: "accepted",
+      status: "processing",
+      requestId: launchRequestId,
+      turnStartedAt: Date.parse("2026-08-01T09:15:00.000Z"),
+      duplicate: false,
+    });
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        initialPrompt={initialPrompt}
+      />,
+    );
+
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+
+    await waitFor(() =>
+      expect(mockRemovePromptQueueMessage).toHaveBeenCalledWith(
+        `claude\u0000${SESSION_KEY}`,
+        ENVIRONMENT_ID,
+        launchRequestId,
+      )
+    );
+    expect(useClaudeStore.getState().messageQueue.get(SESSION_KEY)).toEqual([]);
+  });
+
   test("discards the renderer startup prompt when the backend owns the launch", async () => {
     const initialPrompt = "Backend-owned startup task";
     useClaudeStore.setState({ clients: new Map(), sessions: new Map() });

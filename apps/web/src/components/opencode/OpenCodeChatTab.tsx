@@ -36,6 +36,7 @@ import { useConfigStore } from "@/stores/configStore";
 import { isSetupBlocked } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import {
+  clearQueuedLaunchPrompt,
   enqueueAgentPrompt,
   transferAgentPromptToComposeDraft,
 } from "@/lib/prompt-queue-sources";
@@ -2855,7 +2856,8 @@ export function OpenCodeChatTab({
       const resolvedModel = launchOptionsValidated
         ? getSelectedModel(sessionKey)
         : undefined;
-      handleSendRef.current?.(launchPrompt, [], {
+      const launchRequestId = `initial-prompt:${environmentId}:${tabId}`;
+      void handleSendRef.current?.(launchPrompt, [], {
         model:
           initialLaunchOptionsRef.current.model === "default" || resolvedModel === "default"
             ? undefined
@@ -2863,7 +2865,15 @@ export function OpenCodeChatTab({
         variant: launchOptionsValidated
           ? getSelectedVariant(sessionKey)
           : undefined,
-        requestId: `initial-prompt:${environmentId}:${tabId}`,
+        requestId: launchRequestId,
+      })?.then((result) => {
+        // The tab won the launch race: the same request id is queued durably,
+        // so clear the head before it can be re-promoted as never sent.
+        if (result?.success) {
+          void clearQueuedLaunchPrompt("opencode", sessionKey, launchRequestId);
+        }
+      }).catch((error) => {
+        console.debug("[OpenCodeChatTab] Failed to clear launch prompt from queue:", error);
       });
     }
   }, [
@@ -2917,6 +2927,13 @@ export function OpenCodeChatTab({
 
     const head = store.getQueuedMessages(sessionKey)[0];
     if (!head) return;
+    // Never re-promote a launch prompt this tab already sent. The durable queue
+    // can still hold the same request id until the backend drain reconciles the
+    // dispatch race, and surfacing it would invite a duplicate send.
+    if (
+      head.id === `initial-prompt:${environmentId}:${tabId}`
+      && initialPromptSentRef.current
+    ) return;
     const nextMessage = await transferAgentPromptToComposeDraft<OpenCodeQueuedMessage>(
       "opencode",
       sessionKey,
@@ -2935,7 +2952,7 @@ export function OpenCodeChatTab({
     }
     store.setSelectedVariant(sessionKey, nextMessage.variant);
     store.setSelectedMode(sessionKey, nextMessage.mode);
-  }, [environmentId, sessionKey]);
+  }, [environmentId, sessionKey, tabId]);
 
   /*
    * The claim belongs to the session that was interrupted. If this tab adopts a

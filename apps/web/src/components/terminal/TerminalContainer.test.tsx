@@ -5494,6 +5494,60 @@ describe("TerminalContainer", () => {
       });
     });
 
+    test("activates an existing matching file tab at the limit without reporting an error", async () => {
+      usePaneLayoutStore.setState((state) => ({
+        environments: new Map(state.environments).set("env-visible", {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              {
+                id: "existing-file",
+                type: "file" as const,
+                fileData: {
+                  filePath: "src/existing.ts",
+                  containerId: "container-visible",
+                  isDiff: true,
+                },
+              },
+              ...Array.from(
+                { length: MAX_TABS - 1 },
+                (_, index) => ({ id: `tab-${index}`, type: "plain" as const }),
+              ),
+            ],
+            activeTabId: "tab-0",
+          },
+          activePaneId: "default",
+          containerId: "container-visible",
+        }),
+      }));
+      mockToastError.mockClear();
+
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateFileTabHarness
+            calls={[{ filePath: "src/existing.ts", options: { isDiff: true } }]}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => {
+        const environment = usePaneLayoutStore.getState().environments.get("env-visible");
+        if (!environment || environment.root.kind !== "leaf") {
+          throw new Error("expected leaf");
+        }
+        expect(environment.root.tabs).toHaveLength(MAX_TABS);
+        expect(environment.root.activeTabId).toBe("existing-file");
+      });
+      expect(mockToastError).not.toHaveBeenCalled();
+    });
+
     test("creates local file tabs with worktree metadata and no container id", async () => {
       usePaneLayoutStore.setState({
         environments: new Map([
@@ -5584,6 +5638,10 @@ describe("TerminalContainer", () => {
         const tabs = usePaneLayoutStore.getState().getAllTabs("env-visible");
         expect(tabs).toHaveLength(MAX_TABS);
         expect(tabs.some((tab) => tab.type === "file")).toBe(false);
+      });
+      expect(mockToastError).toHaveBeenCalledWith("Tab limit reached", {
+        description: `You can have up to ${MAX_TABS} tabs open. Close a tab and try again.`,
+        id: "tab-limit-reached",
       });
     });
   });
@@ -6197,6 +6255,10 @@ describe("TerminalContainer", () => {
 
       await waitFor(() => expect(refused).toHaveBeenCalledWith(false));
       expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(MAX_TABS);
+      expect(mockToastError).toHaveBeenCalledWith("Tab limit reached", {
+        description: `You can have up to ${MAX_TABS} tabs open. Close a tab and try again.`,
+        id: "tab-limit-reached",
+      });
     });
 
     test("plain terminal tabs receive displayTitle", async () => {
@@ -6655,6 +6717,10 @@ describe("TerminalContainer", () => {
         usePaneLayoutStore.getState().getAllTabs("env-visible").some((tab) => tab.type === "browser"),
       ).toBe(false);
       expect(environment?.activePaneId).toBe("right");
+      expect(mockToastError).toHaveBeenCalledWith("Tab limit reached", {
+        description: `You can have up to ${MAX_TABS} tabs open. Close a tab and try again.`,
+        id: "tab-limit-reached",
+      });
     });
 
     test("rejects terminal links while stopped or locally not ready without pane mutation", async () => {

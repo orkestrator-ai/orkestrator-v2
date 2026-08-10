@@ -1320,11 +1320,14 @@ describe("build pipeline protocol", () => {
       turnStartedAt: "2026-07-29T00:00:01.500Z",
       structuredWaitStartedAt: "2026-07-29T00:00:02.000Z",
       structuredResultStatus: "pending",
+      structuredReportRepairAttempts: 2,
     }))).toBe(true);
     expect(isBuildPipeline(withSession({ structuredResultStatus: "accepted" })))
       .toBe(true);
     expect(isBuildPipeline(withSession({ structuredResultStatus: "complete" })))
       .toBe(false);
+    expect(isBuildPipeline(withSession({ structuredReportRepairAttempts: 0 })))
+      .toBe(true);
 
     // A malformed timestamp here is not cosmetic: the supervisor subtracts it
     // from now() to decide whether to fail a stalled turn.
@@ -1336,6 +1339,16 @@ describe("build pipeline protocol", () => {
       .toBe(false);
     expect(isBuildPipeline(withSession({ turnStartedAt: 0 }))).toBe(false);
     expect(isBuildPipeline(withSession({ messagesFingerprint: "" }))).toBe(false);
+    // The repair budget is compared against a bound, and the supervisor refuses
+    // to persist a snapshot this rejects — so a value that cannot be counted
+    // has to fail here rather than strand every later save.
+    for (
+      const repairs of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "2", null]
+    ) {
+      expect(
+        isBuildPipeline(withSession({ structuredReportRepairAttempts: repairs })),
+      ).toBe(false);
+    }
   });
 
   test("rejects a timestamp Date.parse would accept but toISOString never emits", () => {

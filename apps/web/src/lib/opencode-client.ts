@@ -150,6 +150,15 @@ export type OpenCodeMessage = NativeMessage & {
    * told apart from a real failure; the error payload itself is still dropped.
    */
   errorName?: string;
+  /**
+   * Provider finish reason reported by OpenCode's final `step-finish` part.
+   *
+   * OpenCode currently treats an unrecognized provider finish reason as
+   * terminal even when the assistant produced reasoning but no final text.
+   * Keeping the reason lets Orkestrator distinguish that incomplete outcome
+   * from a genuinely completed turn after the authoritative transcript fetch.
+   */
+  finishReason?: string;
   providerUsage?: {
     cost: number;
     inputTokens: number;
@@ -162,6 +171,21 @@ export type OpenCodeMessage = NativeMessage & {
     agent?: string;
     durationMs?: number;
   };
+};
+
+/**
+ * Temporary recovery prompt for providers that end a step with `unknown`.
+ * Its exact value is deliberately stable: seeing it as the latest user turn
+ * is the durable, transcript-backed guard that prevents recovery loops across
+ * renderer remounts and SSE reconnects.
+ */
+export const OPENCODE_INCOMPLETE_TURN_CONTINUATION =
+  "Continue from the current session state. Do not repeat completed actions. Finish the remaining work and provide the final conclusion.";
+
+export type OpenCodeIncompleteTurnRecovery = {
+  action: "continue" | "exhausted";
+  assistantMessageId: string;
+  modelId?: string;
 };
 
 
@@ -1038,6 +1062,7 @@ export function normalizeOpenCodeMessage(rawMessage: unknown): OpenCodeMessage |
   const createdAt = parseOpenCodeCreatedAt(info?.time?.created);
   const parsedParts: OpenCodeMessagePart[] = [];
   let textContent = "";
+  let finishReason: string | undefined;
   const modelId =
     typeof info?.modelID === "string" && info.modelID.trim().length > 0
       ? typeof info?.providerID === "string" && info.providerID.trim().length > 0
@@ -1047,6 +1072,17 @@ export function normalizeOpenCodeMessage(rawMessage: unknown): OpenCodeMessage |
 
   if (Array.isArray(msg.parts)) {
     for (const part of msg.parts) {
+      if (
+        part
+        && typeof part === "object"
+        && part.type === "step-finish"
+        && typeof part.reason === "string"
+        && part.reason.trim().length > 0
+      ) {
+        // A message can contain more than one step marker in malformed or
+        // replayed data. The final marker is the terminal reason that matters.
+        finishReason = part.reason.trim();
+      }
       const parsedPart = normalizeOpenCodePart(part);
       if (!parsedPart) continue;
       parsedParts.push(parsedPart);
@@ -1063,6 +1099,7 @@ export function normalizeOpenCodeMessage(rawMessage: unknown): OpenCodeMessage |
     parts: parsedParts,
     createdAt,
     ...(info?.role === "assistant" && modelId ? { modelId } : {}),
+    ...(info?.role === "assistant" && finishReason ? { finishReason } : {}),
     ...(info?.error !== undefined && info?.error !== null
       ? {
           hasError: true,
@@ -1102,6 +1139,75 @@ export function normalizeOpenCodeMessage(rawMessage: unknown): OpenCodeMessage |
           },
         }
       : {}),
+  };
+}
+
+/**
+ * Inspect an authoritative OpenCode transcript for the narrow incomplete-turn
+ * failure seen from providers that return `finish_reason: unknown`.
+ *
+ * Recovery is intentionally conservative:
+ * - final assistant text means the turn is usable, even if its reason is odd;
+ * - a pending tool/subagent means continuing could overlap side effects;
+ * - a client stop marker in the turn means the user aborted it and the turn
+ *   must not be auto-continued;
+ * - the fixed continuation prompt is allowed only once consecutively.
+ */
+export function inspectOpenCodeIncompleteTurn(
+  messages: readonly OpenCodeMessage[],
+): OpenCodeIncompleteTurnRecovery | null {
+  let latestUserIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") {
+      latestUserIndex = index;
+      break;
+    }
+  }
+  if (latestUserIndex < 0) return null;
+
+  const turnMessages = messages.slice(latestUserIndex + 1);
+
+  // OpenCode server transcripts carry only user/assistant roles. A system row
+  // in the tail of the current turn is this client's stop marker (the
+  // "Query stopped by user." row), so continuing here would re-run work the
+  // user deliberately aborted. Stale stop markers from earlier turns sit
+  // before the latest user message and are not part of the turn's tail.
+  if (turnMessages.some((message) => message.role === "system")) {
+    return null;
+  }
+
+  const latestAssistant = [...turnMessages]
+    .reverse()
+    .find((message) => message.role === "assistant");
+  if (
+    !latestAssistant
+    || latestAssistant.hasError
+    || latestAssistant.finishReason !== "unknown"
+    || latestAssistant.content.trim().length > 0
+  ) {
+    return null;
+  }
+
+  let hasPendingWork = false;
+  for (const message of turnMessages) {
+    if (message.role !== "assistant") continue;
+    mapOpenCodeParts(message.parts, (part) => {
+      if (part.toolState === "pending" || part.agentState === "active") {
+        hasPendingWork = true;
+      }
+      return part;
+    });
+    if (hasPendingWork) return null;
+  }
+
+  return {
+    action:
+      messages[latestUserIndex]?.content.trim()
+        === OPENCODE_INCOMPLETE_TURN_CONTINUATION
+        ? "exhausted"
+        : "continue",
+    assistantMessageId: latestAssistant.id,
+    ...(latestAssistant.modelId ? { modelId: latestAssistant.modelId } : {}),
   };
 }
 

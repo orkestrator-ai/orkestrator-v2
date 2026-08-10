@@ -65,6 +65,8 @@ import {
   carryOverOpenCodeSubagentHydration,
   mergeOpenCodeMessageInfo,
   mergeOpenCodeSubagentTranscript,
+  inspectOpenCodeIncompleteTurn,
+  OPENCODE_INCOMPLETE_TURN_CONTINUATION,
   ERROR_MESSAGE_PREFIX,
   SYSTEM_MESSAGE_PREFIX,
   type PermissionRequest,
@@ -217,9 +219,40 @@ function isOpenCodeTurnActive(status: string | null): boolean {
  */
 const locallyStoppedSessions = new Set<string>();
 
-/** Test seam — the module-level set outlives any one component instance. */
+type IncompleteTurnRecoveryOwner = {
+  client: ReturnType<typeof createClient>;
+  state: "pending" | "accepted" | "failed";
+};
+
+/**
+ * Ownership follows the exact optimistic message object across transcript
+ * merges. This lets an authoritative idle snapshot distinguish an in-flight
+ * continuation from one whose dispatch failed through a client that has since
+ * been replaced, without introducing durable bookkeeping or retaining dead
+ * sessions after their marker is collected.
+ */
+let incompleteTurnRecoveryOwnerByMarker = new WeakMap<
+  OpenCodeMessage,
+  IncompleteTurnRecoveryOwner
+>();
+
+const OPENCODE_INCOMPLETE_TURN_EXHAUSTED =
+  "OpenCode stopped before producing a final response after one automatic continuation. Send “Continue” to resume manually, or switch models if this keeps happening.";
+
+/**
+ * How long an accepted continuation marker may sit un-echoed before an idle
+ * snapshot treats the acceptance as lost. OpenCode appends the echoed user
+ * message to the session as soon as a prompt is accepted, so a marker that is
+ * neither echoed nor retired after this window was acknowledged by a server
+ * that died before persisting it. Retiring it lets the recovery make one
+ * bounded re-dispatch instead of wedging the turn loading forever.
+ */
+const OPENCODE_INCOMPLETE_RECOVERY_RETRY_AFTER_MS = 30_000;
+
+/** Test seam — module-level coordination outlives any one component instance. */
 export function __resetOpenCodeLocalStopsForTest(): void {
   locallyStoppedSessions.clear();
+  incompleteTurnRecoveryOwnerByMarker = new WeakMap();
 }
 
 function createTurnStoppedMarker(): OpenCodeMessage {
@@ -856,6 +889,175 @@ export function OpenCodeChatTab({
     ],
   );
 
+  /**
+   * Recover the narrow OpenCode outcome where the authoritative transcript is
+   * idle after an `unknown` finish but contains no final assistant text.
+   *
+   * This must be shared by live terminal events and every snapshot rehydrate:
+   * SSE is observational, so a disconnect or inactive React tree can miss the
+   * only idle frame while the provider session continues in the background.
+   * The optimistic continuation is the in-flight dedupe marker retained across
+   * overlapping snapshots; the server echo replaces it once accepted.
+   */
+  const recoverIncompleteTurn = useCallback(async (
+    sdkClient: ReturnType<typeof createClient>,
+    targetSessionId: string,
+    targetSessionKey: string,
+  ): Promise<void> => {
+    const state = useOpenCodeStore.getState();
+    let currentSession = state.sessions.get(targetSessionKey);
+    if (
+      state.clients.get(environmentId) !== sdkClient
+      || currentSession?.sessionId !== targetSessionId
+    ) {
+      return;
+    }
+    const existingContinuation = currentSession.messages.find(
+      (message) =>
+        message.role === "user"
+        && message.id.startsWith(`${OPTIMISTIC_MESSAGE_PREFIX}incomplete-`),
+    );
+    if (existingContinuation) {
+      const owner = incompleteTurnRecoveryOwnerByMarker.get(
+        existingContinuation,
+      );
+      const continuationEchoed = currentSession.messages.some(
+        (message) =>
+          message.role === "user"
+          && !message.id.startsWith(OPTIMISTIC_MESSAGE_PREFIX)
+          && normalizeMessageContent(message.content)
+            === OPENCODE_INCOMPLETE_TURN_CONTINUATION,
+      );
+      const markerStale =
+        Date.now() - new Date(existingContinuation.createdAt).getTime()
+          >= OPENCODE_INCOMPLETE_RECOVERY_RETRY_AFTER_MS;
+      const retryableFailedDispatch =
+        !!owner
+        && owner.client !== sdkClient
+        && owner.state === "failed";
+      const retryableLostAcceptance =
+        !continuationEchoed
+        && markerStale
+        && (!owner || owner.state === "accepted");
+      if (!retryableFailedDispatch && !retryableLostAcceptance) {
+        // An overlapping idle snapshot can predate the continuation's backend
+        // echo, and a fresh accepted prompt may still stream it. Keep the turn
+        // busy while the optimistic marker owns dispatch.
+        state.setSessionLoading(targetSessionKey, true);
+        return;
+      }
+
+      // Retire only that owned marker, then inspect the refreshed transcript
+      // so this client can make one replacement attempt. Failed dispatches
+      // never reached the backend; a lost acceptance was acknowledged but
+      // never echoed back (the server died before persisting it), so a stale
+      // un-echoed marker would otherwise wedge the turn loading forever.
+      incompleteTurnRecoveryOwnerByMarker.delete(existingContinuation);
+      state.removeMessage(targetSessionKey, existingContinuation.id);
+      const refreshedState = useOpenCodeStore.getState();
+      currentSession = refreshedState.sessions.get(targetSessionKey);
+      if (
+        refreshedState.clients.get(environmentId) !== sdkClient
+        || currentSession?.sessionId !== targetSessionId
+      ) {
+        return;
+      }
+    }
+
+    // A newer busy/retry edge beats the idle snapshot that requested this
+    // reconcile. Never queue a recovery on top of a turn already in progress.
+    if (currentSession.isLoading) return;
+
+    const recovery = inspectOpenCodeIncompleteTurn(currentSession.messages);
+    if (!recovery) return;
+
+    if (recovery.action === "exhausted") {
+      state.addMessage(targetSessionKey, {
+        id: `${ERROR_MESSAGE_PREFIX}incomplete-${recovery.assistantMessageId}`,
+        role: "assistant",
+        content: OPENCODE_INCOMPLETE_TURN_EXHAUSTED,
+        parts: [{ type: "text", content: OPENCODE_INCOMPLETE_TURN_EXHAUSTED }],
+        createdAt: new Date().toISOString(),
+      });
+      state.setSessionLoading(targetSessionKey, false);
+      return;
+    }
+
+    const optimisticContinuation = createOptimisticNativeMessage(
+      `${OPTIMISTIC_MESSAGE_PREFIX}incomplete-${recovery.assistantMessageId}`,
+      OPENCODE_INCOMPLETE_TURN_CONTINUATION,
+    );
+    state.addMessage(targetSessionKey, optimisticContinuation);
+    state.setSessionLoading(targetSessionKey, true);
+    const loadingRevisionAtDispatch =
+      useOpenCodeStore.getState().sessionLoadingRevisions.get(targetSessionKey) ?? 0;
+    const recoveryOwner: IncompleteTurnRecoveryOwner = {
+      client: sdkClient,
+      state: "pending",
+    };
+    incompleteTurnRecoveryOwnerByMarker.set(
+      optimisticContinuation,
+      recoveryOwner,
+    );
+
+    const selectedModelValue =
+      recovery.modelId ?? state.getSelectedModel(targetSessionKey);
+    let result: Awaited<ReturnType<typeof sendPrompt>>;
+    try {
+      result = await sendPrompt(
+        sdkClient,
+        targetSessionId,
+        OPENCODE_INCOMPLETE_TURN_CONTINUATION,
+        {
+          model:
+            selectedModelValue === "default"
+              ? undefined
+              : selectedModelValue,
+          variant: state.getSelectedVariant(targetSessionKey),
+          mode: state.getSelectedMode(targetSessionKey),
+          agent: state.getSelectedAgent(targetSessionKey),
+          directory: slashCommandDirectory,
+        },
+      );
+    } catch (error) {
+      result = {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+    recoveryOwner.state = result.success ? "accepted" : "failed";
+
+    const latestState = useOpenCodeStore.getState();
+    if (
+      latestState.clients.get(environmentId) !== sdkClient
+      || latestState.sessions.get(targetSessionKey)?.sessionId !== targetSessionId
+    ) {
+      return;
+    }
+    if (result.success) return;
+
+    latestState.removeMessage(targetSessionKey, optimisticContinuation.id);
+    const translatedError = translateOpenCodeSendError(result.error);
+    const errorContent =
+      `OpenCode stopped before its final response, and Orkestrator could not send the automatic continuation: ${translatedError}`;
+    latestState.addMessage(targetSessionKey, {
+      id: `${ERROR_MESSAGE_PREFIX}incomplete-send-${recovery.assistantMessageId}`,
+      role: "assistant",
+      content: errorContent,
+      parts: [{ type: "text", content: errorContent }],
+      createdAt: new Date().toISOString(),
+    });
+    // Clear only the loading this dispatch owns. If a newer lifecycle edge
+    // (e.g. a backend-dispatched queued turn) advanced the revision while the
+    // continuation was in flight, that turn's busy state must not be clobbered.
+    if (
+      (latestState.sessionLoadingRevisions.get(targetSessionKey) ?? 0)
+        === loadingRevisionAtDispatch
+    ) {
+      latestState.setSessionLoading(targetSessionKey, false);
+    }
+  }, [environmentId, slashCommandDirectory]);
+
   const refreshSessionFromServer = useCallback(async (
     { manual = false }: RefreshSessionOptions = {},
   ) => {
@@ -930,6 +1132,9 @@ export function OpenCodeChatTab({
         isOpenCodeTurnActive(status),
         isOpenCodeTurnActive(status) ? getOpenCodeTurnStartedAt(messages) : undefined,
       );
+      if (status === "idle") {
+        await recoverIncompleteTurn(activeClient, sessionId, sessionKey);
+      }
     }
     await syncPendingRequests(activeClient, sessionId, {
       throwOnError: true,
@@ -939,6 +1144,7 @@ export function OpenCodeChatTab({
   }, [
     environmentId,
     sessionKey,
+    recoverIncompleteTurn,
     setMessages,
     setSessionLoading,
     syncPendingRequests,
@@ -1171,7 +1377,7 @@ export function OpenCodeChatTab({
                 mounted
                 && reconnectSequence === manualRefreshSequenceRef.current,
             }),
-          ]).then(([messages, status]) => {
+          ]).then(async ([messages, status]) => {
             if (
               !mounted ||
               reconnectSequence !== manualRefreshSequenceRef.current
@@ -1186,21 +1392,30 @@ export function OpenCodeChatTab({
             }
             // An empty reconnect response must not erase a transcript that
             // received a live update after this request started.
+            let appliedMessages = false;
             if (currentSession === sessionBeforeSnapshot && messages.length > 0) {
               setMessages(sessionKey, messages);
+              appliedMessages = true;
             }
-            if (
+            const lifecycleStillCurrent =
               status
               && (
                 useOpenCodeStore.getState().sessionLoadingRevisions.get(sessionKey) ?? 0
-              ) === loadingRevisionBeforeSnapshot
-            ) {
+              ) === loadingRevisionBeforeSnapshot;
+            if (lifecycleStillCurrent) {
               setSessionLoading(
                 sessionKey,
                 isOpenCodeTurnActive(status),
                 isOpenCodeTurnActive(status)
                   ? getOpenCodeTurnStartedAt(messages)
                   : undefined,
+              );
+            }
+            if (appliedMessages && lifecycleStillCurrent && status === "idle") {
+              await recoverIncompleteTurn(
+                existingClient,
+                existingSession.sessionId,
+                sessionKey,
               );
             }
           }).catch((error) => {
@@ -1262,6 +1477,13 @@ export function OpenCodeChatTab({
                 setConnectionState("connected");
                 if (!hasActiveEventSubscription(environmentId)) {
                   startSharedEventSubscription(existingClient);
+                }
+                if (status === "idle") {
+                  await recoverIncompleteTurn(
+                    existingClient,
+                    projectedSessionId,
+                    sessionKey,
+                  );
                 }
                 await syncPendingRequests(existingClient, projectedSessionId, {
                   shouldApply: isCurrentInitialization,
@@ -1528,6 +1750,14 @@ export function OpenCodeChatTab({
               // the store, so an immediate frame cannot be overwritten by it.
               startSharedEventSubscription(sdkClient);
 
+              if (status === "idle") {
+                await recoverIncompleteTurn(
+                  sdkClient,
+                  existingSessionId,
+                  sessionKey,
+                );
+              }
+
               // Sync pending interactions in case we missed early SSE events.
               await syncPendingRequests(sdkClient, existingSessionId, {
                 shouldApply: isCurrentInitialization,
@@ -1622,6 +1852,7 @@ export function OpenCodeChatTab({
     isActive,
     handoffPending,
     isLocal,
+    recoverIncompleteTurn,
     syncPendingRequests,
     getSelectedModel,
     getSelectedVariant,
@@ -1771,19 +2002,26 @@ export function OpenCodeChatTab({
               ) {
                 continue;
               }
-              setMessages(key, messages);
-              if (
+              const snapshotStillCurrent =
                 currentSession === sessionBeforeSnapshot
                 && (
                   stateAfterSnapshot.sessionLoadingRevisions.get(key) ?? 0
-                ) === loadingRevisionBeforeSnapshot
-              ) {
+                ) === loadingRevisionBeforeSnapshot;
+              setMessages(key, messages);
+              if (snapshotStillCurrent) {
                 const isActive = statusLookup.status !== "idle";
                 setSessionLoading(
                   key,
                   isActive,
                   isActive ? getOpenCodeTurnStartedAt(messages) : undefined,
                 );
+                if (!isActive) {
+                  await recoverIncompleteTurn(
+                    sdkClient,
+                    projected.sessionId,
+                    key,
+                  );
+                }
               }
               await syncPendingRequests(sdkClient, projected.sessionId, {
                 throwOnError: true,
@@ -1980,6 +2218,9 @@ export function OpenCodeChatTab({
                 idsBeforeFetch,
               );
               setMessages(sessionKey, reconciledMessages);
+              if (includeSubagents) {
+                await recoverIncompleteTurn(sdkClient, sessionId, sessionKey);
+              }
               if (currentSession.isLoading) {
                 setSessionLoading(
                   sessionKey,
@@ -2642,6 +2883,7 @@ export function OpenCodeChatTab({
       addPendingQuestion,
       removePendingPermission,
       removePendingQuestion,
+      recoverIncompleteTurn,
       syncPendingRequests,
     ],
   );
@@ -3062,6 +3304,10 @@ export function OpenCodeChatTab({
         });
         clearTabAgentHandoff(tabId, environmentId);
 
+        if (status === "idle") {
+          await recoverIncompleteTurn(client, sessionId, sessionKey);
+        }
+
         await syncPendingRequests(client, sessionId);
 
         setResumeDialogOpen(false);
@@ -3074,6 +3320,7 @@ export function OpenCodeChatTab({
       client,
       environmentId,
       models,
+      recoverIncompleteTurn,
       session?.sessionId,
       sessionKey,
       syncPendingRequests,

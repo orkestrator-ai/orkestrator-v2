@@ -433,6 +433,8 @@ export interface BuildPipeline {
   stallWarning?: { sessionId: string; detectedAt: string };
   /** Explicit safe retry for an interaction-triggered terminal failure. */
   interactionRetryRequested?: boolean;
+  /** Starts a fresh session for the non-interactive stage that failed. */
+  stageRetryRequested?: boolean;
   /**
    * User messages queued for the current session, dispatched one at a time by
    * the supervisor once the agent goes idle. Queued rather than sent directly
@@ -926,6 +928,8 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
         || !isIsoDate(value.stallWarning.detectedAt)))
     || (value.interactionRetryRequested !== undefined
       && typeof value.interactionRetryRequested !== "boolean")
+    || (value.stageRetryRequested !== undefined
+      && typeof value.stageRetryRequested !== "boolean")
     || (value.pendingUserMessages !== undefined
       && (
         !Array.isArray(value.pendingUserMessages)

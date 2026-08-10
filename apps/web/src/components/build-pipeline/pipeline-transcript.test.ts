@@ -4,6 +4,73 @@ import { toPipelineTranscript } from "./pipeline-transcript";
 const FALLBACK = "2026-07-29T00:00:00.000Z";
 
 describe("toPipelineTranscript", () => {
+  test("hides the initial pipeline handoff and starts with the agent output", () => {
+    const handoff = `<orkestrator-handoff format="json-v2">
+review context that remains available to the agent
+</orkestrator-handoff>
+
+Address every review issue.`;
+
+    for (const [agent, firstMessage] of [
+      ["codex", {
+        id: "codex-user",
+        role: "user",
+        content: handoff,
+        parts: [{ type: "text", content: handoff }],
+      }],
+      ["claude", {
+        id: "claude-user",
+        role: "user",
+        content: handoff,
+        parts: [{ type: "text", content: handoff }],
+      }],
+      ["opencode", {
+        info: { id: "opencode-user", role: "user", time: { created: 1_800_000_000_000 } },
+        parts: [{ type: "text", text: handoff }],
+      }],
+    ] as const) {
+      const transcript = toPipelineTranscript(
+        [
+          null,
+          firstMessage,
+          {
+            id: `${agent}-assistant`,
+            role: "assistant",
+            content: "Starting with the useful output",
+            parts: [{ type: "text", content: "Starting with the useful output" }],
+          },
+        ],
+        agent,
+        FALLBACK,
+      );
+
+      expect(transcript.map((message) => message.content)).toEqual([
+        "Starting with the useful output",
+      ]);
+    }
+  });
+
+  test("does not hide later or non-user handoff-shaped messages", () => {
+    const handoff = `<orkestrator-handoff format="json-v2">
+quoted context
+</orkestrator-handoff>`;
+    const transcript = toPipelineTranscript(
+      [
+        { id: "first", role: "user", content: "ordinary prompt" },
+        { id: "later", role: "user", content: handoff },
+        { id: "assistant", role: "assistant", content: handoff },
+      ],
+      "codex",
+      FALLBACK,
+    );
+
+    expect(transcript.map((message) => message.id)).toEqual([
+      "first",
+      "later",
+      "assistant",
+    ]);
+  });
+
   test("renders bridge messages as native messages with their parts intact", () => {
     const transcript = toPipelineTranscript(
       [{

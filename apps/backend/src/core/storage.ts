@@ -205,21 +205,28 @@ function paneLayoutLeaves(root: unknown): MutablePaneLayoutLeaf[] {
 }
 
 /**
- * Drops a setup tab that was first introduced after setup had already finished.
+ * Keeps a completed setup handoff focused on the surface that follows setup.
  *
  * The renderer adds and selects its setup tab in one optimistic mutation. A
  * very short setup can finish before that mutation reaches the backend, after
  * which the pipeline selects the build tab. Letting the stale mutation rebase
  * normally would add the obsolete setup tab and let its explicit focus intent
- * override the newer backend-owned build selection. Tabs that were already
- * durable remain available so the user can inspect and select completed setup
- * output later.
+ * override the newer backend-owned build selection.
+ *
+ * A longer setup has a second version of the same race: the setup tab is already
+ * durable, but a selection write based on that pre-handoff layout is still in
+ * flight when the build or startup-agent tab becomes authoritative. In that
+ * case the merge base still has setup selected. Preserve the newer post-setup
+ * target until a client has observed it; a later deliberate click on setup is
+ * based on the post-handoff layout and remains allowed.
  */
 function suppressLateSetupTabAdditions(
   layout: PaneLayoutMergeInput,
   previous: PersistedPaneLayout | undefined,
+  base: PaneLayoutMergeInput,
 ): PaneLayoutMergeInput {
   const previousLeaves = paneLayoutLeaves(previous?.root);
+  const baseLeavesById = new Map(paneLayoutLeaves(base.root).map((leaf) => [leaf.id, leaf]));
   const durableSetupTabIds = new Set(
     previousLeaves.flatMap((leaf) => leaf.tabs.flatMap((tab) =>
       tab.isSetupTab === true && typeof tab.id === "string" ? [tab.id] : []
@@ -233,7 +240,7 @@ function suppressLateSetupTabAdditions(
       typeof tab.id === "string" ? [[tab.id, tab] as const] : []
     )),
   );
-  let removedAny = false;
+  let changed = false;
   let removedGlobalFocus = false;
 
   for (const leaf of nextLeaves) {
@@ -247,7 +254,7 @@ function suppressLateSetupTabAdditions(
       ),
     );
     if (removedIds.size === 0) continue;
-    removedAny = true;
+    changed = true;
     const removedActiveTab = leaf.activeTabId !== null && removedIds.has(leaf.activeTabId);
     leaf.tabs = leaf.tabs.flatMap((tab) => {
       if (typeof tab.id !== "string" || !removedIds.has(tab.id)) return [tab];
@@ -274,7 +281,27 @@ function suppressLateSetupTabAdditions(
           : null;
   }
 
-  if (!removedAny) return layout;
+  const nextLeavesById = new Map(nextLeaves.map((leaf) => [leaf.id, leaf]));
+  for (const previousLeaf of previousLeaves) {
+    const nextLeaf = nextLeavesById.get(previousLeaf.id);
+    const baseLeaf = baseLeavesById.get(previousLeaf.id);
+    if (!nextLeaf || !baseLeaf || !nextLeaf.activeTabId) continue;
+    const selected = nextLeaf.tabs.find((tab) => tab.id === nextLeaf.activeTabId);
+    if (selected?.isSetupTab !== true) continue;
+    if (baseLeaf.activeTabId !== nextLeaf.activeTabId) continue;
+    if (!previousLeaf.activeTabId || previousLeaf.activeTabId === nextLeaf.activeTabId) {
+      continue;
+    }
+    const handoffTarget = nextLeaf.tabs.find(
+      (tab) => tab.id === previousLeaf.activeTabId && tab.isSetupTab !== true,
+    );
+    if (!handoffTarget) continue;
+    nextLeaf.activeTabId = previousLeaf.activeTabId;
+    changed = true;
+    removedGlobalFocus ||= layout.activePaneId === nextLeaf.id;
+  }
+
+  if (!changed) return layout;
   const remainingPaneIds = new Set(nextLeaves.map((leaf) => leaf.id));
   return {
     ...layout,
@@ -3845,7 +3872,7 @@ export class StorageService {
         || environment.setupScriptsComplete === true
         || environment.setupOverride === true
       ) {
-        next = suppressLateSetupTabAdditions(next, previous);
+        next = suppressLateSetupTabAdditions(next, previous, base);
       }
       assertPaneLayoutRootWithinBounds(next.root);
       const saved: PersistedPaneLayout = {

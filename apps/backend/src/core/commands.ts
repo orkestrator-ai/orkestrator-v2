@@ -2631,6 +2631,14 @@ async function generateLoopedReviewPackage(
   );
 
   const hydratedValidation = await Promise.all(validation.map(async (entry) => {
+    // The preparation agent reports `limitation: null` for a command that ran
+    // without one, but the persisted contract is `limitation?: string` and its
+    // guard rejects null. Carrying the null through made the finished package
+    // unpersistable — the whole workflow snapshot failed validation on save and
+    // the round died with a `package` failure that a retry reproduced exactly.
+    const limitation = entry.limitation === null
+      ? {}
+      : { limitation: entry.limitation };
     if (entry.status === "skipped") {
       return {
         command: entry.command,
@@ -2639,7 +2647,7 @@ async function generateLoopedReviewPackage(
         stdout: "",
         stderr: "",
         durationMs: entry.durationMs,
-        limitation: entry.limitation,
+        ...limitation,
       };
     }
     const [stdoutBytes, stderrBytes] = await Promise.all([
@@ -2653,7 +2661,7 @@ async function generateLoopedReviewPackage(
       stdout: decodeValidationOutput(stdoutBytes, entry.stdoutPath!),
       stderr: decodeValidationOutput(stderrBytes, entry.stderrPath!),
       durationMs: entry.durationMs,
-      limitation: entry.limitation,
+      ...limitation,
     };
   }));
 
@@ -10158,6 +10166,12 @@ export function createCommandRegistry(
       asNonBlankString(pipelineId, "pipelineId"),
     );
   });
+  register("retry_build_pipeline_stage", ({ pipelineId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.retryStage(
+      asNonBlankString(pipelineId, "pipelineId"),
+    );
+  });
   register("retry_build_pipeline_interaction_failure", ({ pipelineId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.retryInteractionFailure(
@@ -11688,6 +11702,14 @@ export function createCommandRegistry(
       shared = created;
     }
     const wait = shared.promise;
+    const callerTimedOut = (): AwaitBridgeReadyResult => ({
+      status: "timed-out",
+      error: {
+        message: `${agent} bridge did not become ready before the caller deadline`,
+        retryable: true,
+        retryAfterMs: 1_000,
+      },
+    });
 
     return new Promise<AwaitBridgeReadyResult>((resolve, reject) => {
       let settled = false;
@@ -11695,16 +11717,13 @@ export function createCommandRegistry(
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        resolve(result);
+        // The shared probe and its longest-lived caller expire at the same
+        // absolute deadline. If the probe continuation wins that timer race,
+        // keep its internal startup-window result from changing the caller's
+        // public timeout contract.
+        resolve(result.status === "timed-out" ? callerTimedOut() : result);
       };
-      const timer = setTimeout(() => finish({
-        status: "timed-out",
-        error: {
-          message: `${agent} bridge did not become ready before the caller deadline`,
-          retryable: true,
-          retryAfterMs: 1_000,
-        },
-      }), timeoutMs);
+      const timer = setTimeout(() => finish(callerTimedOut()), timeoutMs);
       timer.unref?.();
       void wait.then(finish, (error) => {
         if (settled) return;

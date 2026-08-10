@@ -417,6 +417,38 @@ function openCodeInfo(
   return asRecord(raw.info);
 }
 
+const PIPELINE_HANDOFF_OPEN = '<orkestrator-handoff format="json-v2">';
+const PIPELINE_HANDOFF_CLOSE = "</orkestrator-handoff>";
+
+/**
+ * The fresh address-issues session receives the review history as one large
+ * bootstrap prompt. The provider still needs that prompt, but showing it as the
+ * first user bubble makes the useful stage output start several screens down.
+ *
+ * Only the first provider entry is eligible for suppression. That is the sole
+ * position where the backend can dispatch this carrier, and keeping the check
+ * there prevents a later model/user message that quotes the marker from being
+ * hidden. Both flat bridge messages and OpenCode's `{ info, parts }` envelope
+ * are recognized before provider-specific normalization.
+ */
+function isInitialPipelineHandoff(raw: Record<string, unknown>): boolean {
+  const role = raw.role ?? openCodeInfo(raw)?.role;
+  if (role !== "user") return false;
+
+  const carriesHandoff = (value: unknown): boolean =>
+    typeof value === "string"
+    && value.trimStart().startsWith(PIPELINE_HANDOFF_OPEN)
+    && value.includes(PIPELINE_HANDOFF_CLOSE);
+
+  if (carriesHandoff(raw.content)) return true;
+  if (!Array.isArray(raw.parts)) return false;
+  return raw.parts.some((part) => {
+    const candidate = asRecord(part);
+    return candidate !== null
+      && (carriesHandoff(candidate.content) || carriesHandoff(candidate.text));
+  });
+}
+
 export function toPipelineTranscript(
   messages: unknown[] | undefined,
   agentType: BuildPipelineAgent,
@@ -424,10 +456,14 @@ export function toPipelineTranscript(
   interactions: readonly PipelineInteractionTranscriptEntry[] = [],
 ): NativeMessage[] {
   const transcript: NativeMessage[] = [];
+  let hasSeenProviderEntry = false;
 
   (messages ?? []).forEach((entry, index) => {
     const raw = asRecord(entry);
     if (!raw) return;
+    const isFirstProviderEntry = !hasSeenProviderEntry;
+    hasSeenProviderEntry = true;
+    if (isFirstProviderEntry && isInitialPipelineHandoff(raw)) return;
 
     const info = openCodeInfo(raw);
     if (info) {

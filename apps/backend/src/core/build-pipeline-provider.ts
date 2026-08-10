@@ -1133,7 +1133,13 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     );
     if (response.status === 404) return "missing";
     assertOk(response, `${this.agent} status read`);
-    const body = await response.json() as { status?: unknown };
+    const body = await response.json() as { status?: unknown; error?: unknown };
+    if (body.status === "error" && typeof body.error === "string") {
+      const detail = body.error.trim().slice(0, 4_000);
+      if (detail) {
+        throw new Error(`The ${this.agent} session failed: ${detail}`);
+      }
+    }
     return body.status === "running" || body.status === "idle" || body.status === "error"
       ? body.status
       : "error";

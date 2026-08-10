@@ -297,6 +297,7 @@ describe("build pipeline protocol", () => {
       ["pendingPromptAttempt", { ...snapshot(), pendingPromptAttempt: {} }],
       ["activePromptContext", { ...snapshot(), activePromptContext: {} }],
       ["pendingUserMessages", { ...snapshot(), pendingUserMessages: {} }],
+      ["stageRetryRequested", { ...snapshot(), stageRetryRequested: 1 }],
       ["reviewRetryRequested", { ...snapshot(), reviewRetryRequested: 1 }],
       ["source", { ...snapshot(), source: { type: "unknown" } }],
       ["featurePlanId", { ...snapshot(), featurePlanId: "" }],
@@ -1285,6 +1286,15 @@ describe("build pipeline protocol", () => {
     expect(isBuildPipeline({ ...snapshot(), reviewRetryRequested: false }))
       .toBe(true);
     expect(isBuildPipeline({ ...snapshot(), reviewRetryRequested: "yes" }))
+      .toBe(false);
+  });
+
+  test("validates the failed-stage retry request flag", () => {
+    expect(isBuildPipeline({ ...snapshot(), stageRetryRequested: true }))
+      .toBe(true);
+    expect(isBuildPipeline({ ...snapshot(), stageRetryRequested: false }))
+      .toBe(true);
+    expect(isBuildPipeline({ ...snapshot(), stageRetryRequested: "yes" }))
       .toBe(false);
   });
 

@@ -10,6 +10,17 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `standalone backend service > can own a Tailscale Serve listener and publish its HTTPS URL` (`apps/backend/tests/standalone.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-07
+- **Original command:** `bun run test` (workspace backend group: `bun test src tests --parallel=2`)
+- **Worker configuration:** Two Bun workers in the backend package while the web, web-public, protocol, root, and bridge groups ran concurrently
+- **Failure:** The test exceeded Bun's 5,000 ms timeout (reported duration 5,000.60 ms); Bun also reported an unhandled `Backend exited during startup:` error with empty stderr from `startBackend` and killed three dangling processes
+- **Suite counts:** Backend package: 1,519 tests, 1,518 passed, 1 failed, plus 1 between-test error
+- **Isolated rerun:** `bun test ./tests/standalone.test.ts` from `apps/backend` -> 8 passed, 0 failed; the target passed in 2,159.94 ms
+- **Hypothesis:** The timeout is load-sensitive: the owning file completed in 10.02 seconds and the affected startup/listener test completed well below its five-second budget in isolation, while the failure occurred with every aggregate group active. The empty startup stderr and dangling-process cleanup do not identify which child exited or why, so no narrower cause is claimed yet.
+
 ## `NativeAgentService > rotates fairly beyond the global live-session adoption cap` (`apps/backend/src/core/native-agent-service.test.ts`)
 
 - **Status:** resolved
@@ -120,6 +131,17 @@ history rather than two partial ones.
 - **Isolated rerun:** `bun test tests/unit/electron/commands.test.ts` -> 362 passed, 1 skipped, 0 failed; the target passed in 195.34 ms
 - **Hypothesis:** The aggregate failure exhausted the cache-repopulation deadline while the same behavior completed quickly in isolation. This is consistent with aggregate scheduling or filesystem-watcher latency, but no narrower root cause has been reproduced.
 
+## `remote gateway > delivers backend events to authenticated event streams` (`tests/unit/electron/gateway.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-07
+- **Original command:** `bun run test` (root group: `bun test tests --parallel=4`); reproduced while isolating that group with `bun test tests --parallel=4`
+- **Worker configuration:** Four Bun workers in the root group; the original run also executed workspace, bridge, protocol-lockfile, and iOS groups, and the confirming root-group run overlapped independent bridge and protocol/iOS isolation commands
+- **Failure:** The test exceeded Bun's 5,000 ms timeout (duration: 5,000.73 ms)
+- **Suite counts:** Root group: 3,749 total, 3,747 passed, 1 skipped, 1 failed across 142 files with 16,070 assertions
+- **Isolated rerun:** `bun test tests/unit/electron/gateway.test.ts` -> 174 passed, 0 failed; the target passed in 18.30 ms and the file completed in 6.27 seconds
+- **Hypothesis:** The event-stream assertion is load-sensitive under concurrent suite execution. The same test completed in tens of milliseconds when its owning file ran alone, but no narrower scheduler, socket, or event-ordering trigger has been reproduced, so no product or test fix is claimed yet.
+
 ## `Electron backend command registry > starting a stopped environment resumes backend PR polling` (`tests/unit/electron/commands.test.ts`)
 
 - **Status:** open
@@ -132,26 +154,29 @@ history rather than two partial ones.
 ## `an ended agent turn discovers a pull request the agent created itself` (`apps/backend/src/core/pr-monitor-agent-completion.integration.test.ts:203`)
 
 - **Status:** open
-- **Date observed:** 2026-08-06; recurred and reproduced 2026-08-07
+- **Date observed:** 2026-08-06; recurred and reproduced 2026-08-07; recurred 2026-08-08
 - **Original command:** `bun run test` (workspace backend group, `bun test src tests --parallel=2`); reproduction used the same command with two Bun workers per workspace package and Turbo workspace concurrency 2 alongside the root and bridge groups
 - **Suite counts:** First observation: 1,409 backend tests, 1 failed; 2026-08-07 recurrences: three runs with 1,498 total, 1,497 passed and 1 failed, and one run with 1,498 total, 1,496 passed and 2 failed, while the root, bridge, and protocol groups ran concurrently
 - **Failure:** `expect(received).not.toHaveLength(expected)` because no `PR_MONITOR_CHANGED_EVENT` had been announced; recorded failed durations include 380.34 ms, 371.41 ms, 379.76 ms, 298.54 ms, 226.30 ms, and 197.55–292.83 ms during the reproduction study
-- **Isolated rerun:** `bun test --cwd apps/backend src/core/pr-monitor-agent-completion.integration.test.ts` -> 3 passed, 0 failed in 803 ms after the first observation; `bun test src/core/pr-monitor-agent-completion.integration.test.ts` from `apps/backend` -> 3 passed, 0 failed in 807 ms, 835 ms, 494 ms, and 784 ms after the recurrences (latest target duration: 200.85 ms); `bun test ./src/core/pr-monitor-agent-completion.integration.test.ts` from `apps/backend` -> 3 passed, 0 failed, 11 assertions in 783 ms on 2026-08-07
+- **Isolated rerun:** `bun test --cwd apps/backend src/core/pr-monitor-agent-completion.integration.test.ts` -> 3 passed, 0 failed in 803 ms after the first observation; `bun test src/core/pr-monitor-agent-completion.integration.test.ts` from `apps/backend` -> 3 passed, 0 failed in 807 ms, 835 ms, 494 ms, and 784 ms after the recurrences (latest target duration: 200.85 ms); `bun test ./src/core/pr-monitor-agent-completion.integration.test.ts` from `apps/backend` -> 3 passed, 0 failed, 11 assertions in 783 ms on 2026-08-07; 2026-08-08 isolated rerun `bun test src/core/pr-monitor-agent-completion.integration.test.ts --timeout 60000` from `apps/backend` -> 3 passed, 0 failed, 11 assertions in 484 ms
+- **Recurrence (2026-08-08):** `bun test --cwd apps/backend src --parallel --timeout 60000` -> 1,522 passed, 1 failed, 50 files; the sole failure was this test at `pr-monitor-agent-completion.integration.test.ts:203` (`expect(received).not.toHaveLength(expected)`, failed duration 287.57 ms). The build-pipeline retry coverage change in flight was unrelated; the same file passed alone immediately afterwards.
 - **Reproduction attempt (2026-08-07), 5 aggregate runs — 4 failed, 1 passed:** `bun run test` (and `TURBO_FORCE=true bun run test`) failed this test on 4 consecutive runs, then passed on a 5th. Two of the four failures were on a clean tree at `bf5874a5` and two with an unrelated working-tree change applied, so the change under review was ruled out as the cause. The backend group run on its own passed 6/6 (`bun test --cwd apps/backend --parallel`, 1,502 tests clean and 1,509 with the change), and the file alone passed in 464 ms.
 - **Strongest signal so far — wall-clock, not the flag:** every failing aggregate run finished its workspace group in ~31 s; the one passing aggregate run took 133.8 s for the same group. The failures cluster in fast runs, which is the opposite of a straightforward "slow under load" story and suggests the PR-monitor announcement is racing something that completes sooner when the machine is less contended, rather than missing a window when it is more contended.
 - **Caution for the next investigator:** a `bun run test` that reports the workspace group green in ~200 ms is a Turbo cache hit and never executed this test. Use `TURBO_FORCE=true` (or touch a backend file) before treating a pass as evidence.
 - **Hypothesis:** This and the preceding PR-polling test failed in separate aggregate runs. Both wait on an announced PR-monitor event. No narrower root cause has been isolated, and the reproduction is not yet reliable enough to bisect against — 4-in-5 under a specific timing profile, not deterministic.
 
-## `bridge readiness command > keeps retryable local startup races inside the durable wait` (`apps/backend/src/core/commands-state-sync.test.ts:295`)
+## `bridge readiness command > keeps retryable local startup races inside the durable wait` (`apps/backend/src/core/commands-state-sync.test.ts:289`)
 
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-07
 - **Original command:** `bun run test` (workspace backend group, `bun test src tests --parallel=2`)
 - **Worker configuration:** Two Bun workers in the backend package while the root, bridge, and protocol groups ran concurrently
 - **Suite counts:** 1,498 backend tests, 1,496 passed, 2 failed; the other failure was the independently tracked PR-monitor flake above
 - **Failure:** Expected the caller-deadline timeout with `retryAfterMs: 1000`, but received the environment-startup-deadline timeout with `retryAfterMs: 500`; failed duration 1001.78 ms
 - **Isolated rerun:** `bun test src/core/commands-state-sync.test.ts` from `apps/backend` -> 93 passed, 0 failed with 432 assertions in 8.40 s; the target passed in 1006.90 ms
-- **Hypothesis:** The shared readiness probe and the per-caller timeout are both scheduled from the same 1,000 ms deadline. Under aggregate scheduling the shared probe's retry loop can settle first and expose its environment-startup timeout; in isolation the caller timer settles first and returns the contract asserted by the test. This ordering race is visible in the two deadline paths in `await_bridge_ready`, but no production fix was attempted in this unrelated review change.
+- **Root cause:** The shared readiness probe and its longest-lived caller expire at the same absolute deadline. Both paths returned public `timed-out` results, but with different messages and retry delays. If aggregate scheduling let the shared probe's retry continuation settle first, its internal environment-startup timeout escaped instead of the caller-deadline contract.
+- **Fix:** Normalize a shared-probe timeout at the per-caller boundary. Regardless of whether the shared retry continuation or the caller timer wins at the deadline, `await_bridge_ready` now returns the caller-specific timeout with `retryAfterMs: 1000`; ready and terminal failure results remain unchanged.
+- **Verification:** The clock-controlled regression, which deterministically makes the shared timeout settle first, passed 100/100 with `bun test src/core/commands-state-sync.test.ts --test-name-pattern "keeps retryable local startup races inside the durable wait" --rerun-each 100` from `apps/backend`. The owning file passed 93 tests with 432 assertions under `--parallel`; backend typechecking passed; and the final `bun run test` aggregate passed every workspace, root, bridge, protocol-lockfile, and iOS group (40 iOS tests).
 
 ## `initial prompt attachment command > does not prune through a staging-directory replacement race` (`apps/backend/src/core/commands-state-sync.test.ts:717`)
 

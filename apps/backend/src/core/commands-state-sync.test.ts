@@ -287,24 +287,37 @@ describe("bridge readiness command", () => {
   });
 
   test("keeps retryable local startup races inside the durable wait", async () => {
-    await withCommands(async (invoke) => {
-      await expect(invoke("await_bridge_ready", {
-        environmentId: "e1",
-        agent: "codex",
-        timeoutMs: 1_000,
-      })).resolves.toEqual({
-        status: "timed-out",
-        error: {
-          message: "codex bridge did not become ready before the caller deadline",
-          retryable: true,
-          retryAfterMs: 1_000,
-        },
+    await withCommands(async (invoke, _storage, _dataDir, commands) => {
+      const startedAt = Date.now();
+      let clockReads = 0;
+      const now = spyOn(Date, "now").mockImplementation(
+        () => clockReads++ === 0 ? startedAt : startedAt + 1_000,
+      );
+      commands.set("start_local_codex_server_cmd", async () => {
+        throw { message: "not ready", retryable: true, retryAfterMs: 500 };
       });
+
+      try {
+        await expect(invoke("await_bridge_ready", {
+          environmentId: "e1",
+          agent: "codex",
+          timeoutMs: 1_000,
+        })).resolves.toEqual({
+          status: "timed-out",
+          error: {
+            message: "codex bridge did not become ready before the caller deadline",
+            retryable: true,
+            retryAfterMs: 1_000,
+          },
+        });
+      } finally {
+        now.mockRestore();
+      }
     }, {
       environment: {
         status: "running",
         setupPhase: "ready",
-        worktreePath: null,
+        worktreePath: "/tmp/ready-worktree",
         createdAt: new Date().toISOString(),
       },
     });
@@ -2683,6 +2696,10 @@ describe("build pipeline commands", () => {
       operation: "retry-review",
       id,
     }));
+    const retryStage = mock(async (id: string) => ({
+      operation: "retry-stage",
+      id,
+    }));
     const retryInteractionFailure = mock(async (id: string) => ({
       operation: "retry-interaction",
       id,
@@ -2696,6 +2713,7 @@ describe("build pipeline commands", () => {
       remove,
       sendMessage,
       retryReview,
+      retryStage,
       retryInteractionFailure,
     } as unknown as NonNullable<CommandContext["buildPipelines"]>;
 
@@ -2722,6 +2740,9 @@ describe("build pipeline commands", () => {
       await expect(invoke("retry_build_pipeline_review", {
         pipelineId: "pipeline-1",
       })).resolves.toEqual({ operation: "retry-review", id: "pipeline-1" });
+      await expect(invoke("retry_build_pipeline_stage", {
+        pipelineId: "pipeline-1",
+      })).resolves.toEqual({ operation: "retry-stage", id: "pipeline-1" });
       await expect(invoke("retry_build_pipeline_interaction_failure", {
         pipelineId: "pipeline-1",
       })).resolves.toEqual({ operation: "retry-interaction", id: "pipeline-1" });
@@ -2742,6 +2763,7 @@ describe("build pipeline commands", () => {
       expect(sendMessage)
         .toHaveBeenCalledWith("pipeline-1", "also update the README");
       expect(retryReview).toHaveBeenCalledWith("pipeline-1");
+      expect(retryStage).toHaveBeenCalledWith("pipeline-1");
       expect(retryInteractionFailure).toHaveBeenCalledWith("pipeline-1");
     }, { buildPipelines: supervisor });
   });
@@ -2836,6 +2858,7 @@ describe("build pipeline commands", () => {
           text: "hello",
         }],
         ["retry_build_pipeline_review", { pipelineId: "pipeline-1" }],
+        ["retry_build_pipeline_stage", { pipelineId: "pipeline-1" }],
         ["retry_build_pipeline_interaction_failure", {
           pipelineId: "pipeline-1",
         }],

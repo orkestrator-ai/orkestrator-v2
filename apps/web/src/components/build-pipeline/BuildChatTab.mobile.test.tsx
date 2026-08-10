@@ -333,7 +333,9 @@ describe("BuildChatTab on a phone", () => {
     fireEvent.click(viewTabs().getByRole("tab", { name: "Stages" }));
     expect(stageTab("Review Session")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: /The review reported/ }));
+    const hint = screen.getByRole("button", { name: /The review reported/ });
+    hint.focus();
+    fireEvent.click(hint);
 
     // The hint sits above the switcher so it is reachable from either half,
     // and it is a request to read a stage — so it moves the view like a pick
@@ -344,6 +346,11 @@ describe("BuildChatTab on a phone", () => {
         .getAttribute("aria-selected"),
     ).toBe("true");
     expect(screen.getByText("The review is complete")).toBeTruthy();
+    // Selecting the report removes the focused hint. Keep keyboard focus on
+    // the persistent tab that now names and controls the visible transcript.
+    expect(document.activeElement?.id).toBe(
+      viewTabs().getByRole("tab", { name: "Review Session" }).id,
+    );
   });
 
   test("browses the stage list with arrow keys without leaving it", () => {

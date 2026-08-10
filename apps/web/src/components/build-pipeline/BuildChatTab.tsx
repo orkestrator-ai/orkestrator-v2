@@ -249,7 +249,10 @@ export function BuildChatTab({
     setSelectedSessionId(sessionId);
   }, []);
 
-  const selectSession = (sessionId: string) => {
+  const selectSession = (
+    sessionId: string,
+    disappearingTrigger?: HTMLElement,
+  ) => {
     pinSession(sessionId);
     // Choosing a stage is a request to read it, so on a phone the transcript
     // comes forward with it. Only an explicit choice does this: the effect
@@ -261,11 +264,19 @@ export function BuildChatTab({
     // The stage list is about to be hidden, and hiding the element that holds
     // focus drops focus to `<body>` — the next Tab would restart from the top
     // of the document, which loses a keyboard user's place entirely. Hand it
-    // instead to the tab that now names what is on screen. Only when the stage
-    // list actually held focus: a tap leaves focus elsewhere, and moving it
-    // then would be a change the user did not ask for.
+    // instead to the tab that now names what is on screen. Do this only when
+    // the stage list or a caller-supplied disappearing trigger actually held
+    // focus: a tap can leave focus elsewhere, and moving it then would be a
+    // change the user did not ask for.
     const focused = document.activeElement;
-    if (!focused || !document.getElementById(stagesPanelId)?.contains(focused)) {
+    const focusWillDisappear = Boolean(
+      focused
+        && (
+          document.getElementById(stagesPanelId)?.contains(focused)
+          || focused === disappearingTrigger
+        ),
+    );
+    if (!focusWillDisappear) {
       return;
     }
     document.getElementById(mobileViewTabId("transcript"))?.focus();
@@ -658,7 +669,11 @@ export function BuildChatTab({
         <button
           type="button"
           className="flex w-full items-center gap-2 border-b border-cyan-500/20 bg-cyan-500/5 px-4 py-2 text-left text-xs text-cyan-200/90 transition-colors hover:bg-cyan-500/10"
-          onClick={() => selectSession(reviewReportHint.session.sdkSessionId)}
+          onClick={(event) =>
+            selectSession(
+              reviewReportHint.session.sdkSessionId,
+              event.currentTarget,
+            )}
         >
           <ClipboardCheck className="h-3.5 w-3.5 shrink-0" />
           <span className="min-w-0 truncate">

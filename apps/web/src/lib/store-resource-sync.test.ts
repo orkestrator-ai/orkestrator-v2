@@ -463,6 +463,90 @@ describe("pane-layout binding", () => {
     expect(pane?.tabs[1]?.claudeNativeData?.sessionId).toBe("session-4");
   });
 
+  test("moves focus to the build tab on setup completion without a pane-layout frame", async () => {
+    detach?.();
+    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    useBuildPipelineStore.setState({
+      pipelines: new Map([["pipe-1", pipeline("pipe-1", 1)]]),
+    } as never);
+
+    // The renderer is sitting on the setup terminal it seeded while the setup
+    // script ran, exactly as it does mid-provision.
+    const paneStore = usePaneLayoutStore.getState();
+    paneStore.initialize(null, "env-1");
+    paneStore.addTab("default", {
+      id: "build-pipe-1",
+      type: "claude-build",
+      buildTabData: {
+        environmentId: "env-1",
+        pipelineId: "pipe-1",
+        taskId: "task-1",
+        isLocal: true,
+      },
+    }, "env-1");
+    paneStore.addTab("default", { id: "default", type: "plain", isSetupTab: true }, "env-1");
+    paneStore.beginHydration("env-1");
+    paneStore.finishHydration(
+      "env-1",
+      usePaneLayoutStore.getState().environments.get("env-1"),
+    );
+    expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId)
+      .toBe("default");
+
+    // The backend already handed selection to the build surface.
+    const getPaneLayout = mock(async () => ({
+      version: PANE_LAYOUT_VERSION,
+      environmentId: "env-1",
+      containerId: null,
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          {
+            id: "build-pipe-1",
+            type: "claude-build",
+            buildTabData: {
+              environmentId: "env-1",
+              pipelineId: "pipe-1",
+              taskId: "task-1",
+              isLocal: true,
+            },
+          },
+          { id: "default", type: "plain", isSetupTab: true },
+        ],
+        activeTabId: "build-pipe-1",
+      },
+      updatedAt: "2026-07-29T08:00:00.000Z",
+      revision: 7,
+    }));
+
+    let emitSetupComplete: ((environmentId: string) => void) | null = null;
+    const listen = mock(async (event: string, handler: (e: { payload: unknown }) => void) => {
+      if (event === "environment-setup-complete") {
+        emitSetupComplete = (environmentId) =>
+          handler({ payload: { environment_id: environmentId } });
+      }
+      return () => {};
+    });
+
+    detach = startTestStoreResourceSync({
+      getPaneLayout: getPaneLayout as never,
+      listen: listen as never,
+    });
+    await tick();
+
+    // Deliberately never dispatch a "pane-layout" resource change: this is the
+    // frame a mid-write or briefly disconnected client misses, which used to
+    // strand the user on the setup terminal while the build ran unseen.
+    emitSetupComplete!("env-1");
+    await tick();
+
+    expect(getPaneLayout).toHaveBeenCalledWith("env-1");
+    expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId)
+      .toBe("build-pipe-1");
+  });
+
   test("replays a change that arrives while initial layout hydration is pending", async () => {
     detach?.();
     useEnvironmentStore.setState({ environments: [environment("env-1")] });

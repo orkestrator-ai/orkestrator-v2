@@ -18,12 +18,21 @@ log_progress() {
     echo "$1" >> "$PROGRESS_FILE"
 }
 
+# Shared, agent-neutral copy helpers.
+#
+# Claude, Codex and OpenCode all mount a host config directory read-only and copy
+# a bounded subset of it into writable container state. That subset is always an
+# allowlist: every one of these homes also holds session history, logs, caches and
+# host-platform binaries that are large, unportable, or private to the host. Each
+# agent passes its own display name as the fourth argument so warnings name the
+# agent whose state was skipped.
+#
 # Allowlist entries can be nested ("plugins/cache"), so testing only the final
 # component leaves every parent free to be a link: a symlinked "plugins" holding
 # a real "cache" passed that test and let find/cp resolve straight into excluded
 # runtime state. Walk every component below the source root instead, and treat
 # ".." as unsafe so a future allowlist entry cannot escape the root either.
-codex_path_has_symlink() {
+agent_source_path_has_symlink() {
     local source_root="$1"
     local relative_path="$2"
     local current="$source_root"
@@ -61,7 +70,7 @@ codex_path_has_symlink() {
 # container starts. The root's parents are outside this helper's owned boundary
 # (and standard systems commonly link paths such as /var), so start at the
 # destination root itself.
-codex_destination_path_has_symlink() {
+agent_destination_path_has_symlink() {
     local destination_root="$1"
     local relative_path="$2"
     local current="$destination_root"
@@ -94,22 +103,24 @@ codex_destination_path_has_symlink() {
     return 1
 }
 
-copy_codex_file() {
+copy_agent_file() {
     local source_root="$1"
     local destination_root="$2"
     local relative_path="$3"
+    # Display name of the calling agent, used only in warnings.
+    local label="${4:-Agent}"
     local source_path="$source_root/$relative_path"
     local destination_path="$destination_root/$relative_path"
-    local max_bytes="${CODEX_COPY_MAX_FILE_BYTES:-10485760}"
+    local max_bytes="${AGENT_COPY_MAX_FILE_BYTES:-10485760}"
     local file_bytes
     local destination_parent
     local temporary_path
 
-    # An allowlisted name must be a real file in the mounted Codex home. Following
+    # An allowlisted name must be a real file in the mounted agent home. Following
     # a link anywhere along the path could turn an allowlisted name into an
     # arbitrary rollout, log, credential, or other host file.
-    if codex_path_has_symlink "$source_root" "$relative_path"; then
-        log_progress "Warning: Skipping symlinked Codex file: $relative_path"
+    if agent_source_path_has_symlink "$source_root" "$relative_path"; then
+        log_progress "Warning: Skipping symlinked $label file: $relative_path"
         return 0
     fi
 
@@ -117,8 +128,8 @@ copy_codex_file() {
         return 0
     fi
 
-    if codex_destination_path_has_symlink "$destination_root" "$relative_path"; then
-        log_progress "Warning: Skipping Codex file with symlinked destination: $relative_path"
+    if agent_destination_path_has_symlink "$destination_root" "$relative_path"; then
+        log_progress "Warning: Skipping $label file with symlinked destination: $relative_path"
         return 0
     fi
 
@@ -128,51 +139,53 @@ copy_codex_file() {
             ;;
     esac
     file_bytes="$(wc -c < "$source_path" 2>/dev/null)" || {
-        log_progress "Warning: Failed to inspect Codex file: $relative_path"
+        log_progress "Warning: Failed to inspect $label file: $relative_path"
         return 0
     }
     # BSD wc pads its count with leading spaces; GNU wc does not.
     file_bytes="${file_bytes##*[[:space:]]}"
     if [ "$file_bytes" -gt "$max_bytes" ]; then
-        log_progress "Warning: Skipping oversized Codex file: $relative_path"
+        log_progress "Warning: Skipping oversized $label file: $relative_path"
         return 0
     fi
 
     if [ -d "$destination_path" ]; then
-        log_progress "Warning: Failed to copy Codex file: $relative_path (destination is a directory)"
+        log_progress "Warning: Failed to copy $label file: $relative_path (destination is a directory)"
         return 0
     fi
     destination_parent="$(dirname "$destination_path")"
     if ! mkdir -p "$destination_parent" 2>/dev/null; then
-        log_progress "Warning: Failed to create destination for Codex file: $relative_path"
+        log_progress "Warning: Failed to create destination for $label file: $relative_path"
         return 0
     fi
     # Recheck after mkdir, then copy to a fresh regular file and rename it into
     # place. In particular, cp never receives the allowlisted destination leaf,
     # so it cannot follow an auth.json/config.toml link if one is present.
-    if codex_destination_path_has_symlink "$destination_root" "$relative_path"; then
-        log_progress "Warning: Skipping Codex file with symlinked destination: $relative_path"
+    if agent_destination_path_has_symlink "$destination_root" "$relative_path"; then
+        log_progress "Warning: Skipping $label file with symlinked destination: $relative_path"
         return 0
     fi
-    temporary_path="$(mktemp "$destination_parent/.codex-copy.XXXXXX" 2>/dev/null)" || {
-        log_progress "Warning: Failed to create destination for Codex file: $relative_path"
+    temporary_path="$(mktemp "$destination_parent/.agent-copy.XXXXXX" 2>/dev/null)" || {
+        log_progress "Warning: Failed to create destination for $label file: $relative_path"
         return 0
     }
     if ! cp "$source_path" "$temporary_path" 2>/dev/null ||
         ! mv -f "$temporary_path" "$destination_path" 2>/dev/null; then
         rm -f "$temporary_path" 2>/dev/null || true
-        log_progress "Warning: Failed to copy Codex file: $relative_path"
+        log_progress "Warning: Failed to copy $label file: $relative_path"
     fi
 }
 
-copy_codex_directory() {
+copy_agent_directory() {
     local source_root="$1"
     local destination_root="$2"
     local relative_path="$3"
+    # Display name of the calling agent, used only in warnings.
+    local label="${4:-Agent}"
     local source_path="$source_root/$relative_path"
     local destination_path="$destination_root/$relative_path"
-    local max_entries="${CODEX_COPY_MAX_DIRECTORY_ENTRIES:-5000}"
-    local max_kib="${CODEX_COPY_MAX_DIRECTORY_KIB:-262144}"
+    local max_entries="${AGENT_COPY_MAX_DIRECTORY_ENTRIES:-5000}"
+    local max_kib="${AGENT_COPY_MAX_DIRECTORY_KIB:-262144}"
     local entry_scan
     local entry_marks
     local entry_count
@@ -186,8 +199,8 @@ copy_codex_directory() {
     # Do not dereference an allowlist link, at any depth. In particular, a host
     # can otherwise make "skills" or the "plugins" parent of "plugins/cache"
     # point at excluded runtime state.
-    if codex_path_has_symlink "$source_root" "$relative_path"; then
-        log_progress "Warning: Skipping symlinked Codex directory: $relative_path"
+    if agent_source_path_has_symlink "$source_root" "$relative_path"; then
+        log_progress "Warning: Skipping symlinked $label directory: $relative_path"
         return 0
     fi
 
@@ -195,8 +208,8 @@ copy_codex_directory() {
         return 0
     fi
 
-    if codex_destination_path_has_symlink "$destination_root" "$relative_path"; then
-        log_progress "Warning: Skipping Codex directory with symlinked destination: $relative_path"
+    if agent_destination_path_has_symlink "$destination_root" "$relative_path"; then
+        log_progress "Warning: Skipping $label directory with symlinked destination: $relative_path"
         return 0
     fi
 
@@ -230,67 +243,67 @@ copy_codex_directory() {
     case "$head_status" in
         0) ;;
         *)
-            log_progress "Warning: Failed to inspect Codex directory: $relative_path"
+            log_progress "Warning: Failed to inspect $label directory: $relative_path"
             return 0
             ;;
     esac
     entry_count="${#entry_marks}"
     if [ "$entry_count" -gt "$max_entries" ]; then
-        log_progress "Warning: Skipping oversized Codex directory: $relative_path"
+        log_progress "Warning: Skipping oversized $label directory: $relative_path"
         return 0
     fi
     if [ "$find_status" -ne 0 ]; then
-        log_progress "Warning: Failed to inspect Codex directory: $relative_path"
+        log_progress "Warning: Failed to inspect $label directory: $relative_path"
         return 0
     fi
     found_symlink="$(find -P "$source_path" -type l -exec printf x \; -quit 2>/dev/null)" || {
-        log_progress "Warning: Failed to inspect Codex directory: $relative_path"
+        log_progress "Warning: Failed to inspect $label directory: $relative_path"
         return 0
     }
     if [ -n "$found_symlink" ]; then
-        log_progress "Warning: Skipping Codex directory containing symlink: $relative_path"
+        log_progress "Warning: Skipping $label directory containing symlink: $relative_path"
         return 0
     fi
     # Same reason as above: a partial du failure still prints an undercounted
     # total, so du's status has to be read before the total is parsed.
     directory_kib="$(du -sk "$source_path" 2>/dev/null)" || {
-        log_progress "Warning: Failed to inspect Codex directory: $relative_path"
+        log_progress "Warning: Failed to inspect $label directory: $relative_path"
         return 0
     }
     directory_kib="${directory_kib%%[!0-9]*}"
     case "$directory_kib" in
         ''|*[!0-9]*)
-            log_progress "Warning: Failed to inspect Codex directory: $relative_path"
+            log_progress "Warning: Failed to inspect $label directory: $relative_path"
             return 0
             ;;
     esac
     if [ "$directory_kib" -gt "$max_kib" ]; then
-        log_progress "Warning: Skipping oversized Codex directory: $relative_path"
+        log_progress "Warning: Skipping oversized $label directory: $relative_path"
         return 0
     fi
 
     if [ -e "$destination_path" ] && [ ! -d "$destination_path" ]; then
-        log_progress "Warning: Failed to copy Codex directory: $relative_path (destination is not a directory)"
+        log_progress "Warning: Failed to copy $label directory: $relative_path (destination is not a directory)"
         return 0
     fi
     if ! mkdir -p "$destination_path" 2>/dev/null; then
-        log_progress "Warning: Failed to create destination for Codex directory: $relative_path"
+        log_progress "Warning: Failed to create destination for $label directory: $relative_path"
         return 0
     fi
-    if codex_destination_path_has_symlink "$destination_root" "$relative_path"; then
-        log_progress "Warning: Skipping Codex directory with symlinked destination: $relative_path"
+    if agent_destination_path_has_symlink "$destination_root" "$relative_path"; then
+        log_progress "Warning: Skipping $label directory with symlinked destination: $relative_path"
         return 0
     fi
     found_symlink="$(find -P "$destination_path" -type l -exec printf x \; -quit 2>/dev/null)" || {
-        log_progress "Warning: Failed to inspect Codex directory destination: $relative_path"
+        log_progress "Warning: Failed to inspect $label directory destination: $relative_path"
         return 0
     }
     if [ -n "$found_symlink" ]; then
-        log_progress "Warning: Skipping Codex directory containing destination symlink: $relative_path"
+        log_progress "Warning: Skipping $label directory containing destination symlink: $relative_path"
         return 0
     fi
     if ! cp -R "$source_path/." "$destination_path/" 2>/dev/null; then
-        log_progress "Warning: Failed to copy Codex directory: $relative_path"
+        log_progress "Warning: Failed to copy $label directory: $relative_path"
     fi
 }
 
@@ -310,38 +323,64 @@ log_progress "Setting up Claude Code configuration..."
 mkdir -p "$HOME/.claude"
 
 if [ -d /claude-config ]; then
-    # Selectively copy only essential config files, skipping large data directories
-    # This avoids copying hundreds of MB of debug logs, projects, shell-snapshots, etc.
+    # A Claude home is dominated by state a container must not inherit: jobs,
+    # projects, file-history and transcripts routinely reach several GB. The
+    # directory allowlist below already excluded those, but the top-level file
+    # copy was an unbounded `find -maxdepth 1 -type f`, which swept up
+    # history.jsonl — the host's rolling prompt history, including pasted
+    # content, for every project — along with daemon.log and stats-cache.json.
+    # Allowlist the portable inputs instead.
+    #
+    # settings.json is deliberately absent: this script overwrites it below with
+    # the container's own bypass-permissions settings, so copying it was work
+    # that was immediately discarded. .credentials.json is handled by the
+    # dedicated credential block that follows, which also chmods it.
     log_progress "  Copying essential config files..."
 
-    # Copy top-level files (settings, CLAUDE.md, etc.)
-    find /claude-config -maxdepth 1 -type f -exec cp {} "$HOME/.claude/" \; 2>/dev/null || true
+    for file in \
+        CLAUDE.md \
+        settings.local.json
+    do
+        copy_agent_file /claude-config "$HOME/.claude" "$file" Claude
+    done
 
-    # Copy specific directories that are needed
-    for dir in commands agents ide plugins; do
-        if [ -d "/claude-config/$dir" ]; then
-            cp -r "/claude-config/$dir" "$HOME/.claude/" 2>/dev/null || true
-        fi
+    # User-authored extensions. Routed through the shared helper so a symlinked
+    # entry cannot resolve into excluded runtime state, and so a destination link
+    # planted by an earlier workload in a reused container is not written through.
+    for dir in \
+        commands \
+        agents \
+        ide \
+        plugins
+    do
+        copy_agent_directory /claude-config "$HOME/.claude" "$dir" Claude
     done
 
     log_progress "  Config files copied"
 fi
 
-# Create credentials.json from OAuth token environment variable
-# This is how we pass macOS Keychain credentials to Linux containers
-# This MUST happen AFTER copying host files to ensure keychain creds take priority
+# Create credentials.json from the host's Claude Code credential.
+#
+# On macOS that credential lives in the login Keychain, which no mount can
+# expose, so the backend pipes it in over `docker exec` immediately after
+# `docker start` (see syncContainerClaudeCredential in commands.ts). That sync
+# races this block and normally wins before any agent runs, so "not found" here
+# is not conclusive.
+#
+# This MUST happen AFTER copying host files so a real credential always beats
+# whatever `/claude-config` happened to contain.
 if [ -n "$CLAUDE_OAUTH_CREDENTIALS" ] && [ "$CLAUDE_OAUTH_CREDENTIALS" != "{}" ]; then
     echo "$CLAUDE_OAUTH_CREDENTIALS" > "$HOME/.claude/.credentials.json"
     chmod 600 "$HOME/.claude/.credentials.json"
-    log_progress "Injected credentials from macOS Keychain"
+    log_progress "Injected credentials from CLAUDE_OAUTH_CREDENTIALS"
 else
-    # Fallback: copy credentials from host if they exist and no keychain creds
+    # Linux hosts keep the credential on disk, so the mount can carry it.
     if [ -f /claude-config/.credentials.json ]; then
         cp /claude-config/.credentials.json "$HOME/.claude/"
         chmod 600 "$HOME/.claude/.credentials.json"
-        echo "Copied credentials from host (no keychain creds available)"
+        echo "Copied credentials from host"
     else
-        echo "WARNING: No credentials available - you may need to run 'claude login'"
+        echo "No credential on the mount; awaiting the backend credential sync"
     fi
 fi
 
@@ -506,9 +545,19 @@ mkdir -p "$HOME/.local/share/opencode"
 mkdir -p "$HOME/.local/state/opencode"
 
 if [ -d /opencode-config ]; then
-    if ! cp -r /opencode-config/. "$HOME/.config/opencode/" 2>&1; then
+    # The config directory is user-authored, so its entries are copied rather than
+    # allowlisted — an allowlist would silently drop a plugin or config a user
+    # added. node_modules is the one deliberate exclusion: OpenCode manages it
+    # with bun to resolve plugin dependencies, so it routinely holds packages
+    # built for the host platform. Mach-O binaries from a macOS host cannot run
+    # in this Linux container, exactly as with Codex's plugins/.plugin-appserver.
+    # OpenCode reinstalls what it needs for Linux on first use.
+    # find reports a non-zero status when any -exec fails, and `set -e` is active,
+    # so the guard is required. Individual cp errors stay on stderr rather than
+    # being discarded — a partially copied config is worth being able to debug.
+    find /opencode-config -maxdepth 1 -mindepth 1 ! -name node_modules \
+        -exec cp -R {} "$HOME/.config/opencode/" \; ||
         echo "Warning: Some config files could not be copied from /opencode-config"
-    fi
     if [ -n "$DEBUG" ]; then
         echo "Copied OpenCode config files:"
         ls -la "$HOME/.config/opencode/"
@@ -516,17 +565,27 @@ if [ -d /opencode-config ]; then
 fi
 
 if [ -d /opencode-data ]; then
-    # Selectively copy only essential files, skipping large directories like bin/, log/, project/
-    # Copy top-level files (auth.json, etc.)
-    find /opencode-data -maxdepth 1 -type f -exec cp {} "$HOME/.local/share/opencode/" \; 2>/dev/null || true
-
-    # Copy specific directories that might be needed (storage, snapshot)
-    for dir in storage snapshot; do
-        if [ -d "/opencode-data/$dir" ]; then
-            cp -r "/opencode-data/$dir" "$HOME/.local/share/opencode/" 2>/dev/null || true
-        fi
+    # This directory is dominated by opencode.db — the host's session database,
+    # which reaches multiple GB and is not portable state a fresh container needs.
+    # The previous `find -maxdepth 1 -type f` copied every top-level file, so that
+    # database (and its -wal/-shm siblings) was copied on every single start.
+    # Allowlist the portable inputs instead, and reuse the Codex copy helpers so
+    # OpenCode gets the same symlink, size and entry-count bounds.
+    for file in \
+        auth.json \
+        account.json
+    do
+        copy_agent_file /opencode-data "$HOME/.local/share/opencode" "$file" OpenCode
     done
 
+    for dir in \
+        storage \
+        snapshot
+    do
+        copy_agent_directory /opencode-data "$HOME/.local/share/opencode" "$dir" OpenCode
+    done
+
+    chmod 600 "$HOME/.local/share/opencode/auth.json" 2>/dev/null || true
     if [ -n "$DEBUG" ]; then
         echo "Copied OpenCode data files:"
         ls -la "$HOME/.local/share/opencode/"
@@ -579,7 +638,7 @@ if [ -d /codex-home ]; then
         cloud-config-bundle-cache.json \
         cloud-requirements-cache.json
     do
-        copy_codex_file /codex-home "$HOME/.codex" "$file"
+        copy_agent_file /codex-home "$HOME/.codex" "$file" Codex
     done
 
     # Preserve user-authored extensions and the platform-neutral plugin cache.
@@ -592,7 +651,7 @@ if [ -d /codex-home ]; then
         vendor_imports \
         plugins/cache
     do
-        copy_codex_directory /codex-home "$HOME/.codex" "$dir"
+        copy_agent_directory /codex-home "$HOME/.codex" "$dir" Codex
     done
 
     chmod 600 "$HOME/.codex/auth.json" 2>/dev/null || true

@@ -796,7 +796,15 @@ printf '%s\\n' '{"slug":"${slug}"}' > "$out"
 `;
 }
 
-async function withFakeDocker(scriptBody: string, run: (logs: { all: string; rm: string; exec: string }) => Promise<void>): Promise<void> {
+async function withFakeDocker(
+  scriptBody: string,
+  run: (logs: { all: string; rm: string; exec: string }) => Promise<void>,
+  // Starting a container syncs the host's Claude Code credential into it, which
+  // on macOS means reading the login Keychain. Without this stub the suite would
+  // read the developer's real OAuth token and write it into these logs. Exit 1
+  // is what `security` reports for a missing item, so the lookup falls through.
+  securityScriptBody = "#!/bin/sh\nexit 1\n",
+): Promise<void> {
   const root = await createTempDir("ork-electron-fake-docker-");
   const binDir = path.join(root, "bin");
   const all = path.join(root, "docker.log");
@@ -805,6 +813,8 @@ async function withFakeDocker(scriptBody: string, run: (logs: { all: string; rm:
   await fs.mkdir(binDir, { recursive: true });
   await fs.writeFile(path.join(binDir, "docker"), scriptBody);
   await fs.chmod(path.join(binDir, "docker"), 0o755);
+  await fs.writeFile(path.join(binDir, "security"), securityScriptBody);
+  await fs.chmod(path.join(binDir, "security"), 0o755);
 
   const originalPath = process.env.PATH;
   const originalDockerLog = process.env.FAKE_DOCKER_LOG;
@@ -6188,6 +6198,52 @@ exit 1
       expect(calls.match(/exec --user root container-1 sh -c/g)).toHaveLength(2);
       expect(calls).toContain("chgrp -R node /project-files && chmod -R g+rX,o-rwx /project-files");
     });
+  });
+
+  test("delivers the host Claude credential into the container on start", async () => {
+    const environment = createEnvironment({
+      id: "env-claude-cred",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "stopped",
+    });
+    const { context } = createContext(environment);
+    context.storage.loadConfig = mock(async () => ({
+      version: "1.0.0",
+      global: { useHostGitHubCredentials: false, githubToken: "" },
+      repositories: {},
+    }));
+    const commands = createCommandRegistry();
+    const credential = '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-from-keychain"}}';
+
+    await withFakeDocker(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "start" ]; then exit 0; fi
+if [ "$1" = "exec" ]; then
+  if [ "$2" = "--user" ]; then exit 0; fi
+  cat >> "$FAKE_DOCKER_EXEC_LOG.stdin"
+  printf '\\n--sync--\\n' >> "$FAKE_DOCKER_EXEC_LOG.stdin"
+  exit 0
+fi
+exit 1
+`,
+      async (logs) => {
+        await commands.get("docker_start_container")?.({ containerId: "container-1" }, context);
+
+        // Codex rides in on the read-only /codex-home mount; Claude's credential
+        // lives in the macOS Keychain and has to be piped in over stdin, which is
+        // the gap that left container agents reporting "Not logged in".
+        const input = await fs.readFile(`${logs.exec}.stdin`, "utf8");
+        expect(input).toContain(credential);
+        const calls = await fs.readFile(logs.all, "utf8");
+        expect(calls).toContain("/home/node/.claude/.credentials.json");
+        // The token must never be passed as an argv value a `ps` or
+        // `docker inspect` could read.
+        expect(calls).not.toContain("sk-ant-oat01-from-keychain");
+      },
+      `#!/bin/sh\nprintf '%s' '${credential}'\n`,
+    );
   });
 
   test("reports a credential sync failure after a direct container start", async () => {

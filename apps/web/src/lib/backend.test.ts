@@ -1355,6 +1355,37 @@ describe("backend native agent and looped review wrappers", () => {
     expect(minimalPayload).not.toHaveProperty("reasoningEffort");
   });
 
+  test("reads native sessions and coordinates OpenCode manual prompt claims", async () => {
+    invokeMock.mockResolvedValueOnce(null);
+    const identity = {
+      environmentId: "env-1",
+      agent: "opencode" as const,
+      logicalSessionKey: "tab-1",
+    };
+    await expect(backendWrappers.getNativeAgentSession(identity)).resolves.toBeNull();
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "get_native_agent_session",
+      identity,
+    );
+
+    const claim = {
+      environmentId: "env-1",
+      logicalSessionKey: "tab-1",
+      providerSessionId: "provider-1",
+      requestId: "request-1",
+    };
+    await backendWrappers.claimOpenCodeManualPrompt(claim);
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "claim_opencode_manual_prompt",
+      claim,
+    );
+    await backendWrappers.releaseOpenCodeManualPrompt(claim);
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "release_opencode_manual_prompt",
+      claim,
+    );
+  });
+
   test("dispatches native prompts with full and minimal payloads", async () => {
     const dispatched = {
       version: 1 as const,

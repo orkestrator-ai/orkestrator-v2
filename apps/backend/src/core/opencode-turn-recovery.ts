@@ -33,6 +33,8 @@ export interface OpenCodeIncompleteTurnRecovery {
   modelId?: string;
   /** Execution agent of the stalled turn (`build`, `plan`, …). */
   agent?: string;
+  /** Model variant/reasoning profile used by the stalled turn. */
+  variant?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -57,6 +59,46 @@ function textContent(entry: unknown): string {
     }
   }
   return text;
+}
+
+function nonBlankString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined;
+}
+
+/**
+ * OpenCode has persisted execution settings in two compatible shapes across
+ * its message-schema transition: directly on `info`, and under the v2
+ * `info.request` object. Read both, preferring the user request because it is
+ * the authoritative record of what was asked to run.
+ */
+function turnExecutionSettings(
+  userEntry: unknown,
+  assistantEntry: unknown,
+): Pick<OpenCodeIncompleteTurnRecovery, "modelId" | "agent" | "variant"> {
+  const user = messageInfo(userEntry);
+  const request = isRecord(user?.request) ? user.request : undefined;
+  const assistant = messageInfo(assistantEntry);
+  const model = isRecord(request?.model)
+    ? request.model
+    : isRecord(user?.model)
+      ? user.model
+      : undefined;
+  const providerID = nonBlankString(model?.providerID)
+    ?? nonBlankString(assistant?.providerID);
+  const modelID = nonBlankString(model?.modelID)
+    ?? nonBlankString(assistant?.modelID);
+  const agent = nonBlankString(request?.agent)
+    ?? nonBlankString(user?.agent)
+    ?? nonBlankString(assistant?.agent);
+  const variant = nonBlankString(request?.variant)
+    ?? nonBlankString(user?.variant);
+  return {
+    ...(providerID && modelID ? { modelId: `${providerID}/${modelID}` } : {}),
+    ...(agent ? { agent } : {}),
+    ...(variant ? { variant } : {}),
+  };
 }
 
 /**
@@ -142,9 +184,6 @@ export function inspectOpenCodeIncompleteTurn(
     if (hasPendingToolWork(message)) return null;
   }
 
-  const providerID = info.providerID;
-  const modelID = info.modelID;
-  const agent = info.agent;
   return {
     action:
       textContent(messages[latestUserIndex]).trim()
@@ -152,15 +191,7 @@ export function inspectOpenCodeIncompleteTurn(
         ? "exhausted"
         : "continue",
     assistantMessageId: info.id,
-    ...(typeof providerID === "string"
-      && providerID.trim().length > 0
-      && typeof modelID === "string"
-      && modelID.trim().length > 0
-      ? { modelId: `${providerID.trim()}/${modelID.trim()}` }
-      : {}),
-    ...(typeof agent === "string" && agent.trim().length > 0
-      ? { agent: agent.trim() }
-      : {}),
+    ...turnExecutionSettings(messages[latestUserIndex], latestAssistant),
   };
 }
 

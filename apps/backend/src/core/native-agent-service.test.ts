@@ -2011,7 +2011,18 @@ describe("NativeAgentService", () => {
 
   describe("OpenCode incomplete-turn recovery", () => {
     const stalledUser = {
-      info: { id: "user-1", role: "user" },
+      info: {
+        id: "user-1",
+        role: "user",
+        request: {
+          model: {
+            providerID: "opencode-go",
+            modelID: "deepseek-v4-flash",
+          },
+          agent: "reviewer",
+          variant: "high",
+        },
+      },
       parts: [{ type: "text", text: "Review this branch" }],
     };
     const stalledAssistant = (id: string) => ({
@@ -2074,7 +2085,8 @@ describe("NativeAgentService", () => {
         expect(options).toMatchObject({
           requestId: openCodeIncompleteTurnRequestId("assistant-1"),
           model: "opencode-go/deepseek-v4-flash",
-          executionAgent: "build",
+          executionAgent: "reviewer",
+          effort: "high",
         });
         expect((await storage.getNativeAgentSession(key))?.dispatchedRequestIds)
           .toContain(openCodeIncompleteTurnRequestId("assistant-1"));
@@ -2108,6 +2120,269 @@ describe("NativeAgentService", () => {
         });
         expect(send).toHaveBeenCalledTimes(1);
         expect(warnings.join("\n")).toContain("incomplete again");
+        expect((await storage.getNativeAgentSession(key))?.openCodeIncompleteTurnNotice)
+          .toMatchObject({
+            kind: "exhausted",
+            assistantMessageId: "assistant-2",
+          });
+      });
+    });
+
+    test("recovers an incomplete transcript on the first idle snapshot after restart", async () => {
+      const { provider, send } = createProviderStub("opencode", {
+        activity: async () => "idle",
+        messages: async () => [stalledUser, stalledAssistant("assistant-startup")],
+      });
+
+      await withService({
+        prefix: "orkestrator-native-opencode-recovery-startup-",
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey("env-1", "opencode", "tab-1"),
+          environmentId: "env-1",
+          agent: "opencode",
+          logicalSessionKey: "tab-1",
+          providerSessionId: "provider-1",
+        });
+        await captureWarnings(async () => {
+          await service.reconcileAgentActivity();
+          await waitForCondition(() => send.mock.calls.length === 1);
+          await waitForCondition(() => recoveryTasks(service).size === 0);
+        });
+        expect(send).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    test("retries a transient transcript failure while the session remains idle", async () => {
+      let now = 1_000;
+      let messageReads = 0;
+      const { provider, send } = createProviderStub("opencode", {
+        activity: async () => "idle",
+        messages: async () => {
+          messageReads += 1;
+          if (messageReads === 1) throw new Error("temporary transcript failure");
+          return [stalledUser, stalledAssistant("assistant-retry")];
+        },
+      });
+
+      await withService({
+        prefix: "orkestrator-native-opencode-recovery-transient-",
+        provider: async () => provider,
+        now: () => now,
+      }, async ({ storage, service }) => {
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey("env-1", "opencode", "tab-1"),
+          environmentId: "env-1",
+          agent: "opencode",
+          logicalSessionKey: "tab-1",
+          providerSessionId: "provider-1",
+        });
+
+        await captureWarnings(async () => {
+          await service.reconcileAgentActivity();
+          await waitForCondition(() => recoveryTasks(service).size === 0);
+        });
+        expect(send).not.toHaveBeenCalled();
+
+        now += 2_000;
+        await captureWarnings(async () => {
+          await service.reconcileAgentActivity();
+          await waitForCondition(() => send.mock.calls.length === 1);
+          await waitForCondition(() => recoveryTasks(service).size === 0);
+        });
+        expect(send).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    test("rechecks a queue that appears while the recovery transcript is loading", async () => {
+      let reads = 0;
+      let releaseRead!: () => void;
+      const readGate = new Promise<void>((resolve) => {
+        releaseRead = resolve;
+      });
+      const { provider, send } = createProviderStub("opencode", {
+        activity: async () => "idle",
+        messages: async () => {
+          reads += 1;
+          if (reads === 2) await readGate;
+          return [stalledUser, stalledAssistant("assistant-race")];
+        },
+      });
+
+      await withService({
+        prefix: "orkestrator-native-opencode-recovery-queue-race-",
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey("env-1", "opencode", "tab-1"),
+          environmentId: "env-1",
+          agent: "opencode",
+          logicalSessionKey: "tab-1",
+          providerSessionId: "provider-1",
+        });
+        await storage.setOpenCodeIncompleteTurnNotice(
+          nativeAgentSessionStorageKey("env-1", "opencode", "tab-1"),
+          "provider-1",
+          {
+            kind: "failed",
+            assistantMessageId: "assistant-manual-race",
+            updatedAt: new Date().toISOString(),
+          },
+        );
+
+        const reconcile = service.reconcileAgentActivity();
+        await waitForCondition(() => reads === 2);
+        await storage.savePromptQueue("opencode\0tab-1", "env-1", [
+          { id: "new-user-prompt", text: "Do this instead" },
+        ]);
+        releaseRead();
+        await reconcile;
+        await waitForCondition(() => recoveryTasks(service).size === 0);
+        expect(send).not.toHaveBeenCalled();
+      });
+    });
+
+    test("a manual prompt claim suppresses a stale automatic continuation", async () => {
+      let reads = 0;
+      let releaseRead!: () => void;
+      const readGate = new Promise<void>((resolve) => {
+        releaseRead = resolve;
+      });
+      const { provider, send } = createProviderStub("opencode", {
+        activity: async () => "idle",
+        messages: async () => {
+          reads += 1;
+          if (reads === 2) await readGate;
+          return [stalledUser, stalledAssistant("assistant-manual-race")];
+        },
+      });
+
+      await withService({
+        prefix: "orkestrator-native-opencode-recovery-manual-race-",
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey("env-1", "opencode", "tab-1"),
+          environmentId: "env-1",
+          agent: "opencode",
+          logicalSessionKey: "tab-1",
+          providerSessionId: "provider-1",
+        });
+
+        const reconcile = service.reconcileAgentActivity();
+        await waitForCondition(() => reads === 2);
+        const claim = service.claimOpenCodeManualPrompt({
+          environmentId: "env-1",
+          logicalSessionKey: "tab-1",
+          providerSessionId: "provider-1",
+          requestId: "manual-1",
+        });
+        // The claim is published synchronously, but its durable notice cleanup
+        // waits behind the recovery dispatch lock. Let the transcript read
+        // finish so recovery can observe the claim and release that lock.
+        releaseRead();
+        await claim;
+        expect((await storage.getNativeAgentSession(
+          nativeAgentSessionStorageKey("env-1", "opencode", "tab-1"),
+        ))?.openCodeIncompleteTurnNotice).toBeUndefined();
+        await reconcile;
+        await waitForCondition(() => recoveryTasks(service).size === 0);
+        expect(send).not.toHaveBeenCalled();
+        service.releaseOpenCodeManualPrompt({
+          environmentId: "env-1",
+          logicalSessionKey: "tab-1",
+          providerSessionId: "provider-1",
+          requestId: "manual-1",
+        });
+      });
+    });
+
+    test("rejects a manual prompt during the final automatic dispatch handoff", async () => {
+      let releaseSend!: () => void;
+      const sendGate = new Promise<void>((resolve) => {
+        releaseSend = resolve;
+      });
+      const { provider, send } = createProviderStub("opencode", {
+        activity: async () => "idle",
+        messages: async () => [
+          stalledUser,
+          stalledAssistant("assistant-final-handoff"),
+        ],
+      });
+      send.mockImplementation(async () => {
+        await sendGate;
+      });
+
+      await withService({
+        prefix: "orkestrator-native-opencode-recovery-final-handoff-",
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey("env-1", "opencode", "tab-1"),
+          environmentId: "env-1",
+          agent: "opencode",
+          logicalSessionKey: "tab-1",
+          providerSessionId: "provider-1",
+        });
+
+        await captureWarnings(async () => {
+          await service.reconcileAgentActivity();
+          await waitForCondition(() => send.mock.calls.length === 1);
+          await expect(service.claimOpenCodeManualPrompt({
+            environmentId: "env-1",
+            logicalSessionKey: "tab-1",
+            providerSessionId: "provider-1",
+            requestId: "manual-overlap",
+          })).rejects.toThrow("automatic recovery is already being sent");
+          releaseSend();
+          await waitForCondition(() => recoveryTasks(service).size === 0);
+        });
+
+        await service.claimOpenCodeManualPrompt({
+          environmentId: "env-1",
+          logicalSessionKey: "tab-1",
+          providerSessionId: "provider-1",
+          requestId: "manual-after-recovery",
+        });
+        service.releaseOpenCodeManualPrompt({
+          environmentId: "env-1",
+          logicalSessionKey: "tab-1",
+          providerSessionId: "provider-1",
+          requestId: "manual-after-recovery",
+        });
+      });
+    });
+
+    test("persists a visible failure notice when continuation dispatch fails", async () => {
+      const { provider, send } = createProviderStub("opencode", {
+        activity: async () => "idle",
+        messages: async () => [stalledUser, stalledAssistant("assistant-failed")],
+      });
+      send.mockRejectedValue(new Error("provider unavailable"));
+
+      await withService({
+        prefix: "orkestrator-native-opencode-recovery-failed-",
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        const key = nativeAgentSessionStorageKey("env-1", "opencode", "tab-1");
+        await storage.adoptNativeAgentSession({
+          key,
+          environmentId: "env-1",
+          agent: "opencode",
+          logicalSessionKey: "tab-1",
+          providerSessionId: "provider-1",
+        });
+
+        await captureWarnings(async () => {
+          await service.reconcileAgentActivity();
+          await waitForCondition(() => recoveryTasks(service).size === 0);
+        });
+        expect((await storage.getNativeAgentSession(key))?.openCodeIncompleteTurnNotice)
+          .toMatchObject({
+            kind: "failed",
+            assistantMessageId: "assistant-failed",
+          });
       });
     });
 

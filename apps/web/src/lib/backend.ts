@@ -1999,6 +1999,35 @@ export async function adoptNativeAgentSession(input: {
   );
 }
 
+export async function getNativeAgentSession(input: {
+  environmentId: string;
+  agent: "claude" | "codex" | "opencode";
+  logicalSessionKey: string;
+}): Promise<PersistedNativeAgentSession | null> {
+  return invoke<PersistedNativeAgentSession | null>(
+    "get_native_agent_session",
+    input,
+  );
+}
+
+export async function claimOpenCodeManualPrompt(input: {
+  environmentId: string;
+  logicalSessionKey: string;
+  providerSessionId: string;
+  requestId: string;
+}): Promise<void> {
+  return invoke("claim_opencode_manual_prompt", input);
+}
+
+export async function releaseOpenCodeManualPrompt(input: {
+  environmentId: string;
+  logicalSessionKey: string;
+  providerSessionId: string;
+  requestId: string;
+}): Promise<void> {
+  return invoke("release_opencode_manual_prompt", input);
+}
+
 export async function dispatchNativeAgentPrompt(input: {
   environmentId: string;
   agent: "claude" | "codex" | "opencode";

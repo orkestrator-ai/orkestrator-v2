@@ -4622,6 +4622,25 @@ describe("HTTP build pipeline provider (codex)", () => {
 });
 
 describe("OpenCode build pipeline provider dispatch", () => {
+  test("bounds targeted transcript reads at the SDK boundary", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      fake.setMessagesResponse({
+        data: [{ info: { id: "latest", role: "assistant" }, parts: [] }],
+      });
+      await expect(provider.messages("owned-session", { limit: 4 })).resolves
+        .toHaveLength(1);
+      expect(fake.messageCalls).toEqual([{ sessionID: "owned-session", limit: 4 }]);
+
+      fake.setMessagesResponse({ data: Array.from({ length: 5 }, () => null) });
+      await expect(provider.messages("owned-session", { limit: 4 }))
+        .rejects.toBeInstanceOf(ProviderUnavailableError);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("does not dispatch from unavailable or malformed authoritative history", async () => {
     for (const response of [
       { error: { message: "history unavailable" } },
@@ -4815,6 +4834,26 @@ describe("OpenCode build pipeline provider dispatch", () => {
       });
 
       expect(fake.promptCalls[0]!.agent).toBe("plan");
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("uses exact execution-agent and variant overrides for continuations", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      await provider.send("owned-session", "Continue", {
+        requestId: "request-recovery",
+        mode: "plan",
+        executionAgent: "reviewer",
+        effort: "high",
+      });
+
+      expect(fake.promptCalls[0]).toMatchObject({
+        agent: "reviewer",
+        variant: "high",
+      });
     } finally {
       await provider.dispose?.();
     }

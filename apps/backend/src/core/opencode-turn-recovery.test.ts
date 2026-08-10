@@ -5,8 +5,12 @@ import {
   OPENCODE_INCOMPLETE_TURN_CONTINUATION,
 } from "./opencode-turn-recovery.js";
 
-function user(text: string, id = "user-1") {
-  return { info: { id, role: "user" }, parts: [{ type: "text", text }] };
+function user(
+  text: string,
+  id = "user-1",
+  info: Record<string, unknown> = {},
+) {
+  return { info: { id, role: "user", ...info }, parts: [{ type: "text", text }] };
 }
 
 function stalledAssistant(overrides: {
@@ -41,6 +45,40 @@ describe("inspectOpenCodeIncompleteTurn", () => {
       assistantMessageId: "assistant-1",
       modelId: "opencode-go/deepseek-v4-flash",
       agent: "build",
+    });
+  });
+
+  test("preserves model, agent, and variant from the authoritative user request", () => {
+    expect(inspectOpenCodeIncompleteTurn([
+      user("Review this", "user-1", {
+        request: {
+          model: { providerID: "anthropic", modelID: "claude-sonnet" },
+          agent: "reviewer",
+          variant: "high",
+        },
+      }),
+      stalledAssistant(),
+    ])).toEqual({
+      action: "continue",
+      assistantMessageId: "assistant-1",
+      modelId: "anthropic/claude-sonnet",
+      agent: "reviewer",
+      variant: "high",
+    });
+  });
+
+  test("supports the legacy direct user execution-setting shape", () => {
+    expect(inspectOpenCodeIncompleteTurn([
+      user("Review this", "user-1", {
+        model: { providerID: "openai", modelID: "gpt-5" },
+        agent: "plan",
+        variant: "low",
+      }),
+      stalledAssistant(),
+    ])).toMatchObject({
+      modelId: "openai/gpt-5",
+      agent: "plan",
+      variant: "low",
     });
   });
 

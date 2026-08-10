@@ -9971,6 +9971,65 @@ export function createCommandRegistry(
     });
   });
 
+  register("get_native_agent_session", async (args, context) => {
+    const environmentId = asNonBlankString(args.environmentId, "environmentId");
+    const agent = asString(args.agent, "agent") as "claude" | "codex" | "opencode";
+    const logicalSessionKey = asNonBlankString(
+      args.logicalSessionKey,
+      "logicalSessionKey",
+    );
+    if (!["claude", "codex", "opencode"].includes(agent)) {
+      throw new Error("Native agent provider is invalid");
+    }
+    const session = await context.storage.getNativeAgentSession(
+      nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
+    );
+    if (session && (
+      session.environmentId !== environmentId
+      || session.agent !== agent
+      || session.logicalSessionKey !== logicalSessionKey
+    )) {
+      throw new Error("Native agent session identity mismatch");
+    }
+    return session;
+  });
+
+  register("claim_opencode_manual_prompt", async (args, context) => {
+    if (!context.nativeAgents) {
+      throw new Error("Native agent service is unavailable");
+    }
+    await context.nativeAgents.claimOpenCodeManualPrompt({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      logicalSessionKey: asNonBlankString(
+        args.logicalSessionKey,
+        "logicalSessionKey",
+      ),
+      providerSessionId: asNonBlankString(
+        args.providerSessionId,
+        "providerSessionId",
+      ),
+      requestId: asNonBlankString(args.requestId, "requestId"),
+    });
+  });
+
+  register("release_opencode_manual_prompt", (args, context) => {
+    if (!context.nativeAgents) {
+      throw new Error("Native agent service is unavailable");
+    }
+    context.nativeAgents.releaseOpenCodeManualPrompt({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      logicalSessionKey: asNonBlankString(
+        args.logicalSessionKey,
+        "logicalSessionKey",
+      ),
+      providerSessionId: asNonBlankString(
+        args.providerSessionId,
+        "providerSessionId",
+      ),
+      requestId: asNonBlankString(args.requestId, "requestId"),
+    });
+  });
+
   register("get_agent_interaction_observations", (_args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");

@@ -12,6 +12,7 @@ import * as realStalledTurnWatchdog from "@/hooks/useStalledTurnWatchdog";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import * as realOpenCodeClient from "@/lib/opencode-client";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
+import { dispatchResourceChange } from "@/lib/resource-sync";
 
 // Snapshot the real sibling modules before we install stubs so we can restore
 // them when this file finishes. Without this, Bun's global mock.module cache
@@ -258,6 +259,36 @@ const mockEnsureNativeAgentSession = mock(async () => {
     dispatchedRequestIds: [],
   };
 });
+const mockGetNativeAgentSession = mock(async (): Promise<any> => ({
+  version: 1 as const,
+  key: "native-session-key",
+  environmentId: ENVIRONMENT_ID,
+  agent: "opencode" as const,
+  logicalSessionKey: SESSION_KEY,
+  providerSessionId: "session-1",
+  origin: "interactive-native" as const,
+  interactionPolicy: {
+    version: 1 as const,
+    mode: "interactive" as const,
+    input: "await-user" as const,
+    authorization: "await-user" as const,
+    unknown: "deny-and-fail" as const,
+  },
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+}));
+type OpenCodeManualPromptClaim = {
+  environmentId: string;
+  logicalSessionKey: string;
+  providerSessionId: string;
+  requestId: string;
+};
+const mockClaimOpenCodeManualPrompt = mock<
+  (_input: OpenCodeManualPromptClaim) => Promise<void>
+>(async () => undefined);
+const mockReleaseOpenCodeManualPrompt = mock<
+  (_input: OpenCodeManualPromptClaim) => Promise<void>
+>(async () => undefined);
 
 const openCodeClientModuleFactory = () => ({
   ...realOpenCodeClientSnapshot,
@@ -290,7 +321,10 @@ mock.module("@/lib/opencode-client", openCodeClientModuleFactory);
 mock.module("@/lib/backend", () => ({
   awaitBridgeReady: mockAwaitBridgeReady,
   adoptNativeAgentSession: mockAdoptNativeAgentSession,
+  claimOpenCodeManualPrompt: mockClaimOpenCodeManualPrompt,
   ensureNativeAgentSession: mockEnsureNativeAgentSession,
+  getNativeAgentSession: mockGetNativeAgentSession,
+  releaseOpenCodeManualPrompt: mockReleaseOpenCodeManualPrompt,
   claimPromptQueueHead: mockClaimPromptQueueHead,
   acknowledgePromptQueueClaim: mock(async (queueKey, environmentId, claimToken) => {
     mockOutstandingQueueClaims.delete(claimToken);
@@ -844,6 +878,29 @@ describe("OpenCodeChatTab", () => {
     });
     mockAdoptNativeAgentSession.mockClear();
     mockEnsureNativeAgentSession.mockClear();
+    mockGetNativeAgentSession.mockReset();
+    mockGetNativeAgentSession.mockImplementation(async () => ({
+      version: 1 as const,
+      key: "native-session-key",
+      environmentId: ENVIRONMENT_ID,
+      agent: "opencode" as const,
+      logicalSessionKey: SESSION_KEY,
+      providerSessionId: "session-1",
+      origin: "interactive-native" as const,
+      interactionPolicy: {
+        version: 1 as const,
+        mode: "interactive" as const,
+        input: "await-user" as const,
+        authorization: "await-user" as const,
+        unknown: "deny-and-fail" as const,
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }));
+    mockClaimOpenCodeManualPrompt.mockReset();
+    mockClaimOpenCodeManualPrompt.mockResolvedValue(undefined);
+    mockReleaseOpenCodeManualPrompt.mockReset();
+    mockReleaseOpenCodeManualPrompt.mockResolvedValue(undefined);
     mockSendPrompt.mockClear();
     mockSendPrompt.mockImplementation(async () => ({
       success: true,
@@ -987,6 +1044,87 @@ describe("OpenCodeChatTab", () => {
         undefined,
         "ready-token",
       ));
+  });
+
+  test("rehydrates an exhausted incomplete-turn notice on mount", async () => {
+    mockGetNativeAgentSession.mockResolvedValue({
+      version: 1,
+      key: "native-session-key",
+      environmentId: ENVIRONMENT_ID,
+      agent: "opencode",
+      logicalSessionKey: SESSION_KEY,
+      providerSessionId: "session-1",
+      origin: "interactive-native",
+      interactionPolicy: {
+        version: 1,
+        mode: "interactive",
+        input: "await-user",
+        authorization: "await-user",
+        unknown: "deny-and-fail",
+      },
+      openCodeIncompleteTurnNotice: {
+        kind: "exhausted",
+        assistantMessageId: "assistant-exhausted",
+        updatedAt: "2026-08-10T10:03:00.000Z",
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-08-10T10:03:00.000Z",
+    });
+
+    render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages.at(-1))
+        .toMatchObject({
+          id: "error-incomplete-backend-assistant-exhausted",
+          role: "assistant",
+          content: expect.stringContaining("after one automatic continuation"),
+        });
+    });
+  });
+
+  test("applies and clears authoritative recovery notices from resource changes", async () => {
+    render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await waitFor(() => expect(mockGetNativeAgentSession).toHaveBeenCalled());
+
+    const persisted = await mockGetNativeAgentSession();
+    mockGetNativeAgentSession.mockResolvedValue({
+      ...persisted,
+      openCodeIncompleteTurnNotice: {
+        kind: "failed",
+        assistantMessageId: "assistant-failed",
+        updatedAt: "2026-08-10T10:04:00.000Z",
+      },
+    });
+    dispatchResourceChange({
+      resource: "native-agent-session",
+      id: ENVIRONMENT_ID,
+      revision: 500,
+    });
+
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages.at(-1))
+        .toMatchObject({
+          id: "error-incomplete-backend-assistant-failed",
+          content: expect.stringContaining("could not send"),
+        });
+    });
+
+    const current = await mockGetNativeAgentSession();
+    mockGetNativeAgentSession.mockResolvedValue({
+      ...current,
+      openCodeIncompleteTurnNotice: undefined,
+    });
+    dispatchResourceChange({
+      resource: "native-agent-session",
+      id: ENVIRONMENT_ID,
+      revision: 501,
+    });
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages.some(
+        (message) => message.id.startsWith("error-incomplete-backend-"),
+      )).toBe(false);
+    });
   });
 
   test.each([
@@ -1259,6 +1397,16 @@ describe("OpenCodeChatTab", () => {
     await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
     expect(mockSendPrompt.mock.calls[0]?.[2]).toContain(`"id": "${handoffId}"`);
     expect(mockSendPrompt.mock.calls[0]?.[3]?.attachments).toHaveLength(1);
+    const claim = mockClaimOpenCodeManualPrompt.mock.calls[0]?.[0];
+    expect(claim).toMatchObject({
+      environmentId: ENVIRONMENT_ID,
+      logicalSessionKey: SESSION_KEY,
+      providerSessionId: "session-1",
+    });
+    expect(mockSendPrompt.mock.calls[0]?.[3]?.requestId).toBe(claim?.requestId);
+    await waitFor(() => {
+      expect(mockReleaseOpenCodeManualPrompt).toHaveBeenCalledWith(claim);
+    });
   });
 
   test("keeps handoff history pending after a rejected send and retries with it", async () => {
@@ -1328,6 +1476,7 @@ describe("OpenCodeChatTab", () => {
       expect(session?.messages.some(
         (message) => message.id.startsWith("optimistic-") || message.id.startsWith("error-"),
       )).toBe(false);
+      expect(mockReleaseOpenCodeManualPrompt).toHaveBeenCalledTimes(1);
     });
 
     fireEvent.click(screen.getByTestId("opencode-send"));
@@ -3713,10 +3862,11 @@ describe("OpenCodeChatTab", () => {
       MOCK_CLIENT,
       "session-1",
       composeText,
-      {
+      expect.objectContaining({
         model: "openai/gpt-5",
         variant: undefined,
         mode: "build",
+        requestId: expect.any(String),
         attachments: [
           {
             type: "image",
@@ -3725,7 +3875,7 @@ describe("OpenCodeChatTab", () => {
             filename: "screenshot.png",
           },
         ],
-      },
+      }),
     );
   });
 

@@ -368,7 +368,10 @@ export interface BuildPipelineProvider {
     sessionIds: readonly string[],
   ): Promise<Map<string, ProviderActivityState>>;
   readonly interactions?: AgentInteractionProviderCapability;
-  messages(sessionId: string): Promise<unknown[]>;
+  messages(
+    sessionId: string,
+    options?: { limit?: number },
+  ): Promise<unknown[]>;
   structured<T>(
     sessionId: string,
     requestId: string,
@@ -2961,14 +2964,27 @@ class OpenCodeProvider implements BuildPipelineProvider {
     }
   }
 
-  async messages(sessionId: string): Promise<unknown[]> {
+  async messages(
+    sessionId: string,
+    options: { limit?: number } = {},
+  ): Promise<unknown[]> {
     try {
+      const limit = options.limit;
+      if (
+        limit !== undefined
+        && (!Number.isSafeInteger(limit) || limit <= 0 || limit > OPEN_CODE_MESSAGE_HISTORY_LIMIT)
+      ) {
+        throw new RangeError("OpenCode transcript limit is invalid");
+      }
       const response = await this.client.session.messages(
-        { sessionID: sessionId },
+        { sessionID: sessionId, ...(limit === undefined ? {} : { limit }) },
         this.requestOptions(),
       );
       assertSdkResponse(response, "OpenCode transcript read");
-      return Array.isArray(response.data) ? response.data : [];
+      if (limit === undefined) {
+        return Array.isArray(response.data) ? response.data : [];
+      }
+      return [...boundedOpenCodeMessageHistory(response.data, { count: limit })];
     } catch (error) {
       throw new ProviderUnavailableError("OpenCode transcript is unavailable", {
         cause: error,

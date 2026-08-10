@@ -34,6 +34,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
 import { isSetupBlocked } from "@/lib/setup-commands";
+import { onResourceChanged } from "@/lib/resource-sync";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import {
   clearQueuedLaunchPrompt,
@@ -84,7 +85,10 @@ import {
   getCachedOpenCodeModelCatalog,
   cacheOpenCodeModelCatalog,
   adoptNativeAgentSession,
+  claimOpenCodeManualPrompt,
   ensureNativeAgentSession,
+  getNativeAgentSession,
+  releaseOpenCodeManualPrompt,
   awaitBridgeReady,
   renameEnvironmentFromPrompt,
   type OpenCodeModelPreferences,
@@ -216,6 +220,13 @@ function isOpenCodeTurnActive(status: string | null): boolean {
  * handler that has to consume the flag.
  */
 const locallyStoppedSessions = new Set<string>();
+const OPENCODE_RECOVERY_NOTICE_PREFIX = `${ERROR_MESSAGE_PREFIX}incomplete-backend-`;
+
+function openCodeRecoveryNoticeContent(kind: "failed" | "exhausted"): string {
+  return kind === "exhausted"
+    ? "OpenCode stopped before producing a final response after one automatic continuation. Send “Continue” to resume manually, or switch models if this keeps happening."
+    : "OpenCode stopped before producing a final response, and Orkestrator could not send the automatic continuation. Send “Continue” to resume manually.";
+}
 
 /** Test seam — module-level coordination outlives any one component instance. */
 export function __resetOpenCodeLocalStopsForTest(): void {
@@ -471,6 +482,67 @@ export function OpenCodeChatTab({
   const session = useOpenCodeStore(
     useCallback((state) => state.sessions.get(sessionKey), [sessionKey]),
   );
+
+  const applyOpenCodeRecoveryNotice = useCallback((persisted: Awaited<
+    ReturnType<typeof getNativeAgentSession>
+  >): void => {
+    const state = useOpenCodeStore.getState();
+    const current = state.sessions.get(sessionKey);
+    if (!current || persisted?.providerSessionId !== current.sessionId) return;
+    for (const message of current.messages) {
+      if (message.id.startsWith(OPENCODE_RECOVERY_NOTICE_PREFIX)) {
+        state.removeMessage(sessionKey, message.id);
+      }
+    }
+    const notice = persisted.openCodeIncompleteTurnNotice;
+    if (!notice) return;
+    const content = openCodeRecoveryNoticeContent(notice.kind);
+    state.addMessage(sessionKey, {
+      id: `${OPENCODE_RECOVERY_NOTICE_PREFIX}${notice.assistantMessageId}`,
+      role: "assistant",
+      content,
+      parts: [{ type: "text", content }],
+      createdAt: notice.updatedAt,
+    });
+  }, [sessionKey]);
+
+  useEffect(() => {
+    if (!session?.sessionId) return;
+    let disposed = false;
+    let refreshSequence = 0;
+    const refresh = async (): Promise<void> => {
+      const sequence = ++refreshSequence;
+      const persisted = await getNativeAgentSession({
+        environmentId,
+        agent: "opencode",
+        logicalSessionKey: sessionKey,
+      });
+      if (!disposed && sequence === refreshSequence) {
+        applyOpenCodeRecoveryNotice(persisted);
+      }
+    };
+    void refresh().catch((error) => {
+      console.warn("[OpenCodeChatTab] Failed to refresh recovery notice:", error);
+    });
+    const unsubscribe = onResourceChanged(
+      "native-agent-session",
+      ({ id }) => {
+        if (id !== environmentId) return;
+        void refresh().catch((error) => {
+          console.warn("[OpenCodeChatTab] Failed to refresh recovery notice:", error);
+        });
+      },
+    );
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [
+    applyOpenCodeRecoveryNotice,
+    environmentId,
+    session?.sessionId,
+    sessionKey,
+  ]);
 
   const forkInFlightRef = useRef(false);
   const [forkInFlight, setForkInFlight] = useState(false);
@@ -2704,6 +2776,16 @@ export function OpenCodeChatTab({
       const selectedAgent = useOpenCodeStore
         .getState()
         .getSelectedAgent(sessionKey);
+      const requestId = options?.requestId ?? createUuid();
+      const manualClaim = {
+        environmentId,
+        logicalSessionKey: sessionKey,
+        providerSessionId: session.sessionId,
+        requestId,
+      };
+      await claimOpenCodeManualPrompt(manualClaim);
+
+      try {
 
       // Add user message optimistically
       const userMessage = createOptimisticNativeMessage(
@@ -2762,7 +2844,7 @@ export function OpenCodeChatTab({
           directory: slashCommandDirectory,
           command: recognizedNativeCommand,
           attachments: sdkAttachments.length > 0 ? sdkAttachments : undefined,
-          requestId: options?.requestId,
+          requestId,
         });
       } catch (error) {
         // The client normally converts provider errors into `success: false`,
@@ -2788,6 +2870,11 @@ export function OpenCodeChatTab({
       }
       // Response will come via SSE events
       return sendResult;
+      } finally {
+        await releaseOpenCodeManualPrompt(manualClaim).catch((error) => {
+          console.warn("[OpenCodeChatTab] Failed to release prompt claim:", error);
+        });
+      }
     },
     [
       client,

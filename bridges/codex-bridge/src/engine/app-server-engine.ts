@@ -957,6 +957,12 @@ export class AppServerEngine implements CodexEngine {
               : {}),
           };
         });
+        const itemsView =
+          turn.itemsView === "notLoaded"
+          || turn.itemsView === "summary"
+          || turn.itemsView === "full"
+            ? turn.itemsView
+            : undefined;
         return {
           id: String(turn.id ?? ""),
           status: (turn.status as EngineThreadTurn["status"]) ?? "completed",
@@ -964,6 +970,7 @@ export class AppServerEngine implements CodexEngine {
           clientId: clientIds[0] ?? null,
           clientIds,
           reconciliationItems,
+          ...(itemsView ? { itemsView } : {}),
           startedAt: secondsToIso(turn.startedAt),
           completedAt: secondsToIso(turn.completedAt),
         } satisfies EngineThreadTurn;

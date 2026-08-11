@@ -44,7 +44,11 @@ import {
   type SessionTitleSource,
   type ThreadContext,
 } from "./sessions/thread-registry.js";
-import { TurnAccumulator, unconfirmedTurnId } from "./sessions/turn-accumulator.js";
+import {
+  TurnAccumulator,
+  unconfirmedTurnId,
+  type AssistantSegment,
+} from "./sessions/turn-accumulator.js";
 import {
   compareDispatchRecordsNewestFirst,
   DispatchJournal,
@@ -163,11 +167,30 @@ interface OrderedRuntimeEvent {
   coalesceKey?: "status";
 }
 
+/** Where a steer landed, as reported by an authoritative `thread/read`. */
+interface SteerOrdering {
+  precedingItemIds?: readonly string[];
+  followingItemIds?: readonly string[];
+}
+
 interface HistoricalAssistantSegmentState {
   render: TurnRenderState;
   publishedParts: NormalizedPart[];
   publishedModelId?: string;
+  /** `assistantSegmentVersion` as of this row's last render. */
+  renderedItemVersion?: number;
 }
+
+/**
+ * Live render state retained for earlier assistant rows of one turn.
+ *
+ * Each steer adds a row, and each retained row costs a `TurnRenderState` —
+ * chiefly its `completedItemParts` map. Past this many rows the oldest stops
+ * being re-rendered and freezes at its last published parts; the rollout stays
+ * authoritative, so a reload rebuilds it in full. Segment *descriptors* on the
+ * accumulator are five scalar fields and are not the consumer worth bounding.
+ */
+export const MAX_HISTORICAL_ASSISTANT_SEGMENTS = 8;
 
 interface ThreadRuntimeState {
   render: TurnRenderState;
@@ -1137,6 +1160,17 @@ export class AppServerRuntime {
         if (lastMessage !== assistantMessage) {
           context.messages.push(assistantMessage);
           this.bumpMessageRevision(context);
+          // Announce the row before anything streams into it. Its updates are
+          // sparse patches keyed by message id, and a patch for a message the
+          // client has never seen can only be answered by refetching the whole
+          // transcript.
+          for (const sessionId of context.bridgeSessionIds) {
+            this.options.emit({
+              type: "message.updated",
+              sessionId,
+              data: { message: assistantMessage },
+            });
+          }
         }
 
         this.registry.setPhase(context, "recovering");
@@ -1417,9 +1451,17 @@ export class AppServerRuntime {
     return state;
   }
 
+  /**
+   * Rebinds a thread's render state to a new streaming assistant message.
+   *
+   * Every field here moves together. Resetting `render`/`assistantMessageId`
+   * without the three `published*` fields leaves the next publish diffing a new
+   * message against the previous one's parts, so this is the only supported way
+   * to swap the streaming row.
+   */
   private beginAssistantTurnRender(
     state: ThreadRuntimeState,
-    assistantMessage: NormalizedMessage,
+    assistantMessage: { id: string; modelId?: string },
   ): void {
     state.historicalAssistantSegments.clear();
     state.render = beginTurnRenderState(state.render);
@@ -2256,6 +2298,36 @@ export class AppServerRuntime {
     })();
   }
 
+  /**
+   * True when re-rendering a frozen assistant row could produce a different
+   * result than the render already published for it.
+   *
+   * Two things can move a frozen row: one of its items mutated, or its
+   * sub-agent transcript probe is due. `renderTurn` resolves everything else
+   * from `completedItemParts` and the retained sub-agent map, so the output
+   * would be identical.
+   *
+   * Note this asks "has anything changed *since the last render*", not "can
+   * anything change from here". An item that completed a moment ago still owes
+   * one render even though it can never move again.
+   */
+  private segmentNeedsRender(
+    turn: TurnAccumulator,
+    segment: AssistantSegment,
+    historical: HistoricalAssistantSegmentState,
+  ): boolean {
+    if (turn.isTerminal()) return true;
+    const probedAt = historical.render.subagentProbedAt;
+    if (
+      probedAt === 0
+      || Date.now() - probedAt >= SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS
+    ) {
+      return true;
+    }
+    return turn.assistantSegmentVersion(segment.assistantMessageId)
+      !== historical.renderedItemVersion;
+  }
+
   /** Re-renders the streaming assistant message and publishes a sparse update. */
   private async publishAssistantMessage(threadId: string): Promise<void> {
     const context = this.registry.getThread(threadId);
@@ -2281,6 +2353,17 @@ export class AppServerRuntime {
         ? state.publishedModelId
         : historical!.publishedModelId;
 
+      // A frozen row that has not moved since its last render would produce
+      // byte-identical parts: every item resolves from `completedItemParts` and
+      // the sub-agent map is reused verbatim. Skipping it keeps a steered turn's
+      // publish tick proportional to the rows that are actually live rather than
+      // re-rendering every row of the turn ~10x/second.
+      if (!isCurrent && !this.segmentNeedsRender(turn, segment, historical!)) {
+        snapshotChars += normalizedMessageSnapshotChars(message);
+        continue;
+      }
+
+      const itemVersion = turn.assistantSegmentVersion(segment.assistantMessageId);
       const rendered = await renderTurn(turn, {
         threadId: context.threadId,
         cwd: context.cwd ?? this.options.cwd,
@@ -2291,8 +2374,19 @@ export class AppServerRuntime {
       message.parts = rendered.parts;
       message.content = rendered.content;
       snapshotChars += normalizedMessageSnapshotChars(message);
+      // Sampled before the render, so an item that mutated while it was awaited
+      // still shows as pending work rather than being recorded as rendered.
+      if (historical) historical.renderedItemVersion = itemVersion;
 
-      if (publishedModelId !== message.modelId) {
+      // The identity half of this guard is what makes the first publish of any
+      // assistant message a whole snapshot. Without it a path that swaps the
+      // streaming message without resetting `publishedParts` emits a patch for a
+      // message the client has never seen, which it can only answer by
+      // refetching the entire transcript.
+      if (
+        (isCurrent && state.publishedMessageId !== message.id)
+        || publishedModelId !== message.modelId
+      ) {
         if (isCurrent) {
           state.publishedMessageId = message.id;
           state.publishedParts = message.parts.slice();
@@ -2795,9 +2889,13 @@ export class AppServerRuntime {
         ) {
           this.rememberSteerRequest(requestId, { ...previous, state: "accepted" });
           await this.options.engine.drainNotifications(session.threadId);
+          // The original attempt is when this steer reached app-server, so it,
+          // not now, is the instant that divides the two rows. Using `now` here
+          // would sweep everything Codex has produced since into the row above.
           await this.appendAcceptedSteer(context, input, expectedTurnId, {
             requestedAt: previous.requestedAt,
             precedingItemIds: reconciled.precedingItemIds,
+            followingItemIds: reconciled.followingItemIds,
           });
           return "accepted";
         }
@@ -2845,7 +2943,7 @@ export class AppServerRuntime {
       return "unknown";
     }
 
-    const requestedAt = new Date(this.now()).toISOString();
+    const attemptedAt = new Date(this.now()).toISOString();
     try {
       await this.options.engine.steerTurn(
         session.threadId,
@@ -2853,20 +2951,29 @@ export class AppServerRuntime {
         [{ type: "text", text: input }],
         requestId,
       );
-      let precedingItemIds: string[] | undefined;
+      let ordering: SteerOrdering = {};
       try {
         const reconciled = await this.options.engine.reconcileRequest(
           session.threadId,
           requestId,
         );
         if (reconciled.turnId === expectedTurnId) {
-          precedingItemIds = reconciled.precedingItemIds;
+          ordering = {
+            precedingItemIds: reconciled.precedingItemIds,
+            followingItemIds: reconciled.followingItemIds,
+          };
         }
       } catch {
         // The steer response itself is authoritative. A failed ordering read
         // falls back to the live boundary rather than changing acceptance.
       }
       await this.options.engine.drainNotifications(session.threadId);
+      // Stamped only once app-server has acknowledged the steer, and once the
+      // ordering read it is paired with has been taken. Sampling before the RPC
+      // dated the row boundary earlier than the steer could possibly have
+      // landed, so anything Codex emitted during the round-trip was attributed
+      // to the row below while its item stayed in the row above.
+      const requestedAt = new Date(this.now()).toISOString();
       this.rememberSteerRequest(requestId, {
         threadId: session.threadId,
         turnId: expectedTurnId,
@@ -2876,7 +2983,7 @@ export class AppServerRuntime {
       });
       await this.appendAcceptedSteer(context, input, expectedTurnId, {
         requestedAt,
-        precedingItemIds,
+        ...ordering,
       });
       return "accepted";
     } catch (error) {
@@ -2899,7 +3006,7 @@ export class AppServerRuntime {
         turnId: expectedTurnId,
         inputDigest,
         state: "unknown",
-        requestedAt,
+        requestedAt: attemptedAt,
       });
       return "unknown";
     }
@@ -2929,7 +3036,7 @@ export class AppServerRuntime {
     context: ThreadContext,
     input: string,
     turnId: string,
-    ordering: { requestedAt: string; precedingItemIds?: readonly string[] },
+    ordering: SteerOrdering & { requestedAt: string },
   ): Promise<void> {
     // app-server persists a successful steer as another user message inside the
     // active turn. Its live userMessage item is intentionally not rendered by
@@ -2940,7 +3047,7 @@ export class AppServerRuntime {
     if (!turn || turn.turnId !== turnId) return;
     const state = this.stateFor(context.threadId);
     const boundary = turn.freezeAssistantSegment(
-      turn.boundaryAfterItems(ordering.precedingItemIds),
+      turn.boundaryAfterItems(ordering),
       ordering.requestedAt,
     );
 
@@ -2972,6 +3079,16 @@ export class AppServerRuntime {
       publishedParts: state.publishedParts.slice(),
       ...(state.publishedModelId ? { publishedModelId: state.publishedModelId } : {}),
     });
+    // `Map` iterates in insertion order, so the first key is the oldest row.
+    // Dropping it stops that row re-rendering; its published parts stand and the
+    // rollout can rebuild it exactly on the next hydration. Deliberately *not*
+    // `releaseTurnRenderState`: every row shares one `fileChange` context, so
+    // releasing a historical row would clear the live row's diff baselines.
+    while (state.historicalAssistantSegments.size > MAX_HISTORICAL_ASSISTANT_SEGMENTS) {
+      const oldest = state.historicalAssistantSegments.keys().next().value;
+      if (typeof oldest !== "string") break;
+      state.historicalAssistantSegments.delete(oldest);
+    }
     turn.startAssistantSegment(assistantMessage.id, boundary, ordering.requestedAt);
     state.render = beginTurnRenderState(state.render);
     state.assistantMessageId = assistantMessage.id;
@@ -4099,10 +4216,16 @@ export class AppServerRuntime {
       // `recovering` was set before the accumulator existed. Re-apply it so the
       // registry can adopt the recovered backend/rollout timestamp immediately.
       this.registry.setPhase(context, "recovering");
-      const state = this.stateFor(context.threadId);
-      state.historicalAssistantSegments.clear();
-      state.render = beginTurnRenderState(state.render);
-      state.assistantMessageId = assistantMessageId;
+      // Goes through the shared helper so the publish baseline is reset with the
+      // render state. Resetting only `render` left the first publish of this
+      // recovered row emitting a patch against the previous turn's parts.
+      const recoveredModelId = context.messages.find(
+        (message) => message.id === assistantMessageId,
+      )?.modelId;
+      this.beginAssistantTurnRender(this.stateFor(context.threadId), {
+        id: assistantMessageId,
+        ...(recoveredModelId ? { modelId: recoveredModelId } : {}),
+      });
     }
 
     // Armed before the read so a reconciliation that hangs or throws still ends

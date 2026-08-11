@@ -213,6 +213,25 @@ export interface SubagentPartsLoadOptions {
   items: EngineItem[];
 }
 
+/**
+ * Agent ids this segment's own items claim, when every spawn among them names
+ * one.
+ *
+ * This is what makes a steered turn's sub-agent rows line up with its item
+ * rows: items are split by app-server's authoritative ordering, so scoping
+ * spawns by the ids those items carry uses the same boundary. The timestamp
+ * window is the fallback for the case the ids cannot supply — notably
+ * multi-agent v2, whose spawn output no longer returns `agent_id`.
+ */
+function ownedSubagentIds(items: EngineItem[]): string[] | undefined {
+  const claimed = getCodexSpawnedAgentIdsInOrder(items);
+  if (claimed.length === 0) return undefined;
+  // A partially identified segment cannot be filtered without dropping the
+  // spawns it failed to name, so fall back rather than lose them.
+  if (claimed.some((agentId) => agentId === undefined)) return undefined;
+  return claimed as string[];
+}
+
 export interface SubagentPartsLoaderDependencies {
   createTranscriptMetaLoader: typeof createSharedTranscriptMetaLoader;
   deriveTranscriptParts: typeof deriveTranscriptSubagentPartsForTurn;
@@ -236,10 +255,12 @@ export async function loadSubagentPartsFromTranscripts(
   },
 ): Promise<NormalizedPart[]> {
   const loadSessionMeta = dependencies.createTranscriptMetaLoader();
+  const owned = ownedSubagentIds(options.items);
   const transcriptParts = await dependencies.deriveTranscriptParts({
     threadId: options.threadId,
     currentTurnStartedAt: options.turnStartedAt,
     ...(options.turnEndedAt ? { currentTurnEndedAt: options.turnEndedAt } : {}),
+    ...(owned ? { ownedSubagentIds: owned } : {}),
     fallbackAgentIdsInSpawnOrder: getCodexSpawnedAgentIdsInOrder(options.items),
     loadSessionMeta,
     loadTranscript: (path) => dependencies.readTranscript(path),

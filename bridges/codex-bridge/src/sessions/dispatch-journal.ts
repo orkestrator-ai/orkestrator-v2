@@ -622,6 +622,17 @@ export interface ReconciliationOutcome {
   status?: DispatchTerminalStatus;
   /** Renderable item ids which app-server ordered before the matched user message. */
   precedingItemIds?: string[];
+  /**
+   * Renderable item ids which app-server ordered *after* the matched user
+   * message.
+   *
+   * This is the side callers must key on. `items` is a projection of what
+   * app-server has persisted, so an id being absent from `precedingItemIds`
+   * proves nothing: an item still streaming, or one elided by a partial
+   * `itemsView`, is simply not there yet. An id appearing *after* the match is
+   * positive evidence, and stays true however truncated the projection is.
+   */
+  followingItemIds?: string[];
 }
 
 /**
@@ -638,18 +649,21 @@ export function reconcileFromThreadTurns(
       (item) => item?.type === "userMessage" && item.clientId === requestId,
     );
     if (matchIndex < 0) continue;
-    const precedingItemIds = items
-      .slice(0, matchIndex)
+    const renderableIds = (from: number, to?: number) => items
+      .slice(from, to)
       .filter((item) => item?.type !== "userMessage" && typeof item?.id === "string")
       .map((item) => item.id!);
+    const precedingItemIds = renderableIds(0, matchIndex);
+    const followingItemIds = renderableIds(matchIndex + 1);
 
     if (turn.status === "inProgress") {
-      return { result: "attach", turnId: turn.id, precedingItemIds };
+      return { result: "attach", turnId: turn.id, precedingItemIds, followingItemIds };
     }
     return {
       result: "terminal",
       turnId: turn.id,
       precedingItemIds,
+      followingItemIds,
       status:
         turn.status === "interrupted"
           ? "interrupted"

@@ -192,6 +192,113 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
       .toEqual([["agent-before", "Before steer"]]);
     expect(after.map((part) => [part.subagentId, part.subagentPrompt]))
       .toEqual([["agent-after", "After steer"]]);
+
+    // The ids a row's own items claim override the clock entirely. Both rows
+    // are asked with a window that would misattribute the spawn, and both still
+    // return only the agent they own.
+    const ownedBefore = await deriveTranscriptSubagentPartsForTurn({
+      ...common,
+      currentTurnStartedAt: "2026-08-11T12:00:00.000Z",
+      currentTurnEndedAt: "2026-08-11T12:00:30.000Z",
+      ownedSubagentIds: ["agent-before"],
+    });
+    const ownedAfter = await deriveTranscriptSubagentPartsForTurn({
+      ...common,
+      currentTurnStartedAt: "2026-08-11T12:00:00.000Z",
+      ownedSubagentIds: ["agent-after"],
+    });
+
+    expect(ownedBefore.map((part) => part.subagentId)).toEqual(["agent-before"]);
+    expect(ownedAfter.map((part) => part.subagentId)).toEqual(["agent-after"]);
+  });
+
+  test("owned ids keep a spawn with its row when the clock would split them", async () => {
+    // The failure this pins down: the row boundary timestamp is sampled from the
+    // bridge clock around a steer RPC, while items are split by app-server's
+    // authoritative ordering. A spawn emitted inside that window lands on the
+    // wrong side of the clock but the right side of the item order.
+    const parentRecords: TranscriptRecord[] = [
+      {
+        timestamp: "2026-08-11T12:00:09.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          arguments: JSON.stringify({ message: "Raced the steer" }),
+          call_id: "spawn-raced",
+        },
+      },
+      {
+        timestamp: "2026-08-11T12:00:09.500Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "spawn-raced",
+          output: JSON.stringify({ agent_id: "agent-raced", nickname: "Raced" }),
+        },
+      },
+    ];
+    const common = {
+      threadId: "thread-1",
+      loadSessionMeta: async (id: string) => id === "thread-1"
+        ? { transcriptPath: "/tmp/parent.jsonl" }
+        : null,
+      loadTranscript: async () => transcript(parentRecords),
+    };
+
+    // The clock says this spawn belongs below the boundary, so the row above
+    // loses it when only the window is consulted.
+    expect(await deriveTranscriptSubagentPartsForTurn({
+      ...common,
+      currentTurnStartedAt: "2026-08-11T12:00:00.000Z",
+      currentTurnEndedAt: "2026-08-11T12:00:05.000Z",
+    })).toEqual([]);
+
+    // Its item is in the row above, so the row above keeps its card.
+    expect((await deriveTranscriptSubagentPartsForTurn({
+      ...common,
+      currentTurnStartedAt: "2026-08-11T12:00:00.000Z",
+      currentTurnEndedAt: "2026-08-11T12:00:05.000Z",
+      ownedSubagentIds: ["agent-raced"],
+    })).map((part) => part.subagentId)).toEqual(["agent-raced"]);
+  });
+
+  test("falls back to the time window when a row cannot name its own spawns", async () => {
+    // Multi-agent v2 spawn output no longer returns `agent_id`, so a row's items
+    // may claim nothing. Filtering on an empty set would hide every card.
+    const parentRecords: TranscriptRecord[] = [
+      {
+        timestamp: "2026-08-11T12:00:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          arguments: JSON.stringify({ message: "Unnamed" }),
+          call_id: "spawn-unnamed",
+        },
+      },
+      {
+        timestamp: "2026-08-11T12:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "spawn-unnamed",
+          output: JSON.stringify({ agent_id: "agent-unnamed", nickname: "Unnamed" }),
+        },
+      },
+    ];
+
+    const parts = await deriveTranscriptSubagentPartsForTurn({
+      threadId: "thread-1",
+      currentTurnStartedAt: "2026-08-11T12:00:00.000Z",
+      ownedSubagentIds: [],
+      loadSessionMeta: async (id: string) => id === "thread-1"
+        ? { transcriptPath: "/tmp/parent.jsonl" }
+        : null,
+      loadTranscript: async () => transcript(parentRecords),
+    });
+
+    expect(parts.map((part) => part.subagentId)).toEqual(["agent-unnamed"]);
   });
 
   test("loads child transcripts and derives completed subagent activity", async () => {

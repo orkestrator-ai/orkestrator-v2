@@ -1974,7 +1974,7 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(resolveButton);
     fireEvent.contextMenu(resolveButton);
 
-    for (const name of ["Resolve with Claude", "Resolve with OpenCode", "Resolve with Codex"]) {
+    for (const name of ["Resolve with Claude", "Resolve with Codex", "Resolve with OpenCode"]) {
       const item = screen.getByRole("button", { name }) as HTMLButtonElement;
       expect(item.disabled).toBe(true);
       fireEvent.click(item);

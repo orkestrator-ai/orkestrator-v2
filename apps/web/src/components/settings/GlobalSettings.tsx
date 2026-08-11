@@ -795,21 +795,6 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
           </button>
           <button
             type="button"
-            onClick={() => setDefaultAgent("opencode")}
-            className={cn(
-              "p-3 rounded-lg border-2 text-left transition-colors",
-              defaultAgent === "opencode"
-                ? "border-primary bg-primary/5"
-                : "border-transparent bg-zinc-900 hover:border-zinc-600"
-            )}
-          >
-            <div className="flex items-center gap-2 font-medium text-sm">
-              <OpenCodeIcon className="h-4.5 w-4.5" />
-              OpenCode
-            </div>
-          </button>
-          <button
-            type="button"
             onClick={() => setDefaultAgent("codex")}
             className={cn(
               "p-3 rounded-lg border-2 text-left transition-colors",
@@ -821,6 +806,21 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
             <div className="flex items-center gap-2 font-medium text-sm">
               <CodexIcon className="text-emerald-400" />
               Codex
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => setDefaultAgent("opencode")}
+            className={cn(
+              "p-3 rounded-lg border-2 text-left transition-colors",
+              defaultAgent === "opencode"
+                ? "border-primary bg-primary/5"
+                : "border-transparent bg-zinc-900 hover:border-zinc-600"
+            )}
+          >
+            <div className="flex items-center gap-2 font-medium text-sm">
+              <OpenCodeIcon className="h-4.5 w-4.5" />
+              OpenCode
             </div>
           </button>
         </div>

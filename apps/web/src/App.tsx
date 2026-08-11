@@ -649,23 +649,23 @@ function App() {
           </AlertDialogContent>
         </AlertDialog>
 
-        {/* AI CLI not installed dialog - shows when Claude, OpenCode, and Codex are unavailable */}
+        {/* AI CLI not installed dialog - shows when Claude, Codex, and OpenCode are unavailable */}
         <AlertDialog open={noAiCliAvailable}>
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>AI CLI Required</AlertDialogTitle>
               <AlertDialogDescription>
-                No compatible AI CLI is installed on your system. Orkestrator AI requires Claude Code, OpenCode, or Codex to create and manage AI-powered development environments.
+                No compatible AI CLI is installed on your system. Orkestrator AI requires Claude Code, Codex, or OpenCode to create and manage AI-powered development environments.
                 <br /><br />
                 <strong>Option 1: Install Claude Code (recommended)</strong>
                 <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">curl -fsSL https://claude.ai/install.sh | bash</pre>
                 Then run <code className="rounded bg-muted px-1 font-mono">claude</code> to complete the setup.
                 <br /><br />
-                <strong>Option 2: Install OpenCode</strong>
-                <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">curl -fsSL https://opencode.ai/install | bash</pre>
-                <br /><br />
-                <strong>Option 3: Install Codex</strong>
+                <strong>Option 2: Install Codex</strong>
                 <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">npm install -g @openai/codex</pre>
+                <br /><br />
+                <strong>Option 3: Install OpenCode</strong>
+                <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">curl -fsSL https://opencode.ai/install | bash</pre>
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>

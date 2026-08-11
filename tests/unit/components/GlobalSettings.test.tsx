@@ -1033,6 +1033,13 @@ describe("GlobalSettings", () => {
   test("saves non-default editor and agent selections", async () => {
     render(<GlobalSettings activeSection="general" />);
 
+    expect(
+      screen
+        .getAllByRole("button")
+        .map((button) => button.textContent?.trim())
+        .filter((label) => ["Claude", "Codex", "OpenCode"].includes(label ?? "")),
+    ).toEqual(["Claude", "Codex", "OpenCode"]);
+
     fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
     fireEvent.click(screen.getByRole("button", { name: "Codex" }));
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));

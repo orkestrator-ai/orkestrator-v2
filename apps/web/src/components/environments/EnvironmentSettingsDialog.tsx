@@ -695,8 +695,8 @@ export function EnvironmentSettingsDialog({
                 {([
                   { value: "global", label: `Global (${config.global.defaultAgent === "claude" ? "Claude" : config.global.defaultAgent === "codex" ? "Codex" : "OpenCode"})`, icon: <Bot className="h-4 w-4" /> },
                   { value: "claude", label: "Claude", icon: <ClaudeIcon className="h-4 w-4" /> },
-                  { value: "opencode", label: "OpenCode", icon: <OpenCodeIcon className="h-4 w-4" /> },
                   { value: "codex", label: "Codex", icon: <CodexIcon className="h-4 w-4 text-emerald-400" /> },
+                  { value: "opencode", label: "OpenCode", icon: <OpenCodeIcon className="h-4 w-4" /> },
                 ] as const).map((opt) => (
                   <button
                     key={opt.value}
@@ -788,35 +788,6 @@ export function EnvironmentSettingsDialog({
               </p>
             </div>
 
-            {/* OpenCode Mode */}
-            <div className="space-y-3">
-              <Label className="text-sm">OpenCode Mode</Label>
-              <div className="grid max-w-md grid-cols-1 gap-2 sm:grid-cols-3">
-                {([
-                  { value: "global", label: `Global (${(config.global.opencodeMode || "terminal") === "native" ? "Native" : "Terminal"})`, icon: <Bot className="h-3.5 w-3.5" /> },
-                  { value: "terminal", label: "Terminal", icon: <Terminal className="h-3.5 w-3.5" /> },
-                  { value: "native", label: "Native", icon: <Bot className="h-3.5 w-3.5" /> },
-                ] as const).map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => setEnvOpencodeMode(opt.value)}
-                    className={cn(
-                      "p-2 rounded-lg border-2 text-left transition-colors",
-                      envOpencodeMode === opt.value
-                        ? "border-primary bg-primary/5"
-                        : "border-transparent bg-zinc-900 hover:border-zinc-600"
-                    )}
-                  >
-                    <div className="flex items-center gap-2 text-sm font-medium">
-                      {opt.icon}
-                      {opt.label}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
             {/* Codex Mode */}
             <div className="space-y-3">
               <Label className="text-sm">Codex Mode</Label>
@@ -833,6 +804,35 @@ export function EnvironmentSettingsDialog({
                     className={cn(
                       "p-2 rounded-lg border-2 text-left transition-colors",
                       envCodexMode === opt.value
+                        ? "border-primary bg-primary/5"
+                        : "border-transparent bg-zinc-900 hover:border-zinc-600"
+                    )}
+                  >
+                    <div className="flex items-center gap-2 text-sm font-medium">
+                      {opt.icon}
+                      {opt.label}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* OpenCode Mode */}
+            <div className="space-y-3">
+              <Label className="text-sm">OpenCode Mode</Label>
+              <div className="grid max-w-md grid-cols-1 gap-2 sm:grid-cols-3">
+                {([
+                  { value: "global", label: `Global (${(config.global.opencodeMode || "terminal") === "native" ? "Native" : "Terminal"})`, icon: <Bot className="h-3.5 w-3.5" /> },
+                  { value: "terminal", label: "Terminal", icon: <Terminal className="h-3.5 w-3.5" /> },
+                  { value: "native", label: "Native", icon: <Bot className="h-3.5 w-3.5" /> },
+                ] as const).map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setEnvOpencodeMode(opt.value)}
+                    className={cn(
+                      "p-2 rounded-lg border-2 text-left transition-colors",
+                      envOpencodeMode === opt.value
                         ? "border-primary bg-primary/5"
                         : "border-transparent bg-zinc-900 hover:border-zinc-600"
                     )}

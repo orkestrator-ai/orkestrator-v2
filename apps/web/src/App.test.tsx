@@ -1472,6 +1472,13 @@ describe("App startup checks and global events", () => {
     await waitFor(() => {
       expect(screen.getByText("AI CLI Required")).toBeTruthy();
     });
+    expect(
+      screen.getAllByText(/Option [123]: Install/).map((option) => option.textContent),
+    ).toEqual([
+      "Option 1: Install Claude Code (recommended)",
+      "Option 2: Install Codex",
+      "Option 3: Install OpenCode",
+    ]);
 
     mockCheckClaudeCli.mockImplementation(async () => true);
     mockCheckClaudeConfig.mockImplementation(async () => true);

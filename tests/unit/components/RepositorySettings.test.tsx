@@ -311,6 +311,9 @@ describe("RepositorySettings", () => {
       expect(within(group).getByRole("radio", { name: "Claude" })).toBeTruthy();
       expect(within(group).getByRole("radio", { name: "OpenCode" })).toBeTruthy();
       expect(within(group).getByRole("radio", { name: "Codex" })).toBeTruthy();
+      expect(
+        within(group).getAllByRole("radio").map((radio) => radio.textContent?.trim()),
+      ).toEqual(["Use App Default (Claude)", "Claude", "Codex", "OpenCode"]);
 
       const [styleSelect] = getMockSelects();
       expect(styleSelect.value).toBe("__app_default__");

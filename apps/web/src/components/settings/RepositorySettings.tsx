@@ -487,14 +487,14 @@ export function RepositorySettings({
       icon: <ClaudeIcon className="h-4 w-4" />,
     },
     {
-      value: "opencode",
-      label: "OpenCode",
-      icon: <OpenCodeIcon className="h-4 w-4 shrink-0" />,
-    },
-    {
       value: "codex",
       label: "Codex",
       icon: <CodexIcon className="h-4 w-4 text-emerald-400" />,
+    },
+    {
+      value: "opencode",
+      label: "OpenCode",
+      icon: <OpenCodeIcon className="h-4 w-4 shrink-0" />,
     },
   ] as const;
 

@@ -800,6 +800,16 @@ describe("ActionBar grid presentation", () => {
     const claude = screen.getByRole("button", { name: "New tab with Claude" });
     expect(globalSettings.lastElementChild?.textContent).toBe("Global settings");
     expect(claude.lastElementChild?.textContent).toBe("New Claude tab");
+    expect(
+      screen
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label"))
+        .filter((label) => label?.startsWith("New tab with ")),
+    ).toEqual([
+      "New tab with Claude",
+      "New tab with Codex",
+      "New tab with OpenCode",
+    ]);
   });
 
   test("keeps project and environment tools visible but disabled in the empty state", () => {
@@ -1692,11 +1702,11 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Claude Tmux" }));
     expect(createTabMock).toHaveBeenLastCalledWith("claude", { agentLaunchMode: "tmux" });
 
-    fireEvent.contextMenu(customMenuTriggers[2]!);
+    fireEvent.contextMenu(customMenuTriggers[1]!);
     fireEvent.click(screen.getByRole("button", { name: "Codex Native" }));
     expect(createTabMock).toHaveBeenLastCalledWith("codex", { agentLaunchMode: "native" });
 
-    fireEvent.contextMenu(customMenuTriggers[1]!);
+    fireEvent.contextMenu(customMenuTriggers[2]!);
     fireEvent.click(screen.getByRole("button", { name: "OpenCode CLI" }));
     expect(createTabMock).toHaveBeenLastCalledWith("opencode", { agentLaunchMode: "cli" });
   });

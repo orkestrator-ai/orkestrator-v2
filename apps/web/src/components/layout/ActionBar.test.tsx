@@ -198,6 +198,19 @@ function findErrorAlert(label: string) {
   return screen.getByText((_content, element) => element?.textContent?.startsWith(label) ?? false);
 }
 
+function expectProviderMenuOrder(action: string) {
+  expect(
+    screen
+      .getAllByRole("button")
+      .map((button) => button.textContent?.trim())
+      .filter((label) => label?.startsWith(`${action} `)),
+  ).toEqual([
+    `${action} Claude`,
+    `${action} Codex`,
+    `${action} OpenCode`,
+  ]);
+}
+
 function confirmMerge() {
   fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
   fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
@@ -1309,10 +1322,13 @@ describe("ActionBar editor and run commands", () => {
     render(<ActionBar />);
 
     const runButton = screen.getByRole("button", { name: "Run commands" });
+    fireEvent.contextMenu(runButton);
+    expectProviderMenuOrder("Create Script with");
+
     for (const [label, agent] of [
       ["Claude", "claude"],
-      ["OpenCode", "opencode"],
       ["Codex", "codex"],
+      ["OpenCode", "opencode"],
     ] as const) {
       fireEvent.contextMenu(runButton);
       fireEvent.click(screen.getByRole("button", { name: `Create Script with ${label}` }));
@@ -2191,9 +2207,12 @@ describe("ActionBar workflow tabs", () => {
     };
     const view = render(<ActionBar />);
 
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+    expectProviderMenuOrder("Create PR with");
+
     for (const [label, agent] of [
-      ["OpenCode", "opencode"],
       ["Codex", "codex"],
+      ["OpenCode", "opencode"],
     ] as const) {
       fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
       fireEvent.click(screen.getByRole("button", { name: `Create PR with ${label}` }));
@@ -2209,6 +2228,9 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: true,
     };
     view.rerender(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+    expectProviderMenuOrder("Resolve with");
 
     for (const [label, agent] of [
       ["Claude", "claude"],
@@ -2230,9 +2252,12 @@ describe("ActionBar workflow tabs", () => {
     };
     view.rerender(<ActionBar />);
 
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Push Changes" }));
+    expectProviderMenuOrder("Push with");
+
     for (const [label, agent] of [
-      ["OpenCode", "opencode"],
       ["Codex", "codex"],
+      ["OpenCode", "opencode"],
     ] as const) {
       fireEvent.contextMenu(screen.getByRole("button", { name: "Push Changes" }));
       fireEvent.click(screen.getByRole("button", { name: `Push with ${label}` }));

@@ -58,7 +58,12 @@ function TooltipContent({
         {...props}
       >
         {children}
-        <TooltipPrimitive.Arrow className="z-50 size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-[2px] bg-zinc-900 fill-zinc-900" />
+        {/* Radix rotates the arrow wrapper for each placement. These two edges
+            therefore remain the outward outline without drawing a body seam. */}
+        <TooltipPrimitive.Arrow
+          data-slot="tooltip-arrow"
+          className="z-50 size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-[2px] border-r border-b border-zinc-700/70 bg-zinc-900 fill-zinc-900"
+        />
       </TooltipPrimitive.Content>
     </TooltipPrimitive.Portal>
   )

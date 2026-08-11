@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -33,6 +34,7 @@ import type {
   PortMapping,
 } from "@/types";
 import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
+import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 
 export interface CreateEnvironmentFlowOperations {
   createEnvironment: (
@@ -122,6 +124,7 @@ export function CreateEnvironmentFlowDialog({
   updateEnvironment,
   startEnvironment,
 }: CreateEnvironmentFlowDialogProps) {
+  const dockerAvailable = useDockerAvailability();
   const [isCreating, setIsCreating] = useState(false);
   const [pendingCredentialWarning, setPendingCredentialWarning] =
     useState<PendingGitHubCredentialWarning | null>(null);
@@ -260,6 +263,12 @@ export function CreateEnvironmentFlowDialog({
 
   const handleCreate = async (options: ClaudeOptions): Promise<boolean> => {
     if (!projectId) return false;
+    if (options.environmentType === "containerized" && !dockerAvailable) {
+      toast.warning("Docker is not running", {
+        description: "Choose a local worktree environment or start Docker.",
+      });
+      return false;
+    }
     if (options.environmentType === "local") {
       await performCreate(options);
       return true;

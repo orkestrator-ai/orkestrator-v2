@@ -40,6 +40,7 @@ import {
 } from "@/lib/agent-launch";
 import { cn } from "@/lib/utils";
 import type { EnvironmentType } from "@/types";
+import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 
 export interface BuildLaunchStepSelection {
   agent: LaunchAgent;
@@ -241,6 +242,7 @@ export function BuildLaunchDialog({
   busy = false,
   onConfirm,
 }: BuildLaunchDialogProps) {
+  const dockerAvailable = useDockerAvailability();
   const [environmentType, setEnvironmentType] = useState(defaultEnvironmentType);
   const [steps, setSteps] = useState(() =>
     initialSteps(defaultAgent, catalog, preferredModels, preferredReasoningEfforts));
@@ -260,7 +262,11 @@ export function BuildLaunchDialog({
     const justOpened = open && !wasOpenRef.current;
     wasOpenRef.current = open;
     if (!justOpened) return;
-    setEnvironmentType(defaultEnvironmentType);
+    setEnvironmentType(
+      defaultEnvironmentType === "containerized" && !dockerAvailable
+        ? "local"
+        : defaultEnvironmentType,
+    );
     setUniform(true);
     setIncludeComments(commentContext?.defaultIncluded ?? true);
     setSteps(initialSteps(
@@ -274,10 +280,17 @@ export function BuildLaunchDialog({
     commentContext?.defaultIncluded,
     defaultAgent,
     defaultEnvironmentType,
+    dockerAvailable,
     open,
     preferredModels,
     preferredReasoningEfforts,
   ]);
+
+  useEffect(() => {
+    if (!dockerAvailable && environmentType === "containerized") {
+      setEnvironmentType("local");
+    }
+  }, [dockerAvailable, environmentType]);
 
   const resolved = useMemo(() => {
     const entries = BUILD_STEPS.map(({ key }) => {
@@ -375,6 +388,7 @@ export function BuildLaunchDialog({
           className="flex min-h-0 flex-1 flex-col overflow-hidden"
           onSubmit={(event) => {
             event.preventDefault();
+            if (environmentType === "containerized" && !dockerAvailable) return;
             onConfirm({
               environmentType,
               ...(commentContext ? { includeComments } : {}),
@@ -404,6 +418,7 @@ export function BuildLaunchDialog({
               >
                 {ENVIRONMENT_OPTIONS.map((option) => {
                   const selected = environmentType === option.value;
+                  const disabled = option.value === "containerized" && !dockerAvailable;
                   const id = `${environmentGroupId}-${option.value}`;
                   return (
                     <div key={option.value} className="relative min-w-0">
@@ -412,6 +427,7 @@ export function BuildLaunchDialog({
                         type="radio"
                         name={`${environmentGroupId}-environment`}
                         checked={selected}
+                        disabled={disabled}
                         onChange={() => setEnvironmentType(option.value)}
                         className="peer sr-only"
                       />
@@ -419,6 +435,7 @@ export function BuildLaunchDialog({
                         htmlFor={id}
                         className={cn(
                           "flex min-h-16 cursor-pointer flex-col rounded-lg border px-3 py-2.5 transition-colors peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-cyan-400/70",
+                          disabled && "cursor-not-allowed opacity-50",
                           selected
                             ? "border-cyan-400/55 bg-cyan-500/10 text-zinc-100"
                             : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700",
@@ -429,7 +446,7 @@ export function BuildLaunchDialog({
                           {option.label}
                         </span>
                         <span className="mt-1 text-[11px] leading-snug text-zinc-500">
-                          {option.description}
+                          {disabled ? "Unavailable while Docker is stopped" : option.description}
                         </span>
                       </label>
                     </div>
@@ -627,7 +644,10 @@ export function BuildLaunchDialog({
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={busy}>
+            <Button
+              type="submit"
+              disabled={busy || (environmentType === "containerized" && !dockerAvailable)}
+            >
               Start build
             </Button>
           </DialogFooter>

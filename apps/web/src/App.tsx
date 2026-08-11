@@ -48,6 +48,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 import type { Environment } from "@/types";
+import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
+
+export const DOCKER_AVAILABILITY_POLL_INTERVAL_MS = 60_000;
 
 /**
  * Setup can fail after Docker has successfully created and started the
@@ -81,6 +84,9 @@ function App() {
   });
   const [dockerAvailable, setDockerAvailable] = useState<boolean | null>(null);
   const [isCheckingDocker, setIsCheckingDocker] = useState(false);
+  const [dockerWarningDismissed, setDockerWarningDismissed] = useState(false);
+  const dockerAvailableRef = useRef<boolean | null>(null);
+  const dockerCheckInFlightRef = useRef<Promise<boolean> | null>(null);
 
   // Initialize centralized PR monitoring service
   usePrMonitorService();
@@ -168,39 +174,74 @@ function App() {
   const selectedEnvironment = selectedEnvironmentId
     ? environments.find((env) => env.id === selectedEnvironmentId) ?? null
     : null;
-  const refreshDockerAvailability = useCallback(async (source: "startup" | "retry") => {
-    const available = await checkDocker();
-    console.log(`[App] Docker ${source} check:`, available);
-    setDockerAvailable(available);
+  const refreshDockerAvailability = useCallback(async (source: "startup" | "retry" | "poll") => {
+    if (dockerCheckInFlightRef.current) return dockerCheckInFlightRef.current;
 
-    if (!available) return available;
+    const check = (async () => {
+      const previous = dockerAvailableRef.current;
+      try {
+        const available = await checkDocker();
+        console.log(`[App] Docker ${source} check:`, available);
+        dockerAvailableRef.current = available;
+        setDockerAvailable(available);
 
-    try {
-      const clearedIds = await syncAllEnvironmentsWithDocker();
-      if (clearedIds.length > 0) {
-        console.log("[App] Cleared orphaned container references:", clearedIds);
+        // Reconcile container identities on startup and when Docker comes back,
+        // but not on every healthy poll.
+        if (available && previous !== true) {
+          try {
+            const clearedIds = await syncAllEnvironmentsWithDocker();
+            if (clearedIds.length > 0) {
+              console.log("[App] Cleared orphaned container references:", clearedIds);
+            }
+          } catch (error) {
+            console.error("[App] Failed to sync environments with Docker:", error);
+            // Non-fatal - Docker-backed controls can still be enabled.
+          }
+        }
+
+        return available;
+      } catch (error) {
+        console.error(`[App] Docker ${source} check failed:`, error);
+        dockerAvailableRef.current = false;
+        setDockerAvailable(false);
+        return false;
       }
-    } catch (error) {
-      console.error("[App] Failed to sync environments with Docker:", error);
-      // Non-fatal - continue with app startup
-    }
+    })();
 
-    return available;
+    dockerCheckInFlightRef.current = check;
+    try {
+      return await check;
+    } finally {
+      if (dockerCheckInFlightRef.current === check) {
+        dockerCheckInFlightRef.current = null;
+      }
+    }
   }, []);
 
   // Check Docker availability on startup and sync environments
   useEffect(() => {
     const initDocker = async () => {
-      try {
-        await refreshDockerAvailability("startup");
-      } catch (error) {
-        console.error("[App] Docker check failed:", error);
-        setDockerAvailable(false);
-      }
+      await refreshDockerAvailability("startup");
     };
 
-    initDocker();
+    void initDocker();
   }, [refreshDockerAvailability]);
+
+  // Docker can be started or stopped while Orkestrator remains open. Keep the
+  // shared capability state fresh in both directions without overlapping a
+  // slow daemon probe.
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void refreshDockerAvailability("poll");
+    }, DOCKER_AVAILABILITY_POLL_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [refreshDockerAvailability]);
+
+  // Dismissing an outage should last for that outage. Once Docker recovers, a
+  // later outage is new information and should warn the user again.
+  useEffect(() => {
+    if (dockerAvailable === true) setDockerWarningDismissed(false);
+  }, [dockerAvailable]);
 
   // Check CLI availability after Docker is confirmed available
   // Checks: Claude CLI, OpenCode CLI (fallback), and GitHub CLI
@@ -253,27 +294,22 @@ function App() {
       });
   }, [setConfig]);
 
-  // Handle closing the app when Docker is not available
-  const handleCloseApp = async () => {
-    try {
-      await exit(0);
-    } catch (error) {
-      console.error("[App] Failed to exit via plugin:", error);
-      // Fallback: try using window.close() for webview
-      window.close();
-    }
-  };
-
   // Handle retrying Docker check
   const handleRetryDockerCheck = async () => {
     setIsCheckingDocker(true);
     try {
       await refreshDockerAvailability("retry");
-    } catch (error) {
-      console.error("[App] Docker retry check failed:", error);
-      setDockerAvailable(false);
     } finally {
       setIsCheckingDocker(false);
+    }
+  };
+
+  const handleCloseApp = async () => {
+    try {
+      await exit(0);
+    } catch (error) {
+      console.error("[App] Failed to exit via plugin:", error);
+      window.close();
     }
   };
 
@@ -452,6 +488,12 @@ function App() {
   const handleStartEnvironmentFromOverlay = useCallback(
     async (environmentId: string, initialPrompt?: string): Promise<boolean> => {
       const environment = getEnvironmentById(environmentId);
+      if (environment?.environmentType !== "local" && dockerAvailable === false) {
+        toast.warning("Docker is not running", {
+          description: "Container environments are disabled until Docker is available.",
+        });
+        return false;
+      }
       const explicitPrompt = initialPrompt?.trim();
       const storedPrompt =
         !explicitPrompt && !environment?.setupScriptsComplete
@@ -528,7 +570,7 @@ function App() {
         return false;
       }
     },
-    [clearClaudeOptions, config.global.defaultAgent, getEnvironmentById, setClaudeOptions, startEnvironment]
+    [clearClaudeOptions, config.global.defaultAgent, dockerAvailable, getEnvironmentById, setClaudeOptions, startEnvironment]
   );
 
   const handleCreateScriptFromOverlay = useCallback(
@@ -553,15 +595,22 @@ function App() {
   return (
     <TooltipProvider>
       <TerminalProvider>
-        <AppShell>
+        <DockerAvailabilityProvider available={dockerAvailable === true}>
+          <AppShell>
           {selectedEnvironment ? (
             <div className="relative h-full bg-background">
               <div className="absolute inset-0 z-10 bg-background">
                 <TerminalContainer
                   environmentId={selectedEnvironment.id}
                   containerId={selectedEnvironment.containerId ?? null}
-                  isContainerRunning={isEnvironmentContainerAvailable(selectedEnvironment)}
-                  isContainerCreating={selectedEnvironment.status === "creating"}
+                  isContainerRunning={
+                    dockerAvailable === true
+                    && isEnvironmentContainerAvailable(selectedEnvironment)
+                  }
+                  isContainerCreating={
+                    dockerAvailable === true
+                    && selectedEnvironment.status === "creating"
+                  }
                   isActive
                   className="h-full"
                   onStartContainer={(initialPrompt) => {
@@ -583,7 +632,8 @@ function App() {
             />
           )}
 
-        </AppShell>
+          </AppShell>
+        </DockerAvailabilityProvider>
         <Toaster />
         <ErrorDetailsDialog />
 
@@ -608,14 +658,19 @@ function App() {
         )}
 
         {/* Docker not available dialog */}
-        <AlertDialog open={dockerAvailable === false}>
+        <AlertDialog
+          open={dockerAvailable === false && !dockerWarningDismissed}
+          onOpenChange={(open) => {
+            if (!open) setDockerWarningDismissed(true);
+          }}
+        >
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Docker Required</AlertDialogTitle>
+              <AlertDialogTitle>Docker Is Not Running</AlertDialogTitle>
               <AlertDialogDescription>
-                Docker is not running or not installed on your system. Orkestrator AI requires Docker to create and manage development environments.
+                Container functionality is currently disabled. You can continue using local worktree environments while Docker is unavailable.
                 <br /><br />
-                Please install Docker Desktop from{" "}
+                Start Docker, or install Docker Desktop from{" "}
                 <a
                   href="https://docker.com"
                   className="text-primary underline"
@@ -623,8 +678,7 @@ function App() {
                   rel="noopener noreferrer"
                 >
                   docker.com
-                </a>{" "}
-                and ensure it is running before starting the application.
+                </a>. Orkestrator will check again automatically every 60 seconds.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -639,12 +693,12 @@ function App() {
                     Checking...
                   </>
                 ) : (
-                  "Retry"
+                  "Check Again"
                 )}
               </Button>
-              <Button onClick={handleCloseApp}>
-                Close Application
-              </Button>
+              <AlertDialogAction onClick={() => setDockerWarningDismissed(true)}>
+                Continue Without Docker
+              </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>

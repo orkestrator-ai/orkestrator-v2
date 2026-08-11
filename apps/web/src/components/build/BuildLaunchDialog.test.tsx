@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createContext, useContext } from "react";
 import * as realDialog from "@/components/ui/dialog";
 import * as realSelect from "@/components/ui/select";
@@ -71,6 +71,7 @@ mock.module("@/components/ui/select", () => ({
 }));
 import { BuildLaunchDialog, type BuildLaunchSelection } from "./BuildLaunchDialog";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
+import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 
 afterEach(cleanup);
 afterAll(() => {
@@ -160,6 +161,31 @@ const claudeDefault = {
 };
 
 describe("BuildLaunchDialog", () => {
+  test("disables container builds and falls back to local while Docker is unavailable", async () => {
+    const onConfirm = mock((_selection: BuildLaunchSelection) => undefined);
+    render(
+      <DockerAvailabilityProvider available={false}>
+        <BuildLaunchDialog
+          open
+          onOpenChange={() => undefined}
+          catalog={catalog}
+          defaultAgent="claude"
+          defaultEnvironmentType="containerized"
+          onConfirm={onConfirm}
+        />
+      </DockerAvailabilityProvider>,
+    );
+
+    const environment = screen.getByRole("radiogroup", { name: "Build environment" });
+    const container = within(environment).getByRole("radio", { name: /^Container/ });
+    const local = within(environment).getByRole("radio", { name: /^Local/ });
+    await waitFor(() => expect((local as HTMLInputElement).checked).toBe(true));
+    expect((container as HTMLInputElement).disabled).toBe(true);
+
+    submit();
+    expect(onConfirm.mock.calls[0]![0].environmentType).toBe("local");
+  });
+
   test("applies one configuration to every step while the toggle is ticked", () => {
     const { onConfirm } = renderDialog({
       preferredModels: { claude: "claude-b" },

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
+import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -273,6 +274,7 @@ export function EnvironmentSettingsDialog({
   onUpdate,
   onRestart,
 }: EnvironmentSettingsDialogProps) {
+  const dockerAvailable = useDockerAvailability();
   const config = useConfigStore((state) => state.config);
   const globalDomains = config.global.allowedDomains || [];
 
@@ -527,7 +529,7 @@ export function EnvironmentSettingsDialog({
 
   // Handle restart with port changes
   const handleRestartWithChanges = async () => {
-    if (!onRestart) return;
+    if (!onRestart || !dockerAvailable) return;
 
     setIsRestarting(true);
     try {
@@ -1032,7 +1034,8 @@ export function EnvironmentSettingsDialog({
             <AlertDialogCancel disabled={isRestarting}>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleRestartWithChanges}
-              disabled={isRestarting}
+              disabled={isRestarting || !dockerAvailable}
+              title={!dockerAvailable ? "Start Docker to recreate this environment" : undefined}
             >
               {isRestarting ? (
                 <>

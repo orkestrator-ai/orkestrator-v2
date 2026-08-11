@@ -81,6 +81,7 @@ import {
   EMPTY_OPENCODE_MODEL_PREFERENCES,
   openCodeModelRefToId,
 } from "@/lib/opencode-model-preferences";
+import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 
 // Stable empty array reference to prevent infinite re-renders when no default port mappings are provided
 const EMPTY_PORT_MAPPINGS: PortMapping[] = [];
@@ -206,6 +207,7 @@ export function CreateEnvironmentDialog({
   projectName,
   defaultPortMappings = EMPTY_PORT_MAPPINGS,
 }: CreateEnvironmentDialogProps) {
+  const dockerAvailable = useDockerAvailability();
   const config = useConfigStore((state) => state.config);
   const repoConfig = projectId ? config.repositories[projectId] : undefined;
 
@@ -216,6 +218,10 @@ export function CreateEnvironmentDialog({
   const configOpencodeMode = resolved.opencodeMode as OpenCodeMode;
   const configCodexMode = resolved.codexMode as CodexMode;
   const configEnvironmentType: EnvironmentType = repoConfig?.lastEnvironmentType ?? "containerized";
+  const effectiveDefaultEnvironmentType: EnvironmentType =
+    !dockerAvailable && configEnvironmentType === "containerized"
+      ? "local"
+      : configEnvironmentType;
   const claudeModels = useClaudeStore((state) => state.models);
   const codexModels = useCodexStore((state) => state.models);
   const openCodeModels = useOpenCodeStore((state) => state.models);
@@ -373,7 +379,7 @@ export function CreateEnvironmentDialog({
   );
   const initialAgentSelection = getInitialAgentSelection(configDefaultAgent);
 
-  const [environmentType, setEnvironmentType] = useState<EnvironmentType>(configEnvironmentType);
+  const [environmentType, setEnvironmentType] = useState<EnvironmentType>(effectiveDefaultEnvironmentType);
   const [environmentName, setEnvironmentName] = useState("");
   const [launchAgent, setLaunchAgent] = useState(true);
   const [agentType, setAgentType] = useState<AgentType>(configDefaultAgent);
@@ -395,6 +401,12 @@ export function CreateEnvironmentDialog({
   const formRef = useRef<HTMLFormElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const promptPasteRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    if (open && !dockerAvailable && environmentType === "containerized") {
+      setEnvironmentType("local");
+    }
+  }, [dockerAvailable, environmentType, open]);
 
   useEffect(() => {
     if (!open) {
@@ -476,7 +488,7 @@ export function CreateEnvironmentDialog({
 
   const resetForm = useCallback(() => {
     promptPasteRequestIdRef.current += 1;
-    setEnvironmentType(configEnvironmentType);
+    setEnvironmentType(effectiveDefaultEnvironmentType);
     setEnvironmentName("");
     setLaunchAgent(true);
     setAgentType(configDefaultAgent);
@@ -498,7 +510,7 @@ export function CreateEnvironmentDialog({
     configClaudeMode,
     configCodexMode,
     configDefaultAgent,
-    configEnvironmentType,
+    effectiveDefaultEnvironmentType,
     configOpencodeMode,
     getInitialAgentSelection,
   ]);
@@ -594,7 +606,7 @@ export function CreateEnvironmentDialog({
       setMobileTabTransitionDirection(null);
       setPortMappings(defaultPortMappings);
       setShowPortConfig(defaultPortMappings.length > 0);
-      setEnvironmentType(configEnvironmentType);
+      setEnvironmentType(effectiveDefaultEnvironmentType);
       setAgentType(configDefaultAgent);
       setClaudeMode(configClaudeMode);
       setOpencodeMode(configOpencodeMode);
@@ -760,6 +772,8 @@ export function CreateEnvironmentDialog({
     async (e: React.FormEvent) => {
       e.preventDefault();
 
+      if (environmentType === "containerized" && !dockerAvailable) return;
+
       // Validate port mappings before submission
       if (environmentType === "containerized" && !validatePortMappings()) {
         console.error("Invalid port mappings: ports must be between 1 and 65535");
@@ -798,7 +812,7 @@ export function CreateEnvironmentDialog({
         console.error("Failed to create environment:", err);
       }
     },
-    [environmentType, environmentName, launchAgent, agentType, claudeMode, opencodeMode, codexMode, model, hasAvailableOpenCodeModels, reasoningEffort, initialPrompt, initialPromptAttachments, networkAccessMode, portMappings, onCreate, resetForm, onOpenChange, projectId, validatePortMappings]
+    [dockerAvailable, environmentType, environmentName, launchAgent, agentType, claudeMode, opencodeMode, codexMode, model, hasAvailableOpenCodeModels, reasoningEffort, initialPrompt, initialPromptAttachments, networkAccessMode, portMappings, onCreate, resetForm, onOpenChange, projectId, validatePortMappings]
   );
 
   const handlePromptKeyDown = useCallback(
@@ -902,20 +916,23 @@ export function CreateEnvironmentDialog({
               <button
                 type="button"
                 onClick={() => setEnvironmentType("containerized")}
-                disabled={isLoading}
+                disabled={isLoading || !dockerAvailable}
+                title={!dockerAvailable ? "Start Docker to use container environments" : undefined}
                 className={cn(
                   "p-3 rounded-lg border-2 text-left transition-colors",
                   environmentType === "containerized"
                     ? "border-primary bg-primary/5"
                     : UNSELECTED_CARD_CLASSES,
-                  isLoading && "opacity-50 cursor-not-allowed"
+                  (isLoading || !dockerAvailable) && "opacity-50 cursor-not-allowed"
                 )}
               >
                 <div className="flex items-center gap-2">
                   <Container className="h-4 w-4" />
                   <div>
                     <div className="font-medium text-sm">Containerized</div>
-                    <div className="text-xs text-muted-foreground">Isolated Docker environment</div>
+                    <div className="text-xs text-muted-foreground">
+                      {dockerAvailable ? "Isolated Docker environment" : "Unavailable while Docker is stopped"}
+                    </div>
                   </div>
                 </div>
               </button>
@@ -1386,7 +1403,10 @@ export function CreateEnvironmentDialog({
           <Button
             type="button"
             onClick={() => formRef.current?.requestSubmit()}
-            disabled={isLoading || (environmentType === "containerized" && !validatePortMappings())}
+            disabled={
+              isLoading
+              || (environmentType === "containerized" && (!dockerAvailable || !validatePortMappings()))
+            }
           >
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Create Environment

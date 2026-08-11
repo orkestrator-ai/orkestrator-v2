@@ -41,6 +41,7 @@ import {
   LazyDialogLoadingFallback,
   LazyLoadBoundary,
 } from "@/components/LazyLoadBoundary";
+import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 
 const LazyEnvironmentSettingsDialog = lazy(async () => ({
   default: (await import("./EnvironmentSettingsDialog")).EnvironmentSettingsDialog,
@@ -180,6 +181,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   isChecked = false,
   subtitle,
 }: EnvironmentItemProps) {
+  const dockerAvailable = useDockerAvailability();
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
   // Local state to track transitioning - ensures spinner shows immediately
@@ -211,7 +213,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
 
   const isLocalEnvironment = environment.environmentType === "local";
   // Local environments are always considered "running" - they exist or they don't
-  const isRunning = isLocalEnvironment || environment.status === "running";
+  const isRunning = isLocalEnvironment || (dockerAvailable && environment.status === "running");
   const isCreating = environment.status === "creating";
   const isStopping = environment.status === "stopping";
   // Use local state OR prop status for transitioning (not applicable for local environments)
@@ -338,14 +340,14 @@ export const EnvironmentItem = memo(function EnvironmentItem({
               ? <Square className="h-4 w-4 mr-2" />
               : <Play className="h-4 w-4 mr-2" />,
             onSelect: () => isRunning ? onStop(environment.id) : onStart(environment.id),
-            disabled: isTransitioning,
+            disabled: !dockerAvailable || isTransitioning,
           },
           {
             key: "restart",
             label: "Restart",
             icon: <RotateCw className="h-4 w-4 mr-2" />,
             onSelect: () => onRestart(environment.id),
-            disabled: !isRunning || isTransitioning,
+            disabled: !dockerAvailable || !isRunning || isTransitioning,
           },
         ] satisfies EnvironmentMenuItem[])
       : []),

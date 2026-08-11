@@ -10,6 +10,7 @@ import {
   mockToastError as toastErrorMock,
   mockToastSuccess as toastSuccessMock,
 } from "../../mocks/sonner";
+import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 
 const { CreateEnvironmentDialog, getEncodedImageSizeError, resolveAgentDefaults } = await import("../../../apps/web/src/components/environments/CreateEnvironmentDialog");
 const defaultConfig = structuredClone(useConfigStore.getState().config);
@@ -96,6 +97,27 @@ describe("resolveAgentDefaults", () => {
     expect(result.claudeMode).toBe("native");
     expect(result.opencodeMode).toBe("terminal");
     expect(result.codexMode).toBe("native");
+  });
+
+  test("disables container creation and falls back to a local worktree without Docker", async () => {
+    const onCreate = mock(async () => {});
+    render(
+      <DockerAvailabilityProvider available={false}>
+        <CreateEnvironmentDialog
+          open
+          onOpenChange={() => {}}
+          onCreate={onCreate}
+        />
+      </DockerAvailabilityProvider>,
+    );
+
+    const container = screen.getByRole("button", { name: /Containerized/ });
+    expect((container as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("Unavailable while Docker is stopped")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]![0].environmentType).toBe("local");
   });
 
   test("uses app-level defaults when repo config has no overrides", () => {

@@ -6,6 +6,7 @@ import {
   mockToastSuccess as toastSuccessMock,
 } from "../../../../../tests/mocks/sonner";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useProjectStore } from "@/stores/projectStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import type { LinearConnectionStatus, LinearIssueDetail, LinearIssueListItem } from "@/types/linear";
 
@@ -196,6 +197,7 @@ describe("LinearTicketsView", () => {
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
+    useProjectStore.setState({ projects: [] });
   });
 
   function renderLinearTicketsView() {
@@ -687,6 +689,16 @@ describe("LinearTicketsView", () => {
   });
 
   test("opens the shared build launcher and starts a configured Linear-backed build", async () => {
+    useProjectStore.setState({
+      projects: [{
+        id: "project-1",
+        name: "Project One",
+        gitUrl: "https://example.test/project-one.git",
+        localPath: "/work/project-one",
+        addedAt: "2026-08-11T00:00:00.000Z",
+        order: 0,
+      }],
+    });
     renderLinearTicketsView();
 
     fireEvent.click(await screen.findByText("Add Linear integration"));

@@ -98,6 +98,7 @@ import {
   LazyDialogLoadingFallback,
   LazyLoadBoundary,
 } from "@/components/LazyLoadBoundary";
+import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 
 const LazyRepositorySettings = lazy(async () => ({
   default: (await import("@/components/settings/RepositorySettings")).RepositorySettings,
@@ -222,6 +223,7 @@ interface ActionBarProps {
 }
 
 export function ActionBar({ presentation = "bar" }: ActionBarProps) {
+  const dockerAvailable = useDockerAvailability();
   const isGrid = presentation === "grid";
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
@@ -371,7 +373,15 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const repoName = selectedProject?.name ?? null;
   const isLocalEnvironment = selectedEnvironment?.environmentType === "local";
   const isLocalReady = isLocalEnvironment && !!selectedEnvironment?.worktreePath;
-  const isRunning = isLocalReady || selectedEnvironment?.status === "running";
+  const isRunning = isLocalReady || (
+    dockerAvailable
+    && !isLocalEnvironment
+    && selectedEnvironment?.status === "running"
+  );
+
+  useEffect(() => {
+    if (!dockerAvailable) setDockerStatsOpen(false);
+  }, [dockerAvailable]);
 
   const {
     prUrl,
@@ -1343,17 +1353,20 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
               </Button>
           </ToolbarTooltipTrigger>
 
-          <ToolbarTooltipTrigger tooltip="Docker configuration">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8"
-                onClick={() => setDockerStatsOpen(true)}
-                aria-label="Docker configuration"
-              >
-                <DockerIcon className="h-4 w-4" />
-                {isGrid && <span className="truncate text-xs">Docker</span>}
-              </Button>
+          <ToolbarTooltipTrigger
+            tooltip={dockerAvailable ? "Docker configuration" : "Docker is not running"}
+          >
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setDockerStatsOpen(true)}
+              aria-label="Docker configuration"
+              disabled={!dockerAvailable}
+            >
+              <DockerIcon className="h-4 w-4" />
+              {isGrid && <span className="truncate text-xs">Docker</span>}
+            </Button>
           </ToolbarTooltipTrigger>
 
           {(isGrid || repoName) && (

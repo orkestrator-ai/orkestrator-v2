@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -33,6 +34,8 @@ import type {
   PortMapping,
 } from "@/types";
 import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
+import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
+import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 
 export interface CreateEnvironmentFlowOperations {
   createEnvironment: (
@@ -122,10 +125,12 @@ export function CreateEnvironmentFlowDialog({
   updateEnvironment,
   startEnvironment,
 }: CreateEnvironmentFlowDialogProps) {
+  const dockerAvailable = useDockerAvailability();
   const [isCreating, setIsCreating] = useState(false);
   const [pendingCredentialWarning, setPendingCredentialWarning] =
     useState<PendingGitHubCredentialWarning | null>(null);
   const mountedRef = useRef(true);
+  const dockerAvailableRef = useRef(dockerAvailable);
   const activePreflightRef = useRef<PendingGitHubCredentialPreflight | null>(null);
   const pendingCredentialWarningRef =
     useRef<PendingGitHubCredentialWarning | null>(null);
@@ -136,6 +141,10 @@ export function CreateEnvironmentFlowDialog({
       ? state.projects.find((project) => project.id === projectId)?.name
       : undefined,
   );
+  const localEnvironmentAvailable = useLocalEnvironmentAvailable(projectId);
+  const localEnvironmentAvailableRef = useRef(localEnvironmentAvailable);
+  dockerAvailableRef.current = dockerAvailable;
+  localEnvironmentAvailableRef.current = localEnvironmentAvailable;
   const projectName = providedProjectName ?? storedProjectName;
   const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
   const selectProjectAndEnvironment = useUIStore(
@@ -174,9 +183,29 @@ export function CreateEnvironmentFlowDialog({
     }
   }, [settleCredentialWarning]);
 
+  const canCreateEnvironment = useCallback((options: ClaudeOptions): boolean => {
+    if (options.environmentType === "containerized" && !dockerAvailableRef.current) {
+      toast.warning("Docker is not running", {
+        description: "Choose a local worktree environment or start Docker.",
+      });
+      return false;
+    }
+    if (options.environmentType === "local" && !localEnvironmentAvailableRef.current) {
+      toast.warning("Local worktrees are unavailable", {
+        description: "Add a local checkout for this project before creating a local environment.",
+      });
+      return false;
+    }
+    return true;
+  }, []);
+
   useEffect(() => {
     if (!open) cancelPendingCredentialFlow();
   }, [cancelPendingCredentialFlow, open]);
+
+  useEffect(() => {
+    if (!dockerAvailable) cancelPendingCredentialFlow();
+  }, [cancelPendingCredentialFlow, dockerAvailable]);
 
   useEffect(() => {
     const preflight = activePreflightRef.current;
@@ -195,8 +224,8 @@ export function CreateEnvironmentFlowDialog({
     };
   }, [cancelPendingCredentialFlow]);
 
-  const performCreate = async (options: ClaudeOptions) => {
-    if (!projectId) return;
+  const performCreate = async (options: ClaudeOptions): Promise<boolean> => {
+    if (!projectId || !canCreateEnvironment(options)) return false;
 
     setIsCreating(true);
     try {
@@ -253,16 +282,16 @@ export function CreateEnvironmentFlowDialog({
       ).catch((startError) => {
         console.error("Failed to auto-start environment:", startError);
       });
+      return true;
     } finally {
       setIsCreating(false);
     }
   };
 
   const handleCreate = async (options: ClaudeOptions): Promise<boolean> => {
-    if (!projectId) return false;
+    if (!projectId || !canCreateEnvironment(options)) return false;
     if (options.environmentType === "local") {
-      await performCreate(options);
-      return true;
+      return performCreate(options);
     }
 
     cancelPendingCredentialFlow();
@@ -292,6 +321,7 @@ export function CreateEnvironmentFlowDialog({
       return false;
     }
     setIsCreating(false);
+    if (!canCreateEnvironment(options)) return false;
 
     const status = "status" in result ? result.status : null;
     if ("error" in result) {
@@ -299,8 +329,7 @@ export function CreateEnvironmentFlowDialog({
     }
 
     if (status?.available) {
-      await performCreate(options);
-      return true;
+      return performCreate(options);
     }
 
     return new Promise<boolean>((resolve) => {
@@ -325,11 +354,15 @@ export function CreateEnvironmentFlowDialog({
   const createWithoutGitHubCredential = async () => {
     const pending = pendingCredentialWarningRef.current;
     if (!pending || pending.creating) return;
+    if (!canCreateEnvironment(pending.options)) {
+      settleCredentialWarning(pending, { created: false });
+      return;
+    }
     pending.creating = true;
 
     try {
-      await performCreate(pending.options);
-      settleCredentialWarning(pending, { created: true });
+      const created = await performCreate(pending.options);
+      settleCredentialWarning(pending, { created });
     } catch (error) {
       console.error("Failed to create environment:", error);
       settleCredentialWarning(pending, { created: false });
@@ -358,6 +391,7 @@ export function CreateEnvironmentFlowDialog({
         isLoading={isCreating}
         projectId={projectId}
         projectName={projectName}
+        localEnvironmentAvailable={localEnvironmentAvailable}
         defaultPortMappings={
           projectId ? config.repositories[projectId]?.defaultPortMappings : undefined
         }
@@ -389,7 +423,8 @@ export function CreateEnvironmentFlowDialog({
             <Button
               type="button"
               onClick={() => void createWithoutGitHubCredential()}
-              disabled={isCreating}
+              disabled={isCreating || !dockerAvailable}
+              title={!dockerAvailable ? "Start Docker to create a container environment" : undefined}
             >
               {isCreating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Create anyway

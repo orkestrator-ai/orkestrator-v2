@@ -259,7 +259,16 @@ function resetStores() {
   // The build launcher reads its defaults and its model catalog from these, so
   // a test that seeds them must not leak into the next one.
   useConfigStore.setState({ config: initialConfig });
-  useProjectStore.setState({ projects: [] });
+  useProjectStore.setState({
+    projects: [{
+      id: "project-1",
+      name: "Project One",
+      gitUrl: "https://example.test/project-one.git",
+      localPath: "/work/project-one",
+      addedAt: "2026-08-11T00:00:00.000Z",
+      order: 0,
+    }],
+  });
   useOpenCodeStore.setState({ models: new Map(), modelSource: new Map() });
   useBuildPipelineStore.setState({
     pipelines: new Map(),

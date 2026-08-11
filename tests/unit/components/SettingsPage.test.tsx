@@ -76,6 +76,12 @@ describe("SettingsPage", () => {
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("get_config"));
     expect(screen.getByTestId("active-settings-section").textContent).toBe("general");
+    expect(
+      screen
+        .getAllByRole("button")
+        .map((button) => button.textContent)
+        .filter((label) => ["Claude", "Codex", "OpenCode"].includes(label ?? "")),
+    ).toEqual(["Claude", "Codex", "OpenCode"]);
 
     fireEvent.click(screen.getByRole("button", { name: "Review" }));
     expect(screen.getByTestId("active-settings-section").textContent).toBe("review");

@@ -215,6 +215,30 @@ describe("EnvironmentSettingsDialog", () => {
     );
   });
 
+  test("orders agent controls alphabetically", () => {
+    extensionHandler = () => new Promise(() => undefined);
+    render(
+      <EnvironmentSettingsDialog
+        open={true}
+        onOpenChange={() => {}}
+        environment={makeEnvironment()}
+        onUpdate={() => {}}
+      />
+    );
+
+    expect(
+      screen
+        .getAllByRole("button")
+        .map((button) => button.textContent?.trim())
+        .filter((label) => ["Claude", "Codex", "OpenCode"].includes(label ?? "")),
+    ).toEqual(["Claude", "Codex", "OpenCode"]);
+    expect(
+      Array.from(document.querySelectorAll("label"))
+        .map((label) => label.textContent?.trim())
+        .filter((label) => ["Claude Mode", "Codex Mode", "OpenCode Mode"].includes(label ?? "")),
+    ).toEqual(["Claude Mode", "Codex Mode", "OpenCode Mode"]);
+  });
+
   test("shows MCP servers and plugins for all three agents", async () => {
     mockSection = "extensions";
 

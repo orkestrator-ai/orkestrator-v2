@@ -1934,7 +1934,7 @@ export function AgentInfoButton({
             <div className="rounded-lg border border-dashed border-border/70 px-4 py-5">
               <p className="text-sm text-foreground">Select a native agent tab.</p>
               <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                Context, tokens, cost, limits, and runtime details are scoped to the active Claude, OpenCode, or Codex session.
+                Context, tokens, cost, limits, and runtime details are scoped to the active Claude, Codex, or OpenCode session.
               </p>
             </div>
           )}

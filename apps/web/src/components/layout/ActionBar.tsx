@@ -1500,39 +1500,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                 <ToolbarContextMenuTrigger
                   tooltip={
                     <>
-                      <p>New Tab with OpenCode</p>
-                      <p className="text-xs text-muted-foreground">⌘M · Right-click for mode</p>
-                    </>
-                  }
-                >
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={() => handleCreateAgentTab("opencode")}
-                    disabled={!selectedEnvironment || !canCreateTab}
-                    aria-label="New tab with OpenCode"
-                  >
-                    <OpenCodeIcon className="h-4 w-4" />
-                    {isGrid && <span className="truncate text-xs">New OpenCode tab</span>}
-                  </Button>
-                </ToolbarContextMenuTrigger>
-                <ContextMenuContent>
-                  <ContextMenuItem onClick={() => handleCreateAgentTab("opencode", "cli")} disabled={!canCreateTab}>
-                    <OpenCodeIcon className="mr-2 h-4 w-4" />
-                    OpenCode CLI
-                  </ContextMenuItem>
-                  <ContextMenuItem onClick={() => handleCreateAgentTab("opencode", "native")} disabled={!canCreateTab}>
-                    <OpenCodeIcon className="mr-2 h-4 w-4" />
-                    OpenCode Native
-                  </ContextMenuItem>
-                </ContextMenuContent>
-              </ContextMenu>
-
-              <ContextMenu>
-                <ToolbarContextMenuTrigger
-                  tooltip={
-                    <>
                       <p>New Tab with Codex</p>
                       <p className="text-xs text-muted-foreground">Right-click for mode</p>
                     </>
@@ -1558,6 +1525,39 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   <ContextMenuItem onClick={() => handleCreateAgentTab("codex", "native")} disabled={!canCreateTab}>
                     <CodexIcon className="mr-2 h-4 w-4" />
                     Codex Native
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
+
+              <ContextMenu>
+                <ToolbarContextMenuTrigger
+                  tooltip={
+                    <>
+                      <p>New Tab with OpenCode</p>
+                      <p className="text-xs text-muted-foreground">⌘M · Right-click for mode</p>
+                    </>
+                  }
+                >
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={() => handleCreateAgentTab("opencode")}
+                    disabled={!selectedEnvironment || !canCreateTab}
+                    aria-label="New tab with OpenCode"
+                  >
+                    <OpenCodeIcon className="h-4 w-4" />
+                    {isGrid && <span className="truncate text-xs">New OpenCode tab</span>}
+                  </Button>
+                </ToolbarContextMenuTrigger>
+                <ContextMenuContent>
+                  <ContextMenuItem onClick={() => handleCreateAgentTab("opencode", "cli")} disabled={!canCreateTab}>
+                    <OpenCodeIcon className="mr-2 h-4 w-4" />
+                    OpenCode CLI
+                  </ContextMenuItem>
+                  <ContextMenuItem onClick={() => handleCreateAgentTab("opencode", "native")} disabled={!canCreateTab}>
+                    <OpenCodeIcon className="mr-2 h-4 w-4" />
+                    OpenCode Native
                   </ContextMenuItem>
                 </ContextMenuContent>
               </ContextMenu>
@@ -1686,18 +1686,18 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     Create Script with Claude
                   </ContextMenuItem>
                   <ContextMenuItem
-                    onClick={() => handleCreateScript("opencode")}
-                    disabled={!canCreateTab || !isRunning}
-                  >
-                    <FilePlus2 className="mr-2 h-4 w-4" />
-                    Create Script with OpenCode
-                  </ContextMenuItem>
-                  <ContextMenuItem
                     onClick={() => handleCreateScript("codex")}
                     disabled={!canCreateTab || !isRunning}
                   >
                     <FilePlus2 className="mr-2 h-4 w-4" />
                     Create Script with Codex
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    onClick={() => handleCreateScript("opencode")}
+                    disabled={!canCreateTab || !isRunning}
+                  >
+                    <FilePlus2 className="mr-2 h-4 w-4" />
+                    Create Script with OpenCode
                   </ContextMenuItem>
                 </ContextMenuContent>
               </ContextMenu>
@@ -1791,13 +1791,13 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   <ClaudeIcon className="mr-2 h-4 w-4" />
                   Create PR with Claude
                 </ContextMenuItem>
-                <ContextMenuItem onClick={() => handleCreatePR("opencode")}>
-                  <OpenCodeIcon className="mr-2 h-4 w-4" />
-                  Create PR with OpenCode
-                </ContextMenuItem>
                 <ContextMenuItem onClick={() => handleCreatePR("codex")}>
                   <CodexIcon className="mr-2 h-4 w-4" />
                   Create PR with Codex
+                </ContextMenuItem>
+                <ContextMenuItem onClick={() => handleCreatePR("opencode")}>
+                  <OpenCodeIcon className="mr-2 h-4 w-4" />
+                  Create PR with OpenCode
                 </ContextMenuItem>
               </ContextMenuContent>
             </ContextMenu>
@@ -1913,18 +1913,18 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                       Resolve with Claude
                     </ContextMenuItem>
                     <ContextMenuItem
-                      onClick={() => handleResolveConflicts("opencode")}
-                      disabled={resolveLaunchEnvironmentId !== null}
-                    >
-                      <OpenCodeIcon className="mr-2 h-4 w-4" />
-                      Resolve with OpenCode
-                    </ContextMenuItem>
-                    <ContextMenuItem
                       onClick={() => handleResolveConflicts("codex")}
                       disabled={resolveLaunchEnvironmentId !== null}
                     >
                       <CodexIcon className="mr-2 h-4 w-4" />
                       Resolve with Codex
+                    </ContextMenuItem>
+                    <ContextMenuItem
+                      onClick={() => handleResolveConflicts("opencode")}
+                      disabled={resolveLaunchEnvironmentId !== null}
+                    >
+                      <OpenCodeIcon className="mr-2 h-4 w-4" />
+                      Resolve with OpenCode
                     </ContextMenuItem>
                   </ContextMenuContent>
                 </ContextMenu>
@@ -1981,13 +1981,13 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                       <ClaudeIcon className="mr-2 h-4 w-4" />
                       Push with Claude
                     </ContextMenuItem>
-                    <ContextMenuItem onClick={() => handlePushChanges("opencode")}>
-                      <OpenCodeIcon className="mr-2 h-4 w-4" />
-                      Push with OpenCode
-                    </ContextMenuItem>
                     <ContextMenuItem onClick={() => handlePushChanges("codex")}>
                       <CodexIcon className="mr-2 h-4 w-4" />
                       Push with Codex
+                    </ContextMenuItem>
+                    <ContextMenuItem onClick={() => handlePushChanges("opencode")}>
+                      <OpenCodeIcon className="mr-2 h-4 w-4" />
+                      Push with OpenCode
                     </ContextMenuItem>
                   </ContextMenuContent>
                 </ContextMenu>

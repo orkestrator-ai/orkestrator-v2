@@ -19,6 +19,7 @@ import type { GitHubIssueBuildInput } from "@/hooks/useBuildPipeline";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import * as realBackend from "@/lib/backend";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
+import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 
 const realBackendSnapshot = { ...realBackend };
 const openInBrowserMock = mock(async () => undefined);
@@ -510,6 +511,53 @@ describe("GitHubIssueDetail", () => {
         expect.objectContaining({ number: 42 }),
         "project-1",
         "containerized",
+      );
+    });
+  });
+
+  test("blocks container builds after Docker stops while keeping local builds available", async () => {
+    const renderWithDocker = (available: boolean) => (
+      <DockerAvailabilityProvider available={available}>
+        <GitHubIssueDetailContent
+          projectId="project-1"
+          repository={repository}
+          issueNumber={42}
+          summary={detail}
+          onBack={() => {}}
+          onClosed={() => {}}
+          buildPipeline={{
+            startBuildFromGitHubIssue: startBuildMock,
+            navigateToPipeline: navigateToPipelineMock,
+          }}
+        />
+      </DockerAvailabilityProvider>
+    );
+    const view = render(renderWithDocker(true));
+
+    expect(
+      (screen.getByRole("button", { name: "Build Container" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+
+    view.rerender(renderWithDocker(false));
+
+    const containerBuild = screen.getByRole("button", { name: "Build Container" });
+    const localBuild = screen.getByRole("button", { name: "Build Local" });
+    expect((containerBuild as HTMLButtonElement).disabled).toBe(true);
+    expect(containerBuild.getAttribute("title")).toBe(
+      "Start Docker to run a container build",
+    );
+    expect((localBuild as HTMLButtonElement).disabled).toBe(false);
+
+    fireEvent.click(containerBuild);
+    expect(startBuildMock).not.toHaveBeenCalled();
+
+    fireEvent.click(localBuild);
+    await waitFor(() => {
+      expect(startBuildMock).toHaveBeenCalledWith(
+        expect.objectContaining({ number: 42 }),
+        "project-1",
+        "local",
       );
     });
   });

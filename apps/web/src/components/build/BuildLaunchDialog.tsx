@@ -176,6 +176,8 @@ interface BuildLaunchDialogProps {
   commentContext?: BuildLaunchCommentContextOption;
   /** Disables the submit button while a start request is in flight. */
   busy?: boolean;
+  /** Whether this project has a host checkout that can own local worktrees. */
+  localEnvironmentAvailable?: boolean;
   onConfirm: (selection: BuildLaunchSelection) => void;
 }
 
@@ -240,6 +242,7 @@ export function BuildLaunchDialog({
   favoriteOpenCodeModelIds = [],
   commentContext,
   busy = false,
+  localEnvironmentAvailable = true,
   onConfirm,
 }: BuildLaunchDialogProps) {
   const dockerAvailable = useDockerAvailability();
@@ -262,11 +265,15 @@ export function BuildLaunchDialog({
     const justOpened = open && !wasOpenRef.current;
     wasOpenRef.current = open;
     if (!justOpened) return;
-    setEnvironmentType(
-      defaultEnvironmentType === "containerized" && !dockerAvailable
-        ? "local"
-        : defaultEnvironmentType,
-    );
+    setEnvironmentType(() => {
+      if (defaultEnvironmentType === "containerized" && !dockerAvailable) {
+        return localEnvironmentAvailable ? "local" : "containerized";
+      }
+      if (defaultEnvironmentType === "local" && !localEnvironmentAvailable) {
+        return dockerAvailable ? "containerized" : "local";
+      }
+      return defaultEnvironmentType;
+    });
     setUniform(true);
     setIncludeComments(commentContext?.defaultIncluded ?? true);
     setSteps(initialSteps(
@@ -281,16 +288,19 @@ export function BuildLaunchDialog({
     defaultAgent,
     defaultEnvironmentType,
     dockerAvailable,
+    localEnvironmentAvailable,
     open,
     preferredModels,
     preferredReasoningEfforts,
   ]);
 
   useEffect(() => {
-    if (!dockerAvailable && environmentType === "containerized") {
+    if (!dockerAvailable && localEnvironmentAvailable && environmentType === "containerized") {
       setEnvironmentType("local");
+    } else if (!localEnvironmentAvailable && dockerAvailable && environmentType === "local") {
+      setEnvironmentType("containerized");
     }
-  }, [dockerAvailable, environmentType]);
+  }, [dockerAvailable, environmentType, localEnvironmentAvailable]);
 
   const resolved = useMemo(() => {
     const entries = BUILD_STEPS.map(({ key }) => {
@@ -389,6 +399,7 @@ export function BuildLaunchDialog({
           onSubmit={(event) => {
             event.preventDefault();
             if (environmentType === "containerized" && !dockerAvailable) return;
+            if (environmentType === "local" && !localEnvironmentAvailable) return;
             onConfirm({
               environmentType,
               ...(commentContext ? { includeComments } : {}),
@@ -418,7 +429,9 @@ export function BuildLaunchDialog({
               >
                 {ENVIRONMENT_OPTIONS.map((option) => {
                   const selected = environmentType === option.value;
-                  const disabled = option.value === "containerized" && !dockerAvailable;
+                  const disabled = option.value === "containerized"
+                    ? !dockerAvailable
+                    : !localEnvironmentAvailable;
                   const id = `${environmentGroupId}-${option.value}`;
                   return (
                     <div key={option.value} className="relative min-w-0">
@@ -446,7 +459,11 @@ export function BuildLaunchDialog({
                           {option.label}
                         </span>
                         <span className="mt-1 text-[11px] leading-snug text-zinc-500">
-                          {disabled ? "Unavailable while Docker is stopped" : option.description}
+                          {disabled
+                            ? option.value === "containerized"
+                              ? "Unavailable while Docker is stopped"
+                              : "Unavailable without a local project checkout"
+                            : option.description}
                         </span>
                       </label>
                     </div>
@@ -646,7 +663,11 @@ export function BuildLaunchDialog({
             </Button>
             <Button
               type="submit"
-              disabled={busy || (environmentType === "containerized" && !dockerAvailable)}
+              disabled={
+                busy
+                || (environmentType === "containerized" && !dockerAvailable)
+                || (environmentType === "local" && !localEnvironmentAvailable)
+              }
             >
               Start build
             </Button>

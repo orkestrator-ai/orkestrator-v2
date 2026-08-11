@@ -186,6 +186,68 @@ describe("BuildLaunchDialog", () => {
     expect(onConfirm.mock.calls[0]![0].environmentType).toBe("local");
   });
 
+  test("falls back to local when Docker stops while the build dialog is open", async () => {
+    const onConfirm = mock((_selection: BuildLaunchSelection) => undefined);
+    const dialog = (
+      <BuildLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        catalog={catalog}
+        defaultAgent="claude"
+        defaultEnvironmentType="containerized"
+        onConfirm={onConfirm}
+      />
+    );
+    const view = render(
+      <DockerAvailabilityProvider available>
+        {dialog}
+      </DockerAvailabilityProvider>,
+    );
+    const environment = screen.getByRole("radiogroup", { name: "Build environment" });
+    expect((within(environment).getByRole("radio", { name: /^Container/ }) as HTMLInputElement).checked)
+      .toBe(true);
+
+    view.rerender(
+      <DockerAvailabilityProvider available={false}>
+        {dialog}
+      </DockerAvailabilityProvider>,
+    );
+    await waitFor(() => {
+      expect((within(environment).getByRole("radio", { name: /^Local/ }) as HTMLInputElement).checked)
+        .toBe(true);
+    });
+
+    submit();
+    expect(onConfirm.mock.calls[0]![0].environmentType).toBe("local");
+  });
+
+  test("does not force a local build when the project has no local checkout", () => {
+    const onConfirm = mock((_selection: BuildLaunchSelection) => undefined);
+    render(
+      <DockerAvailabilityProvider available={false}>
+        <BuildLaunchDialog
+          open
+          onOpenChange={() => undefined}
+          catalog={catalog}
+          defaultAgent="claude"
+          defaultEnvironmentType="containerized"
+          localEnvironmentAvailable={false}
+          onConfirm={onConfirm}
+        />
+      </DockerAvailabilityProvider>,
+    );
+
+    const environment = screen.getByRole("radiogroup", { name: "Build environment" });
+    expect((within(environment).getByRole("radio", { name: /^Container/ }) as HTMLInputElement).disabled)
+      .toBe(true);
+    expect((within(environment).getByRole("radio", { name: /^Local/ }) as HTMLInputElement).disabled)
+      .toBe(true);
+    const start = screen.getByRole("button", { name: "Start build" });
+    expect((start as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(start);
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
   test("applies one configuration to every step while the toggle is ticked", () => {
     const { onConfirm } = renderDialog({
       preferredModels: { claude: "claude-b" },

@@ -243,11 +243,9 @@ function App() {
     if (dockerAvailable === true) setDockerWarningDismissed(false);
   }, [dockerAvailable]);
 
-  // Check CLI availability after Docker is confirmed available
-  // Checks: Claude CLI, OpenCode CLI (fallback), and GitHub CLI
+  // Host CLI availability is independent of Docker. Run it in parallel with
+  // the daemon probe so local worktree workflows receive the same onboarding.
   useEffect(() => {
-    if (dockerAvailable !== true) return;
-
     Promise.all([
       checkClaudeCli(),
       checkClaudeConfig(),
@@ -279,7 +277,7 @@ function App() {
         setGithubCliAvailable(false);
         setAvailableAiCli(null);
       });
-  }, [dockerAvailable]);
+  }, []);
 
   // Load config from backend on startup
   // This ensures repository configs (including default port mappings) are available
@@ -462,25 +460,31 @@ function App() {
   }, [zoomIn, zoomOut, resetZoom]);
 
   // Derived state for dialog visibility - makes conditions easier to read
+  // When Docker is down, let its outage warning lead; host-tool onboarding is
+  // shown after the user chooses to continue without containers.
+  const hostToolWarningsVisible =
+    dockerAvailable === true
+    || (dockerAvailable === false && dockerWarningDismissed);
+
   const isCheckingCliTools =
-    dockerAvailable === true &&
+    hostToolWarningsVisible &&
     availableAiCli === null &&
     claudeCliAvailable === null;
 
   const noAiCliAvailable =
-    dockerAvailable === true &&
+    hostToolWarningsVisible &&
     claudeCliAvailable === false &&
     opencodeCliAvailable === false &&
     codexCliAvailable === false;
 
   const claudeNeedsLogin =
-    dockerAvailable === true &&
+    hostToolWarningsVisible &&
     claudeCliAvailable === true &&
     claudeConfigAvailable === false &&
     opencodeCliAvailable === false;
 
   const showGithubWarning =
-    dockerAvailable === true &&
+    hostToolWarningsVisible &&
     (claudeCliAvailable === true || opencodeCliAvailable === true) &&
     githubCliAvailable === false &&
     !githubCliWarningDismissed;

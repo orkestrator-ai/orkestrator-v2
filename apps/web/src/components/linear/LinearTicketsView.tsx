@@ -48,6 +48,7 @@ import {
   discardComposeDraft,
 } from "@/lib/compose-draft-persistence";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
+import { useProjectStore } from "@/stores/projectStore";
 import {
   connectLinear,
   getLinearConnection,
@@ -350,6 +351,9 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
   commentBodyRef.current = commentBody;
 
   const pipelines = useBuildPipelineStore((state) => state.pipelines);
+  const localEnvironmentAvailable = useProjectStore((state) =>
+    Boolean(state.projects.find((project) => project.id === projectId)?.localPath),
+  );
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
   const { startBuildFromLinearIssue, navigateToPipeline } = buildPipeline;
   const {
@@ -845,6 +849,7 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
           catalog={launchCatalog}
           favoriteOpenCodeModelIds={favoriteOpenCodeModelIds}
           busy={isBuildStarting || hasActiveBuild}
+          localEnvironmentAvailable={localEnvironmentAvailable}
           commentContext={detail && detail.comments.length > 0
             ? { count: detail.comments.length }
             : undefined}

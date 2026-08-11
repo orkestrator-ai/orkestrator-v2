@@ -26,6 +26,7 @@ import { toast } from "sonner";
 import type { KanbanTask, KanbanStatus } from "@/stores/kanbanStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useProjectStore } from "@/stores/projectStore";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { useBuildLaunchOptions } from "@/hooks/useBuildLaunchOptions";
 import {
@@ -162,6 +163,9 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
 
   const isCreateMode = !!createForProjectId;
   const buildProjectId = createForProjectId ?? task?.projectId ?? "";
+  const localEnvironmentAvailable = useProjectStore((state) =>
+    Boolean(state.projects.find((project) => project.id === buildProjectId)?.localPath),
+  );
   const {
     catalog: launchCatalog,
     defaults: launchDefaults,
@@ -885,6 +889,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
           catalog={launchCatalog}
           favoriteOpenCodeModelIds={favoriteOpenCodeModelIds}
           busy={isBuildStarting}
+          localEnvironmentAvailable={localEnvironmentAvailable}
           {...launchDefaults}
           onConfirm={(selection) => void handleCreateAndBuild(selection)}
         />
@@ -1151,6 +1156,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
         catalog={launchCatalog}
         favoriteOpenCodeModelIds={favoriteOpenCodeModelIds}
         busy={isBuildStarting}
+        localEnvironmentAvailable={localEnvironmentAvailable}
         {...launchDefaults}
         onConfirm={handleBuildConfirmed}
       />

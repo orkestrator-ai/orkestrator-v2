@@ -4,6 +4,7 @@ import type { Environment } from "@/types";
 import type { GitHubCredentialStatus } from "@/lib/backend";
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useProjectStore } from "@/stores/projectStore";
+import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 
 // Snapshot the real module before replacing it, and restore it afterwards, so
 // other suites that need the genuine backend wrappers are unaffected.
@@ -90,7 +91,52 @@ describe("CreateEnvironmentFlowDialog", () => {
       available: true,
     });
     useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
-    useProjectStore.setState({ projects: [] });
+    useProjectStore.setState({
+      projects: [{
+        id: "project-1",
+        name: "Project One",
+        gitUrl: "https://example.test/project-one.git",
+        localPath: "/work/project-one",
+        addedAt: "2026-08-11T00:00:00.000Z",
+        order: 0,
+      }],
+    });
+  });
+
+  test("does not submit a forced local fallback for a remote-only project", async () => {
+    useProjectStore.setState({
+      projects: [{
+        id: "project-1",
+        name: "Remote Only",
+        gitUrl: "https://example.test/remote-only.git",
+        localPath: null,
+        addedAt: "2026-08-11T00:00:00.000Z",
+        order: 0,
+      }],
+    });
+    const createEnvironment = mock(async () => ({ id: "env-impossible-local" }) as Environment);
+
+    render(
+      <DockerAvailabilityProvider available={false}>
+        <CreateEnvironmentFlowDialog
+          open
+          onOpenChange={() => {}}
+          projectId="project-1"
+          createEnvironment={createEnvironment}
+          updateEnvironment={() => {}}
+          startEnvironment={async () => {}}
+        />
+      </DockerAvailabilityProvider>,
+    );
+
+    expect((screen.getByRole("button", { name: /Containerized/ }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect((screen.getByRole("button", { name: /Local/ }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    const submit = screen.getByRole("button", { name: "Create Environment" });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(submit);
+    expect(createEnvironment).not.toHaveBeenCalled();
   });
 
   test("warns before creating a container when host GitHub CLI credentials are unavailable", async () => {
@@ -293,6 +339,83 @@ describe("CreateEnvironmentFlowDialog", () => {
     await act(async () => {
       resolveStatus?.({ source: "host-cli", available: true });
       await Promise.resolve();
+    });
+    expect(createEnvironment).not.toHaveBeenCalled();
+  });
+
+  test("cancels a delayed container credential preflight when Docker stops", async () => {
+    let resolveStatus:
+      | ((status: GitHubCredentialStatus) => void)
+      | undefined;
+    getContainerGitHubCredentialStatusMock.mockImplementationOnce(
+      () =>
+        new Promise<GitHubCredentialStatus>((resolve) => {
+          resolveStatus = resolve;
+        }),
+    );
+    const createEnvironment = mock(async () => ({ id: "env-after-outage" }) as Environment);
+    const props = {
+      open: true,
+      onOpenChange: () => {},
+      projectId: "project-1",
+      createEnvironment,
+      updateEnvironment: () => {},
+      startEnvironment: async () => {},
+    };
+    const view = render(
+      <DockerAvailabilityProvider available>
+        <CreateEnvironmentFlowDialog {...props} />
+      </DockerAvailabilityProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    await waitFor(() =>
+      expect(getContainerGitHubCredentialStatusMock).toHaveBeenCalledTimes(1),
+    );
+
+    view.rerender(
+      <DockerAvailabilityProvider available={false}>
+        <CreateEnvironmentFlowDialog {...props} />
+      </DockerAvailabilityProvider>,
+    );
+    await act(async () => {
+      resolveStatus?.({ source: "host-cli", available: true });
+      await Promise.resolve();
+    });
+
+    expect(createEnvironment).not.toHaveBeenCalled();
+  });
+
+  test("does not create from an open credential warning after Docker stops", async () => {
+    getContainerGitHubCredentialStatusMock.mockResolvedValueOnce({
+      source: "host-cli",
+      available: false,
+    });
+    const createEnvironment = mock(async () => ({ id: "env-after-warning-outage" }) as Environment);
+    const props = {
+      open: true,
+      onOpenChange: () => {},
+      projectId: "project-1",
+      createEnvironment,
+      updateEnvironment: () => {},
+      startEnvironment: async () => {},
+    };
+    const view = render(
+      <DockerAvailabilityProvider available>
+        <CreateEnvironmentFlowDialog {...props} />
+      </DockerAvailabilityProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    expect(await screen.findByText("No GitHub CLI credentials found")).toBeTruthy();
+
+    view.rerender(
+      <DockerAvailabilityProvider available={false}>
+        <CreateEnvironmentFlowDialog {...props} />
+      </DockerAvailabilityProvider>,
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Create anyway" })).toBeNull();
     });
     expect(createEnvironment).not.toHaveBeenCalled();
   });

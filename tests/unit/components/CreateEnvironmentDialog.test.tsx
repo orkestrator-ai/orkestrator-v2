@@ -120,6 +120,61 @@ describe("resolveAgentDefaults", () => {
     expect(onCreate.mock.calls[0]![0].environmentType).toBe("local");
   });
 
+  test("falls back to a local worktree when Docker stops while the dialog is open", async () => {
+    const onCreate = mock(async () => {});
+    const dialog = (
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+      />
+    );
+    const view = render(
+      <DockerAvailabilityProvider available>
+        {dialog}
+      </DockerAvailabilityProvider>,
+    );
+
+    expect((screen.getByRole("button", { name: /Containerized/ }) as HTMLButtonElement).disabled)
+      .toBe(false);
+    view.rerender(
+      <DockerAvailabilityProvider available={false}>
+        {dialog}
+      </DockerAvailabilityProvider>,
+    );
+
+    await waitFor(() => {
+      expect((screen.getByRole("button", { name: /Containerized/ }) as HTMLButtonElement).disabled)
+        .toBe(true);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]![0].environmentType).toBe("local");
+  });
+
+  test("does not force a local submission when the project has no local checkout", () => {
+    const onCreate = mock(async () => {});
+    render(
+      <DockerAvailabilityProvider available={false}>
+        <CreateEnvironmentDialog
+          open
+          onOpenChange={() => {}}
+          onCreate={onCreate}
+          localEnvironmentAvailable={false}
+        />
+      </DockerAvailabilityProvider>,
+    );
+
+    expect((screen.getByRole("button", { name: /Containerized/ }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect((screen.getByRole("button", { name: /Local/ }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    const submit = screen.getByRole("button", { name: "Create Environment" });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(submit);
+    expect(onCreate).not.toHaveBeenCalled();
+  });
+
   test("uses app-level defaults when repo config has no overrides", () => {
     const result = resolveAgentDefaults(
       { defaultAgent: "opencode", claudeMode: "terminal", opencodeMode: "native", codexMode: "terminal" },

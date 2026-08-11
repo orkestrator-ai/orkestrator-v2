@@ -6,6 +6,7 @@ import { mockReadImage } from "../../mocks/clipboard";
 import { restoreMatchMedia, setMobileViewport } from "../../mocks/match-media";
 import { useClaudeOptionsStore, useConfigStore, useUIStore } from "@/stores";
 import type { Environment, Project } from "@/types";
+import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import {
   dispatchResourceChange,
   requestResourceResync,
@@ -1529,6 +1530,50 @@ describe("HierarchicalSidebar", () => {
       expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-stopped");
     });
     expect(useUIStore.getState().selectedEnvironmentIds).toEqual([]);
+  });
+
+  test("runs bulk lifecycle actions only for local environments after Docker stops", async () => {
+    const containerEnvironment = {
+      ...createdEnvironment,
+      id: "env-container",
+      name: "Container",
+      order: 0,
+      status: "running" as const,
+    };
+    const localEnvironment = {
+      ...createdEnvironment,
+      id: "env-local",
+      name: "Local",
+      order: 1,
+      environmentType: "local" as const,
+      containerId: null,
+      worktreePath: "/tmp/project-local",
+      status: "running" as const,
+    };
+    environmentsValue = [containerEnvironment, localEnvironment];
+    useUIStore.setState({
+      selectedEnvironmentIds: [containerEnvironment.id, localEnvironment.id],
+    });
+    const renderSidebar = (available: boolean) => (
+      <DockerAvailabilityProvider available={available}>
+        <HierarchicalSidebar />
+      </DockerAvailabilityProvider>
+    );
+    const view = render(renderSidebar(true));
+
+    view.rerender(renderSidebar(false));
+
+    fireEvent.click(screen.getByTitle("Stop selected"));
+    await waitFor(() => {
+      expect(stopEnvironmentMock).toHaveBeenCalledWith(localEnvironment.id);
+    });
+    expect(stopEnvironmentMock).not.toHaveBeenCalledWith(containerEnvironment.id);
+
+    fireEvent.click(screen.getByTitle("Restart selected"));
+    await waitFor(() => {
+      expect(restartEnvironmentMock).toHaveBeenCalledWith(localEnvironment.id);
+    });
+    expect(restartEnvironmentMock).not.toHaveBeenCalledWith(containerEnvironment.id);
   });
 
   test("reports bulk action failures and still exits delete selection mode", async () => {

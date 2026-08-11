@@ -129,17 +129,24 @@ export function CreateEnvironmentFlowDialog({
   const [pendingCredentialWarning, setPendingCredentialWarning] =
     useState<PendingGitHubCredentialWarning | null>(null);
   const mountedRef = useRef(true);
+  const dockerAvailableRef = useRef(dockerAvailable);
   const activePreflightRef = useRef<PendingGitHubCredentialPreflight | null>(null);
   const pendingCredentialWarningRef =
     useRef<PendingGitHubCredentialWarning | null>(null);
   const setOptions = useClaudeOptionsStore((state) => state.setOptions);
   const config = useConfigStore((state) => state.config);
-  const storedProjectName = useProjectStore((state) =>
+  const storedProject = useProjectStore((state) =>
     projectId
-      ? state.projects.find((project) => project.id === projectId)?.name
+      ? state.projects.find((project) => project.id === projectId)
       : undefined,
   );
-  const projectName = providedProjectName ?? storedProjectName;
+  const localEnvironmentAvailable = storedProject
+    ? Boolean(storedProject.localPath)
+    : true;
+  const localEnvironmentAvailableRef = useRef(localEnvironmentAvailable);
+  dockerAvailableRef.current = dockerAvailable;
+  localEnvironmentAvailableRef.current = localEnvironmentAvailable;
+  const projectName = providedProjectName ?? storedProject?.name;
   const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
   const selectProjectAndEnvironment = useUIStore(
     (state) => state.selectProjectAndEnvironment,
@@ -177,9 +184,29 @@ export function CreateEnvironmentFlowDialog({
     }
   }, [settleCredentialWarning]);
 
+  const canCreateEnvironment = useCallback((options: ClaudeOptions): boolean => {
+    if (options.environmentType === "containerized" && !dockerAvailableRef.current) {
+      toast.warning("Docker is not running", {
+        description: "Choose a local worktree environment or start Docker.",
+      });
+      return false;
+    }
+    if (options.environmentType === "local" && !localEnvironmentAvailableRef.current) {
+      toast.warning("Local worktrees are unavailable", {
+        description: "Add a local checkout for this project before creating a local environment.",
+      });
+      return false;
+    }
+    return true;
+  }, []);
+
   useEffect(() => {
     if (!open) cancelPendingCredentialFlow();
   }, [cancelPendingCredentialFlow, open]);
+
+  useEffect(() => {
+    if (!dockerAvailable) cancelPendingCredentialFlow();
+  }, [cancelPendingCredentialFlow, dockerAvailable]);
 
   useEffect(() => {
     const preflight = activePreflightRef.current;
@@ -198,8 +225,8 @@ export function CreateEnvironmentFlowDialog({
     };
   }, [cancelPendingCredentialFlow]);
 
-  const performCreate = async (options: ClaudeOptions) => {
-    if (!projectId) return;
+  const performCreate = async (options: ClaudeOptions): Promise<boolean> => {
+    if (!projectId || !canCreateEnvironment(options)) return false;
 
     setIsCreating(true);
     try {
@@ -256,22 +283,16 @@ export function CreateEnvironmentFlowDialog({
       ).catch((startError) => {
         console.error("Failed to auto-start environment:", startError);
       });
+      return true;
     } finally {
       setIsCreating(false);
     }
   };
 
   const handleCreate = async (options: ClaudeOptions): Promise<boolean> => {
-    if (!projectId) return false;
-    if (options.environmentType === "containerized" && !dockerAvailable) {
-      toast.warning("Docker is not running", {
-        description: "Choose a local worktree environment or start Docker.",
-      });
-      return false;
-    }
+    if (!projectId || !canCreateEnvironment(options)) return false;
     if (options.environmentType === "local") {
-      await performCreate(options);
-      return true;
+      return performCreate(options);
     }
 
     cancelPendingCredentialFlow();
@@ -301,6 +322,7 @@ export function CreateEnvironmentFlowDialog({
       return false;
     }
     setIsCreating(false);
+    if (!canCreateEnvironment(options)) return false;
 
     const status = "status" in result ? result.status : null;
     if ("error" in result) {
@@ -308,8 +330,7 @@ export function CreateEnvironmentFlowDialog({
     }
 
     if (status?.available) {
-      await performCreate(options);
-      return true;
+      return performCreate(options);
     }
 
     return new Promise<boolean>((resolve) => {
@@ -334,11 +355,15 @@ export function CreateEnvironmentFlowDialog({
   const createWithoutGitHubCredential = async () => {
     const pending = pendingCredentialWarningRef.current;
     if (!pending || pending.creating) return;
+    if (!canCreateEnvironment(pending.options)) {
+      settleCredentialWarning(pending, { created: false });
+      return;
+    }
     pending.creating = true;
 
     try {
-      await performCreate(pending.options);
-      settleCredentialWarning(pending, { created: true });
+      const created = await performCreate(pending.options);
+      settleCredentialWarning(pending, { created });
     } catch (error) {
       console.error("Failed to create environment:", error);
       settleCredentialWarning(pending, { created: false });
@@ -367,6 +392,7 @@ export function CreateEnvironmentFlowDialog({
         isLoading={isCreating}
         projectId={projectId}
         projectName={projectName}
+        localEnvironmentAvailable={localEnvironmentAvailable}
         defaultPortMappings={
           projectId ? config.repositories[projectId]?.defaultPortMappings : undefined
         }
@@ -398,7 +424,8 @@ export function CreateEnvironmentFlowDialog({
             <Button
               type="button"
               onClick={() => void createWithoutGitHubCredential()}
-              disabled={isCreating}
+              disabled={isCreating || !dockerAvailable}
+              title={!dockerAvailable ? "Start Docker to create a container environment" : undefined}
             >
               {isCreating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Create anyway

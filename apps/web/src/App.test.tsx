@@ -1492,6 +1492,49 @@ describe("App Docker availability", () => {
       window.clearInterval = originalClearInterval;
     }
   });
+
+  test("deduplicates Docker polls while an earlier probe is still in flight", async () => {
+    const originalSetInterval = window.setInterval;
+    const originalClearInterval = window.clearInterval;
+    const pollCallbacks: Array<() => void> = [];
+    let resolveDocker!: (available: boolean) => void;
+    mockCheckDocker.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => {
+        resolveDocker = resolve;
+      }),
+    );
+    window.setInterval = ((handler: TimerHandler, timeout?: number) => {
+      if (timeout === DOCKER_AVAILABILITY_POLL_INTERVAL_MS) {
+        pollCallbacks.push(handler as () => void);
+      }
+      return 42;
+    }) as typeof window.setInterval;
+    window.clearInterval = mock(() => {}) as typeof window.clearInterval;
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    try {
+      render(<App />);
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
+      expect(pollCallbacks).toHaveLength(1);
+
+      act(() => {
+        pollCallbacks[0]!();
+        pollCallbacks[0]!();
+      });
+      expect(mockCheckDocker).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        resolveDocker(true);
+        await Promise.resolve();
+      });
+      act(() => pollCallbacks[0]!());
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(2));
+    } finally {
+      cleanup();
+      window.setInterval = originalSetInterval;
+      window.clearInterval = originalClearInterval;
+    }
+  });
 });
 
 describe("App startup checks and global events", () => {
@@ -1553,6 +1596,55 @@ describe("App startup checks and global events", () => {
       },
     );
   }, 15_000);
+
+  test("checks host CLIs and shows onboarding after continuing without Docker", async () => {
+    mockCheckDocker.mockImplementation(async () => false);
+    mockCheckClaudeCli.mockImplementation(async () => false);
+    mockCheckClaudeConfig.mockImplementation(async () => false);
+    mockCheckOpencodeCli.mockImplementation(async () => false);
+    mockCheckCodexCli.mockImplementation(async () => false);
+    mockCheckGithubCli.mockImplementation(async () => false);
+    mockGetAvailableAiCli.mockImplementation(async () => null);
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    render(<App />);
+    expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
+    act(() => screen.getByRole("button", { name: "Continue Without Docker" }).click());
+
+    expect(await screen.findByText("AI CLI Required")).toBeTruthy();
+    expect(mockCheckClaudeCli).toHaveBeenCalledTimes(1);
+    expect(mockCheckClaudeConfig).toHaveBeenCalledTimes(1);
+    expect(mockCheckOpencodeCli).toHaveBeenCalledTimes(1);
+    expect(mockCheckCodexCli).toHaveBeenCalledTimes(1);
+    expect(mockCheckGithubCli).toHaveBeenCalledTimes(1);
+    expect(mockGetAvailableAiCli).toHaveBeenCalledTimes(1);
+  });
+
+  test("shows the host GitHub CLI warning after continuing without Docker", async () => {
+    mockCheckDocker.mockImplementation(async () => false);
+    mockCheckGithubCli.mockImplementation(async () => false);
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    render(<App />);
+    expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
+    act(() => screen.getByRole("button", { name: "Continue Without Docker" }).click());
+
+    expect(await screen.findByText("GitHub CLI Not Found")).toBeTruthy();
+  });
+
+  test("shows the Claude login warning after continuing without Docker", async () => {
+    mockCheckDocker.mockImplementation(async () => false);
+    mockCheckClaudeConfig.mockImplementation(async () => false);
+    mockCheckOpencodeCli.mockImplementation(async () => false);
+    mockCheckCodexCli.mockImplementation(async () => false);
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    render(<App />);
+    expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
+    act(() => screen.getByRole("button", { name: "Continue Without Docker" }).click());
+
+    expect(await screen.findByText("Claude Code Login Required")).toBeTruthy();
+  });
 
   test("shows Claude login required when Claude is installed but not configured", async () => {
     mockCheckClaudeCli.mockImplementation(async () => true);
@@ -1863,6 +1955,51 @@ describe("App terminal overlay actions", () => {
           agentType: "codex",
           initialPrompt: "Stand up the Codex session",
         });
+    });
+  });
+
+  test("blocks container start and create-script actions while Docker is unavailable", async () => {
+    mockCheckDocker.mockImplementation(async () => false);
+    resetStores({
+      environments: [makeEnvironment("env-visible", "project-1")],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    render(<App />);
+    expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
+
+    act(() => {
+      screen.getByTestId("start-env-visible").click();
+      screen.getByTestId("create-script-env-visible").click();
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mockStartEnvironment).not.toHaveBeenCalled();
+    expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toBeUndefined();
+  });
+
+  test("still starts a local environment while Docker is unavailable", async () => {
+    mockCheckDocker.mockImplementation(async () => false);
+    resetStores({
+      environments: [{
+        ...makeEnvironment("env-local", "project-1"),
+        environmentType: "local",
+        containerId: null,
+        status: "stopped",
+      }],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-local",
+    });
+
+    render(<App />);
+    expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
+    act(() => screen.getByTestId("start-env-local").click());
+
+    await waitFor(() => {
+      expect(mockStartEnvironment).toHaveBeenCalledWith("env-local", undefined);
     });
   });
 

@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ENVIRONMENT_AGENT_SKILLS_SCRIPT } from "./environment-agent-skills.js";
+import { scanAgentSkills, setAgentSkillsHomeForTesting } from "./agent-skills.js";
 
 const tempDirectories: string[] = [];
 
@@ -115,6 +116,126 @@ describe("environment agent skills scanner", () => {
     expect(read.exitCode).toBe(1);
     expect(read.stderr.toString()).toContain("outside trusted agent roots");
     expect(read.stdout.toString()).toBe("");
+  });
+
+  test("reports, rather than silently drops, a skill directory that escapes the trusted roots", async () => {
+    const worktree = await createWorktree();
+    const home = await createTemporaryDirectory("ork-environment-home-");
+    const outside = await createTemporaryDirectory("ork-environment-dotfiles-");
+    const target = path.join(outside, "skills", "from-dotfiles");
+    await fs.mkdir(target, { recursive: true });
+    await fs.writeFile(path.join(target, "SKILL.md"), "---\nname: from-dotfiles\n---\n# Outside\n");
+    const userRoot = path.join(home, ".claude", "skills");
+    await fs.mkdir(path.join(userRoot, "kept"), { recursive: true });
+    await fs.writeFile(path.join(userRoot, "kept", "SKILL.md"), "---\nname: kept\n---\n# Kept\n");
+    // A directory symlink out of a root takes a different branch to a symlinked
+    // SKILL.md, and used to be dropped with nothing said — leaving the pane
+    // claiming a confident count while omitting a skill the agent does load.
+    await fs.symlink(target, path.join(userRoot, "escaping"), "dir");
+    // An ordinary symlink that is not a skill must stay quiet, or the real
+    // refusals drown in noise.
+    await fs.mkdir(path.join(outside, "notes"), { recursive: true });
+    await fs.symlink(path.join(outside, "notes"), path.join(userRoot, "notes"), "dir");
+
+    const listed = runScanner(worktree, "claude", "list", "", { env: { HOME: home } });
+    expect(listed.exitCode).toBe(0);
+    const scan = JSON.parse(listed.stdout.toString()) as {
+      skills: Array<{ name: string }>;
+      errors: Array<{ path: string; message: string }>;
+    };
+
+    expect(scan.skills.map((skill) => skill.name)).toEqual(["kept"]);
+    expect(scan.errors).toEqual([{
+      path: path.join("~", ".claude", "skills", "escaping", "SKILL.md"),
+      message: "Refusing a skill directory that resolves outside trusted agent roots",
+    }]);
+  });
+
+  test("bounds the error list instead of returning one entry per refused path", async () => {
+    const worktree = await createWorktree();
+    const home = await createTemporaryDirectory("ork-environment-home-");
+    const outside = await createTemporaryDirectory("ork-environment-dotfiles-");
+    const target = path.join(outside, "skill");
+    await fs.mkdir(target, { recursive: true });
+    await fs.writeFile(path.join(target, "SKILL.md"), "---\nname: outside\n---\n# Outside\n");
+    const userRoot = path.join(home, ".claude", "skills");
+    await fs.mkdir(userRoot, { recursive: true });
+    await Promise.all(Array.from({ length: 120 }, (_, index) =>
+      fs.symlink(target, path.join(userRoot, `escaping-${String(index).padStart(3, "0")}`), "dir")));
+
+    const listed = runScanner(worktree, "claude", "list", "", { env: { HOME: home } });
+    expect(listed.exitCode).toBe(0);
+    const scan = JSON.parse(listed.stdout.toString()) as {
+      errors: Array<{ path: string; message: string }>;
+    };
+
+    // 100 refusals plus the entry that says how many more there were.
+    expect(scan.errors).toHaveLength(101);
+    expect(scan.errors.at(-1)).toEqual({
+      path: "…",
+      message: "20 further paths could not be read or were refused",
+    });
+  });
+
+  test("reports a missing root as absent, which Bun's lazy opendir hid", async () => {
+    const worktree = await createWorktree();
+    const home = await createTemporaryDirectory("ork-environment-home-");
+    const projectRoot = path.join(worktree, ".claude", "skills");
+    await fs.mkdir(projectRoot, { recursive: true });
+
+    const listed = runScanner(worktree, "claude", "list", "", { env: { HOME: home } });
+    expect(listed.exitCode).toBe(0);
+    const scan = JSON.parse(listed.stdout.toString()) as {
+      roots: Array<{ path: string; exists: boolean }>;
+    };
+
+    // Local environments run this under Bun, whose `opendir` resolves for a
+    // directory that is not there; the container runs it under Node, which does
+    // not. Both must report the same thing.
+    expect(scan.roots.find((root) => root.path === path.join(home, ".claude", "skills"))?.exists)
+      .toBe(false);
+    expect(scan.roots.find((root) => root.path === projectRoot)?.exists).toBe(true);
+  });
+
+  test("names skills exactly as the host scanner does for the same home", async () => {
+    const worktree = await createWorktree();
+    const home = await createTemporaryDirectory("ork-environment-home-");
+    const install = path.join(home, "plugin-install");
+    for (const skillPath of [
+      path.join(install, "skills", "review", "SKILL.md"),
+      path.join(home, ".claude", "skills", "review", "SKILL.md"),
+    ]) {
+      await fs.mkdir(path.dirname(skillPath), { recursive: true });
+      await fs.writeFile(skillPath, "---\nname: review\n---\n# Review\n");
+    }
+    const manifest = path.join(home, ".claude", "plugins", "installed_plugins.json");
+    await fs.mkdir(path.dirname(manifest), { recursive: true });
+    await fs.writeFile(manifest, JSON.stringify({
+      plugins: { "@team/quality@official": [{ installPath: install }] },
+    }));
+
+    const listed = runScanner(worktree, "claude", "list", "", { env: { HOME: home } });
+    expect(listed.exitCode).toBe(0);
+    const scanned = JSON.parse(listed.stdout.toString()) as {
+      skills: Array<{ name: string; filePath: string }>;
+    };
+
+    setAgentSkillsHomeForTesting(home);
+    let hostNames: string[];
+    try {
+      hostNames = (await scanAgentSkills("claude")).skills
+        .filter((skill) => skill.filePath.startsWith(home))
+        .map((skill) => skill.name);
+    } finally {
+      setAgentSkillsHomeForTesting(undefined);
+    }
+
+    // The two scanners are separate implementations of one catalogue — the
+    // settings pane and the environment pane must not disagree about what the
+    // same machine's skills are called.
+    expect(scanned.skills.filter((skill) => skill.filePath.startsWith(home)).map((skill) => skill.name))
+      .toEqual(hostNames);
+    expect(hostNames).toEqual(["@team/quality:review", "review"]);
   });
 
   test("allows a project skill symlink into another enumerated Codex root", async () => {

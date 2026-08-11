@@ -17139,6 +17139,102 @@ describe("agent extension discovery commands", () => {
     expect(calls).toHaveLength(1);
   });
 
+  test("drops OpenCode's built-in skill, which has no file to read or reveal", () => {
+    expect(commandTesting.parseOpenCodeEnvironmentSkills(JSON.stringify([
+      { name: "configuration", location: "<built-in>" },
+      { name: "review", location: "/workspace/.opencode/skills/review/SKILL.md" },
+    ]))).toEqual([{
+      name: "review",
+      location: "/workspace/.opencode/skills/review/SKILL.md",
+    }]);
+  });
+
+  test("rejects a catalogue entry whose location is not an absolute SKILL.md", () => {
+    for (const location of [
+      ".opencode/skills/review/SKILL.md",
+      "/workspace/.opencode/skills/review/notes.md",
+      "/workspace/.opencode/skills/review",
+      `/workspace/${"x".repeat(4_097)}/SKILL.md`,
+    ]) {
+      expect(() => commandTesting.parseOpenCodeEnvironmentSkills(
+        JSON.stringify([{ name: "review", location }]),
+      )).toThrow("OpenCode returned an invalid skill entry");
+    }
+    for (const entry of [
+      { name: "", location: "/workspace/SKILL.md" },
+      { name: 7, location: "/workspace/SKILL.md" },
+      { name: "review", location: "/workspace/SKILL.md", description: 7 },
+      ["review", "/workspace/SKILL.md"],
+      null,
+    ]) {
+      expect(() => commandTesting.parseOpenCodeEnvironmentSkills(JSON.stringify([entry])))
+        .toThrow("OpenCode returned an invalid skill entry");
+    }
+  });
+
+  test("refuses a catalogue larger than the scanner is willing to accept", () => {
+    const entry = { name: "review", location: "/workspace/.opencode/skills/review/SKILL.md" };
+    expect(commandTesting.parseOpenCodeEnvironmentSkills(
+      JSON.stringify(Array.from({ length: 2_000 }, () => entry)),
+    )).toHaveLength(2_000);
+    expect(() => commandTesting.parseOpenCodeEnvironmentSkills(
+      JSON.stringify(Array.from({ length: 2_001 }, () => entry)),
+    )).toThrow("OpenCode returned more than 2000 skills");
+    expect(() => commandTesting.parseOpenCodeEnvironmentSkills(JSON.stringify({ skills: [] })))
+      .toThrow("OpenCode returned an invalid skills catalogue");
+  });
+
+  test("clamps catalogue metadata without splitting a surrogate pair", () => {
+    const [skill] = commandTesting.parseOpenCodeEnvironmentSkills(JSON.stringify([{
+      name: `  review${"n".repeat(600)}  `,
+      description: "🙂".repeat(600),
+      location: "/workspace/.opencode/skills/review/SKILL.md",
+    }]));
+
+    expect(Array.from(skill!.name)).toHaveLength(512);
+    expect(Array.from(skill!.description ?? "")).toHaveLength(512);
+    expect(skill!.description?.endsWith("🙂")).toBe(true);
+  });
+
+  test("reads a skill inside the selected container through the same scanner", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      worktreePath: undefined,
+    });
+    const { context } = createContext(environment);
+    const response = { path: "/workspace/.agents/skills/review/SKILL.md", content: "# Review", truncated: false };
+    const { run, calls } = recordingRun(JSON.stringify(response));
+
+    await expect(commandTesting.runEnvironmentAgentSkills(
+      environment,
+      context,
+      "codex",
+      "read",
+      "/workspace/.agents/skills/review/SKILL.md",
+      run,
+    )).resolves.toEqual(response);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.command).toBe("docker");
+    expect(calls[0]!.args.slice(0, 6)).toEqual([
+      "exec",
+      "-w",
+      "/workspace",
+      "container-1",
+      "node",
+      "-e",
+    ]);
+    // The path is the scanner's third argument; passing it in any other
+    // position would have it read as the operation.
+    expect(calls[0]!.args.slice(-3)).toEqual([
+      "codex",
+      "read",
+      "/workspace/.agents/skills/review/SKILL.md",
+    ]);
+  });
+
   test("rejects malformed scanner JSON and propagates execution failures", async () => {
     const environment = createEnvironment({
       id: "env-local",

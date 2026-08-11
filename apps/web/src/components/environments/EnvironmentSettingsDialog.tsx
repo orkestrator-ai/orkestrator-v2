@@ -253,6 +253,7 @@ function AgentExtensionSection({
         provider={catalog.agent}
         showProviderTabs={false}
         embedded
+        reuseLoadedScans
         canRevealInFileManager={canRevealSkills}
         listSkills={listSkills}
         readSkill={readSkill}
@@ -354,6 +355,13 @@ export function EnvironmentSettingsDialog({
     backend.AgentExtensionCatalog[]
   >(emptyExtensionCatalogs);
   const [isLoadingExtensions, setIsLoadingExtensions] = useState(false);
+  /**
+   * Gates the placeholder on the *first* load rather than on `isLoading`, which
+   * starts false: the panel used to render the agent section for one commit,
+   * swap it for the placeholder, then mount it a second time — remounting the
+   * skills pane and rescanning the environment for nothing.
+   */
+  const [hasLoadedExtensions, setHasLoadedExtensions] = useState(false);
   const [extensionsError, setExtensionsError] = useState<string | null>(null);
   const [activeExtensionAgent, setActiveExtensionAgent] =
     useState<backend.AgentExtensionId>("claude");
@@ -424,6 +432,7 @@ export function EnvironmentSettingsDialog({
       setExtensionCatalogs(emptyExtensionCatalogs());
       setExtensionsError(null);
       setIsLoadingExtensions(false);
+      setHasLoadedExtensions(false);
     }
   }, [open]);
 
@@ -444,7 +453,10 @@ export function EnvironmentSettingsDialog({
         "Extension settings could not be loaded. Check that the environment is available and try again.",
       );
     } finally {
-      if (isCurrent()) setIsLoadingExtensions(false);
+      if (isCurrent()) {
+        setIsLoadingExtensions(false);
+        setHasLoadedExtensions(true);
+      }
     }
   }, [environment.id]);
 
@@ -1015,11 +1027,7 @@ export function EnvironmentSettingsDialog({
                 ))}
               </TabsList>
             </Tabs>
-            {isLoadingExtensions &&
-            extensionCatalogs.every(
-              (catalog) =>
-                catalog.mcpServers.length === 0 && catalog.plugins.length === 0,
-            ) ? (
+            {!hasLoadedExtensions ? (
               <div className="flex items-center gap-2 rounded-xl border border-border/80 px-4 py-8 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Reading Claude, Codex, and OpenCode configuration…
@@ -1027,8 +1035,11 @@ export function EnvironmentSettingsDialog({
             ) : (
               <div>
                 {activeCatalog && (
+                  /* Keyed on the environment alone: keying on the agent too
+                     would remount on every tab switch, discarding each
+                     provider's scan and the skill the user had selected. */
                   <AgentExtensionSection
-                    key={`${environment.id}:${activeCatalog.agent}`}
+                    key={environment.id}
                     catalog={activeCatalog}
                     environmentId={environment.id}
                     canRevealSkills={isLocalEnvironment}

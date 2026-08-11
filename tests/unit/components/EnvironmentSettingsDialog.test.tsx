@@ -79,15 +79,15 @@ const mockListEnvironmentAgentSkills = mock(
       exists: true,
       skillCount: 1,
     }],
-    skills: [{
-      id: `/workspace/.${provider}/skills/${provider}-skill/SKILL.md`,
-      name: `${provider}-skill`,
+    skills: [`${provider}-skill`, `${provider}-second`].map((name) => ({
+      id: `/workspace/.${provider}/skills/${name}/SKILL.md`,
+      name,
       description: `${provider} environment skill`,
-      filePath: `/workspace/.${provider}/skills/${provider}-skill/SKILL.md`,
-      location: `./.${provider}/skills/${provider}-skill`,
+      filePath: `/workspace/.${provider}/skills/${name}/SKILL.md`,
+      location: `./.${provider}/skills/${name}`,
       scope: "project" as const,
       shadowed: false,
-    }],
+    })),
     errors: [],
     environmentId,
   }),
@@ -325,6 +325,60 @@ describe("EnvironmentSettingsDialog", () => {
     });
     expect(screen.queryByRole("button", { name: "Reveal skill in file manager" })).toBeNull();
     expect(mockGetEnvironmentExtensions).toHaveBeenCalledWith("env-1", {});
+  });
+
+  test("keeps each agent's scanned skills and selection when the tab is revisited", async () => {
+    mockSection = "extensions";
+
+    render(
+      <EnvironmentSettingsDialog
+        open={true}
+        onOpenChange={() => {}}
+        environment={makeEnvironment()}
+        onUpdate={() => {}}
+      />
+    );
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /claude-second/ })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /claude-second/ }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /claude-second/ }).getAttribute("aria-current"))
+        .toBe("true"));
+
+    clickAgentTab("Codex");
+    await waitFor(() => expect(screen.getByRole("button", { name: /codex-skill/ })).toBeTruthy());
+    clickAgentTab("Claude");
+
+    // Scanning a skill tree inside an environment runs a process in the
+    // container, so returning to a tab must reuse what it already has rather
+    // than re-running the scan and dropping the user back to the first skill.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /claude-second/ }).getAttribute("aria-current"))
+        .toBe("true"));
+    expect(mockListEnvironmentAgentSkills.mock.calls.map(([, provider]) => provider))
+      .toEqual(["claude", "codex"]);
+  });
+
+  test("rescans an agent's skills on demand", async () => {
+    mockSection = "extensions";
+
+    render(
+      <EnvironmentSettingsDialog
+        open={true}
+        onOpenChange={() => {}}
+        environment={makeEnvironment()}
+        onUpdate={() => {}}
+      />
+    );
+
+    await waitFor(() => expect(screen.getAllByText("claude-skill").length).toBeGreaterThan(0));
+    fireEvent.click(screen.getByRole("button", { name: "Rescan skill directories" }));
+
+    // Reusing a completed scan is what makes the Rescan button the only way to
+    // pick up a skill written since the pane opened.
+    await waitFor(() =>
+      expect(mockListEnvironmentAgentSkills.mock.calls.map(([, provider]) => provider))
+        .toEqual(["claude", "claude"]));
   });
 
   test("labels each item with its source, falling back to its status", async () => {

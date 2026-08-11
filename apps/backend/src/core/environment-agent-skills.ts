@@ -23,9 +23,38 @@ const maxSkills = 2000;
 const maxDepth = 32;
 const maxHeadBytes = 16 * 1024;
 const maxFileBytes = 1024 * 1024;
+const maxErrors = 100;
 
 if (!["claude", "codex", "opencode"].includes(provider)) {
   throw new Error("Unknown agent skill provider");
+}
+
+/**
+ * Every other dimension of this response is explicitly bounded, and the error
+ * list must be too: one project directory full of escaping symlinks would
+ * otherwise answer with tens of thousands of entries, all of which the settings
+ * pane renders un-virtualised. Past the cap the count is kept and reported as a
+ * single trailing entry, so a truncated list never reads as a complete one.
+ */
+function createErrorSink() {
+  const entries = [];
+  let suppressed = 0;
+  return {
+    push(entry) {
+      if (entries.length < maxErrors) entries.push(entry);
+      else suppressed += 1;
+    },
+    drain() {
+      if (suppressed > 0) {
+        entries.push({
+          path: "…",
+          message: suppressed + " further path" + (suppressed === 1 ? "" : "s")
+            + " could not be read or were refused",
+        });
+      }
+      return entries;
+    },
+  };
 }
 
 function inside(parent, target) {
@@ -271,6 +300,20 @@ async function authorizedRealPath(target, allowedRoots) {
   return allowedRoots.some((root) => inside(root, real)) ? real : undefined;
 }
 
+/**
+ * Whether a refused directory would have been listed as a skill.
+ *
+ * A skills root also holds ordinary subdirectories — a skill's own
+ * "references", a symlinked scratch directory — and reporting every one of
+ * those that points elsewhere would bury the refusals that actually cost the
+ * user a skill. Only a directory carrying a SKILL.md is worth naming.
+ */
+async function holdsSkillFile(directory) {
+  try {
+    return (await fsp.stat(path.join(directory, "SKILL.md"))).isFile();
+  } catch { return false; }
+}
+
 function frontmatter(head) {
   const normalized = head.replace(/^\uFEFF/, "");
   if (!/^---[ \t]*\r?\n/.test(normalized)) return {};
@@ -343,14 +386,18 @@ async function scanRoot(entry, allowedRoots, errors) {
   const spec = entry.spec;
   const root = { path: spec.path, label: displayPath(spec.path), scope: spec.scope, ...(spec.plugin ? { plugin: spec.plugin } : {}), exists: false, skillCount: 0, truncated: false };
   if (entry.blocked) return { root, skills: [] };
-  let rootDirectory;
+  // Probe with stat, not opendir: local environments run this under Bun, where
+  // opendir resolves for a missing directory and only fails once it is
+  // iterated, so probing with opendir reported every absent root as present —
+  // and disagreed with the container, which runs the same scan under Node.
+  let rootStat;
   try {
-    rootDirectory = await fsp.opendir(spec.path);
-    await rootDirectory.close();
+    rootStat = await fsp.stat(spec.path);
   } catch (error) {
     if (!error || !["ENOENT", "ENOTDIR"].includes(error.code)) errors.push({ path: root.label, message: errorMessage(error) });
     return { root, skills: [] };
   }
+  if (!rootStat.isDirectory()) return { root, skills: [] };
   root.exists = true;
   const skills = [];
   const stack = [{ directory: spec.path, depth: 0 }];
@@ -372,8 +419,21 @@ async function scanRoot(entry, allowedRoots, errors) {
         if (child.name.startsWith(".")) continue;
         if (!child.isDirectory() && !child.isSymbolicLink()) continue;
         const childPath = path.join(current.directory, child.name);
-        const childReal = await authorizedRealPath(childPath, allowedRoots);
+        const childReal = await realpathIfPresent(childPath);
         if (!childReal) continue;
+        // A directory that leaves the trusted roots is refused, but silently
+        // dropping it would leave the pane claiming a confident count while
+        // omitting a skill the agent does load — the symlinked skill directory
+        // is a routine layout, so the user has to be told which one went.
+        if (!allowedRoots.some((trusted) => inside(trusted, childReal))) {
+          if (await holdsSkillFile(childPath)) {
+            errors.push({
+              path: displayPath(path.join(childPath, "SKILL.md")),
+              message: "Refusing a skill directory that resolves outside trusted agent roots",
+            });
+          }
+          continue;
+        }
         let childStat;
         try { childStat = await fsp.stat(childPath); } catch { continue; }
         if (!childStat.isDirectory()) continue;
@@ -457,12 +517,12 @@ async function listOpenCode(plan, preparedPlan, errors) {
     });
   }
   skills.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) || a.location.localeCompare(b.location));
-  return { provider, roots: [...rootMap.values()], skills, errors };
+  return { provider, roots: [...rootMap.values()], skills, errors: errors.drain() };
 }
 
 async function list() {
   const plan = await rootPlan();
-  const errors = [];
+  const errors = createErrorSink();
   const preparedPlan = await preparePlan(plan, errors);
   if (provider === "opencode") return listOpenCode(plan, preparedPlan, errors);
   const results = [];
@@ -486,7 +546,7 @@ async function list() {
   }
   const scopeOrder = ["admin", "user", "project", "shared", "system", "plugin"];
   skills.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) || Number(a.shadowed) - Number(b.shadowed) || scopeOrder.indexOf(a.scope) - scopeOrder.indexOf(b.scope) || a.location.localeCompare(b.location));
-  return { provider, roots: results.map((result) => result.root), skills, errors };
+  return { provider, roots: results.map((result) => result.root), skills, errors: errors.drain() };
 }
 
 async function readBounded(filePath) {
@@ -510,7 +570,9 @@ async function read() {
   if (!path.isAbsolute(requestedPath) || path.basename(path.normalize(requestedPath)) !== "SKILL.md") throw new Error("Expected an absolute SKILL.md path");
   const normalized = path.normalize(requestedPath);
   const plan = await rootPlan();
-  const errors = [];
+  // A read reports its refusal by throwing; the sink only exists because
+  // preparePlan records blocked project roots on the way through.
+  const errors = createErrorSink();
   const preparedPlan = await preparePlan(plan, errors);
   if (provider === "opencode") {
     const catalog = parseOpenCodeInput();

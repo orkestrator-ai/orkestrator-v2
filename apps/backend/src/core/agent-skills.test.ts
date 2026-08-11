@@ -236,6 +236,43 @@ describe("scanAgentSkills", () => {
     ]);
   });
 
+  test("finds nested Codex skills, which Codex loads at any depth", async () => {
+    await writeSkill(join(home, ".agents", "skills", "team"), "review");
+
+    const scan = await scanAgentSkills("codex");
+
+    expect(scan.skills.map((skill) => [skill.name, skill.location]))
+      .toEqual([["review", "~/.agents/skills/team/review"]]);
+  });
+
+  test("does not descend beneath a Claude root, which Claude reads flat", async () => {
+    await writeSkill(join(home, ".claude", "skills", "team"), "review");
+
+    expect((await scanAgentSkills("claude")).skills).toEqual([]);
+  });
+
+  test("does not report a nested skill twice when its parent is also a skill", async () => {
+    const parent = join(home, ".agents", "skills", "outer");
+    await writeSkill(join(home, ".agents", "skills"), "outer");
+    await writeSkill(parent, "inner");
+
+    const scan = await scanAgentSkills("codex");
+
+    expect(scan.skills.map((skill) => skill.name)).toEqual(["inner", "outer"]);
+    expect(scan.roots.find((root) => root.label === "~/.agents/skills")?.skillCount).toBe(2);
+  });
+
+  test("terminates on a symlink cycle inside a recursive root", async () => {
+    const shared = join(home, ".agents", "skills");
+    await writeSkill(shared, "looping");
+    await symlink(shared, join(shared, "looping", "back"), "dir");
+
+    const scan = await scanAgentSkills("codex");
+
+    expect(scan.skills.map((skill) => skill.name)).toEqual(["looping"]);
+    expect(scan.errors).toEqual([]);
+  });
+
   test("ignores directories without a SKILL.md", async () => {
     await mkdir(join(home, ".claude", "skills", "not-a-skill"), { recursive: true });
     await writeSkill(join(home, ".claude", "skills"), "real");
@@ -335,7 +372,7 @@ describe("scanAgentSkills", () => {
     const scan = await scanAgentSkills("claude");
 
     expect(scan.skills[0]).toMatchObject({
-      name: "plugin-skill",
+      name: "my-plugin:plugin-skill",
       scope: "plugin",
       plugin: "my-plugin",
     });
@@ -760,7 +797,7 @@ describe("Claude plugin discovery", () => {
 
     // Later entries are other scopes of the same plugin, not other plugins.
     expect((await scanAgentSkills("claude")).skills.map((skill) => skill.name))
-      .toEqual(["from-first"]);
+      .toEqual(["dup:from-first"]);
   });
 
   test("falls back to the whole key when it carries no marketplace", async () => {
@@ -772,6 +809,31 @@ describe("Claude plugin discovery", () => {
       plugin: "no-marketplace",
       scope: "plugin",
     });
+  });
+
+  test("splits a scoped plugin id at its marketplace, not at its scope", async () => {
+    const installPath = join(home, "scoped");
+    await writeSkill(join(installPath, "skills"), "review");
+    await writeManifest({ plugins: { "@team/quality@official": [{ installPath }] } });
+
+    // Splitting at the first `@` names every scoped plugin the empty string,
+    // which then falls back to the whole id — marketplace suffix and all.
+    expect((await scanAgentSkills("claude")).skills[0]).toMatchObject({
+      name: "@team/quality:review",
+      plugin: "@team/quality",
+    });
+  });
+
+  test("namespaces a plugin skill so it does not shadow the personal one", async () => {
+    const installPath = join(home, "install");
+    await writeSkill(join(installPath, "skills"), "review");
+    await writeSkill(join(home, ".claude", "skills"), "review");
+    await writeManifest({ plugins: { "quality@market": [{ installPath }] } });
+
+    // Claude addresses these as `review` and `quality:review`; both load, so
+    // neither may be reported as shadowed by the other.
+    expect((await scanAgentSkills("claude")).skills.map((skill) => [skill.name, skill.shadowed]))
+      .toEqual([["quality:review", false], ["review", false]]);
   });
 
   test("refuses a relative installPath rather than resolving it against the cwd", async () => {

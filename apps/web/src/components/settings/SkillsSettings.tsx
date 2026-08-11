@@ -125,6 +125,14 @@ interface SkillsSettingsProps {
   ) => Promise<backend.AgentSkillFile>;
   canRevealInFileManager?: boolean;
   embedded?: boolean;
+  /**
+   * Keeps a provider's completed scan instead of rescanning when the user
+   * returns to its tab. Rescanning is the right default for host directories,
+   * where the scan is a local `readdir` — but an environment scan runs a
+   * process inside a container, so the Rescan button becomes the way to ask
+   * for fresh data.
+   */
+  reuseLoadedScans?: boolean;
 }
 
 export function SkillsSettings({
@@ -135,6 +143,7 @@ export function SkillsSettings({
   readSkill = backend.readAgentSkill,
   canRevealInFileManager = true,
   embedded = false,
+  reuseLoadedScans = false,
 }: SkillsSettingsProps = {}) {
   const [internalProvider, setInternalProvider] = useState<AgentSkillProvider>("claude");
   const provider = controlledProvider ?? internalProvider;
@@ -157,16 +166,22 @@ export function SkillsSettings({
   const scanTokens = useRef<Record<string, number>>({});
   const fileToken = useRef(0);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Providers whose scan has completed, for `reuseLoadedScans`. */
+  const loadedProviders = useRef<Set<string>>(new Set());
 
   /**
    * Rescans on every tab visit rather than caching: skills are files on disk
    * that change outside this app, and a directory scan is cheap. The previous
    * result stays on screen while the new one loads, so revisiting a tab does
-   * not flash a spinner.
+   * not flash a spinner. `reuseLoadedScans` opts out for callers whose scan is
+   * not cheap; the Rescan button calls this directly either way.
    */
   const loadProvider = useCallback(async (target: AgentSkillProvider) => {
     const token = (scanTokens.current[target] ?? 0) + 1;
     scanTokens.current[target] = token;
+    // Marked before the await, not after it: a scan already in flight is a scan
+    // this provider has, so a remount or a second visit must not start another.
+    loadedProviders.current.add(target);
 
     setStates((prev) => ({ ...prev, [target]: { ...prev[target], loading: true, error: undefined } }));
     try {
@@ -182,6 +197,8 @@ export function SkillsSettings({
       }));
     } catch (err) {
       if (scanTokens.current[target] !== token) return;
+      // A failed scan is not a result to reuse; the next visit tries again.
+      loadedProviders.current.delete(target);
       setStates((prev) => ({
         ...prev,
         [target]: {
@@ -193,9 +210,19 @@ export function SkillsSettings({
     }
   }, [listSkills]);
 
+  /**
+   * A new loader means a different source (another environment), so nothing
+   * scanned under the previous one may be reused. Declared before the load
+   * effect so the reset lands first when both fire on the same commit.
+   */
   useEffect(() => {
+    loadedProviders.current.clear();
+  }, [listSkills]);
+
+  useEffect(() => {
+    if (reuseLoadedScans && loadedProviders.current.has(provider)) return;
     void loadProvider(provider);
-  }, [provider, loadProvider]);
+  }, [provider, loadProvider, reuseLoadedScans]);
 
   /**
    * The input stays controlled, but the list only refilters once typing pauses:

@@ -82,6 +82,8 @@ export interface AgentSkillFile {
  */
 const MAX_ENTRIES_PER_ROOT = 500;
 const MAX_SKILLS_PER_PROVIDER = 2_000;
+/** Depth bound for the recursive roots; mirrors the environment scanner. */
+const MAX_SCAN_DEPTH = 32;
 /** Enough for any realistic frontmatter block; we never read further for the list. */
 const FRONTMATTER_READ_BYTES = 16 * 1024;
 /** The detail pane renders one SKILL.md; anything past this is elided. */
@@ -145,8 +147,31 @@ interface RootSpec {
   path: string;
   scope: AgentSkillScope;
   plugin?: string;
+  /**
+   * Prefix applied to every skill name found under this root. Claude addresses a
+   * plugin's skill as `<plugin>:<skill>`, so the bare name would both display
+   * wrongly and shadow an unrelated personal skill that happens to share it.
+   */
+  namePrefix?: string;
   /** Subdirectory names to skip (Codex hides its system cache under `skills/.system`). */
   skip?: readonly string[];
+  /**
+   * Codex and OpenCode load skills from any depth beneath their roots
+   * (`~/.agents/skills/team/review/SKILL.md`); Claude reads only the top level.
+   * This must stay in step with `rootPlan` in `environment-agent-skills.ts`,
+   * which scans the same layouts from inside an environment.
+   */
+  recursive?: boolean;
+}
+
+/**
+ * `@team/quality@official` is a plugin named `@team/quality` from the
+ * `official` marketplace, so the id splits at its *last* `@` — splitting at the
+ * first one names every scoped plugin the empty string.
+ */
+function pluginNameFromId(id: string): string {
+  const marketplace = id.lastIndexOf("@");
+  return marketplace > 0 ? id.slice(0, marketplace) : id;
 }
 
 /**
@@ -199,10 +224,12 @@ async function claudePluginRoots(): Promise<RootSpec[]> {
       // a cache root the way Codex's is — but it must still be a real absolute
       // location rather than a relative fragment resolved against our cwd.
       if (!path.isAbsolute(installPath)) continue;
+      const plugin = pluginNameFromId(key);
       roots.push({
         path: path.join(installPath, "skills"),
         scope: "plugin",
-        plugin: key.split("@")[0] || key,
+        plugin,
+        namePrefix: `${plugin}:`,
       });
       break; // One install per plugin id; later entries are other scopes of the same plugin.
     }
@@ -322,7 +349,7 @@ async function codexPluginRoots(home: string): Promise<RootSpec[]> {
     if (!isInside(cacheRoot, pluginCache)) continue;
     const versionDir = await newestChildDir(pluginCache);
     if (!versionDir) continue;
-    roots.push({ path: path.join(versionDir, "skills"), scope: "plugin", plugin });
+    roots.push({ path: path.join(versionDir, "skills"), scope: "plugin", plugin, recursive: true });
   }
   return roots;
 }
@@ -362,18 +389,18 @@ async function rootSpecsFor(provider: AgentSkillProvider): Promise<RootSpec[]> {
     return [
       ...(process.platform === "win32" || homeOverride !== undefined
         ? []
-        : [{ path: "/etc/codex/skills", scope: "admin" as const }]),
-      { path: path.join(codex, "skills"), scope: "user", skip: [".system"] },
-      { path: agentsSkills, scope: "shared" },
-      { path: path.join(codex, "skills", ".system"), scope: "system" },
+        : [{ path: "/etc/codex/skills", scope: "admin" as const, recursive: true }]),
+      { path: path.join(codex, "skills"), scope: "user", skip: [".system"], recursive: true },
+      { path: agentsSkills, scope: "shared", recursive: true },
+      { path: path.join(codex, "skills", ".system"), scope: "system", recursive: true },
       ...(await codexPluginRoots(codex)),
     ];
   }
 
   return [
-    { path: path.join(opencodeConfigHome(), "skills"), scope: "user" },
-    { path: path.join(home, ".claude", "skills"), scope: "shared" },
-    { path: agentsSkills, scope: "shared" },
+    { path: path.join(opencodeConfigHome(), "skills"), scope: "user", recursive: true },
+    { path: path.join(home, ".claude", "skills"), scope: "shared", recursive: true },
+    { path: agentsSkills, scope: "shared", recursive: true },
   ];
 }
 
@@ -488,39 +515,47 @@ async function isDirectory(target: string): Promise<boolean> {
 /** Internal shape: `realPath` collapses duplicate roots and never leaves this module. */
 type ScannedSkill = Omit<AgentSkill, "shadowed"> & { realPath: string };
 
-/**
- * Streams a root's candidate skill directories, stopping at the cap.
- *
- * `opendir` rather than `readdir` so an enormous directory costs a bounded read
- * instead of materialising every entry only to slice it away afterwards.
- */
-async function readRootEntries(spec: RootSpec): Promise<{ names: string[]; truncated: boolean }> {
-  const names: string[] = [];
-  let truncated = false;
-  const dir = await fs.opendir(spec.path);
+/** Reads one candidate skill directory, or nothing when it holds no SKILL.md. */
+async function readSkillDirectory(
+  spec: RootSpec,
+  skillDir: string,
+  errors: Array<{ path: string; message: string }>,
+): Promise<ScannedSkill | undefined> {
+  const filePath = path.join(skillDir, "SKILL.md");
+  let frontmatter: { name?: string; description?: string };
   try {
-    for await (const entry of dir) {
-      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
-      if (spec.skip?.includes(entry.name)) continue;
-      if (names.length >= MAX_ENTRIES_PER_ROOT) {
-        truncated = true;
-        break;
-      }
-      names.push(entry.name);
-    }
-  } finally {
-    // Breaking out of `for await` already closes the handle, and Bun's second
-    // `close()` returns undefined rather than a promise — so this has to guard
-    // against both a throw and a non-thenable, not just a rejection.
-    try {
-      await dir.close();
-    } catch {
-      // Already closed by the iterator.
-    }
+    frontmatter = parseSkillFrontmatter(await readHead(filePath, FRONTMATTER_READ_BYTES));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return undefined; // A directory without SKILL.md is not a skill.
+    errors.push({ path: displayPath(filePath), message: (error as Error).message });
+    return undefined;
   }
-  return { names, truncated };
+
+  return {
+    id: filePath,
+    name: (spec.namePrefix ?? "") + (frontmatter.name?.trim() || path.basename(skillDir)),
+    description: clampDescription(frontmatter.description ?? ""),
+    filePath,
+    location: displayPath(skillDir),
+    scope: spec.scope,
+    ...(spec.plugin ? { plugin: spec.plugin } : {}),
+    // Two roots can reach one file: OpenCode reads both `~/.claude/skills`
+    // and `~/.agents/skills`, and the former is usually symlinks into the
+    // latter. Resolving here lets the caller collapse those to one entry.
+    realPath: await fs.realpath(filePath).catch(() => filePath),
+  };
 }
 
+/**
+ * Walks one root, depth-first, for directories holding a SKILL.md.
+ *
+ * `opendir` rather than `readdir` so an enormous directory costs a bounded read
+ * instead of materialising every entry only to slice it away afterwards. The
+ * entry budget is spent across the whole root rather than per directory, so a
+ * recursive root cannot multiply it by its depth, and `visited` is keyed on the
+ * resolved path so a symlink cycle terminates.
+ */
 async function scanRoot(
   spec: RootSpec,
   errors: Array<{ path: string; message: string }>,
@@ -536,51 +571,75 @@ async function scanRoot(
     truncated: false,
   };
 
-  let entries: string[];
+  // Probe with `stat`, not `opendir`: a root that simply is not there is the
+  // normal case rather than an error, and under Bun `opendir` resolves for a
+  // missing directory and only fails once it is iterated — which would report
+  // every absent root as present.
+  let rootStat: Awaited<ReturnType<typeof fs.stat>>;
   try {
-    const listing = await readRootEntries(spec);
-    entries = listing.names;
-    root.truncated = listing.truncated;
+    rootStat = await fs.stat(spec.path);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    // A root that simply is not there is the normal case, not an error.
     if (code !== "ENOENT" && code !== "ENOTDIR") {
       errors.push({ path: label, message: (error as Error).message });
     }
     return { root, skills: [] };
   }
+  if (!rootStat.isDirectory()) return { root, skills: [] };
 
   root.exists = true;
 
   const skills: ScannedSkill[] = [];
-  for (const name of entries) {
-    const skillDir = path.join(spec.path, name);
-    const filePath = path.join(skillDir, "SKILL.md");
-    if (!(await isDirectory(skillDir))) continue;
+  const stack: Array<{ directory: string; depth: number }> = [{ directory: spec.path, depth: 0 }];
+  const visited = new Set<string>();
+  let entriesRead = 0;
 
-    let frontmatter: { name?: string; description?: string };
+  while (stack.length > 0 && !root.truncated) {
+    const current = stack.pop()!;
+    const realDirectory = await fs.realpath(current.directory).catch(() => undefined);
+    if (!realDirectory || visited.has(realDirectory)) continue;
+    visited.add(realDirectory);
+
+    let dir: Awaited<ReturnType<typeof fs.opendir>> | undefined;
     try {
-      frontmatter = parseSkillFrontmatter(await readHead(filePath, FRONTMATTER_READ_BYTES));
+      dir = await fs.opendir(current.directory);
+      for await (const entry of dir) {
+        entriesRead += 1;
+        if (entriesRead > MAX_ENTRIES_PER_ROOT) {
+          root.truncated = true;
+          break;
+        }
+        if (current.depth === 0 && spec.skip?.includes(entry.name)) continue;
+        // Codex hides its system cache under a dot directory and repositories
+        // are full of them; neither is ever a skill.
+        if (entry.name.startsWith(".")) continue;
+        if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+        const skillDir = path.join(current.directory, entry.name);
+        if (!(await isDirectory(skillDir))) continue;
+
+        const skill = await readSkillDirectory(spec, skillDir, errors);
+        if (skill) skills.push(skill);
+        if (spec.recursive && current.depth + 1 < MAX_SCAN_DEPTH) {
+          stack.push({ directory: skillDir, depth: current.depth + 1 });
+        }
+      }
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
-      if (code === "ENOENT") continue; // A directory without SKILL.md is not a skill.
-      errors.push({ path: displayPath(filePath), message: (error as Error).message });
-      continue;
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        errors.push({ path: displayPath(current.directory), message: (error as Error).message });
+      }
+    } finally {
+      // Breaking out of `for await` already closes the handle, and Bun's second
+      // `close()` returns undefined rather than a promise — so this has to guard
+      // against both a throw and a non-thenable, not just a rejection.
+      if (dir) {
+        try {
+          await dir.close();
+        } catch {
+          // Already closed by the iterator.
+        }
+      }
     }
-
-    skills.push({
-      id: filePath,
-      name: frontmatter.name?.trim() || name,
-      description: clampDescription(frontmatter.description ?? ""),
-      filePath,
-      location: displayPath(skillDir),
-      scope: spec.scope,
-      ...(spec.plugin ? { plugin: spec.plugin } : {}),
-      // Two roots can reach one file: OpenCode reads both `~/.claude/skills`
-      // and `~/.agents/skills`, and the former is usually symlinks into the
-      // latter. Resolving here lets the caller collapse those to one entry.
-      realPath: await fs.realpath(filePath).catch(() => filePath),
-    });
   }
 
   // `skillCount` is finalised by the caller: dedupe and the per-provider cap can

@@ -138,7 +138,7 @@ export function HoverTooltipContent({
   return createPortal(
     <div
       className={cn(
-        "fixed z-50 w-fit rounded-md bg-foreground px-3 py-1.5 text-xs text-background text-balance shadow-md [&_.text-muted-foreground]:text-zinc-600",
+        "fixed z-50 w-fit rounded-md border border-zinc-700/70 bg-zinc-900/95 px-3 py-1.5 text-xs text-popover-foreground text-balance shadow-[0_18px_48px_rgba(0,0,0,0.42)] backdrop-blur-sm",
         className,
       )}
       style={{
@@ -154,7 +154,11 @@ export function HoverTooltipContent({
         data-slot="hover-tooltip-arrow"
         aria-hidden="true"
         className={cn(
-          "absolute size-2.5 rotate-45 rounded-[2px] bg-foreground",
+          // The border is only drawn on the two edges that form the arrow's outward
+          // point, so the other two don't cut a visible seam across the tooltip body.
+          "absolute size-2.5 rotate-45 rounded-[2px] border-zinc-700/70 bg-zinc-900",
+          side === "right" && "border-b border-l",
+          side === "bottom" && "border-l border-t",
           side === "right" && align === "center" && "left-0 top-1/2 -translate-x-1/2 -translate-y-1/2",
           side === "right" && align === "start" && "left-0 top-4 -translate-x-1/2 -translate-y-1/2",
           side === "bottom" && align === "center" && "left-1/2 top-0 -translate-x-1/2 -translate-y-1/2",

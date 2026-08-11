@@ -26,7 +26,7 @@ import { toast } from "sonner";
 import type { KanbanTask, KanbanStatus } from "@/stores/kanbanStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useProjectStore } from "@/stores/projectStore";
+import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { useBuildLaunchOptions } from "@/hooks/useBuildLaunchOptions";
 import {
@@ -163,9 +163,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
 
   const isCreateMode = !!createForProjectId;
   const buildProjectId = createForProjectId ?? task?.projectId ?? "";
-  const localEnvironmentAvailable = useProjectStore((state) =>
-    Boolean(state.projects.find((project) => project.id === buildProjectId)?.localPath),
-  );
+  const localEnvironmentAvailable = useLocalEnvironmentAvailable(buildProjectId);
   const {
     catalog: launchCatalog,
     defaults: launchDefaults,

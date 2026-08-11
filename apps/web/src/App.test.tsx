@@ -1445,6 +1445,8 @@ describe("App Docker availability", () => {
     window.clearInterval = mock(() => {}) as typeof window.clearInterval;
     mockCheckDocker
       .mockImplementationOnce(async () => true)
+      // Two failures, because one is not enough to declare an outage.
+      .mockImplementationOnce(async () => false)
       .mockImplementationOnce(async () => false)
       .mockImplementationOnce(async () => true);
     resetStores({
@@ -1472,18 +1474,20 @@ describe("App Docker availability", () => {
 
       await runPoll();
       await waitFor(() => {
-        expect(mockCheckDocker).toHaveBeenCalledTimes(2);
-        expect(screen.getByTestId("terminal-env-visible").getAttribute("data-container-running"))
-          .toBe("false");
+        expect(mockCheckDocker).toHaveBeenCalledTimes(3);
         expect(screen.getByText("Docker Is Not Running")).toBeTruthy();
       });
+      // The daemon being down says nothing about whether this container is
+      // still up, and answering "not running" here disposes the environment's
+      // terminals. The outage must not reach that projection.
+      expect(screen.getByTestId("terminal-env-visible").getAttribute("data-container-running"))
+        .toBe("true");
 
       act(() => screen.getByRole("button", { name: "Continue Without Docker" }).click());
       await runPoll();
       await waitFor(() => {
-        expect(mockCheckDocker).toHaveBeenCalledTimes(3);
-        expect(screen.getByTestId("terminal-env-visible").getAttribute("data-container-running"))
-          .toBe("true");
+        expect(mockCheckDocker).toHaveBeenCalledTimes(4);
+        expect(screen.queryByText("Docker Is Not Running")).toBeNull();
       });
       expect(mockSyncAllEnvironmentsWithDocker).toHaveBeenCalledTimes(2);
     } finally {
@@ -1491,6 +1495,65 @@ describe("App Docker availability", () => {
       window.setInterval = originalSetInterval;
       window.clearInterval = originalClearInterval;
     }
+  });
+
+  test("keeps container functionality after a single failed probe recovers", async () => {
+    const originalSetInterval = window.setInterval;
+    const originalClearInterval = window.clearInterval;
+    const pollCallbacks: Array<() => void> = [];
+    window.setInterval = ((handler: TimerHandler, timeout?: number) => {
+      if (timeout === DOCKER_AVAILABILITY_POLL_INTERVAL_MS) {
+        pollCallbacks.push(handler as () => void);
+      }
+      return 42;
+    }) as typeof window.setInterval;
+    window.clearInterval = mock(() => {}) as typeof window.clearInterval;
+    mockCheckDocker
+      .mockImplementationOnce(async () => true)
+      // `docker info` timed out once under load; the confirming probe succeeds.
+      .mockImplementationOnce(async () => false)
+      .mockImplementationOnce(async () => true);
+    resetStores({
+      environments: [makeEnvironment("env-visible", "project-1")],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    try {
+      render(<App />);
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      });
+
+      await act(async () => {
+        pollCallbacks.forEach((poll) => poll());
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      });
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(3));
+
+      expect(screen.queryByText("Docker Is Not Running")).toBeNull();
+      expect(screen.getByTestId("terminal-env-visible").getAttribute("data-container-running"))
+        .toBe("true");
+      // Docker never left the "available" state, so nothing needed re-syncing
+      // beyond the startup reconcile.
+      expect(mockSyncAllEnvironmentsWithDocker).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanup();
+      window.setInterval = originalSetInterval;
+      window.clearInterval = originalClearInterval;
+    }
+  });
+
+  test("declares an outage without a confirming probe when Docker was never available", async () => {
+    mockCheckDocker.mockImplementation(async () => false);
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    render(<App />);
+    expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
+    // Startup has no healthy state to protect, so it must not pay for a second
+    // 10s `docker info` before telling the user what is wrong.
+    expect(mockCheckDocker).toHaveBeenCalledTimes(1);
   });
 
   test("deduplicates Docker polls while an earlier probe is still in flight", async () => {

@@ -35,6 +35,7 @@ import type {
 } from "@/types";
 import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
+import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 
 export interface CreateEnvironmentFlowOperations {
   createEnvironment: (
@@ -135,18 +136,16 @@ export function CreateEnvironmentFlowDialog({
     useRef<PendingGitHubCredentialWarning | null>(null);
   const setOptions = useClaudeOptionsStore((state) => state.setOptions);
   const config = useConfigStore((state) => state.config);
-  const storedProject = useProjectStore((state) =>
+  const storedProjectName = useProjectStore((state) =>
     projectId
-      ? state.projects.find((project) => project.id === projectId)
+      ? state.projects.find((project) => project.id === projectId)?.name
       : undefined,
   );
-  const localEnvironmentAvailable = storedProject
-    ? Boolean(storedProject.localPath)
-    : true;
+  const localEnvironmentAvailable = useLocalEnvironmentAvailable(projectId);
   const localEnvironmentAvailableRef = useRef(localEnvironmentAvailable);
   dockerAvailableRef.current = dockerAvailable;
   localEnvironmentAvailableRef.current = localEnvironmentAvailable;
-  const projectName = providedProjectName ?? storedProject?.name;
+  const projectName = providedProjectName ?? storedProjectName;
   const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
   const selectProjectAndEnvironment = useUIStore(
     (state) => state.selectProjectAndEnvironment,

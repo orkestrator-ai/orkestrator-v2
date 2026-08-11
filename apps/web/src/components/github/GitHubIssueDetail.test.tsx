@@ -20,6 +20,7 @@ import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import * as realBackend from "@/lib/backend";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
+import { useProjectStore } from "@/stores/projectStore";
 
 const realBackendSnapshot = { ...realBackend };
 const openInBrowserMock = mock(async () => undefined);
@@ -139,6 +140,7 @@ describe("GitHubIssueDetail", () => {
 
   beforeEach(() => {
     cleanup();
+    useProjectStore.setState({ projects: [] });
     loadIssueMock.mockClear();
     saveIssueMock.mockReset();
     saveIssueMock.mockResolvedValue(detail);
@@ -552,6 +554,51 @@ describe("GitHubIssueDetail", () => {
     fireEvent.click(containerBuild);
     expect(startBuildMock).not.toHaveBeenCalled();
 
+    fireEvent.click(localBuild);
+    await waitFor(() => {
+      expect(startBuildMock).toHaveBeenCalledWith(
+        expect.objectContaining({ number: 42 }),
+        "project-1",
+        "local",
+      );
+    });
+  });
+
+  test("blocks local builds for a project with no host checkout", async () => {
+    useProjectStore.setState({
+      projects: [{
+        id: "project-1",
+        name: "Remote only",
+        gitUrl: "https://example.test/remote-only.git",
+        localPath: null,
+        addedAt: "2026-08-11T00:00:00.000Z",
+        order: 0,
+      }],
+    });
+    renderDetail();
+
+    const localBuild = screen.getByRole("button", { name: "Build Local" });
+    expect((localBuild as HTMLButtonElement).disabled).toBe(true);
+    expect(localBuild.getAttribute("title")).toBe(
+      "Add a local project checkout to run a local build",
+    );
+    fireEvent.click(localBuild);
+    expect(startBuildMock).not.toHaveBeenCalled();
+
+    // The container build stays available - the missing checkout says nothing
+    // about Docker.
+    expect(
+      (screen.getByRole("button", { name: "Build Container" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  test("keeps local builds available while the project store is still hydrating", async () => {
+    // An id the store does not know yet means "not loaded", not "no checkout".
+    useProjectStore.setState({ projects: [] });
+    renderDetail();
+
+    const localBuild = screen.getByRole("button", { name: "Build Local" });
+    expect((localBuild as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(localBuild);
     await waitFor(() => {
       expect(startBuildMock).toHaveBeenCalledWith(

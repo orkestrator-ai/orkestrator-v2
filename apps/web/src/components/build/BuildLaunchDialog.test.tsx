@@ -221,6 +221,44 @@ describe("BuildLaunchDialog", () => {
     expect(onConfirm.mock.calls[0]![0].environmentType).toBe("local");
   });
 
+  test("restores the local default on reopen once a checkout becomes available", async () => {
+    const onConfirm = mock((_selection: BuildLaunchSelection) => undefined);
+    const dialog = (open: boolean, localEnvironmentAvailable: boolean) => (
+      <DockerAvailabilityProvider available>
+        <BuildLaunchDialog
+          open={open}
+          onOpenChange={() => undefined}
+          catalog={catalog}
+          defaultAgent="claude"
+          defaultEnvironmentType="local"
+          localEnvironmentAvailable={localEnvironmentAvailable}
+          onConfirm={onConfirm}
+        />
+      </DockerAvailabilityProvider>
+    );
+    // The correction away from an unavailable option is deliberately
+    // one-directional, so reopening is what re-derives the user's default.
+    const view = render(dialog(true, false));
+    await waitFor(() => {
+      const environment = screen.getByRole("radiogroup", { name: "Build environment" });
+      expect(
+        (within(environment).getByRole("radio", { name: /^Container/ }) as HTMLInputElement).checked,
+      ).toBe(true);
+    });
+
+    view.rerender(dialog(false, true));
+    view.rerender(dialog(true, true));
+
+    await waitFor(() => {
+      const environment = screen.getByRole("radiogroup", { name: "Build environment" });
+      expect(
+        (within(environment).getByRole("radio", { name: /^Local/ }) as HTMLInputElement).checked,
+      ).toBe(true);
+    });
+    submit();
+    expect(onConfirm.mock.calls[0]![0].environmentType).toBe("local");
+  });
+
   test("does not force a local build when the project has no local checkout", () => {
     const onConfirm = mock((_selection: BuildLaunchSelection) => undefined);
     render(

@@ -53,6 +53,27 @@ import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext
 export const DOCKER_AVAILABILITY_POLL_INTERVAL_MS = 60_000;
 
 /**
+ * How many consecutive failed probes it takes to declare an outage once Docker
+ * has been seen healthy. One is not enough: a false negative disables every
+ * container control and is not corrected until the next poll.
+ */
+export const DOCKER_UNAVAILABLE_CONFIRMATIONS = 2;
+
+/**
+ * A single daemon probe, normalised to a boolean. A thrown error and a `false`
+ * answer mean the same thing to every caller, and neither may reject - the
+ * poll would otherwise leave an unhandled rejection behind.
+ */
+async function probeDocker(source: "startup" | "retry" | "poll"): Promise<boolean> {
+  try {
+    return await checkDocker();
+  } catch (error) {
+    console.error(`[App] Docker ${source} check failed:`, error);
+    return false;
+  }
+}
+
+/**
  * Setup can fail after Docker has successfully created and started the
  * container. The backend reports that lifecycle outcome as `status: "error"`,
  * but the existing container is still the workspace in which retry/override
@@ -179,33 +200,41 @@ function App() {
 
     const check = (async () => {
       const previous = dockerAvailableRef.current;
-      try {
-        const available = await checkDocker();
-        console.log(`[App] Docker ${source} check:`, available);
-        dockerAvailableRef.current = available;
-        setDockerAvailable(available);
+      let available = await probeDocker(source);
 
-        // Reconcile container identities on startup and when Docker comes back,
-        // but not on every healthy poll.
-        if (available && previous !== true) {
-          try {
-            const clearedIds = await syncAllEnvironmentsWithDocker();
-            if (clearedIds.length > 0) {
-              console.log("[App] Cleared orphaned container references:", clearedIds);
-            }
-          } catch (error) {
-            console.error("[App] Failed to sync environments with Docker:", error);
-            // Non-fatal - Docker-backed controls can still be enabled.
-          }
-        }
-
-        return available;
-      } catch (error) {
-        console.error(`[App] Docker ${source} check failed:`, error);
-        dockerAvailableRef.current = false;
-        setDockerAvailable(false);
-        return false;
+      // A single failed probe is not evidence of an outage. `check_docker`
+      // shells out to `docker info` with a 10s timeout and reports any failure
+      // - including that timeout - as "unavailable", so a loaded host can
+      // produce a false negative. Tearing down container-backed UI on one of
+      // those is destructive, so confirm before believing a daemon that was
+      // healthy a moment ago went away.
+      for (
+        let attempt = 1;
+        !available && previous === true && attempt < DOCKER_UNAVAILABLE_CONFIRMATIONS;
+        attempt++
+      ) {
+        available = await probeDocker(source);
       }
+
+      console.log(`[App] Docker ${source} check:`, available);
+      dockerAvailableRef.current = available;
+      setDockerAvailable(available);
+
+      // Reconcile container identities on startup and when Docker comes back,
+      // but not on every healthy poll.
+      if (available && previous !== true) {
+        try {
+          const clearedIds = await syncAllEnvironmentsWithDocker();
+          if (clearedIds.length > 0) {
+            console.log("[App] Cleared orphaned container references:", clearedIds);
+          }
+        } catch (error) {
+          console.error("[App] Failed to sync environments with Docker:", error);
+          // Non-fatal - Docker-backed controls can still be enabled.
+        }
+      }
+
+      return available;
     })();
 
     dockerCheckInFlightRef.current = check;
@@ -604,17 +633,21 @@ function App() {
           {selectedEnvironment ? (
             <div className="relative h-full bg-background">
               <div className="absolute inset-0 z-10 bg-background">
+                {/*
+                  `isContainerRunning` is deliberately not gated on Docker
+                  availability. A false value means "this container stopped",
+                  and TerminalContainer answers it by disposing every terminal
+                  and resetting the pane layout, so feeding a daemon-wide probe
+                  into a per-environment fact would destroy the user's tabs on a
+                  transient outage. The daemon state gates *actions* instead:
+                  handleStartEnvironmentFromOverlay refuses to start a container
+                  while Docker is down.
+                */}
                 <TerminalContainer
                   environmentId={selectedEnvironment.id}
                   containerId={selectedEnvironment.containerId ?? null}
-                  isContainerRunning={
-                    dockerAvailable === true
-                    && isEnvironmentContainerAvailable(selectedEnvironment)
-                  }
-                  isContainerCreating={
-                    dockerAvailable === true
-                    && selectedEnvironment.status === "creating"
-                  }
+                  isContainerRunning={isEnvironmentContainerAvailable(selectedEnvironment)}
+                  isContainerCreating={selectedEnvironment.status === "creating"}
                   isActive
                   className="h-full"
                   onStartContainer={(initialPrompt) => {

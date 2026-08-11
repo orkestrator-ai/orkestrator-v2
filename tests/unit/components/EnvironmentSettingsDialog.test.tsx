@@ -752,4 +752,48 @@ describe("EnvironmentSettingsDialog", () => {
     expect(mockSyncEnvironmentStatus).not.toHaveBeenCalled();
     expect(onUpdate).not.toHaveBeenCalled();
   });
+
+  test("saves port changes without a recreate prompt while Docker is unavailable", async () => {
+    mockSection = "ports";
+    const onRestart = mock(async () => undefined);
+    const onUpdate = mock(() => undefined);
+    const onOpenChange = mock(() => undefined);
+    const environment = makeEnvironment({ status: "running" });
+    render(
+      <DockerAvailabilityProvider available={false}>
+        <EnvironmentSettingsDialog
+          open={true}
+          onOpenChange={onOpenChange}
+          environment={environment}
+          onUpdate={onUpdate}
+          onRestart={onRestart}
+        />
+      </DockerAvailabilityProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add Port" }));
+    fireEvent.change(screen.getByPlaceholderText("Host"), {
+      target: { value: "3001" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    // The recreate confirmation must not open: its only action is disabled
+    // while the daemon is down, which would strand the user with no way to
+    // save and silently drop every other edit in the form.
+    await waitFor(() => {
+      expect(mockUpdatePortMappings).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByRole("button", { name: "Restart Environment" })).toBeNull();
+    expect(onRestart).not.toHaveBeenCalled();
+    expect(onUpdate).toHaveBeenCalled();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(mockToastSuccess).toHaveBeenCalledWith(
+      "Environment settings saved",
+      expect.objectContaining({
+        description:
+          "Port changes apply the next time this environment is recreated, once Docker is running.",
+      }),
+    );
+  });
 });

@@ -575,11 +575,18 @@ export function EnvironmentSettingsDialog({
       return;
     }
 
-    // If port mappings changed and environment is running, show restart confirmation
-    if (portMappingsChanged && environment.status === "running" && onRestart) {
+    // If port mappings changed and environment is running, show restart
+    // confirmation - but only when Docker can actually honour it. The
+    // confirmation's only action recreates the container, so offering it while
+    // the daemon is down parks the user on a dialog they cannot dismiss
+    // forwards and silently drops every other edit in the form. Saving still
+    // persists the new mappings; they take effect on the next recreate.
+    if (portMappingsChanged && environment.status === "running" && onRestart && dockerAvailable) {
       setShowRestartConfirm(true);
       return;
     }
+    const portsDeferredByOutage =
+      portMappingsChanged && environment.status === "running" && !dockerAvailable;
 
     const domains = useGlobalDefaults
       ? undefined
@@ -626,7 +633,11 @@ export function EnvironmentSettingsDialog({
       }
 
       onUpdate(updated);
-      toast.success("Environment settings saved");
+      toast.success("Environment settings saved", {
+        description: portsDeferredByOutage
+          ? "Port changes apply the next time this environment is recreated, once Docker is running."
+          : undefined,
+      });
       onOpenChange(false);
     } catch (err) {
       console.error("[EnvironmentSettingsDialog] Failed to save:", err);

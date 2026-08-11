@@ -84,7 +84,8 @@ export class TurnAccumulator {
   readonly threadId: string;
   readonly requestId?: string;
   readonly expectsStructuredOutput: boolean;
-  readonly assistantMessageId: string;
+  /** Assistant transcript row receiving the current segment of this turn. */
+  assistantMessageId: string;
   readonly startedAt: string;
 
   /**
@@ -104,6 +105,14 @@ export class TurnAccumulator {
   /** Insertion order of item keys, which is the render order. */
   readonly itemOrder: string[] = [];
   readonly items = new Map<string, ItemAccumulator>();
+
+  /**
+   * A steer is a user message inside an already-running turn. Items which
+   * existed before that message stay in the preceding assistant row; items
+   * introduced afterwards render into a new row below it.
+   */
+  private assistantSegmentStartIndex = 0;
+  private assistantSegmentEndIndex: number | undefined;
 
   private readonly maxCommandOutputChars: number;
 
@@ -326,6 +335,33 @@ export class TurnAccumulator {
     return this.itemOrder
       .map((id) => this.items.get(id))
       .filter((entry): entry is ItemAccumulator => entry !== undefined);
+  }
+
+  /** Items belonging to the assistant row currently being published. */
+  orderedForAssistantSegment(): ItemAccumulator[] {
+    const end = this.assistantSegmentEndIndex ?? this.itemOrder.length;
+    return this.itemOrder
+      .slice(this.assistantSegmentStartIndex, end)
+      .map((id) => this.items.get(id))
+      .filter((entry): entry is ItemAccumulator => entry !== undefined);
+  }
+
+  /**
+   * Freezes the current row at the exact item boundary where a steer landed.
+   * Events may continue arriving while that row is rendered, so the boundary
+   * must be captured before awaiting any rendering work.
+   */
+  freezeAssistantSegment(): number {
+    const boundary = this.itemOrder.length;
+    this.assistantSegmentEndIndex = boundary;
+    return boundary;
+  }
+
+  /** Starts the post-steer assistant row at a previously captured boundary. */
+  startAssistantSegment(assistantMessageId: string, boundary: number): void {
+    this.assistantMessageId = assistantMessageId;
+    this.assistantSegmentStartIndex = boundary;
+    this.assistantSegmentEndIndex = undefined;
   }
 
   /**

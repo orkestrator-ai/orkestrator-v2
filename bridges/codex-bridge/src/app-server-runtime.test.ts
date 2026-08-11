@@ -5170,6 +5170,12 @@ describe("idle detach and transparent re-attach", () => {
     // Same session id the UI still holds — this must just work.
     const messages = await h.runtime.getMessages(sessionId);
     expect(messages).not.toBeNull();
+    expect(messages!.map((message) => [message.role, message.content])).toEqual([
+      ["user", "hello"],
+      ["assistant", ""],
+      ["user", "also inspect the bridge"],
+      ["assistant", "done"],
+    ]);
     expect(messages!.filter((message) => message.role === "user").map((message) => ({
       content: message.content,
       turnId: message.turnId,
@@ -7949,6 +7955,65 @@ describe("steering", () => {
         && (event.data?.message as { content?: unknown } | undefined)?.content
           === "also check the tests",
     )).toBe(true);
+  });
+
+  test("places a steer between the assistant activity before and after it", async () => {
+    const h = await harness({ "turn/steer": () => ({ turnId: "turn-1" }) });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "investigate",
+      requestId: "req-original",
+      attachments: [],
+    });
+
+    h.child().notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: { id: "before", type: "agentMessage", text: "Initial finding" },
+    });
+    await h.drain();
+
+    expect(
+      await h.runtime.steerSession(
+        sessionId,
+        "also inspect the tests",
+        "turn-1",
+        "req-steer-order",
+      ),
+    ).toBe("accepted");
+
+    h.child().notify("item/started", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "after-tool",
+        type: "commandExecution",
+        command: "bun test",
+        status: "inProgress",
+        aggregatedOutput: null,
+      },
+    });
+    h.child().notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: { id: "after-text", type: "agentMessage", text: "Tests are green" },
+    });
+    await h.drain();
+
+    const messages = (await h.runtime.getMessages(sessionId))!;
+    expect(messages.map((message) => [message.role, message.content])).toEqual([
+      ["user", "investigate"],
+      ["assistant", "Initial finding"],
+      ["user", "also inspect the tests"],
+      ["assistant", "Tests are green"],
+    ]);
+    expect(messages[1]?.parts).toEqual([
+      { type: "text", content: "Initial finding" },
+    ]);
+    expect(messages[3]?.parts.map((part) => part.type)).toEqual([
+      "tool-invocation",
+      "text",
+    ]);
   });
 
   test("rejects a stale renderer turn before calling app-server", async () => {

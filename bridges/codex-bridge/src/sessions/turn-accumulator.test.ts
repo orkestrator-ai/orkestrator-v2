@@ -74,6 +74,23 @@ describe("delta accumulation", () => {
     expect(turn.effectiveText(turn.items.get("item-2")!)).toBe("early");
   });
 
+  test("a steering boundary keeps earlier and later items in separate assistant segments", () => {
+    const turn = accumulator();
+    turn.onItemCompleted(agentMessage("before", "before steer"));
+
+    const boundary = turn.freezeAssistantSegment();
+    expect(turn.orderedForAssistantSegment().map((item) => item.id)).toEqual(["before"]);
+
+    turn.onItemCompleted(agentMessage("after", "after steer"));
+    // Events can keep arriving while the old segment is being flushed, but
+    // they must not leak above the steering message.
+    expect(turn.orderedForAssistantSegment().map((item) => item.id)).toEqual(["before"]);
+
+    turn.startAssistantSegment("assistant-2", boundary);
+    expect(turn.assistantMessageId).toBe("assistant-2");
+    expect(turn.orderedForAssistantSegment().map((item) => item.id)).toEqual(["after"]);
+  });
+
   test("reasoning deltas accumulate per channel and index", () => {
     const turn = accumulator();
     turn.onReasoningDelta("r1", "sum-a", "summary", 0);

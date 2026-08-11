@@ -2741,7 +2741,7 @@ export class AppServerRuntime {
           && reconciled.turnId === expectedTurnId
         ) {
           this.rememberSteerRequest(requestId, { ...previous, state: "accepted" });
-          this.appendAcceptedSteer(context, input, expectedTurnId);
+          await this.appendAcceptedSteer(context, input, expectedTurnId);
           return "accepted";
         }
         // A successful authoritative read found no matching client id, proving
@@ -2799,7 +2799,7 @@ export class AppServerRuntime {
         inputDigest,
         state: "accepted",
       });
-      this.appendAcceptedSteer(context, input, expectedTurnId);
+      await this.appendAcceptedSteer(context, input, expectedTurnId);
       return "accepted";
     } catch (error) {
       // A structured rejection that explicitly says the expected turn is stale
@@ -2845,21 +2845,64 @@ export class AppServerRuntime {
     }
   }
 
-  private appendAcceptedSteer(
+  private async appendAcceptedSteer(
     context: ThreadContext,
     input: string,
     turnId: string,
-  ): void {
+  ): Promise<void> {
     // app-server persists a successful steer as another user message inside the
     // active turn. Its live userMessage item is intentionally not rendered by
-    // the engine reducer, so append the accepted text here; detach/re-attach
-    // later reconstructs the same entry from the rollout.
+    // the engine reducer, so split the current assistant stream at the accepted
+    // item boundary and append the text between the two assistant rows. A
+    // detach/re-attach reconstructs this same shape from rollout record order.
+    const turn = context.activeTurn;
+    if (!turn || turn.turnId !== turnId) return;
+    const state = this.stateFor(context.threadId);
+    const boundary = turn.freezeAssistantSegment();
+
+    // Finish the pre-steer row before announcing the user message. The
+    // coalescer serializes this against a render already in flight, while the
+    // frozen boundary prevents items arriving during the await from leaking
+    // above the steer.
+    await state.coalescer.flushNow();
+
     const userMessage = this.appendUserMessage(context, input, []);
     userMessage.turnId = turnId;
+    const previousAssistant = context.messages.find(
+      (message) => message.id === turn.assistantMessageId,
+    );
+    const assistantMessage: NormalizedMessage = {
+      id: createMessageId(),
+      role: "assistant",
+      content: "",
+      parts: [],
+      createdAt: new Date(this.now()).toISOString(),
+      turnId,
+      revision: 1,
+      ...(previousAssistant?.modelId ? { modelId: previousAssistant.modelId } : {}),
+      ...(previousAssistant?.planReview ? { planReview: true } : {}),
+    };
+    context.messages.push(assistantMessage);
+    turn.startAssistantSegment(assistantMessage.id, boundary);
+    state.render = beginTurnRenderState(state.render);
+    state.assistantMessageId = assistantMessage.id;
+    state.publishedMessageId = assistantMessage.id;
+    state.publishedParts = [];
+    state.publishedModelId = assistantMessage.modelId;
     this.bumpMessageRevision(context);
     for (const id of context.bridgeSessionIds) {
       this.options.emit({ type: "message.updated", sessionId: id, data: { message: userMessage } });
+      this.options.emit({
+        type: "message.updated",
+        sessionId: id,
+        data: { message: assistantMessage },
+      });
     }
+
+    // Items can arrive after the boundary while the old row is flushing. Make
+    // their suffix visible immediately instead of waiting for another engine
+    // event to happen to schedule the new row.
+    await state.coalescer.flushNow();
     this.emitStatus(context);
   }
 

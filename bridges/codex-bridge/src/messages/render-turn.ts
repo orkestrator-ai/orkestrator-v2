@@ -268,7 +268,7 @@ function collectTurnItems(turn: TurnAccumulator): {
   const accumulatorsByKey = new Map<string, ItemAccumulator>();
   const itemKeys: string[] = [];
 
-  for (const accumulator of turn.ordered()) {
+  for (const accumulator of turn.orderedForAssistantSegment()) {
     // Reserve every accumulator's position, even when it currently contains only
     // an unrenderable delta. If item/started arrives later, the row materializes
     // at its original position rather than being appended after newer activity.

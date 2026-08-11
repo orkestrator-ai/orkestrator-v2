@@ -131,9 +131,16 @@ describe("HoverTooltipContent", () => {
 
     fireEvent.mouseEnter(screen.getByRole("button", { name: "Run" }));
 
-    await waitFor(() => {
-      expect(screen.getByText("Run command")).toBeTruthy();
+    const tooltip = await waitFor(() => {
+      const element = screen.getByText("Run command");
+      expect(element).toBeTruthy();
+      return element;
     });
+
+    expect(tooltip.classList.contains("border")).toBe(true);
+    expect(tooltip.classList.contains("border-zinc-700/70")).toBe(true);
+    expect(tooltip.classList.contains("bg-zinc-900/95")).toBe(true);
+    expect(tooltip.classList.contains("text-popover-foreground")).toBe(true);
   });
 
   test("waits for the open delay before showing a new tooltip", async () => {
@@ -243,6 +250,9 @@ describe("HoverTooltipContent", () => {
     expect(arrow?.className).toContain("left-1/2");
     expect(arrow?.className).toContain("-translate-x-1/2");
     expect(arrow?.className).not.toContain("left-4");
+    expect(arrow?.classList.contains("border-l")).toBe(true);
+    expect(arrow?.classList.contains("border-t")).toBe(true);
+    expect(arrow?.classList.contains("border-b")).toBe(false);
   });
 
   test("keeps leading arrow placement for start-aligned bottom tooltips", async () => {
@@ -277,6 +287,9 @@ describe("HoverTooltipContent", () => {
     expect(arrow?.className).toContain("top-1/2");
     expect(arrow?.className).toContain("-translate-y-1/2");
     expect(arrow?.className).not.toContain("top-4");
+    expect(arrow?.classList.contains("border-b")).toBe(true);
+    expect(arrow?.classList.contains("border-l")).toBe(true);
+    expect(arrow?.classList.contains("border-t")).toBe(false);
   });
 
   test("keeps leading arrow placement for start-aligned right tooltips", async () => {

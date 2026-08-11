@@ -1866,6 +1866,25 @@ describe("backend command wrapper coverage", () => {
     });
   });
 
+  test("lists and reads skills through environment-scoped commands", async () => {
+    await backendWrappers.listEnvironmentAgentSkills("env-1", "codex");
+    expect(invokeMock).toHaveBeenLastCalledWith("list_environment_agent_skills", {
+      environmentId: "env-1",
+      provider: "codex",
+    });
+
+    await backendWrappers.readEnvironmentAgentSkill(
+      "env-1",
+      "codex",
+      "/workspace/.agents/skills/review/SKILL.md",
+    );
+    expect(invokeMock).toHaveBeenLastCalledWith("read_environment_agent_skill", {
+      environmentId: "env-1",
+      provider: "codex",
+      filePath: "/workspace/.agents/skills/review/SKILL.md",
+    });
+  });
+
   test("deletes an agent handoff through its environment-scoped command", async () => {
     invokeMock.mockResolvedValueOnce(true);
 

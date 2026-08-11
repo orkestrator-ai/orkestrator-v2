@@ -124,6 +124,7 @@ import {
   type AgentExtensionId,
   type ExtensionCommandRunner,
 } from "./extension-discovery.js";
+import { ENVIRONMENT_AGENT_SKILLS_SCRIPT } from "./environment-agent-skills.js";
 import {
   assertBase64PayloadWithinLimit,
   base64DecodedByteLength,
@@ -1766,6 +1767,55 @@ function createExtensionCommandRunner(
   return async () => {
     throw new Error("The environment is not available");
   };
+}
+
+const ENVIRONMENT_SKILL_DISCOVERY_TIMEOUT_MS = 20_000;
+
+async function runEnvironmentAgentSkills(
+  environment: Environment,
+  context: CommandContext,
+  provider: AgentSkillProvider,
+  operation: "list" | "read",
+  filePath = "",
+  run: typeof runCommand = runCommand,
+): Promise<unknown> {
+  let stdout: string;
+  if (environment.environmentType === "local" && environment.worktreePath) {
+    ({ stdout } = await run(
+      resolveBunBinary(context),
+      ["-e", ENVIRONMENT_AGENT_SKILLS_SCRIPT, provider, operation, filePath],
+      {
+        cwd: environment.worktreePath,
+        env: envWithManagedBinaries(context),
+        timeoutMs: ENVIRONMENT_SKILL_DISCOVERY_TIMEOUT_MS,
+      },
+    ));
+  } else if (environment.containerId) {
+    ({ stdout } = await run(
+      "docker",
+      [
+        "exec",
+        "-w",
+        "/workspace",
+        environment.containerId,
+        "node",
+        "-e",
+        ENVIRONMENT_AGENT_SKILLS_SCRIPT,
+        provider,
+        operation,
+        filePath,
+      ],
+      { timeoutMs: ENVIRONMENT_SKILL_DISCOVERY_TIMEOUT_MS },
+    ));
+  } else {
+    throw new Error("The environment is not available");
+  }
+
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    throw new Error("The environment returned an invalid skills response");
+  }
 }
 
 function hasPackagedOrPathBinary(context: CommandContext, name: string): Promise<boolean> {
@@ -9828,6 +9878,39 @@ export function createCommandRegistry(
       asString(args.filePath, "filePath"),
     );
   });
+  register("list_environment_agent_skills", async (args, context) => {
+    assertOnlyKeys(
+      args,
+      ["environmentId", "provider"],
+      "list_environment_agent_skills argument",
+    );
+    const environmentId = asString(args.environmentId, "environmentId");
+    const environment = await context.storage.getEnvironment(environmentId);
+    if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+    return runEnvironmentAgentSkills(
+      environment,
+      context,
+      asAgentSkillProvider(args.provider),
+      "list",
+    );
+  });
+  register("read_environment_agent_skill", async (args, context) => {
+    assertOnlyKeys(
+      args,
+      ["environmentId", "provider", "filePath"],
+      "read_environment_agent_skill argument",
+    );
+    const environmentId = asString(args.environmentId, "environmentId");
+    const environment = await context.storage.getEnvironment(environmentId);
+    if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+    return runEnvironmentAgentSkills(
+      environment,
+      context,
+      asAgentSkillProvider(args.provider),
+      "read",
+      asString(args.filePath, "filePath"),
+    );
+  });
 
   register("has_claude_credentials", () => pathExists(homePath(".claude", ".credentials.json")).then(async (exists) => exists || pathExists(homePath(".claude.json"))));
   register("get_credential_status", async (_args, context) => ({
@@ -12457,6 +12540,7 @@ export const __testing = {
   ensureContainerAgentToolsHost,
   agentToolConnectionFingerprint,
   createExtensionCommandRunner,
+  runEnvironmentAgentSkills,
   environmentLifecycleErrorMessage,
   scrubLifecycleLogDetail,
   isEnvironmentDeleting(environmentId: string): boolean {

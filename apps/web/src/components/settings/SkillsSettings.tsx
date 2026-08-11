@@ -32,6 +32,7 @@ const PROVIDERS: Array<{ id: AgentSkillProvider; label: string; icon: React.Reac
 ];
 
 const SCOPE_LABELS: Record<AgentSkillScope, string> = {
+  project: "Project",
   admin: "Managed",
   user: "Personal",
   shared: "Shared",
@@ -112,8 +113,31 @@ interface ProviderState {
   revision?: number;
 }
 
-export function SkillsSettings() {
-  const [provider, setProvider] = useState<AgentSkillProvider>("claude");
+interface SkillsSettingsProps {
+  /** Controlled by the parent when its agent tabs are the primary navigation. */
+  provider?: AgentSkillProvider;
+  showProviderTabs?: boolean;
+  description?: React.ReactNode;
+  listSkills?: (provider: AgentSkillProvider) => Promise<AgentSkillScan>;
+  readSkill?: (
+    provider: AgentSkillProvider,
+    filePath: string,
+  ) => Promise<backend.AgentSkillFile>;
+  canRevealInFileManager?: boolean;
+  embedded?: boolean;
+}
+
+export function SkillsSettings({
+  provider: controlledProvider,
+  showProviderTabs = true,
+  description,
+  listSkills = backend.listAgentSkills,
+  readSkill = backend.readAgentSkill,
+  canRevealInFileManager = true,
+  embedded = false,
+}: SkillsSettingsProps = {}) {
+  const [internalProvider, setInternalProvider] = useState<AgentSkillProvider>("claude");
+  const provider = controlledProvider ?? internalProvider;
   const [states, setStates] = useState<Record<string, ProviderState>>({});
   const [selectedByProvider, setSelectedByProvider] = useState<Record<string, string>>({});
   const [query, setQuery] = useState("");
@@ -146,7 +170,7 @@ export function SkillsSettings() {
 
     setStates((prev) => ({ ...prev, [target]: { ...prev[target], loading: true, error: undefined } }));
     try {
-      const scan = await backend.listAgentSkills(target);
+      const scan = await listSkills(target);
       if (scanTokens.current[target] !== token) return;
       setStates((prev) => ({
         ...prev,
@@ -167,7 +191,7 @@ export function SkillsSettings() {
         },
       }));
     }
-  }, []);
+  }, [listSkills]);
 
   useEffect(() => {
     void loadProvider(provider);
@@ -217,7 +241,7 @@ export function SkillsSettings() {
     setFileLoading(true);
     setFileError(null);
 
-    backend.readAgentSkill(provider, selected.filePath)
+    readSkill(provider, selected.filePath)
       .then((result) => {
         if (fileToken.current !== token) return;
         setFile(result);
@@ -229,7 +253,7 @@ export function SkillsSettings() {
         setFileError(err instanceof Error ? err.message : String(err));
         setFileLoading(false);
       });
-  }, [provider, selected?.filePath, state.revision, fileRetry]);
+  }, [provider, selected?.filePath, state.revision, fileRetry, readSkill]);
 
   /**
    * The confirmation is pane-scoped, so a timer armed for one skill would leave
@@ -269,26 +293,40 @@ export function SkillsSettings() {
   const presentRoots = (state.scan?.roots.length ?? 0) - missingRoots;
 
   return (
-    <div className={cn("flex min-h-[28rem] flex-col gap-4", PANE_HEIGHT_CLASSES)}>
+    <div
+      className={cn(
+        "flex min-h-[28rem] flex-col gap-4",
+        embedded ? "h-[calc(100dvh-17rem)]" : PANE_HEIGHT_CLASSES,
+      )}
+    >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-medium text-foreground">Skills</h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            Every skill each agent can load from its user-level skill directories, including shared
-            locations such as <code className="text-[11px]">~/.agents/skills</code>. Project skills
-            are not listed here.
+            {description ?? (
+              <>
+                Every skill each agent can load from its user-level skill directories, including shared
+                locations such as <code className="text-[11px]">~/.agents/skills</code>. Project skills
+                are not listed here.
+              </>
+            )}
           </p>
         </div>
-        <Tabs value={provider} onValueChange={(value) => setProvider(value as AgentSkillProvider)}>
-          <TabsList className="h-8 bg-zinc-900/80">
-            {PROVIDERS.map((entry) => (
-              <TabsTrigger key={entry.id} value={entry.id} className={TAB_TRIGGER_CLASSES}>
-                {entry.icon}
-                {entry.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
+        {showProviderTabs && (
+          <Tabs
+            value={provider}
+            onValueChange={(value) => setInternalProvider(value as AgentSkillProvider)}
+          >
+            <TabsList className="h-8 bg-zinc-900/80">
+              {PROVIDERS.map((entry) => (
+                <TabsTrigger key={entry.id} value={entry.id} className={TAB_TRIGGER_CLASSES}>
+                  {entry.icon}
+                  {entry.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+        )}
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 rounded-md border border-zinc-800 md:flex-row">
@@ -459,16 +497,18 @@ export function SkillsSettings() {
                   >
                     {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                    onClick={() => void revealSkill()}
-                    aria-label="Reveal skill in file manager"
-                    title="Reveal in file manager"
-                  >
-                    <FolderOpen className="h-3.5 w-3.5" />
-                  </Button>
+                  {canRevealInFileManager && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                      onClick={() => void revealSkill()}
+                      aria-label="Reveal skill in file manager"
+                      title="Reveal in file manager"
+                    >
+                      <FolderOpen className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
                 </div>
               </div>
 

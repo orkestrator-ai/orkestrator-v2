@@ -1212,6 +1212,69 @@ describe("agent skill commands", () => {
       context,
     )).rejects.toThrow(/ENOENT/);
   });
+
+  test("lists and reads project skills inside a local environment", async () => {
+    const worktree = await fs.realpath(
+      await createTempDir("ork-environment-agent-skills-"),
+    );
+    await fs.mkdir(path.join(worktree, ".git"));
+    const skillDirectory = path.join(worktree, ".agents", "skills", "review");
+    const skillPath = path.join(skillDirectory, "SKILL.md");
+    await fs.mkdir(skillDirectory, { recursive: true });
+    await fs.writeFile(
+      skillPath,
+      "---\nname: review\ndescription: Environment review\n---\n# Review\n",
+    );
+    const environment = createEnvironment({
+      id: "env-skills",
+      environmentType: "local",
+      worktreePath: worktree,
+      containerId: null,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    const scan = await commands.get("list_environment_agent_skills")?.(
+      { environmentId: environment.id, provider: "codex" },
+      context,
+    ) as { skills: Array<{ name: string; filePath: string; scope: string }> };
+    expect(scan.skills).toContainEqual(expect.objectContaining({
+      name: "review",
+      filePath: skillPath,
+      scope: "project",
+    }));
+
+    await expect(commands.get("read_environment_agent_skill")?.(
+      { environmentId: environment.id, provider: "codex", filePath: skillPath },
+      context,
+    )).resolves.toMatchObject({
+      path: skillPath,
+      content: expect.stringContaining("# Review"),
+    });
+  });
+
+  test("validates environment skill command arguments", async () => {
+    const environment = createEnvironment({ id: "env-skills" });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("list_environment_agent_skills")?.(
+      { environmentId: environment.id, provider: "other" },
+      context,
+    )).rejects.toThrow("Expected provider to be claude, codex or opencode");
+    await expect(commands.get("list_environment_agent_skills")?.(
+      { environmentId: environment.id, provider: "claude", unexpected: true },
+      context,
+    )).rejects.toThrow("Unexpected list_environment_agent_skills argument field");
+    await expect(commands.get("read_environment_agent_skill")?.(
+      { environmentId: environment.id, provider: "claude" },
+      context,
+    )).rejects.toThrow("Expected filePath to be a string");
+    await expect(commands.get("list_environment_agent_skills")?.(
+      { environmentId: "missing", provider: "claude" },
+      context,
+    )).rejects.toThrow("Environment not found: missing");
+  });
 });
 
 // These helpers are the failure reporting path for most of the async tests in
@@ -16942,6 +17005,40 @@ describe("agent extension discovery commands", () => {
       "list",
       "--json",
     ]);
+    expect(calls[0]!.options).toMatchObject({ timeoutMs: 20_000 });
+  });
+
+  test("runs environment skill discovery inside the selected container", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      worktreePath: undefined,
+    });
+    const { context } = createContext(environment);
+    const response = { provider: "codex", roots: [], skills: [], errors: [] };
+    const { run, calls } = recordingRun(JSON.stringify(response));
+
+    await expect(commandTesting.runEnvironmentAgentSkills(
+      environment,
+      context,
+      "codex",
+      "list",
+      "",
+      run,
+    )).resolves.toEqual(response);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.command).toBe("docker");
+    expect(calls[0]!.args.slice(0, 6)).toEqual([
+      "exec",
+      "-w",
+      "/workspace",
+      "container-1",
+      "node",
+      "-e",
+    ]);
+    expect(calls[0]!.args.slice(-3)).toEqual(["codex", "list", ""]);
     expect(calls[0]!.options).toMatchObject({ timeoutMs: 20_000 });
   });
 

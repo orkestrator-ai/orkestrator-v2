@@ -28,9 +28,9 @@ export function isAgentSkillProvider(value: unknown): value is AgentSkillProvide
  * Claude's documented enterprise > personal > plugin ordering and Codex's
  * admin > user > system layering.
  */
-export type AgentSkillScope = "admin" | "user" | "shared" | "system" | "plugin";
+export type AgentSkillScope = "project" | "admin" | "user" | "shared" | "system" | "plugin";
 
-const SCOPE_ORDER: readonly AgentSkillScope[] = ["admin", "user", "shared", "system", "plugin"];
+const SCOPE_ORDER: readonly AgentSkillScope[] = ["project", "admin", "user", "shared", "system", "plugin"];
 
 export interface AgentSkillRoot {
   /** Absolute path of the directory holding `<name>/SKILL.md`. */

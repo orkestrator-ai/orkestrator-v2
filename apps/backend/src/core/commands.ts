@@ -1770,6 +1770,65 @@ function createExtensionCommandRunner(
 }
 
 const ENVIRONMENT_SKILL_DISCOVERY_TIMEOUT_MS = 20_000;
+const MAX_ENVIRONMENT_SKILLS = 2_000;
+const MAX_ENVIRONMENT_SKILL_PATH_CHARS = 4_096;
+const MAX_ENVIRONMENT_SKILL_METADATA_CHARS = 512;
+
+type OpenCodeEnvironmentSkill = {
+  name: string;
+  description?: string;
+  location: string;
+};
+
+function parseOpenCodeEnvironmentSkills(output: string): OpenCodeEnvironmentSkill[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch {
+    throw new Error("OpenCode returned an invalid skills catalogue");
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error("OpenCode returned an invalid skills catalogue");
+  }
+  if (parsed.length > MAX_ENVIRONMENT_SKILLS) {
+    throw new Error(`OpenCode returned more than ${MAX_ENVIRONMENT_SKILLS} skills`);
+  }
+
+  const result: OpenCodeEnvironmentSkill[] = [];
+  for (const value of parsed) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("OpenCode returned an invalid skill entry");
+    }
+    const record = value as Record<string, unknown>;
+    // OpenCode's bundled configuration skill has no file on disk. The file
+    // browser cannot read or reveal it, so this surface lists filesystem-backed
+    // skills only.
+    if (record.location === "<built-in>") continue;
+    if (
+      typeof record.name !== "string"
+      || typeof record.location !== "string"
+      || (record.description !== undefined && typeof record.description !== "string")
+      || record.name.trim().length === 0
+      || !path.isAbsolute(record.location)
+      || path.basename(path.normalize(record.location)) !== "SKILL.md"
+      || record.location.length > MAX_ENVIRONMENT_SKILL_PATH_CHARS
+    ) {
+      throw new Error("OpenCode returned an invalid skill entry");
+    }
+    result.push({
+      name: Array.from(record.name.trim()).slice(0, MAX_ENVIRONMENT_SKILL_METADATA_CHARS).join(""),
+      ...(typeof record.description === "string"
+        ? {
+            description: Array.from(record.description)
+              .slice(0, MAX_ENVIRONMENT_SKILL_METADATA_CHARS)
+              .join(""),
+          }
+        : {}),
+      location: path.normalize(record.location),
+    });
+  }
+  return result;
+}
 
 async function runEnvironmentAgentSkills(
   environment: Environment,
@@ -1779,6 +1838,14 @@ async function runEnvironmentAgentSkills(
   filePath = "",
   run: typeof runCommand = runCommand,
 ): Promise<unknown> {
+  const scannerInput = provider === "opencode"
+    ? JSON.stringify(parseOpenCodeEnvironmentSkills(
+        await createExtensionCommandRunner(environment, context, run)(
+          "opencode",
+          ["debug", "skill"],
+        ),
+      ))
+    : undefined;
   let stdout: string;
   if (environment.environmentType === "local" && environment.worktreePath) {
     ({ stdout } = await run(
@@ -1787,6 +1854,7 @@ async function runEnvironmentAgentSkills(
       {
         cwd: environment.worktreePath,
         env: envWithManagedBinaries(context),
+        ...(scannerInput === undefined ? {} : { stdin: scannerInput }),
         timeoutMs: ENVIRONMENT_SKILL_DISCOVERY_TIMEOUT_MS,
       },
     ));
@@ -1795,6 +1863,7 @@ async function runEnvironmentAgentSkills(
       "docker",
       [
         "exec",
+        ...(scannerInput === undefined ? [] : ["-i"]),
         "-w",
         "/workspace",
         environment.containerId,
@@ -1805,7 +1874,10 @@ async function runEnvironmentAgentSkills(
         operation,
         filePath,
       ],
-      { timeoutMs: ENVIRONMENT_SKILL_DISCOVERY_TIMEOUT_MS },
+      {
+        ...(scannerInput === undefined ? {} : { stdin: scannerInput }),
+        timeoutMs: ENVIRONMENT_SKILL_DISCOVERY_TIMEOUT_MS,
+      },
     ));
   } else {
     throw new Error("The environment is not available");
@@ -12540,6 +12612,7 @@ export const __testing = {
   ensureContainerAgentToolsHost,
   agentToolConnectionFingerprint,
   createExtensionCommandRunner,
+  parseOpenCodeEnvironmentSkills,
   runEnvironmentAgentSkills,
   environmentLifecycleErrorMessage,
   scrubLifecycleLogDetail,

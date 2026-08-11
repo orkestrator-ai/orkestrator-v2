@@ -13,24 +13,44 @@ afterEach(async () => {
   );
 });
 
-function runScanner(cwd: string, provider: string, operation: string, filePath = "") {
+function runScanner(
+  cwd: string,
+  provider: string,
+  operation: string,
+  filePath = "",
+  options: { env?: Record<string, string | undefined>; stdin?: string } = {},
+) {
   return Bun.spawnSync({
     cmd: [process.execPath, "-e", ENVIRONMENT_AGENT_SKILLS_SCRIPT, provider, operation, filePath],
     cwd,
-    env: process.env,
+    env: {
+      ...process.env,
+      HOME: path.join(cwd, ".test-home"),
+      CODEX_HOME: path.join(cwd, ".test-codex"),
+      XDG_CONFIG_HOME: path.join(cwd, ".test-config"),
+      ...options.env,
+    },
+    stdin: options.stdin === undefined ? undefined : Buffer.from(options.stdin),
     stdout: "pipe",
     stderr: "pipe",
   });
 }
 
+async function createTemporaryDirectory(prefix: string) {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  tempDirectories.push(temporary);
+  return fs.realpath(temporary);
+}
+
+async function createWorktree() {
+  const worktree = await createTemporaryDirectory("ork-environment-skills-");
+  await fs.mkdir(path.join(worktree, ".git"));
+  return worktree;
+}
+
 describe("environment agent skills scanner", () => {
   test("lists and reads a project skill from inside the environment", async () => {
-    const temporaryWorktree = await fs.mkdtemp(path.join(os.tmpdir(), "ork-environment-skills-"));
-    tempDirectories.push(temporaryWorktree);
-    // macOS exposes /var through /private/var, while a spawned process reports
-    // the real cwd. Build expected paths from the same canonical directory.
-    const worktree = await fs.realpath(temporaryWorktree);
-    await fs.mkdir(path.join(worktree, ".git"));
+    const worktree = await createWorktree();
     const skillDirectory = path.join(worktree, ".codex", "skills", "review");
     const skillPath = path.join(skillDirectory, "SKILL.md");
     await fs.mkdir(skillDirectory, { recursive: true });
@@ -60,9 +80,7 @@ describe("environment agent skills scanner", () => {
   });
 
   test("refuses reads outside the selected agent's skill roots", async () => {
-    const worktree = await fs.mkdtemp(path.join(os.tmpdir(), "ork-environment-skills-"));
-    tempDirectories.push(worktree);
-    await fs.mkdir(path.join(worktree, ".git"));
+    const worktree = await createWorktree();
     const outside = path.join(worktree, "outside", "SKILL.md");
     await fs.mkdir(path.dirname(outside), { recursive: true });
     await fs.writeFile(outside, "# Outside\n");
@@ -71,5 +89,193 @@ describe("environment agent skills scanner", () => {
     expect(read.exitCode).toBe(1);
     expect(read.stderr.toString()).toContain("outside the environment's agent skill directories");
     expect(read.stdout.toString()).toBe("");
+  });
+
+  test("refuses a project SKILL.md symlink that escapes every trusted root", async () => {
+    const worktree = await createWorktree();
+    const outside = await createTemporaryDirectory("ork-environment-secret-");
+    const skillDirectory = path.join(worktree, ".agents", "skills", "leak");
+    const skillPath = path.join(skillDirectory, "SKILL.md");
+    const secretPath = path.join(outside, "secret.txt");
+    await fs.mkdir(skillDirectory, { recursive: true });
+    await fs.writeFile(secretPath, "private material\n");
+    await fs.symlink(secretPath, skillPath);
+
+    const listed = runScanner(worktree, "codex", "list");
+    expect(listed.exitCode).toBe(0);
+    const scan = JSON.parse(listed.stdout.toString()) as {
+      skills: Array<{ filePath: string }>;
+      errors: Array<{ message: string }>;
+    };
+    expect(scan.skills.some((skill) => skill.filePath === skillPath)).toBe(false);
+    expect(scan.errors.some((error) => error.message.includes("outside trusted agent roots")))
+      .toBe(true);
+
+    const read = runScanner(worktree, "codex", "read", skillPath);
+    expect(read.exitCode).toBe(1);
+    expect(read.stderr.toString()).toContain("outside trusted agent roots");
+    expect(read.stdout.toString()).toBe("");
+  });
+
+  test("allows a project skill symlink into another enumerated Codex root", async () => {
+    const worktree = await createWorktree();
+    const codexHome = await createTemporaryDirectory("ork-environment-codex-");
+    const sharedSkill = path.join(codexHome, "skills", "shared", "SKILL.md");
+    await fs.mkdir(path.dirname(sharedSkill), { recursive: true });
+    await fs.writeFile(sharedSkill, "---\nname: shared\n---\n# Shared\n");
+    const projectSkillDirectory = path.join(worktree, ".agents", "skills", "shared");
+    await fs.mkdir(path.dirname(projectSkillDirectory), { recursive: true });
+    await fs.symlink(path.dirname(sharedSkill), projectSkillDirectory, "dir");
+
+    const listed = runScanner(worktree, "codex", "list", "", {
+      env: { CODEX_HOME: codexHome },
+    });
+    expect(listed.exitCode).toBe(0);
+    const scan = JSON.parse(listed.stdout.toString()) as {
+      skills: Array<{ filePath: string }>;
+    };
+    expect(scan.skills.some((skill) => skill.filePath === path.join(projectSkillDirectory, "SKILL.md")))
+      .toBe(true);
+  });
+
+  test("recursively discovers nested Codex skills", async () => {
+    const worktree = await createWorktree();
+    const skillPath = path.join(worktree, ".agents", "skills", "team", "review", "SKILL.md");
+    await fs.mkdir(path.dirname(skillPath), { recursive: true });
+    await fs.writeFile(skillPath, "---\nname: nested-review\n---\n# Nested\n");
+
+    const listed = runScanner(worktree, "codex", "list");
+    expect(listed.exitCode).toBe(0);
+    const scan = JSON.parse(listed.stdout.toString()) as {
+      skills: Array<{ name: string; filePath: string }>;
+    };
+    expect(scan.skills).toContainEqual(expect.objectContaining({
+      name: "nested-review",
+      filePath: skillPath,
+    }));
+  });
+
+  test("uses Claude managed/user/project precedence and namespaces plugin skills", async () => {
+    const worktree = await createWorktree();
+    const home = await createTemporaryDirectory("ork-environment-home-");
+    const plugin = await createTemporaryDirectory("ork-environment-plugin-");
+    const userSkill = path.join(home, ".claude", "skills", "review", "SKILL.md");
+    const projectSkill = path.join(worktree, ".claude", "skills", "review", "SKILL.md");
+    const pluginSkill = path.join(plugin, "skills", "review", "SKILL.md");
+    for (const skillPath of [userSkill, projectSkill, pluginSkill]) {
+      await fs.mkdir(path.dirname(skillPath), { recursive: true });
+      await fs.writeFile(skillPath, "---\nname: review\n---\n# Review\n");
+    }
+    const manifest = path.join(home, ".claude", "plugins", "installed_plugins.json");
+    await fs.mkdir(path.dirname(manifest), { recursive: true });
+    await fs.writeFile(manifest, JSON.stringify({
+      plugins: { "@team/quality@official": [{ installPath: plugin }] },
+    }));
+
+    const listed = runScanner(worktree, "claude", "list", "", { env: { HOME: home } });
+    expect(listed.exitCode).toBe(0);
+    const scan = JSON.parse(listed.stdout.toString()) as {
+      skills: Array<{ name: string; filePath: string; shadowed: boolean }>;
+    };
+    expect(scan.skills).toContainEqual(expect.objectContaining({
+      name: "review",
+      filePath: userSkill,
+      shadowed: false,
+    }));
+    expect(scan.skills).toContainEqual(expect.objectContaining({
+      name: "review",
+      filePath: projectSkill,
+      shadowed: true,
+    }));
+    expect(scan.skills).toContainEqual(expect.objectContaining({
+      name: "@team/quality:review",
+      filePath: pluginSkill,
+      shadowed: false,
+    }));
+  });
+
+  test("parses inline Codex plugin config and prefers the newest stable cache", async () => {
+    const worktree = await createWorktree();
+    const codexHome = await createTemporaryDirectory("ork-environment-codex-");
+    await fs.writeFile(
+      path.join(codexHome, "config.toml"),
+      "[plugins]\n\"review@official\" = { enabled = true }\n",
+    );
+    for (const version of ["unknown", "2.0.0-beta.1", "1.9.0", "2.0.0"]) {
+      const skillPath = path.join(
+        codexHome,
+        "plugins",
+        "cache",
+        "official",
+        "review",
+        version,
+        "skills",
+        "review",
+        "SKILL.md",
+      );
+      await fs.mkdir(path.dirname(skillPath), { recursive: true });
+      await fs.writeFile(skillPath, `---\nname: review-${version}\n---\n# ${version}\n`);
+    }
+
+    const listed = runScanner(worktree, "codex", "list", "", {
+      env: { CODEX_HOME: codexHome },
+    });
+    expect(listed.exitCode).toBe(0);
+    const scan = JSON.parse(listed.stdout.toString()) as {
+      skills: Array<{ name: string; filePath: string }>;
+    };
+    expect(scan.skills).toContainEqual(expect.objectContaining({
+      name: "review-2.0.0",
+      filePath: expect.stringContaining(`${path.sep}2.0.0${path.sep}`),
+    }));
+    expect(scan.skills.some((skill) => skill.name.includes("unknown"))).toBe(false);
+  });
+
+  test("uses OpenCode's resolved catalogue for custom and URL-backed skill locations", async () => {
+    const worktree = await createWorktree();
+    const customRoot = await createTemporaryDirectory("ork-opencode-catalogue-");
+    const skillPath = path.join(customRoot, "remote-review", "SKILL.md");
+    await fs.mkdir(path.dirname(skillPath), { recursive: true });
+    await fs.writeFile(skillPath, "# Resolved remote skill\n");
+    const stdin = JSON.stringify([{
+      name: "remote-review",
+      description: "Resolved by OpenCode",
+      location: skillPath,
+    }]);
+
+    const listed = runScanner(worktree, "opencode", "list", "", { stdin });
+    expect(listed.exitCode).toBe(0);
+    expect(JSON.parse(listed.stdout.toString()).skills).toContainEqual(expect.objectContaining({
+      name: "remote-review",
+      filePath: skillPath,
+    }));
+
+    const read = runScanner(worktree, "opencode", "read", skillPath, { stdin });
+    expect(read.exitCode).toBe(0);
+    expect(JSON.parse(read.stdout.toString()).content).toContain("Resolved remote skill");
+  });
+
+  test("bounds root traversal and skill file reads", async () => {
+    const worktree = await createWorktree();
+    const root = path.join(worktree, ".codex", "skills");
+    await fs.mkdir(root, { recursive: true });
+    await Promise.all(Array.from({ length: 501 }, (_, index) =>
+      fs.writeFile(path.join(root, `entry-${String(index).padStart(3, "0")}`), "")));
+
+    const listed = runScanner(worktree, "codex", "list");
+    expect(listed.exitCode).toBe(0);
+    const scan = JSON.parse(listed.stdout.toString()) as {
+      roots: Array<{ path: string; truncated: boolean }>;
+    };
+    expect(scan.roots.find((entry) => entry.path === root)?.truncated).toBe(true);
+
+    const largeSkill = path.join(root, "large", "SKILL.md");
+    await fs.mkdir(path.dirname(largeSkill), { recursive: true });
+    await fs.writeFile(largeSkill, Buffer.alloc(1024 * 1024 + 64, "x"));
+    const read = runScanner(worktree, "codex", "read", largeSkill);
+    expect(read.exitCode).toBe(0);
+    const file = JSON.parse(read.stdout.toString()) as { content: string; truncated: boolean };
+    expect(Buffer.byteLength(file.content)).toBe(1024 * 1024);
+    expect(file.truncated).toBe(true);
   });
 });

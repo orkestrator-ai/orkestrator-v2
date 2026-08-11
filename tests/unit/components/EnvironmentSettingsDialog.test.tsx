@@ -316,6 +316,14 @@ describe("EnvironmentSettingsDialog", () => {
     expect(new Set(skillCalls.map(([, provider]) => provider))).toEqual(
       new Set(["claude", "codex", "opencode"]),
     );
+    await waitFor(() => {
+      const readCalls = mockReadEnvironmentAgentSkill.mock.calls;
+      expect(readCalls.every(([environmentId]) => environmentId === "env-1")).toBe(true);
+      expect(new Set(readCalls.map(([, provider]) => provider))).toEqual(
+        new Set(["claude", "codex", "opencode"]),
+      );
+    });
+    expect(screen.queryByRole("button", { name: "Reveal skill in file manager" })).toBeNull();
     expect(mockGetEnvironmentExtensions).toHaveBeenCalledWith("env-1", {});
   });
 

@@ -71,7 +71,7 @@ describe("FullscreenSettingsLayout", () => {
     expect(document.body.contains(dialog)).toBe(true);
     expect(dialog.className).toContain("inset-0");
     expect(dialog.className).not.toContain("top-11");
-    expect(dialog.className).toContain("md:top-7");
+    expect(dialog.className).toContain("md:top-[var(--desktop-title-bar-height)]");
   });
 
   test("changes sections through the mobile selector", () => {

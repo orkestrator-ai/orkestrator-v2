@@ -617,6 +617,7 @@ describe("reconciliation", () => {
       result: "terminal",
       turnId: "turn-1",
       status: "completed",
+      precedingItemIds: [],
     });
   });
 
@@ -630,7 +631,7 @@ describe("reconciliation", () => {
               status: "inProgress",
               items: [
                 { type: "userMessage", clientId: "req-original" },
-                { type: "agentMessage", text: "working" },
+                { id: "before-steer", type: "agentMessage", text: "working" },
                 { type: "userMessage", clientId: "req-steer" },
               ],
             },
@@ -643,6 +644,7 @@ describe("reconciliation", () => {
     expect(await h.engine.reconcileRequest("t1", "req-steer")).toEqual({
       result: "attach",
       turnId: "turn-1",
+      precedingItemIds: ["before-steer"],
     });
   });
 

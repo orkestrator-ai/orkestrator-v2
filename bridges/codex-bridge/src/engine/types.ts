@@ -119,6 +119,12 @@ export interface EngineThreadTurn {
   clientId?: string | null;
   /** Every user-message client id in the turn, including steering additions. */
   clientIds?: string[];
+  /**
+   * Minimal wire-order projection retained for exact request reconciliation.
+   * Unlike `items`, this includes user messages, which are transcript
+   * boundaries rather than renderable assistant items.
+   */
+  reconciliationItems?: Array<{ type?: string; id?: string; clientId?: string | null }>;
   startedAt?: string;
   completedAt?: string;
   error?: EngineError;

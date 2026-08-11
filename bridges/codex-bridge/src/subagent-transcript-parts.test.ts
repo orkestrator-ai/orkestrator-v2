@@ -129,6 +129,71 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
     expect(parts[0]?.subagentActions).toEqual([]);
   });
 
+  test("scopes spawn calls to assistant segments while retaining later lifecycle output", async () => {
+    const parentRecords: TranscriptRecord[] = [
+      {
+        timestamp: "2026-08-11T12:00:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          arguments: JSON.stringify({ message: "Before steer" }),
+          call_id: "spawn-before",
+        },
+      },
+      {
+        timestamp: "2026-08-11T12:00:03.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "spawn-before",
+          output: JSON.stringify({ agent_id: "agent-before", nickname: "Before" }),
+        },
+      },
+      {
+        timestamp: "2026-08-11T12:00:04.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          arguments: JSON.stringify({ message: "After steer" }),
+          call_id: "spawn-after",
+        },
+      },
+      {
+        timestamp: "2026-08-11T12:00:05.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "spawn-after",
+          output: JSON.stringify({ agent_id: "agent-after", nickname: "After" }),
+        },
+      },
+    ];
+    const common = {
+      threadId: "thread-1",
+      loadSessionMeta: async (id: string) => id === "thread-1"
+        ? { transcriptPath: "/tmp/parent.jsonl" }
+        : null,
+      loadTranscript: async () => transcript(parentRecords),
+    };
+
+    const before = await deriveTranscriptSubagentPartsForTurn({
+      ...common,
+      currentTurnStartedAt: "2026-08-11T12:00:00.000Z",
+      currentTurnEndedAt: "2026-08-11T12:00:02.000Z",
+    });
+    const after = await deriveTranscriptSubagentPartsForTurn({
+      ...common,
+      currentTurnStartedAt: "2026-08-11T12:00:02.000Z",
+    });
+
+    expect(before.map((part) => [part.subagentId, part.subagentPrompt]))
+      .toEqual([["agent-before", "Before steer"]]);
+    expect(after.map((part) => [part.subagentId, part.subagentPrompt]))
+      .toEqual([["agent-after", "After steer"]]);
+  });
+
   test("loads child transcripts and derives completed subagent activity", async () => {
     const parentRecords: TranscriptRecord[] = [
       {

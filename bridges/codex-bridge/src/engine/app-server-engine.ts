@@ -744,6 +744,11 @@ export class AppServerEngine implements CodexEngine {
     return response.turnId;
   }
 
+  /** Waits for notifications already handed off for one thread to be reduced. */
+  async drainNotifications(threadId: string): Promise<void> {
+    await this.supervisor.notificationQueue.drain(threadId);
+  }
+
   async startReview(
     threadId: string,
     target:
@@ -941,12 +946,24 @@ export class AppServerEngine implements CodexEngine {
           )
           .map((item) => item.clientId)
           .filter((clientId): clientId is string => typeof clientId === "string");
+        const reconciliationItems = items.map((item) => {
+          if (!item || typeof item !== "object") return {};
+          const record = item as Record<string, unknown>;
+          return {
+            ...(typeof record.type === "string" ? { type: record.type } : {}),
+            ...(typeof record.id === "string" ? { id: record.id } : {}),
+            ...(typeof record.clientId === "string" || record.clientId === null
+              ? { clientId: record.clientId }
+              : {}),
+          };
+        });
         return {
           id: String(turn.id ?? ""),
           status: (turn.status as EngineThreadTurn["status"]) ?? "completed",
           items: [],
           clientId: clientIds[0] ?? null,
           clientIds,
+          reconciliationItems,
           startedAt: secondsToIso(turn.startedAt),
           completedAt: secondsToIso(turn.completedAt),
         } satisfies EngineThreadTurn;
@@ -1156,8 +1173,9 @@ export class AppServerEngine implements CodexEngine {
     const turns = (thread?.turns ?? []).map((turn) => ({
       id: turn.id,
       status: turn.status,
-      items: (turn.clientIds ?? (turn.clientId ? [turn.clientId] : []))
-        .map((clientId) => ({ type: "userMessage" as const, clientId })),
+      items: turn.reconciliationItems
+        ?? (turn.clientIds ?? (turn.clientId ? [turn.clientId] : []))
+          .map((clientId) => ({ type: "userMessage" as const, clientId })),
     }));
     return reconcileFromThreadTurns(turns, requestId);
   }

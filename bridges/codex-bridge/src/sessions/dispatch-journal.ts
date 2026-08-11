@@ -601,6 +601,7 @@ export class DispatchJournal {
 /** A `userMessage` item as returned inside `thread/read` turns. */
 interface UserMessageLike {
   type?: string;
+  id?: string;
   clientId?: string | null;
 }
 
@@ -619,6 +620,8 @@ export interface ReconciliationOutcome {
   result: "attach" | "terminal" | "absent";
   turnId?: string;
   status?: DispatchTerminalStatus;
+  /** Renderable item ids which app-server ordered before the matched user message. */
+  precedingItemIds?: string[];
 }
 
 /**
@@ -630,15 +633,23 @@ export function reconcileFromThreadTurns(
   requestId: string,
 ): ReconciliationOutcome {
   for (const turn of turns ?? []) {
-    const matches = (turn.items ?? []).some(
+    const items = turn.items ?? [];
+    const matchIndex = items.findIndex(
       (item) => item?.type === "userMessage" && item.clientId === requestId,
     );
-    if (!matches) continue;
+    if (matchIndex < 0) continue;
+    const precedingItemIds = items
+      .slice(0, matchIndex)
+      .filter((item) => item?.type !== "userMessage" && typeof item?.id === "string")
+      .map((item) => item.id!);
 
-    if (turn.status === "inProgress") return { result: "attach", turnId: turn.id };
+    if (turn.status === "inProgress") {
+      return { result: "attach", turnId: turn.id, precedingItemIds };
+    }
     return {
       result: "terminal",
       turnId: turn.id,
+      precedingItemIds,
       status:
         turn.status === "interrupted"
           ? "interrupted"

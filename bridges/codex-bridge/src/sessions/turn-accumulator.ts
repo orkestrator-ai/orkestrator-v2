@@ -65,6 +65,14 @@ export interface TurnAccumulatorOptions {
   maxCommandOutputChars?: number;
 }
 
+export interface AssistantSegment {
+  assistantMessageId: string;
+  startIndex: number;
+  endIndex?: number;
+  startedAt: string;
+  endedAt?: string;
+}
+
 /** A single runaway command must not be able to exhaust bridge memory. */
 export const DEFAULT_MAX_COMMAND_OUTPUT_CHARS = 256 * 1024;
 
@@ -84,7 +92,7 @@ export class TurnAccumulator {
   readonly threadId: string;
   readonly requestId?: string;
   readonly expectsStructuredOutput: boolean;
-  /** Assistant transcript row receiving the current segment of this turn. */
+  /** Assistant transcript row receiving newly introduced items in this turn. */
   assistantMessageId: string;
   readonly startedAt: string;
 
@@ -111,8 +119,7 @@ export class TurnAccumulator {
    * existed before that message stay in the preceding assistant row; items
    * introduced afterwards render into a new row below it.
    */
-  private assistantSegmentStartIndex = 0;
-  private assistantSegmentEndIndex: number | undefined;
+  private readonly assistantSegments: AssistantSegment[];
 
   private readonly maxCommandOutputChars: number;
 
@@ -124,6 +131,11 @@ export class TurnAccumulator {
     this.engineGeneration = options.engineGeneration;
     this.assistantMessageId = options.assistantMessageId;
     this.startedAt = options.startedAt ?? new Date().toISOString();
+    this.assistantSegments = [{
+      assistantMessageId: options.assistantMessageId,
+      startIndex: 0,
+      startedAt: this.startedAt,
+    }];
     this.maxCommandOutputChars =
       options.maxCommandOutputChars ?? DEFAULT_MAX_COMMAND_OUTPUT_CHARS;
   }
@@ -337,13 +349,43 @@ export class TurnAccumulator {
       .filter((entry): entry is ItemAccumulator => entry !== undefined);
   }
 
-  /** Items belonging to the assistant row currently being published. */
-  orderedForAssistantSegment(): ItemAccumulator[] {
-    const end = this.assistantSegmentEndIndex ?? this.itemOrder.length;
+  assistantSegmentsInOrder(): readonly AssistantSegment[] {
+    return this.assistantSegments;
+  }
+
+  assistantSegment(assistantMessageId: string = this.assistantMessageId): AssistantSegment {
+    return this.assistantSegments.find(
+      (segment) => segment.assistantMessageId === assistantMessageId,
+    ) ?? this.assistantSegments[this.assistantSegments.length - 1]!;
+  }
+
+  /** Items belonging to one assistant transcript row. */
+  orderedForAssistantSegment(
+    assistantMessageId: string = this.assistantMessageId,
+  ): ItemAccumulator[] {
+    const segment = this.assistantSegment(assistantMessageId);
+    const end = segment.endIndex ?? this.itemOrder.length;
     return this.itemOrder
-      .slice(this.assistantSegmentStartIndex, end)
+      .slice(segment.startIndex, end)
       .map((id) => this.items.get(id))
       .filter((entry): entry is ItemAccumulator => entry !== undefined);
+  }
+
+  /**
+   * Maps an authoritative `thread/read` item prefix onto the live accumulator.
+   * User-message items are absent from `itemOrder`, so the boundary is the last
+   * live item which app-server reported before the steering user message.
+   */
+  boundaryAfterItems(precedingItemIds: readonly string[] | undefined): number {
+    if (!precedingItemIds) return this.itemOrder.length;
+    const preceding = new Set(precedingItemIds);
+    // A later steer can never move back into an already-frozen row, even if an
+    // older app-server omits some item ids from its reconciliation projection.
+    let boundary = this.assistantSegment().startIndex;
+    for (let index = 0; index < this.itemOrder.length; index += 1) {
+      if (preceding.has(this.itemOrder[index]!)) boundary = index + 1;
+    }
+    return boundary;
   }
 
   /**
@@ -351,17 +393,28 @@ export class TurnAccumulator {
    * Events may continue arriving while that row is rendered, so the boundary
    * must be captured before awaiting any rendering work.
    */
-  freezeAssistantSegment(): number {
-    const boundary = this.itemOrder.length;
-    this.assistantSegmentEndIndex = boundary;
+  freezeAssistantSegment(
+    boundary: number = this.itemOrder.length,
+    endedAt?: string,
+  ): number {
+    const segment = this.assistantSegment();
+    segment.endIndex = boundary;
+    if (endedAt) segment.endedAt = endedAt;
     return boundary;
   }
 
   /** Starts the post-steer assistant row at a previously captured boundary. */
-  startAssistantSegment(assistantMessageId: string, boundary: number): void {
+  startAssistantSegment(
+    assistantMessageId: string,
+    boundary: number,
+    startedAt: string = new Date().toISOString(),
+  ): void {
     this.assistantMessageId = assistantMessageId;
-    this.assistantSegmentStartIndex = boundary;
-    this.assistantSegmentEndIndex = undefined;
+    this.assistantSegments.push({
+      assistantMessageId,
+      startIndex: boundary,
+      startedAt,
+    });
   }
 
   /**

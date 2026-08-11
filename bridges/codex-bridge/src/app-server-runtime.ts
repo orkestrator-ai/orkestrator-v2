@@ -163,8 +163,16 @@ interface OrderedRuntimeEvent {
   coalesceKey?: "status";
 }
 
+interface HistoricalAssistantSegmentState {
+  render: TurnRenderState;
+  publishedParts: NormalizedPart[];
+  publishedModelId?: string;
+}
+
 interface ThreadRuntimeState {
   render: TurnRenderState;
+  /** Render/publish baselines for earlier assistant rows in the active turn. */
+  historicalAssistantSegments: Map<string, HistoricalAssistantSegmentState>;
   coalescer: UpdateCoalescer;
   /** Bounded estimate for adapting the cadence of whole-message snapshots. */
   lastPublishedSnapshotChars: number;
@@ -596,6 +604,7 @@ export class AppServerRuntime {
       turnId: string;
       inputDigest: string;
       state: "accepted" | "unknown";
+      requestedAt: string;
     }
   >();
   private accountRateLimits: EngineRateLimitWindow[] = [];
@@ -1233,6 +1242,7 @@ export class AppServerRuntime {
     state.orderedEventBytes = 0;
     state.orderedReconcilePending = false;
     releaseTurnRenderState(state.render);
+    state.historicalAssistantSegments.clear();
     state.pendingEvents.clear();
     this.threadState.delete(threadId);
   }
@@ -1380,6 +1390,7 @@ export class AppServerRuntime {
     if (!state) {
       state = {
         render: createTurnRenderState(),
+        historicalAssistantSegments: new Map(),
         pendingEvents: new Map(),
         publishedParts: [],
         orderedEventTail: Promise.resolve(),
@@ -1404,6 +1415,18 @@ export class AppServerRuntime {
       this.threadState.set(threadId, state);
     }
     return state;
+  }
+
+  private beginAssistantTurnRender(
+    state: ThreadRuntimeState,
+    assistantMessage: NormalizedMessage,
+  ): void {
+    state.historicalAssistantSegments.clear();
+    state.render = beginTurnRenderState(state.render);
+    state.assistantMessageId = assistantMessage.id;
+    state.publishedMessageId = assistantMessage.id;
+    state.publishedParts = [];
+    state.publishedModelId = assistantMessage.modelId;
   }
 
   private onEngineEvent(event: EngineEvent): void {
@@ -1702,31 +1725,34 @@ export class AppServerRuntime {
         void this.persistSession(session);
       }
     }
-    let target: NormalizedMessage | undefined;
+    let targets: NormalizedMessage[] = [];
 
     if (turnId) {
-      target = context.messages.find(
+      targets = context.messages.filter(
         (message) => message.role === "assistant" && message.turnId === turnId,
       );
-      if (!target && context.activeTurn?.turnId === turnId) {
-        target = context.messages.find(
+      if (targets.length === 0 && context.activeTurn?.turnId === turnId) {
+        const active = context.messages.find(
           (message) => message.id === context.activeTurn?.assistantMessageId,
         );
+        if (active) targets = [active];
       }
     } else if (context.activeTurn) {
-      target = context.messages.find(
+      const active = context.messages.find(
         (message) => message.id === context.activeTurn?.assistantMessageId,
       );
+      if (active) targets = [active];
     } else if (context.dispatchInFlight) {
       for (let index = context.messages.length - 1; index >= 0; index -= 1) {
         const message = context.messages[index];
         if (message?.role === "assistant") {
-          target = message;
+          targets = [message];
           break;
         }
       }
     }
 
+    const target = targets[0];
     const targetTurnId =
       target?.turnId
       ?? (
@@ -1737,21 +1763,31 @@ export class AppServerRuntime {
     if (!turnId && targetTurnId && context.confirmedModelsByTurn.has(targetTurnId)) {
       return;
     }
-    if (!target || target.modelId === model) return;
-    target.modelId = model;
-    target.revision = (target.revision ?? 0) + 1;
+    const changed = targets.filter((message) => message.modelId !== model);
+    if (changed.length === 0) return;
     const state = this.threadState.get(context.threadId);
-    if (state?.publishedMessageId === target.id) {
-      state.publishedModelId = model;
-      state.publishedParts = target.parts.slice();
+    for (const message of changed) {
+      message.modelId = model;
+      message.revision = (message.revision ?? 0) + 1;
+      if (state?.publishedMessageId === message.id) {
+        state.publishedModelId = model;
+        state.publishedParts = message.parts.slice();
+      }
+      const historical = state?.historicalAssistantSegments.get(message.id);
+      if (historical) {
+        historical.publishedModelId = model;
+        historical.publishedParts = message.parts.slice();
+      }
     }
     this.bumpMessageRevision(context);
-    for (const sessionId of context.bridgeSessionIds) {
-      this.options.emit({
-        type: "message.updated",
-        sessionId,
-        data: { message: target },
-      });
+    for (const message of changed) {
+      for (const sessionId of context.bridgeSessionIds) {
+        this.options.emit({
+          type: "message.updated",
+          sessionId,
+          data: { message },
+        });
+      }
     }
   }
 
@@ -2228,63 +2264,80 @@ export class AppServerRuntime {
     const turn = context.activeTurn;
     if (!turn) return;
 
-    const message = context.messages.find((entry) => entry.id === turn.assistantMessageId);
-    if (!message) return;
+    let snapshotChars = 0;
+    for (const segment of turn.assistantSegmentsInOrder()) {
+      const message = context.messages.find(
+        (entry) => entry.id === segment.assistantMessageId,
+      );
+      if (!message) continue;
+      const isCurrent = segment.assistantMessageId === turn.assistantMessageId;
+      const historical = isCurrent
+        ? undefined
+        : state.historicalAssistantSegments.get(segment.assistantMessageId);
+      if (!isCurrent && !historical) continue;
+      const renderState = isCurrent ? state.render : historical!.render;
+      const publishedParts = isCurrent ? state.publishedParts : historical!.publishedParts;
+      const publishedModelId = isCurrent
+        ? state.publishedModelId
+        : historical!.publishedModelId;
 
-    const rendered = await renderTurn(turn, {
-      threadId: context.threadId,
-      cwd: context.cwd ?? this.options.cwd,
-      state: state.render,
-      subagentProbeIntervalMs: SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS,
-    });
-    message.parts = rendered.parts;
-    message.content = rendered.content;
-    state.lastPublishedSnapshotChars = normalizedMessageSnapshotChars(message);
+      const rendered = await renderTurn(turn, {
+        threadId: context.threadId,
+        cwd: context.cwd ?? this.options.cwd,
+        state: renderState,
+        segment,
+        subagentProbeIntervalMs: SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS,
+      });
+      message.parts = rendered.parts;
+      message.content = rendered.content;
+      snapshotChars += normalizedMessageSnapshotChars(message);
 
-    if (
-      state.publishedMessageId !== message.id
-      || state.publishedModelId !== message.modelId
-    ) {
-      state.publishedMessageId = message.id;
-      state.publishedParts = message.parts.slice();
-      state.publishedModelId = message.modelId;
+      if (publishedModelId !== message.modelId) {
+        if (isCurrent) {
+          state.publishedMessageId = message.id;
+          state.publishedParts = message.parts.slice();
+          state.publishedModelId = message.modelId;
+        } else {
+          historical!.publishedParts = message.parts.slice();
+          historical!.publishedModelId = message.modelId;
+        }
+        message.revision = (message.revision ?? 0) + 1;
+        this.bumpMessageRevision(context);
+        for (const sessionId of context.bridgeSessionIds) {
+          this.options.emit({ type: "message.updated", sessionId, data: { message } });
+        }
+        continue;
+      }
+
+      const changedParts: { index: number; part: NormalizedPart }[] = [];
+      for (let index = 0; index < message.parts.length; index += 1) {
+        const part = message.parts[index];
+        if (part && !isSamePublishedPart(publishedParts[index], part)) {
+          changedParts.push({ index, part });
+        }
+      }
+      if (changedParts.length === 0 && message.parts.length === publishedParts.length) {
+        continue;
+      }
+
+      if (isCurrent) state.publishedParts = message.parts.slice();
+      else historical!.publishedParts = message.parts.slice();
       message.revision = (message.revision ?? 0) + 1;
       this.bumpMessageRevision(context);
+      const patch = {
+        messageId: message.id,
+        partCount: message.parts.length,
+        changedParts,
+        content: message.content,
+        createdAt: message.createdAt,
+        turnId: message.turnId,
+        revision: message.revision,
+      } satisfies MessagePatchEventData;
       for (const sessionId of context.bridgeSessionIds) {
-        this.options.emit({ type: "message.updated", sessionId, data: { message } });
-      }
-      return;
-    }
-
-    const changedParts: { index: number; part: NormalizedPart }[] = [];
-    for (let index = 0; index < message.parts.length; index += 1) {
-      const part = message.parts[index];
-      if (part && !isSamePublishedPart(state.publishedParts[index], part)) {
-        changedParts.push({ index, part });
+        this.options.emit({ type: "message.patched", sessionId, data: patch });
       }
     }
-    if (
-      changedParts.length === 0
-      && message.parts.length === state.publishedParts.length
-    ) {
-      return;
-    }
-
-    state.publishedParts = message.parts.slice();
-    message.revision = (message.revision ?? 0) + 1;
-    this.bumpMessageRevision(context);
-    const patch = {
-      messageId: message.id,
-      partCount: message.parts.length,
-      changedParts,
-      content: message.content,
-      createdAt: message.createdAt,
-      turnId: message.turnId,
-      revision: message.revision,
-    } satisfies MessagePatchEventData;
-    for (const sessionId of context.bridgeSessionIds) {
-      this.options.emit({ type: "message.patched", sessionId, data: patch });
-    }
+    state.lastPublishedSnapshotChars = snapshotChars;
   }
 
   private emitStatus(context: ThreadContext): void {
@@ -2741,7 +2794,11 @@ export class AppServerRuntime {
           && reconciled.turnId === expectedTurnId
         ) {
           this.rememberSteerRequest(requestId, { ...previous, state: "accepted" });
-          await this.appendAcceptedSteer(context, input, expectedTurnId);
+          await this.options.engine.drainNotifications(session.threadId);
+          await this.appendAcceptedSteer(context, input, expectedTurnId, {
+            requestedAt: previous.requestedAt,
+            precedingItemIds: reconciled.precedingItemIds,
+          });
           return "accepted";
         }
         // A successful authoritative read found no matching client id, proving
@@ -2771,6 +2828,7 @@ export class AppServerRuntime {
           turnId: expectedTurnId,
           inputDigest,
           state: "accepted",
+          requestedAt: new Date(this.now()).toISOString(),
         });
         // A request found after cache loss came from an earlier runtime. Its
         // transcript is already authoritative; appending here would duplicate it.
@@ -2782,10 +2840,12 @@ export class AppServerRuntime {
         turnId: expectedTurnId,
         inputDigest,
         state: "unknown",
+        requestedAt: new Date(this.now()).toISOString(),
       });
       return "unknown";
     }
 
+    const requestedAt = new Date(this.now()).toISOString();
     try {
       await this.options.engine.steerTurn(
         session.threadId,
@@ -2793,13 +2853,31 @@ export class AppServerRuntime {
         [{ type: "text", text: input }],
         requestId,
       );
+      let precedingItemIds: string[] | undefined;
+      try {
+        const reconciled = await this.options.engine.reconcileRequest(
+          session.threadId,
+          requestId,
+        );
+        if (reconciled.turnId === expectedTurnId) {
+          precedingItemIds = reconciled.precedingItemIds;
+        }
+      } catch {
+        // The steer response itself is authoritative. A failed ordering read
+        // falls back to the live boundary rather than changing acceptance.
+      }
+      await this.options.engine.drainNotifications(session.threadId);
       this.rememberSteerRequest(requestId, {
         threadId: session.threadId,
         turnId: expectedTurnId,
         inputDigest,
         state: "accepted",
+        requestedAt,
       });
-      await this.appendAcceptedSteer(context, input, expectedTurnId);
+      await this.appendAcceptedSteer(context, input, expectedTurnId, {
+        requestedAt,
+        precedingItemIds,
+      });
       return "accepted";
     } catch (error) {
       // A structured rejection that explicitly says the expected turn is stale
@@ -2821,6 +2899,7 @@ export class AppServerRuntime {
         turnId: expectedTurnId,
         inputDigest,
         state: "unknown",
+        requestedAt,
       });
       return "unknown";
     }
@@ -2833,6 +2912,7 @@ export class AppServerRuntime {
       turnId: string;
       inputDigest: string;
       state: "accepted" | "unknown";
+      requestedAt: string;
     },
   ): void {
     // Refresh insertion order so the cap retains the most recently used ids.
@@ -2849,6 +2929,7 @@ export class AppServerRuntime {
     context: ThreadContext,
     input: string,
     turnId: string,
+    ordering: { requestedAt: string; precedingItemIds?: readonly string[] },
   ): Promise<void> {
     // app-server persists a successful steer as another user message inside the
     // active turn. Its live userMessage item is intentionally not rendered by
@@ -2858,7 +2939,10 @@ export class AppServerRuntime {
     const turn = context.activeTurn;
     if (!turn || turn.turnId !== turnId) return;
     const state = this.stateFor(context.threadId);
-    const boundary = turn.freezeAssistantSegment();
+    const boundary = turn.freezeAssistantSegment(
+      turn.boundaryAfterItems(ordering.precedingItemIds),
+      ordering.requestedAt,
+    );
 
     // Finish the pre-steer row before announcing the user message. The
     // coalescer serializes this against a render already in flight, while the
@@ -2883,7 +2967,12 @@ export class AppServerRuntime {
       ...(previousAssistant?.planReview ? { planReview: true } : {}),
     };
     context.messages.push(assistantMessage);
-    turn.startAssistantSegment(assistantMessage.id, boundary);
+    state.historicalAssistantSegments.set(turn.assistantMessageId, {
+      render: state.render,
+      publishedParts: state.publishedParts.slice(),
+      ...(state.publishedModelId ? { publishedModelId: state.publishedModelId } : {}),
+    });
+    turn.startAssistantSegment(assistantMessage.id, boundary, ordering.requestedAt);
     state.render = beginTurnRenderState(state.render);
     state.assistantMessageId = assistantMessage.id;
     state.publishedMessageId = assistantMessage.id;
@@ -2996,11 +3085,7 @@ export class AppServerRuntime {
       // `assistantMessageId`, so `publishAssistantMessage` returns early and the
       // turn runs without ever streaming.
       const liveState = this.stateFor(context.threadId);
-      liveState.publishedMessageId = assistantMessage.id;
-      liveState.publishedParts = [];
-      liveState.publishedModelId = assistantMessage.modelId;
-      liveState.render = beginTurnRenderState(liveState.render);
-      liveState.assistantMessageId = assistantMessage.id;
+      this.beginAssistantTurnRender(liveState, assistantMessage);
       this.emitStatus(context);
       this.drainPendingEvents(context, review.turnId);
       return { outcome: "accepted", turnId: review.turnId };
@@ -3863,11 +3948,7 @@ export class AppServerRuntime {
       // reader goes through `stateFor`, and writing the streaming identity to a
       // dead object would leave the turn running but never streaming.
       const liveState = this.stateFor(context.threadId);
-      liveState.publishedMessageId = assistantMessage.id;
-      liveState.publishedParts = [];
-      liveState.publishedModelId = assistantMessage.modelId;
-      liveState.render = beginTurnRenderState(liveState.render);
-      liveState.assistantMessageId = assistantMessage.id;
+      this.beginAssistantTurnRender(liveState, assistantMessage);
 
       // The turn is registered now, so anything that arrived while `turn/start`
       // was still in flight can be applied. A fast turn may already have
@@ -4019,6 +4100,7 @@ export class AppServerRuntime {
       // registry can adopt the recovered backend/rollout timestamp immediately.
       this.registry.setPhase(context, "recovering");
       const state = this.stateFor(context.threadId);
+      state.historicalAssistantSegments.clear();
       state.render = beginTurnRenderState(state.render);
       state.assistantMessageId = assistantMessageId;
     }

@@ -398,6 +398,49 @@ describe("renderTurn", () => {
     });
   });
 
+  test("passes each assistant segment's item and transcript boundaries to rendering", async () => {
+    const accumulator = turn();
+    accumulator.onItemCompleted({ id: "before", type: "agent_message", text: "before" });
+    const boundary = accumulator.freezeAssistantSegment(
+      undefined,
+      "2026-07-25T12:00:01.000Z",
+    );
+    accumulator.startAssistantSegment(
+      "message-2",
+      boundary,
+      "2026-07-25T12:00:01.000Z",
+    );
+    accumulator.onItemCompleted({ id: "after", type: "agent_message", text: "after" });
+    const received: Array<Record<string, unknown>> = [];
+
+    for (const segment of accumulator.assistantSegmentsInOrder()) {
+      await renderTurn(accumulator, {
+        threadId: "thread-1",
+        cwd: "/tmp",
+        state: createTurnRenderState(),
+        segment,
+        loadSubagentParts: async (options) => {
+          received.push(options);
+          return [];
+        },
+      });
+    }
+
+    expect(received).toEqual([
+      {
+        threadId: "thread-1",
+        turnStartedAt: "2026-07-25T12:00:00.000Z",
+        turnEndedAt: "2026-07-25T12:00:01.000Z",
+        items: [{ id: "before", type: "agent_message", text: "before" }],
+      },
+      {
+        threadId: "thread-1",
+        turnStartedAt: "2026-07-25T12:00:01.000Z",
+        items: [{ id: "after", type: "agent_message", text: "after" }],
+      },
+    ]);
+  });
+
   test("maps transcript fields and folds live collaboration state with injected dependencies", async () => {
     const items = [{
       id: "spawn",

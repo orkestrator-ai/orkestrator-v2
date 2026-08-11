@@ -89,6 +89,26 @@ describe("delta accumulation", () => {
     turn.startAssistantSegment("assistant-2", boundary);
     expect(turn.assistantMessageId).toBe("assistant-2");
     expect(turn.orderedForAssistantSegment().map((item) => item.id)).toEqual(["after"]);
+
+    turn.onItemCompleted(agentMessage("before", "completed after steer"));
+    expect(turn.orderedForAssistantSegment("assistant-1").map((item) =>
+      turn.effectiveText(item)
+    )).toEqual(["completed after steer"]);
+  });
+
+  test("an authoritative item prefix places delayed post-steer items below the steer", () => {
+    const turn = accumulator();
+    turn.onItemCompleted(agentMessage("before", "before"));
+    turn.onItemCompleted(agentMessage("after", "after"));
+
+    const boundary = turn.boundaryAfterItems(["before"]);
+    turn.freezeAssistantSegment(boundary, "2026-08-11T12:00:01.000Z");
+    turn.startAssistantSegment("assistant-2", boundary, "2026-08-11T12:00:01.000Z");
+
+    expect(turn.orderedForAssistantSegment("assistant-1").map((item) => item.id))
+      .toEqual(["before"]);
+    expect(turn.orderedForAssistantSegment("assistant-2").map((item) => item.id))
+      .toEqual(["after"]);
   });
 
   test("reasoning deltas accumulate per channel and index", () => {

@@ -1147,6 +1147,24 @@ describe("reconcileFromThreadTurns", () => {
     expect(reconcileFromThreadTurns([runningTurn], "req-1")).toEqual({
       result: "attach",
       turnId: "turn-1",
+      precedingItemIds: [],
+    });
+  });
+
+  test("returns the authoritative item prefix before a steering message", () => {
+    expect(reconcileFromThreadTurns([{
+      id: "turn-1",
+      status: "inProgress",
+      items: [
+        { type: "userMessage", clientId: "req-original" },
+        { id: "before", type: "agentMessage" },
+        { type: "userMessage", clientId: "req-steer" },
+        { id: "after", type: "commandExecution" },
+      ],
+    }], "req-steer")).toEqual({
+      result: "attach",
+      turnId: "turn-1",
+      precedingItemIds: ["before"],
     });
   });
 
@@ -1155,6 +1173,7 @@ describe("reconcileFromThreadTurns", () => {
       result: "terminal",
       turnId: "turn-2",
       status: "completed",
+      precedingItemIds: [],
     });
   });
 

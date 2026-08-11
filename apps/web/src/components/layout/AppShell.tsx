@@ -117,7 +117,7 @@ export function AppShell({ children }: AppShellProps) {
       ) : (
         <>
           <div
-            className="relative flex h-[34px] w-full shrink-0 items-center justify-center bg-black"
+            className="relative flex h-[var(--desktop-title-bar-height)] w-full shrink-0 items-center justify-center bg-black"
             data-backend-drag-region
             onMouseDown={handleTitleBarMouseDown}
             style={{ WebkitAppRegion: "drag" } as React.CSSProperties}

@@ -1221,6 +1221,69 @@ describe("agent skill commands", () => {
       context,
     )).rejects.toThrow(/ENOENT/);
   });
+
+  test("lists and reads project skills inside a local environment", async () => {
+    const worktree = await fs.realpath(
+      await createTempDir("ork-environment-agent-skills-"),
+    );
+    await fs.mkdir(path.join(worktree, ".git"));
+    const skillDirectory = path.join(worktree, ".agents", "skills", "review");
+    const skillPath = path.join(skillDirectory, "SKILL.md");
+    await fs.mkdir(skillDirectory, { recursive: true });
+    await fs.writeFile(
+      skillPath,
+      "---\nname: review\ndescription: Environment review\n---\n# Review\n",
+    );
+    const environment = createEnvironment({
+      id: "env-skills",
+      environmentType: "local",
+      worktreePath: worktree,
+      containerId: null,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    const scan = await commands.get("list_environment_agent_skills")?.(
+      { environmentId: environment.id, provider: "codex" },
+      context,
+    ) as { skills: Array<{ name: string; filePath: string; scope: string }> };
+    expect(scan.skills).toContainEqual(expect.objectContaining({
+      name: "review",
+      filePath: skillPath,
+      scope: "project",
+    }));
+
+    await expect(commands.get("read_environment_agent_skill")?.(
+      { environmentId: environment.id, provider: "codex", filePath: skillPath },
+      context,
+    )).resolves.toMatchObject({
+      path: skillPath,
+      content: expect.stringContaining("# Review"),
+    });
+  });
+
+  test("validates environment skill command arguments", async () => {
+    const environment = createEnvironment({ id: "env-skills" });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("list_environment_agent_skills")?.(
+      { environmentId: environment.id, provider: "other" },
+      context,
+    )).rejects.toThrow("Expected provider to be claude, codex or opencode");
+    await expect(commands.get("list_environment_agent_skills")?.(
+      { environmentId: environment.id, provider: "claude", unexpected: true },
+      context,
+    )).rejects.toThrow("Unexpected list_environment_agent_skills argument field");
+    await expect(commands.get("read_environment_agent_skill")?.(
+      { environmentId: environment.id, provider: "claude" },
+      context,
+    )).rejects.toThrow("Expected filePath to be a string");
+    await expect(commands.get("list_environment_agent_skills")?.(
+      { environmentId: "missing", provider: "claude" },
+      context,
+    )).rejects.toThrow("Environment not found: missing");
+  });
 });
 
 // These helpers are the failure reporting path for most of the async tests in
@@ -16901,15 +16964,19 @@ describe("agent extension discovery commands", () => {
     options: Record<string, unknown> | undefined;
   };
 
-  function recordingRun(stdout = "") {
+  function recordingRun(stdout: string | string[] = "") {
     const calls: RunCall[] = [];
+    let outputIndex = 0;
     const run = (async (
       command: string,
       args: string[] = [],
       options?: Record<string, unknown>,
     ) => {
       calls.push({ command, args, options });
-      return { stdout, stderr: "" };
+      const next = Array.isArray(stdout)
+        ? stdout[Math.min(outputIndex++, stdout.length - 1)] ?? ""
+        : stdout;
+      return { stdout: next, stderr: "" };
     }) as unknown as Parameters<typeof commandTesting.createExtensionCommandRunner>[2];
     return { run, calls };
   }
@@ -16967,6 +17034,282 @@ describe("agent extension discovery commands", () => {
       "--json",
     ]);
     expect(calls[0]!.options).toMatchObject({ timeoutMs: 20_000 });
+  });
+
+  test("runs environment skill discovery inside the selected container", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      worktreePath: undefined,
+    });
+    const { context } = createContext(environment);
+    const response = { provider: "codex", roots: [], skills: [], errors: [] };
+    const { run, calls } = recordingRun(JSON.stringify(response));
+
+    await expect(commandTesting.runEnvironmentAgentSkills(
+      environment,
+      context,
+      "codex",
+      "list",
+      "",
+      run,
+    )).resolves.toEqual(response);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.command).toBe("docker");
+    expect(calls[0]!.args.slice(0, 6)).toEqual([
+      "exec",
+      "-w",
+      "/workspace",
+      "container-1",
+      "node",
+      "-e",
+    ]);
+    expect(calls[0]!.args.slice(-3)).toEqual(["codex", "list", ""]);
+    expect(calls[0]!.options).toMatchObject({ timeoutMs: 20_000 });
+  });
+
+  test("uses OpenCode's resolved catalogue as bounded scanner input", async () => {
+    const environment = createEnvironment({
+      id: "env-local",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      containerId: null,
+    });
+    const { context } = createContext(environment);
+    const catalogue = [{
+      name: "review",
+      description: "Environment review",
+      location: "/tmp/worktree/.opencode/skills/review/SKILL.md",
+      content: "content that must not be copied into scanner input",
+    }];
+    const response = { provider: "opencode", roots: [], skills: [], errors: [] };
+    const { run, calls } = recordingRun([
+      JSON.stringify(catalogue),
+      JSON.stringify(response),
+    ]);
+
+    await expect(commandTesting.runEnvironmentAgentSkills(
+      environment,
+      context,
+      "opencode",
+      "list",
+      "",
+      run,
+    )).resolves.toEqual(response);
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.args).toEqual(["debug", "skill"]);
+    expect(calls[1]!.args.slice(0, 2)).toEqual(["-e", expect.any(String)]);
+    expect(JSON.parse(String(calls[1]!.options?.stdin))).toEqual([{
+      name: "review",
+      description: "Environment review",
+      location: "/tmp/worktree/.opencode/skills/review/SKILL.md",
+    }]);
+    expect(String(calls[1]!.options?.stdin)).not.toContain("must not be copied");
+  });
+
+  test("pipes OpenCode's catalogue into a container scanner", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      worktreePath: undefined,
+    });
+    const { context } = createContext(environment);
+    const response = { provider: "opencode", roots: [], skills: [], errors: [] };
+    const { run, calls } = recordingRun([
+      JSON.stringify([{
+        name: "review",
+        location: "/workspace/.opencode/skills/review/SKILL.md",
+      }]),
+      JSON.stringify(response),
+    ]);
+
+    await commandTesting.runEnvironmentAgentSkills(
+      environment,
+      context,
+      "opencode",
+      "list",
+      "",
+      run,
+    );
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.args).toContain("opencode");
+    expect(calls[1]!.args.slice(0, 3)).toEqual(["exec", "-i", "-w"]);
+    expect(typeof calls[1]!.options?.stdin).toBe("string");
+  });
+
+  test("rejects malformed OpenCode catalogues before starting the scanner", async () => {
+    const environment = createEnvironment({
+      id: "env-local",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      containerId: null,
+    });
+    const { context } = createContext(environment);
+    const { run, calls } = recordingRun("not-json");
+
+    await expect(commandTesting.runEnvironmentAgentSkills(
+      environment,
+      context,
+      "opencode",
+      "list",
+      "",
+      run,
+    )).rejects.toThrow("OpenCode returned an invalid skills catalogue");
+    expect(calls).toHaveLength(1);
+  });
+
+  test("drops OpenCode's built-in skill, which has no file to read or reveal", () => {
+    expect(commandTesting.parseOpenCodeEnvironmentSkills(JSON.stringify([
+      { name: "configuration", location: "<built-in>" },
+      { name: "review", location: "/workspace/.opencode/skills/review/SKILL.md" },
+    ]))).toEqual([{
+      name: "review",
+      location: "/workspace/.opencode/skills/review/SKILL.md",
+    }]);
+  });
+
+  test("rejects a catalogue entry whose location is not an absolute SKILL.md", () => {
+    for (const location of [
+      ".opencode/skills/review/SKILL.md",
+      "/workspace/.opencode/skills/review/notes.md",
+      "/workspace/.opencode/skills/review",
+      `/workspace/${"x".repeat(4_097)}/SKILL.md`,
+    ]) {
+      expect(() => commandTesting.parseOpenCodeEnvironmentSkills(
+        JSON.stringify([{ name: "review", location }]),
+      )).toThrow("OpenCode returned an invalid skill entry");
+    }
+    for (const entry of [
+      { name: "", location: "/workspace/SKILL.md" },
+      { name: 7, location: "/workspace/SKILL.md" },
+      { name: "review", location: "/workspace/SKILL.md", description: 7 },
+      ["review", "/workspace/SKILL.md"],
+      null,
+    ]) {
+      expect(() => commandTesting.parseOpenCodeEnvironmentSkills(JSON.stringify([entry])))
+        .toThrow("OpenCode returned an invalid skill entry");
+    }
+  });
+
+  test("refuses a catalogue larger than the scanner is willing to accept", () => {
+    const entry = { name: "review", location: "/workspace/.opencode/skills/review/SKILL.md" };
+    expect(commandTesting.parseOpenCodeEnvironmentSkills(
+      JSON.stringify(Array.from({ length: 2_000 }, () => entry)),
+    )).toHaveLength(2_000);
+    expect(() => commandTesting.parseOpenCodeEnvironmentSkills(
+      JSON.stringify(Array.from({ length: 2_001 }, () => entry)),
+    )).toThrow("OpenCode returned more than 2000 skills");
+    expect(() => commandTesting.parseOpenCodeEnvironmentSkills(JSON.stringify({ skills: [] })))
+      .toThrow("OpenCode returned an invalid skills catalogue");
+  });
+
+  test("clamps catalogue metadata without splitting a surrogate pair", () => {
+    const [skill] = commandTesting.parseOpenCodeEnvironmentSkills(JSON.stringify([{
+      name: `  review${"n".repeat(600)}  `,
+      description: "🙂".repeat(600),
+      location: "/workspace/.opencode/skills/review/SKILL.md",
+    }]));
+
+    expect(Array.from(skill!.name)).toHaveLength(512);
+    expect(Array.from(skill!.description ?? "")).toHaveLength(512);
+    expect(skill!.description?.endsWith("🙂")).toBe(true);
+  });
+
+  test("reads a skill inside the selected container through the same scanner", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      worktreePath: undefined,
+    });
+    const { context } = createContext(environment);
+    const response = { path: "/workspace/.agents/skills/review/SKILL.md", content: "# Review", truncated: false };
+    const { run, calls } = recordingRun(JSON.stringify(response));
+
+    await expect(commandTesting.runEnvironmentAgentSkills(
+      environment,
+      context,
+      "codex",
+      "read",
+      "/workspace/.agents/skills/review/SKILL.md",
+      run,
+    )).resolves.toEqual(response);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.command).toBe("docker");
+    expect(calls[0]!.args.slice(0, 6)).toEqual([
+      "exec",
+      "-w",
+      "/workspace",
+      "container-1",
+      "node",
+      "-e",
+    ]);
+    // The path is the scanner's third argument; passing it in any other
+    // position would have it read as the operation.
+    expect(calls[0]!.args.slice(-3)).toEqual([
+      "codex",
+      "read",
+      "/workspace/.agents/skills/review/SKILL.md",
+    ]);
+  });
+
+  test("rejects malformed scanner JSON and propagates execution failures", async () => {
+    const environment = createEnvironment({
+      id: "env-local",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      containerId: null,
+    });
+    const { context } = createContext(environment);
+    const malformed = recordingRun("not-json");
+    await expect(commandTesting.runEnvironmentAgentSkills(
+      environment,
+      context,
+      "codex",
+      "list",
+      "",
+      malformed.run,
+    )).rejects.toThrow("invalid skills response");
+
+    const failure = new Error("scanner timed out");
+    const failingRun = mock(async () => Promise.reject(failure)) as unknown as Parameters<
+      typeof commandTesting.runEnvironmentAgentSkills
+    >[5];
+    await expect(commandTesting.runEnvironmentAgentSkills(
+      environment,
+      context,
+      "codex",
+      "list",
+      "",
+      failingRun,
+    )).rejects.toBe(failure);
+  });
+
+  test("refuses environment skill discovery when no runtime is available", async () => {
+    const environment = createEnvironment({
+      id: "env-nowhere",
+      environmentType: "local",
+      worktreePath: undefined,
+      containerId: null,
+    });
+    const { context } = createContext(environment);
+    const { run, calls } = recordingRun();
+
+    await expect(commandTesting.runEnvironmentAgentSkills(
+      environment,
+      context,
+      "codex",
+      "list",
+      "",
+      run,
+    )).rejects.toThrow("The environment is not available");
+    expect(calls).toEqual([]);
   });
 
   test("prefers the container over a stale worktree path when both are set", async () => {

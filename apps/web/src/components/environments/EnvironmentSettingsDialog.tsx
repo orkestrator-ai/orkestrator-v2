@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,
   SelectContent,
@@ -46,6 +47,7 @@ import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIco
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { cn } from "@/lib/utils";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "@/components/settings/FullscreenSettingsLayout";
+import { SkillsSettings } from "@/components/settings/SkillsSettings";
 import * as backend from "@/lib/backend";
 import { useConfigStore } from "@/stores";
 import type {
@@ -201,27 +203,36 @@ function ExtensionCollection({
 
 function AgentExtensionSection({
   catalog,
+  environmentId,
+  canRevealSkills,
 }: {
   catalog: backend.AgentExtensionCatalog;
+  environmentId: string;
+  canRevealSkills: boolean;
 }) {
   const copy = AGENT_EXTENSION_COPY[catalog.agent];
   const extensionCount = catalog.mcpServers.length + catalog.plugins.length;
+  const listSkills = useCallback(
+    (provider: backend.AgentSkillProvider) =>
+      backend.listEnvironmentAgentSkills(environmentId, provider),
+    [environmentId],
+  );
+  const readSkill = useCallback(
+    (provider: backend.AgentSkillProvider, filePath: string) =>
+      backend.readEnvironmentAgentSkill(environmentId, provider, filePath),
+    [environmentId],
+  );
+
   return (
-    <section className="overflow-hidden rounded-xl border border-border/80 bg-card/40">
-      <div className="flex items-center gap-3 border-b border-border/70 bg-muted/20 px-4 py-3">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-border/70 bg-background">
-          <AgentExtensionIcon agent={catalog.agent} className="h-4.5 w-4.5" />
-        </div>
-        <div>
-          <h3 className="text-sm font-semibold">{copy.label}</h3>
-          <p className="text-xs text-muted-foreground">
-            {extensionCount === 0
-              ? "No configured extensions found"
-              : `${extensionCount} configured extension${extensionCount === 1 ? "" : "s"}`}
-          </p>
-        </div>
+    <section className="space-y-5" aria-label={`${copy.label} extensions`}>
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <span>
+          {extensionCount === 0
+            ? "No configured extensions found"
+            : `${extensionCount} configured extension${extensionCount === 1 ? "" : "s"}`}
+        </span>
       </div>
-      <div className="grid grid-cols-1 divide-y divide-border/70 md:grid-cols-2 md:divide-x md:divide-y-0">
+      <div className="grid grid-cols-1 overflow-hidden rounded-xl border border-border/80 bg-card/40 divide-y divide-border/70 md:grid-cols-2 md:divide-x md:divide-y-0">
         <ExtensionCollection
           title="MCP servers"
           emptyLabel="No MCP servers configured"
@@ -239,6 +250,21 @@ function AgentExtensionSection({
           configHint={copy.pluginConfig}
         />
       </div>
+      <SkillsSettings
+        provider={catalog.agent}
+        showProviderTabs={false}
+        embedded
+        reuseLoadedScans
+        canRevealInFileManager={canRevealSkills}
+        listSkills={listSkills}
+        readSkill={readSkill}
+        description={
+          <>
+            Skills available to {copy.label} in this environment, including project,
+            personal, shared, built-in, and plugin locations.
+          </>
+        }
+      />
     </section>
   );
 }
@@ -331,7 +357,16 @@ export function EnvironmentSettingsDialog({
     backend.AgentExtensionCatalog[]
   >(emptyExtensionCatalogs);
   const [isLoadingExtensions, setIsLoadingExtensions] = useState(false);
+  /**
+   * Gates the placeholder on the *first* load rather than on `isLoading`, which
+   * starts false: the panel used to render the agent section for one commit,
+   * swap it for the placeholder, then mount it a second time — remounting the
+   * skills pane and rescanning the environment for nothing.
+   */
+  const [hasLoadedExtensions, setHasLoadedExtensions] = useState(false);
   const [extensionsError, setExtensionsError] = useState<string | null>(null);
+  const [activeExtensionAgent, setActiveExtensionAgent] =
+    useState<backend.AgentExtensionId>("claude");
   // Only the newest extension load may write state; see the close effect below.
   const extensionLoadSeq = useRef(0);
 
@@ -376,6 +411,7 @@ export function EnvironmentSettingsDialog({
       setEnvClaudeNativeBackend(environment.claudeNativeBackend ?? "default");
       setEnvOpencodeMode(environment.opencodeMode ?? "global");
       setEnvCodexMode(environment.codexMode ?? "global");
+      setActiveExtensionAgent("claude");
     }
   }, [open, environment.name, environment.allowedDomains, environment.portMappings, environment.defaultAgent, environment.claudeMode, environment.opencodeMode, environment.codexMode, globalDomains]);
 
@@ -398,6 +434,7 @@ export function EnvironmentSettingsDialog({
       setExtensionCatalogs(emptyExtensionCatalogs());
       setExtensionsError(null);
       setIsLoadingExtensions(false);
+      setHasLoadedExtensions(false);
     }
   }, [open]);
 
@@ -418,7 +455,10 @@ export function EnvironmentSettingsDialog({
         "Extension settings could not be loaded. Check that the environment is available and try again.",
       );
     } finally {
-      if (isCurrent()) setIsLoadingExtensions(false);
+      if (isCurrent()) {
+        setIsLoadingExtensions(false);
+        setHasLoadedExtensions(true);
+      }
     }
   }, [environment.id]);
 
@@ -944,14 +984,17 @@ export function EnvironmentSettingsDialog({
             )}
           </div>
         );
-      case "extensions":
+      case "extensions": {
+        const activeCatalog = extensionCatalogs.find(
+          (catalog) => catalog.agent === activeExtensionAgent,
+        ) ?? extensionCatalogs[0];
         return (
           <div className="max-w-5xl space-y-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-sm font-medium">Agent extensions</p>
                 <p className="text-xs text-muted-foreground">
-                  Effective MCP servers and plugins for this environment.
+                  Effective MCP servers, plugins, and skills for this environment.
                   Refreshing health-checks Claude&apos;s approved MCP servers,
                   which starts each one.
                 </p>
@@ -977,27 +1020,49 @@ export function EnvironmentSettingsDialog({
                 <span>{extensionsError}</span>
               </div>
             )}
-            {isLoadingExtensions &&
-            extensionCatalogs.every(
-              (catalog) =>
-                catalog.mcpServers.length === 0 && catalog.plugins.length === 0,
-            ) ? (
+            <Tabs
+              value={activeExtensionAgent}
+              onValueChange={(value) => setActiveExtensionAgent(value as backend.AgentExtensionId)}
+            >
+              <TabsList
+                aria-label="Agent extensions"
+                className="h-10 w-full justify-start rounded-xl border border-border/70 bg-muted/30 p-1 sm:w-fit"
+              >
+                {AGENT_ORDER.map((agent) => (
+                  <TabsTrigger
+                    key={agent}
+                    value={agent}
+                    className="h-8 min-w-0 flex-1 gap-2 px-4 text-xs data-[state=active]:bg-background data-[state=active]:text-foreground sm:min-w-32"
+                  >
+                    <AgentExtensionIcon agent={agent} className="h-4 w-4" />
+                    {AGENT_EXTENSION_COPY[agent].label}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+            {!hasLoadedExtensions ? (
               <div className="flex items-center gap-2 rounded-xl border border-border/80 px-4 py-8 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Reading Claude, Codex, and OpenCode configuration…
               </div>
             ) : (
-              <div className="space-y-3">
-                {extensionCatalogs.map((catalog) => (
+              <div>
+                {activeCatalog && (
+                  /* Keyed on the environment alone: keying on the agent too
+                     would remount on every tab switch, discarding each
+                     provider's scan and the skill the user had selected. */
                   <AgentExtensionSection
-                    key={catalog.agent}
-                    catalog={catalog}
+                    key={environment.id}
+                    catalog={activeCatalog}
+                    environmentId={environment.id}
+                    canRevealSkills={isLocalEnvironment}
                   />
-                ))}
+                )}
               </div>
             )}
           </div>
         );
+      }
       default:
         return null;
     }

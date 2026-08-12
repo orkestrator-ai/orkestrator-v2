@@ -1104,7 +1104,7 @@ export async function checkOpencodeCli(): Promise<boolean> {
 
 export const AGENT_SKILL_PROVIDERS = ["claude", "codex", "opencode"] as const;
 export type AgentSkillProvider = (typeof AGENT_SKILL_PROVIDERS)[number];
-export type AgentSkillScope = "admin" | "user" | "shared" | "system" | "plugin";
+export type AgentSkillScope = "project" | "admin" | "user" | "shared" | "system" | "plugin";
 
 export interface AgentSkillRoot {
   path: string;
@@ -1159,6 +1159,30 @@ export async function readAgentSkill(
   filePath: string,
 ): Promise<AgentSkillFile> {
   return invoke<AgentSkillFile>("read_agent_skill", { provider, filePath });
+}
+
+/** List the skills the selected agent can load inside one environment. */
+export async function listEnvironmentAgentSkills(
+  environmentId: string,
+  provider: AgentSkillProvider,
+): Promise<AgentSkillScan> {
+  return invoke<AgentSkillScan>("list_environment_agent_skills", {
+    environmentId,
+    provider,
+  });
+}
+
+/** Read a SKILL.md from the selected environment's validated skill roots. */
+export async function readEnvironmentAgentSkill(
+  environmentId: string,
+  provider: AgentSkillProvider,
+  filePath: string,
+): Promise<AgentSkillFile> {
+  return invoke<AgentSkillFile>("read_environment_agent_skill", {
+    environmentId,
+    provider,
+    filePath,
+  });
 }
 
 /** Check if the Codex CLI binary is installed and available */

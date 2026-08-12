@@ -32,6 +32,7 @@ const PROVIDERS: Array<{ id: AgentSkillProvider; label: string; icon: React.Reac
 ];
 
 const SCOPE_LABELS: Record<AgentSkillScope, string> = {
+  project: "Project",
   admin: "Managed",
   user: "Personal",
   shared: "Shared",
@@ -114,8 +115,40 @@ interface ProviderState {
   revision?: number;
 }
 
-export function SkillsSettings() {
-  const [provider, setProvider] = useState<AgentSkillProvider>("claude");
+interface SkillsSettingsProps {
+  /** Controlled by the parent when its agent tabs are the primary navigation. */
+  provider?: AgentSkillProvider;
+  showProviderTabs?: boolean;
+  description?: React.ReactNode;
+  listSkills?: (provider: AgentSkillProvider) => Promise<AgentSkillScan>;
+  readSkill?: (
+    provider: AgentSkillProvider,
+    filePath: string,
+  ) => Promise<backend.AgentSkillFile>;
+  canRevealInFileManager?: boolean;
+  embedded?: boolean;
+  /**
+   * Keeps a provider's completed scan instead of rescanning when the user
+   * returns to its tab. Rescanning is the right default for host directories,
+   * where the scan is a local `readdir` — but an environment scan runs a
+   * process inside a container, so the Rescan button becomes the way to ask
+   * for fresh data.
+   */
+  reuseLoadedScans?: boolean;
+}
+
+export function SkillsSettings({
+  provider: controlledProvider,
+  showProviderTabs = true,
+  description,
+  listSkills = backend.listAgentSkills,
+  readSkill = backend.readAgentSkill,
+  canRevealInFileManager = true,
+  embedded = false,
+  reuseLoadedScans = false,
+}: SkillsSettingsProps = {}) {
+  const [internalProvider, setInternalProvider] = useState<AgentSkillProvider>("claude");
+  const provider = controlledProvider ?? internalProvider;
   const [states, setStates] = useState<Record<string, ProviderState>>({});
   const [selectedByProvider, setSelectedByProvider] = useState<Record<string, string>>({});
   const [query, setQuery] = useState("");
@@ -135,20 +168,26 @@ export function SkillsSettings() {
   const scanTokens = useRef<Record<string, number>>({});
   const fileToken = useRef(0);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Providers whose scan has completed, for `reuseLoadedScans`. */
+  const loadedProviders = useRef<Set<string>>(new Set());
 
   /**
    * Rescans on every tab visit rather than caching: skills are files on disk
    * that change outside this app, and a directory scan is cheap. The previous
    * result stays on screen while the new one loads, so revisiting a tab does
-   * not flash a spinner.
+   * not flash a spinner. `reuseLoadedScans` opts out for callers whose scan is
+   * not cheap; the Rescan button calls this directly either way.
    */
   const loadProvider = useCallback(async (target: AgentSkillProvider) => {
     const token = (scanTokens.current[target] ?? 0) + 1;
     scanTokens.current[target] = token;
+    // Marked before the await, not after it: a scan already in flight is a scan
+    // this provider has, so a remount or a second visit must not start another.
+    loadedProviders.current.add(target);
 
     setStates((prev) => ({ ...prev, [target]: { ...prev[target], loading: true, error: undefined } }));
     try {
-      const scan = await backend.listAgentSkills(target);
+      const scan = await listSkills(target);
       if (scanTokens.current[target] !== token) return;
       setStates((prev) => ({
         ...prev,
@@ -160,6 +199,8 @@ export function SkillsSettings() {
       }));
     } catch (err) {
       if (scanTokens.current[target] !== token) return;
+      // A failed scan is not a result to reuse; the next visit tries again.
+      loadedProviders.current.delete(target);
       setStates((prev) => ({
         ...prev,
         [target]: {
@@ -169,11 +210,21 @@ export function SkillsSettings() {
         },
       }));
     }
-  }, []);
+  }, [listSkills]);
+
+  /**
+   * A new loader means a different source (another environment), so nothing
+   * scanned under the previous one may be reused. Declared before the load
+   * effect so the reset lands first when both fire on the same commit.
+   */
+  useEffect(() => {
+    loadedProviders.current.clear();
+  }, [listSkills]);
 
   useEffect(() => {
+    if (reuseLoadedScans && loadedProviders.current.has(provider)) return;
     void loadProvider(provider);
-  }, [provider, loadProvider]);
+  }, [provider, loadProvider, reuseLoadedScans]);
 
   /**
    * The input stays controlled, but the list only refilters once typing pauses:
@@ -219,7 +270,7 @@ export function SkillsSettings() {
     setFileLoading(true);
     setFileError(null);
 
-    backend.readAgentSkill(provider, selected.filePath)
+    readSkill(provider, selected.filePath)
       .then((result) => {
         if (fileToken.current !== token) return;
         setFile(result);
@@ -231,7 +282,7 @@ export function SkillsSettings() {
         setFileError(err instanceof Error ? err.message : String(err));
         setFileLoading(false);
       });
-  }, [provider, selected?.filePath, state.revision, fileRetry]);
+  }, [provider, selected?.filePath, state.revision, fileRetry, readSkill]);
 
   /**
    * The confirmation is pane-scoped, so a timer armed for one skill would leave
@@ -271,26 +322,40 @@ export function SkillsSettings() {
   const presentRoots = (state.scan?.roots.length ?? 0) - missingRoots;
 
   return (
-    <div className={cn("flex min-h-[28rem] flex-col gap-4", PANE_HEIGHT_CLASSES)}>
+    <div
+      className={cn(
+        "flex min-h-[28rem] flex-col gap-4",
+        embedded ? "h-[calc(100dvh-17rem)]" : PANE_HEIGHT_CLASSES,
+      )}
+    >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-medium text-foreground">Skills</h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            Every skill each agent can load from its user-level skill directories, including shared
-            locations such as <code className="text-[11px]">~/.agents/skills</code>. Project skills
-            are not listed here.
+            {description ?? (
+              <>
+                Every skill each agent can load from its user-level skill directories, including shared
+                locations such as <code className="text-[11px]">~/.agents/skills</code>. Project skills
+                are not listed here.
+              </>
+            )}
           </p>
         </div>
-        <Tabs value={provider} onValueChange={(value) => setProvider(value as AgentSkillProvider)}>
-          <TabsList className="h-8 bg-zinc-900/80">
-            {PROVIDERS.map((entry) => (
-              <TabsTrigger key={entry.id} value={entry.id} className={TAB_TRIGGER_CLASSES}>
-                {entry.icon}
-                {entry.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
+        {showProviderTabs && (
+          <Tabs
+            value={provider}
+            onValueChange={(value) => setInternalProvider(value as AgentSkillProvider)}
+          >
+            <TabsList className="h-8 bg-zinc-900/80">
+              {PROVIDERS.map((entry) => (
+                <TabsTrigger key={entry.id} value={entry.id} className={TAB_TRIGGER_CLASSES}>
+                  {entry.icon}
+                  {entry.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+        )}
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 rounded-md border border-zinc-800 md:flex-row">
@@ -461,16 +526,18 @@ export function SkillsSettings() {
                   >
                     {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                    onClick={() => void revealSkill()}
-                    aria-label="Reveal skill in file manager"
-                    title="Reveal in file manager"
-                  >
-                    <FolderOpen className="h-3.5 w-3.5" />
-                  </Button>
+                  {canRevealInFileManager && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                      onClick={() => void revealSkill()}
+                      aria-label="Reveal skill in file manager"
+                      title="Reveal in file manager"
+                    >
+                      <FolderOpen className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
                 </div>
               </div>
 

@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
+import type { AgentSkill, AgentSkillProvider, AgentSkillScan } from "@/lib/backend";
 
 /**
  * `@/lib/native/backend` is mocked globally in tests/setup.ts with an invoke
@@ -164,6 +165,57 @@ function footerText() {
 }
 
 describe("SkillsSettings", () => {
+  test("uses controlled environment callbacks and hides host-only controls", async () => {
+    const listSkills = mock(async (provider: AgentSkillProvider): Promise<AgentSkillScan> => ({
+      provider,
+      roots: [{
+        path: "/workspace/.agents/skills",
+        label: "./.agents/skills",
+        scope: "project" as const,
+        exists: true,
+        skillCount: 1,
+        truncated: false,
+      }],
+      skills: [skill({
+        name: "environment-review",
+        filePath: "/workspace/.agents/skills/review/SKILL.md",
+        location: "./.agents/skills/review",
+        scope: "project",
+      }) as AgentSkill],
+      errors: [],
+    }));
+    const readSkill = mock(async (
+      provider: AgentSkillProvider,
+      filePath: string,
+    ) => ({
+      path: filePath,
+      content: `Loaded ${provider} environment skill`,
+      truncated: false,
+    }));
+
+    render(
+      <SkillsSettings
+        provider="codex"
+        showProviderTabs={false}
+        canRevealInFileManager={false}
+        embedded
+        listSkills={listSkills}
+        readSkill={readSkill}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText("Loaded codex environment skill")).toBeTruthy());
+    expect(listSkills).toHaveBeenCalledWith("codex");
+    expect(readSkill).toHaveBeenCalledWith(
+      "codex",
+      "/workspace/.agents/skills/review/SKILL.md",
+    );
+    expect(screen.queryByRole("tab", { name: "Claude" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Codex" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "OpenCode" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reveal skill in file manager" })).toBeNull();
+  });
+
   test("lists the agent's skills with name and location, and renders the first one", async () => {
     skillScans.claude = {
       provider: "claude",

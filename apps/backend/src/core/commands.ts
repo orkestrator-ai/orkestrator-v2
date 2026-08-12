@@ -124,6 +124,7 @@ import {
   type AgentExtensionId,
   type ExtensionCommandRunner,
 } from "./extension-discovery.js";
+import { ENVIRONMENT_AGENT_SKILLS_SCRIPT } from "./environment-agent-skills.js";
 import {
   assertBase64PayloadWithinLimit,
   base64DecodedByteLength,
@@ -1766,6 +1767,127 @@ function createExtensionCommandRunner(
   return async () => {
     throw new Error("The environment is not available");
   };
+}
+
+const ENVIRONMENT_SKILL_DISCOVERY_TIMEOUT_MS = 20_000;
+const MAX_ENVIRONMENT_SKILLS = 2_000;
+const MAX_ENVIRONMENT_SKILL_PATH_CHARS = 4_096;
+const MAX_ENVIRONMENT_SKILL_METADATA_CHARS = 512;
+
+type OpenCodeEnvironmentSkill = {
+  name: string;
+  description?: string;
+  location: string;
+};
+
+function parseOpenCodeEnvironmentSkills(output: string): OpenCodeEnvironmentSkill[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch {
+    throw new Error("OpenCode returned an invalid skills catalogue");
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error("OpenCode returned an invalid skills catalogue");
+  }
+  if (parsed.length > MAX_ENVIRONMENT_SKILLS) {
+    throw new Error(`OpenCode returned more than ${MAX_ENVIRONMENT_SKILLS} skills`);
+  }
+
+  const result: OpenCodeEnvironmentSkill[] = [];
+  for (const value of parsed) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("OpenCode returned an invalid skill entry");
+    }
+    const record = value as Record<string, unknown>;
+    // OpenCode's bundled configuration skill has no file on disk. The file
+    // browser cannot read or reveal it, so this surface lists filesystem-backed
+    // skills only.
+    if (record.location === "<built-in>") continue;
+    if (
+      typeof record.name !== "string"
+      || typeof record.location !== "string"
+      || (record.description !== undefined && typeof record.description !== "string")
+      || record.name.trim().length === 0
+      || !path.isAbsolute(record.location)
+      || path.basename(path.normalize(record.location)) !== "SKILL.md"
+      || record.location.length > MAX_ENVIRONMENT_SKILL_PATH_CHARS
+    ) {
+      throw new Error("OpenCode returned an invalid skill entry");
+    }
+    result.push({
+      name: Array.from(record.name.trim()).slice(0, MAX_ENVIRONMENT_SKILL_METADATA_CHARS).join(""),
+      ...(typeof record.description === "string"
+        ? {
+            description: Array.from(record.description)
+              .slice(0, MAX_ENVIRONMENT_SKILL_METADATA_CHARS)
+              .join(""),
+          }
+        : {}),
+      location: path.normalize(record.location),
+    });
+  }
+  return result;
+}
+
+async function runEnvironmentAgentSkills(
+  environment: Environment,
+  context: CommandContext,
+  provider: AgentSkillProvider,
+  operation: "list" | "read",
+  filePath = "",
+  run: typeof runCommand = runCommand,
+): Promise<unknown> {
+  const scannerInput = provider === "opencode"
+    ? JSON.stringify(parseOpenCodeEnvironmentSkills(
+        await createExtensionCommandRunner(environment, context, run)(
+          "opencode",
+          ["debug", "skill"],
+        ),
+      ))
+    : undefined;
+  let stdout: string;
+  if (environment.environmentType === "local" && environment.worktreePath) {
+    ({ stdout } = await run(
+      resolveBunBinary(context),
+      ["-e", ENVIRONMENT_AGENT_SKILLS_SCRIPT, provider, operation, filePath],
+      {
+        cwd: environment.worktreePath,
+        env: envWithManagedBinaries(context),
+        ...(scannerInput === undefined ? {} : { stdin: scannerInput }),
+        timeoutMs: ENVIRONMENT_SKILL_DISCOVERY_TIMEOUT_MS,
+      },
+    ));
+  } else if (environment.containerId) {
+    ({ stdout } = await run(
+      "docker",
+      [
+        "exec",
+        ...(scannerInput === undefined ? [] : ["-i"]),
+        "-w",
+        "/workspace",
+        environment.containerId,
+        "node",
+        "-e",
+        ENVIRONMENT_AGENT_SKILLS_SCRIPT,
+        provider,
+        operation,
+        filePath,
+      ],
+      {
+        ...(scannerInput === undefined ? {} : { stdin: scannerInput }),
+        timeoutMs: ENVIRONMENT_SKILL_DISCOVERY_TIMEOUT_MS,
+      },
+    ));
+  } else {
+    throw new Error("The environment is not available");
+  }
+
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    throw new Error("The environment returned an invalid skills response");
+  }
 }
 
 function hasPackagedOrPathBinary(context: CommandContext, name: string): Promise<boolean> {
@@ -9832,6 +9954,39 @@ export function createCommandRegistry(
       asString(args.filePath, "filePath"),
     );
   });
+  register("list_environment_agent_skills", async (args, context) => {
+    assertOnlyKeys(
+      args,
+      ["environmentId", "provider"],
+      "list_environment_agent_skills argument",
+    );
+    const environmentId = asString(args.environmentId, "environmentId");
+    const environment = await context.storage.getEnvironment(environmentId);
+    if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+    return runEnvironmentAgentSkills(
+      environment,
+      context,
+      asAgentSkillProvider(args.provider),
+      "list",
+    );
+  });
+  register("read_environment_agent_skill", async (args, context) => {
+    assertOnlyKeys(
+      args,
+      ["environmentId", "provider", "filePath"],
+      "read_environment_agent_skill argument",
+    );
+    const environmentId = asString(args.environmentId, "environmentId");
+    const environment = await context.storage.getEnvironment(environmentId);
+    if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+    return runEnvironmentAgentSkills(
+      environment,
+      context,
+      asAgentSkillProvider(args.provider),
+      "read",
+      asString(args.filePath, "filePath"),
+    );
+  });
 
   register("has_claude_credentials", () => pathExists(homePath(".claude", ".credentials.json")).then(async (exists) => exists || pathExists(homePath(".claude.json"))));
   register("get_credential_status", async (_args, context) => ({
@@ -12461,6 +12616,8 @@ export const __testing = {
   ensureContainerAgentToolsHost,
   agentToolConnectionFingerprint,
   createExtensionCommandRunner,
+  parseOpenCodeEnvironmentSkills,
+  runEnvironmentAgentSkills,
   environmentLifecycleErrorMessage,
   scrubLifecycleLogDetail,
   isEnvironmentDeleting(environmentId: string): boolean {

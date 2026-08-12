@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { useConfigStore } from "@/stores/configStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
-import type { AgentExtensionCatalog } from "@/lib/backend";
+import type { AgentExtensionCatalog, AgentSkillProvider } from "@/lib/backend";
 import type { Environment } from "@/types";
 import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
 
@@ -15,6 +15,12 @@ function deferred<T>() {
     reject = rejectFn;
   });
   return { promise, resolve, reject };
+}
+
+function clickAgentTab(name: string) {
+  const tab = screen.getByRole("tab", { name });
+  fireEvent.mouseDown(tab);
+  fireEvent.focus(tab);
 }
 
 function defaultExtensionCatalogs(): AgentExtensionCatalog[] {
@@ -64,6 +70,36 @@ const mockGetEnvironmentExtensions = mock(
   (environmentId: string, options?: { refresh?: boolean }) =>
     extensionHandler(environmentId, options),
 );
+const mockListEnvironmentAgentSkills = mock(
+  async (environmentId: string, provider: AgentSkillProvider) => ({
+    provider,
+    roots: [{
+      path: `/workspace/.${provider}/skills`,
+      label: `./.${provider}/skills`,
+      scope: "project" as const,
+      exists: true,
+      skillCount: 1,
+    }],
+    skills: [`${provider}-skill`, `${provider}-second`].map((name) => ({
+      id: `/workspace/.${provider}/skills/${name}/SKILL.md`,
+      name,
+      description: `${provider} environment skill`,
+      filePath: `/workspace/.${provider}/skills/${name}/SKILL.md`,
+      location: `./.${provider}/skills/${name}`,
+      scope: "project" as const,
+      shadowed: false,
+    })),
+    errors: [],
+    environmentId,
+  }),
+);
+const mockReadEnvironmentAgentSkill = mock(
+  async (_environmentId: string, provider: AgentSkillProvider, filePath: string) => ({
+    path: filePath,
+    content: `---\nname: ${provider}-skill\n---\n\n# ${provider} skill`,
+    truncated: false,
+  }),
+);
 const mockUpdatePortMappings = mock(async () => makeEnvironment());
 const mockSyncEnvironmentStatus = mock(async () => makeEnvironment());
 const actualBackend = await import("../../../apps/web/src/lib/backend");
@@ -71,6 +107,8 @@ const actualBackend = await import("../../../apps/web/src/lib/backend");
 mock.module("@/lib/backend", () => ({
   ...actualBackend,
   getEnvironmentExtensions: mockGetEnvironmentExtensions,
+  listEnvironmentAgentSkills: mockListEnvironmentAgentSkills,
+  readEnvironmentAgentSkill: mockReadEnvironmentAgentSkill,
   updateEnvironmentAgentSettings: mockUpdateEnvironmentAgentSettings,
   renameEnvironment: mock(async (_id: string, name: string) => ({ ...makeEnvironment(), name })),
   updateEnvironmentAllowedDomains: mock(async () => makeEnvironment()),
@@ -133,6 +171,8 @@ describe("EnvironmentSettingsDialog", () => {
     mockSection = "agent";
     mockUpdateEnvironmentAgentSettings.mockClear();
     mockGetEnvironmentExtensions.mockClear();
+    mockListEnvironmentAgentSkills.mockClear();
+    mockReadEnvironmentAgentSkill.mockClear();
     mockUpdatePortMappings.mockClear();
     mockSyncEnvironmentStatus.mockClear();
     extensionHandler = async () => defaultExtensionCatalogs();
@@ -244,7 +284,7 @@ describe("EnvironmentSettingsDialog", () => {
     ).toEqual(["Claude Mode", "Codex Mode", "OpenCode Mode"]);
   });
 
-  test("shows MCP servers and plugins for all three agents", async () => {
+  test("uses top agent tabs and shows MCP servers, plugins, and skills for each agent", async () => {
     mockSection = "extensions";
 
     render(
@@ -260,19 +300,90 @@ describe("EnvironmentSettingsDialog", () => {
       expect(screen.getByText("claude-docs")).toBeTruthy();
     });
 
-    for (const label of ["Claude", "Codex", "OpenCode"]) {
-      expect(screen.getByRole("heading", { name: label })).toBeTruthy();
-    }
-    for (const extension of [
-      "claude-review",
-      "codex-github",
-      "codex-browser",
-      "opencode-linear",
-      "@team/opencode-review",
-    ]) {
-      expect(screen.getByText(extension)).toBeTruthy();
-    }
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.map((tab) => tab.textContent?.trim())).toEqual(["Claude", "Codex", "OpenCode"]);
+    expect(screen.getByText("claude-review")).toBeTruthy();
+    await waitFor(() => expect(screen.getAllByText("claude-skill").length).toBeGreaterThan(0));
+    expect(screen.getByText("Project")).toBeTruthy();
+
+    clickAgentTab("Codex");
+    await waitFor(() => expect(screen.getByText("codex-github")).toBeTruthy());
+    expect(screen.getByText("codex-browser")).toBeTruthy();
+    await waitFor(() => expect(screen.getAllByText("codex-skill").length).toBeGreaterThan(0));
+
+    clickAgentTab("OpenCode");
+    await waitFor(() => expect(screen.getByText("opencode-linear")).toBeTruthy());
+    expect(screen.getByText("@team/opencode-review")).toBeTruthy();
+    await waitFor(() => expect(screen.getAllByText("opencode-skill").length).toBeGreaterThan(0));
+
+    const skillCalls = mockListEnvironmentAgentSkills.mock.calls.map((call) => call.slice(0, 2));
+    expect(skillCalls.every(([environmentId]) => environmentId === "env-1")).toBe(true);
+    expect(new Set(skillCalls.map(([, provider]) => provider))).toEqual(
+      new Set(["claude", "codex", "opencode"]),
+    );
+    await waitFor(() => {
+      const readCalls = mockReadEnvironmentAgentSkill.mock.calls;
+      expect(readCalls.every(([environmentId]) => environmentId === "env-1")).toBe(true);
+      expect(new Set(readCalls.map(([, provider]) => provider))).toEqual(
+        new Set(["claude", "codex", "opencode"]),
+      );
+    });
+    expect(screen.queryByRole("button", { name: "Reveal skill in file manager" })).toBeNull();
     expect(mockGetEnvironmentExtensions).toHaveBeenCalledWith("env-1", {});
+  });
+
+  test("keeps each agent's scanned skills and selection when the tab is revisited", async () => {
+    mockSection = "extensions";
+
+    render(
+      <EnvironmentSettingsDialog
+        open={true}
+        onOpenChange={() => {}}
+        environment={makeEnvironment()}
+        onUpdate={() => {}}
+      />
+    );
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /claude-second/ })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /claude-second/ }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /claude-second/ }).getAttribute("aria-current"))
+        .toBe("true"));
+
+    clickAgentTab("Codex");
+    await waitFor(() => expect(screen.getByRole("button", { name: /codex-skill/ })).toBeTruthy());
+    clickAgentTab("Claude");
+
+    // Scanning a skill tree inside an environment runs a process in the
+    // container, so returning to a tab must reuse what it already has rather
+    // than re-running the scan and dropping the user back to the first skill.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /claude-second/ }).getAttribute("aria-current"))
+        .toBe("true"));
+    expect(mockListEnvironmentAgentSkills.mock.calls.map(([, provider]) => provider))
+      .toEqual(["claude", "codex"]);
+  });
+
+  test("rescans an agent's skills on demand", async () => {
+    mockSection = "extensions";
+
+    render(
+      <EnvironmentSettingsDialog
+        open={true}
+        onOpenChange={() => {}}
+        environment={makeEnvironment()}
+        onUpdate={() => {}}
+      />
+    );
+
+    await waitFor(() => expect(screen.getAllByText("claude-skill").length).toBeGreaterThan(0));
+    fireEvent.click(screen.getByRole("button", { name: "Rescan skill directories" }));
+
+    // Reusing a completed scan is what makes the Rescan button the only way to
+    // pick up a skill written since the pane opened.
+    await waitFor(() =>
+      expect(mockListEnvironmentAgentSkills.mock.calls.map(([, provider]) => provider))
+        .toEqual(["claude", "claude"]));
   });
 
   test("labels each item with its source, falling back to its status", async () => {
@@ -328,9 +439,12 @@ describe("EnvironmentSettingsDialog", () => {
 
     await waitFor(() => expect(screen.getByText("only-one")).toBeTruthy());
     expect(screen.getByText("1 configured extension")).toBeTruthy();
-    expect(screen.getAllByText("No configured extensions found")).toHaveLength(2);
-    expect(screen.getAllByText("No MCP servers configured")).toHaveLength(2);
-    expect(screen.getAllByText("No plugins configured")).toHaveLength(3);
+    expect(screen.getByText("No plugins configured")).toBeTruthy();
+
+    clickAgentTab("Codex");
+    await waitFor(() => expect(screen.getByText("No configured extensions found")).toBeTruthy());
+    expect(screen.getByText("No MCP servers configured")).toBeTruthy();
+    expect(screen.getByText("No plugins configured")).toBeTruthy();
   });
 
   test("shows an error banner and no stale data when the load fails", async () => {
@@ -354,8 +468,9 @@ describe("EnvironmentSettingsDialog", () => {
         expect(screen.getByText(/Extension settings could not be loaded/)).toBeTruthy();
       });
       expect(screen.queryByText("claude-docs")).toBeNull();
-      // The agent sections still render so the panel does not collapse.
-      expect(screen.getByRole("heading", { name: "Claude" })).toBeTruthy();
+      // The agent navigation and empty selected section remain available.
+      expect(screen.getByRole("tab", { name: "Claude" })).toBeTruthy();
+      expect(screen.getByRole("region", { name: "Claude extensions" })).toBeTruthy();
     } finally {
       consoleError.mockRestore();
     }
@@ -437,10 +552,12 @@ describe("EnvironmentSettingsDialog", () => {
 
     await waitFor(() => expect(screen.getByText("claude-docs")).toBeTruthy());
     for (const label of ["Claude", "Codex", "OpenCode"]) {
-      expect(screen.getByRole("heading", { name: label })).toBeTruthy();
+      expect(screen.getByRole("tab", { name: label })).toBeTruthy();
     }
+    clickAgentTab("Codex");
     expect(screen.getByText("Could not read Codex MCP servers.")).toBeTruthy();
     expect(screen.getByText("Could not read Codex plugins.")).toBeTruthy();
+    clickAgentTab("OpenCode");
     expect(screen.getByText("Could not read OpenCode MCP servers.")).toBeTruthy();
     expect(screen.getByText("Could not read OpenCode plugins.")).toBeTruthy();
   });

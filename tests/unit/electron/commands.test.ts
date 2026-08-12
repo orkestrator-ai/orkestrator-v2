@@ -1734,7 +1734,13 @@ exit 1
 `, async (logPath) => {
       await commands.get("start_environment")?.({ environmentId: environment.id }, context);
       await commands.get("pr_monitor_refresh")?.({ environmentId: environment.id }, context);
-      await waitForCondition(() => existsSync(logPath), "resumed PR monitor check");
+      await waitForCondition(
+        () => existsSync(logPath)
+          && readFileSync(logPath, "utf8").includes(
+            "pr view https://github.com/acme/repo/pull/42 --json url,state,mergeable",
+          ),
+        "resumed PR monitor check",
+      );
 
       expect(await fs.readFile(logPath, "utf8")).toContain(
         "pr view https://github.com/acme/repo/pull/42 --json url,state,mergeable",
@@ -6704,19 +6710,32 @@ exit 1
 
         expect(immediate.some((change) => change.path === "tracked.txt")).toBe(false);
 
-        await fs.writeFile(path.join(worktree, "tracked.txt"), "base\nchanged again\n");
+        const trackedPath = path.join(worktree, "tracked.txt");
         emitted.splice(0);
-        await commands.get("refresh_environment_diff_stats")?.(
-          { environmentId: environment.id },
-          context,
-        );
-        await waitForCondition(
-          () => emitted.some((entry) =>
+        const deadline = Date.now() + ASYNC_TEST_WAIT_TIMEOUT_MS;
+        let writeAttempt = 0;
+        while (
+          !emitted.some((entry) =>
             entry.event === "environment-diff-stats-changed"
             && (entry.payload as { stats?: { additions?: number } }).stats?.additions === 1
-          ),
-          "changed file to be cached again",
-        );
+          )
+          && Date.now() < deadline
+        ) {
+          // A real fs watcher is allowed to coalesce or lose an individual
+          // notification. Distinct writes keep exercising the production
+          // invalidation path without assuming one OS event is a barrier.
+          writeAttempt += 1;
+          await fs.writeFile(trackedPath, `base\nchanged again ${writeAttempt}\n`);
+          await commands.get("refresh_environment_diff_stats")?.(
+            { environmentId: environment.id },
+            context,
+          );
+          await Bun.sleep(25);
+        }
+        expect(emitted.some((entry) =>
+          entry.event === "environment-diff-stats-changed"
+          && (entry.payload as { stats?: { additions?: number } }).stats?.additions === 1
+        )).toBe(true);
 
         await commands.get("delete_local_file")?.(
           { environmentId: environment.id, filePath: "tracked.txt" },

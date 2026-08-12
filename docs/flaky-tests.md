@@ -25,14 +25,16 @@ history rather than two partial ones.
 
 ## `standalone backend service > can own a Tailscale Serve listener and publish its HTTPS URL` (`apps/backend/tests/standalone.test.ts`)
 
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-07
 - **Original command:** `bun run test` (workspace backend group: `bun test src tests --parallel=2`)
 - **Worker configuration:** Two Bun workers in the backend package while the web, web-public, protocol, root, and bridge groups ran concurrently
 - **Failure:** The test exceeded Bun's 5,000 ms timeout (reported duration 5,000.60 ms); Bun also reported an unhandled `Backend exited during startup:` error with empty stderr from `startBackend` and killed three dangling processes
 - **Suite counts:** Backend package: 1,519 tests, 1,518 passed, 1 failed, plus 1 between-test error
 - **Isolated rerun:** `bun test ./tests/standalone.test.ts` from `apps/backend` -> 8 passed, 0 failed; the target passed in 2,159.94 ms
-- **Hypothesis:** The timeout is load-sensitive: the owning file completed in 10.02 seconds and the affected startup/listener test completed well below its five-second budget in isolation, while the failure occurred with every aggregate group active. The empty startup stderr and dangling-process cleanup do not identify which child exited or why, so no narrower cause is claimed yet.
+- **Root cause:** The test performs two complete standalone-backend startups and two graceful shutdowns but inherited Bun's five-second test budget. Each lifecycle is healthy but takes roughly two to three seconds, so aggregate contention could exhaust the outer budget even though `startBackend` deliberately allows ten seconds for either individual startup.
+- **Fix:** Give this two-lifecycle integration test a 20-second budget. The startup helper's own ten-second deadline and every functional assertion remain unchanged, so a hung child still fails with the narrower diagnostic.
+- **Verification:** After building the standalone backend, `bun test tests/standalone.test.ts --test-name-pattern 'can own a Tailscale Serve listener' --rerun-each 10` from `apps/backend` -> 10 passed, 0 failed; individual runs completed in 2,037.57-2,896.36 ms.
 
 ## `NativeAgentService > rotates fairly beyond the global live-session adoption cap` (`apps/backend/src/core/native-agent-service.test.ts`)
 
@@ -137,7 +139,7 @@ history rather than two partial ones.
 
 ## OpenCode component timeout cascade (`apps/web/src/components/opencode/OpenCodeChatTab.test.tsx`)
 
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-06
 - **Tests:** 88 tests failed in one cascading run; the first was `unlocks sending when idle arrives before abort completion`, followed by broad one-second `waitFor` timeouts and empty-DOM query failures across model, SSE, session-action, slash-command, and refresh tests
 - **Original command:** `bun test src/components/opencode/OpenCodeChatTab.test.tsx --parallel`, launched alongside the Claude, Codex, and Terminal component test commands
@@ -145,41 +147,49 @@ history rather than two partial ones.
 - **Failure:** The first test timed out after 5000ms (duration: 10298.84ms); most subsequent failures clustered around 1001-1004ms or queried an empty DOM after initialization did not complete
 - **Suite counts:** 175 total, 87 passed, 88 failed
 - **Isolated rerun:** `bun test src/components/opencode/OpenCodeChatTab.test.tsx --parallel` -> 175 passed, 0 failed in 9.29s
-- **Hypothesis:** This is a load-triggered timeout cascade rather than 88 independent regressions. The failing run took 97.22s and stalled many asynchronous UI assertions at their one-second boundary, while the same file passed completely in 9.29s without the three competing component processes.
+- **Root cause:** The first timed-out test synchronized five already-controlled operations through wall-clock `waitFor` polling: subscription setup, abort dispatch, queued SSE delivery, abort completion, and the following send. Under the deliberately oversubscribed run those waits consumed the outer five-second budget. Its still-pending abort and event stream then delayed cleanup and contaminated the remaining long-running file, producing the 88-test cascade rather than 88 independent defects.
+- **Fix:** Flush the bounded React/microtask work at each controlled boundary and assert synchronously afterward. The test still proves that an idle event unlocks send before the abort promise resolves, preserves the stopped-turn marker, and allows the next prompt; it no longer waits for elapsed polling intervals.
+- **Verification:** Before the fix, the exact test passed under concurrent load but took 1,502.30-2,685.93 ms across 20 repetitions. After the fix, `bun test src/components/opencode/OpenCodeChatTab.test.tsx --test-name-pattern 'unlocks sending when idle arrives before abort completion' --rerun-each 30` -> 30 passed, 0 failed in 808 ms total; individual runs completed in 13.81-42.95 ms.
 
 ## `Electron backend command registry > backend-owned diff statistics > invalidates the shared file-list cache after local revert and delete` (`tests/unit/electron/commands.test.ts:6345`)
 
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-06
 - **Original command:** `bun run test` (root group: `bun test tests --parallel=4`)
 - **Suite counts:** 3,685 passed, 1 skipped, 10 failed; nine failures were deterministic UI regressions from the reviewed change and this was the only unrelated failure
 - **Failure:** `Timed out waiting for changed file to be cached again`; failed duration 3,397.10 ms
 - **Isolated rerun:** `bun test tests/unit/electron/commands.test.ts` -> 362 passed, 1 skipped, 0 failed; the target passed in 195.34 ms
-- **Hypothesis:** The aggregate failure exhausted the cache-repopulation deadline while the same behavior completed quickly in isolation. This is consistent with aggregate scheduling or filesystem-watcher latency, but no narrower root cause has been reproduced.
+- **Root cause:** After rewriting the file, the test immediately requested one refresh and then only waited for its event. That refresh could run before the real filesystem watcher invalidated the shared cache; once it reused the stale empty list, nothing requested another scan and the test could only time out. A single filesystem notification is not a synchronization barrier and may also be coalesced or dropped.
+- **Fix:** Keep issuing bounded refreshes while making distinct writes until the production watcher invalidates the cache and the expected one-addition event arrives. The final revert/delete assertions remain unchanged, and a broken invalidation path still fails at the three-second deadline.
+- **Verification:** `bun test tests/unit/electron/commands.test.ts --test-name-pattern 'starting a stopped environment resumes backend PR polling|invalidates the shared file-list cache after local revert and delete' --rerun-each 20` -> 40 passed, 0 failed; the cache test completed in 215-238 ms in the retained output.
 
 ## `remote gateway > delivers backend events to authenticated event streams` (`tests/unit/electron/gateway.test.ts`)
 
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-07
 - **Original command:** `bun run test` (root group: `bun test tests --parallel=4`); reproduced while isolating that group with `bun test tests --parallel=4`
 - **Worker configuration:** Four Bun workers in the root group; the original run also executed workspace, bridge, protocol-lockfile, and iOS groups, and the confirming root-group run overlapped independent bridge and protocol/iOS isolation commands
 - **Failure:** The test exceeded Bun's 5,000 ms timeout (duration: 5,000.73 ms)
 - **Suite counts:** Root group: 3,749 total, 3,747 passed, 1 skipped, 1 failed across 142 files with 16,070 assertions
 - **Isolated rerun:** `bun test tests/unit/electron/gateway.test.ts` -> 174 passed, 0 failed; the target passed in 18.30 ms and the file completed in 6.27 seconds
-- **Hypothesis:** The event-stream assertion is load-sensitive under concurrent suite execution. The same test completed in tens of milliseconds when its owning file ran alone, but no narrower scheduler, socket, or event-ordering trigger has been reproduced, so no product or test fix is claimed yet.
+- **Root cause:** The test emitted its only backend event from an arbitrary ten-millisecond timer started immediately after the HTTP request. Under load, that timer could fire before the server had registered the authenticated event-stream client; events are live incremental updates, so the pre-subscription event was correctly not delivered and the promise waited until Bun's outer timeout.
+- **Fix:** Wait until the response has received both the connected frame and a keepalive, then emit exactly once through the live stream. This proves registration and still verifies connected, keepalive, and backend-event delivery without treating elapsed time as readiness.
+- **Verification:** The old form passed 30 isolated repetitions but retained the structural pre-subscription race. The fixed test passed 50/50 with `bun test tests/unit/electron/gateway.test.ts --test-name-pattern 'delivers backend events to authenticated event streams' --rerun-each 50`; individual runs completed in 9.07-25.18 ms.
 
 ## `Electron backend command registry > starting a stopped environment resumes backend PR polling` (`tests/unit/electron/commands.test.ts`)
 
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-06
 - **Original command:** `bun run test` (root group: `bun test tests --parallel=4`)
 - **Failure:** `expect(received).toContain(expected)` on the resumed polling assertion; failed duration 472.36 ms
 - **Isolated rerun:** `bun test tests/unit/electron/commands.test.ts` -> 362 passed, 0 failed, twice consecutively; the target also passed when run alone with `-t`
-- **Hypothesis:** A repeat aggregate run did not reproduce this failure and instead failed the agent-completion PR-monitor test below. Both wait for a background poll announcement within the test window, which is consistent with aggregate scheduling latency rather than a demonstrated product defect.
+- **Root cause:** The assertion waited only for the fake `gh` log file to exist. Starting the environment can create that file with an earlier `pr list` discovery call, so the wait could return before the explicitly requested `pr view` check had appended its command; the immediate content assertion then raced the monitor.
+- **Fix:** Wait for the exact `pr view <url> --json url,state,mergeable` line that the test is intended to prove rather than using file existence as a proxy.
+- **Verification:** The resumed-poll test and the diff-cache test shared a 20-repetition owning-file stress command: 40 passed, 0 failed in 9.73 seconds. The resumed-poll case completed in 122-207 ms in the retained output.
 
 ## `an ended agent turn discovers a pull request the agent created itself` (`apps/backend/src/core/pr-monitor-agent-completion.integration.test.ts:203`)
 
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-06; recurred and reproduced 2026-08-07; recurred 2026-08-08; recurred 2026-08-10; recurred on 4 of 4 aggregate runs 2026-08-11
 - **Original command:** `bun run test` (workspace backend group, `bun test src tests --parallel=2`); reproduction used the same command with two Bun workers per workspace package and Turbo workspace concurrency 2 alongside the root and bridge groups
 - **Suite counts:** First observation: 1,409 backend tests, 1 failed; 2026-08-07 recurrences: three runs with 1,498 total, 1,497 passed and 1 failed, and one run with 1,498 total, 1,496 passed and 2 failed, while the root, bridge, and protocol groups ran concurrently
@@ -199,7 +209,9 @@ history rather than two partial ones.
 - **Reproduction attempt (2026-08-07), 5 aggregate runs — 4 failed, 1 passed:** `bun run test` (and `TURBO_FORCE=true bun run test`) failed this test on 4 consecutive runs, then passed on a 5th. Two of the four failures were on a clean tree at `bf5874a5` and two with an unrelated working-tree change applied, so the change under review was ruled out as the cause. The backend group run on its own passed 6/6 (`bun test --cwd apps/backend --parallel`, 1,502 tests clean and 1,509 with the change), and the file alone passed in 464 ms.
 - **Strongest signal so far — wall-clock, not the flag:** every failing aggregate run finished its workspace group in ~31 s; the one passing aggregate run took 133.8 s for the same group. The failures cluster in fast runs, which is the opposite of a straightforward "slow under load" story and suggests the PR-monitor announcement is racing something that completes sooner when the machine is less contended, rather than missing a window when it is more contended.
 - **Caution for the next investigator:** a `bun run test` that reports the workspace group green in ~200 ms is a Turbo cache hit and never executed this test. Use `TURBO_FORCE=true` (or touch a backend file) before treating a pass as evidence.
-- **Hypothesis:** This and the preceding PR-polling test failed in separate aggregate runs. Both wait on an announced PR-monitor event. No narrower root cause has been isolated, and the reproduction is not yet reliable enough to bisect against — 4-in-5 under a specific timing profile, not deterministic.
+- **Root cause:** `PrMonitorService.applyDetection` first awaits durable environment persistence, then completes later asynchronous reconciliation, and only emits the completed-check event from `performCheck`'s `finally`. The test waited for `storage.getEnvironment(...).prUrl` and immediately inspected the event array, so it could observe the intentional persistence-before-emission interval. The timing profile looked inverted because faster storage made that interval easier for the polling assertion to hit. A focused pre-fix run reproduced the exact failure 3 times in 30 repetitions, including at 90.41 ms and 91.55 ms.
+- **Fix:** Make the bounded wait require both authoritative persistence and the `PR_MONITOR_CHANGED_EVENT` before asserting the persisted fields and event payload. This preserves the product contract that clients are notified; it merely stops using an earlier durability milestone as proof that the later announcement has completed.
+- **Verification:** `bun test src/core/pr-monitor-agent-completion.integration.test.ts --test-name-pattern 'an ended agent turn discovers' --rerun-each 50` from `apps/backend` -> 50 passed, 0 failed with 200 assertions in 9.05 seconds. The final backend parallel and repository aggregate runs are recorded below.
 
 ## `bridge readiness command > keeps retryable local startup races inside the durable wait` (`apps/backend/src/core/commands-state-sync.test.ts:289`)
 
@@ -273,6 +285,11 @@ history rather than two partial ones.
 
 The `bun run test` verification runs recorded for the fixes above:
 
+- 2026-08-12 (after resolving every entry that was still open) used
+  `TURBO_FORCE=true bun run test` so Turbo could not satisfy any group from
+  cache. The workspace group passed in 137.0 seconds, and the root, bridge,
+  protocol-lockfile, and iOS groups also passed; iOS executed 40 tests with 0
+  failures. The affected web and backend package typechecks passed separately.
 - 2026-08-06 (after the `startWorktreeWatcher`, `at-most-once dispatch`, and second `InitializationLogs` fixes) exited 0:
   - workspace: passed in 168.6 seconds — web 5,337 passed / 1 skipped / 0 failed; backend 1,341 passed / 0 failed; web-public 26 passed / 0 failed; protocol 442 passed / 0 failed
   - root: 3,687 passed, 1 skipped, 0 failed across 142 files
@@ -348,7 +365,7 @@ Post-fix stress verification:
 ### `DiffViewerTab` aggregate cascade
 
 - Test file: `apps/web/src/components/terminal/DiffViewerTab.test.tsx`
-- Status: open
+- Status: resolved
 - Original command: `bun test src --parallel=2` from `apps/web`
 - Worker configuration: Bun reported `2x PARALLEL`
 - Aggregate result: 5,349 passed, 1 skipped, 3 failed across 217 files
@@ -369,3 +386,16 @@ Post-fix stress verification:
   boundaries, contaminating later Monaco call counts. The owning file's clean
   rerun proves the aggregate failure is intermittent, but the trigger and a
   deterministic fix have not yet been established.
+- Root cause: the cache-cap test mounted, initialized, queried, and unmounted a
+  complete React diff viewer 130 times merely to exercise a 128-entry module
+  cache. Aggregate scheduling could push that unrelated UI work beyond Bun's
+  five-second budget. Once the test timed out, its remaining async renders ran
+  across the test boundary and inflated the following Monaco setup call counts.
+- Fix: expose a narrow test helper around the same production cache function and
+  drive the 130 cache keys directly. Component-level tests still cover cache
+  reuse, moving refs, rejection eviction, and key separation; only the capacity
+  test avoids redundant editor lifecycles.
+- Verification: `bun test src/components/terminal/DiffViewerTab.test.tsx
+  --rerun-each 10` -> 470 passed, 0 failed. The capacity case now completes in
+  0.13-0.37 ms, and the following Monaco lifecycle tests retained their exact
+  call-count assertions across all ten runs.

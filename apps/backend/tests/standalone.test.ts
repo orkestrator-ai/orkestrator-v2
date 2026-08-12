@@ -359,7 +359,7 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
     expect(restarted.readyMessage.browserUrl).toBe("https://workstation.example.ts.net/");
     restarted.child.kill("SIGTERM");
     await expect(restarted.child.exited).resolves.toBe(0);
-  });
+  }, 20_000);
 
   test("exits without a leftover listener when environment-managed Serve setup fails", async () => {
     const testDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-tailscale-fail-"));

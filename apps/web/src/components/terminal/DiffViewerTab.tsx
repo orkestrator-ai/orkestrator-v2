@@ -76,6 +76,15 @@ function cachedImmutableDiffBase(
   return pending;
 }
 
+/** Exercises the cache directly without mounting a complete editor per entry. */
+export function cacheImmutableDiffBaseForTests(
+  key: string,
+  comparisonRef: string,
+  load: () => Promise<backend.FileContent | null>,
+): Promise<backend.FileContent | null> {
+  return cachedImmutableDiffBase(key, comparisonRef, load);
+}
+
 type DiffMode = "side-by-side" | "inline";
 
 /** Viewports narrower than this get the touch-oriented single-column layout. */

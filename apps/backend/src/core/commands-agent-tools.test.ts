@@ -79,8 +79,11 @@ const connection: AgentToolConnection = {
 };
 
 describe("OpenCode agent-tool configuration", () => {
-  test("reuses an already-connected MCP entry without posting it again", async () => {
+  test("posts the authoritative config instead of trusting status-only identity", async () => {
     const server = await serveMcpResponse(() => ({
+      // GET cannot identify the configured URL or credential. Even when it
+      // would report this reserved name as connected, reconciliation must POST
+      // the backend-owned configuration rather than trusting that collision.
       body: JSON.stringify({
         [ORKESTRATOR_AGENT_MCP_SERVER_NAME]: { status: "connected" },
       }),
@@ -95,31 +98,8 @@ describe("OpenCode agent-tool configuration", () => {
 
     expect(server.requests).toHaveLength(1);
     const request = server.requests[0]!;
-    expect(request.method).toBe("GET");
-    expect(request.url).toContain("directory=%2Fworkspace+with+spaces");
-    expect(request.body).toBe("");
-    expect(request.authorization).toStartWith("Basic ");
-  });
-
-  test("posts the scoped remote config when the MCP entry is cold", async () => {
-    const server = await serveMcpResponse((request) => ({
-      body: request.method === "GET"
-        ? JSON.stringify({})
-        : JSON.stringify({
-            [ORKESTRATOR_AGENT_MCP_SERVER_NAME]: { status: "connected" },
-          }),
-    }));
-
-    await expect(__testing.configureOpenCodeAgentTools(
-      server.port,
-      "o".repeat(43),
-      connection,
-      "/workspace with spaces",
-    )).resolves.toBeUndefined();
-
-    expect(server.requests).toHaveLength(2);
-    const request = server.requests[1]!;
     expect(request.method).toBe("POST");
+    expect(request.url).toContain("directory=%2Fworkspace+with+spaces");
     expect(request.authorization).toStartWith("Basic ");
     expect(JSON.parse(request.body)).toEqual({
       name: ORKESTRATOR_AGENT_MCP_SERVER_NAME,
@@ -135,16 +115,12 @@ describe("OpenCode agent-tool configuration", () => {
   });
 
   test("reconciles in the background and memoizes a healthy generation", async () => {
-    const server = await serveMcpResponse(async (request) => {
-      if (request.method === "POST") {
-        await new Promise((resolve) => setTimeout(resolve, 75));
-      }
+    const server = await serveMcpResponse(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 75));
       return {
-        body: request.method === "GET"
-          ? JSON.stringify({})
-          : JSON.stringify({
-              [ORKESTRATOR_AGENT_MCP_SERVER_NAME]: { status: "connected" },
-            }),
+        body: JSON.stringify({
+          [ORKESTRATOR_AGENT_MCP_SERVER_NAME]: { status: "connected" },
+        }),
       };
     });
 
@@ -161,7 +137,7 @@ describe("OpenCode agent-tool configuration", () => {
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(__testing.openCodeAgentToolsConfigurationCount()).toBe(0);
     expect(__testing.configuredOpenCodeAgentToolsCount()).toBe(1);
-    expect(server.requests).toHaveLength(2);
+    expect(server.requests).toHaveLength(1);
 
     __testing.scheduleOpenCodeAgentToolsConfiguration(
       "test",
@@ -171,7 +147,7 @@ describe("OpenCode agent-tool configuration", () => {
       "/workspace",
     );
     await new Promise((resolve) => setTimeout(resolve, 25));
-    expect(server.requests).toHaveLength(2);
+    expect(server.requests).toHaveLength(1);
   });
 
   test.each(["failed", "pending", "connecting", "disabled"])(

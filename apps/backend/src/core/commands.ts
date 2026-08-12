@@ -5740,26 +5740,6 @@ async function configureOpenCodeAgentTools(
   url.searchParams.set("directory", directory);
   const headers = openCodeHealthHeaders(password);
 
-  // OpenCode keeps MCP state for the running server. Repeated native-session
-  // starts should reuse a connected entry instead of reconnecting and listing
-  // every tool again.
-  try {
-    const statusResponse = await fetch(url, {
-      headers,
-      signal: openCodeAgentToolsAbortSignal(1_500, signal),
-    });
-    if (statusResponse.ok) {
-      const statusPayload = await readBoundedOpenCodeResponse(statusResponse);
-      if (readOpenCodeAgentToolsStatus(statusPayload) === "connected") return;
-    } else {
-      await statusResponse.body?.cancel().catch(() => undefined);
-    }
-  } catch (error) {
-    // A caller cancellation retires this generation. A missing/slow status
-    // route is compatible with older OpenCode versions, so try the POST path.
-    if (signal?.aborted) throw error;
-  }
-
   const response = await fetch(url, {
     method: "POST",
     headers: {

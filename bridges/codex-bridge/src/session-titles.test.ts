@@ -14,6 +14,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   SESSION_TITLE_MODEL,
+  SESSION_TITLE_REASONING_EFFORT,
   buildFallbackSessionTitle,
   buildSessionTitleCommandArgs,
   buildSessionTitleModelCatalog,
@@ -171,6 +172,8 @@ describe("Codex session titles", () => {
     expect(catalog.models).toHaveLength(1);
     expect(catalog.models[0]).toMatchObject({
       slug: SESSION_TITLE_MODEL,
+      default_reasoning_level: SESSION_TITLE_REASONING_EFFORT,
+      supported_reasoning_levels: [{ effort: SESSION_TITLE_REASONING_EFFORT }],
       shell_type: "disabled",
       apply_patch_tool_type: null,
       input_modalities: ["text"],
@@ -208,6 +211,7 @@ describe("Codex session titles", () => {
     }
     expect(args).not.toContain("approval_policy=\"never\"");
     expect(args).toContain("web_search=\"disabled\"");
+    expect(args).toContain(`model_reasoning_effort=\"${SESSION_TITLE_REASONING_EFFORT}\"`);
     expect(args.slice(execIndex)).toContain("-");
   });
 

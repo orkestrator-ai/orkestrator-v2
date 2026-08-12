@@ -23,6 +23,35 @@ function renderDialog(overrides: Partial<React.ComponentProps<typeof AddProjectD
 }
 
 describe("AddProjectDialog", () => {
+  test("renders the source selector as option cards and preserves active state", () => {
+    renderDialog();
+
+    const existingTab = screen.getByRole("tab", { name: "Existing repository" });
+    const createTab = screen.getByRole("tab", { name: "Create new" });
+    const tabList = screen.getByRole("tablist");
+
+    expect(tabList.className).toContain("gap-2");
+    expect(tabList.className).toContain("bg-transparent");
+    expect(tabList.className).toContain("p-0");
+
+    for (const tab of [existingTab, createTab]) {
+      expect(tab.className).toContain("border-2");
+      expect(tab.className).toContain("p-3");
+      expect(tab.className).toContain("justify-start");
+      expect(tab.className).toContain("data-[state=active]:!border-primary");
+      expect(tab.className).toContain("data-[state=inactive]:!bg-zinc-900");
+      expect(tab.className).toContain("hover:data-[state=inactive]:border-zinc-600");
+    }
+
+    expect(existingTab.getAttribute("data-state")).toBe("active");
+    expect(createTab.getAttribute("data-state")).toBe("inactive");
+
+    fireEvent.mouseDown(createTab, { button: 0 });
+
+    expect(existingTab.getAttribute("data-state")).toBe("inactive");
+    expect(createTab.getAttribute("data-state")).toBe("active");
+  });
+
   test("creates a new private project from the selected target path", async () => {
     const { onCreate, onAdd, onOpenChange } = renderDialog();
 

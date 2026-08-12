@@ -5164,6 +5164,16 @@ async function dockerExec(
 }
 
 const CONTAINER_AGENT_TOOLS_HOST = "host.docker.internal";
+const DOCKER_DESKTOP_GATEWAY_HOST = "gateway.docker.internal";
+
+function shouldAddDockerHostGatewayAlias(
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  // Docker Desktop publishes host.docker.internal through its own DNS. An
+  // explicit host-gateway entry shadows that working address with the Linux VM
+  // bridge gateway on macOS/Windows, which cannot reach host-only listeners.
+  return platform === "linux";
+}
 
 function parseIpTokens(output: string): string[] {
   return output
@@ -5173,18 +5183,69 @@ function parseIpTokens(output: string): string[] {
 }
 
 /**
- * Containers created before agent tools were introduced do not have Docker's
- * host-gateway alias on Linux. Repair those persisted containers in place
- * before handing an agent a URL that uses the alias.
+ * Repair persisted container host routing before handing an agent a backend
+ * tools URL. Linux Engine needs a host-gateway alias, while Docker Desktop must
+ * use its built-in DNS rather than an explicit Linux bridge-gateway override.
  */
 async function ensureContainerAgentToolsHost(
   containerId: string,
 ): Promise<void> {
-  const existing = await dockerExec(
+  let existing = await dockerExec(
     containerId,
     `getent hosts ${CONTAINER_AGENT_TOOLS_HOST} 2>/dev/null || true`,
     10_000,
   );
+
+  // Docker Desktop's gateway hostname is a reliable in-container signal that
+  // its special DNS is available. Older Orkestrator containers were created
+  // with an explicit host-gateway entry even on Desktop; remove that entry so
+  // host.docker.internal falls back to Desktop DNS instead of the unreachable
+  // Linux VM bridge gateway.
+  const desktopGateway = await dockerExec(
+    containerId,
+    `getent hosts ${DOCKER_DESKTOP_GATEWAY_HOST} 2>/dev/null || true`,
+    10_000,
+  );
+  if (parseIpTokens(desktopGateway).length > 0) {
+    const explicitHostEntry = await dockerExec(
+      containerId,
+      `grep -E '^[^#]*[[:space:]]${CONTAINER_AGENT_TOOLS_HOST.replaceAll(".", "\\.")}([[:space:]]|$)' /etc/hosts 2>/dev/null || true`,
+      10_000,
+    );
+    if (explicitHostEntry.trim()) {
+      const repairHosts = `
+        set -eu
+        hosts_tmp="/tmp/orkestrator-hosts.$$"
+        trap 'rm -f "$hosts_tmp"' EXIT
+        awk '$2 != "${CONTAINER_AGENT_TOOLS_HOST}"' /etc/hosts > "$hosts_tmp"
+        cat "$hosts_tmp" > /etc/hosts
+      `;
+      await runCommand(
+        "docker",
+        [
+          "exec",
+          "--user",
+          "root",
+          containerId,
+          "bash",
+          "-lc",
+          repairHosts,
+        ],
+        { timeoutMs: 10_000 },
+      );
+      existing = await dockerExec(
+        containerId,
+        `getent hosts ${CONTAINER_AGENT_TOOLS_HOST} 2>/dev/null || true`,
+        10_000,
+      );
+    }
+    if (parseIpTokens(existing).length === 0) {
+      throw new Error(
+        `Docker Desktop did not resolve ${CONTAINER_AGENT_TOOLS_HOST} for container ${containerId}`,
+      );
+    }
+    return;
+  }
 
   const { stdout } = await runCommand(
     "docker",
@@ -7648,11 +7709,12 @@ async function createDockerContainer(environment: Environment, context: CommandC
     "/workspace",
     "--cap-add",
     "NET_ADMIN",
-    // Linux does not provide Docker Desktop's host.docker.internal DNS entry
-    // automatically. The host-gateway mapping is also accepted by Docker
-    // Desktop, giving container agents one portable address for backend tools.
-    "--add-host",
-    "host.docker.internal:host-gateway",
+    // Linux Engine does not provide Docker Desktop's host.docker.internal DNS
+    // entry automatically. Do not add this override on macOS/Windows: there it
+    // shadows Docker Desktop's working DNS address with the VM bridge gateway.
+    ...(shouldAddDockerHostGatewayAlias()
+      ? ["--add-host", "host.docker.internal:host-gateway"]
+      : []),
     "-e",
     `GIT_URL=${project.gitUrl}`,
     "-e",
@@ -12614,6 +12676,7 @@ export const __testing = {
   configureOpenCodeAgentTools,
   readBoundedOpenCodeResponse,
   ensureContainerAgentToolsHost,
+  shouldAddDockerHostGatewayAlias,
   agentToolConnectionFingerprint,
   createExtensionCommandRunner,
   parseOpenCodeEnvironmentSkills,

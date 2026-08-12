@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -64,6 +65,7 @@ const {
   CONTAINER_SAFE_BASE64_READER,
   buildContainerSafeBase64Reader,
   createCommandRegistry,
+  __testing: commandTesting,
 } = await import("../../../apps/backend/src/core/commands");
 
 const tempDirs: string[] = [];
@@ -533,6 +535,67 @@ done
       { environmentId: 1 },
       context,
     )).toThrow("Expected environmentId to be a string");
+  });
+
+  test("reports OpenCode agent-tool readiness only for a live server with agent tools", async () => {
+    // No `worktreePath`, so the status read reports readiness without
+    // scheduling reconciliation — this test asserts the surface, not the POST.
+    const environment = { id: "env-tools", localOpencodePort: 4201, opencodePid: 5201 };
+    const commands = createCommandRegistry();
+    const agentTools = {
+      connection: mock(() => ({ url: "http://127.0.0.1:1/mcp", token: "t" })),
+      revokeEnvironment: mock(() => undefined),
+    };
+    const withAgentTools = {
+      ...createContext(environment),
+      agentTools,
+    } as unknown as CommandContext;
+
+    // A stopped server has no MCP state worth reporting.
+    await expect(commands.get("get_local_opencode_server_status")?.(
+      { environmentId: "env-tools" },
+      withAgentTools,
+    )).resolves.toEqual({ running: false, port: 4201, pid: 5201 });
+
+    commandTesting.setLocalServerProcess("opencode:env-tools", {
+      pid: 5201,
+      exitCode: null,
+      signalCode: null,
+      kill: mock(() => true),
+    } as unknown as ChildProcessWithoutNullStreams);
+    try {
+      // Live, but nothing has been reconciled yet: readiness is unknown rather
+      // than an unqualified claim that the ticket tools are wired up.
+      await expect(commands.get("get_local_opencode_server_status")?.(
+        { environmentId: "env-tools" },
+        withAgentTools,
+      )).resolves.toEqual({
+        running: true,
+        port: 4201,
+        pid: 5201,
+        agentTools: "pending",
+      });
+
+      // Claude has no MCP wiring of its own, and a backend built without an
+      // agent-tools server must not advertise the field at all.
+      commandTesting.setLocalServerProcess("claude:env-tools", {
+        pid: 5202,
+        exitCode: null,
+        signalCode: null,
+        kill: mock(() => true),
+      } as unknown as ChildProcessWithoutNullStreams);
+      await expect(commands.get("get_local_claude_server_status")?.(
+        { environmentId: "env-tools" },
+        withAgentTools,
+      )).resolves.toEqual({ running: true, port: null, pid: 5202 });
+      await expect(commands.get("get_local_opencode_server_status")?.(
+        { environmentId: "env-tools" },
+        createContext(environment),
+      )).resolves.toEqual({ running: true, port: 4201, pid: 5201 });
+      expect(agentTools.connection).not.toHaveBeenCalled();
+    } finally {
+      commandTesting.resetLocalServerLifecycle();
+    }
   });
 
   // The build pipeline reads this before and after writable validation, so HEAD

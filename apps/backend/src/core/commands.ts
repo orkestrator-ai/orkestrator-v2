@@ -302,7 +302,24 @@ const openCodeAgentToolsConfigurations = new Map<
   string,
   OpenCodeAgentToolsConfiguration
 >();
-const configuredOpenCodeAgentTools = new Map<string, string>();
+/**
+ * What reconciliation last established about a server generation, and when.
+ *
+ * `connected` memoizes a successful POST so ordinary status reads do no I/O;
+ * `unavailable` records an exhausted retry cycle so status can report degraded
+ * ticket tools instead of failing silently. Both entries expire — see
+ * `openCodeAgentToolsMemoWindowMs`.
+ */
+type OpenCodeAgentToolsOutcome = {
+  fingerprint: string;
+  state: "connected" | "unavailable";
+  /** `Date.now()` when this outcome was recorded. */
+  at: number;
+};
+const configuredOpenCodeAgentTools = new Map<
+  string,
+  OpenCodeAgentToolsOutcome
+>();
 /** Shape of a base64url-encoded 32-byte bridge token persisted in the container. */
 const BRIDGE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const localServerEnvironmentOperations = new Map<string, Promise<void>>();
@@ -5706,9 +5723,9 @@ async function peekLocalAgentBridge(
 /**
  * Report a live container bridge without starting one.
  *
- * Deliberately does not reconcile agent-tool wiring the way
- * `get_*_server_status` does — that path re-invokes the start command, which is
- * exactly the side effect an observer must not have.
+ * Deliberately does not reconcile agent-tool wiring at all. `get_*_server_status`
+ * schedules background MCP reconciliation and mints an agent-tools credential
+ * via `agentTools.connection`; neither side effect belongs to a pure observer.
  */
 async function peekContainerAgentBridge(
   containerId: string,
@@ -5877,7 +5894,56 @@ function agentToolConnectionFingerprint(
     .digest("hex");
 }
 
-const OPENCODE_AGENT_TOOLS_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000] as const;
+const OPENCODE_AGENT_TOOLS_RETRY_DELAYS_MS: readonly number[] = [
+  250,
+  500,
+  1_000,
+  2_000,
+  4_000,
+];
+let openCodeAgentToolsRetryDelaysMs = OPENCODE_AGENT_TOOLS_RETRY_DELAYS_MS;
+
+/**
+ * How long a recorded outcome suppresses another POST.
+ *
+ * A `connected` memo must expire: OpenCode can drop, disable or fail the entry
+ * while the server keeps running on the same port and password, so the
+ * fingerprint alone can never notice. Re-POSTing periodically is the only
+ * re-verification left now that a status GET is known to be unable to identify
+ * the configured URL or credential. An `unavailable` outcome gets a shorter
+ * cooldown so a repeated status read cannot restart the retry cycle back to
+ * back.
+ */
+const OPENCODE_AGENT_TOOLS_CONNECTED_TTL_MS = 5 * 60_000;
+const OPENCODE_AGENT_TOOLS_UNAVAILABLE_COOLDOWN_MS = 30_000;
+let openCodeAgentToolsConnectedTtlMs = OPENCODE_AGENT_TOOLS_CONNECTED_TTL_MS;
+let openCodeAgentToolsUnavailableCooldownMs =
+  OPENCODE_AGENT_TOOLS_UNAVAILABLE_COOLDOWN_MS;
+
+function openCodeAgentToolsMemoWindowMs(
+  state: OpenCodeAgentToolsOutcome["state"],
+): number {
+  return state === "connected"
+    ? openCodeAgentToolsConnectedTtlMs
+    : openCodeAgentToolsUnavailableCooldownMs;
+}
+
+/** Reported by the local and container OpenCode status commands. */
+export type OpenCodeAgentToolsState = "pending" | "connected" | "unavailable";
+
+/**
+ * What the backend last observed about a generation's ticket tools.
+ *
+ * An in-flight generation reads `pending` rather than the previous cycle's
+ * failure, but a live `connected` memo keeps reading `connected` while a TTL
+ * re-verification runs — a periodic re-POST must not flap the indicator.
+ */
+function openCodeAgentToolsState(key: string): OpenCodeAgentToolsState {
+  const recorded = configuredOpenCodeAgentTools.get(key);
+  if (recorded?.state === "connected") return "connected";
+  if (openCodeAgentToolsConfigurations.has(key)) return "pending";
+  return recorded ? "unavailable" : "pending";
+}
 
 function openCodeAgentToolsFingerprint(
   port: number,
@@ -5916,7 +5982,9 @@ function waitForOpenCodeAgentToolsRetry(
 /**
  * Reconcile the optional Orkestrator MCP entry without extending native chat
  * startup. One task per server generation retries transient connect/catalog
- * failures; successful generations are memoized so later sessions do no I/O.
+ * failures; the terminal outcome is recorded so ordinary status reads do no I/O
+ * and can report degraded ticket tools. Recorded outcomes expire, so a
+ * long-lived server that later drops the entry is re-reconciled.
  */
 function scheduleOpenCodeAgentToolsConfiguration(
   key: string,
@@ -5931,19 +5999,27 @@ function scheduleOpenCodeAgentToolsConfiguration(
     connection,
     directory,
   );
-  if (configuredOpenCodeAgentTools.get(key) === fingerprint) return;
+  const recorded = configuredOpenCodeAgentTools.get(key);
+  if (recorded?.fingerprint === fingerprint) {
+    if (
+      Date.now() - recorded.at < openCodeAgentToolsMemoWindowMs(recorded.state)
+    ) {
+      return;
+    }
+  } else if (recorded) {
+    // The outcome map always describes the current generation, so a status read
+    // never reports the previous port/credential's verdict.
+    configuredOpenCodeAgentTools.delete(key);
+  }
 
   const current = openCodeAgentToolsConfigurations.get(key);
   if (current?.fingerprint === fingerprint) return;
   current?.controller.abort();
 
   const controller = new AbortController();
+  const delays = openCodeAgentToolsRetryDelaysMs;
   const task = (async () => {
-    for (
-      let attempt = 0;
-      attempt <= OPENCODE_AGENT_TOOLS_RETRY_DELAYS_MS.length;
-      attempt += 1
-    ) {
+    for (let attempt = 0; attempt <= delays.length; attempt += 1) {
       try {
         await configureOpenCodeAgentTools(
           port,
@@ -5953,22 +6029,34 @@ function scheduleOpenCodeAgentToolsConfiguration(
           controller.signal,
         );
         if (!controller.signal.aborted) {
-          configuredOpenCodeAgentTools.set(key, fingerprint);
+          configuredOpenCodeAgentTools.set(key, {
+            fingerprint,
+            state: "connected",
+            at: Date.now(),
+          });
         }
         return;
       } catch (error) {
         if (controller.signal.aborted) return;
-        if (attempt === OPENCODE_AGENT_TOOLS_RETRY_DELAYS_MS.length) {
+        if (attempt === delays.length) {
+          // Record the failure rather than only logging it: the status commands
+          // report this so a session does not silently run without the ticket
+          // tools it was told it would have.
+          configuredOpenCodeAgentTools.set(key, {
+            fingerprint,
+            state: "unavailable",
+            at: Date.now(),
+          });
           console.warn(
             `[backend] OpenCode agent tools remain unavailable for ${key}:`,
             conciseError(error),
           );
           return;
         }
-        await waitForOpenCodeAgentToolsRetry(
-          OPENCODE_AGENT_TOOLS_RETRY_DELAYS_MS[attempt]!,
-          controller.signal,
-        );
+        await waitForOpenCodeAgentToolsRetry(delays[attempt]!, controller.signal);
+        // An abort during the backoff resolves rather than throwing, so the
+        // cancellation has to be observed here instead of via the next fetch.
+        if (controller.signal.aborted) return;
       }
     }
   })();
@@ -5985,6 +6073,13 @@ function cancelOpenCodeAgentToolsConfiguration(key: string): void {
   openCodeAgentToolsConfigurations.get(key)?.controller.abort();
   openCodeAgentToolsConfigurations.delete(key);
   configuredOpenCodeAgentTools.delete(key);
+}
+
+function resetOpenCodeAgentToolsTuning(): void {
+  openCodeAgentToolsRetryDelaysMs = OPENCODE_AGENT_TOOLS_RETRY_DELAYS_MS;
+  openCodeAgentToolsConnectedTtlMs = OPENCODE_AGENT_TOOLS_CONNECTED_TTL_MS;
+  openCodeAgentToolsUnavailableCooldownMs =
+    OPENCODE_AGENT_TOOLS_UNAVAILABLE_COOLDOWN_MS;
 }
 
 function cancelAllOpenCodeAgentToolsConfigurations(): void {
@@ -6543,6 +6638,7 @@ async function readLocalServerStatus(environmentId: string, context: CommandCont
   port: number | null;
   pid: number | null;
   authToken?: string;
+  agentTools?: OpenCodeAgentToolsState;
 }> {
   const key = `${kind}:${environmentId}`;
   const env = await context.storage.getEnvironment(environmentId);
@@ -6570,11 +6666,17 @@ async function readLocalServerStatus(environmentId: string, context: CommandCont
       env.worktreePath,
     );
   }
+  const running = !!child && !child.killed;
   return {
-    running: !!child && !child.killed,
+    running,
     port: port ?? null,
     pid: child?.pid ?? pid ?? null,
     ...(authToken ? { authToken } : {}),
+    // Only meaningful for a live server: a stopped one has no MCP state to
+    // report, and a crashed one's last verdict describes a process that is gone.
+    ...(running && kind === "opencode" && context.agentTools
+      ? { agentTools: openCodeAgentToolsState(`local:${environmentId}`) }
+      : {}),
   };
 }
 
@@ -6583,6 +6685,7 @@ function getLocalServerStatus(environmentId: string, context: CommandContext, ki
   port: number | null;
   pid: number | null;
   authToken?: string;
+  agentTools?: OpenCodeAgentToolsState;
 }> {
   // Status is a readiness snapshot, not merely a process-exists snapshot.
   // Serialize it behind any in-flight start/stop so callers never observe the
@@ -9955,6 +10058,9 @@ export function createCommandRegistry(
       running,
       hostPort,
       ...(running ? { authToken } : {}),
+      ...(running && context.agentTools
+        ? { agentTools: openCodeAgentToolsState(`container:${id}`) }
+        : {}),
     };
   });
   register("get_opencode_server_log", ({ containerId }) =>
@@ -12894,6 +13000,20 @@ export const __testing = {
   configuredOpenCodeAgentToolsCount(): number {
     return configuredOpenCodeAgentTools.size;
   },
+  openCodeAgentToolsState,
+  // `resetLocalServerLifecycle` restores the production windows and backoff, so
+  // an override cannot outlive the test that set it.
+  setOpenCodeAgentToolsRetryDelaysMs(delays: readonly number[]): void {
+    openCodeAgentToolsRetryDelaysMs = delays;
+  },
+  setOpenCodeAgentToolsMemoWindowsMs(
+    connectedTtlMs: number,
+    unavailableCooldownMs: number,
+  ): void {
+    openCodeAgentToolsConnectedTtlMs = connectedTtlMs;
+    openCodeAgentToolsUnavailableCooldownMs = unavailableCooldownMs;
+  },
+  resetOpenCodeAgentToolsTuning,
   readBoundedOpenCodeResponse,
   ensureContainerAgentToolsHost,
   shouldAddDockerHostGatewayAlias,
@@ -13009,6 +13129,7 @@ export const __testing = {
     localClaudeBridgeTokens.clear();
     localOpenCodeServerPasswords.clear();
     cancelAllOpenCodeAgentToolsConfigurations();
+    resetOpenCodeAgentToolsTuning();
     deletingLocalServerEnvironments.clear();
     mergingEnvironments.clear();
     localServerShutdownRequested = false;

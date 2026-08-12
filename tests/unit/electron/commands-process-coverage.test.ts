@@ -638,6 +638,9 @@ describe("process and platform command behavior", () => {
         running: true,
         hostPort: openCode.port,
         authToken: "o".repeat(43),
+        // Reconciliation is backgrounded, so the first observer sees it in
+        // flight rather than an unqualified "everything is wired up".
+        agentTools: "pending",
       });
       expect(agentTools.connection).toHaveBeenCalledWith(
         "environment-1",
@@ -658,6 +661,20 @@ describe("process and platform command behavior", () => {
         }),
       ]);
 
+      // Once the POST lands, the same observer reports usable ticket tools.
+      await waitFor(
+        () => __testing.openCodeAgentToolsState("container:container-existing")
+          === "connected",
+        "the recorded connected outcome",
+      );
+      await expect(invoke(
+        "get_opencode_server_status",
+        { containerId: "container-existing" },
+        context,
+      )).resolves.toMatchObject({ running: true, agentTools: "connected" });
+      // The memo means the second status read did no further MCP I/O.
+      expect(openCode.configurations).toHaveLength(1);
+
       const log = await readCommandLog();
       expect(log).toContain(
         "docker inspect --format {{range .NetworkSettings.Networks}}{{println .Gateway}}{{end}} container-existing",
@@ -665,6 +682,9 @@ describe("process and platform command behavior", () => {
       expect(log).toContain("docker exec --user root container-existing");
       expect(log).not.toContain(connection.token);
     } finally {
+      // Retire the memo so a later test against this container reconciles
+      // rather than inheriting this generation's recorded outcome.
+      __testing.cancelOpenCodeAgentToolsConfiguration("container:container-existing");
       await openCode.close();
     }
   });

@@ -5,11 +5,12 @@ import { Loader2, GitBranch } from "lucide-react";
 import { useMediaQuery } from "@/hooks";
 
 interface ChangesViewProps {
+  onReveal?: (path: string) => void;
   onRevert?: (path: string) => void;
   onDelete?: (path: string) => void;
 }
 
-export function ChangesView({ onRevert, onDelete }: ChangesViewProps = {}) {
+export function ChangesView({ onReveal, onRevert, onDelete }: ChangesViewProps = {}) {
   const changes = useFilesPanelStore((state) => state.changes);
   const isLoadingChanges = useFilesPanelStore((state) => state.isLoadingChanges);
   const closePanel = useFilesPanelStore((state) => state.closePanel);
@@ -48,6 +49,7 @@ export function ChangesView({ onRevert, onDelete }: ChangesViewProps = {}) {
           key={change.path}
           change={change}
           onClick={(path) => handleFileClick(path, change.status)}
+          onReveal={onReveal}
           onRevert={onRevert}
           onDelete={onDelete}
         />

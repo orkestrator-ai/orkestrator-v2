@@ -90,6 +90,7 @@ const {
   ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
   isImmutableCommitRef,
   resolveBrowserOpenCommand,
+  resolveFileManagerRevealCommands,
   shutdownDiffStatsTracking,
   shutdownLocalServers,
   shutdownPrMonitorTracking,
@@ -146,6 +147,35 @@ describe("resolveBrowserOpenCommand", () => {
     expect(() => resolveBrowserOpenCommand("file:///tmp/secret", "win32")).toThrow(
       "Unsupported browser URL protocol",
     );
+  });
+});
+
+describe("resolveFileManagerRevealCommands", () => {
+  test("uses native selection commands on macOS and Windows", () => {
+    expect(resolveFileManagerRevealCommands("/tmp/project/file.ts", "darwin")).toEqual([
+      { command: "open", args: ["-R", "/tmp/project/file.ts"] },
+    ]);
+    expect(resolveFileManagerRevealCommands("C:\\project\\file.ts", "win32")).toEqual([
+      { command: "explorer", args: ["/select,", "C:\\project\\file.ts"] },
+    ]);
+  });
+
+  test("selects through FileManager1 on Linux with an encoded URI and parent-folder fallback", () => {
+    expect(resolveFileManagerRevealCommands("/tmp/project/file, name.ts", "linux")).toEqual([
+      {
+        command: "dbus-send",
+        args: [
+          "--session",
+          "--print-reply",
+          "--dest=org.freedesktop.FileManager1",
+          "/org/freedesktop/FileManager1",
+          "org.freedesktop.FileManager1.ShowItems",
+          "array:string:file:///tmp/project/file%2C%20name.ts",
+          "string:",
+        ],
+      },
+      { command: "xdg-open", args: ["/tmp/project"] },
+    ]);
   });
 });
 

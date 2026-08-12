@@ -17,6 +17,8 @@ const originalHomedir = os.homedir;
 const originalDockerLog = process.env.FAKE_DOCKER_LOG;
 const originalLauncherLog = process.env.FAKE_LAUNCHER_LOG;
 const originalLauncherFailExecutable = process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE;
+const originalLauncherFailSecondaryExecutable =
+  process.env.FAKE_LAUNCHER_FAIL_SECONDARY_EXECUTABLE;
 const originalLauncherExitCode = process.env.FAKE_LAUNCHER_EXIT_CODE;
 const originalDockerStatus = process.env.FAKE_DOCKER_STATUS;
 const originalDockerPort = process.env.FAKE_DOCKER_PORT;
@@ -130,7 +132,8 @@ printf '%s\\000%s\\000' "\${0##*/}" "$#" >> "$FAKE_LAUNCHER_LOG"
 for arg in "$@"; do
   printf '%s\\000' "$arg" >> "$FAKE_LAUNCHER_LOG"
 done
-if [ "\${FAKE_LAUNCHER_FAIL_EXECUTABLE:-}" = "\${0##*/}" ]; then
+if [ "\${FAKE_LAUNCHER_FAIL_EXECUTABLE:-}" = "\${0##*/}" ] || \
+   [ "\${FAKE_LAUNCHER_FAIL_SECONDARY_EXECUTABLE:-}" = "\${0##*/}" ]; then
   printf 'launcher failed\n' >&2
   exit "\${FAKE_LAUNCHER_EXIT_CODE:-23}"
 fi
@@ -341,6 +344,7 @@ beforeEach(async () => {
   await fs.writeFile(commandLog, "");
   await fs.writeFile(launcherLog, "");
   delete process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE;
+  delete process.env.FAKE_LAUNCHER_FAIL_SECONDARY_EXECUTABLE;
   delete process.env.FAKE_LAUNCHER_EXIT_CODE;
   delete process.env.FAKE_DOCKER_STATUS;
   delete process.env.FAKE_DOCKER_PORT;
@@ -377,6 +381,12 @@ afterAll(async () => {
   else process.env.FAKE_LAUNCHER_LOG = originalLauncherLog;
   if (originalLauncherFailExecutable === undefined) delete process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE;
   else process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE = originalLauncherFailExecutable;
+  if (originalLauncherFailSecondaryExecutable === undefined) {
+    delete process.env.FAKE_LAUNCHER_FAIL_SECONDARY_EXECUTABLE;
+  } else {
+    process.env.FAKE_LAUNCHER_FAIL_SECONDARY_EXECUTABLE =
+      originalLauncherFailSecondaryExecutable;
+  }
   if (originalLauncherExitCode === undefined) delete process.env.FAKE_LAUNCHER_EXIT_CODE;
   else process.env.FAKE_LAUNCHER_EXIT_CODE = originalLauncherExitCode;
   if (originalDockerStatus === undefined) delete process.env.FAKE_DOCKER_STATUS;
@@ -999,6 +1009,50 @@ describe("process and platform command behavior", () => {
       args: ["--folder-uri", "vscode-remote://attached-container+636f6e7461696e65722d62/workspace"],
     });
     expect(invocations).toContainEqual({ executable: "code", args: ["/tmp/project"] });
+  });
+
+  test("falls back to the parent directory when Linux FileManager1 fails", async () => {
+    const platform = process.platform;
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+    process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE = "dbus-send";
+    try {
+      await invoke("reveal_in_file_manager", { path: "/tmp/project/file.ts" });
+      expect(await readLauncherInvocations()).toEqual([
+        {
+          executable: "dbus-send",
+          args: [
+            "--session",
+            "--print-reply",
+            "--dest=org.freedesktop.FileManager1",
+            "/org/freedesktop/FileManager1",
+            "org.freedesktop.FileManager1.ShowItems",
+            "array:string:file:///tmp/project/file.ts",
+            "string:",
+          ],
+        },
+        { executable: "xdg-open", args: ["/tmp/project"] },
+      ]);
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: platform });
+    }
+  });
+
+  test("propagates the fallback failure when both Linux reveal commands fail", async () => {
+    const platform = process.platform;
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+    process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE = "dbus-send";
+    process.env.FAKE_LAUNCHER_FAIL_SECONDARY_EXECUTABLE = "xdg-open";
+    try {
+      await expect(
+        invoke("reveal_in_file_manager", { path: "/tmp/project/file.ts" }),
+      ).rejects.toThrow("launcher failed");
+      expect((await readLauncherInvocations()).map(({ executable }) => executable)).toEqual([
+        "dbus-send",
+        "xdg-open",
+      ]);
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: platform });
+    }
   });
 
   test.each([

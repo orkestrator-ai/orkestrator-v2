@@ -1602,7 +1602,9 @@ export function resolveFileManagerRevealCommands(
         "--dest=org.freedesktop.FileManager1",
         "/org/freedesktop/FileManager1",
         "org.freedesktop.FileManager1.ShowItems",
-        `array:string:${pathToFileURL(target).href}`,
+        // dbus-send uses commas to delimit array values, while file URLs allow
+        // literal commas. Encode them so one filesystem path stays one URI.
+        `array:string:${pathToFileURL(target).href.replaceAll(",", "%2C")}`,
         "string:",
       ],
     },

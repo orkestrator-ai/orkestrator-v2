@@ -8,6 +8,7 @@ import {
 import { useFilesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
 import type { FileNode, GitFileChange } from "../../../apps/web/src/lib/backend";
 import { invoke } from "../../../apps/web/src/lib/native/backend";
+import { mockToastError } from "../../mocks/sonner";
 import * as realHooks from "@/hooks";
 import * as realContextMenu from "@/components/ui/context-menu";
 import * as realAlertDialog from "@/components/ui/alert-dialog";
@@ -229,6 +230,17 @@ describe("Files panel components", () => {
     expect(onReveal).toHaveBeenCalledWith("src/components/Button.tsx");
     expect(onRevert).toHaveBeenCalledWith("src/components/Button.tsx");
     expect(onDelete).toHaveBeenCalledWith("src/components/Button.tsx");
+  });
+
+  test("ChangedFileItem hides reveal for deleted files", () => {
+    render(
+      <ChangedFileItem
+        change={{ ...change, status: "D" }}
+        onReveal={mock(() => {})}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Reveal in file manager" })).toBeNull();
   });
 
   test("ChangedFileItem renders a root-level file without a directory segment", () => {
@@ -618,6 +630,22 @@ describe("Files panel components", () => {
     mockWorktreePath = null;
     rerender(<TerminalProvider><FilesPanel /></TerminalProvider>);
     expect(screen.queryByRole("button", { name: "Reveal in file manager" })).toBeNull();
+  });
+
+  test("reports file-manager reveal failures", async () => {
+    mockEnvironmentId = "env-local";
+    mockIsLocalEnvironment = true;
+    mockWorktreePath = "/worktrees/feature";
+    invokeMock.mockRejectedValueOnce(new Error("file manager unavailable"));
+    useFilesPanelStore.setState({ activeTab: "changes", changes: [change] });
+    render(<TerminalProvider><FilesPanel /></TerminalProvider>);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reveal in file manager" }));
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
+      "Failed to reveal file",
+      { description: "file manager unavailable" },
+    ));
   });
 
   test("the files-panel barrel exports every public component", () => {

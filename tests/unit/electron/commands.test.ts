@@ -160,8 +160,8 @@ describe("resolveFileManagerRevealCommands", () => {
     ]);
   });
 
-  test("selects through FileManager1 on Linux with a parent-folder fallback", () => {
-    expect(resolveFileManagerRevealCommands("/tmp/project/file name.ts", "linux")).toEqual([
+  test("selects through FileManager1 on Linux with an encoded URI and parent-folder fallback", () => {
+    expect(resolveFileManagerRevealCommands("/tmp/project/file, name.ts", "linux")).toEqual([
       {
         command: "dbus-send",
         args: [
@@ -170,7 +170,7 @@ describe("resolveFileManagerRevealCommands", () => {
           "--dest=org.freedesktop.FileManager1",
           "/org/freedesktop/FileManager1",
           "org.freedesktop.FileManager1.ShowItems",
-          "array:string:file:///tmp/project/file%20name.ts",
+          "array:string:file:///tmp/project/file%2C%20name.ts",
           "string:",
         ],
       },

@@ -18,6 +18,7 @@ interface ChangedFileItemProps {
 }
 
 export function ChangedFileItem({ change, onClick, onReveal, onRevert, onDelete }: ChangedFileItemProps) {
+  const reveal = change.status.startsWith("D") ? undefined : onReveal;
   const item = (
     <button
       onClick={() => onClick?.(change.path)}
@@ -52,14 +53,14 @@ export function ChangedFileItem({ change, onClick, onReveal, onRevert, onDelete 
     </button>
   );
 
-  if (!onReveal && !onRevert && !onDelete) return item;
+  if (!reveal && !onRevert && !onDelete) return item;
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{item}</ContextMenuTrigger>
       <ContextMenuContent>
-        {onReveal && (
-          <ContextMenuItem onSelect={() => onReveal(change.path)}>
+        {reveal && (
+          <ContextMenuItem onSelect={() => reveal(change.path)}>
             <FolderOpen />
             Reveal in file manager
           </ContextMenuItem>

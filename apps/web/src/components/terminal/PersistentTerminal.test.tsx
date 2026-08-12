@@ -290,6 +290,7 @@ type MockTerminal = {
   selectAll: ReturnType<typeof mock>;
   onSelectionChange: ReturnType<typeof mock>;
   onData: ReturnType<typeof mock>;
+  input: ReturnType<typeof mock>;
   attachCustomKeyEventHandler: ReturnType<typeof mock>;
   open: ReturnType<typeof mock>;
   clear: ReturnType<typeof mock>;
@@ -326,6 +327,7 @@ function createMockTerminal(): MockTerminal {
       terminalInputDisposables.push(disposable);
       return disposable;
     }),
+    input: mock((data: string) => terminalInputHandler?.(data)),
     attachCustomKeyEventHandler: mock((handler: (event: KeyboardEvent) => boolean) => {
       terminalKeyHandler = handler;
     }),
@@ -1983,6 +1985,40 @@ describe("PersistentTerminal", () => {
       expect(preventDefault).toHaveBeenCalled();
       expect(writeMock).toHaveBeenCalledWith("pasted text");
     });
+  });
+
+  it("sends Shift+Enter as LF without letting xterm submit the prompt", async () => {
+    const terminalData = createTerminalData();
+    const terminal = terminalData.terminal as unknown as MockTerminal;
+
+    render(
+      <PersistentTerminal
+        terminalData={terminalData}
+        tabId="tab-1"
+        tabType="codex"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    await waitFor(() => expect(terminalKeyHandler).toBeDefined());
+    const preventDefault = mock(() => {});
+    const event = new KeyboardEvent("keydown", { key: "Enter", shiftKey: true });
+    Object.defineProperty(event, "preventDefault", { value: preventDefault });
+
+    expect(terminalKeyHandler!(event)).toBe(false);
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    expect(terminal.input).toHaveBeenCalledWith("\n");
+    expect(writeMock).toHaveBeenCalledWith("\n");
+
+    writeMock.mockClear();
+    expect(terminalKeyHandler!(new KeyboardEvent("keydown", { key: "Enter" }))).toBe(true);
+    expect(writeMock).not.toHaveBeenCalled();
   });
 
   it("contains clipboard copy failures", async () => {

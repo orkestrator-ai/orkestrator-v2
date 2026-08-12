@@ -1116,6 +1116,15 @@ export function PersistentTerminal({
       const isAlt = event.altKey;
       const isShift = event.shiftKey;
 
+      // xterm.js maps Enter and Shift+Enter to the same carriage return. Send
+      // LF explicitly so terminal TUIs receive their portable Ctrl+J newline
+      // binding without submitting the prompt.
+      if (key === "enter" && isShift && !isCtrl && !isMeta && !isAlt) {
+        event.preventDefault();
+        terminal.input("\n");
+        return false;
+      }
+
       // Let Ctrl+digit keys pass through to global handler for tab switching
       // Return false to prevent xterm from handling, allowing event to bubble up
       if (isCtrl && !isMeta && !isAlt && !isShift && event.code?.startsWith("Digit")) {

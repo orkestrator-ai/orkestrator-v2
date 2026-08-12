@@ -372,10 +372,9 @@ export const EnvironmentItem = memo(function EnvironmentItem({
           <div
             ref={tooltipAnchorRef}
             className={cn(
-              "group flex w-full items-center gap-2 py-1.5 pr-2 text-[13px] transition-colors",
+              "group flex w-full items-center gap-2 py-1 pr-2 text-[13px] transition-colors",
               // Stops a long-press from starting a text selection on touch.
               isMobile && "select-none",
-              subtitle && "py-2",
               isChecked && isMultiSelectMode && "bg-zinc-800/50",
               (isStopping || isEnvironmentDeleting) && "opacity-60"
             )}

@@ -945,7 +945,7 @@ export function HierarchicalSidebar() {
               ) : (
                 <div
                   data-testid="activity-environment-rows"
-                  className="space-y-0.5 px-1 pt-2"
+                  className="px-1 pt-2"
                 >
                   {activityEnvironments.map((environment, position) => (
                     <AnimatedActivityRow

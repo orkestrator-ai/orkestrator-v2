@@ -28,6 +28,7 @@ describe("monorepo orchestration scripts", () => {
     expect(dev).toContain('process.on("SIGINT"');
     expect(dev).toContain("Timed out waiting for");
     expect(dev).toContain('electron.on("exit"');
+    expect(dev).toContain("Electron exited with code");
     expect(build).toContain('process.platform === "win32"');
     expect(dev).toContain('process.platform === "win32"');
   });

@@ -10,11 +10,12 @@ type FocusableWindow = Pick<BrowserWindow, "isMinimized" | "restore" | "focus">;
 /**
  * Claims the single-instance lock, or quits.
  *
- * Two instances would share one `userData` directory: each spawns its own
- * backend against the same storage, and the second silently takes a fallback
- * port and starts a duplicate set of bridge processes. The lock is scoped to
- * `userData`, so a dev build and a packaged build (which share it) exclude each
- * other too — which is why `app.setPath("userData", ...)` must already have run.
+ * Two instances of the same flavor would share one `userData` directory: each
+ * spawns its own backend against the same storage, and the second silently
+ * takes a fallback port and starts a duplicate set of bridge processes. The
+ * lock is scoped to `userData`, which is why `app.setPath("userData", ...)`
+ * must already have run. Dev uses a separate directory from a packaged
+ * install so `bun run dev` can open while Orkestrator is already running.
  *
  * Returns whether this process is the primary instance. The caller must skip
  * *all* startup work when it is not: `app.quit()` is asynchronous, so module

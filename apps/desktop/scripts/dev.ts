@@ -65,7 +65,14 @@ try {
     },
   });
 
-  electron.on("exit", (code) => shutdown(code ?? 0));
+  electron.on("exit", (code, signal) => {
+    if (signal) {
+      console.error(`Electron exited with signal ${signal}`);
+    } else if (code) {
+      console.error(`Electron exited with code ${code}`);
+    }
+    shutdown(code ?? (signal ? 1 : 0));
+  });
 } catch (error) {
   console.error(error);
   shutdown(1);

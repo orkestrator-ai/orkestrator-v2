@@ -240,7 +240,7 @@ export function SortableProjectGroup({
 
           {/* Environments List */}
           <CollapsibleContent>
-            <div className="space-y-0.5 pb-1">
+            <div className="pb-1">
               {environments.length > 0 && (
                 <SortableContext
                   items={environments.map((e) => e.id)}

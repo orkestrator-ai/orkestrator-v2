@@ -214,6 +214,7 @@ describe("AppShell", () => {
 
     const titleBar = container.querySelector("div[data-backend-drag-region]");
     expect(titleBar).toBeTruthy();
+    expect(titleBar?.className).toContain("h-[var(--desktop-title-bar-height)]");
     fireEvent.mouseDown(titleBar!, { button: 2 });
     expect(startDraggingMock).not.toHaveBeenCalled();
     fireEvent.mouseDown(titleBar!, { button: 0 });

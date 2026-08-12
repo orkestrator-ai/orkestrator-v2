@@ -48,6 +48,30 @@ import {
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 import type { Environment } from "@/types";
+import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
+
+export const DOCKER_AVAILABILITY_POLL_INTERVAL_MS = 60_000;
+
+/**
+ * How many consecutive failed probes it takes to declare an outage once Docker
+ * has been seen healthy. One is not enough: a false negative disables every
+ * container control and is not corrected until the next poll.
+ */
+export const DOCKER_UNAVAILABLE_CONFIRMATIONS = 2;
+
+/**
+ * A single daemon probe, normalised to a boolean. A thrown error and a `false`
+ * answer mean the same thing to every caller, and neither may reject - the
+ * poll would otherwise leave an unhandled rejection behind.
+ */
+async function probeDocker(source: "startup" | "retry" | "poll"): Promise<boolean> {
+  try {
+    return await checkDocker();
+  } catch (error) {
+    console.error(`[App] Docker ${source} check failed:`, error);
+    return false;
+  }
+}
 
 /**
  * Setup can fail after Docker has successfully created and started the
@@ -81,6 +105,9 @@ function App() {
   });
   const [dockerAvailable, setDockerAvailable] = useState<boolean | null>(null);
   const [isCheckingDocker, setIsCheckingDocker] = useState(false);
+  const [dockerWarningDismissed, setDockerWarningDismissed] = useState(false);
+  const dockerAvailableRef = useRef<boolean | null>(null);
+  const dockerCheckInFlightRef = useRef<Promise<boolean> | null>(null);
 
   // Initialize centralized PR monitoring service
   usePrMonitorService();
@@ -168,45 +195,86 @@ function App() {
   const selectedEnvironment = selectedEnvironmentId
     ? environments.find((env) => env.id === selectedEnvironmentId) ?? null
     : null;
-  const refreshDockerAvailability = useCallback(async (source: "startup" | "retry") => {
-    const available = await checkDocker();
-    console.log(`[App] Docker ${source} check:`, available);
-    setDockerAvailable(available);
+  const refreshDockerAvailability = useCallback(async (source: "startup" | "retry" | "poll") => {
+    if (dockerCheckInFlightRef.current) return dockerCheckInFlightRef.current;
 
-    if (!available) return available;
+    const check = (async () => {
+      const previous = dockerAvailableRef.current;
+      let available = await probeDocker(source);
 
-    try {
-      const clearedIds = await syncAllEnvironmentsWithDocker();
-      if (clearedIds.length > 0) {
-        console.log("[App] Cleared orphaned container references:", clearedIds);
+      // A single failed probe is not evidence of an outage. `check_docker`
+      // shells out to `docker info` with a 10s timeout and reports any failure
+      // - including that timeout - as "unavailable", so a loaded host can
+      // produce a false negative. Tearing down container-backed UI on one of
+      // those is destructive, so confirm before believing a daemon that was
+      // healthy a moment ago went away.
+      for (
+        let attempt = 1;
+        !available && previous === true && attempt < DOCKER_UNAVAILABLE_CONFIRMATIONS;
+        attempt++
+      ) {
+        available = await probeDocker(source);
       }
-    } catch (error) {
-      console.error("[App] Failed to sync environments with Docker:", error);
-      // Non-fatal - continue with app startup
-    }
 
-    return available;
+      console.log(`[App] Docker ${source} check:`, available);
+      dockerAvailableRef.current = available;
+      setDockerAvailable(available);
+
+      // Reconcile container identities on startup and when Docker comes back,
+      // but not on every healthy poll.
+      if (available && previous !== true) {
+        try {
+          const clearedIds = await syncAllEnvironmentsWithDocker();
+          if (clearedIds.length > 0) {
+            console.log("[App] Cleared orphaned container references:", clearedIds);
+          }
+        } catch (error) {
+          console.error("[App] Failed to sync environments with Docker:", error);
+          // Non-fatal - Docker-backed controls can still be enabled.
+        }
+      }
+
+      return available;
+    })();
+
+    dockerCheckInFlightRef.current = check;
+    try {
+      return await check;
+    } finally {
+      if (dockerCheckInFlightRef.current === check) {
+        dockerCheckInFlightRef.current = null;
+      }
+    }
   }, []);
 
   // Check Docker availability on startup and sync environments
   useEffect(() => {
     const initDocker = async () => {
-      try {
-        await refreshDockerAvailability("startup");
-      } catch (error) {
-        console.error("[App] Docker check failed:", error);
-        setDockerAvailable(false);
-      }
+      await refreshDockerAvailability("startup");
     };
 
-    initDocker();
+    void initDocker();
   }, [refreshDockerAvailability]);
 
-  // Check CLI availability after Docker is confirmed available
-  // Checks: Claude CLI, OpenCode CLI (fallback), and GitHub CLI
+  // Docker can be started or stopped while Orkestrator remains open. Keep the
+  // shared capability state fresh in both directions without overlapping a
+  // slow daemon probe.
   useEffect(() => {
-    if (dockerAvailable !== true) return;
+    const interval = window.setInterval(() => {
+      void refreshDockerAvailability("poll");
+    }, DOCKER_AVAILABILITY_POLL_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [refreshDockerAvailability]);
 
+  // Dismissing an outage should last for that outage. Once Docker recovers, a
+  // later outage is new information and should warn the user again.
+  useEffect(() => {
+    if (dockerAvailable === true) setDockerWarningDismissed(false);
+  }, [dockerAvailable]);
+
+  // Host CLI availability is independent of Docker. Run it in parallel with
+  // the daemon probe so local worktree workflows receive the same onboarding.
+  useEffect(() => {
     Promise.all([
       checkClaudeCli(),
       checkClaudeConfig(),
@@ -238,7 +306,7 @@ function App() {
         setGithubCliAvailable(false);
         setAvailableAiCli(null);
       });
-  }, [dockerAvailable]);
+  }, []);
 
   // Load config from backend on startup
   // This ensures repository configs (including default port mappings) are available
@@ -253,27 +321,22 @@ function App() {
       });
   }, [setConfig]);
 
-  // Handle closing the app when Docker is not available
-  const handleCloseApp = async () => {
-    try {
-      await exit(0);
-    } catch (error) {
-      console.error("[App] Failed to exit via plugin:", error);
-      // Fallback: try using window.close() for webview
-      window.close();
-    }
-  };
-
   // Handle retrying Docker check
   const handleRetryDockerCheck = async () => {
     setIsCheckingDocker(true);
     try {
       await refreshDockerAvailability("retry");
-    } catch (error) {
-      console.error("[App] Docker retry check failed:", error);
-      setDockerAvailable(false);
     } finally {
       setIsCheckingDocker(false);
+    }
+  };
+
+  const handleCloseApp = async () => {
+    try {
+      await exit(0);
+    } catch (error) {
+      console.error("[App] Failed to exit via plugin:", error);
+      window.close();
     }
   };
 
@@ -426,25 +489,31 @@ function App() {
   }, [zoomIn, zoomOut, resetZoom]);
 
   // Derived state for dialog visibility - makes conditions easier to read
+  // When Docker is down, let its outage warning lead; host-tool onboarding is
+  // shown after the user chooses to continue without containers.
+  const hostToolWarningsVisible =
+    dockerAvailable === true
+    || (dockerAvailable === false && dockerWarningDismissed);
+
   const isCheckingCliTools =
-    dockerAvailable === true &&
+    hostToolWarningsVisible &&
     availableAiCli === null &&
     claudeCliAvailable === null;
 
   const noAiCliAvailable =
-    dockerAvailable === true &&
+    hostToolWarningsVisible &&
     claudeCliAvailable === false &&
     opencodeCliAvailable === false &&
     codexCliAvailable === false;
 
   const claudeNeedsLogin =
-    dockerAvailable === true &&
+    hostToolWarningsVisible &&
     claudeCliAvailable === true &&
     claudeConfigAvailable === false &&
     opencodeCliAvailable === false;
 
   const showGithubWarning =
-    dockerAvailable === true &&
+    hostToolWarningsVisible &&
     (claudeCliAvailable === true || opencodeCliAvailable === true) &&
     githubCliAvailable === false &&
     !githubCliWarningDismissed;
@@ -452,6 +521,12 @@ function App() {
   const handleStartEnvironmentFromOverlay = useCallback(
     async (environmentId: string, initialPrompt?: string): Promise<boolean> => {
       const environment = getEnvironmentById(environmentId);
+      if (environment?.environmentType !== "local" && dockerAvailable === false) {
+        toast.warning("Docker is not running", {
+          description: "Container environments are disabled until Docker is available.",
+        });
+        return false;
+      }
       const explicitPrompt = initialPrompt?.trim();
       const storedPrompt =
         !explicitPrompt && !environment?.setupScriptsComplete
@@ -528,7 +603,7 @@ function App() {
         return false;
       }
     },
-    [clearClaudeOptions, config.global.defaultAgent, getEnvironmentById, setClaudeOptions, startEnvironment]
+    [clearClaudeOptions, config.global.defaultAgent, dockerAvailable, getEnvironmentById, setClaudeOptions, startEnvironment]
   );
 
   const handleCreateScriptFromOverlay = useCallback(
@@ -553,10 +628,21 @@ function App() {
   return (
     <TooltipProvider>
       <TerminalProvider>
-        <AppShell>
+        <DockerAvailabilityProvider available={dockerAvailable === true}>
+          <AppShell>
           {selectedEnvironment ? (
             <div className="relative h-full bg-background">
               <div className="absolute inset-0 z-10 bg-background">
+                {/*
+                  `isContainerRunning` is deliberately not gated on Docker
+                  availability. A false value means "this container stopped",
+                  and TerminalContainer answers it by disposing every terminal
+                  and resetting the pane layout, so feeding a daemon-wide probe
+                  into a per-environment fact would destroy the user's tabs on a
+                  transient outage. The daemon state gates *actions* instead:
+                  handleStartEnvironmentFromOverlay refuses to start a container
+                  while Docker is down.
+                */}
                 <TerminalContainer
                   environmentId={selectedEnvironment.id}
                   containerId={selectedEnvironment.containerId ?? null}
@@ -583,7 +669,8 @@ function App() {
             />
           )}
 
-        </AppShell>
+          </AppShell>
+        </DockerAvailabilityProvider>
         <Toaster />
         <ErrorDetailsDialog />
 
@@ -608,14 +695,19 @@ function App() {
         )}
 
         {/* Docker not available dialog */}
-        <AlertDialog open={dockerAvailable === false}>
+        <AlertDialog
+          open={dockerAvailable === false && !dockerWarningDismissed}
+          onOpenChange={(open) => {
+            if (!open) setDockerWarningDismissed(true);
+          }}
+        >
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Docker Required</AlertDialogTitle>
+              <AlertDialogTitle>Docker Is Not Running</AlertDialogTitle>
               <AlertDialogDescription>
-                Docker is not running or not installed on your system. Orkestrator AI requires Docker to create and manage development environments.
+                Container functionality is currently disabled. You can continue using local worktree environments while Docker is unavailable.
                 <br /><br />
-                Please install Docker Desktop from{" "}
+                Start Docker, or install Docker Desktop from{" "}
                 <a
                   href="https://docker.com"
                   className="text-primary underline"
@@ -623,8 +715,7 @@ function App() {
                   rel="noopener noreferrer"
                 >
                   docker.com
-                </a>{" "}
-                and ensure it is running before starting the application.
+                </a>. Orkestrator will check again automatically every 60 seconds.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -639,12 +730,12 @@ function App() {
                     Checking...
                   </>
                 ) : (
-                  "Retry"
+                  "Check Again"
                 )}
               </Button>
-              <Button onClick={handleCloseApp}>
-                Close Application
-              </Button>
+              <AlertDialogAction onClick={() => setDockerWarningDismissed(true)}>
+                Continue Without Docker
+              </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>

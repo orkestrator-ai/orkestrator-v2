@@ -49,10 +49,12 @@ const TAB_TRIGGER_CLASSES =
  * enclosing settings body is `flex-1` inside a scroll container, so a
  * percentage height there resolves against content rather than the viewport
  * and the whole section grows instead. These subtract the settings chrome:
- * the overlay's `md:top-7` offset, the 48px content header, and the body's
- * `py-4` / `md:py-6` padding.
+ * the shared desktop title-bar height, the 48px content header, and the body's
+ * `py-4` / `md:py-6` padding. The fixed 96px desktop remainder is the header
+ * plus the body's 48px vertical padding.
  */
-const PANE_HEIGHT_CLASSES = "h-[calc(100dvh-80px)] md:h-[calc(100dvh-124px)]";
+const PANE_HEIGHT_CLASSES =
+  "h-[calc(100dvh-80px)] md:h-[calc(100dvh-var(--desktop-title-bar-height)-96px)]";
 
 /** Long enough that a typed word filters once, short enough to feel instant. */
 const FILTER_DEBOUNCE_MS = 150;

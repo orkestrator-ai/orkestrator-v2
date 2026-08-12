@@ -1256,7 +1256,9 @@ test("shutdown clears backend-owned PR watch state before a new backend starts",
     const environment = await first.invoke<{ id: string }>("create_environment", {
       projectId: project.id,
       name: "PR watch",
-      environmentType: "local",
+      // This test exercises backend-owned PR watch shutdown, not worktree
+      // admission. The remote-only project deliberately has no local checkout.
+      environmentType: "containerized",
     });
     await first.invoke("pr_monitor_watch", {
       environmentId: environment.id,

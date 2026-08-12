@@ -80,6 +80,8 @@
 
 /* Base styles */
 html {
+  /* Shared by the desktop shell and fullscreen surfaces that preserve its title bar. */
+  --desktop-title-bar-height: 34px;
   color-scheme: dark;
   scrollbar-color: var(--color-border) var(--color-background);
   height: 100%;

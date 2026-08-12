@@ -6,6 +6,7 @@ import {
   mockToastError as toastErrorMock,
   mockToastSuccess as toastSuccessMock,
 } from "../../mocks/sonner";
+import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 
 type SettingsDialogProps = {
   open: boolean;
@@ -837,6 +838,25 @@ describe("EnvironmentItem copy initial prompt", () => {
 });
 
 describe("EnvironmentItem menu actions and selection", () => {
+  test("disables container lifecycle actions while Docker is unavailable", () => {
+    const onStart = mock(() => {});
+    const onRestart = mock(() => {});
+    const { container } = render(
+      <DockerAvailabilityProvider available={false}>
+        {itemElement(makeEnvironment({ status: "running" }), { onStart, onRestart })}
+      </DockerAvailabilityProvider>,
+    );
+
+    const startItem = findMenuItem(container, "Start");
+    const restartItem = findMenuItem(container, "Restart");
+    expect(startItem?.getAttribute("aria-disabled")).toBe("true");
+    expect(restartItem?.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(startItem!);
+    fireEvent.click(restartItem!);
+    expect(onStart).not.toHaveBeenCalled();
+    expect(onRestart).not.toHaveBeenCalled();
+  });
+
   test("context menu Settings opens the settings dialog", async () => {
     const env = makeEnvironment();
     const { container } = renderItem(env);

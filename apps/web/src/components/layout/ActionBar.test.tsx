@@ -13,6 +13,7 @@ import * as realContexts from "@/contexts";
 import * as realBackend from "@/lib/backend";
 import * as realKanbanStore from "@/stores/kanbanStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
+import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import type { Environment, PrState, Project } from "@/types";
 import type {
   KanbanTask,
@@ -1386,6 +1387,54 @@ describe("ActionBar toolbar interactions", () => {
       asyncDialogOptions,
     );
   }, 60_000);
+
+  test("closes Docker configuration and preserves local controls when Docker stops", async () => {
+    const renderActionBar = (available: boolean) => (
+      <DockerAvailabilityProvider available={available}>
+        <ActionBar />
+      </DockerAvailabilityProvider>
+    );
+    const view = render(renderActionBar(true));
+
+    fireEvent.click(screen.getByRole("button", { name: "Docker configuration" }));
+    expect(await screen.findByText("Docker configuration dialog")).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Open in VS Code" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+
+    view.rerender(renderActionBar(false));
+
+    expect(screen.queryByText("Docker configuration dialog")).toBeNull();
+    expect(
+      (screen.getByRole("button", { name: "Docker configuration" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Open in VS Code" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+
+    currentEnvironment = {
+      ...selectedEnvironment,
+      environmentType: "local",
+      containerId: null,
+      worktreePath: "/tmp/feature-env",
+    };
+    view.rerender(renderActionBar(false));
+
+    const localEditorButton = screen.getByRole("button", { name: "Open in VS Code" });
+    expect((localEditorButton as HTMLButtonElement).disabled).toBe(false);
+    expect(
+      (screen.getByRole("button", { name: "Environment settings" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+    fireEvent.click(localEditorButton);
+    await waitFor(() => {
+      expect(openLocalInEditorMock).toHaveBeenCalledWith("/tmp/feature-env", "vscode");
+    });
+    expect(openInEditorMock).not.toHaveBeenCalled();
+  });
 
   test("dismisses repository and environment settings through onOpenChange", async () => {
     render(<ActionBar />);

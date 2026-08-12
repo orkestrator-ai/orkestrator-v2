@@ -9148,6 +9148,10 @@ export function createCommandRegistry(
     const { storage } = context;
     const project = await storage.getProject(asString(projectId, "projectId"));
     if (!project) throw new Error(`Project not found: ${projectId}`);
+    const requestedEnvironmentType = asEnvironmentType(environmentType);
+    if (requestedEnvironmentType === "local" && !project.localPath) {
+      throw new Error("Project has no local path - cannot create a local worktree");
+    }
     const repoConfig = await storage.getRepositoryConfig(project.id);
     const explicitName = asOptionalString(name)?.trim();
     const initialPromptText = asOptionalString(initialPrompt);
@@ -9166,7 +9170,7 @@ export function createCommandRegistry(
       networkAccessMode: networkAccessMode === "full" ? "full" : networkAccessMode === "restricted" ? "restricted" : undefined,
       initialPrompt: initialPromptText,
       portMappings: asPortMappings(portMappings),
-      environmentType: asEnvironmentType(environmentType),
+      environmentType: requestedEnvironmentType,
       entryPort: repoConfig.entryPort,
       pendingRenamePrompt,
     });

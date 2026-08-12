@@ -54,6 +54,7 @@ import {
   LazyDialogLoadingFallback,
   LazyLoadBoundary,
 } from "@/components/LazyLoadBoundary";
+import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 
 const NO_ENVIRONMENTS: Environment[] = [];
 const LazyRepositorySettings = lazy(async () => ({
@@ -318,6 +319,7 @@ export async function deleteProjectAndEnvironments(
 }
 
 export function HierarchicalSidebar() {
+  const dockerAvailable = useDockerAvailability();
   // Poll git diff stats for all environments
   useEnvironmentDiffStats();
   const [showAddProjectDialog, setShowAddProjectDialog] = useState(false);
@@ -643,7 +645,8 @@ export function HierarchicalSidebar() {
   const handleStopSelected = async () => {
     const runningIds = selectedEnvironmentIds.filter((id) => {
       const env = allEnvironments.find((e) => e.id === id);
-      return env?.status === "running";
+      return env?.status === "running"
+        && (env.environmentType === "local" || dockerAvailable);
     });
 
     const results = await Promise.allSettled(
@@ -660,7 +663,8 @@ export function HierarchicalSidebar() {
   const handleRestartSelected = async () => {
     const runningIds = selectedEnvironmentIds.filter((id) => {
       const env = allEnvironments.find((e) => e.id === id);
-      return env?.status === "running";
+      return env?.status === "running"
+        && (env.environmentType === "local" || dockerAvailable);
     });
 
     const results = await Promise.allSettled(
@@ -699,6 +703,11 @@ export function HierarchicalSidebar() {
       return env ? { id: env.id, name: env.name } : null;
     })
     .filter(Boolean) as { id: string; name: string }[];
+  const hasActionableRunningSelection = selectedEnvironmentIds.some((id) => {
+    const environment = allEnvironments.find((candidate) => candidate.id === id);
+    return environment?.status === "running"
+      && (environment.environmentType === "local" || dockerAvailable);
+  });
 
   const handleUpdateEnvironment = useMemo(
     () => createEnvironmentUpdateHandler(updateEnvironment),
@@ -737,6 +746,7 @@ export function HierarchicalSidebar() {
                 className="h-7 w-7 text-muted-foreground hover:text-orange-500"
                 onClick={handleStopSelected}
                 title="Stop selected"
+                disabled={!hasActionableRunningSelection}
               >
                 <Square className="h-4 w-4" />
               </Button>
@@ -746,6 +756,7 @@ export function HierarchicalSidebar() {
                 className="h-7 w-7 text-muted-foreground hover:text-foreground"
                 onClick={handleRestartSelected}
                 title="Restart selected"
+                disabled={!hasActionableRunningSelection}
               >
                 <RotateCw className="h-4 w-4" />
               </Button>

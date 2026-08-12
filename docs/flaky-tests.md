@@ -10,6 +10,19 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `App Docker availability > polls every 60 seconds and disables then re-enables container functionality` (`apps/web/src/App.test.tsx`)
+
+- **Status:** resolved
+- **Date observed:** 2026-08-11
+- **Original command:** `bun test --cwd apps/web --parallel`
+- **Worker configuration:** Bun reported `18x PARALLEL` across the web package.
+- **Failure:** The test timed out waiting for the second simulated poll to render the recovered `data-container-running="true"` state (duration: 1,019.40 ms).
+- **Suite counts:** 5,468 total, 5,466 passed, 1 skipped, 1 failed across 221 files with 18,404 assertions.
+- **Isolated rerun:** `bun test --cwd apps/web ./src/App.test.tsx --parallel` -> 55 passed, 0 failed; the target passed in that run. A pre-fix exact-test stress run then reproduced the race 6 times in 20 repetitions and preserved the failing assertion.
+- **Root cause:** The test invoked an asynchronous interval callback inside synchronous `act()`. It could observe the third mocked Docker probe while React's resulting availability update had not committed, leaving the terminal projection at `false` until the one-second wait expired. The test also fired a poll before explicitly letting the prior check clear the production in-flight deduplication guard.
+- **Fix:** Capture every matching 60-second callback, let the startup check settle, and execute each simulated poll in asynchronous `act()` through the following macrotask before asserting the rendered capability state.
+- **Verification:** `bun test --cwd apps/web ./src/App.test.tsx --test-name-pattern "polls every 60 seconds and disables then re-enables container functionality" --rerun-each 20` -> 20 passed, 0 failed; individual runs completed in 9.45-27.46 ms. `bun test --cwd apps/web --parallel` then passed 5,467 tests with 1 skipped and 0 failed across 221 files in 16.98 seconds.
+
 ## `standalone backend service > can own a Tailscale Serve listener and publish its HTTPS URL` (`apps/backend/tests/standalone.test.ts`)
 
 - **Status:** open
@@ -181,6 +194,7 @@ history rather than two partial ones.
   - **Isolation:** `bun test src/core/pr-monitor-agent-completion.integration.test.ts` from `apps/backend` -> 3 passed, 0 failed, 11 assertions in 514 ms. The whole backend group also passed on its own: `bun test --parallel` from `apps/backend` -> 1,556 passed, 0 failed in 11.98 s. Root group alone: 3,787 passed, 0 failed. Web workspace alone: 5,450 passed, 0 failed.
   - **Attribution:** the Claude-credential and entrypoint-allowlist work in flight touches neither the PR monitor nor its polling, and the first of the four failures predates those edits on a clean tree at `b1674ee7`, so that change is ruled out as the cause.
   - **Reinforces the wall-clock signal below:** all four failing runs finished the workspace group in 27–28 s, squarely in the fast band that correlates with failure rather than the 133.8 s band that passed.
+- **Recurrence (2026-08-12), backend group run directly at `bfaea86c`:** `bun test src tests --parallel` from `apps/backend` on a clean tree -> 1,565 passed, 1 failed, 5,949 assertions across 52 files in 14.11 s; the sole failure was this test at line 203 with the usual `expect(received).not.toHaveLength(expected)` (failed duration 384.56 ms). Notable because the group was **not** run through Turbo alongside the other groups this time, which weakens the "only under aggregate contention" reading — the 14.11 s group duration is well inside the fast band the entry already correlates with failure. Isolated rerun `bun test src/core/pr-monitor-agent-completion.integration.test.ts` from `apps/backend` -> 3 passed, 0 failed. The Docker-availability work in flight touches the renderer, the build-pipeline service and `create_environment`, none of which is on the PR-monitor announcement path.
 - **Note for the next investigator:** a failure here aborts the Turbo workspace group, so the `@orkestrator/web` and `@orkestrator/web-public` suites never execute and `scripts/test-all.ts` returns before the iOS group. A red run therefore leaves three suites unverified; run them directly (`bun run --cwd apps/web test:workspace`) rather than assuming the aggregate covered them.
 - **Reproduction attempt (2026-08-07), 5 aggregate runs — 4 failed, 1 passed:** `bun run test` (and `TURBO_FORCE=true bun run test`) failed this test on 4 consecutive runs, then passed on a 5th. Two of the four failures were on a clean tree at `bf5874a5` and two with an unrelated working-tree change applied, so the change under review was ruled out as the cause. The backend group run on its own passed 6/6 (`bun test --cwd apps/backend --parallel`, 1,502 tests clean and 1,509 with the change), and the file alone passed in 464 ms.
 - **Strongest signal so far — wall-clock, not the flag:** every failing aggregate run finished its workspace group in ~31 s; the one passing aggregate run took 133.8 s for the same group. The failures cluster in fast runs, which is the opposite of a straightforward "slow under load" story and suggests the PR-monitor announcement is racing something that completes sooner when the machine is less contended, rather than missing a window when it is more contended.

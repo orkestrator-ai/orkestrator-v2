@@ -40,6 +40,7 @@ import {
 } from "@/lib/agent-launch";
 import { cn } from "@/lib/utils";
 import type { EnvironmentType } from "@/types";
+import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 
 export interface BuildLaunchStepSelection {
   agent: LaunchAgent;
@@ -175,6 +176,8 @@ interface BuildLaunchDialogProps {
   commentContext?: BuildLaunchCommentContextOption;
   /** Disables the submit button while a start request is in flight. */
   busy?: boolean;
+  /** Whether this project has a host checkout that can own local worktrees. */
+  localEnvironmentAvailable?: boolean;
   onConfirm: (selection: BuildLaunchSelection) => void;
 }
 
@@ -239,8 +242,10 @@ export function BuildLaunchDialog({
   favoriteOpenCodeModelIds = [],
   commentContext,
   busy = false,
+  localEnvironmentAvailable = true,
   onConfirm,
 }: BuildLaunchDialogProps) {
+  const dockerAvailable = useDockerAvailability();
   const [environmentType, setEnvironmentType] = useState(defaultEnvironmentType);
   const [steps, setSteps] = useState(() =>
     initialSteps(defaultAgent, catalog, preferredModels, preferredReasoningEfforts));
@@ -260,7 +265,15 @@ export function BuildLaunchDialog({
     const justOpened = open && !wasOpenRef.current;
     wasOpenRef.current = open;
     if (!justOpened) return;
-    setEnvironmentType(defaultEnvironmentType);
+    setEnvironmentType(() => {
+      if (defaultEnvironmentType === "containerized" && !dockerAvailable) {
+        return localEnvironmentAvailable ? "local" : "containerized";
+      }
+      if (defaultEnvironmentType === "local" && !localEnvironmentAvailable) {
+        return dockerAvailable ? "containerized" : "local";
+      }
+      return defaultEnvironmentType;
+    });
     setUniform(true);
     setIncludeComments(commentContext?.defaultIncluded ?? true);
     setSteps(initialSteps(
@@ -274,10 +287,20 @@ export function BuildLaunchDialog({
     commentContext?.defaultIncluded,
     defaultAgent,
     defaultEnvironmentType,
+    dockerAvailable,
+    localEnvironmentAvailable,
     open,
     preferredModels,
     preferredReasoningEfforts,
   ]);
+
+  useEffect(() => {
+    if (!dockerAvailable && localEnvironmentAvailable && environmentType === "containerized") {
+      setEnvironmentType("local");
+    } else if (!localEnvironmentAvailable && dockerAvailable && environmentType === "local") {
+      setEnvironmentType("containerized");
+    }
+  }, [dockerAvailable, environmentType, localEnvironmentAvailable]);
 
   const resolved = useMemo(() => {
     const entries = BUILD_STEPS.map(({ key }) => {
@@ -375,6 +398,8 @@ export function BuildLaunchDialog({
           className="flex min-h-0 flex-1 flex-col overflow-hidden"
           onSubmit={(event) => {
             event.preventDefault();
+            if (environmentType === "containerized" && !dockerAvailable) return;
+            if (environmentType === "local" && !localEnvironmentAvailable) return;
             onConfirm({
               environmentType,
               ...(commentContext ? { includeComments } : {}),
@@ -404,6 +429,9 @@ export function BuildLaunchDialog({
               >
                 {ENVIRONMENT_OPTIONS.map((option) => {
                   const selected = environmentType === option.value;
+                  const disabled = option.value === "containerized"
+                    ? !dockerAvailable
+                    : !localEnvironmentAvailable;
                   const id = `${environmentGroupId}-${option.value}`;
                   return (
                     <div key={option.value} className="relative min-w-0">
@@ -412,6 +440,7 @@ export function BuildLaunchDialog({
                         type="radio"
                         name={`${environmentGroupId}-environment`}
                         checked={selected}
+                        disabled={disabled}
                         onChange={() => setEnvironmentType(option.value)}
                         className="peer sr-only"
                       />
@@ -419,6 +448,7 @@ export function BuildLaunchDialog({
                         htmlFor={id}
                         className={cn(
                           "flex min-h-16 cursor-pointer flex-col rounded-lg border px-3 py-2.5 transition-colors peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-cyan-400/70",
+                          disabled && "cursor-not-allowed opacity-50",
                           selected
                             ? "border-cyan-400/55 bg-cyan-500/10 text-zinc-100"
                             : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700",
@@ -429,7 +459,11 @@ export function BuildLaunchDialog({
                           {option.label}
                         </span>
                         <span className="mt-1 text-[11px] leading-snug text-zinc-500">
-                          {option.description}
+                          {disabled
+                            ? option.value === "containerized"
+                              ? "Unavailable while Docker is stopped"
+                              : "Unavailable without a local project checkout"
+                            : option.description}
                         </span>
                       </label>
                     </div>
@@ -627,7 +661,14 @@ export function BuildLaunchDialog({
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={busy}>
+            <Button
+              type="submit"
+              disabled={
+                busy
+                || (environmentType === "containerized" && !dockerAvailable)
+                || (environmentType === "local" && !localEnvironmentAvailable)
+              }
+            >
               Start build
             </Button>
           </DialogFooter>

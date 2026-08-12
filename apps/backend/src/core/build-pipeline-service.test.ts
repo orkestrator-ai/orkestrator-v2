@@ -1937,6 +1937,43 @@ describe("BuildPipelineService", () => {
     });
   });
 
+  test("fails a local build cleanly when the project has no host checkout", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-no-checkout-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    // What `create_environment` now answers for a remote-only project.
+    const rejection = "Project has no local path - cannot create a local worktree";
+    const invoke = async <T>(command: string): Promise<T> => {
+      if (command !== "create_environment") {
+        throw new Error(`Unexpected command: ${command}`);
+      }
+      throw new Error(rejection);
+    };
+    const service = new BuildPipelineService(storage, invoke, {
+      autoAdvance: false,
+      provider: async () => new FakeProvider(),
+    });
+
+    try {
+      await expect(service.start(startInput({
+        existingEnvironmentId: undefined,
+        environmentType: "local",
+      }))).rejects.toThrow(rejection);
+
+      // The rejection must land as a terminal, explained failure rather than
+      // leaving the pipeline parked in `creating-environment` forever.
+      const pipelines = await storage.listBuildPipelines("project-1");
+      expect(pipelines).toHaveLength(1);
+      const pipeline = pipelines[0]!.snapshot as BuildPipeline;
+      expect(pipeline.phase).toBe("failed");
+      expect(pipeline.error).toContain(rejection);
+      expect(pipeline.environmentId).toBeFalsy();
+    } finally {
+      await service.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("coalesces a timer-style provisioning race without losing the custom name prompt", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-race-"));
     const storage = new StorageService(dataDir);

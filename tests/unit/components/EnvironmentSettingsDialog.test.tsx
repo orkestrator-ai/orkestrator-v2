@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
 import { useClaudeStore } from "@/stores/claudeStore";
+import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import type { AgentExtensionCatalog, AgentSkillProvider } from "@/lib/backend";
 import type { Environment } from "@/types";
 import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
@@ -99,6 +100,8 @@ const mockReadEnvironmentAgentSkill = mock(
     truncated: false,
   }),
 );
+const mockUpdatePortMappings = mock(async () => makeEnvironment());
+const mockSyncEnvironmentStatus = mock(async () => makeEnvironment());
 const actualBackend = await import("../../../apps/web/src/lib/backend");
 
 mock.module("@/lib/backend", () => ({
@@ -109,8 +112,8 @@ mock.module("@/lib/backend", () => ({
   updateEnvironmentAgentSettings: mockUpdateEnvironmentAgentSettings,
   renameEnvironment: mock(async (_id: string, name: string) => ({ ...makeEnvironment(), name })),
   updateEnvironmentAllowedDomains: mock(async () => makeEnvironment()),
-  updatePortMappings: mock(async () => makeEnvironment()),
-  syncEnvironmentStatus: mock(async () => makeEnvironment()),
+  updatePortMappings: mockUpdatePortMappings,
+  syncEnvironmentStatus: mockSyncEnvironmentStatus,
   testDomainResolution: mock(async () => []),
 }));
 
@@ -170,6 +173,8 @@ describe("EnvironmentSettingsDialog", () => {
     mockGetEnvironmentExtensions.mockClear();
     mockListEnvironmentAgentSkills.mockClear();
     mockReadEnvironmentAgentSkill.mockClear();
+    mockUpdatePortMappings.mockClear();
+    mockSyncEnvironmentStatus.mockClear();
     extensionHandler = async () => defaultExtensionCatalogs();
     capturedMenuItems = [];
     mockToastSuccess.mockClear();
@@ -816,5 +821,96 @@ describe("EnvironmentSettingsDialog", () => {
     expect(localMenu).toContain("extensions");
     // Local environments have no container network or port settings.
     expect(localMenu).not.toContain("ports");
+  });
+
+  test("blocks a pending port recreate when Docker becomes unavailable", async () => {
+    mockSection = "ports";
+    const onRestart = mock(async () => undefined);
+    const onUpdate = mock(() => undefined);
+    const environment = makeEnvironment({ status: "running" });
+    const renderDialog = (available: boolean) => (
+      <DockerAvailabilityProvider available={available}>
+        <EnvironmentSettingsDialog
+          open={true}
+          onOpenChange={() => {}}
+          environment={environment}
+          onUpdate={onUpdate}
+          onRestart={onRestart}
+        />
+      </DockerAvailabilityProvider>
+    );
+    const view = render(renderDialog(true));
+
+    fireEvent.click(screen.getByRole("button", { name: "Add Port" }));
+    fireEvent.change(screen.getByPlaceholderText("Host"), {
+      target: { value: "3001" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    const restartButton = await screen.findByRole("button", {
+      name: "Restart Environment",
+    });
+    expect((restartButton as HTMLButtonElement).disabled).toBe(false);
+
+    view.rerender(renderDialog(false));
+
+    const disabledRestartButton = screen.getByRole("button", {
+      name: "Restart Environment",
+    });
+    expect((disabledRestartButton as HTMLButtonElement).disabled).toBe(true);
+    expect(disabledRestartButton.getAttribute("title")).toBe(
+      "Start Docker to recreate this environment",
+    );
+    fireEvent.click(disabledRestartButton);
+
+    expect(mockUpdatePortMappings).not.toHaveBeenCalled();
+    expect(onRestart).not.toHaveBeenCalled();
+    expect(mockSyncEnvironmentStatus).not.toHaveBeenCalled();
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  test("saves port changes without a recreate prompt while Docker is unavailable", async () => {
+    mockSection = "ports";
+    const onRestart = mock(async () => undefined);
+    const onUpdate = mock(() => undefined);
+    const onOpenChange = mock(() => undefined);
+    const environment = makeEnvironment({ status: "running" });
+    render(
+      <DockerAvailabilityProvider available={false}>
+        <EnvironmentSettingsDialog
+          open={true}
+          onOpenChange={onOpenChange}
+          environment={environment}
+          onUpdate={onUpdate}
+          onRestart={onRestart}
+        />
+      </DockerAvailabilityProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add Port" }));
+    fireEvent.change(screen.getByPlaceholderText("Host"), {
+      target: { value: "3001" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    // The recreate confirmation must not open: its only action is disabled
+    // while the daemon is down, which would strand the user with no way to
+    // save and silently drop every other edit in the form.
+    await waitFor(() => {
+      expect(mockUpdatePortMappings).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByRole("button", { name: "Restart Environment" })).toBeNull();
+    expect(onRestart).not.toHaveBeenCalled();
+    expect(onUpdate).toHaveBeenCalled();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(mockToastSuccess).toHaveBeenCalledWith(
+      "Environment settings saved",
+      expect.objectContaining({
+        description:
+          "Port changes apply the next time this environment is recreated, once Docker is running.",
+      }),
+    );
   });
 });

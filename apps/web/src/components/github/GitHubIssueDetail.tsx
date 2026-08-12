@@ -65,6 +65,8 @@ import {
   GITHUB_WORKFLOW_STAGES,
   getGitHubStageLabel,
 } from "./GitHubIssueCard";
+import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
+import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 
 function formatGitHubDate(value: string): string {
   const date = new Date(value);
@@ -265,6 +267,8 @@ export function GitHubIssueDetailContent({
   onClosed,
   buildPipeline,
 }: GitHubIssueDetailContentProps) {
+  const dockerAvailable = useDockerAvailability();
+  const localEnvironmentAvailable = useLocalEnvironmentAvailable(projectId);
   const key = githubIssueDetailKey(projectId, issueNumber);
   const detail = useGitHubIssuesStore((state) => state.details.get(key));
   const loading = useGitHubIssuesStore((state) => state.loadingDetails.has(key));
@@ -419,6 +423,8 @@ export function GitHubIssueDetailContent({
 
   const handleStartBuild = async (environmentType: EnvironmentType) => {
     if (!detail || activePipeline || startingType) return;
+    if (environmentType === "containerized" && !dockerAvailable) return;
+    if (environmentType === "local" && !localEnvironmentAvailable) return;
     setStartingType(environmentType);
     setBuildError(null);
     try {
@@ -764,7 +770,8 @@ export function GitHubIssueDetailContent({
                     type="button"
                     variant="outline"
                     size="sm"
-                    disabled={!!startingType || !!activePipeline}
+                    disabled={!dockerAvailable || !!startingType || !!activePipeline}
+                    title={!dockerAvailable ? "Start Docker to run a container build" : undefined}
                     onClick={() => void handleStartBuild("containerized")}
                   >
                     {startingType === "containerized" ? (
@@ -778,7 +785,12 @@ export function GitHubIssueDetailContent({
                     type="button"
                     variant="outline"
                     size="sm"
-                    disabled={!!startingType || !!activePipeline}
+                    disabled={!localEnvironmentAvailable || !!startingType || !!activePipeline}
+                    title={
+                      !localEnvironmentAvailable
+                        ? "Add a local project checkout to run a local build"
+                        : undefined
+                    }
                     onClick={() => void handleStartBuild("local")}
                   >
                     {startingType === "local" ? (

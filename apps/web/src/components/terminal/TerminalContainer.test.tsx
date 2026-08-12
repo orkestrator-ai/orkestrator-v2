@@ -582,6 +582,59 @@ describe("TerminalContainer", () => {
     expect(getPaneLayoutMock).toHaveBeenCalledWith("env-hidden");
   });
 
+  test("discards restored panes when the container stops, so the caller must not pass daemon state", async () => {
+    getPaneLayoutMock.mockResolvedValue({
+      version: PANE_LAYOUT_VERSION,
+      environmentId: "env-hidden",
+      containerId: "container-hidden",
+      activePaneId: "restored-pane",
+      root: {
+        kind: "leaf",
+        id: "restored-pane",
+        tabs: [
+          { id: "restored-tab", type: "plain", displayTitle: "Restored" },
+          { id: "second-tab", type: "plain", displayTitle: "Second" },
+        ],
+        activeTabId: "restored-tab",
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 1,
+    });
+
+    const renderTerminal = (isContainerRunning: boolean) => (
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning={isContainerRunning}
+          isActive={false}
+        />
+      </TerminalProvider>
+    );
+    const view = render(renderTerminal(true));
+
+    await waitFor(() => {
+      const restored = usePaneLayoutStore.getState().environments.get("env-hidden");
+      expect(restored?.root).toMatchObject({
+        kind: "leaf",
+        tabs: [{ id: "restored-tab" }, { id: "second-tab" }],
+      });
+    });
+
+    view.rerender(renderTerminal(false));
+
+    // `isContainerRunning={false}` with a live containerId means "this
+    // container stopped", and the answer is to throw the panes away. That is
+    // correct for a real stop and catastrophic for a false negative, which is
+    // why App.tsx feeds this from the environment's own status rather than
+    // from the Docker daemon probe.
+    await waitFor(() => {
+      const afterStop = usePaneLayoutStore.getState().environments.get("env-hidden");
+      expect(afterStop?.root).toMatchObject({ kind: "leaf", id: "default", tabs: [] });
+      expect(afterStop?.activePaneId).toBe("default");
+    });
+  });
+
   test("CAS-migrates sensitive restored browser history after hydration alone", async () => {
     const currentUrl = "https://example.com/current?token=current#live";
     getPaneLayoutMock.mockResolvedValue({

@@ -185,10 +185,11 @@ printf '%s\\n' '[{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE","upda
 
       await invoke("pr_monitor_probe_environment", { environmentId: "env-1" });
 
-      await waitForCondition(
-        async () => (await storage.getEnvironment("env-1"))?.prUrl === PR_URL,
-        "the probe to persist the PR the agent created",
-      );
+      await waitForCondition(async () => {
+        const environment = await storage.getEnvironment("env-1");
+        return environment?.prUrl === PR_URL
+          && events.some((event) => event.event === PR_MONITOR_CHANGED_EVENT);
+      }, "the probe to persist and announce the PR the agent created");
       expect(await ghLog()).toContain(
         "pr list --head feature/agent-created --state all",
       );

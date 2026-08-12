@@ -1797,7 +1797,13 @@ exit 1
 `, async (logPath) => {
       await commands.get("start_environment")?.({ environmentId: environment.id }, context);
       await commands.get("pr_monitor_refresh")?.({ environmentId: environment.id }, context);
-      await waitForCondition(() => existsSync(logPath), "resumed PR monitor check");
+      await waitForCondition(
+        () => existsSync(logPath)
+          && readFileSync(logPath, "utf8").includes(
+            "pr view https://github.com/acme/repo/pull/42 --json url,state,mergeable",
+          ),
+        "resumed PR monitor check",
+      );
 
       expect(await fs.readFile(logPath, "utf8")).toContain(
         "pr view https://github.com/acme/repo/pull/42 --json url,state,mergeable",
@@ -6767,12 +6773,31 @@ exit 1
 
         expect(immediate.some((change) => change.path === "tracked.txt")).toBe(false);
 
-        await fs.writeFile(path.join(worktree, "tracked.txt"), "base\nchanged again\n");
+        // `revert_local_file` only *requests* its scan, so the reverted counts
+        // are not published yet. Rewriting the file before that scan lands makes
+        // it read the pre-revert counts again, and the service correctly
+        // suppresses an unchanged reading - leaving `last` pinned to the
+        // pre-revert value, which then suppresses every later scan too. Waiting
+        // for the reverted counts is the barrier that keeps the rewrite below a
+        // genuine change rather than a no-op the service is right to swallow.
+        await waitForCondition(
+          () => emitted.some((entry) =>
+            entry.event === "environment-diff-stats-changed"
+            && (entry.payload as { stats?: { filesChanged?: number } }).stats?.filesChanged === 0
+          ),
+          "the revert to be announced",
+        );
+
+        const trackedPath = path.join(worktree, "tracked.txt");
         emitted.splice(0);
+        await fs.writeFile(trackedPath, "base\nchanged again\n");
         await commands.get("refresh_environment_diff_stats")?.(
           { environmentId: environment.id },
           context,
         );
+        // One write is enough for whichever path gets there first - the explicit
+        // refresh or the watcher. Retrying the write instead would only mask an
+        // arbitrarily slow announcement, and cannot escape the suppression above.
         await waitForCondition(
           () => emitted.some((entry) =>
             entry.event === "environment-diff-stats-changed"
@@ -6799,7 +6824,7 @@ exit 1
         await commands.get("delete_environment")?.({ environmentId: environment.id }, context)
           .catch(() => undefined);
       }
-    });
+    }, ASYNC_TEST_BUDGET_MS);
 
     test("invalidates the shared file-list cache after container revert and delete", async () => {
       const environment = createEnvironment({

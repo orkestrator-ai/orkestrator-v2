@@ -4094,12 +4094,13 @@ describe("OpenCodeChatTab", () => {
         isActive
       />,
     );
-    await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+    await flushReactMicrotasks();
+    expect(mockSubscribeToEvents).toHaveBeenCalled();
     act(() => {
       useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true);
     });
     fireEvent.click(screen.getByTestId("opencode-stop"));
-    await waitFor(() => expect(mockAbortSession).toHaveBeenCalled());
+    expect(mockAbortSession).toHaveBeenCalled();
 
     channel.push({
       type: "session.status",
@@ -4108,34 +4109,28 @@ describe("OpenCodeChatTab", () => {
         status: { type: "idle" },
       },
     });
-    await waitFor(() => {
-      expect(screen.queryByTestId("opencode-stop")).toBeNull();
-      expect(screen.getByTestId("opencode-send").hasAttribute("disabled")).toBe(
-        false,
-      );
-    });
+    await flushReactMicrotasks();
+    expect(screen.queryByTestId("opencode-stop")).toBeNull();
+    expect(screen.getByTestId("opencode-send").hasAttribute("disabled")).toBe(false);
 
     await act(async () => {
       pendingAbort.resolve(true);
       await pendingAbort.promise;
     });
-    await waitFor(() => {
-      expect(
-        useOpenCodeStore
-          .getState()
-          .sessions.get(SESSION_KEY)
-          ?.messages.some((message) => message.content === TURN_STOPPED_BY_USER),
-      ).toBe(true);
-    });
+    expect(
+      useOpenCodeStore
+        .getState()
+        .sessions.get(SESSION_KEY)
+        ?.messages.some((message) => message.content === TURN_STOPPED_BY_USER),
+    ).toBe(true);
     fireEvent.click(screen.getByTestId("opencode-send"));
-    await waitFor(() => {
-      expect(mockSendPrompt).toHaveBeenCalledWith(
-        MOCK_CLIENT,
-        "session-1",
-        composeText,
-        expect.any(Object),
-      );
-    });
+    await flushReactMicrotasks();
+    expect(mockSendPrompt).toHaveBeenCalledWith(
+      MOCK_CLIENT,
+      "session-1",
+      composeText,
+      expect.any(Object),
+    );
     useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
     channel.close();
   });

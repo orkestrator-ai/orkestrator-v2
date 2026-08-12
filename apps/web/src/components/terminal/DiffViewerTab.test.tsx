@@ -98,6 +98,7 @@ mock.module("@/lib/monaco-loader", () => ({
 }));
 
 const {
+  cacheImmutableDiffBaseForTests,
   DiffViewerTab,
   clearDiffBaseCacheForTests,
   formatBaseRef,
@@ -749,18 +750,16 @@ describe("DiffViewerTab immutable base cache", () => {
   });
 
   test("bounds retained commit bases to 128 entries", async () => {
-    const loadFile = async (filePath: string) => {
-      const view = render(
-        <DiffViewerTab
-          {...baseProps}
-          filePath={filePath}
-          baseBranch="abcdef0000000000000000000000000000000000"
-          containerId="container-1"
-        />,
+    const branch = "abcdef0000000000000000000000000000000000";
+    const loadFile = (filePath: string) =>
+      cacheImmutableDiffBaseForTests(
+        `container\0container-1\0${branch}\0${filePath}`,
+        branch,
+        async () => {
+          const result = await readFileAtBranchMock("container-1", filePath, branch);
+          return result ? { ...result, path: filePath } : null;
+        },
       );
-      await screen.findByTestId("diff-editor");
-      view.unmount();
-    };
 
     for (let index = 0; index < 129; index += 1) {
       await loadFile(`src/cache-${index}.ts`);

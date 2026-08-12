@@ -6208,8 +6208,13 @@ describe("remote gateway", () => {
         headers: { authorization: `Bearer ${info.token}` },
       }, (response) => {
         let body = "";
+        let emitted = false;
         response.on("data", (chunk) => {
           body += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+          if (!emitted && body.includes(": connected") && body.includes(": keepalive")) {
+            emitted = true;
+            gateway.emit("menu-zoom", "in");
+          }
           if (body.includes(": keepalive") && body.includes("\"event\":\"menu-zoom\"")) {
             response.destroy();
             resolve(body);
@@ -6218,10 +6223,6 @@ describe("remote gateway", () => {
       });
       request.on("error", reject);
       request.end();
-
-      setTimeout(() => {
-        gateway.emit("menu-zoom", "in");
-      }, 10);
     });
 
     expect(eventBody).toContain(": connected");

@@ -42,8 +42,8 @@ const REGISTRY_DOCKER_OWNER = dockerOwnerNamespace(REGISTRY_DATA_DIR);
 const DOCKER_SCRIPT = `#!/bin/sh
 printf 'docker %s\n' "$*" >> "$FAKE_COMMAND_LOG"
 
-if [ "$1" = "system" ] && [ "$2" = "prune" ]; then
-  printf 'Deleted Containers:\\nold-container\\nTotal reclaimed space: 768MB\\n'
+if [ "$1" = "container" ] && [ "$2" = "prune" ]; then
+  printf 'Deleted Containers:\\nold-container\\n\\nTotal reclaimed space: 768MB\\n'
   exit 0
 fi
 if [ "$1" = "ps" ] && [ "$2" = "-a" ]; then
@@ -54,7 +54,7 @@ if [ "$1" = "ps" ] && [ "$2" = "-a" ]; then
         '{"ID":"orphan-container","Names":"runtime-orphan","Status":"Exited (0)","State":"exited","Image":"orkestrator-v2:latest","Labels":"app=orkestrator-v2,orkestrator-owner=${REGISTRY_DOCKER_OWNER},environment-name=orphan"}'
       ;;
     *" -q "*) printf 'assigned-container\\norphan-container\\n' ;;
-    *) printf 'assigned-container\\tassigned\\norphan-container\\torphan\\n' ;;
+    *) printf 'assigned-container\\tassigned\\tapp=orkestrator-v2,orkestrator-owner=${REGISTRY_DOCKER_OWNER}\\norphan-container\\torphan\\tapp=orkestrator-v2,orkestrator-owner=${REGISTRY_DOCKER_OWNER}\\n' ;;
   esac
   exit 0
 fi
@@ -225,9 +225,9 @@ describe("direct backend command registry coverage", () => {
     });
 
     await expect(
-      invoke("docker_system_prune", { pruneVolumes: true }, context),
+      invoke("docker_system_prune", {}, context),
     ).resolves.toEqual({
-      containersDeleted: 0,
+      containersDeleted: 1,
       imagesDeleted: 0,
       networksDeleted: 0,
       volumesDeleted: 0,
@@ -268,7 +268,7 @@ describe("direct backend command registry coverage", () => {
 
     const log = await commandLogContents();
     expect(log).toContain(
-      `docker system prune -f --filter label=orkestrator-owner=${REGISTRY_DOCKER_OWNER} --volumes`,
+      `docker container prune -f --filter label=orkestrator-owner=${REGISTRY_DOCKER_OWNER}`,
     );
     expect(log).toContain("docker rm -f orphan-container");
     expect(log).not.toContain("docker rm -f assigned-container");

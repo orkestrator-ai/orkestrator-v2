@@ -886,23 +886,29 @@ export async function reattachContainer(
   return invoke<Environment>("reattach_container", { projectId, containerId, name });
 }
 
-/** Result of Docker system prune operation */
+/** Result of a Docker prune operation */
 export interface SystemPruneResult {
   /** Number of containers deleted */
   containersDeleted: number;
-  /** Number of images deleted */
+  /** Number of images deleted. Always 0: images are shared, so none are pruned. */
   imagesDeleted: number;
-  /** Number of networks deleted */
+  /** Number of networks deleted. Always 0: this app creates no networks. */
   networksDeleted: number;
-  /** Number of volumes deleted */
+  /** Number of volumes deleted. Always 0: this app creates no volumes. */
   volumesDeleted: number;
-  /** Total space reclaimed in bytes */
-  spaceReclaimed: number;
+  /** Total space reclaimed, pre-formatted by Docker (e.g. "1.25GB") */
+  spaceReclaimed: string;
 }
 
-/** Perform Docker system prune - removes unused containers, images, networks, and optionally volumes */
-export async function dockerSystemPrune(pruneVolumes: boolean = false): Promise<SystemPruneResult> {
-  return invoke<SystemPruneResult>("docker_system_prune", { pruneVolumes });
+/**
+ * Remove this instance's stopped containers.
+ *
+ * Scoped to containers labelled with this backend registry's owner. Images,
+ * networks and volumes are deliberately left alone — they carry no owner label,
+ * so pruning them could not be limited to resources this instance created.
+ */
+export async function dockerSystemPrune(): Promise<SystemPruneResult> {
+  return invoke<SystemPruneResult>("docker_system_prune", {});
 }
 
 /** Get container logs (non-streaming, returns last N lines) */

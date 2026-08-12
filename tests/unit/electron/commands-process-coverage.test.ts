@@ -80,7 +80,11 @@ fi
 if [ "$1" = "ps" ] && [ "$2" = "-a" ]; then
   case " $* " in
     *" -q "*) printf 'container-a\ncontainer-b\n' ;;
-    *) printf 'container-a\talpha\ncontainer-b\tbeta\n' ;;
+    *)
+      printf 'container-a\talpha\tapp=orkestrator-v2,orkestrator-owner=%s\n' "\${FAKE_DOCKER_OWNER:-}"
+      printf 'container-b\tbeta\tapp=orkestrator-v2\n'
+      printf 'container-c\tgamma\tapp=orkestrator-v2,orkestrator-owner=other-registry\n'
+      ;;
   esac
   exit 0
 fi
@@ -104,8 +108,8 @@ if [ "$1" = "logs" ]; then
   esac
   exit 0
 fi
-if [ "$1" = "system" ] && [ "$2" = "prune" ]; then
-  printf 'Deleted Containers:\ncontainer-old\nTotal reclaimed space: 1.25GB\n'
+if [ "$1" = "container" ] && [ "$2" = "prune" ]; then
+  printf 'Deleted Containers:\ncontainer-old\ncontainer-older\n\nTotal reclaimed space: 1.25GB\n'
   exit 0
 fi
 if [ "$1" = "exec" ]; then
@@ -348,6 +352,9 @@ beforeAll(async () => {
   process.env.HOME = fakeHome;
   process.env.FAKE_DOCKER_LOG = commandLog;
   process.env.FAKE_LAUNCHER_LOG = launcherLog;
+  // Lets the fake `docker ps` label one row with the owner the registry under
+  // test will compute from `root`.
+  process.env.FAKE_DOCKER_OWNER = dockerOwnerNamespace(root);
   Object.defineProperty(os, "homedir", { configurable: true, value: () => fakeHome });
 });
 
@@ -494,10 +501,15 @@ describe("process and platform command behavior", () => {
     process.env.FAKE_DOCKER_STATUS = "unexpected";
     expect(await invoke("docker_container_status", { containerId: "container-a" })).toBe("error");
 
+    // container-a is owned by this registry and container-b predates the owner
+    // label, so both are listed; container-c belongs to another registry.
     expect(await invoke("list_docker_containers")).toEqual([
       ["container-a", "alpha"],
       ["container-b", "beta"],
     ]);
+    expect(await readCommandLog()).not.toContain(
+      `--filter label=orkestrator-owner=${dockerOwnerNamespace(root)} --format`,
+    );
     expect(await invoke("get_container_host_port", { containerId: "container-a", containerPort: 4096 })).toBe(43123);
     process.env.FAKE_DOCKER_NO_PORT = "1";
     expect(await invoke("get_container_host_port", { containerId: "container-a", containerPort: 4096 })).toBeNull();
@@ -511,8 +523,8 @@ describe("process and platform command behavior", () => {
       { event: "container-log", payload: { containerId: "container-a", line: "stream stderr\n" } },
     ]);
 
-    expect(await invoke("docker_system_prune", { pruneVolumes: true })).toEqual({
-      containersDeleted: 0,
+    expect(await invoke("docker_system_prune", {})).toEqual({
+      containersDeleted: 2,
       imagesDeleted: 0,
       networksDeleted: 0,
       volumesDeleted: 0,
@@ -525,9 +537,14 @@ describe("process and platform command behavior", () => {
       memoryUsed: 0,
       diskUsed: 0,
     });
-    expect(await readCommandLog()).toContain(
-      `docker system prune -f --filter label=orkestrator-owner=${dockerOwnerNamespace(root)} --volumes`,
+    // Scoped to this registry's containers. `system prune` would apply the same
+    // label filter to images, networks and volumes, which never carry it.
+    const pruneLog = await readCommandLog();
+    expect(pruneLog).toContain(
+      `docker container prune -f --filter label=orkestrator-owner=${dockerOwnerNamespace(root)}`,
     );
+    expect(pruneLog).not.toContain("docker system prune");
+    expect(pruneLog).not.toContain("--volumes");
   });
 
   test("reattaches a container and persists its inspected status", async () => {

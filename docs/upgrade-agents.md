@@ -33,10 +33,24 @@ verified upstream bytes and creates a locally ad-hoc-signed executable.
 An entry may also declare `companions`: further executables the primary one
 spawns from its own directory. They are installed into the same version
 directory and symlinked into the same generated `bin` directory, and the whole
-set is validated together, so a cache predating a new companion is reinstalled
+set is validated together, so a cache predating a new companion is repaired
 rather than trusted. Codex's `codex-code-mode-host` is the only one today.
 Companions are not probed with `--version`: they are helper processes with their
 own protocols, not CLIs.
+
+Repair is incremental. When the primary executable still verifies and only a
+companion is absent — the shape every existing install has the first time a
+companion is added to an already-pinned version — the manager downloads just
+that companion and renames it into the existing version directory. The primary
+archive is not fetched again, and the version directory is never removed, so a
+concurrently running older build keeps the exact executable its activation
+symlink resolves to. Only a primary executable that fails verification triggers
+the full download-and-replace path.
+
+A companion file name must be a plain file name, and it must not collide with
+any other pinned tool or companion: every one of them is linked into a single
+shared activation directory, where a collision would silently replace another
+tool's symlink. Both rules are enforced before anything is downloaded.
 
 At application startup:
 

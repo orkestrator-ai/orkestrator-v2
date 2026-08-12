@@ -426,6 +426,41 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
       expect(host!.archive.sha256).not.toBe(artifact.archive.sha256);
       expect(host!.executable.sha256).not.toBe(artifact.executable.sha256);
     }
+
+    // Only `bun run verify:toolchains:live` can prove a digest matches the
+    // release it names. What is checkable offline is that a refresh actually
+    // produced distinct values: every digest in the manifest — companion or
+    // primary, archive or executable — must be unique, so a companion block
+    // pasted twice, or left pointing at another target's bytes, fails here.
+    const digests = new Map<string, string>();
+    for (const artifact of PINNED_TOOLCHAIN_ARTIFACTS) {
+      const target = `${artifact.name}:${artifact.platform}:${artifact.architecture}`;
+      const claim = (label: string, sha256: string) => {
+        const existing = digests.get(sha256);
+        expect(existing, `${label} reuses the SHA-256 already pinned by ${existing}`)
+          .toBeUndefined();
+        digests.set(sha256, label);
+      };
+      claim(`${target} archive`, artifact.archive.sha256);
+      claim(`${target} executable`, artifact.executable.sha256);
+      for (const companion of artifact.companions ?? []) {
+        claim(`${target} ${companion.fileName} archive`, companion.archive.sha256);
+        claim(`${target} ${companion.fileName} executable`, companion.executable.sha256);
+      }
+    }
+
+    // A companion asset name carries its own target, so a copied block that was
+    // never retargeted downloads another platform's helper with this platform's
+    // expectations and only fails at install time.
+    for (const artifact of codexArtifacts) {
+      const target = artifact.archive.entryPath.replace(/^codex-/, "");
+      for (const companion of artifact.companions ?? []) {
+        expect(companion.archive.url).toBe(
+          `${CODEX_RELEASE_BASE}/${companion.fileName}-${target}.tar.gz`,
+        );
+        expect(companion.archive.entryPath).toBe(`${companion.fileName}-${target}`);
+      }
+    }
   });
 
   test("Claude: managed manifest and download script build the same npm tarball URL", () => {

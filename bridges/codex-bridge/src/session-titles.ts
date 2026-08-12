@@ -2,10 +2,14 @@ import { spawn } from "node:child_process";
 import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  CODEX_BACKGROUND_TASK_MODEL,
+  CODEX_BACKGROUND_TASK_REASONING_EFFORT,
+} from "@orkestrator/protocol/codex-background-task";
 import { runtimeEnvironmentWithoutCredentials } from "./runtime-env.js";
 
-export const SESSION_TITLE_MODEL = "gpt-5.6-luna";
-export const SESSION_TITLE_REASONING_EFFORT = "low";
+export const SESSION_TITLE_MODEL = CODEX_BACKGROUND_TASK_MODEL;
+export const SESSION_TITLE_REASONING_EFFORT = CODEX_BACKGROUND_TASK_REASONING_EFFORT;
 export const SESSION_TITLE_INDEX_FILENAME = "session-titles.jsonl";
 
 const MAX_SOURCE_PROMPT_LENGTH = 6_000;

@@ -2069,7 +2069,8 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
       });
 
       const codexLog = await fs.readFile(logPath, "utf8");
-      expect(codexLog).toContain("exec --skip-git-repo-check --ephemeral --ignore-rules --config model_reasoning_effort=\"low\" --sandbox read-only");
+      expect(codexLog).toContain("--model gpt-5.6-luna --config model_reasoning_effort=\"medium\" --sandbox read-only");
+      expect(codexLog).toContain("exec --skip-git-repo-check --ephemeral --ignore-user-config --ignore-rules");
       expect(codexLog).toContain("--output-last-message");
       expect(codexLog).not.toContain("claude");
     });

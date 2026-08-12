@@ -10,6 +10,7 @@
     "./bridge-readiness": "./src/bridge-readiness.ts",
     "./build-pipeline": "./src/build-pipeline.ts",
     "./connections": "./src/connections.ts",
+    "./codex-background-task": "./src/codex-background-task.ts",
     "./diff-stats": "./src/diff-stats.ts",
     "./feature-planning": "./src/feature-planning.ts",
     "./gateway-token": "./src/gateway-token.ts",

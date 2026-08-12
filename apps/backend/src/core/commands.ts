@@ -7,6 +7,10 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { parseStoredDesktopConnections } from "@orkestrator/protocol/connections";
 import {
+  CODEX_BACKGROUND_TASK_MODEL,
+  CODEX_BACKGROUND_TASK_REASONING_EFFORT,
+} from "@orkestrator/protocol/codex-background-task";
+import {
   AGENT_INTERACTION_ORIGINS,
   isAgentInteractionPolicy,
   type AgentInteractionOrigin,
@@ -1962,16 +1966,19 @@ async function generateEnvironmentNameWithCodexExec(prompt: string, context: Com
   const outputPath = path.join(os.tmpdir(), `orkestrator-name-${randomUUID()}.txt`);
   try {
     const { stdout } = await runCommand(resolveCodexBinary(context), [
-      "exec",
-      "--skip-git-repo-check",
-      "--ephemeral",
-      "--ignore-rules",
+      "--model",
+      CODEX_BACKGROUND_TASK_MODEL,
       "--config",
-      "model_reasoning_effort=\"low\"",
+      `model_reasoning_effort="${CODEX_BACKGROUND_TASK_REASONING_EFFORT}"`,
       "--sandbox",
       "read-only",
       "--cd",
       os.tmpdir(),
+      "exec",
+      "--skip-git-repo-check",
+      "--ephemeral",
+      "--ignore-user-config",
+      "--ignore-rules",
       "--output-last-message",
       outputPath,
       buildSlugGenerationPrompt(trimmedPrompt),

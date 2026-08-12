@@ -617,6 +617,8 @@ describe("reconciliation", () => {
       result: "terminal",
       turnId: "turn-1",
       status: "completed",
+      precedingItemIds: [],
+      followingItemIds: [],
     });
   });
 
@@ -628,10 +630,12 @@ describe("reconciliation", () => {
             {
               id: "turn-1",
               status: "inProgress",
+              itemsView: "full",
               items: [
                 { type: "userMessage", clientId: "req-original" },
-                { type: "agentMessage", text: "working" },
+                { id: "before-steer", type: "agentMessage", text: "working" },
                 { type: "userMessage", clientId: "req-steer" },
+                { id: "after-steer", type: "commandExecution" },
               ],
             },
           ],
@@ -643,7 +647,36 @@ describe("reconciliation", () => {
     expect(await h.engine.reconcileRequest("t1", "req-steer")).toEqual({
       result: "attach",
       turnId: "turn-1",
+      precedingItemIds: ["before-steer"],
+      followingItemIds: ["after-steer"],
     });
+  });
+
+  test("records how much of a turn's item list app-server actually loaded", async () => {
+    const h = harness({
+      "thread/read": () => ({
+        thread: thread("t1", {
+          turns: [
+            {
+              id: "turn-1",
+              status: "inProgress",
+              itemsView: "summary",
+              items: [{ type: "userMessage", clientId: "req-1" }],
+            },
+            {
+              id: "turn-2",
+              status: "completed",
+              itemsView: "nonsense",
+              items: [{ type: "userMessage", clientId: "req-2" }],
+            },
+          ],
+        }),
+      }),
+    });
+    await h.engine.start();
+
+    const read = await h.engine.readThread("t1", { includeTurns: true });
+    expect(read?.turns?.map((turn) => turn.itemsView)).toEqual(["summary", undefined]);
   });
 
   test("reports a still-running turn as attach", async () => {

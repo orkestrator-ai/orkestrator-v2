@@ -48,6 +48,11 @@ export interface ItemAccumulator {
   completed: boolean;
   /** Raw apply_patch recovery candidate, hidden while a structured item may arrive. */
   rawFallback: boolean;
+  /**
+   * Bumped on every mutation, so a consumer can tell "nothing happened here"
+   * from "this settled a moment ago" without diffing rendered output.
+   */
+  version: number;
   startedAt?: number;
   completedAt?: number;
 }
@@ -63,6 +68,14 @@ export interface TurnAccumulatorOptions {
   startedAt?: string;
   /** UI cap for a single command's aggregated output. */
   maxCommandOutputChars?: number;
+}
+
+export interface AssistantSegment {
+  assistantMessageId: string;
+  startIndex: number;
+  endIndex?: number;
+  startedAt: string;
+  endedAt?: string;
 }
 
 /** A single runaway command must not be able to exhaust bridge memory. */
@@ -84,7 +97,8 @@ export class TurnAccumulator {
   readonly threadId: string;
   readonly requestId?: string;
   readonly expectsStructuredOutput: boolean;
-  readonly assistantMessageId: string;
+  /** Assistant transcript row receiving newly introduced items in this turn. */
+  assistantMessageId: string;
   readonly startedAt: string;
 
   /**
@@ -105,6 +119,13 @@ export class TurnAccumulator {
   readonly itemOrder: string[] = [];
   readonly items = new Map<string, ItemAccumulator>();
 
+  /**
+   * A steer is a user message inside an already-running turn. Items which
+   * existed before that message stay in the preceding assistant row; items
+   * introduced afterwards render into a new row below it.
+   */
+  private readonly assistantSegments: AssistantSegment[];
+
   private readonly maxCommandOutputChars: number;
 
   constructor(options: TurnAccumulatorOptions) {
@@ -115,6 +136,11 @@ export class TurnAccumulator {
     this.engineGeneration = options.engineGeneration;
     this.assistantMessageId = options.assistantMessageId;
     this.startedAt = options.startedAt ?? new Date().toISOString();
+    this.assistantSegments = [{
+      assistantMessageId: options.assistantMessageId,
+      startIndex: 0,
+      startedAt: this.startedAt,
+    }];
     this.maxCommandOutputChars =
       options.maxCommandOutputChars ?? DEFAULT_MAX_COMMAND_OUTPUT_CHARS;
   }
@@ -144,6 +170,12 @@ export class TurnAccumulator {
   }
 
   /** Creates the accumulator on demand, so a delta can precede `item/started`. */
+  /**
+   * Resolves an item's accumulator, creating it on first sight.
+   *
+   * Every mutator funnels through here exactly once, which is what makes the
+   * `version` bump below a complete record of change for that item.
+   */
   private ensureItem(itemId: string): ItemAccumulator {
     let accumulator = this.items.get(itemId);
     if (!accumulator) {
@@ -157,10 +189,12 @@ export class TurnAccumulator {
         outputTruncated: false,
         completed: false,
         rawFallback: false,
+        version: 0,
       };
       this.items.set(itemId, accumulator);
       this.itemOrder.push(itemId);
     }
+    accumulator.version += 1;
     return accumulator;
   }
 
@@ -326,6 +360,107 @@ export class TurnAccumulator {
     return this.itemOrder
       .map((id) => this.items.get(id))
       .filter((entry): entry is ItemAccumulator => entry !== undefined);
+  }
+
+  assistantSegmentsInOrder(): readonly AssistantSegment[] {
+    return this.assistantSegments;
+  }
+
+  assistantSegment(assistantMessageId: string = this.assistantMessageId): AssistantSegment {
+    return this.assistantSegments.find(
+      (segment) => segment.assistantMessageId === assistantMessageId,
+    ) ?? this.assistantSegments[this.assistantSegments.length - 1]!;
+  }
+
+  /**
+   * Cheap "has anything in this row moved?" token.
+   *
+   * Sums the per-item mutation counters in the row's range. Equal tokens mean
+   * no item was created, streamed into, updated or completed since it was last
+   * sampled, which is what lets a frozen row skip a re-render it cannot change
+   * the result of.
+   */
+  assistantSegmentVersion(
+    assistantMessageId: string = this.assistantMessageId,
+  ): number {
+    const segment = this.assistantSegment(assistantMessageId);
+    const end = segment.endIndex ?? this.itemOrder.length;
+    let version = 0;
+    for (let index = segment.startIndex; index < end; index += 1) {
+      version += this.items.get(this.itemOrder[index]!)?.version ?? 0;
+    }
+    return version;
+  }
+
+  /** Items belonging to one assistant transcript row. */
+  orderedForAssistantSegment(
+    assistantMessageId: string = this.assistantMessageId,
+  ): ItemAccumulator[] {
+    const segment = this.assistantSegment(assistantMessageId);
+    const end = segment.endIndex ?? this.itemOrder.length;
+    return this.itemOrder
+      .slice(segment.startIndex, end)
+      .map((id) => this.items.get(id))
+      .filter((entry): entry is ItemAccumulator => entry !== undefined);
+  }
+
+  /**
+   * Maps an authoritative `thread/read` ordering onto the live accumulator.
+   *
+   * The boundary is driven by `followingItemIds` — the items app-server placed
+   * *after* the steering user message — and never by the absence of an id from
+   * `precedingItemIds`. Absence is not evidence: `thread/read` projects what
+   * app-server has persisted, so an item that is still streaming, or one elided
+   * by a partial `itemsView`, is missing from the prefix while genuinely
+   * belonging above the steer. Demoting on absence emptied the pre-steer row and
+   * pushed the whole in-flight response below the user's own message.
+   *
+   * Presence on the far side is evidence, and survives any truncation: if
+   * app-server ordered an item after the steer, it did come after. Everything
+   * the projection does not mention keeps the position it already has.
+   */
+  boundaryAfterItems(
+    ordering: {
+      precedingItemIds?: readonly string[];
+      followingItemIds?: readonly string[];
+    } | undefined,
+  ): number {
+    const liveBoundary = this.itemOrder.length;
+    if (!ordering?.followingItemIds?.length) return liveBoundary;
+    const following = new Set(ordering.followingItemIds);
+    const firstFollowing = this.itemOrder.findIndex((id) => following.has(id));
+    if (firstFollowing < 0) return liveBoundary;
+    // A later steer can never reach back into an already-frozen row.
+    return Math.max(firstFollowing, this.assistantSegment().startIndex);
+  }
+
+  /**
+   * Freezes the current row at the exact item boundary where a steer landed.
+   * Events may continue arriving while that row is rendered, so the boundary
+   * must be captured before awaiting any rendering work.
+   */
+  freezeAssistantSegment(
+    boundary: number = this.itemOrder.length,
+    endedAt?: string,
+  ): number {
+    const segment = this.assistantSegment();
+    segment.endIndex = boundary;
+    if (endedAt) segment.endedAt = endedAt;
+    return boundary;
+  }
+
+  /** Starts the post-steer assistant row at a previously captured boundary. */
+  startAssistantSegment(
+    assistantMessageId: string,
+    boundary: number,
+    startedAt: string = new Date().toISOString(),
+  ): void {
+    this.assistantMessageId = assistantMessageId;
+    this.assistantSegments.push({
+      assistantMessageId,
+      startIndex: boundary,
+      startedAt,
+    });
   }
 
   /**

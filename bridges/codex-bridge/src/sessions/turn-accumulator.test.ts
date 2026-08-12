@@ -74,6 +74,111 @@ describe("delta accumulation", () => {
     expect(turn.effectiveText(turn.items.get("item-2")!)).toBe("early");
   });
 
+  test("a steering boundary keeps earlier and later items in separate assistant segments", () => {
+    const turn = accumulator();
+    turn.onItemCompleted(agentMessage("before", "before steer"));
+
+    const boundary = turn.freezeAssistantSegment();
+    expect(turn.orderedForAssistantSegment().map((item) => item.id)).toEqual(["before"]);
+
+    turn.onItemCompleted(agentMessage("after", "after steer"));
+    // Events can keep arriving while the old segment is being flushed, but
+    // they must not leak above the steering message.
+    expect(turn.orderedForAssistantSegment().map((item) => item.id)).toEqual(["before"]);
+
+    turn.startAssistantSegment("assistant-2", boundary);
+    expect(turn.assistantMessageId).toBe("assistant-2");
+    expect(turn.orderedForAssistantSegment().map((item) => item.id)).toEqual(["after"]);
+
+    turn.onItemCompleted(agentMessage("before", "completed after steer"));
+    expect(turn.orderedForAssistantSegment("assistant-1").map((item) =>
+      turn.effectiveText(item)
+    )).toEqual(["completed after steer"]);
+  });
+
+  test("an authoritative item order places delayed post-steer items below the steer", () => {
+    const turn = accumulator();
+    turn.onItemCompleted(agentMessage("before", "before"));
+    turn.onItemCompleted(agentMessage("after", "after"));
+
+    const boundary = turn.boundaryAfterItems({
+      precedingItemIds: ["before"],
+      followingItemIds: ["after"],
+    });
+    turn.freezeAssistantSegment(boundary, "2026-08-11T12:00:01.000Z");
+    turn.startAssistantSegment("assistant-2", boundary, "2026-08-11T12:00:01.000Z");
+
+    expect(turn.orderedForAssistantSegment("assistant-1").map((item) => item.id))
+      .toEqual(["before"]);
+    expect(turn.orderedForAssistantSegment("assistant-2").map((item) => item.id))
+      .toEqual(["after"]);
+  });
+
+  describe("boundaryAfterItems", () => {
+    test("keeps every live item above the steer when nothing is known to follow it", () => {
+      // The regression this guards: `thread/read` projects only what app-server
+      // has persisted, so an item still streaming is absent from the prefix. An
+      // empty prefix used to collapse the pre-steer row to nothing and push the
+      // whole in-flight response below the user's own steering message.
+      const turn = accumulator();
+      turn.onTextDelta("streaming", "half a thought");
+
+      expect(turn.boundaryAfterItems({ precedingItemIds: [], followingItemIds: [] }))
+        .toBe(1);
+      expect(turn.boundaryAfterItems({})).toBe(1);
+      expect(turn.boundaryAfterItems(undefined)).toBe(1);
+    });
+
+    test("survives a truncated projection that omits the items before the steer", () => {
+      const turn = accumulator();
+      turn.onItemCompleted(agentMessage("elided-by-summary", "before"));
+      turn.onItemCompleted(agentMessage("after", "after"));
+
+      // A partial `itemsView` drops the prefix but cannot invent a suffix, so
+      // the split still lands in the right place.
+      expect(turn.boundaryAfterItems({ followingItemIds: ["after"] })).toBe(1);
+    });
+
+    test("ignores following ids that have not reached the accumulator yet", () => {
+      const turn = accumulator();
+      turn.onItemCompleted(agentMessage("before", "before"));
+
+      expect(turn.boundaryAfterItems({
+        precedingItemIds: ["before"],
+        followingItemIds: ["not-yet-streamed"],
+      })).toBe(1);
+    });
+
+    test("never reaches back into an already-frozen row", () => {
+      const turn = accumulator();
+      turn.onItemCompleted(agentMessage("first", "first"));
+      turn.onItemCompleted(agentMessage("second", "second"));
+      const first = turn.boundaryAfterItems({ followingItemIds: ["second"] });
+      turn.freezeAssistantSegment(first);
+      turn.startAssistantSegment("assistant-2", first);
+
+      // A second steer whose projection names an item from the frozen row above
+      // must not pull that row's contents back down into the live one.
+      expect(turn.boundaryAfterItems({ followingItemIds: ["first", "second"] }))
+        .toBe(first);
+    });
+  });
+
+  test("a segment version changes only while its own items are moving", () => {
+    const turn = accumulator();
+    turn.onItemStarted(agentMessage("first", ""));
+    const boundary = turn.freezeAssistantSegment();
+    turn.startAssistantSegment("assistant-2", boundary);
+    turn.onItemStarted(agentMessage("second", ""));
+
+    const frozen = turn.assistantSegmentVersion("assistant-1");
+    turn.onItemCompleted(agentMessage("second", "live row moved"));
+    expect(turn.assistantSegmentVersion("assistant-1")).toBe(frozen);
+
+    turn.onItemCompleted(agentMessage("first", "frozen row moved"));
+    expect(turn.assistantSegmentVersion("assistant-1")).toBeGreaterThan(frozen);
+  });
+
   test("reasoning deltas accumulate per channel and index", () => {
     const turn = accumulator();
     turn.onReasoningDelta("r1", "sum-a", "summary", 0);

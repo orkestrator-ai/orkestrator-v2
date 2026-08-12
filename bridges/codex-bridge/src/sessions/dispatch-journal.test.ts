@@ -1147,6 +1147,62 @@ describe("reconcileFromThreadTurns", () => {
     expect(reconcileFromThreadTurns([runningTurn], "req-1")).toEqual({
       result: "attach",
       turnId: "turn-1",
+      precedingItemIds: [],
+      followingItemIds: [],
+    });
+  });
+
+  test("splits the authoritative item order around a steering message", () => {
+    expect(reconcileFromThreadTurns([{
+      id: "turn-1",
+      status: "inProgress",
+      items: [
+        { type: "userMessage", clientId: "req-original" },
+        { id: "before", type: "agentMessage" },
+        { type: "userMessage", clientId: "req-steer" },
+        { id: "after", type: "commandExecution" },
+      ],
+    }], "req-steer")).toEqual({
+      result: "attach",
+      turnId: "turn-1",
+      precedingItemIds: ["before"],
+      followingItemIds: ["after"],
+    });
+  });
+
+  test("reports no following items when the steer is the last thing persisted", () => {
+    // The prefix being empty here does not mean nothing preceded the steer, only
+    // that app-server had not persisted it yet. Callers must not read absence
+    // from `precedingItemIds`; `followingItemIds` is the side that carries proof.
+    expect(reconcileFromThreadTurns([{
+      id: "turn-1",
+      status: "inProgress",
+      items: [
+        { type: "userMessage", clientId: "req-original" },
+        { type: "userMessage", clientId: "req-steer" },
+      ],
+    }], "req-steer")).toEqual({
+      result: "attach",
+      turnId: "turn-1",
+      precedingItemIds: [],
+      followingItemIds: [],
+    });
+  });
+
+  test("ignores items app-server returned without an id", () => {
+    expect(reconcileFromThreadTurns([{
+      id: "turn-1",
+      status: "inProgress",
+      items: [
+        { type: "userMessage", clientId: "req-steer" },
+        { type: "agentMessage" },
+        { id: "after", type: "commandExecution" },
+      ],
+    }], "req-steer")).toEqual({
+      result: "attach",
+      turnId: "turn-1",
+      precedingItemIds: [],
+      followingItemIds: ["after"],
     });
   });
 
@@ -1155,6 +1211,8 @@ describe("reconcileFromThreadTurns", () => {
       result: "terminal",
       turnId: "turn-2",
       status: "completed",
+      precedingItemIds: [],
+      followingItemIds: [],
     });
   });
 

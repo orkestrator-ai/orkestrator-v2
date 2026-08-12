@@ -1265,6 +1265,69 @@ describe("session lifecycle", () => {
     })).toMatchObject({ ok: false, status: 409 });
   });
 
+  test("a restored dispatch announces its assistant row before patching it", async () => {
+    // Updates to a streaming row are sparse patches keyed by message id. A row
+    // created during startup recovery is the one the client has no snapshot of,
+    // so a patch it cannot apply forces a whole-transcript refetch.
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: "session-announce",
+        threadId: "thread-announce",
+        cwd: "/tmp/ws",
+        config: { mode: "build", sandbox: "danger-full-access" },
+        title: "Announce",
+        titleSource: "prompt",
+        lastAcceptedRequestId: "req-restored",
+      }),
+    );
+    const journal = new DispatchJournal({ codexHome, cwd: "/tmp/ws" });
+    await journal.load();
+    await journal.markPrepared({
+      requestId: "req-restored",
+      bridgeSessionId: "session-announce",
+      threadId: "thread-announce",
+    });
+    await journal.markAccepted("req-restored", {
+      threadId: "thread-announce",
+      turnId: "turn-restored",
+    });
+
+    const h = await harness({
+      "thread/resume": () => ({ thread: threadPayload("thread-announce") }),
+      "thread/read": () => ({
+        thread: threadPayload("thread-announce", {
+          turns: [{
+            id: "turn-restored",
+            status: "inProgress",
+            items: [{ type: "userMessage", clientId: "req-restored" }],
+          }],
+        }),
+      }),
+    });
+    await h.drain();
+
+    const restored = (await h.runtime.getMessages("session-announce"))!.at(-1)!;
+    expect(restored.role).toBe("assistant");
+    const announced = h.events.filter((event) =>
+      event.type === "message.updated"
+      && (event.data?.message as { id?: string } | undefined)?.id === restored.id
+    );
+    expect(announced.length).toBeGreaterThan(0);
+
+    h.child().notify("item/completed", {
+      threadId: "thread-announce",
+      turnId: "turn-restored",
+      item: { id: "restored-item", type: "agentMessage", text: "recovered answer" },
+    });
+    await h.drain();
+
+    // Every later frame for this row may be a patch, now that the client has a
+    // snapshot to apply one to.
+    expect((await h.runtime.getMessages("session-announce"))?.at(-1))
+      .toMatchObject({ id: restored.id, content: "recovered answer" });
+  });
+
   test("an unresolved record with no thread is spent, not replayed", async () => {
     const journal = new DispatchJournal({ codexHome, cwd: "/tmp/ws" });
     await journal.load();
@@ -5170,6 +5233,12 @@ describe("idle detach and transparent re-attach", () => {
     // Same session id the UI still holds — this must just work.
     const messages = await h.runtime.getMessages(sessionId);
     expect(messages).not.toBeNull();
+    expect(messages!.map((message) => [message.role, message.content])).toEqual([
+      ["user", "hello"],
+      ["assistant", ""],
+      ["user", "also inspect the bridge"],
+      ["assistant", "done"],
+    ]);
     expect(messages!.filter((message) => message.role === "user").map((message) => ({
       content: message.content,
       turnId: message.turnId,
@@ -5954,6 +6023,44 @@ describe("models", () => {
     assistants = (await h.runtime.getMessages(sessionId))
       ?.filter((message) => message.role === "assistant");
     expect(assistants?.[2]?.modelId).toBeUndefined();
+  });
+
+  test("applies a post-steer reroute to every assistant segment of the turn", async () => {
+    const h = await harness({
+      "thread/start": () => ({
+        thread: threadPayload("thread-1"),
+        model: "gpt-start",
+      }),
+      "turn/steer": () => ({ turnId: "turn-1" }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "Investigate",
+      requestId: "req-reroute-segments",
+      attachments: [],
+    });
+    expect(
+      await h.runtime.steerSession(
+        sessionId,
+        "Also inspect tests",
+        "turn-1",
+        "req-reroute-steer",
+      ),
+    ).toBe("accepted");
+
+    h.child().notify("model/rerouted", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      fromModel: "gpt-start",
+      toModel: "gpt-rerouted",
+    });
+    await h.drain();
+
+    expect(
+      (await h.runtime.getMessages(sessionId))
+        ?.filter((message) => message.role === "assistant")
+        .map((message) => message.modelId),
+    ).toEqual(["gpt-rerouted", "gpt-rerouted"]);
   });
 
   test("restores a rerouted model after idle detach and rollout rehydration", async () => {
@@ -7951,6 +8058,443 @@ describe("steering", () => {
     )).toBe(true);
   });
 
+  test("places a steer between the assistant activity before and after it", async () => {
+    const h = await harness({ "turn/steer": () => ({ turnId: "turn-1" }) });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "investigate",
+      requestId: "req-original",
+      attachments: [],
+    });
+
+    h.child().notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: { id: "before", type: "agentMessage", text: "Initial finding" },
+    });
+    await h.drain();
+
+    expect(
+      await h.runtime.steerSession(
+        sessionId,
+        "also inspect the tests",
+        "turn-1",
+        "req-steer-order",
+      ),
+    ).toBe("accepted");
+
+    h.child().notify("item/started", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "after-tool",
+        type: "commandExecution",
+        command: "bun test",
+        status: "inProgress",
+        aggregatedOutput: null,
+      },
+    });
+    h.child().notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: { id: "after-text", type: "agentMessage", text: "Tests are green" },
+    });
+    await h.drain();
+
+    const messages = (await h.runtime.getMessages(sessionId))!;
+    expect(messages.map((message) => [message.role, message.content])).toEqual([
+      ["user", "investigate"],
+      ["assistant", "Initial finding"],
+      ["user", "also inspect the tests"],
+      ["assistant", "Tests are green"],
+    ]);
+    expect(messages[1]?.parts).toEqual([
+      { type: "text", content: "Initial finding" },
+    ]);
+    expect(messages[3]?.parts.map((part) => part.type)).toEqual([
+      "tool-invocation",
+      "text",
+    ]);
+  });
+
+  /**
+   * `turn/steer` + `thread/read` answering the way app-server does around a
+   * live steer.
+   *
+   * The read is stateful on purpose: a steer's client id only appears in the
+   * turn once app-server has accepted it. A handler that returned it up front
+   * would satisfy the pre-dispatch idempotency read instead, which reports the
+   * steer as already applied by an earlier runtime and never appends it.
+   *
+   * `items` receives the client ids accepted so far and returns the persisted
+   * item list in wire order.
+   */
+  function steerScript(
+    items: (accepted: readonly string[]) => Array<Record<string, unknown>>,
+    extra: Record<string, unknown> = {},
+  ): Record<string, (params: Record<string, unknown>) => unknown> {
+    const accepted: string[] = [];
+    return {
+      "turn/steer": (params) => {
+        const clientId = params.clientUserMessageId;
+        if (typeof clientId === "string") accepted.push(clientId);
+        return { turnId: "turn-1" };
+      },
+      "thread/read": () => ({
+        thread: threadPayload("thread-1", {
+          turns: [{
+            id: "turn-1",
+            status: "inProgress",
+            itemsView: "full",
+            items: items(accepted),
+            ...extra,
+          }],
+        }),
+      }),
+    };
+  }
+
+  test("keeps updating an item that started in the assistant row before a steer", async () => {
+    const h = await harness(steerScript((accepted) => [
+      { type: "userMessage", clientId: "req-original" },
+      // app-server ordered the running command before the steering message, so
+      // the pre-steer row owns it and must keep receiving its completion.
+      { id: "long-command", type: "commandExecution" },
+      ...accepted.map((clientId) => ({ type: "userMessage", clientId })),
+    ]));
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "investigate",
+      requestId: "req-original",
+      attachments: [],
+    });
+    h.child().notify("item/started", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "long-command",
+        type: "commandExecution",
+        command: "bun test",
+        status: "inProgress",
+        aggregatedOutput: null,
+      },
+    });
+    await h.drain();
+
+    expect(
+      await h.runtime.steerSession(
+        sessionId,
+        "also inspect the tests",
+        "turn-1",
+        "req-steer-running-item",
+      ),
+    ).toBe("accepted");
+
+    h.child().notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "long-command",
+        type: "commandExecution",
+        command: "bun test",
+        status: "completed",
+        aggregatedOutput: "all green",
+      },
+    });
+    await h.drain();
+
+    const messages = (await h.runtime.getMessages(sessionId))!;
+    expect(messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+    ]);
+    expect(messages[1]?.parts[0]).toMatchObject({
+      type: "tool-invocation",
+      toolState: "success",
+      toolOutput: "all green",
+    });
+    expect(messages[3]?.parts).toEqual([]);
+  });
+
+  test("splits the turn at the item app-server ordered after the steer", async () => {
+    const h = await harness(steerScript((accepted) => [
+      { type: "userMessage", clientId: "req-original" },
+      { id: "above", type: "agentMessage" },
+      ...accepted.flatMap((clientId) => [
+        { type: "userMessage", clientId },
+        { id: "below", type: "agentMessage" },
+      ]),
+    ]));
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "investigate",
+      requestId: "req-original",
+      attachments: [],
+    });
+    // Both items are already live when the steer is appended, so only the
+    // authoritative ordering can say which row each one belongs to.
+    for (const [id, text] of [["above", "before the steer"], ["below", "after the steer"]]) {
+      h.child().notify("item/completed", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id, type: "agentMessage", text },
+      });
+    }
+    await h.drain();
+
+    expect(
+      await h.runtime.steerSession(sessionId, "narrow it down", "turn-1", "req-split"),
+    ).toBe("accepted");
+    await h.drain();
+
+    expect((await h.runtime.getMessages(sessionId))?.map((message) => [
+      message.role,
+      message.content,
+    ])).toEqual([
+      ["user", "investigate"],
+      ["assistant", "before the steer"],
+      ["user", "narrow it down"],
+      ["assistant", "after the steer"],
+    ]);
+  });
+
+  test("keeps a streaming item above the steer when app-server has not persisted it", async () => {
+    // The regression: `thread/read` only projects persisted items, so an item
+    // still streaming is absent from the prefix. Treating that absence as proof
+    // it came after emptied the pre-steer row and pushed the whole in-flight
+    // response below the user's own steering message.
+    const h = await harness(steerScript((accepted) => [
+      { type: "userMessage", clientId: "req-original" },
+      ...accepted.map((clientId) => ({ type: "userMessage", clientId })),
+    ]));
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "investigate",
+      requestId: "req-original",
+      attachments: [],
+    });
+    h.child().notify("item/agentMessage/delta", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "streaming",
+      delta: "half a thought",
+    });
+    await h.drain();
+
+    expect(
+      await h.runtime.steerSession(sessionId, "actually, stop", "turn-1", "req-steer-streaming"),
+    ).toBe("accepted");
+    await h.drain();
+
+    expect((await h.runtime.getMessages(sessionId))?.map((message) => [
+      message.role,
+      message.content,
+    ])).toEqual([
+      ["user", "investigate"],
+      ["assistant", "half a thought"],
+      ["user", "actually, stop"],
+      ["assistant", ""],
+    ]);
+  });
+
+  test("tolerates a partial itemsView that elides the items before the steer", async () => {
+    // A `summary` view drops the prefix but cannot invent a suffix, so the
+    // items it does name after the steer are still trustworthy.
+    const h = await harness(steerScript(
+      (accepted) => accepted.flatMap((clientId) => [
+        { type: "userMessage", clientId },
+        { id: "below", type: "agentMessage" },
+      ]),
+      { itemsView: "summary" },
+    ));
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "investigate",
+      requestId: "req-original",
+      attachments: [],
+    });
+    for (const [id, text] of [["above", "elided by the summary"], ["below", "named"]]) {
+      h.child().notify("item/completed", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id, type: "agentMessage", text },
+      });
+    }
+    await h.drain();
+
+    expect(
+      await h.runtime.steerSession(sessionId, "narrow it down", "turn-1", "req-truncated"),
+    ).toBe("accepted");
+    await h.drain();
+
+    expect((await h.runtime.getMessages(sessionId))?.map((message) => [
+      message.role,
+      message.content,
+    ])).toEqual([
+      ["user", "investigate"],
+      ["assistant", "elided by the summary"],
+      ["user", "narrow it down"],
+      ["assistant", "named"],
+    ]);
+  });
+
+  test("falls back to the live boundary when the ordering read fails", async () => {
+    const h = await harness({
+      "turn/steer": () => ({ turnId: "turn-1" }),
+      "thread/read": (() => {
+        let calls = 0;
+        return () => {
+          calls += 1;
+          // The pre-dispatch idempotency read must succeed; only the ordering
+          // read that follows the accepted steer fails.
+          if (calls === 1) return { thread: threadPayload("thread-1", { turns: [] }) };
+          throw new Error("thread/read unavailable");
+        };
+      })(),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "investigate",
+      requestId: "req-original",
+      attachments: [],
+    });
+    h.child().notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: { id: "above", type: "agentMessage", text: "before the steer" },
+    });
+    await h.drain();
+
+    expect(
+      await h.runtime.steerSession(sessionId, "carry on", "turn-1", "req-read-fails"),
+    ).toBe("accepted");
+    await h.drain();
+
+    expect((await h.runtime.getMessages(sessionId))?.map((message) => [
+      message.role,
+      message.content,
+    ])).toEqual([
+      ["user", "investigate"],
+      ["assistant", "before the steer"],
+      ["user", "carry on"],
+      ["assistant", ""],
+    ]);
+  });
+
+  test("keeps three assistant rows straight across two steers in one turn", async () => {
+    const laterItems = ["second", "third"];
+    const h = await harness(steerScript((accepted) => [
+      { type: "userMessage", clientId: "req-original" },
+      { id: "first", type: "agentMessage" },
+      ...accepted.flatMap((clientId, index) => [
+        { type: "userMessage", clientId },
+        { id: laterItems[index]!, type: "agentMessage" },
+      ]),
+    ]));
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "investigate",
+      requestId: "req-original",
+      attachments: [],
+    });
+    const complete = async (id: string, text: string) => {
+      h.child().notify("item/completed", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id, type: "agentMessage", text },
+      });
+      await h.drain();
+    };
+
+    await complete("first", "one");
+    expect(await h.runtime.steerSession(sessionId, "again", "turn-1", "req-steer-1"))
+      .toBe("accepted");
+    await complete("second", "two");
+    expect(await h.runtime.steerSession(sessionId, "once more", "turn-1", "req-steer-2"))
+      .toBe("accepted");
+    await complete("third", "three");
+
+    expect((await h.runtime.getMessages(sessionId))?.map((message) => [
+      message.role,
+      message.content,
+    ])).toEqual([
+      ["user", "investigate"],
+      ["assistant", "one"],
+      ["user", "again"],
+      ["assistant", "two"],
+      ["user", "once more"],
+      ["assistant", "three"],
+    ]);
+
+    // A reroute reported for the turn owns every row it produced, not just the
+    // one still streaming.
+    h.child().notify("model/rerouted", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      fromModel: "gpt-start",
+      toModel: "gpt-rerouted",
+    });
+    await h.drain();
+
+    expect(
+      (await h.runtime.getMessages(sessionId))
+        ?.filter((message) => message.role === "assistant")
+        .map((message) => message.modelId),
+    ).toEqual(["gpt-rerouted", "gpt-rerouted", "gpt-rerouted"]);
+  });
+
+  test("re-renders a frozen row when one of its own items completes late", async () => {
+    // The frozen row is skipped while nothing in it moves, so the skip must be
+    // keyed on "changed since the last render", not "can still change".
+    const h = await harness(steerScript((accepted) => [
+      { type: "userMessage", clientId: "req-original" },
+      { id: "slow", type: "agentMessage" },
+      ...accepted.map((clientId) => ({ type: "userMessage", clientId })),
+    ]));
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "investigate",
+      requestId: "req-original",
+      attachments: [],
+    });
+    h.child().notify("item/agentMessage/delta", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "slow",
+      delta: "partial",
+    });
+    await h.drain();
+    expect(await h.runtime.steerSession(sessionId, "keep going", "turn-1", "req-steer-late"))
+      .toBe("accepted");
+    await h.drain();
+
+    // Everything in the frozen row has settled; a further publish must be a
+    // no-op for it rather than a re-render.
+    const settled = (await h.runtime.getMessages(sessionId))![1]!.revision;
+    h.child().notify("item/agentMessage/delta", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "live",
+      delta: "new row",
+    });
+    await h.drain();
+    expect((await h.runtime.getMessages(sessionId))![1]!.revision).toBe(settled);
+
+    h.child().notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: { id: "slow", type: "agentMessage", text: "partial and then complete" },
+    });
+    await h.drain();
+
+    const messages = (await h.runtime.getMessages(sessionId))!;
+    expect(messages[1]?.content).toBe("partial and then complete");
+    expect(messages[1]?.revision).toBeGreaterThan(settled!);
+    expect(messages[3]?.content).toBe("new row");
+  });
+
   test("rejects a stale renderer turn before calling app-server", async () => {
     const h = await harness({ "turn/steer": () => ({ turnId: "turn-1" }) });
     const { sessionId } = h.runtime.createSession({ mode: "build" });
@@ -8024,7 +8568,10 @@ describe("steering", () => {
             items: [
               { type: "userMessage", clientId: "req-original" },
               ...(steerAttempted
-                ? [{ type: "userMessage", clientId: "req-steer-retry" }]
+                ? [
+                    { type: "userMessage", clientId: "req-steer-retry" },
+                    { id: "after-steer", type: "agentMessage", text: "after steer" },
+                  ]
                 : []),
             ],
           }],
@@ -8046,12 +8593,27 @@ describe("steering", () => {
     expect(
       await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer-retry"),
     ).toBe("unknown");
+    h.child().notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: { id: "after-steer", type: "agentMessage", text: "after steer" },
+    });
+    await h.drain();
     expect(
       await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer-retry"),
     ).toBe("accepted");
     expect(steerCalls).toBe(1);
     expect((await h.runtime.getMessages(sessionId))?.filter((message) => message.role === "user")
       .map((message) => message.content)).toEqual(["go", "more"]);
+    expect((await h.runtime.getMessages(sessionId))?.map((message) => [
+      message.role,
+      message.content,
+    ])).toEqual([
+      ["user", "go"],
+      ["assistant", ""],
+      ["user", "more"],
+      ["assistant", "after steer"],
+    ]);
 
     // A third delivery of the same logical request is served from the bounded
     // accepted cache and cannot append or dispatch it again.

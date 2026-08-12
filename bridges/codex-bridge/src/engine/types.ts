@@ -119,6 +119,21 @@ export interface EngineThreadTurn {
   clientId?: string | null;
   /** Every user-message client id in the turn, including steering additions. */
   clientIds?: string[];
+  /**
+   * Minimal wire-order projection retained for exact request reconciliation.
+   * Unlike `items`, this includes user messages, which are transcript
+   * boundaries rather than renderable assistant items.
+   *
+   * Always a projection of what app-server has persisted, never of what is
+   * live: see `itemsView`. Consumers must treat a missing id as unknown rather
+   * than as proof of absence.
+   */
+  reconciliationItems?: Array<{ type?: string; id?: string; clientId?: string | null }>;
+  /**
+   * How much of the turn's item list app-server actually loaded. `summary` and
+   * `notLoaded` mean `reconciliationItems` is a partial view.
+   */
+  itemsView?: "notLoaded" | "summary" | "full";
   startedAt?: string;
   completedAt?: string;
   error?: EngineError;

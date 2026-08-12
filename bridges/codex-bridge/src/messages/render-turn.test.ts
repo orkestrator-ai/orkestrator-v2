@@ -398,6 +398,86 @@ describe("renderTurn", () => {
     });
   });
 
+  test("passes each assistant segment's item and transcript boundaries to rendering", async () => {
+    const accumulator = turn();
+    accumulator.onItemCompleted({ id: "before", type: "agent_message", text: "before" });
+    const boundary = accumulator.freezeAssistantSegment(
+      undefined,
+      "2026-07-25T12:00:01.000Z",
+    );
+    accumulator.startAssistantSegment(
+      "message-2",
+      boundary,
+      "2026-07-25T12:00:01.000Z",
+    );
+    accumulator.onItemCompleted({ id: "after", type: "agent_message", text: "after" });
+    const received: Array<Record<string, unknown>> = [];
+
+    for (const segment of accumulator.assistantSegmentsInOrder()) {
+      await renderTurn(accumulator, {
+        threadId: "thread-1",
+        cwd: "/tmp",
+        state: createTurnRenderState(),
+        segment,
+        loadSubagentParts: async (options) => {
+          received.push(options);
+          return [];
+        },
+      });
+    }
+
+    expect(received).toEqual([
+      {
+        threadId: "thread-1",
+        turnStartedAt: "2026-07-25T12:00:00.000Z",
+        turnEndedAt: "2026-07-25T12:00:01.000Z",
+        items: [{ id: "before", type: "agent_message", text: "before" }],
+      },
+      {
+        threadId: "thread-1",
+        turnStartedAt: "2026-07-25T12:00:01.000Z",
+        items: [{ id: "after", type: "agent_message", text: "after" }],
+      },
+    ]);
+  });
+
+  test("scopes sub-agent discovery by the ids a row's own items claim", async () => {
+    const seen: Array<readonly string[] | undefined> = [];
+    const derive = async (items: Array<Record<string, unknown>>) => {
+      await loadSubagentPartsFromTranscripts({
+        threadId: "thread-1",
+        turnStartedAt: "2026-07-25T12:00:00.000Z",
+        items: items as never,
+      }, {
+        createTranscriptMetaLoader: () => async (threadId) => ({
+          id: threadId,
+          updatedAt: "2026-07-25T12:00:00.000Z",
+          transcriptPath: `/transcripts/${threadId}.jsonl`,
+        }),
+        deriveTranscriptParts: async (options) => {
+          seen.push(options.ownedSubagentIds);
+          return [];
+        },
+        readTranscript: async () => ({ records: [] }),
+      });
+    };
+    const spawn = (id: string, receiver?: string) => ({
+      id,
+      type: "collab_tool_call" as const,
+      tool: "spawn_agent",
+      ...(receiver ? { receiver_thread_ids: [receiver] } : {}),
+      status: "completed" as const,
+    });
+
+    await derive([spawn("a", "child-1"), spawn("b", "child-2")]);
+    // A row that cannot name every spawn it owns must not filter on a partial
+    // set, or the ones it failed to name would vanish.
+    await derive([spawn("a", "child-1"), spawn("b")]);
+    await derive([]);
+
+    expect(seen).toEqual([["child-1", "child-2"], undefined, undefined]);
+  });
+
   test("maps transcript fields and folds live collaboration state with injected dependencies", async () => {
     const items = [{
       id: "spawn",

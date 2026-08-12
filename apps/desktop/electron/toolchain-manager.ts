@@ -996,7 +996,6 @@ async function installArtifact(
       allowInsecureDownloadsForTests,
       timings.downloadTimeoutMs,
     );
-    onVerify();
     if (artifact.archive.format === "zip") {
       await extractZipEntry(
         archivePath,
@@ -1073,6 +1072,11 @@ async function installArtifact(
       timings,
       spawnProcess,
     );
+
+    // Every archive — the primary and each companion — has finished
+    // downloading by now, so announcing "verifying" here can never be followed
+    // by a "downloading" event: the phase only moves forward.
+    onVerify();
 
     const destinationDirectory = artifactDirectory(rootDir, artifact);
     await mkdir(path.dirname(destinationDirectory), { recursive: true, mode: 0o700 });
@@ -1412,10 +1416,11 @@ export async function ensurePinnedToolchains(
         });
       };
       const onVerify = () => {
-        // On a fresh install the companions are still to come, so this reports
-        // the primary archive's share rather than letting progress jump to full
-        // and then fall back. A repair has nothing left to download.
-        toolFractions.set(artifact.name, repairable ? 1 : artifact.archive.size / bytesTotal);
+        // Every byte — the primary archive and then each companion — has
+        // already been reported through onBytes, so the fraction is where it
+        // should be and only the phase moves on. `installArtifact` fires this
+        // after its companion staging, and the repair path fires it after
+        // staging too, so "downloading" never follows "verifying".
         progress({
           phase: "verifying",
           tool: artifact.name,

@@ -6710,32 +6710,38 @@ exit 1
 
         expect(immediate.some((change) => change.path === "tracked.txt")).toBe(false);
 
+        // `revert_local_file` only *requests* its scan, so the reverted counts
+        // are not published yet. Rewriting the file before that scan lands makes
+        // it read the pre-revert counts again, and the service correctly
+        // suppresses an unchanged reading - leaving `last` pinned to the
+        // pre-revert value, which then suppresses every later scan too. Waiting
+        // for the reverted counts is the barrier that keeps the rewrite below a
+        // genuine change rather than a no-op the service is right to swallow.
+        await waitForCondition(
+          () => emitted.some((entry) =>
+            entry.event === "environment-diff-stats-changed"
+            && (entry.payload as { stats?: { filesChanged?: number } }).stats?.filesChanged === 0
+          ),
+          "the revert to be announced",
+        );
+
         const trackedPath = path.join(worktree, "tracked.txt");
         emitted.splice(0);
-        const deadline = Date.now() + ASYNC_TEST_WAIT_TIMEOUT_MS;
-        let writeAttempt = 0;
-        while (
-          !emitted.some((entry) =>
+        await fs.writeFile(trackedPath, "base\nchanged again\n");
+        await commands.get("refresh_environment_diff_stats")?.(
+          { environmentId: environment.id },
+          context,
+        );
+        // One write is enough for whichever path gets there first - the explicit
+        // refresh or the watcher. Retrying the write instead would only mask an
+        // arbitrarily slow announcement, and cannot escape the suppression above.
+        await waitForCondition(
+          () => emitted.some((entry) =>
             entry.event === "environment-diff-stats-changed"
             && (entry.payload as { stats?: { additions?: number } }).stats?.additions === 1
-          )
-          && Date.now() < deadline
-        ) {
-          // A real fs watcher is allowed to coalesce or lose an individual
-          // notification. Distinct writes keep exercising the production
-          // invalidation path without assuming one OS event is a barrier.
-          writeAttempt += 1;
-          await fs.writeFile(trackedPath, `base\nchanged again ${writeAttempt}\n`);
-          await commands.get("refresh_environment_diff_stats")?.(
-            { environmentId: environment.id },
-            context,
-          );
-          await Bun.sleep(25);
-        }
-        expect(emitted.some((entry) =>
-          entry.event === "environment-diff-stats-changed"
-          && (entry.payload as { stats?: { additions?: number } }).stats?.additions === 1
-        )).toBe(true);
+          ),
+          "changed file to be cached again",
+        );
 
         await commands.get("delete_local_file")?.(
           { environmentId: environment.id, filePath: "tracked.txt" },
@@ -6755,7 +6761,7 @@ exit 1
         await commands.get("delete_environment")?.({ environmentId: environment.id }, context)
           .catch(() => undefined);
       }
-    });
+    }, ASYNC_TEST_BUDGET_MS);
 
     test("invalidates the shared file-list cache after container revert and delete", async () => {
       const environment = createEnvironment({

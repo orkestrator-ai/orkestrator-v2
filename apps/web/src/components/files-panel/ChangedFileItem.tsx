@@ -7,16 +7,17 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { RotateCcw, Trash2 } from "lucide-react";
+import { FolderOpen, RotateCcw, Trash2 } from "lucide-react";
 
 interface ChangedFileItemProps {
   change: GitFileChange;
   onClick?: (path: string) => void;
+  onReveal?: (path: string) => void;
   onRevert?: (path: string) => void;
   onDelete?: (path: string) => void;
 }
 
-export function ChangedFileItem({ change, onClick, onRevert, onDelete }: ChangedFileItemProps) {
+export function ChangedFileItem({ change, onClick, onReveal, onRevert, onDelete }: ChangedFileItemProps) {
   const item = (
     <button
       onClick={() => onClick?.(change.path)}
@@ -51,12 +52,18 @@ export function ChangedFileItem({ change, onClick, onRevert, onDelete }: Changed
     </button>
   );
 
-  if (!onRevert && !onDelete) return item;
+  if (!onReveal && !onRevert && !onDelete) return item;
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{item}</ContextMenuTrigger>
       <ContextMenuContent>
+        {onReveal && (
+          <ContextMenuItem onSelect={() => onReveal(change.path)}>
+            <FolderOpen />
+            Reveal in file manager
+          </ContextMenuItem>
+        )}
         {onRevert && (
           <ContextMenuItem onSelect={() => onRevert(change.path)}>
             <RotateCcw />

@@ -110,6 +110,7 @@ describe("files panel views", () => {
   });
 
   test("FileTreeNode expands folders and exposes changed-file actions", async () => {
+    const onReveal = mock(() => undefined);
     const onRevert = mock(() => undefined);
     const onDelete = mock(() => undefined);
     render(
@@ -117,6 +118,7 @@ describe("files panel views", () => {
         item={fileTree[0]!}
         depth={0}
         changedPaths={new Set(["src/App.tsx"])}
+        onReveal={onReveal}
         onRevert={onRevert}
         onDelete={onDelete}
       />,
@@ -125,6 +127,9 @@ describe("files panel views", () => {
     fireEvent.click(screen.getByRole("button", { name: "src" }));
     expect(useFilesPanelStore.getState().expandedFolders).toContain("src");
     const fileButton = await screen.findByRole("button", { name: "App.tsx" });
+    fireEvent.contextMenu(fileButton);
+    fireEvent.click(await screen.findByText("Reveal in file manager"));
+    expect(onReveal).toHaveBeenCalledWith("src/App.tsx");
     fireEvent.contextMenu(fileButton);
     const revert = await screen.findByText("Revert");
     fireEvent.click(revert);

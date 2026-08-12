@@ -7,6 +7,7 @@ import {
 } from "../../../apps/web/src/contexts/TerminalContext";
 import { useFilesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
 import type { FileNode, GitFileChange } from "../../../apps/web/src/lib/backend";
+import { invoke } from "../../../apps/web/src/lib/native/backend";
 import * as realHooks from "@/hooks";
 import * as realContextMenu from "@/components/ui/context-menu";
 import * as realAlertDialog from "@/components/ui/alert-dialog";
@@ -21,6 +22,9 @@ const deleteFileMock = mock(async () => {});
 let mockEnvironmentId: string | null = "env-container";
 let mockFileActionPending: string | null = null;
 let mockIsMobile = false;
+let mockIsLocalEnvironment = false;
+let mockWorktreePath: string | null = null;
+const invokeMock = invoke as ReturnType<typeof mock>;
 
 mock.module("@/hooks", () => ({
   ...realHooksSnapshot,
@@ -31,8 +35,8 @@ mock.module("@/hooks", () => ({
     isAvailable: true,
     environmentId: mockEnvironmentId,
     containerId: "container-1",
-    worktreePath: null,
-    isLocalEnvironment: false,
+    worktreePath: mockWorktreePath,
+    isLocalEnvironment: mockIsLocalEnvironment,
     revertFile: revertFileMock,
     deleteFile: deleteFileMock,
     fileActionPending: mockFileActionPending,
@@ -162,6 +166,9 @@ describe("Files panel components", () => {
     mockEnvironmentId = "env-container";
     mockFileActionPending = null;
     mockIsMobile = false;
+    mockIsLocalEnvironment = false;
+    mockWorktreePath = null;
+    invokeMock.mockClear();
     useFilesPanelStore.setState({
       isOpen: false,
       activeTab: "changes",
@@ -203,19 +210,23 @@ describe("Files panel components", () => {
   });
 
   test("ChangedFileItem exposes revert and delete context actions", () => {
+    const onReveal = mock(() => {});
     const onRevert = mock(() => {});
     const onDelete = mock(() => {});
     render(
       <ChangedFileItem
         change={change}
+        onReveal={onReveal}
         onRevert={onRevert}
         onDelete={onDelete}
       />,
     );
 
+    fireEvent.click(screen.getByRole("button", { name: "Reveal in file manager" }));
     fireEvent.click(screen.getByRole("button", { name: "Revert" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete file" }));
 
+    expect(onReveal).toHaveBeenCalledWith("src/components/Button.tsx");
     expect(onRevert).toHaveBeenCalledWith("src/components/Button.tsx");
     expect(onDelete).toHaveBeenCalledWith("src/components/Button.tsx");
   });
@@ -589,6 +600,24 @@ describe("Files panel components", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete file" }));
     expect(screen.queryByRole("heading", { name: "Delete file?" })).toBeNull();
     expect(deleteFileMock).not.toHaveBeenCalled();
+  });
+
+  test("reveals local files by absolute worktree path and hides the action for containers", async () => {
+    mockEnvironmentId = "env-local";
+    mockIsLocalEnvironment = true;
+    mockWorktreePath = "/worktrees/feature/";
+    useFilesPanelStore.setState({ activeTab: "changes", changes: [change] });
+    const { rerender } = render(<TerminalProvider><FilesPanel /></TerminalProvider>);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reveal in file manager" }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("reveal_in_file_manager", {
+      path: "/worktrees/feature/src/components/Button.tsx",
+    }));
+
+    mockIsLocalEnvironment = false;
+    mockWorktreePath = null;
+    rerender(<TerminalProvider><FilesPanel /></TerminalProvider>);
+    expect(screen.queryByRole("button", { name: "Reveal in file manager" })).toBeNull();
   });
 
   test("the files-panel barrel exports every public component", () => {

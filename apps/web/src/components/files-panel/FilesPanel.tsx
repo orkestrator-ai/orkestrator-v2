@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
 import { FilesPanelHeader } from "./FilesPanelHeader";
 import { ChangesView } from "./ChangesView";
 import { AllFilesView } from "./AllFilesView";
@@ -6,7 +7,12 @@ import { FileActionDialog, type PendingFileAction } from "./FileActionDialog";
 import { useFilesPanelStore } from "@/stores";
 import { useFilesPanel } from "@/hooks";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { revealInFileManager } from "@/lib/backend";
 
+function resolveLocalFilePath(worktreePath: string, filePath: string): string {
+  const separator = worktreePath.includes("\\") && !worktreePath.includes("/") ? "\\" : "/";
+  return `${worktreePath.replace(/[\\/]+$/, "")}${separator}${filePath.replace(/^[\\/]+/, "")}`;
+}
 
 export function FilesPanel() {
   const activeTab = useFilesPanelStore((state) => state.activeTab);
@@ -14,7 +20,15 @@ export function FilesPanel() {
   const [pendingAction, setPendingAction] = useState<PendingFileAction | null>(null);
 
   // Initialize the files panel data loading
-  const { refresh, revertFile, deleteFile, fileActionPending, environmentId } = useFilesPanel();
+  const {
+    refresh,
+    revertFile,
+    deleteFile,
+    fileActionPending,
+    environmentId,
+    isLocalEnvironment,
+    worktreePath,
+  } = useFilesPanel();
 
   useEffect(() => {
     setPendingAction(null);
@@ -24,6 +38,15 @@ export function FilesPanel() {
     if (!environmentId) return;
     setPendingAction({ environmentId, kind, path });
   };
+
+  const revealFile = useCallback((filePath: string) => {
+    if (!isLocalEnvironment || !worktreePath) return;
+    void revealInFileManager(resolveLocalFilePath(worktreePath, filePath)).catch((error) => {
+      toast.error("Failed to reveal file", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }, [isLocalEnvironment, worktreePath]);
 
   const confirmFileAction = async () => {
     if (!pendingAction || pendingAction.environmentId !== environmentId) {
@@ -48,11 +71,13 @@ export function FilesPanel() {
       <ScrollArea className="min-h-0 flex-1">
         {activeTab === "changes" ? (
           <ChangesView
+            onReveal={isLocalEnvironment && worktreePath ? revealFile : undefined}
             onRevert={(path) => requestFileAction("revert", path)}
             onDelete={(path) => requestFileAction("delete", path)}
           />
         ) : (
           <AllFilesView
+            onReveal={isLocalEnvironment && worktreePath ? revealFile : undefined}
             onRevert={(path) => requestFileAction("revert", path)}
             onDelete={(path) => requestFileAction("delete", path)}
           />

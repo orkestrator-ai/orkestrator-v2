@@ -324,7 +324,7 @@ beforeAll(async () => {
   await fs.mkdir(fakeHome, { recursive: true });
   await fs.writeFile(path.join(binDir, "docker"), DOCKER_SCRIPT);
   await fs.chmod(path.join(binDir, "docker"), 0o755);
-  for (const executable of ["gh", "open", "xdg-open", "explorer.exe", "explorer", "code", "cursor"]) {
+  for (const executable of ["gh", "open", "xdg-open", "dbus-send", "explorer.exe", "explorer", "code", "cursor"]) {
     await fs.writeFile(path.join(binDir, executable), LAUNCHER_SCRIPT);
     await fs.chmod(path.join(binDir, executable), 0o755);
   }
@@ -978,7 +978,18 @@ describe("process and platform command behavior", () => {
       ? { executable: "open", args: ["-R", "/tmp/project/file.ts"] }
       : process.platform === "win32"
         ? { executable: "explorer", args: ["/select,", "/tmp/project/file.ts"] }
-        : { executable: "xdg-open", args: ["/tmp/project"] });
+        : {
+            executable: "dbus-send",
+            args: [
+              "--session",
+              "--print-reply",
+              "--dest=org.freedesktop.FileManager1",
+              "/org/freedesktop/FileManager1",
+              "org.freedesktop.FileManager1.ShowItems",
+              "array:string:file:///tmp/project/file.ts",
+              "string:",
+            ],
+          });
     expect(invocations).toContainEqual({
       executable: "cursor",
       args: ["--folder-uri", "vscode-remote://attached-container+636f6e7461696e65722d61/workspace"],

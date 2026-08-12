@@ -2,6 +2,7 @@ import { constants as fsConstants, existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import { isIP } from "node:net";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { parseStoredDesktopConnections } from "@orkestrator/protocol/connections";
@@ -1584,6 +1585,29 @@ export function resolveBrowserOpenCommand(
   if (platform === "darwin") return { command: "open", args: [normalized] };
   if (platform === "win32") return { command: "explorer.exe", args: [normalized] };
   return { command: "xdg-open", args: [normalized] };
+}
+
+export function resolveFileManagerRevealCommands(
+  target: string,
+  platform: NodeJS.Platform = process.platform,
+): Array<{ command: string; args: string[] }> {
+  if (platform === "darwin") return [{ command: "open", args: ["-R", target] }];
+  if (platform === "win32") return [{ command: "explorer", args: ["/select,", target] }];
+  return [
+    {
+      command: "dbus-send",
+      args: [
+        "--session",
+        "--print-reply",
+        "--dest=org.freedesktop.FileManager1",
+        "/org/freedesktop/FileManager1",
+        "org.freedesktop.FileManager1.ShowItems",
+        `array:string:${pathToFileURL(target).href}`,
+        "string:",
+      ],
+    },
+    { command: "xdg-open", args: [path.dirname(target)] },
+  ];
 }
 
 function validateGitRefName(value: string, name = "git ref"): string {
@@ -9862,11 +9886,16 @@ export function createCommandRegistry(
     const { command, args } = resolveBrowserOpenCommand(asString(url, "url"));
     return runCommand(command, args).then(() => undefined);
   });
-  register("reveal_in_file_manager", ({ path: filePath }) => {
+  register("reveal_in_file_manager", async ({ path: filePath }) => {
     const target = asString(filePath, "path");
-    if (process.platform === "darwin") return runCommand("open", ["-R", target]).then(() => undefined);
-    if (process.platform === "win32") return runCommand("explorer", ["/select,", target]).then(() => undefined);
-    return runCommand("xdg-open", [path.dirname(target)]).then(() => undefined);
+    const commands = resolveFileManagerRevealCommands(target);
+    try {
+      await runCommand(commands[0]!.command, commands[0]!.args, { timeoutMs: 5_000 });
+    } catch (error) {
+      const fallback = commands[1];
+      if (!fallback) throw error;
+      await runCommand(fallback.command, fallback.args);
+    }
   });
   register("open_in_editor", ({ containerId, editor }) => runCommand(asString(editor, "editor") === "cursor" ? "cursor" : "code", ["--folder-uri", `vscode-remote://attached-container+${Buffer.from(asString(containerId, "containerId")).toString("hex")}/workspace`]).then(() => undefined));
   register("open_local_in_editor", ({ path: filePath, editor }) => runCommand(asString(editor, "editor") === "cursor" ? "cursor" : "code", [asString(filePath, "path")]).then(() => undefined));

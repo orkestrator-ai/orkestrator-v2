@@ -22,6 +22,7 @@ interface FileTreeNodeProps {
   item: FileNode;
   depth: number;
   onFileClick?: (path: string) => void;
+  onReveal?: (path: string) => void;
   changedPaths?: ReadonlySet<string>;
   onRevert?: (path: string) => void;
   onDelete?: (path: string) => void;
@@ -31,6 +32,7 @@ export const FileTreeNode = memo(function FileTreeNode({
   item,
   depth,
   onFileClick,
+  onReveal,
   changedPaths = EMPTY_CHANGED_PATHS,
   onRevert,
   onDelete,
@@ -76,6 +78,7 @@ export const FileTreeNode = memo(function FileTreeNode({
               item={child}
               depth={depth + 1}
               onFileClick={onFileClick}
+              onReveal={onReveal}
               changedPaths={changedPaths}
               onRevert={onRevert}
               onDelete={onDelete}
@@ -100,12 +103,18 @@ export const FileTreeNode = memo(function FileTreeNode({
     </button>
   );
 
-  if (!onDelete && !(onRevert && changedPaths.has(item.path))) return fileButton;
+  if (!onReveal && !onDelete && !(onRevert && changedPaths.has(item.path))) return fileButton;
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{fileButton}</ContextMenuTrigger>
       <ContextMenuContent>
+        {onReveal && (
+          <ContextMenuItem onSelect={() => onReveal(item.path)}>
+            <FolderOpen />
+            Reveal in file manager
+          </ContextMenuItem>
+        )}
         {onRevert && changedPaths.has(item.path) && (
           <ContextMenuItem onSelect={() => onRevert(item.path)}>
             <RotateCcw />

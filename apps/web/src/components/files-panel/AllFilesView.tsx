@@ -6,11 +6,12 @@ import { Loader2, FolderTree } from "lucide-react";
 import { useMediaQuery } from "@/hooks";
 
 interface AllFilesViewProps {
+  onReveal?: (path: string) => void;
   onRevert?: (path: string) => void;
   onDelete?: (path: string) => void;
 }
 
-export function AllFilesView({ onRevert, onDelete }: AllFilesViewProps = {}) {
+export function AllFilesView({ onReveal, onRevert, onDelete }: AllFilesViewProps = {}) {
   const fileTree = useFilesPanelStore((state) => state.fileTree);
   const changes = useFilesPanelStore((state) => state.changes);
   const isLoadingTree = useFilesPanelStore((state) => state.isLoadingTree);
@@ -54,6 +55,7 @@ export function AllFilesView({ onRevert, onDelete }: AllFilesViewProps = {}) {
           item={node}
           depth={0}
           onFileClick={handleFileClick}
+          onReveal={onReveal}
           changedPaths={changedPaths}
           onRevert={onRevert}
           onDelete={onDelete}

@@ -32,6 +32,8 @@ const originalClaudeGitHubEnvironmentFingerprint =
   process.env.FAKE_CLAUDE_GITHUB_ENV_FINGERPRINT;
 const originalDockerHostResolves = process.env.FAKE_DOCKER_HOST_RESOLVES;
 const originalDockerHostsOutput = process.env.FAKE_DOCKER_HOSTS_OUTPUT;
+const originalDockerDesktopGateway = process.env.FAKE_DOCKER_DESKTOP_GATEWAY;
+const originalDockerExplicitHostEntry = process.env.FAKE_DOCKER_EXPLICIT_HOST_ENTRY;
 const originalDockerGateway = process.env.FAKE_DOCKER_GATEWAY;
 const originalClaudeAgentToolsFingerprint = process.env.FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT;
 const originalCodexAgentToolsFingerprint = process.env.FAKE_CODEX_AGENT_TOOLS_FINGERPRINT;
@@ -102,12 +104,18 @@ if [ "$1" = "system" ] && [ "$2" = "prune" ]; then
 fi
 if [ "$1" = "exec" ]; then
   case "$*" in
+    *"getent hosts gateway.docker.internal"*)
+      [ "\${FAKE_DOCKER_DESKTOP_GATEWAY:-}" = "1" ] && printf '192.168.65.1 gateway.docker.internal\n'
+      ;;
     *"getent hosts host.docker.internal"*)
       if [ -n "\${FAKE_DOCKER_HOSTS_OUTPUT:-}" ]; then
         printf '%s' "\${FAKE_DOCKER_HOSTS_OUTPUT}"
       elif [ "\${FAKE_DOCKER_HOST_RESOLVES:-}" = "1" ]; then
         printf '%s %s\n' "\${FAKE_DOCKER_GATEWAY:-172.17.0.1}" host.docker.internal
       fi
+      ;;
+    *"grep -E"*"host\\.docker\\.internal"*)
+      [ -n "\${FAKE_DOCKER_EXPLICIT_HOST_ENTRY:-}" ] && printf '%s\n' "\${FAKE_DOCKER_EXPLICIT_HOST_ENTRY}"
       ;;
     *claude-agent-tools-fingerprint*) printf '%s' "\${FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT:-}" ;;
     *codex-agent-tools-fingerprint*) printf '%s' "\${FAKE_CODEX_AGENT_TOOLS_FINGERPRINT:-}" ;;
@@ -356,6 +364,8 @@ beforeEach(async () => {
     __testing.CLAUDE_GITHUB_ENV_FINGERPRINT;
   delete process.env.FAKE_DOCKER_HOST_RESOLVES;
   delete process.env.FAKE_DOCKER_HOSTS_OUTPUT;
+  delete process.env.FAKE_DOCKER_DESKTOP_GATEWAY;
+  delete process.env.FAKE_DOCKER_EXPLICIT_HOST_ENTRY;
   delete process.env.FAKE_DOCKER_GATEWAY;
   delete process.env.FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT;
   delete process.env.FAKE_CODEX_AGENT_TOOLS_FINGERPRINT;
@@ -411,6 +421,10 @@ afterAll(async () => {
   else process.env.FAKE_DOCKER_HOST_RESOLVES = originalDockerHostResolves;
   if (originalDockerHostsOutput === undefined) delete process.env.FAKE_DOCKER_HOSTS_OUTPUT;
   else process.env.FAKE_DOCKER_HOSTS_OUTPUT = originalDockerHostsOutput;
+  if (originalDockerDesktopGateway === undefined) delete process.env.FAKE_DOCKER_DESKTOP_GATEWAY;
+  else process.env.FAKE_DOCKER_DESKTOP_GATEWAY = originalDockerDesktopGateway;
+  if (originalDockerExplicitHostEntry === undefined) delete process.env.FAKE_DOCKER_EXPLICIT_HOST_ENTRY;
+  else process.env.FAKE_DOCKER_EXPLICIT_HOST_ENTRY = originalDockerExplicitHostEntry;
   if (originalDockerGateway === undefined) delete process.env.FAKE_DOCKER_GATEWAY;
   else process.env.FAKE_DOCKER_GATEWAY = originalDockerGateway;
   if (originalClaudeAgentToolsFingerprint === undefined) delete process.env.FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT;
@@ -444,6 +458,11 @@ describe("process and platform command behavior", () => {
     const log = await readCommandLog();
     expect(log).toContain("docker create --name feature-environment");
     expect(log).toContain("GIT_URL=https://github.com/example/project.git");
+    if (process.platform === "linux") {
+      expect(log).toContain("--add-host host.docker.internal:host-gateway");
+    } else {
+      expect(log).not.toContain("--add-host host.docker.internal:host-gateway");
+    }
     expect(log).toContain("docker start container-a");
     expect(log).toContain("docker stop container-a");
     expect(log).toContain("docker rm -f container-a");
@@ -643,6 +662,27 @@ describe("process and platform command behavior", () => {
     expect(log).toContain("getent hosts host.docker.internal");
     expect(log).toContain("docker inspect --format");
     expect(log).not.toContain("docker exec --user root");
+  });
+
+  test("removes a Linux host-gateway override when Docker Desktop DNS is available", async () => {
+    process.env.FAKE_DOCKER_DESKTOP_GATEWAY = "1";
+    process.env.FAKE_DOCKER_HOSTS_OUTPUT = "192.168.65.254 host.docker.internal\n";
+    process.env.FAKE_DOCKER_EXPLICIT_HOST_ENTRY =
+      "172.17.0.1 host.docker.internal";
+
+    await __testing.ensureContainerAgentToolsHost("container-existing");
+
+    const log = await readCommandLog();
+    expect(log).toContain("getent hosts gateway.docker.internal");
+    expect(log).toContain("grep -E");
+    expect(log).toContain("docker exec --user root container-existing");
+    expect(log).not.toContain("docker inspect --format");
+  });
+
+  test("does not add a Linux host-gateway override on Docker Desktop host platforms", () => {
+    expect(__testing.shouldAddDockerHostGatewayAlias("darwin")).toBe(false);
+    expect(__testing.shouldAddDockerHostGatewayAlias("win32")).toBe(false);
+    expect(__testing.shouldAddDockerHostGatewayAlias("linux")).toBe(true);
   });
 
   test("rewrites a stale host.docker.internal mapping before trusting the alias", async () => {

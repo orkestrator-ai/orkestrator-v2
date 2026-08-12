@@ -20,6 +20,7 @@ import { spawnCommand } from "../../../apps/backend/src/core/shell";
 import type { Environment, RepositoryConfig } from "../../../apps/backend/src/core/models";
 import type { CommandContext } from "../../../apps/backend/src/core/commands";
 import { APP_SLUG, APP_VERSION } from "../../../apps/backend/src/core/constants";
+import { dockerOwnerNamespace } from "../../../apps/backend/src/core/docker-ownership";
 import { EnvironmentLifecycleTaskTracker } from "../../../apps/backend/src/core/environment-lifecycle-tasks";
 
 const execFileAsync = promisify(execFile);
@@ -405,6 +406,7 @@ function createContext(
       agent: "claude" | "codex",
       models: unknown[],
     ) => Promise<unknown>;
+    dataDir?: string;
   } = {},
 ): {
   context: CommandContext;
@@ -442,6 +444,7 @@ function createContext(
       emitted.push({ event, payload });
     }),
     storage: {
+      getDataDir: () => options.dataDir ?? path.join(os.tmpdir(), "orkestrator-command-tests"),
       withGitHubCompletionCommentLock: mock(async (
         _pipelineId: string,
         operation: () => Promise<unknown>,
@@ -6077,16 +6080,22 @@ exit 0
   });
 
   test("matches short and full container IDs before removing orphaned Docker containers", async () => {
+    const currentDataDir = path.join(os.tmpdir(), "orkestrator-current-registry");
+    const foreignDataDir = path.join(os.tmpdir(), "orkestrator-foreign-registry");
+    const currentOwner = dockerOwnerNamespace(currentDataDir);
+    const foreignOwner = dockerOwnerNamespace(foreignDataDir);
     const fullAssignedId = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
     const shortAssignedId = fullAssignedId.slice(0, 12);
     const orphanId = "1234567890ab";
+    const legacyOrphanId = "0f0f0f0f0f0f";
+    const foreignId = "fedcba098765";
     const environment = createEnvironment({
       id: "env-container",
       environmentType: "containerized",
       containerId: fullAssignedId,
       status: "running",
     });
-    const { context } = createContext(environment);
+    const { context } = createContext(environment, { dataDir: currentDataDir });
     const commands = createCommandRegistry();
 
     await withFakeDocker(`#!/bin/sh
@@ -6102,12 +6111,21 @@ if [ "$1" = "ps" ]; then
       exit 0
       ;;
     *'{{json .}}'*)
-      printf '{"ID":"${shortAssignedId}","Names":"assigned","Status":"Up","State":"running","Image":"orkestrator"}\\n'
-      printf '{"ID":"${orphanId}","Names":"orphan","Status":"Exited","State":"exited","Image":"orkestrator"}\\n'
+      printf '{"ID":"${shortAssignedId}","Names":"legacy-assigned","Status":"Up","State":"running","Image":"orkestrator","Labels":"app=orkestrator-v2"}\\n'
+      printf '{"ID":"${legacyOrphanId}","Names":"legacy-orphan","Status":"Exited","State":"exited","Image":"orkestrator","Labels":"app=orkestrator-v2"}\\n'
+      printf '{"ID":"${orphanId}","Names":"runtime-orphan","Status":"Exited","State":"exited","Image":"orkestrator","Labels":"app=orkestrator-v2,orkestrator-owner=${currentOwner},environment-name=current-orphan"}\\n'
+      printf '{"ID":"${foreignId}","Names":"foreign","Status":"Up","State":"running","Image":"orkestrator","Labels":"app=orkestrator-v2,orkestrator-owner=${foreignOwner},environment-name=foreign"}\\n'
+      ;;
+    *'{{.Labels}}'*)
+      printf '${shortAssignedId}\\tlegacy-assigned\\tapp=orkestrator-v2\\n'
+      printf '${legacyOrphanId}\\tlegacy-orphan\\tapp=orkestrator-v2\\n'
+      printf '${orphanId}\\truntime-orphan\\tapp=orkestrator-v2,orkestrator-owner=${currentOwner}\\n'
+      printf '${foreignId}\\tforeign\\tapp=orkestrator-v2,orkestrator-owner=${foreignOwner}\\n'
       ;;
     *)
       printf '${shortAssignedId}\\tassigned\\n'
       printf '${orphanId}\\torphan\\n'
+      printf '${foreignId}\\tforeign\\n'
       ;;
   esac
   exit 0
@@ -6118,20 +6136,68 @@ if [ "$1" = "rm" ]; then
 fi
 exit 0
 `, async (logs) => {
-      const containers = await commands.get("get_orkestrator_containers")?.({}, context) as Array<{ id: string; isAssigned: boolean; environmentId: string | null }>;
+      const containers = await commands.get("get_orkestrator_containers")?.({}, context) as Array<{ id: string; name: string; isAssigned: boolean; environmentId: string | null }>;
       expect(containers.find((container) => container.id === shortAssignedId)).toMatchObject({
         isAssigned: true,
         environmentId: "env-container",
       });
       expect(containers.find((container) => container.id === orphanId)).toMatchObject({ isAssigned: false });
+      // Created before the owner label existed: adopted, not stranded.
+      expect(containers.find((container) => container.id === legacyOrphanId)).toMatchObject({ isAssigned: false });
+      expect(containers.find((container) => container.id === foreignId)).toBeUndefined();
 
-      await expect(commands.get("cleanup_orphaned_containers")?.({}, context)).resolves.toBe(1);
+      await expect(commands.get("cleanup_orphaned_containers")?.({}, context)).resolves.toBe(2);
       const removed = await fs.readFile(logs.rm, "utf8");
       expect(removed).toContain(orphanId);
+      expect(removed).toContain(legacyOrphanId);
       expect(removed).not.toContain(shortAssignedId);
+      expect(removed).not.toContain(foreignId);
 
       const dockerCalls = await fs.readFile(logs.all, "utf8");
       expect(dockerCalls).toContain("--no-trunc");
+      // Ownership is decided from the returned labels. Filtering it in the
+      // daemon query would hide unlabelled pre-upgrade containers for good.
+      expect(dockerCalls).toContain("label=app=orkestrator-v2");
+      expect(dockerCalls).not.toContain(`label=orkestrator-owner=${currentOwner}`);
+    });
+  });
+
+  test("resolves a container's display name through its environment id when the name label is stale", async () => {
+    const currentDataDir = path.join(os.tmpdir(), "orkestrator-stale-name-registry");
+    const detachedId = "aabbccddeeff";
+    const orphanId = "ffeeddccbbaa";
+    // Renamed after `docker create` stamped `environment-name`, and its container
+    // id no longer matches the record, so only the environment-id label connects
+    // the two.
+    const environment = createEnvironment({
+      id: "env-renamed",
+      name: "current-name",
+      environmentType: "containerized",
+      containerId: null,
+      status: "stopped",
+    });
+    const { context } = createContext(environment, { dataDir: currentDataDir });
+    const commands = createCommandRegistry();
+    const owner = dockerOwnerNamespace(currentDataDir);
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "ps" ]; then
+  case "$*" in
+    *'{{json .}}'*)
+      printf '{"ID":"${detachedId}","Names":"ork-${owner}-env-renamed","Status":"Exited","State":"exited","Image":"orkestrator","Labels":"app=orkestrator-v2,environment-id=env-renamed,environment-name=name-at-create,orkestrator-owner=${owner}"}\\n'
+      printf '{"ID":"${orphanId}","Names":"ork-${owner}-env-deleted","Status":"Exited","State":"exited","Image":"orkestrator","Labels":"app=orkestrator-v2,environment-id=env-deleted,environment-name=name-at-create-deleted,orkestrator-owner=${owner}"}\\n'
+      ;;
+  esac
+  exit 0
+fi
+exit 0
+`, async () => {
+      const containers = await commands.get("get_orkestrator_containers")?.({}, context) as Array<{ id: string; name: string }>;
+
+      expect(containers.find((container) => container.id === detachedId)?.name).toBe("current-name");
+      // No environment left to ask, so the creation-time label is the best available.
+      expect(containers.find((container) => container.id === orphanId)?.name).toBe("name-at-create-deleted");
     });
   });
 

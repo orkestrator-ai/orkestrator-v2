@@ -28,7 +28,6 @@ import * as backend from "@/lib/backend";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "@/components/settings/FullscreenSettingsLayout";
 import type { DockerSystemStats, ContainerInfo, SystemPruneResult } from "@/lib/backend";
 import { useProjectStore, useEnvironmentStore } from "@/stores";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import {
@@ -60,7 +59,6 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
   const [showPruneConfirm, setShowPruneConfirm] = useState(false);
   const [isPruning, setIsPruning] = useState(false);
   const [pruneResult, setPruneResult] = useState<SystemPruneResult | null>(null);
-  const [pruneVolumes, setPruneVolumes] = useState(false);
 
   // Get project lookup function and projects list
   const getProjectById = useProjectStore((state) => state.getProjectById);
@@ -110,7 +108,6 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
       setError(null);
       setCleanupResult(null);
       setPruneResult(null);
-      setPruneVolumes(false);
     }
   }, [open, loadData]);
 
@@ -167,7 +164,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
     setIsPruning(true);
     setError(null);
     try {
-      const result = await backend.dockerSystemPrune(pruneVolumes);
+      const result = await backend.dockerSystemPrune();
       setPruneResult(result);
       // Refresh stats after prune
       const statsData = await backend.getDockerSystemStats();
@@ -292,7 +289,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
                       {pruneResult.imagesDeleted > 0 && <div>{pruneResult.imagesDeleted} image{pruneResult.imagesDeleted > 1 ? "s" : ""} removed</div>}
                       {pruneResult.networksDeleted > 0 && <div>{pruneResult.networksDeleted} network{pruneResult.networksDeleted > 1 ? "s" : ""} removed</div>}
                       {pruneResult.volumesDeleted > 0 && <div>{pruneResult.volumesDeleted} volume{pruneResult.volumesDeleted > 1 ? "s" : ""} removed</div>}
-                      <div className="font-medium mt-1">{formatBytes(pruneResult.spaceReclaimed)} reclaimed</div>
+                      <div className="font-medium mt-1">{pruneResult.spaceReclaimed} reclaimed</div>
                     </div></>
                   )}
                 </div>
@@ -409,40 +406,27 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* System Prune Confirmation Dialog */}
-      <AlertDialog open={showPruneConfirm} onOpenChange={(open) => {
-        setShowPruneConfirm(open);
-        if (!open) setPruneVolumes(false);
-      }}>
+      {/* Stopped Container Prune Confirmation Dialog */}
+      <AlertDialog open={showPruneConfirm} onOpenChange={setShowPruneConfirm}>
         <AlertDialogContent
           className={Z_FULLSCREEN_DIALOG}
           overlayClassName={Z_FULLSCREEN_DIALOG}
         >
           <AlertDialogHeader>
-            <AlertDialogTitle>Clean Up Docker Resources?</AlertDialogTitle>
+            <AlertDialogTitle>Remove Stopped Containers?</AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-3">
                 <p>
-                  This will remove unused Docker resources to free up disk space:
+                  This removes every stopped container belonging to this
+                  Orkestrator instance, including containers for environments you
+                  have stopped but not deleted. Starting such an environment
+                  afterwards rebuilds its container from scratch.
                 </p>
-                <ul className="list-disc list-inside text-sm space-y-1">
-                  <li>Stopped containers</li>
-                  <li>Dangling images (untagged)</li>
-                  <li>Unused networks</li>
-                </ul>
-                <div className="flex items-center space-x-2 pt-2">
-                  <Checkbox
-                    id="prune-volumes"
-                    checked={pruneVolumes}
-                    onCheckedChange={(checked) => setPruneVolumes(checked === true)}
-                  />
-                  <Label
-                    htmlFor="prune-volumes"
-                    className="text-sm font-normal cursor-pointer"
-                  >
-                    Also remove unused volumes (may delete data)
-                  </Label>
-                </div>
+                <p className="text-sm text-muted-foreground">
+                  Images, networks and volumes are left alone — they are shared
+                  with everything else on your Docker daemon, so they cannot be
+                  cleaned up safely from here.
+                </p>
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>

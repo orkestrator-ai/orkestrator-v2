@@ -65,7 +65,7 @@ export function SortableEnvironmentItem({
           {...attributes}
           {...listeners}
           className={cn(
-            "flex h-8 w-4 shrink-0 cursor-grab items-center justify-center text-muted-foreground opacity-0 transition-opacity hover:text-foreground active:cursor-grabbing",
+            "flex h-6 w-4 shrink-0 cursor-grab items-center justify-center text-muted-foreground opacity-0 transition-opacity hover:text-foreground active:cursor-grabbing",
             "group-hover/sortable:opacity-100"
           )}
         >

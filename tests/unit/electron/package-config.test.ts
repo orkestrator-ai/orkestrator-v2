@@ -62,6 +62,7 @@ describe("Electron packaging configuration", () => {
     expect(desktopBuildScript).toContain('path.join(packageRoot, "electron/toolchain-bootstrap-preload.ts")');
     expect(bootstrapPreload).toContain('ipcRenderer.on("orkestrator:toolchain-progress"');
     expect(bootstrapPreload).toContain('window.addEventListener("DOMContentLoaded"');
+    expect(desktopMain).toContain("userDataDirectoryName(isDev)");
     expect(desktopMain).toContain("createToolchainProgressController");
     expect(desktopMain).toContain("await toolchainProgress.close()");
     expect(desktopMain).toContain("initializeBrowserPreviews");

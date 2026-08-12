@@ -347,6 +347,106 @@ describe("verify-toolchain-artifacts", () => {
     }
   });
 
+  test("verifies, emits, and rejects a companion alongside its primary executable", async () => {
+    // A companion ships as its own release asset, so its digests move
+    // independently of the primary executable's. Both have to be downloaded and
+    // both have to be asserted, under labels that say which one moved.
+    const root = await mkdtemp(join(tmpdir(), "ork-artifact-test-"));
+    const log = spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      const primaryBody = Buffer.from("#!/bin/sh\nprintf 'codex\\n'\n");
+      const companionBody = Buffer.from("#!/bin/sh\nprintf 'host\\n'\n");
+      await writeFile(join(root, "codex"), primaryBody);
+      await writeFile(join(root, "codex-code-mode-host"), companionBody);
+      const pack = async (entry: string, name: string) => {
+        const archivePath = join(root, name);
+        const tar = Bun.spawn(["tar", "-czf", archivePath, entry], {
+          cwd: root,
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        expect(await tar.exited).toBe(0);
+        return readFile(archivePath);
+      };
+      const primaryArchive = await pack("codex", "primary.tar.gz");
+      const companionArchive = await pack("codex-code-mode-host", "companion.tar.gz");
+      const digest = (contents: Uint8Array) => ({
+        size: contents.byteLength,
+        sha256: createHash("sha256").update(contents).digest("hex"),
+      });
+      const companionUrl = "https://downloads.example.test/codex-code-mode-host.tar.gz";
+      const body = (contents: Buffer) => contents.buffer.slice(
+        contents.byteOffset,
+        contents.byteOffset + contents.byteLength,
+      );
+      const fetchImpl = async (input: URL | string) => new Response(
+        String(input) === companionUrl ? body(companionArchive) : body(primaryArchive),
+      );
+      const withCompanion = (
+        companionDigests: { archive: ReturnType<typeof digest>; executable: ReturnType<typeof digest> },
+      ) => testArtifact({
+        archive: { ...testArtifact().archive, ...digest(primaryArchive) },
+        executable: { ...testArtifact().executable, ...digest(primaryBody) },
+        companions: [{
+          fileName: "codex-code-mode-host",
+          archive: {
+            format: "tar.gz",
+            url: companionUrl,
+            entryPath: "codex-code-mode-host",
+            allowedHosts: ["downloads.example.test"],
+            ...companionDigests.archive,
+          },
+          executable: companionDigests.executable,
+        }],
+      });
+      const correct = withCompanion({
+        archive: digest(companionArchive),
+        executable: digest(companionBody),
+      });
+
+      await verifyArtifact(correct, root, { fetchImpl });
+
+      // Both scratch archives are removed even though two were written.
+      expect(await readFile(join(root, "codex-code-mode-host-linux-x64.tar.gz"))
+        .then(() => true, () => false)).toBe(false);
+
+      await expect(verifyArtifact(
+        withCompanion({
+          archive: { ...digest(companionArchive), sha256: "f".repeat(64) },
+          executable: digest(companionBody),
+        }),
+        root,
+        { fetchImpl },
+      )).rejects.toThrow("codex:linux:x64 codex-code-mode-host archive SHA-256 mismatch");
+
+      await expect(verifyArtifact(
+        withCompanion({
+          archive: digest(companionArchive),
+          executable: { ...digest(companionBody), size: 1 },
+        }),
+        root,
+        { fetchImpl },
+      )).rejects.toThrow("codex:linux:x64 codex-code-mode-host executable size mismatch");
+
+      // Emit prints the companion as its own paste-ready block, so a version
+      // bump does not silently reuse the previous release's helper digests.
+      log.mockClear();
+      await verifyArtifact(correct, root, { emit: true, fetchImpl });
+      const printed = log.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(printed).toContain("  // codex:linux:x64\n");
+      expect(printed).toContain("  // codex:linux:x64 codex-code-mode-host\n");
+      expect(printed).toContain(
+        `executable.sha256: "${createHash("sha256").update(companionBody).digest("hex")}",`,
+      );
+      expect(printed).toContain(
+        `archive.sha256:    "${createHash("sha256").update(companionArchive).digest("hex")}",`,
+      );
+    } finally {
+      log.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("refuses a response that loses its body before it is streamed to disk", async () => {
     // Defence in depth: fetchArtifact already rejects a body-less response, so
     // this guard only fires if that ever stops holding. Proving it throws is

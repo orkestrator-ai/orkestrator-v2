@@ -40,6 +40,15 @@ interface Downloader {
   scriptName: string;
   expectedDownload(case_: PlatformCase): string;
   expectedExtractor(case_: PlatformCase): "tar" | "unzip";
+  /**
+   * Further executables the script must place beside the primary one, and the
+   * archives it fetches for them. Codex spawns `codex-code-mode-host` from its
+   * own directory, so a bundle without it cannot run code mode.
+   */
+  companions?: {
+    binaryName: string;
+    expectedDownload(case_: PlatformCase): string;
+  }[];
 }
 
 const downloaders: Downloader[] = [
@@ -64,6 +73,16 @@ const downloaders: Downloader[] = [
       return `rust-v0.147.0/codex-${target}.tar.gz`;
     },
     expectedExtractor: () => "tar",
+    companions: [{
+      binaryName: "codex-code-mode-host",
+      expectedDownload: ({ architecture, os }) => {
+        const arch = architecture === "x86_64" ? "x86_64" : "aarch64";
+        const target = os === "Darwin"
+          ? `${arch}-apple-darwin`
+          : `${arch}-unknown-linux-musl`;
+        return `rust-v0.147.0/codex-code-mode-host-${target}.tar.gz`;
+      },
+    }],
   },
   {
     binaryName: "opencode",
@@ -167,6 +186,7 @@ for target in \
   x86_64-apple-darwin aarch64-apple-darwin \
   x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
   /bin/cp "$HARNESS_FAKE_EXECUTABLE" "$destination/codex-$target"
+  /bin/cp "$HARNESS_FAKE_EXECUTABLE" "$destination/codex-code-mode-host-$target"
 done
 `);
 
@@ -261,8 +281,18 @@ for (const downloader of downloaders) {
         expect(existsSync(path.join(fixture.binariesDirectory, downloader.binaryName))).toBe(true);
         expect(existsSync(fixture.temporaryDirectory)).toBe(false);
 
+        for (const companion of downloader.companions ?? []) {
+          expect(log).toContain(companion.expectedDownload(platform));
+          expect(
+            existsSync(path.join(fixture.binariesDirectory, companion.binaryName)),
+            `${companion.binaryName} was not placed beside ${downloader.binaryName}`,
+          ).toBe(true);
+        }
+
+        // Every bundled binary is ad-hoc signed: remove-signature then sign.
+        const signedBinaries = 1 + (downloader.companions?.length ?? 0);
         const codesignCalls = log.match(/^codesign /gm) ?? [];
-        expect(codesignCalls).toHaveLength(platform.os === "Darwin" ? 2 : 0);
+        expect(codesignCalls).toHaveLength(platform.os === "Darwin" ? 2 * signedBinaries : 0);
       }, DOWNLOADER_TEST_TIMEOUT_MS);
     }
 

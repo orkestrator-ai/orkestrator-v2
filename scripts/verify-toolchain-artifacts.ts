@@ -7,6 +7,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import {
   PINNED_TOOLCHAIN_ARTIFACTS,
+  type ToolchainArchive,
   type ToolchainArtifact,
   type ToolchainArchitecture,
   type ToolchainName,
@@ -82,13 +83,13 @@ export type FetchArtifact = (
   init?: RequestInit,
 ) => Promise<Response>;
 
-export async function fetchArtifact(
-  artifact: ToolchainArtifact,
+export async function fetchArchive(
+  archive: ToolchainArchive,
   fetchImpl: FetchArtifact = fetch,
 ): Promise<Response> {
-  let current = new URL(artifact.archive.url);
+  let current = new URL(archive.url);
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
-    validateDownloadUrl(current, artifact.archive.allowedHosts);
+    validateDownloadUrl(current, archive.allowedHosts);
     const response = await fetchImpl(current, {
       redirect: "manual",
       signal: AbortSignal.timeout(ARTIFACT_DOWNLOAD_TIMEOUT_MS),
@@ -109,6 +110,13 @@ export async function fetchArtifact(
     current = new URL(location, current);
   }
   throw new Error(`Artifact exceeded ${MAX_REDIRECTS} redirects`);
+}
+
+export function fetchArtifact(
+  artifact: ToolchainArtifact,
+  fetchImpl: FetchArtifact = fetch,
+): Promise<Response> {
+  return fetchArchive(artifact.archive, fetchImpl);
 }
 
 async function hashFile(filePath: string): Promise<Digest> {
@@ -149,13 +157,13 @@ export function expectDigest(
   }
 }
 
-export async function hashExecutable(
-  artifact: ToolchainArtifact,
+export async function hashArchiveEntry(
+  archive: ToolchainArchive,
   archivePath: string,
 ): Promise<Digest> {
-  const command = artifact.archive.format === "zip"
-    ? ["unzip", "-p", archivePath, artifact.archive.entryPath]
-    : ["tar", "-xOzf", archivePath, artifact.archive.entryPath];
+  const command = archive.format === "zip"
+    ? ["unzip", "-p", archivePath, archive.entryPath]
+    : ["tar", "-xOzf", archivePath, archive.entryPath];
   const extractor = Bun.spawn(command, {
     stdout: "pipe",
     stderr: "pipe",
@@ -167,15 +175,67 @@ export async function hashExecutable(
   ]);
   if (exitCode !== 0) {
     throw new Error(
-      `Could not extract ${artifact.archive.entryPath}: ${stderr.slice(0, 2_000)}`,
+      `Could not extract ${archive.entryPath}: ${stderr.slice(0, 2_000)}`,
     );
   }
   return digest;
 }
 
+export function hashExecutable(
+  artifact: ToolchainArtifact,
+  archivePath: string,
+): Promise<Digest> {
+  return hashArchiveEntry(artifact.archive, archivePath);
+}
+
 /** Formats a size the way the manifest writes them, with `_` separators. */
 function formatManifestSize(size: number): string {
   return size.toLocaleString("en-US").replace(/,/g, "_");
+}
+
+/**
+ * Downloads one archive, hashes it and its pinned entry, then either prints the
+ * digests in manifest form or asserts them. Used for an artifact's primary
+ * executable and for each of its companions.
+ */
+async function verifyArchive(
+  label: string,
+  archive: ToolchainArchive,
+  executable: { size: number; sha256: string },
+  archivePath: string,
+  options: { emit?: boolean; fetchImpl?: FetchArtifact },
+): Promise<void> {
+  const response = await fetchArchive(archive, options.fetchImpl);
+  if (!response.body) throw new Error(`Artifact response omitted a body: ${archive.url}`);
+  await pipeline(
+    Readable.fromWeb(response.body as globalThis.ReadableStream<Uint8Array>),
+    createWriteStream(archivePath),
+  );
+
+  const archiveDigest = await hashFile(archivePath);
+  const executableDigest = await hashArchiveEntry(archive, archivePath);
+
+  if (options.emit) {
+    // A version bump changes all four digests per archive. Printing them in
+    // manifest form means one download pass instead of one per mismatch.
+    console.log(
+      [
+        `  // ${label}`,
+        `  archive.size:      ${formatManifestSize(archiveDigest.size)},`,
+        `  archive.sha256:    "${archiveDigest.sha256}",`,
+        `  executable.size:   ${formatManifestSize(executableDigest.size)},`,
+        `  executable.sha256: "${executableDigest.sha256}",`,
+      ].join("\n"),
+    );
+  } else {
+    expectDigest(`${label} archive`, archiveDigest, {
+      size: archive.size,
+      sha256: archive.sha256,
+    });
+    expectDigest(`${label} executable`, executableDigest, executable);
+  }
+
+  await rm(archivePath, { force: true });
 }
 
 export async function verifyArtifact(
@@ -185,44 +245,31 @@ export async function verifyArtifact(
 ): Promise<void> {
   const target = `${artifact.name}:${artifact.platform}:${artifact.architecture}`;
   console.log(`${options.emit ? "Hashing" : "Verifying"} ${target} ${artifact.version}`);
-  const response = await fetchArtifact(artifact, options.fetchImpl);
-  const archivePath = join(
-    temporaryRoot,
-    `${artifact.name}-${artifact.platform}-${artifact.architecture}.${artifact.archive.format}`,
-  );
-  if (!response.body) throw new Error(`Artifact response omitted a body: ${artifact.archive.url}`);
-  await pipeline(
-    Readable.fromWeb(response.body as globalThis.ReadableStream<Uint8Array>),
-    createWriteStream(archivePath),
+  await verifyArchive(
+    target,
+    artifact.archive,
+    { size: artifact.executable.size, sha256: artifact.executable.sha256 },
+    join(
+      temporaryRoot,
+      `${artifact.name}-${artifact.platform}-${artifact.architecture}.${artifact.archive.format}`,
+    ),
+    options,
   );
 
-  const archiveDigest = await hashFile(archivePath);
-  const executableDigest = await hashExecutable(artifact, archivePath);
-
-  if (options.emit) {
-    // A version bump changes all four digests per artifact. Printing them in
-    // manifest form means one download pass instead of one per mismatch.
-    console.log(
-      [
-        `  // ${target}`,
-        `  archive.size:      ${formatManifestSize(archiveDigest.size)},`,
-        `  archive.sha256:    "${archiveDigest.sha256}",`,
-        `  executable.size:   ${formatManifestSize(executableDigest.size)},`,
-        `  executable.sha256: "${executableDigest.sha256}",`,
-      ].join("\n"),
+  // A companion is shipped from its own release asset, so a version bump moves
+  // its digests independently of the primary executable's.
+  for (const companion of artifact.companions ?? []) {
+    await verifyArchive(
+      `${target} ${companion.fileName}`,
+      companion.archive,
+      companion.executable,
+      join(
+        temporaryRoot,
+        `${companion.fileName}-${artifact.platform}-${artifact.architecture}.${companion.archive.format}`,
+      ),
+      options,
     );
-  } else {
-    expectDigest(`${target} archive`, archiveDigest, {
-      size: artifact.archive.size,
-      sha256: artifact.archive.sha256,
-    });
-    expectDigest(`${target} executable`, executableDigest, {
-      size: artifact.executable.size,
-      sha256: artifact.executable.sha256,
-    });
   }
-
-  await rm(archivePath, { force: true });
 }
 
 export function selectArtifacts(

@@ -24,7 +24,9 @@ import * as tar from "tar-stream";
 import yauzl from "yauzl";
 import {
   pinnedToolchainArtifacts,
+  type ToolchainArchive,
   type ToolchainArtifact,
+  type ToolchainCompanion,
   type ToolchainName,
 } from "./toolchain-manifest.js";
 
@@ -117,6 +119,26 @@ function upstreamExecutablePath(rootDir: string, artifact: ToolchainArtifact): s
   return path.join(artifactDirectory(rootDir, artifact), `.upstream-${artifact.executable.fileName}`);
 }
 
+function artifactCompanions(artifact: ToolchainArtifact): readonly ToolchainCompanion[] {
+  return artifact.companions ?? [];
+}
+
+function companionPath(
+  rootDir: string,
+  artifact: ToolchainArtifact,
+  companion: ToolchainCompanion,
+): string {
+  return path.join(artifactDirectory(rootDir, artifact), companion.fileName);
+}
+
+/** Every archive byte an artifact downloads, so progress covers companions. */
+function artifactArchiveBytes(artifact: ToolchainArtifact): number {
+  return artifactCompanions(artifact).reduce(
+    (total, companion) => total + companion.archive.size,
+    artifact.archive.size,
+  );
+}
+
 async function sha256File(filePath: string): Promise<string> {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(filePath)) hash.update(chunk as Buffer);
@@ -150,6 +172,69 @@ function assertValidArtifactMetadata(artifact: ToolchainArtifact): void {
     throw new Error(
       `${artifact.name} manifest cannot pin locally repaired executable bytes`,
     );
+  }
+
+  const companionNames = new Set<string>([artifact.executable.fileName]);
+  for (const companion of artifactCompanions(artifact)) {
+    if (companion.archive.format !== "zip" && companion.archive.format !== "tar.gz") {
+      throw new Error(`${artifact.name} companion has an unsupported archive format`);
+    }
+    // A companion is written into, and symlinked out of, directories this
+    // module owns. Anything that is not a plain file name could escape them.
+    if (
+      !companion.fileName
+      || companion.fileName.startsWith(".")
+      || companion.fileName.includes("/")
+      || companion.fileName.includes("\\")
+      || companion.fileName !== path.basename(companion.fileName)
+    ) {
+      throw new Error(`${artifact.name} companion has an unsafe file name`);
+    }
+    if (companionNames.has(companion.fileName)) {
+      throw new Error(`${artifact.name} companion ${companion.fileName} is declared twice`);
+    }
+    companionNames.add(companion.fileName);
+    if (
+      !Number.isSafeInteger(companion.executable.size)
+      || companion.executable.size <= 0
+      || !/^[a-f0-9]{64}$/.test(companion.executable.sha256)
+    ) {
+      throw new Error(`${artifact.name} companion ${companion.fileName} has invalid executable metadata`);
+    }
+  }
+}
+
+/**
+ * Every artifact and every companion is linked into one shared activation
+ * directory, so a companion whose name collides with another tool silently
+ * replaces that tool's symlink — and the winner depends on iteration order.
+ * `assertValidArtifactMetadata` can only see one artifact, so the set-wide
+ * check lives here.
+ */
+function assertUniqueActivationNames(artifacts: readonly ToolchainArtifact[]): void {
+  // Owned by tool name rather than by artifact, so the per-platform entries of
+  // one tool legitimately claim the same names as each other.
+  const owners = new Map<string, ToolchainName>();
+  const claim = (linkName: string, owner: ToolchainName): void => {
+    const existing = owners.get(linkName);
+    if (existing !== undefined && existing !== owner) {
+      throw new Error(
+        `${owner} companion ${linkName} collides with ${existing} in the shared activation directory`,
+      );
+    }
+    owners.set(linkName, owner);
+  };
+
+  // Tool names first, so a collision is reported no matter which artifact
+  // declares the companion or which order the set arrives in.
+  for (const artifact of artifacts) {
+    owners.set(artifact.name, artifact.name);
+    owners.set(artifact.executable.fileName, artifact.name);
+  }
+  for (const artifact of artifacts) {
+    for (const companion of artifactCompanions(artifact)) {
+      claim(companion.fileName, artifact.name);
+    }
   }
 }
 
@@ -205,6 +290,63 @@ async function isValidExecutable(rootDir: string, artifact: ToolchainArtifact): 
   } catch {
     return false;
   }
+}
+
+async function isValidCompanion(
+  rootDir: string,
+  artifact: ToolchainArtifact,
+  companion: ToolchainCompanion,
+): Promise<boolean> {
+  const filePath = companionPath(rootDir, artifact, companion);
+  try {
+    const file = await lstat(filePath);
+    if (!file.isFile() || file.isSymbolicLink() || file.size !== companion.executable.size) return false;
+    if (await sha256File(filePath) !== companion.executable.sha256) return false;
+    if ((file.mode & 0o777) !== 0o500) await chmod(filePath, 0o500);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function missingCompanions(
+  rootDir: string,
+  artifact: ToolchainArtifact,
+): Promise<ToolchainCompanion[]> {
+  const companions = artifactCompanions(artifact);
+  const validity = await Promise.all(companions
+    .map((companion) => isValidCompanion(rootDir, artifact, companion)));
+  return companions.filter((_, index) => !validity[index]);
+}
+
+/**
+ * An artifact is only usable when its companions are present too. A cache that
+ * predates a companion being added holds a valid primary executable, so the
+ * install has to be judged as a set or the missing companion is never repaired.
+ *
+ * `companions-missing` is kept distinct from `missing` because the two are
+ * repaired differently: re-downloading a primary archive that is already
+ * verified on disk costs the user the whole release for a helper a fraction of
+ * its size, and rebuilding the version directory disturbs a still-running build
+ * whose activation symlinks point into it. It carries the companions it found
+ * missing so the repair does not have to digest them a second time.
+ */
+type InstallationStatus =
+  | { state: "valid" }
+  | { state: "missing" }
+  | { state: "companions-missing"; companions: readonly ToolchainCompanion[] };
+
+async function installationStatus(
+  rootDir: string,
+  artifact: ToolchainArtifact,
+): Promise<InstallationStatus> {
+  if (!await isValidExecutable(rootDir, artifact)) return { state: "missing" };
+  const companions = await missingCompanions(rootDir, artifact);
+  return companions.length === 0 ? { state: "valid" } : { state: "companions-missing", companions };
+}
+
+async function isValidInstallation(rootDir: string, artifact: ToolchainArtifact): Promise<boolean> {
+  return (await installationStatus(rootDir, artifact)).state === "valid";
 }
 
 type InstallLockOwner = {
@@ -329,25 +471,27 @@ async function acquireInstallLock(
 }
 
 function assertDownloadLocation(
-  artifact: ToolchainArtifact,
+  label: string,
+  archive: ToolchainArchive,
   response: Response,
   allowInsecureDownloadsForTests: boolean,
 ): void {
-  const requested = new URL(artifact.archive.url);
-  const resolved = new URL(response.url || artifact.archive.url);
+  const requested = new URL(archive.url);
+  const resolved = new URL(response.url || archive.url);
   if (!allowInsecureDownloadsForTests && (requested.protocol !== "https:" || resolved.protocol !== "https:")) {
-    throw new Error(`${artifact.name} download did not use HTTPS`);
+    throw new Error(`${label} download did not use HTTPS`);
   }
-  if (!artifact.archive.allowedHosts.includes(requested.hostname)) {
-    throw new Error(`${artifact.name} download host is not allowlisted: ${requested.hostname}`);
+  if (!archive.allowedHosts.includes(requested.hostname)) {
+    throw new Error(`${label} download host is not allowlisted: ${requested.hostname}`);
   }
-  if (!artifact.archive.allowedHosts.includes(resolved.hostname)) {
-    throw new Error(`${artifact.name} redirected to an untrusted host: ${resolved.hostname}`);
+  if (!archive.allowedHosts.includes(resolved.hostname)) {
+    throw new Error(`${label} redirected to an untrusted host: ${resolved.hostname}`);
   }
 }
 
 async function downloadArchive(
-  artifact: ToolchainArtifact,
+  label: string,
+  archive: ToolchainArchive,
   archivePath: string,
   fetchImpl: FetchLike,
   onBytes: (received: number) => void,
@@ -358,20 +502,20 @@ async function downloadArchive(
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let handle: Awaited<ReturnType<typeof open>> | null = null;
   try {
-    const response = await fetchImpl(artifact.archive.url, {
+    const response = await fetchImpl(archive.url, {
       redirect: "follow",
       signal: controller.signal,
       headers: { "user-agent": "OrkestratorV2 toolchain installer" },
     });
     if (!response.ok || !response.body) {
-      throw new Error(`${artifact.name} download failed with HTTP ${response.status}`);
+      throw new Error(`${label} download failed with HTTP ${response.status}`);
     }
-    assertDownloadLocation(artifact, response, allowInsecureDownloadsForTests);
+    assertDownloadLocation(label, archive, response, allowInsecureDownloadsForTests);
 
     const contentLength = response.headers.get("content-length");
-    if (contentLength !== null && Number(contentLength) !== artifact.archive.size) {
+    if (contentLength !== null && Number(contentLength) !== archive.size) {
       throw new Error(
-        `${artifact.name} archive size header did not match the pinned manifest`,
+        `${label} archive size header did not match the pinned manifest`,
       );
     }
 
@@ -383,8 +527,8 @@ async function downloadArchive(
       const { done, value } = await reader.read();
       if (done) break;
       received += value.byteLength;
-      if (received > artifact.archive.size) {
-        throw new Error(`${artifact.name} archive exceeded its pinned size`);
+      if (received > archive.size) {
+        throw new Error(`${label} archive exceeded its pinned size`);
       }
       hash.update(value);
       await handle.writeFile(value);
@@ -393,11 +537,11 @@ async function downloadArchive(
     await handle.close();
     handle = null;
 
-    if (received !== artifact.archive.size) {
-      throw new Error(`${artifact.name} archive was truncated`);
+    if (received !== archive.size) {
+      throw new Error(`${label} archive was truncated`);
     }
-    if (hash.digest("hex") !== artifact.archive.sha256) {
-      throw new Error(`${artifact.name} archive checksum did not match the pinned manifest`);
+    if (hash.digest("hex") !== archive.sha256) {
+      throw new Error(`${label} archive checksum did not match the pinned manifest`);
     }
   } finally {
     clearTimeout(timeout);
@@ -408,24 +552,26 @@ async function downloadArchive(
 async function extractTarGzipEntry(
   archivePath: string,
   destinationPath: string,
-  artifact: ToolchainArtifact,
+  label: string,
+  archive: ToolchainArchive,
+  executableSize: number,
 ): Promise<void> {
   let found = false;
   const extract = tar.extract();
   extract.on("entry", (header, stream, next) => {
-    if (header.name !== artifact.archive.entryPath) {
+    if (header.name !== archive.entryPath) {
       stream.on("end", next);
       stream.resume();
       return;
     }
     if (found) {
-      extract.destroy(new Error(`${artifact.name} archive contains a duplicate executable entry`));
+      extract.destroy(new Error(`${label} archive contains a duplicate executable entry`));
       stream.resume();
       return;
     }
     found = true;
-    if (header.type !== "file" || header.size !== artifact.executable.size) {
-      extract.destroy(new Error(`${artifact.name} executable entry did not match the pinned manifest`));
+    if (header.type !== "file" || header.size !== executableSize) {
+      extract.destroy(new Error(`${label} executable entry did not match the pinned manifest`));
       stream.resume();
       return;
     }
@@ -436,7 +582,7 @@ async function extractTarGzipEntry(
   });
 
   await pipeline(createReadStream(archivePath), createGunzip(), extract);
-  if (!found) throw new Error(`${artifact.name} executable was not found in its archive`);
+  if (!found) throw new Error(`${label} executable was not found in its archive`);
 }
 
 function openZip(archivePath: string): Promise<yauzl.ZipFile> {
@@ -456,7 +602,9 @@ function openZip(archivePath: string): Promise<yauzl.ZipFile> {
 async function extractZipEntry(
   archivePath: string,
   destinationPath: string,
-  artifact: ToolchainArtifact,
+  label: string,
+  archive: ToolchainArchive,
+  executableSize: number,
 ): Promise<void> {
   const zipFile = await openZip(archivePath);
   await new Promise<void>((resolve, reject) => {
@@ -473,25 +621,25 @@ async function extractZipEntry(
     zipFile.on("entry", (entry) => {
       const invalidName = yauzl.validateFileName(entry.fileName);
       if (invalidName) {
-        fail(new Error(`Unsafe ZIP entry in ${artifact.name} archive: ${invalidName}`));
+        fail(new Error(`Unsafe ZIP entry in ${label} archive: ${invalidName}`));
         return;
       }
-      if (entry.fileName !== artifact.archive.entryPath) {
+      if (entry.fileName !== archive.entryPath) {
         zipFile.readEntry();
         return;
       }
       if (found) {
-        fail(new Error(`${artifact.name} archive contains a duplicate executable entry`));
+        fail(new Error(`${label} archive contains a duplicate executable entry`));
         return;
       }
       found = true;
-      if (entry.fileName.endsWith("/") || entry.uncompressedSize !== artifact.executable.size) {
-        fail(new Error(`${artifact.name} executable entry did not match the pinned manifest`));
+      if (entry.fileName.endsWith("/") || entry.uncompressedSize !== executableSize) {
+        fail(new Error(`${label} executable entry did not match the pinned manifest`));
         return;
       }
       zipFile.openReadStream(entry, (error, stream) => {
         if (error || !stream) {
-          fail(error ?? new Error(`${artifact.name} executable stream was unavailable`));
+          fail(error ?? new Error(`${label} executable stream was unavailable`));
           return;
         }
         void pipeline(
@@ -504,7 +652,7 @@ async function extractZipEntry(
       if (settled) return;
       settled = true;
       if (found) resolve();
-      else reject(new Error(`${artifact.name} executable was not found in its archive`));
+      else reject(new Error(`${label} executable was not found in its archive`));
     });
     zipFile.readEntry();
   });
@@ -550,7 +698,7 @@ async function probeExecutable(
 
 async function verifyMacCodeSignature(
   executablePath: string,
-  artifact: ToolchainArtifact,
+  label: string,
   timeoutMs: number,
   spawnProcess: typeof spawn,
 ): Promise<void> {
@@ -562,7 +710,7 @@ async function verifyMacCodeSignature(
     child.stderr.on("data", (chunk) => errors.push(Buffer.from(chunk)));
     const timeout = setTimeout(() => {
       child.kill("SIGKILL");
-      reject(new Error(`${artifact.name} code-signature check timed out`));
+      reject(new Error(`${label} code-signature check timed out`));
     }, timeoutMs);
     child.once("error", (error) => {
       clearTimeout(timeout);
@@ -576,7 +724,7 @@ async function verifyMacCodeSignature(
       }
       const detail = Buffer.concat(errors).toString("utf8").trim();
       reject(new Error(
-        `${artifact.name} has an invalid macOS code signature (code ${code ?? "unknown"}, signal ${signal ?? "none"})${detail ? `: ${detail}` : ""}`,
+        `${label} has an invalid macOS code signature (code ${code ?? "unknown"}, signal ${signal ?? "none"})${detail ? `: ${detail}` : ""}`,
       ));
     });
   });
@@ -656,10 +804,10 @@ async function prepareRepairableExecutable(
     await chmod(temporaryPath, 0o700);
     if (!skipExecutableProbeForTests) {
       try {
-        await verifyMacCodeSignature(temporaryPath, artifact, processTimeoutMs, spawnProcess);
+        await verifyMacCodeSignature(temporaryPath, artifact.name, processTimeoutMs, spawnProcess);
       } catch {
         await repairInvalidMacSignature(temporaryPath, artifact, processTimeoutMs, spawnProcess);
-        await verifyMacCodeSignature(temporaryPath, artifact, processTimeoutMs, spawnProcess);
+        await verifyMacCodeSignature(temporaryPath, artifact.name, processTimeoutMs, spawnProcess);
       }
       await probeExecutable(temporaryPath, artifact, processTimeoutMs, spawnProcess);
     }
@@ -692,6 +840,135 @@ async function refreshRepairableArtifact(
   );
 }
 
+/**
+ * Downloads, verifies and stages every requested companion into
+ * `stagingDirectory`. Nothing is published: the caller decides whether the
+ * staged files become visible through a directory rename (a fresh install) or
+ * per-file renames into an existing version directory (a companion repair).
+ *
+ * `startBytes` offsets the progress stream by whatever the caller already
+ * downloaded, so a fresh install keeps counting from the primary archive.
+ */
+async function stageCompanions(
+  stagingDirectory: string,
+  artifact: ToolchainArtifact,
+  companions: readonly ToolchainCompanion[],
+  fetchImpl: FetchLike,
+  onBytes: (received: number) => void,
+  startBytes: number,
+  allowInsecureDownloadsForTests: boolean,
+  skipExecutableProbeForTests: boolean,
+  timings: ToolchainManagerTimings,
+  spawnProcess: typeof spawn,
+): Promise<void> {
+  let downloadedBytes = startBytes;
+  for (const companion of companions) {
+    const companionArchivePath = path.join(
+      stagingDirectory,
+      `.archive-${companion.fileName}.${companion.archive.format === "zip" ? "zip" : "tar.gz"}`,
+    );
+    const companionFilePath = path.join(stagingDirectory, companion.fileName);
+    const precedingBytes = downloadedBytes;
+    await downloadArchive(
+      companion.fileName,
+      companion.archive,
+      companionArchivePath,
+      fetchImpl,
+      (received) => onBytes(precedingBytes + received),
+      allowInsecureDownloadsForTests,
+      timings.downloadTimeoutMs,
+    );
+    downloadedBytes += companion.archive.size;
+    if (companion.archive.format === "zip") {
+      await extractZipEntry(
+        companionArchivePath,
+        companionFilePath,
+        companion.fileName,
+        companion.archive,
+        companion.executable.size,
+      );
+    } else {
+      await extractTarGzipEntry(
+        companionArchivePath,
+        companionFilePath,
+        companion.fileName,
+        companion.archive,
+        companion.executable.size,
+      );
+    }
+    await rm(companionArchivePath, { force: true });
+
+    const installedCompanion = await lstat(companionFilePath);
+    if (!installedCompanion.isFile() || installedCompanion.size !== companion.executable.size) {
+      throw new Error(
+        `${companion.fileName} extracted executable size did not match the pinned manifest`,
+      );
+    }
+    if (await sha256File(companionFilePath) !== companion.executable.sha256) {
+      throw new Error(`${companion.fileName} executable checksum did not match the pinned manifest`);
+    }
+    if (!skipExecutableProbeForTests && artifact.platform === "darwin") {
+      await verifyMacCodeSignature(
+        companionFilePath,
+        companion.fileName,
+        timings.processTimeoutMs,
+        spawnProcess,
+      );
+    }
+    await chmod(companionFilePath, 0o500);
+  }
+}
+
+/**
+ * Adds companions to a version directory whose primary executable is already
+ * verified. The archive that executable came from is not downloaded again, and
+ * the directory is never removed, so a concurrently running build keeps the
+ * exact executable its activation symlink resolves to.
+ *
+ * Every companion is staged and verified before any of them is published, and
+ * each rename is atomic, so a failure part-way leaves whole files behind rather
+ * than truncated ones. An interrupted repair simply reports as
+ * `companions-missing` again on the next launch.
+ */
+async function repairArtifactCompanions(
+  rootDir: string,
+  artifact: ToolchainArtifact,
+  companions: readonly ToolchainCompanion[],
+  fetchImpl: FetchLike,
+  onBytes: (received: number) => void,
+  onVerify: () => void,
+  allowInsecureDownloadsForTests: boolean,
+  skipExecutableProbeForTests: boolean,
+  timings: ToolchainManagerTimings,
+  spawnProcess: typeof spawn,
+): Promise<void> {
+  const stagingDirectory = await mkdtemp(path.join(rootDir, `.staging-${artifact.name}-`));
+  try {
+    await stageCompanions(
+      stagingDirectory,
+      artifact,
+      companions,
+      fetchImpl,
+      onBytes,
+      0,
+      allowInsecureDownloadsForTests,
+      skipExecutableProbeForTests,
+      timings,
+      spawnProcess,
+    );
+    onVerify();
+    const destinationDirectory = artifactDirectory(rootDir, artifact);
+    for (const companion of companions) {
+      await rename(
+        path.join(stagingDirectory, companion.fileName),
+        path.join(destinationDirectory, companion.fileName),
+      );
+    }
+  } finally {
+    await rm(stagingDirectory, { recursive: true, force: true });
+  }
+}
+
 async function installArtifact(
   rootDir: string,
   artifact: ToolchainArtifact,
@@ -711,18 +988,30 @@ async function installArtifact(
     : executablePath;
   try {
     await downloadArchive(
-      artifact,
+      artifact.name,
+      artifact.archive,
       archivePath,
       fetchImpl,
       onBytes,
       allowInsecureDownloadsForTests,
       timings.downloadTimeoutMs,
     );
-    onVerify();
     if (artifact.archive.format === "zip") {
-      await extractZipEntry(archivePath, extractedPath, artifact);
+      await extractZipEntry(
+        archivePath,
+        extractedPath,
+        artifact.name,
+        artifact.archive,
+        artifact.executable.size,
+      );
     } else {
-      await extractTarGzipEntry(archivePath, extractedPath, artifact);
+      await extractTarGzipEntry(
+        archivePath,
+        extractedPath,
+        artifact.name,
+        artifact.archive,
+        artifact.executable.size,
+      );
     }
     await rm(archivePath, { force: true });
     await chmod(extractedPath, 0o700);
@@ -746,7 +1035,7 @@ async function installArtifact(
       await chmod(extractedPath, 0o400);
     } else if (!skipExecutableProbeForTests && artifact.platform === "darwin") {
       try {
-        await verifyMacCodeSignature(executablePath, artifact, timings.processTimeoutMs, spawnProcess);
+        await verifyMacCodeSignature(executablePath, artifact.name, timings.processTimeoutMs, spawnProcess);
       } catch (error) {
         throw error;
       }
@@ -767,6 +1056,27 @@ async function installArtifact(
     if (!skipExecutableProbeForTests && !artifact.executable.repairInvalidMacSignature) {
       await probeExecutable(executablePath, artifact, timings.processTimeoutMs, spawnProcess);
     }
+
+    // Companions land in the same staging directory, so the complete set
+    // becomes visible in a single rename. A version directory holding only the
+    // primary executable would pass its own validation and never be repaired.
+    await stageCompanions(
+      stagingDirectory,
+      artifact,
+      artifactCompanions(artifact),
+      fetchImpl,
+      onBytes,
+      artifact.archive.size,
+      allowInsecureDownloadsForTests,
+      skipExecutableProbeForTests,
+      timings,
+      spawnProcess,
+    );
+
+    // Every archive — the primary and each companion — has finished
+    // downloading by now, so announcing "verifying" here can never be followed
+    // by a "downloading" event: the phase only moves forward.
+    onVerify();
 
     const destinationDirectory = artifactDirectory(rootDir, artifact);
     await mkdir(path.dirname(destinationDirectory), { recursive: true, mode: 0o700 });
@@ -938,6 +1248,14 @@ function activationSetId(artifacts: readonly ToolchainArtifact[]): string {
       installedSize: artifact.executable.installedSize,
       installedSha256: artifact.executable.installedSha256,
       repairInvalidMacSignature: artifact.executable.repairInvalidMacSignature ?? false,
+      // Companions are part of the activated set: adding or changing one has to
+      // produce a new bin directory, so a running older build keeps the exact
+      // sibling layout its `codex` was launched against.
+      companions: artifactCompanions(artifact).map((companion) => ({
+        fileName: companion.fileName,
+        size: companion.executable.size,
+        sha256: companion.executable.sha256,
+      })),
     }))
     .sort((left, right) => {
       const leftKey = `${left.name}\0${left.platform}\0${left.architecture}`;
@@ -970,10 +1288,9 @@ async function activateExecutables(
   await chmod(binDir, 0o700);
   const executables = {} as Record<ToolchainName, string>;
 
-  for (const artifact of artifacts) {
-    const target = artifactExecutablePath(rootDir, artifact);
-    const activePath = path.join(binDir, artifact.name);
-    const temporaryLink = path.join(binDir, `.${artifact.name}-${randomUUID()}.tmp`);
+  const activate = async (linkName: string, target: string): Promise<string> => {
+    const activePath = path.join(binDir, linkName);
+    const temporaryLink = path.join(binDir, `.${linkName}-${randomUUID()}.tmp`);
     const existingTarget = await readlink(activePath).catch(() => null);
     if (existingTarget !== target) {
       await symlink(target, temporaryLink, "file");
@@ -993,7 +1310,20 @@ async function activateExecutables(
         }
       }
     }
-    executables[artifact.name] = activePath;
+    return activePath;
+  };
+
+  for (const artifact of artifacts) {
+    executables[artifact.name] = await activate(
+      artifact.name,
+      artifactExecutablePath(rootDir, artifact),
+    );
+    // Codex resolves `codex-code-mode-host` from the directory it was launched
+    // from, which is this activation directory rather than the version
+    // directory the symlink points into.
+    for (const companion of artifactCompanions(artifact)) {
+      await activate(companion.fileName, companionPath(rootDir, artifact, companion));
+    }
   }
 
   return { rootDir, binDir, executables };
@@ -1004,6 +1334,7 @@ export async function ensurePinnedToolchains(
 ): Promise<PinnedToolchainResult> {
   const artifacts = options.artifacts ?? pinnedToolchainArtifacts(options.platform, options.architecture);
   for (const artifact of artifacts) assertValidArtifactMetadata(artifact);
+  assertUniqueActivationNames(artifacts);
   const fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
   const onProgress = options.onProgress ?? (() => undefined);
   const timings = { ...DEFAULT_TIMINGS, ...options.timingsForTests };
@@ -1041,53 +1372,88 @@ export async function ensurePinnedToolchains(
     // in another app window cannot remove a version between its validation and
     // activation.
     await cleanStagingDirectories(rootDir);
-    const validity = await Promise.all(artifacts.map((artifact) => isValidExecutable(rootDir, artifact)));
-    artifacts.forEach((artifact, index) => toolFractions.set(artifact.name, validity[index] ? 1 : 0));
-    const missing = artifacts.filter((_, index) => !validity[index]);
-    let completedTools = totalTools - missing.length;
+    const statuses = await Promise.all(artifacts.map((artifact) => installationStatus(rootDir, artifact)));
+    artifacts.forEach((artifact, index) => toolFractions.set(
+      artifact.name,
+      statuses[index]!.state === "valid" ? 1 : 0,
+    ));
+    const pending = artifacts
+      .map((artifact, index) => ({ artifact, status: statuses[index]! }))
+      .filter((entry) => entry.status.state !== "valid");
+    let completedTools = totalTools - pending.length;
 
-    const installations = await Promise.allSettled(missing.map(async (artifact) => {
+    const installations = await Promise.allSettled(pending.map(async ({ artifact, status }) => {
+      // A cache that predates a companion has a verified primary executable on
+      // disk already. Repairing only what is missing keeps the download to the
+      // companion itself and leaves the version directory — which a running
+      // older build may have activated — in place.
+      const companions = status.state === "companions-missing" ? status.companions : [];
+      const repairable = status.state === "companions-missing";
+      const bytesTotal = repairable
+        ? companions.reduce((total, companion) => total + companion.archive.size, 0)
+        : artifactArchiveBytes(artifact);
       progress({
         phase: "downloading",
         tool: artifact.name,
         completedTools,
         bytesReceived: 0,
-        bytesTotal: artifact.archive.size,
+        bytesTotal,
         message: `Downloading ${artifact.name} ${artifact.version}…`,
       });
       let lastReportedAt = 0;
-      await installArtifact(
-        rootDir,
-        artifact,
-        fetchImpl,
-        (bytesReceived) => {
-          toolFractions.set(artifact.name, bytesReceived / artifact.archive.size);
-          const now = Date.now();
-          if (now - lastReportedAt < 200 && bytesReceived !== artifact.archive.size) return;
-          lastReportedAt = now;
-          progress({
-            phase: "downloading",
-            tool: artifact.name,
-            completedTools,
-            bytesReceived,
-            bytesTotal: artifact.archive.size,
-            message: `Downloading ${artifact.name} ${artifact.version}…`,
-          });
-        },
-        () => {
-          toolFractions.set(artifact.name, 1);
-          progress({
-            phase: "verifying",
-            tool: artifact.name,
-            completedTools,
-            message: `Verifying ${artifact.name} ${artifact.version}…`,
-          });
-        },
-        options.allowInsecureDownloadsForTests ?? false,
-        options.skipExecutableProbeForTests ?? false,
-        timings,
-        spawnProcess,
-      );
+      const onBytes = (bytesReceived: number) => {
+        toolFractions.set(artifact.name, bytesReceived / bytesTotal);
+        const now = Date.now();
+        if (now - lastReportedAt < 200 && bytesReceived !== bytesTotal) return;
+        lastReportedAt = now;
+        progress({
+          phase: "downloading",
+          tool: artifact.name,
+          completedTools,
+          bytesReceived,
+          bytesTotal,
+          message: `Downloading ${artifact.name} ${artifact.version}…`,
+        });
+      };
+      const onVerify = () => {
+        // Every byte — the primary archive and then each companion — has
+        // already been reported through onBytes, so the fraction is where it
+        // should be and only the phase moves on. `installArtifact` fires this
+        // after its companion staging, and the repair path fires it after
+        // staging too, so "downloading" never follows "verifying".
+        progress({
+          phase: "verifying",
+          tool: artifact.name,
+          completedTools,
+          message: `Verifying ${artifact.name} ${artifact.version}…`,
+        });
+      };
+      if (repairable) {
+        await repairArtifactCompanions(
+          rootDir,
+          artifact,
+          companions,
+          fetchImpl,
+          onBytes,
+          onVerify,
+          options.allowInsecureDownloadsForTests ?? false,
+          options.skipExecutableProbeForTests ?? false,
+          timings,
+          spawnProcess,
+        );
+      } else {
+        await installArtifact(
+          rootDir,
+          artifact,
+          fetchImpl,
+          onBytes,
+          onVerify,
+          options.allowInsecureDownloadsForTests ?? false,
+          options.skipExecutableProbeForTests ?? false,
+          timings,
+          spawnProcess,
+        );
+      }
       toolFractions.set(artifact.name, 1);
       completedTools += 1;
       progress({
@@ -1116,7 +1482,7 @@ export async function ensurePinnedToolchains(
 
     await options.beforeFinalVerificationForTests?.();
     const finalValidity = await Promise.all(artifacts.map(async (artifact) => {
-      if (!await isValidExecutable(rootDir, artifact)) return false;
+      if (!await isValidInstallation(rootDir, artifact)) return false;
       const executable = await lstat(artifactExecutablePath(rootDir, artifact)).catch(() => null);
       return executable?.isFile() === true && !executable.isSymbolicLink();
     }));

@@ -19,19 +19,40 @@ type InstalledExecutableIntegrity =
       installedSha256?: undefined;
     };
 
+export type ToolchainArchive = {
+  format: ToolchainArchiveFormat;
+  url: string;
+  entryPath: string;
+  size: number;
+  sha256: string;
+  allowedHosts: readonly string[];
+};
+
+/**
+ * A second executable that the primary executable spawns from its own
+ * directory. It is installed next to the primary one and activated under the
+ * same generated `bin` directory, so the primary tool finds it whether it
+ * resolves siblings from the activation symlink or from the version directory.
+ *
+ * Companions are never probed with `--version`: they are helper processes with
+ * their own protocols, not CLIs.
+ */
+export type ToolchainCompanion = {
+  fileName: string;
+  archive: ToolchainArchive;
+  executable: {
+    size: number;
+    sha256: string;
+  };
+};
+
 export type ToolchainArtifact = {
   name: ToolchainName;
   version: string;
   platform: ToolchainPlatform;
   architecture: ToolchainArchitecture;
-  archive: {
-    format: ToolchainArchiveFormat;
-    url: string;
-    entryPath: string;
-    size: number;
-    sha256: string;
-    allowedHosts: readonly string[];
-  };
+  archive: ToolchainArchive;
+  companions?: readonly ToolchainCompanion[];
   executable: {
     fileName: ToolchainName;
     /** Size and digest of the executable exactly as published upstream. */
@@ -67,6 +88,34 @@ export const CODEX_RELEASE_BASE =
 export const OPENCODE_RELEASE_BASE =
   `https://github.com/anomalyco/opencode/releases/download/v${PINNED_TOOLCHAIN_VERSIONS.opencode}` as const;
 
+export const CODEX_CODE_MODE_HOST_FILE_NAME = "codex-code-mode-host";
+
+/**
+ * Codex 0.147 runs code mode inside a separate `codex-code-mode-host` process
+ * that it spawns from the directory it was launched from. Shipping `codex`
+ * alone makes every code-mode turn fail with
+ * `failed to spawn code-mode host …: No such file or directory`, which is how
+ * the whole model family that defaults to code mode became unusable.
+ */
+function codexCodeModeHost(
+  target: string,
+  archive: { size: number; sha256: string },
+  executable: { size: number; sha256: string },
+): ToolchainCompanion {
+  return {
+    fileName: CODEX_CODE_MODE_HOST_FILE_NAME,
+    archive: {
+      format: "tar.gz",
+      url: `${CODEX_RELEASE_BASE}/${CODEX_CODE_MODE_HOST_FILE_NAME}-${target}.tar.gz`,
+      entryPath: `${CODEX_CODE_MODE_HOST_FILE_NAME}-${target}`,
+      size: archive.size,
+      sha256: archive.sha256,
+      allowedHosts: GITHUB_RELEASE_HOSTS,
+    },
+    executable,
+  };
+}
+
 function claudeArchiveUrl(target: string): string {
   const pkg = `claude-code-${target}`;
   return `https://registry.npmjs.org/@anthropic-ai/${pkg}/-/${pkg}-${PINNED_TOOLCHAIN_VERSIONS.claude}.tgz`;
@@ -86,6 +135,11 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       sha256: "75984b81f92a71b0c0f4b3b5cad80e5c57177e4d8c8b4b1e13db703b20dc4358",
       allowedHosts: GITHUB_RELEASE_HOSTS,
     },
+    companions: [codexCodeModeHost(
+      "aarch64-apple-darwin",
+      { size: 17_556_525, sha256: "56cdbf6187bf914108d3b7feeea5a34ffba15e5c162bedce69e062ee92ddfb5e" },
+      { size: 49_991_616, sha256: "a059beb029cdbc989e72e23f8680be9f703cb6cf83d9598d91041f82178d018d" },
+    )],
     executable: {
       fileName: "codex",
       size: 219_997_536,
@@ -105,6 +159,11 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       sha256: "36e782f71d8164cc37c2b89c64948f2180e9a2f8456b27e660da75bc6b5574e2",
       allowedHosts: GITHUB_RELEASE_HOSTS,
     },
+    companions: [codexCodeModeHost(
+      "x86_64-apple-darwin",
+      { size: 18_876_257, sha256: "7131a0508de4dea60f79c816188b0b06b17f6ed417d9b3a1865b0a4927fbc48a" },
+      { size: 52_496_608, sha256: "2a52ebc47c255e6b7284f674453030981a38ae7ba09467b998b2c2ebbb595259" },
+    )],
     executable: {
       fileName: "codex",
       size: 238_056_656,
@@ -124,6 +183,11 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       sha256: "eb677c80f666b1ab8b4b1d083b66e8d614b1281d960bb6f9fd8ca98f58b38b90",
       allowedHosts: GITHUB_RELEASE_HOSTS,
     },
+    companions: [codexCodeModeHost(
+      "aarch64-unknown-linux-musl",
+      { size: 17_260_137, sha256: "dfd4ff98ea4db30ed078af9c31b6f86e3da4836d0573aa87e225e5a5b54d3c7c" },
+      { size: 46_976_328, sha256: "c8fd26e2ddb0243d79d7c3dfa8bcd47b6a30b14695083790fc51884e82e8ebc2" },
+    )],
     executable: {
       fileName: "codex",
       size: 222_231_296,
@@ -143,6 +207,11 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       sha256: "0246e2e773834e07f0fb5249ed6ebad12e4591e608f8c7bb97dd6a9690544c36",
       allowedHosts: GITHUB_RELEASE_HOSTS,
     },
+    companions: [codexCodeModeHost(
+      "x86_64-unknown-linux-musl",
+      { size: 18_267_855, sha256: "0146adfaac8363ec9fcdb5895f7624db5b2e8617a283887938b7fb97a1dd4356" },
+      { size: 49_682_360, sha256: "00ecf5d040865b97884c488883abd342581c2a432debe7a54e4646bceee3d2d6" },
+    )],
     executable: {
       fileName: "codex",
       size: 258_278_208,

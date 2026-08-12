@@ -30,6 +30,28 @@ member to extract, and extracted executable size and SHA-256. OpenCode's macOS
 entries additionally set `repairInvalidMacSignature`; the manager retains the
 verified upstream bytes and creates a locally ad-hoc-signed executable.
 
+An entry may also declare `companions`: further executables the primary one
+spawns from its own directory. They are installed into the same version
+directory and symlinked into the same generated `bin` directory, and the whole
+set is validated together, so a cache predating a new companion is repaired
+rather than trusted. Codex's `codex-code-mode-host` is the only one today.
+Companions are not probed with `--version`: they are helper processes with their
+own protocols, not CLIs.
+
+Repair is incremental. When the primary executable still verifies and only a
+companion is absent — the shape every existing install has the first time a
+companion is added to an already-pinned version — the manager downloads just
+that companion and renames it into the existing version directory. The primary
+archive is not fetched again, and the version directory is never removed, so a
+concurrently running older build keeps the exact executable its activation
+symlink resolves to. Only a primary executable that fails verification triggers
+the full download-and-replace path.
+
+A companion file name must be a plain file name, and it must not collide with
+any other pinned tool or companion: every one of them is linked into a single
+shared activation directory, where a collision would silently replace another
+tool's symlink. Both rules are enforced before anything is downloaded.
+
 At application startup:
 
 1. `apps/desktop/electron/main.ts` calls `preparePinnedToolchains()`.
@@ -272,7 +294,12 @@ hermetic `codex exec` exception.
    - `CODEX_CLI_VERSION` in `docker/Dockerfile`
 
 3. Refresh and verify all four Codex artifact records using the shared binary
-   procedure.
+   procedure. Each of them also pins a `codex-code-mode-host` companion, whose
+   archive and executable digests move independently of `codex`'s; the emitter
+   prints them as a separate `<target> codex-code-mode-host` block. Codex spawns
+   that helper from its own directory for every code-mode turn, so omitting it
+   breaks every model that defaults to code mode with
+   `failed to spawn code-mode host …: No such file or directory`.
 4. Generate bindings from a new binary whose `--version` reports the new pin:
 
    ```bash

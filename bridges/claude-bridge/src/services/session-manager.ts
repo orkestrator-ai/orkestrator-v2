@@ -5094,7 +5094,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         mcpServers: mcpServerCount > 0 ? mcpServers : undefined,
         // Load plugins from user config
         plugins: pluginCount > 0 ? plugins : undefined,
-        // Pinned against @anthropic-ai/claude-agent-sdk 0.3.220: although the
+        // Pinned against @anthropic-ai/claude-agent-sdk 0.3.228: although the
         // SDK warns that bypassPermissions shadows canUseTool for ordinary
         // tool permission checks, AskUserQuestion is a special case. A live
         // contract probe confirmed it still reaches this callback and the SDK

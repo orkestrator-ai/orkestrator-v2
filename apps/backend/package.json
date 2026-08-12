@@ -18,14 +18,16 @@
     "typecheck": "bunx tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.29.0",
-    "@opencode-ai/sdk": "1.18.11",
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "@opencode-ai/sdk": "1.18.16",
     "@orkestrator/protocol": "workspace:*",
     "sharp": "^0.35.1",
     "ws": "8.20.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
     "@types/ws": "8.18.1"
   }
 }

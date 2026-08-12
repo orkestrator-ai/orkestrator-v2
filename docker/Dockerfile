@@ -123,9 +123,9 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
 #   CODEX_CLI_VERSION     ↔ config/codex-version.json and the generated app-server protocol (and scripts/download-codex.sh)
 #   OPENCODE_CLI_VERSION  ↔ @opencode-ai/sdk in apps/web/package.json and apps/backend/package.json (and scripts/download-opencode.sh)
 # Claude CLI has its own release train distinct from @anthropic-ai/claude-agent-sdk.
-ARG CLAUDE_CLI_VERSION=2.1.220
-ARG CODEX_CLI_VERSION=0.146.0
-ARG OPENCODE_CLI_VERSION=1.18.11
+ARG CLAUDE_CLI_VERSION=2.1.228
+ARG CODEX_CLI_VERSION=0.147.0
+ARG OPENCODE_CLI_VERSION=1.18.16
 
 # Install Claude Code from the pinned npm package. The package pulls in the
 # platform-native binary via optional dependencies.

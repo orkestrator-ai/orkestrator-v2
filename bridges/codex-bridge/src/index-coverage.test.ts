@@ -461,6 +461,7 @@ describe("codex bridge private boundary coverage", () => {
       },
       configOverrides: {
         "features.goals": "true",
+        "features.mcp_2026_07_28": "true",
         "agents.max_concurrent_threads_per_session": "11",
         "features.multi_agent_v2.max_concurrent_threads_per_session": "12",
       },

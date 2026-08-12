@@ -152,7 +152,7 @@ export interface ThreadContext {
    * Load-bearing for detaching: a materialized thread survives
    * `thread/unsubscribe` → `thread/resume` with full history, but an
    * unmaterialized one has no rollout, so resume fails with "no rollout found"
-   * and the thread is unrecoverable. Verified against codex 0.146.0.
+   * and the thread is unrecoverable. Verified against codex 0.147.0.
    */
   materialized: boolean;
   /** Last model app-server confirmed for this thread. */

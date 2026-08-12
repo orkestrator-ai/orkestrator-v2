@@ -354,9 +354,9 @@ The largest non-generated source files concentrate a lot of the system's risk:
     (Bun), which also gives item 32's checksums a single home.
 
 43. **Toolchain version pins are duplicated in 4+ places with only partial
-    drift protection.** `CLAUDE_VERSION=2.1.220` appears in
-    `download-claude.sh` and `docker/Dockerfile:126`; Codex `0.146.0` in three
-    places; OpenCode `1.18.11` in four — and `version-drift.test.ts` only
+    drift protection.** `CLAUDE_VERSION=2.1.228` appears in
+    `download-claude.sh` and `docker/Dockerfile:126`; Codex `0.147.0` in three
+    places; OpenCode `1.18.16` in four — and `version-drift.test.ts` only
     guards Codex/OpenCode, not Claude. Suggestion: single-source in
     `config/toolchain-versions.json` and extend the drift test.
 

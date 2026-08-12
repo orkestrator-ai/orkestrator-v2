@@ -379,6 +379,11 @@ describe("startup", () => {
     expect(spawnCalls[0]!.args).toContain(
       `mcp_servers.orkestrator.bearer_token_env_var="${ORKESTRATOR_AGENT_MCP_TOKEN_ENV}"`,
     );
+    expect(spawnCalls[0]!.args).toContain("features.mcp_2026_07_28=true");
+    expect(spawnCalls[0]!.args).toContain("mcp_servers.orkestrator.required=false");
+    expect(spawnCalls[0]!.args).toContain(
+      "mcp_servers.orkestrator.startup_timeout_sec=3",
+    );
     expect(spawnCalls[0]!.args.join(" ")).not.toContain("project-secret");
     expect(spawnCalls[0]!.options.shell).toBe(false);
   });

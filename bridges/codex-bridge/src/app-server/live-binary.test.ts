@@ -20,7 +20,7 @@ import {
   type VersionProbeResult,
 } from "./live-binary.js";
 
-const VERSION = "0.146.0";
+const VERSION = "0.147.0";
 
 /** Isolates every case from the developer's real environment and filesystem. */
 const BASE: ResolveBinaryOptions = {
@@ -199,7 +199,7 @@ describe("resolveCodexBinaryUncached", () => {
     const message = (error as Error).message;
     expect(message).toContain("Could not execute codex");
     expect(message).toContain("Executable not found in $PATH");
-    expect(message).toContain("config/codex-version.json pins codex 0.146.0");
+    expect(message).toContain("config/codex-version.json pins codex 0.147.0");
     expect(message).toContain("CODEX_PATH");
   });
 
@@ -214,7 +214,7 @@ describe("resolveCodexBinaryUncached", () => {
     ).catch((caught: unknown) => caught);
 
     expect((error as Error).message).toContain("did not respond within 10ms");
-    expect((error as Error).message).toContain("config/codex-version.json pins codex 0.146.0");
+    expect((error as Error).message).toContain("config/codex-version.json pins codex 0.147.0");
   });
 
   test("surfaces stderr when the probe exits non-zero", async () => {
@@ -224,7 +224,7 @@ describe("resolveCodexBinaryUncached", () => {
     ).catch((caught: unknown) => caught);
 
     expect((error as Error).message).toContain("Could not execute codex: permission denied");
-    expect((error as Error).message).toContain("pins codex 0.146.0");
+    expect((error as Error).message).toContain("pins codex 0.147.0");
   });
 
   test("describes a signal kill when there is no stderr and no exit code", async () => {
@@ -246,7 +246,7 @@ describe("resolveCodexBinaryUncached", () => {
     ).catch((caught: unknown) => caught);
 
     expect((error as Error).message).toBe(
-      "codex-old reports 0.145.0, but config/codex-version.json pins 0.146.0",
+      "codex-old reports 0.145.0, but config/codex-version.json pins 0.147.0",
     );
   });
 
@@ -257,7 +257,7 @@ describe("resolveCodexBinaryUncached", () => {
     ).catch((caught: unknown) => caught);
 
     expect((error as Error).message).toBe(
-      "codex reports an unknown version, but config/codex-version.json pins 0.146.0",
+      "codex reports an unknown version, but config/codex-version.json pins 0.147.0",
     );
   });
 

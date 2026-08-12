@@ -36,6 +36,7 @@ describe("Codex app-server configuration", () => {
     expect(resolveCodexMaxConcurrentThreads(undefined)).toBe(5);
     expect(codexAppServerConfigOverrides({})).toEqual({
       "features.goals": "true",
+      "features.mcp_2026_07_28": "true",
       "agents.max_concurrent_threads_per_session": "5",
       "features.multi_agent_v2.max_concurrent_threads_per_session": "6",
     });
@@ -46,6 +47,7 @@ describe("Codex app-server configuration", () => {
       [CODEX_MAX_CONCURRENT_THREADS_ENV]: "8",
     })).toEqual({
       "features.goals": "true",
+      "features.mcp_2026_07_28": "true",
       "agents.max_concurrent_threads_per_session": "8",
       "features.multi_agent_v2.max_concurrent_threads_per_session": "9",
     });
@@ -71,6 +73,8 @@ describe("Codex app-server configuration", () => {
         "\"http://host.docker.internal:4567/mcp\"",
       "mcp_servers.orkestrator.bearer_token_env_var":
         `"${ORKESTRATOR_AGENT_MCP_TOKEN_ENV}"`,
+      "mcp_servers.orkestrator.required": "false",
+      "mcp_servers.orkestrator.startup_timeout_sec": "3",
     });
     expect(JSON.stringify(overrides)).not.toContain("project-secret");
   });
@@ -157,6 +161,8 @@ describe("Codex app-server configuration", () => {
       .toEqual([
         "mcp_servers.orkestrator.url",
         "mcp_servers.orkestrator.bearer_token_env_var",
+        "mcp_servers.orkestrator.required",
+        "mcp_servers.orkestrator.startup_timeout_sec",
       ]);
   });
 

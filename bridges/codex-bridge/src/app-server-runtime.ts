@@ -1230,7 +1230,7 @@ export class AppServerRuntime {
    * message can be resumed from its rollout, so detaching is reversible. One that
    * was started but never prompted has **no rollout** — `thread/resume` fails with
    * "no rollout found" — so its id is cleared instead, and the next prompt starts a
-   * fresh thread. Verified against codex 0.146.0.
+   * fresh thread. Verified against codex 0.147.0.
    */
   private async detachThread(context: ThreadContext): Promise<void> {
     const sessionIds = [...context.bridgeSessionIds];

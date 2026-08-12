@@ -1544,7 +1544,7 @@ function hashPath(value: string): string {
   return hash.toString(16).padStart(8, "0");
 }
 
-/** `orkestrator/0.146.0 (Mac OS ...)` → `0.146.0`. */
+/** `orkestrator/0.147.0 (Mac OS ...)` → `0.147.0`. */
 export function parseVersionFromUserAgent(
   userAgent: string | undefined,
 ): string | undefined {

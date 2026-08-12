@@ -177,6 +177,44 @@ function storedZip(entries: Array<{ name: string; body: Buffer }>): Buffer {
   return Buffer.concat([...localParts, centralDirectory, end]);
 }
 
+const COMPANION_ARCHIVE_URL = "https://downloads.example.test/codex-host.tar.gz";
+
+/** `artifacts[0]` plus one companion, the shape the Codex code-mode host uses. */
+function companionArtifact(
+  base: ToolchainArtifact,
+  companionArchive: Buffer,
+  companionBody: Buffer,
+): ToolchainArtifact {
+  return {
+    ...base,
+    companions: [{
+      fileName: "codex-host",
+      archive: {
+        format: "tar.gz",
+        url: COMPANION_ARCHIVE_URL,
+        entryPath: "tool-host",
+        size: companionArchive.byteLength,
+        sha256: sha256(companionArchive),
+        allowedHosts: ["downloads.example.test"],
+      },
+      executable: {
+        size: companionBody.byteLength,
+        sha256: sha256(companionBody),
+      },
+    }],
+  };
+}
+
+function createCompanionFetch(companionArchive: Buffer) {
+  return mock(async (input: string) => {
+    const body = input === COMPANION_ARCHIVE_URL ? companionArchive : ZIP_FIXTURE;
+    return new Response(body, {
+      status: 200,
+      headers: { "content-length": String(body.byteLength) },
+    });
+  });
+}
+
 type SpawnOutcome =
   | { type: "exit"; code: number | null; signal?: NodeJS.Signals | null; stdout?: string; stderr?: string }
   | { type: "error"; error: Error }
@@ -1376,6 +1414,127 @@ describe("pinned desktop toolchain cache", () => {
     })).rejects.toThrow("unsafe toolchain activation directory");
     expect(await readdir(setDecoy)).toEqual([]);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  test("installs, activates, and repairs a companion executable", async () => {
+    const dataDir = await createDataDir();
+    const companionBody = Buffer.from("#!/bin/sh\nprintf \"host 1.2.3\\n\"\n");
+    const companionArchive = await tarGzip([{ name: "tool-host", body: companionBody }]);
+    const withCompanion = companionArtifact(artifacts[0], companionArchive, companionBody);
+    const fetchImpl = createCompanionFetch(companionArchive);
+
+    const result = await ensurePinnedToolchains({
+      dataDir,
+      artifacts: [withCompanion],
+      fetchImpl,
+      skipExecutableProbeForTests: true,
+    });
+
+    const versionDir = path.join(dataDir, "toolchains", "codex", "1.2.3", "darwin-arm64");
+    const companionTarget = await readlink(path.join(result.binDir, "codex-host"));
+    expect(companionTarget).toBe(path.join(versionDir, "codex-host"));
+    const installed = await lstat(companionTarget);
+    expect(installed.size).toBe(companionBody.byteLength);
+    expect(installed.mode & 0o777).toBe(0o500);
+    // No `--version` probe: a companion is a helper process, not a CLI.
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    // Staging archives must not survive into the activated version directory.
+    expect((await readdir(versionDir)).sort()).toEqual(["codex", "codex-host"]);
+
+    // A cache that predates the companion still holds a valid primary
+    // executable. It has to be reinstalled rather than trusted.
+    await rm(companionTarget, { force: true });
+    await ensurePinnedToolchains({
+      dataDir,
+      artifacts: [withCompanion],
+      fetchImpl,
+      skipExecutableProbeForTests: true,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect((await lstat(companionTarget)).size).toBe(companionBody.byteLength);
+  });
+
+  test("gives a companion set its own activation directory", async () => {
+    const dataDir = await createDataDir();
+    const companionBody = Buffer.from("#!/bin/sh\nprintf \"host 1.2.3\\n\"\n");
+    const companionArchive = await tarGzip([{ name: "tool-host", body: companionBody }]);
+
+    const withoutCompanion = await ensurePinnedToolchains({
+      dataDir,
+      artifacts: [artifacts[0]],
+      fetchImpl: createFetch(),
+      skipExecutableProbeForTests: true,
+    });
+    const withCompanion = await ensurePinnedToolchains({
+      dataDir,
+      artifacts: [companionArtifact(artifacts[0], companionArchive, companionBody)],
+      fetchImpl: createCompanionFetch(companionArchive),
+      skipExecutableProbeForTests: true,
+    });
+
+    // A running older build keeps the sibling layout its executable was
+    // launched against, so the two sets cannot share one bin directory.
+    expect(withCompanion.binDir).not.toBe(withoutCompanion.binDir);
+    expect(await readdir(withoutCompanion.binDir)).toEqual(["codex"]);
+    expect((await readdir(withCompanion.binDir)).sort()).toEqual(["codex", "codex-host"]);
+  });
+
+  test("rejects a companion whose bytes are not pinned, leaving nothing activated", async () => {
+    const dataDir = await createDataDir();
+    const companionBody = Buffer.from("#!/bin/sh\nprintf \"host 1.2.3\\n\"\n");
+    const companionArchive = await tarGzip([{ name: "tool-host", body: companionBody }]);
+    const base = companionArtifact(artifacts[0], companionArchive, companionBody);
+    const tampered: ToolchainArtifact = {
+      ...base,
+      companions: [{
+        ...base.companions![0],
+        executable: { ...base.companions![0].executable, sha256: "0".repeat(64) },
+      }],
+    };
+
+    await expect(ensurePinnedToolchains({
+      dataDir,
+      artifacts: [tampered],
+      fetchImpl: createCompanionFetch(companionArchive),
+      skipExecutableProbeForTests: true,
+    })).rejects.toThrow("codex-host executable checksum did not match the pinned manifest");
+
+    expect(await readdir(path.join(dataDir, "toolchains", "codex")).catch(() => [])).toEqual([]);
+  });
+
+  test("rejects companion manifests that could escape the directories it owns", async () => {
+    const dataDir = await createDataDir();
+    const companionBody = Buffer.from("#!/bin/sh\nprintf \"host 1.2.3\\n\"\n");
+    const companionArchive = await tarGzip([{ name: "tool-host", body: companionBody }]);
+    const base = companionArtifact(artifacts[0], companionArchive, companionBody);
+    const withFileName = (fileName: string): ToolchainArtifact => ({
+      ...base,
+      companions: [{ ...base.companions![0], fileName }],
+    });
+
+    for (const fileName of ["../escape", "nested/host", ".upstream-codex"]) {
+      await expect(ensurePinnedToolchains({
+        dataDir,
+        artifacts: [withFileName(fileName)],
+        fetchImpl: createCompanionFetch(companionArchive),
+        skipExecutableProbeForTests: true,
+      })).rejects.toThrow("companion has an unsafe file name");
+    }
+
+    await expect(ensurePinnedToolchains({
+      dataDir,
+      artifacts: [{ ...base, companions: [base.companions![0], base.companions![0]] }],
+      fetchImpl: createCompanionFetch(companionArchive),
+      skipExecutableProbeForTests: true,
+    })).rejects.toThrow("companion codex-host is declared twice");
+
+    await expect(ensurePinnedToolchains({
+      dataDir,
+      artifacts: [withFileName("codex")],
+      fetchImpl: createCompanionFetch(companionArchive),
+      skipExecutableProbeForTests: true,
+    })).rejects.toThrow("companion codex is declared twice");
   });
 
   test("supports an empty explicit artifact set", async () => {

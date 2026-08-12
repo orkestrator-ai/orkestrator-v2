@@ -404,6 +404,30 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     }
   });
 
+  test("Codex: every managed platform ships the code-mode host next to codex", () => {
+    // Codex spawns `codex-code-mode-host` from its own directory for every
+    // code-mode turn. 0.147.0 shipped without it, which made every model that
+    // defaults to code mode fail with "failed to spawn code-mode host".
+    const script = read("scripts/download-codex.sh");
+    expect(script).toContain('CODEX_HOST_FILENAME="codex-code-mode-host-${CODEX_TARGET}"');
+    expect(script).toContain("$BINARIES_DIR/codex-code-mode-host");
+    expect(read("docker/Dockerfile")).toContain("-name codex-code-mode-host");
+
+    const codexArtifacts = PINNED_TOOLCHAIN_ARTIFACTS.filter((entry) => entry.name === "codex");
+    expect(codexArtifacts.length).toBe(4);
+    for (const artifact of codexArtifacts) {
+      const host = artifact.companions
+        ?.find((companion) => companion.fileName === "codex-code-mode-host");
+      expect(host, `${artifact.platform}-${artifact.architecture} has no code-mode host`)
+        .toBeDefined();
+      // The companion is a separate release asset, so nothing else guarantees
+      // it was refreshed from the same release as the executable beside it.
+      expect(host!.archive.url.startsWith(`${CODEX_RELEASE_BASE}/`)).toBe(true);
+      expect(host!.archive.sha256).not.toBe(artifact.archive.sha256);
+      expect(host!.executable.sha256).not.toBe(artifact.executable.sha256);
+    }
+  });
+
   test("Claude: managed manifest and download script build the same npm tarball URL", () => {
     const script = read("scripts/download-claude.sh");
 

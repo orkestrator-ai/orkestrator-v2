@@ -147,6 +147,14 @@ RUN "$CLAUDE_CLI_PATH" --version \
  && "$CODEX_CLI_PATH" --version \
  && "$OPENCODE_CLI_PATH" --version
 
+# Codex spawns `codex-code-mode-host` from its own directory for every code-mode
+# turn, and the models that default to code mode are unusable without it. The
+# npm package vendors it next to `codex`; assert that rather than assume it.
+# `$CODEX_CLI_PATH` is npm's JS shim, so the host sits beside the vendored
+# binary the shim execs, not beside the shim.
+RUN find /usr/local/share/npm-global/lib/node_modules/@openai \
+      -type f -name codex-code-mode-host | grep -q .
+
 # Build both bridge servers from a filtered monorepo install. They import the
 # shared @orkestrator/protocol workspace package, so copying either bridge as a
 # standalone package leaves its `workspace:*` dependency impossible to resolve.

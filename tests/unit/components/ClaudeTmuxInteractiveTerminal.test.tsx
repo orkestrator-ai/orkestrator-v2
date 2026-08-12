@@ -83,6 +83,10 @@ class MockTerminal {
     this.dataHandlers.forEach((handler) => handler(data));
   }
 
+  input(data: string) {
+    this.emitData(data);
+  }
+
   emitKey(event: Partial<KeyboardEvent>) {
     return this.keyHandler?.(event as KeyboardEvent);
   }
@@ -256,6 +260,45 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     expect(unlistenMock).toHaveBeenCalledTimes(1);
     expect(detachInteractiveTerminalMock).toHaveBeenCalledWith("pty-1");
     expect(terminalInstances[0]!.disposed).toBe(true);
+  });
+
+  test("sends Shift+Enter as LF to the tmux input bridge", async () => {
+    render(
+      <ClaudeTmuxInteractiveTerminal
+        tabId="tab-1"
+        environmentId={environmentId}
+        isActive
+      />,
+    );
+
+    await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+    const preventDefault = mock(() => {});
+    const handled = terminalInstances[0]!.emitKey({
+      type: "keydown",
+      key: "Enter",
+      shiftKey: true,
+      ctrlKey: false,
+      metaKey: false,
+      altKey: false,
+      preventDefault,
+    });
+
+    expect(handled).toBe(false);
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(writeInteractiveTerminalMock).toHaveBeenCalledWith("pty-1", "\n"),
+    );
+
+    writeInteractiveTerminalMock.mockClear();
+    expect(terminalInstances[0]!.emitKey({
+      type: "keydown",
+      key: "Enter",
+      shiftKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      altKey: false,
+    })).toBe(true);
+    expect(writeInteractiveTerminalMock).not.toHaveBeenCalled();
   });
 
   test("fits without focusing the terminal when activated on mobile", async () => {

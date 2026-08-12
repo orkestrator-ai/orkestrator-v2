@@ -2863,7 +2863,7 @@ exit 0
         context,
       ) as string;
       await invoke(handlers, "claude_tmux_start_interactive_terminal", { terminalSessionId }, context);
-      await invoke(handlers, "claude_tmux_write_interactive_terminal", { terminalSessionId, data: "abc\r\u001b[A\u007f" });
+      await invoke(handlers, "claude_tmux_write_interactive_terminal", { terminalSessionId, data: "abc\r\n\u001b[A\u007f" });
       await invoke(handlers, "claude_tmux_resize_interactive_terminal", { terminalSessionId, cols: 100, rows: 30 });
       await invoke(handlers, "claude_tmux_detach_interactive_terminal", { terminalSessionId });
       await invoke(handlers, "claude_tmux_stop", { tabId: "tab-1", environmentId: environment.id }, context);
@@ -2874,6 +2874,7 @@ exit 0
       expect(tmuxLog).toContain("send-keys -t");
       expect(tmuxLog).toContain("-l abc");
       expect(tmuxLog).toContain("-- Enter");
+      expect(tmuxLog).toContain("-- C-j");
       expect(tmuxLog).toContain("-- Up");
       expect(tmuxLog).toContain("-- BSpace");
       expect(emitted.some((item) => item.event === "claude-tmux:event")).toBe(true);

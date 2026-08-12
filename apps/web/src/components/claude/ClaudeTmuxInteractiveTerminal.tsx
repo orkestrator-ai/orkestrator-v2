@@ -201,6 +201,18 @@ export function ClaudeTmuxInteractiveTerminal({
       if (event.type !== "keydown") return true;
 
       const key = event.key.toLowerCase();
+      if (
+        key === "enter"
+        && event.shiftKey
+        && !event.ctrlKey
+        && !event.metaKey
+        && !event.altKey
+      ) {
+        event.preventDefault();
+        terminal.input("\n");
+        return false;
+      }
+
       const isPasteShortcut = (event.metaKey || event.ctrlKey) && key === "v";
       if (isPasteShortcut && !event.altKey) {
         event.preventDefault();

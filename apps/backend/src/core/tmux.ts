@@ -3666,9 +3666,12 @@ async function sendInteractiveData(
     const char = data[index]!;
     switch (char) {
       case "\r":
-      case "\n":
         await flushLiteral();
         await sendKeys(["Enter"]);
+        break;
+      case "\n":
+        await flushLiteral();
+        await sendKeys(["C-j"]);
         break;
       case "\x7f":
       case "\b":

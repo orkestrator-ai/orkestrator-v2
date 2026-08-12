@@ -88,11 +88,17 @@ import {
   DOCKER_LABEL_APP,
   DOCKER_LABEL_APP_VALUE,
   DOCKER_LABEL_ENVIRONMENT_ID,
+  DOCKER_LABEL_ENVIRONMENT_NAME,
+  DOCKER_LABEL_OWNER,
   DOCKER_LABEL_PROJECT_ID,
   OPENCODE_SERVER_PORT,
   ORKESTRATOR_PROJECT_CONFIG,
   resolveCodexMaxConcurrentThreads,
 } from "./constants.js";
+import {
+  dockerContainerRuntimeName,
+  dockerOwnerNamespace,
+} from "./docker-ownership.js";
 import {
   createEnvironment,
   createProject,
@@ -3221,6 +3227,19 @@ function containerIdMatches(known: string, candidate: string): boolean {
 
 function findEnvironmentByContainerId(environments: Environment[], containerId: string): Environment | undefined {
   return environments.find((environment) => environment.containerId && containerIdMatches(environment.containerId, containerId));
+}
+
+function dockerLabelValue(labels: unknown, key: string): string | undefined {
+  if (typeof labels === "object" && labels !== null && !Array.isArray(labels)) {
+    const value = (labels as Record<string, unknown>)[key];
+    return typeof value === "string" ? value : undefined;
+  }
+  if (typeof labels !== "string") return undefined;
+  const prefix = `${key}=`;
+  const match = labels
+    .split(",")
+    .find((label) => label.startsWith(prefix));
+  return match?.slice(prefix.length);
 }
 
 /** Explicit list projection: renderer hydration never receives backend internals. */
@@ -8011,14 +8030,19 @@ async function createDockerContainer(environment: Environment, context: CommandC
   if (configuredFilesToCopy.length > 0 && !project.localPath) {
     throw new Error("Project has files configured to copy, but no local path is set");
   }
+  const dockerOwner = dockerOwnerNamespace(context.storage.getDataDir());
   const args = [
     "create",
     "--name",
-    environment.name,
+    dockerContainerRuntimeName(dockerOwner, environment.id),
     "--label",
     `${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`,
     "--label",
     `${DOCKER_LABEL_ENVIRONMENT_ID}=${environment.id}`,
+    "--label",
+    `${DOCKER_LABEL_ENVIRONMENT_NAME}=${environment.name}`,
+    "--label",
+    `${DOCKER_LABEL_OWNER}=${dockerOwner}`,
     "--label",
     `${DOCKER_LABEL_PROJECT_ID}=${project.id}`,
     "--workdir",
@@ -9935,8 +9959,19 @@ export function createCommandRegistry(
   register("docker_stop_container", ({ containerId }) => runCommand("docker", ["stop", asString(containerId, "containerId")], { timeoutMs: 60_000 }).then(() => undefined));
   register("docker_remove_container", ({ containerId }) => runCommand("docker", ["rm", "-f", asString(containerId, "containerId")], { timeoutMs: 60_000 }).then(() => undefined));
   register("docker_container_status", ({ containerId }) => getDockerStatus(asString(containerId, "containerId")));
-  register("list_docker_containers", async () => {
-    const { stdout } = await runCommand("docker", ["ps", "-a", "--no-trunc", "--filter", `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`, "--format", "{{.ID}}\t{{.Names}}"], { timeoutMs: 10_000 });
+  register("list_docker_containers", async (_args, { storage }) => {
+    const dockerOwner = dockerOwnerNamespace(storage.getDataDir());
+    const { stdout } = await runCommand("docker", [
+      "ps",
+      "-a",
+      "--no-trunc",
+      "--filter",
+      `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`,
+      "--filter",
+      `label=${DOCKER_LABEL_OWNER}=${dockerOwner}`,
+      "--format",
+      "{{.ID}}\t{{.Names}}",
+    ], { timeoutMs: 10_000 });
     return stdout.split("\n").filter(Boolean).map((line) => line.split("\t"));
   });
   register("get_container_host_port", ({ containerId, containerPort }) => getHostPort(asString(containerId, "containerId"), asNumber(containerPort, "containerPort")));
@@ -9947,8 +9982,15 @@ export function createCommandRegistry(
     child.stdout.on("data", (data) => emit("container-log", { containerId: id, line: data.toString() }));
     child.stderr.on("data", (data) => emit("container-log", { containerId: id, line: data.toString() }));
   });
-  register("docker_system_prune", async ({ pruneVolumes }) => {
-    const args = ["system", "prune", "-f"];
+  register("docker_system_prune", async ({ pruneVolumes }, { storage }) => {
+    const dockerOwner = dockerOwnerNamespace(storage.getDataDir());
+    const args = [
+      "system",
+      "prune",
+      "-f",
+      "--filter",
+      `label=${DOCKER_LABEL_OWNER}=${dockerOwner}`,
+    ];
     if (asBoolean(pruneVolumes)) args.push("--volumes");
     const { stdout } = await runCommand("docker", args, { timeoutMs: 120_000 });
     const reclaimed = /Total reclaimed space:\s*([^\n]+)/.exec(stdout)?.[1] ?? "0B";
@@ -9962,12 +10004,29 @@ export function createCommandRegistry(
   });
   register("get_orkestrator_containers", async ({}, { storage }) => {
     const environments = await storage.loadEnvironments();
+    const dockerOwner = dockerOwnerNamespace(storage.getDataDir());
     const { stdout } = await runCommand("docker", ["ps", "-a", "--no-trunc", "--filter", `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`, "--format", "{{json .}}"], { timeoutMs: 20_000 });
-    return stdout.split("\n").filter(Boolean).map((line) => {
-      const row = JSON.parse(line) as Record<string, string>;
-      const id = row.ID ?? "";
+    return stdout.split("\n").filter(Boolean).flatMap((line) => {
+      const row = JSON.parse(line) as Record<string, unknown>;
+      const id = typeof row.ID === "string" ? row.ID : "";
       const env = findEnvironmentByContainerId(environments, id);
-      return { id, name: row.Names ?? "", status: row.Status ?? "", state: row.State ?? "", image: row.Image ?? "", created: 0, environmentId: env?.id ?? null, projectId: env?.projectId ?? null, isAssigned: !!env, cpuPercent: null };
+      if (!env && dockerLabelValue(row.Labels, DOCKER_LABEL_OWNER) !== dockerOwner) {
+        return [];
+      }
+      return [{
+        id,
+        name: env?.name
+          ?? dockerLabelValue(row.Labels, DOCKER_LABEL_ENVIRONMENT_NAME)
+          ?? (typeof row.Names === "string" ? row.Names : ""),
+        status: typeof row.Status === "string" ? row.Status : "",
+        state: typeof row.State === "string" ? row.State : "",
+        image: typeof row.Image === "string" ? row.Image : "",
+        created: 0,
+        environmentId: env?.id ?? null,
+        projectId: env?.projectId ?? null,
+        isAssigned: !!env,
+        cpuPercent: null,
+      }];
     });
   });
   register("cleanup_orphaned_containers", async (_args, context) => {

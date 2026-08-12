@@ -5,6 +5,8 @@ export const DOCKER_IMAGE = "orkestrator-v2:latest";
 export const DOCKER_LABEL_APP = "app";
 export const DOCKER_LABEL_APP_VALUE = APP_SLUG;
 export const DOCKER_LABEL_ENVIRONMENT_ID = "environment-id";
+export const DOCKER_LABEL_ENVIRONMENT_NAME = "environment-name";
+export const DOCKER_LABEL_OWNER = "orkestrator-owner";
 export const DOCKER_LABEL_PROJECT_ID = "project-id";
 
 export const OPENCODE_SERVER_PORT = 4096;

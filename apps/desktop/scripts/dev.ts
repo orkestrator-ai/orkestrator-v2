@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
+import { handleElectronExit } from "../electron/dev-process-exit.js";
 
 if (process.platform === "win32") {
   throw new Error("Orkestrator desktop development supports macOS and Linux only.");
@@ -66,12 +67,10 @@ try {
   });
 
   electron.on("exit", (code, signal) => {
-    if (signal) {
-      console.error(`Electron exited with signal ${signal}`);
-    } else if (code) {
-      console.error(`Electron exited with code ${code}`);
-    }
-    shutdown(code ?? (signal ? 1 : 0));
+    handleElectronExit(code, signal, {
+      logError: (message) => console.error(message),
+      shutdown,
+    });
   });
 } catch (error) {
   console.error(error);

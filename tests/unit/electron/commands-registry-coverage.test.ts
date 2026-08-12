@@ -16,6 +16,7 @@ import type { AddressInfo } from "node:net";
 import type { CommandContext } from "../../../apps/backend/src/core/commands";
 import type { Environment } from "../../../apps/backend/src/core/models";
 import { runCommand } from "../../../apps/backend/src/core/shell";
+import { dockerOwnerNamespace } from "../../../apps/backend/src/core/docker-ownership";
 
 const {
   createCommandRegistry,
@@ -35,6 +36,8 @@ let fixtureRoot = "";
 let binDirectory = "";
 let commandLog = "";
 let registry: Registry;
+const REGISTRY_DATA_DIR = path.join(os.tmpdir(), "ork-command-registry-data");
+const REGISTRY_DOCKER_OWNER = dockerOwnerNamespace(REGISTRY_DATA_DIR);
 
 const DOCKER_SCRIPT = `#!/bin/sh
 printf 'docker %s\n' "$*" >> "$FAKE_COMMAND_LOG"
@@ -47,8 +50,8 @@ if [ "$1" = "ps" ] && [ "$2" = "-a" ]; then
   case "$*" in
     *"{{json .}}"*)
       printf '%s\\n' \
-        '{"ID":"assigned-container","Names":"assigned","Status":"Up 2 minutes","State":"running","Image":"orkestrator-v2:latest"}' \
-        '{"ID":"orphan-container","Names":"orphan","Status":"Exited (0)","State":"exited","Image":"orkestrator-v2:latest"}'
+        '{"ID":"assigned-container","Names":"runtime-assigned","Status":"Up 2 minutes","State":"running","Image":"orkestrator-v2:latest","Labels":"app=orkestrator-v2,orkestrator-owner=${REGISTRY_DOCKER_OWNER},environment-name=assigned"}' \
+        '{"ID":"orphan-container","Names":"runtime-orphan","Status":"Exited (0)","State":"exited","Image":"orkestrator-v2:latest","Labels":"app=orkestrator-v2,orkestrator-owner=${REGISTRY_DOCKER_OWNER},environment-name=orphan"}'
       ;;
     *" -q "*) printf 'assigned-container\\norphan-container\\n' ;;
     *) printf 'assigned-container\\tassigned\\norphan-container\\torphan\\n' ;;
@@ -113,7 +116,10 @@ function contextWithStorage(
     appRoot: fixtureRoot,
     resourceRoot: fixtureRoot,
     emit: mock((event: string, payload: unknown) => events.push({ event, payload })),
-    storage,
+    storage: {
+      getDataDir: () => REGISTRY_DATA_DIR,
+      ...storage,
+    },
   } as unknown as CommandContext;
 }
 
@@ -235,7 +241,7 @@ describe("direct backend command registry coverage", () => {
     await expect(invoke("get_orkestrator_containers", {}, context)).resolves.toEqual([
       {
         id: "assigned-container",
-        name: "assigned",
+        name: "Environment",
         status: "Up 2 minutes",
         state: "running",
         image: "orkestrator-v2:latest",
@@ -261,7 +267,9 @@ describe("direct backend command registry coverage", () => {
     await expect(invoke("cleanup_orphaned_containers", {}, context)).resolves.toBe(1);
 
     const log = await commandLogContents();
-    expect(log).toContain("docker system prune -f --volumes");
+    expect(log).toContain(
+      `docker system prune -f --filter label=orkestrator-owner=${REGISTRY_DOCKER_OWNER} --volumes`,
+    );
     expect(log).toContain("docker rm -f orphan-container");
     expect(log).not.toContain("docker rm -f assigned-container");
   });

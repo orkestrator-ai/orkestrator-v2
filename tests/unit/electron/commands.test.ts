@@ -20,6 +20,7 @@ import { spawnCommand } from "../../../apps/backend/src/core/shell";
 import type { Environment, RepositoryConfig } from "../../../apps/backend/src/core/models";
 import type { CommandContext } from "../../../apps/backend/src/core/commands";
 import { APP_SLUG, APP_VERSION } from "../../../apps/backend/src/core/constants";
+import { dockerOwnerNamespace } from "../../../apps/backend/src/core/docker-ownership";
 import { EnvironmentLifecycleTaskTracker } from "../../../apps/backend/src/core/environment-lifecycle-tasks";
 
 const execFileAsync = promisify(execFile);
@@ -405,6 +406,7 @@ function createContext(
       agent: "claude" | "codex",
       models: unknown[],
     ) => Promise<unknown>;
+    dataDir?: string;
   } = {},
 ): {
   context: CommandContext;
@@ -442,6 +444,7 @@ function createContext(
       emitted.push({ event, payload });
     }),
     storage: {
+      getDataDir: () => options.dataDir ?? path.join(os.tmpdir(), "orkestrator-command-tests"),
       withGitHubCompletionCommentLock: mock(async (
         _pipelineId: string,
         operation: () => Promise<unknown>,
@@ -6077,16 +6080,21 @@ exit 0
   });
 
   test("matches short and full container IDs before removing orphaned Docker containers", async () => {
+    const currentDataDir = path.join(os.tmpdir(), "orkestrator-current-registry");
+    const foreignDataDir = path.join(os.tmpdir(), "orkestrator-foreign-registry");
+    const currentOwner = dockerOwnerNamespace(currentDataDir);
+    const foreignOwner = dockerOwnerNamespace(foreignDataDir);
     const fullAssignedId = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
     const shortAssignedId = fullAssignedId.slice(0, 12);
     const orphanId = "1234567890ab";
+    const foreignId = "fedcba098765";
     const environment = createEnvironment({
       id: "env-container",
       environmentType: "containerized",
       containerId: fullAssignedId,
       status: "running",
     });
-    const { context } = createContext(environment);
+    const { context } = createContext(environment, { dataDir: currentDataDir });
     const commands = createCommandRegistry();
 
     await withFakeDocker(`#!/bin/sh
@@ -6102,12 +6110,17 @@ if [ "$1" = "ps" ]; then
       exit 0
       ;;
     *'{{json .}}'*)
-      printf '{"ID":"${shortAssignedId}","Names":"assigned","Status":"Up","State":"running","Image":"orkestrator"}\\n'
-      printf '{"ID":"${orphanId}","Names":"orphan","Status":"Exited","State":"exited","Image":"orkestrator"}\\n'
+      printf '{"ID":"${shortAssignedId}","Names":"legacy-assigned","Status":"Up","State":"running","Image":"orkestrator","Labels":"app=orkestrator-v2"}\\n'
+      printf '{"ID":"${orphanId}","Names":"runtime-orphan","Status":"Exited","State":"exited","Image":"orkestrator","Labels":"app=orkestrator-v2,orkestrator-owner=${currentOwner},environment-name=current-orphan"}\\n'
+      printf '{"ID":"${foreignId}","Names":"foreign","Status":"Up","State":"running","Image":"orkestrator","Labels":"app=orkestrator-v2,orkestrator-owner=${foreignOwner},environment-name=foreign"}\\n'
+      ;;
+    *'label=orkestrator-owner=${currentOwner}'*)
+      printf '${orphanId}\\truntime-orphan\\n'
       ;;
     *)
       printf '${shortAssignedId}\\tassigned\\n'
       printf '${orphanId}\\torphan\\n'
+      printf '${foreignId}\\tforeign\\n'
       ;;
   esac
   exit 0
@@ -6124,14 +6137,17 @@ exit 0
         environmentId: "env-container",
       });
       expect(containers.find((container) => container.id === orphanId)).toMatchObject({ isAssigned: false });
+      expect(containers.find((container) => container.id === foreignId)).toBeUndefined();
 
       await expect(commands.get("cleanup_orphaned_containers")?.({}, context)).resolves.toBe(1);
       const removed = await fs.readFile(logs.rm, "utf8");
       expect(removed).toContain(orphanId);
       expect(removed).not.toContain(shortAssignedId);
+      expect(removed).not.toContain(foreignId);
 
       const dockerCalls = await fs.readFile(logs.all, "utf8");
       expect(dockerCalls).toContain("--no-trunc");
+      expect(dockerCalls).toContain(`label=orkestrator-owner=${currentOwner}`);
     });
   });
 

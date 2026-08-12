@@ -6,6 +6,10 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import type { CommandContext } from "../../../apps/backend/src/core/commands";
 import type { Environment } from "../../../apps/backend/src/core/models";
+import {
+  dockerContainerRuntimeName,
+  dockerOwnerNamespace,
+} from "../../../apps/backend/src/core/docker-ownership";
 
 const { createCommandRegistry, __testing } = await import("../../../apps/backend/src/core/commands");
 
@@ -187,6 +191,7 @@ function createContext(initialEnvironment = environment()): {
     resourceRoot: root,
     emit: mock((event: string, payload: unknown) => events.push({ event, payload })),
     storage: {
+      getDataDir: () => root,
       getEnvironment: mock(async (id: string) => id === initialEnvironment.id ? initialEnvironment : null),
       loadEnvironments: mock(async () => [initialEnvironment]),
       updateEnvironment: mock(async (id: string, update: Record<string, unknown>) => {
@@ -466,7 +471,11 @@ describe("process and platform command behavior", () => {
     await expect(invoke("docker_start_container", { containerId: 7 })).rejects.toThrow("Expected containerId to be a string");
 
     const log = await readCommandLog();
-    expect(log).toContain("docker create --name feature-environment");
+    const owner = dockerOwnerNamespace(root);
+    expect(log).toContain(
+      `docker create --name ${dockerContainerRuntimeName(owner, "environment-1")}`,
+    );
+    expect(log).toContain(`--label orkestrator-owner=${owner}`);
     expect(log).toContain("GIT_URL=https://github.com/example/project.git");
     if (process.platform === "linux") {
       expect(log).toContain("--add-host host.docker.internal:host-gateway");
@@ -516,7 +525,9 @@ describe("process and platform command behavior", () => {
       memoryUsed: 0,
       diskUsed: 0,
     });
-    expect(await readCommandLog()).toContain("docker system prune -f --volumes");
+    expect(await readCommandLog()).toContain(
+      `docker system prune -f --filter label=orkestrator-owner=${dockerOwnerNamespace(root)} --volumes`,
+    );
   });
 
   test("reattaches a container and persists its inspected status", async () => {

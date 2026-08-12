@@ -292,6 +292,17 @@ const localCodexBridgeTokens = new Map<string, string>();
 const localClaudeBridgeTokens = new Map<string, string>();
 /** Per-process HTTP Basic passwords for renderer → local OpenCode requests. */
 const localOpenCodeServerPasswords = new Map<string, string>();
+type OpenCodeAgentToolsConfiguration = {
+  fingerprint: string;
+  controller: AbortController;
+  task: Promise<void>;
+};
+/** Backend-owned reconciliation; native tabs must not be its lifecycle owner. */
+const openCodeAgentToolsConfigurations = new Map<
+  string,
+  OpenCodeAgentToolsConfiguration
+>();
+const configuredOpenCodeAgentTools = new Map<string, string>();
 /** Shape of a base64url-encoded 32-byte bridge token persisted in the container. */
 const BRIDGE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const localServerEnvironmentOperations = new Map<string, Promise<void>>();
@@ -5723,13 +5734,36 @@ async function configureOpenCodeAgentTools(
   password: string,
   connection: AgentToolConnection,
   directory: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   const url = new URL(`http://127.0.0.1:${port}/mcp`);
   url.searchParams.set("directory", directory);
+  const headers = openCodeHealthHeaders(password);
+
+  // OpenCode keeps MCP state for the running server. Repeated native-session
+  // starts should reuse a connected entry instead of reconnecting and listing
+  // every tool again.
+  try {
+    const statusResponse = await fetch(url, {
+      headers,
+      signal: openCodeAgentToolsAbortSignal(1_500, signal),
+    });
+    if (statusResponse.ok) {
+      const statusPayload = await readBoundedOpenCodeResponse(statusResponse);
+      if (readOpenCodeAgentToolsStatus(statusPayload) === "connected") return;
+    } else {
+      await statusResponse.body?.cancel().catch(() => undefined);
+    }
+  } catch (error) {
+    // A caller cancellation retires this generation. A missing/slow status
+    // route is compatible with older OpenCode versions, so try the POST path.
+    if (signal?.aborted) throw error;
+  }
+
   const response = await fetch(url, {
     method: "POST",
     headers: {
-      ...openCodeHealthHeaders(password),
+      ...headers,
       "content-type": "application/json",
     },
     body: JSON.stringify({
@@ -5739,12 +5773,15 @@ async function configureOpenCodeAgentTools(
         url: connection.url,
         enabled: true,
         oauth: false,
+        // Orkestrator's endpoint is on the same host. Do not inherit
+        // OpenCode's 30-second connect/catalog default for this optional tool.
+        timeout: 3_000,
         headers: {
           Authorization: `Bearer ${connection.token}`,
         },
       },
     }),
-    signal: AbortSignal.timeout(10_000),
+    signal: openCodeAgentToolsAbortSignal(5_000, signal),
   });
   if (!response.ok) {
     // Never include the response body: OpenCode may echo the submitted MCP
@@ -5762,13 +5799,10 @@ async function configureOpenCodeAgentTools(
   ) {
     throw new Error("OpenCode returned an invalid MCP status response");
   }
-  const entry = (payload as Record<string, unknown>)[
-    ORKESTRATOR_AGENT_MCP_SERVER_NAME
-  ];
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+  const status = readOpenCodeAgentToolsStatus(payload);
+  if (status === null) {
     throw new Error("OpenCode omitted the Orkestrator MCP status");
   }
-  const status = (entry as Record<string, unknown>).status;
   if (status !== "connected") {
     // Treat transitional states as unsuccessful too: startup must not advertise
     // a server whose ticket tools are not usable yet. Do not include the remote
@@ -5781,6 +5815,26 @@ async function configureOpenCodeAgentTools(
       `OpenCode did not connect the Orkestrator agent tools (${safeStatus})`,
     );
   }
+}
+
+function openCodeAgentToolsAbortSignal(
+  timeoutMs: number,
+  signal?: AbortSignal,
+): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
+function readOpenCodeAgentToolsStatus(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  const entry = (payload as Record<string, unknown>)[
+    ORKESTRATOR_AGENT_MCP_SERVER_NAME
+  ];
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+  const status = (entry as Record<string, unknown>).status;
+  return typeof status === "string" ? status : null;
 }
 
 const MAX_OPENCODE_MCP_STATUS_BYTES = 64 * 1024;
@@ -5843,6 +5897,124 @@ function agentToolConnectionFingerprint(
     .digest("hex");
 }
 
+const OPENCODE_AGENT_TOOLS_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000] as const;
+
+function openCodeAgentToolsFingerprint(
+  port: number,
+  password: string,
+  connection: AgentToolConnection,
+  directory: string,
+): string {
+  return createHash("sha256")
+    .update(String(port))
+    .update("\0")
+    .update(password)
+    .update("\0")
+    .update(directory)
+    .update("\0")
+    .update(agentToolConnectionFingerprint(connection))
+    .digest("hex");
+}
+
+function waitForOpenCodeAgentToolsRetry(
+  delayMs: number,
+  signal: AbortSignal,
+): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(finish, delayMs);
+    timer.unref?.();
+    signal.addEventListener("abort", finish, { once: true });
+    function finish(): void {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    }
+  });
+}
+
+/**
+ * Reconcile the optional Orkestrator MCP entry without extending native chat
+ * startup. One task per server generation retries transient connect/catalog
+ * failures; successful generations are memoized so later sessions do no I/O.
+ */
+function scheduleOpenCodeAgentToolsConfiguration(
+  key: string,
+  port: number,
+  password: string,
+  connection: AgentToolConnection,
+  directory: string,
+): void {
+  const fingerprint = openCodeAgentToolsFingerprint(
+    port,
+    password,
+    connection,
+    directory,
+  );
+  if (configuredOpenCodeAgentTools.get(key) === fingerprint) return;
+
+  const current = openCodeAgentToolsConfigurations.get(key);
+  if (current?.fingerprint === fingerprint) return;
+  current?.controller.abort();
+
+  const controller = new AbortController();
+  const task = (async () => {
+    for (
+      let attempt = 0;
+      attempt <= OPENCODE_AGENT_TOOLS_RETRY_DELAYS_MS.length;
+      attempt += 1
+    ) {
+      try {
+        await configureOpenCodeAgentTools(
+          port,
+          password,
+          connection,
+          directory,
+          controller.signal,
+        );
+        if (!controller.signal.aborted) {
+          configuredOpenCodeAgentTools.set(key, fingerprint);
+        }
+        return;
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        if (attempt === OPENCODE_AGENT_TOOLS_RETRY_DELAYS_MS.length) {
+          console.warn(
+            `[backend] OpenCode agent tools remain unavailable for ${key}:`,
+            conciseError(error),
+          );
+          return;
+        }
+        await waitForOpenCodeAgentToolsRetry(
+          OPENCODE_AGENT_TOOLS_RETRY_DELAYS_MS[attempt]!,
+          controller.signal,
+        );
+      }
+    }
+  })();
+  const configuration = { fingerprint, controller, task };
+  openCodeAgentToolsConfigurations.set(key, configuration);
+  void task.finally(() => {
+    if (openCodeAgentToolsConfigurations.get(key) === configuration) {
+      openCodeAgentToolsConfigurations.delete(key);
+    }
+  });
+}
+
+function cancelOpenCodeAgentToolsConfiguration(key: string): void {
+  openCodeAgentToolsConfigurations.get(key)?.controller.abort();
+  openCodeAgentToolsConfigurations.delete(key);
+  configuredOpenCodeAgentTools.delete(key);
+}
+
+function cancelAllOpenCodeAgentToolsConfigurations(): void {
+  for (const configuration of openCodeAgentToolsConfigurations.values()) {
+    configuration.controller.abort();
+  }
+  openCodeAgentToolsConfigurations.clear();
+  configuredOpenCodeAgentTools.clear();
+}
+
 function releaseLocalServerOwnership(
   key: string,
   child: ChildProcessWithoutNullStreams,
@@ -5854,7 +6026,9 @@ function releaseLocalServerOwnership(
   } else if (key.startsWith("claude:")) {
     localClaudeBridgeTokens.delete(key.slice("claude:".length));
   } else if (key.startsWith("opencode:")) {
-    localOpenCodeServerPasswords.delete(key.slice("opencode:".length));
+    const environmentId = key.slice("opencode:".length);
+    localOpenCodeServerPasswords.delete(environmentId);
+    cancelOpenCodeAgentToolsConfiguration(`local:${environmentId}`);
   }
 }
 
@@ -5875,7 +6049,8 @@ async function startLocalServerUnlocked(
       : undefined;
     if (port && authToken && await checkHttpHealth(port, "/global/health", healthHeaders)) {
       if (kind === "opencode" && env?.worktreePath && context.agentTools) {
-        await configureOpenCodeAgentTools(
+        scheduleOpenCodeAgentToolsConfiguration(
+          `local:${environmentId}`,
           port,
           authToken,
           context.agentTools.connection(env.id, env.projectId, "host"),
@@ -6004,7 +6179,8 @@ async function startLocalServerUnlocked(
       kind === "opencode" && authToken ? openCodeHealthHeaders(authToken) : undefined,
     );
     if (kind === "opencode" && authToken && agentToolConnection) {
-      await configureOpenCodeAgentTools(
+      scheduleOpenCodeAgentToolsConfiguration(
+        `local:${environmentId}`,
         port,
         authToken,
         agentToolConnection,
@@ -6075,6 +6251,9 @@ async function stopLocalServerUnlocked(
   kind: LocalServerKind,
 ): Promise<void> {
   const key = `${kind}:${environmentId}`;
+  if (kind === "opencode") {
+    cancelOpenCodeAgentToolsConfiguration(`local:${environmentId}`);
+  }
   const child = localServerProcesses.get(key);
   if (child) await terminateLocalServerChild(key, child);
   const fields = kind === "opencode"
@@ -6160,6 +6339,9 @@ async function deleteEnvironment(
         // Retire state polling before removing the container, or the next tick
         // execs into something that no longer exists.
         shutdownClaudeStatePolling(environment.containerId);
+        cancelOpenCodeAgentToolsConfiguration(
+          `container:${environment.containerId}`,
+        );
         await runCommand(
           "docker",
           ["rm", "-f", environment.containerId],
@@ -6338,6 +6520,7 @@ async function waitForLocalServerEnvironmentOperations(
  */
 export function closeLocalServerAdmission(): void {
   localServerShutdownRequested = true;
+  cancelAllOpenCodeAgentToolsConfigurations();
 }
 
 /**
@@ -6390,6 +6573,23 @@ async function readLocalServerStatus(environmentId: string, context: CommandCont
   const port = kind === "opencode" ? env?.localOpencodePort : kind === "claude" ? env?.localClaudePort : env?.localCodexPort;
   const pid = kind === "opencode" ? env?.opencodePid : kind === "claude" ? env?.claudeBridgePid : env?.codexBridgePid;
   const authToken = localBridgeTokens(kind)?.get(environmentId);
+  if (
+    kind === "opencode"
+    && child
+    && !child.killed
+    && port
+    && authToken
+    && env?.worktreePath
+    && context.agentTools
+  ) {
+    scheduleOpenCodeAgentToolsConfiguration(
+      `local:${environmentId}`,
+      port,
+      authToken,
+      context.agentTools.connection(env.id, env.projectId, "host"),
+      env.worktreePath,
+    );
+  }
   return {
     running: !!child && !child.killed,
     port: port ?? null,
@@ -9724,7 +9924,8 @@ export function createCommandRegistry(
       const started = await startContainerOpenCodeServer(id);
       const connection = await resolveContainerAgentToolConnection(context, id);
       if (connection) {
-        await configureOpenCodeAgentTools(
+        scheduleOpenCodeAgentToolsConfiguration(
+          `container:${id}`,
           started.hostPort,
           started.authToken,
           connection,
@@ -9736,13 +9937,14 @@ export function createCommandRegistry(
   });
   register("stop_opencode_server", ({ containerId }) => {
     const id = asString(containerId, "containerId");
-    return enqueueContainerBridgeOperation("opencode", id, () =>
+    return enqueueContainerBridgeOperation("opencode", id, () => {
+      cancelOpenCodeAgentToolsConfiguration(`container:${id}`);
       // Bracketing avoids matching the `bash -lc` shell carrying this command.
-      dockerExec(
+      return dockerExec(
         id,
         "pkill -f '[o]pencode serve' || true; rm -f /tmp/opencode-server-password",
       ).then(() => undefined)
-    );
+    });
   });
   register("get_opencode_server_status", async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
@@ -9758,16 +9960,15 @@ export function createCommandRegistry(
         openCodeHealthHeaders(authToken),
       );
     if (running && context.agentTools) {
-      const start = commands.get("start_opencode_server");
-      const reconciled = await start?.({ containerId: id }, context) as
-        | { hostPort: number; authToken: string }
-        | undefined;
-      if (reconciled) {
-        return {
-          running: true,
-          hostPort: reconciled.hostPort,
-          authToken: reconciled.authToken,
-        };
+      const connection = await resolveContainerAgentToolConnection(context, id);
+      if (connection && hostPort) {
+        scheduleOpenCodeAgentToolsConfiguration(
+          `container:${id}`,
+          hostPort,
+          authToken,
+          connection,
+          "/workspace",
+        );
       }
     }
     return {
@@ -12705,6 +12906,14 @@ export const __testing = {
   CONTAINER_PINNED_ATTACHMENT_WRITE,
   CONTAINER_PINNED_ATTACHMENT_REMOVE,
   configureOpenCodeAgentTools,
+  scheduleOpenCodeAgentToolsConfiguration,
+  cancelOpenCodeAgentToolsConfiguration,
+  openCodeAgentToolsConfigurationCount(): number {
+    return openCodeAgentToolsConfigurations.size;
+  },
+  configuredOpenCodeAgentToolsCount(): number {
+    return configuredOpenCodeAgentTools.size;
+  },
   readBoundedOpenCodeResponse,
   ensureContainerAgentToolsHost,
   shouldAddDockerHostGatewayAlias,
@@ -12819,6 +13028,7 @@ export const __testing = {
     localCodexBridgeTokens.clear();
     localClaudeBridgeTokens.clear();
     localOpenCodeServerPasswords.clear();
+    cancelAllOpenCodeAgentToolsConfigurations();
     deletingLocalServerEnvironments.clear();
     mergingEnvironments.clear();
     localServerShutdownRequested = false;

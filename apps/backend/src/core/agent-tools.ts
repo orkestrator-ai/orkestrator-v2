@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { toNodeHandler } from "@modelcontextprotocol/node";
+import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { KanbanStatus, KanbanTask, StorageService } from "./storage.js";
 
@@ -558,15 +558,18 @@ export class AgentToolsServer {
       throw error;
     }
 
-    const mcp = createTicketServer(this.storage, scope);
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-    });
+    // The v2 handler selects the protocol era per request. Modern clients use
+    // MCP 2026-07-28's per-request envelope, while OpenCode/Claude releases
+    // that still speak the 2025 protocol use the handler's stateless legacy
+    // fallback. Both paths create an isolated ticket server for this request.
+    const handler = createMcpHandler(
+      () => createTicketServer(this.storage, scope),
+      { legacy: "stateless" },
+    );
     try {
-      await mcp.connect(transport);
-      await transport.handleRequest(request, response, body);
+      await toNodeHandler(handler)(request, response, body);
     } finally {
-      await mcp.close().catch(() => undefined);
+      await handler.close().catch(() => undefined);
     }
   }
 }

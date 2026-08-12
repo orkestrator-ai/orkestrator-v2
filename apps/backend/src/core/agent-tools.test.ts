@@ -3,6 +3,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  Client as McpClient,
+  StreamableHTTPClientTransport,
+} from "@modelcontextprotocol/client";
 import { AgentToolsServer } from "./agent-tools.js";
 import { StorageService } from "./storage.js";
 
@@ -130,6 +134,36 @@ describe("agent Kanban tools", () => {
       .toMatchObject({ readOnlyHint: true, destructiveHint: false });
     expect(listed.body.result?.tools?.find((tool) => tool.name === "update_ticket")?.annotations)
       .toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
+  });
+
+  test("negotiates MCP 2026-07-28 while retaining the legacy endpoint", async () => {
+    const connection = server.connection("env-modern", "project-modern", "host");
+    const client = new McpClient(
+      { name: "orkestrator-modern-contract", version: "1.0.0" },
+      { versionNegotiation: { mode: "auto" } },
+    );
+    const transport = new StreamableHTTPClientTransport(
+      new URL(connection.url),
+      {
+        requestInit: {
+          headers: { Authorization: `Bearer ${connection.token}` },
+        },
+      },
+    );
+
+    try {
+      await client.connect(transport);
+      expect(client.getProtocolEra()).toBe("modern");
+      expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual([
+        "list_tickets",
+        "get_ticket",
+        "create_ticket",
+        "update_ticket",
+        "add_ticket_comment",
+      ]);
+    } finally {
+      await client.close();
+    }
   });
 
   test("creates, reads, updates, comments on, and paginates project tickets", async () => {

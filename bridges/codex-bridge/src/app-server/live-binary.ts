@@ -124,7 +124,7 @@ export function selectCodexBinary(
 const SEMVER_PATTERN = /\b\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\b/;
 
 /**
- * Extracts the version from `codex --version` output (`codex-cli 0.146.0`).
+ * Extracts the version from `codex --version` output (`codex-cli 0.147.0`).
  *
  * Deliberately scoped to the first non-empty line: taking the last whitespace
  * token of the whole output — which is what the generator does — would silently

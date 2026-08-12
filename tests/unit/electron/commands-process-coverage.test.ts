@@ -644,6 +644,10 @@ describe("process and platform command behavior", () => {
         "project-1",
         "container",
       );
+      await waitFor(
+        () => openCode.configurations.length === 1,
+        "background OpenCode agent-tool reconciliation",
+      );
       expect(openCode.configurations).toEqual([
         expect.objectContaining({
           name: "orkestrator",

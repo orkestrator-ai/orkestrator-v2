@@ -32,6 +32,9 @@ export function codexAppServerConfigOverrides(
   );
   const overrides: Record<string, string> = {
     "features.goals": "true",
+    // Codex 0.147+ negotiates the stateless MCP 2026-07-28 protocol and falls
+    // back to the 2025 era for third-party servers that have not upgraded yet.
+    "features.mcp_2026_07_28": "true",
     // V1 reads the child-only compatibility key.
     "agents.max_concurrent_threads_per_session": String(childLimit),
     // V2 prefers this root-inclusive key whenever it is present in config.toml.
@@ -58,6 +61,10 @@ export function codexAppServerConfigOverrides(
         // where process listings and diagnostics could expose its value.
         overrides["mcp_servers.orkestrator.bearer_token_env_var"] =
           JSON.stringify(ORKESTRATOR_AGENT_MCP_TOKEN_ENV);
+        // Ticket tools are useful but must never delay an app-server becoming
+        // ready. Codex 0.147 starts optional MCP servers in the background.
+        overrides["mcp_servers.orkestrator.required"] = "false";
+        overrides["mcp_servers.orkestrator.startup_timeout_sec"] = "3";
       }
     } catch {
       // Invalid injected configuration is ignored; user MCP config still loads.

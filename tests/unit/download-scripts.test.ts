@@ -49,7 +49,7 @@ const downloaders: Downloader[] = [
     expectedDownload: ({ architecture, os }) => {
       const platform = os === "Darwin" ? "darwin" : "linux";
       const arch = architecture === "x86_64" ? "x64" : "arm64";
-      return `claude-code-${platform}-${arch}/-/claude-code-${platform}-${arch}-2.1.220.tgz`;
+      return `claude-code-${platform}-${arch}/-/claude-code-${platform}-${arch}-2.1.228.tgz`;
     },
     expectedExtractor: () => "tar",
   },
@@ -61,7 +61,7 @@ const downloaders: Downloader[] = [
       const target = os === "Darwin"
         ? `${arch}-apple-darwin`
         : `${arch}-unknown-linux-musl`;
-      return `rust-v0.146.0/codex-${target}.tar.gz`;
+      return `rust-v0.147.0/codex-${target}.tar.gz`;
     },
     expectedExtractor: () => "tar",
   },
@@ -72,7 +72,7 @@ const downloaders: Downloader[] = [
       const platform = os === "Darwin" ? "darwin" : "linux";
       const arch = architecture === "x86_64" ? "x64" : "arm64";
       const extension = os === "Darwin" ? ".zip" : ".tar.gz";
-      return `v1.18.11/opencode-${platform}-${arch}${extension}`;
+      return `v1.18.16/opencode-${platform}-${arch}${extension}`;
     },
     expectedExtractor: ({ os }) => os === "Darwin" ? "unzip" : "tar",
   },

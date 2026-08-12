@@ -5298,7 +5298,7 @@ describe("idle detach and transparent re-attach", () => {
 
   /**
    * An unmaterialized thread has no rollout, so `thread/resume` fails with "no
-   * rollout found" — verified against codex 0.146.0. Keeping its id would strand
+   * rollout found" — verified against codex 0.147.0. Keeping its id would strand
    * the session against a dead thread forever.
    */
   test("detaching a thread that never ran a turn clears its id so the next prompt starts fresh", async () => {

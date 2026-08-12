@@ -10,6 +10,7 @@ import { __testing } from "./commands.js";
 const servers: http.Server[] = [];
 
 afterEach(async () => {
+  __testing.cancelOpenCodeAgentToolsConfiguration("test");
   await Promise.all(servers.splice(0).map((server) =>
     new Promise<void>((resolve, reject) =>
       server.close((error) => error ? reject(error) : resolve())
@@ -21,21 +22,40 @@ async function serveMcpResponse(
   responseFactory: (
     request: http.IncomingMessage,
     body: string,
-  ) => {
+  ) => Promise<{
+    status?: number;
+    headers?: Record<string, string>;
+    body: string;
+  }> | {
     status?: number;
     headers?: Record<string, string>;
     body: string;
   },
-): Promise<{ port: number; requests: Array<{ body: string; authorization?: string }> }> {
-  const requests: Array<{ body: string; authorization?: string }> = [];
+): Promise<{
+  port: number;
+  requests: Array<{
+    method?: string;
+    url?: string;
+    body: string;
+    authorization?: string;
+  }>;
+}> {
+  const requests: Array<{
+    method?: string;
+    url?: string;
+    body: string;
+    authorization?: string;
+  }> = [];
   const server = http.createServer(async (request, response) => {
     let body = "";
     for await (const chunk of request) body += chunk;
     requests.push({
+      method: request.method,
+      url: request.url,
       body,
       authorization: request.headers.authorization,
     });
-    const result = responseFactory(request, body);
+    const result = await responseFactory(request, body);
     response.writeHead(result.status ?? 200, {
       "content-type": "application/json",
       ...result.headers,
@@ -59,7 +79,7 @@ const connection: AgentToolConnection = {
 };
 
 describe("OpenCode agent-tool configuration", () => {
-  test("accepts only a connected status and sends the scoped remote config", async () => {
+  test("reuses an already-connected MCP entry without posting it again", async () => {
     const server = await serveMcpResponse(() => ({
       body: JSON.stringify({
         [ORKESTRATOR_AGENT_MCP_SERVER_NAME]: { status: "connected" },
@@ -75,6 +95,31 @@ describe("OpenCode agent-tool configuration", () => {
 
     expect(server.requests).toHaveLength(1);
     const request = server.requests[0]!;
+    expect(request.method).toBe("GET");
+    expect(request.url).toContain("directory=%2Fworkspace+with+spaces");
+    expect(request.body).toBe("");
+    expect(request.authorization).toStartWith("Basic ");
+  });
+
+  test("posts the scoped remote config when the MCP entry is cold", async () => {
+    const server = await serveMcpResponse((request) => ({
+      body: request.method === "GET"
+        ? JSON.stringify({})
+        : JSON.stringify({
+            [ORKESTRATOR_AGENT_MCP_SERVER_NAME]: { status: "connected" },
+          }),
+    }));
+
+    await expect(__testing.configureOpenCodeAgentTools(
+      server.port,
+      "o".repeat(43),
+      connection,
+      "/workspace with spaces",
+    )).resolves.toBeUndefined();
+
+    expect(server.requests).toHaveLength(2);
+    const request = server.requests[1]!;
+    expect(request.method).toBe("POST");
     expect(request.authorization).toStartWith("Basic ");
     expect(JSON.parse(request.body)).toEqual({
       name: ORKESTRATOR_AGENT_MCP_SERVER_NAME,
@@ -83,9 +128,50 @@ describe("OpenCode agent-tool configuration", () => {
         url: connection.url,
         enabled: true,
         oauth: false,
+        timeout: 3_000,
         headers: { Authorization: `Bearer ${connection.token}` },
       },
     });
+  });
+
+  test("reconciles in the background and memoizes a healthy generation", async () => {
+    const server = await serveMcpResponse(async (request) => {
+      if (request.method === "POST") {
+        await new Promise((resolve) => setTimeout(resolve, 75));
+      }
+      return {
+        body: request.method === "GET"
+          ? JSON.stringify({})
+          : JSON.stringify({
+              [ORKESTRATOR_AGENT_MCP_SERVER_NAME]: { status: "connected" },
+            }),
+      };
+    });
+
+    expect(__testing.scheduleOpenCodeAgentToolsConfiguration(
+      "test",
+      server.port,
+      "o".repeat(43),
+      connection,
+      "/workspace",
+    )).toBeUndefined();
+    expect(__testing.openCodeAgentToolsConfigurationCount()).toBe(1);
+    expect(__testing.configuredOpenCodeAgentToolsCount()).toBe(0);
+
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(__testing.openCodeAgentToolsConfigurationCount()).toBe(0);
+    expect(__testing.configuredOpenCodeAgentToolsCount()).toBe(1);
+    expect(server.requests).toHaveLength(2);
+
+    __testing.scheduleOpenCodeAgentToolsConfiguration(
+      "test",
+      server.port,
+      "o".repeat(43),
+      connection,
+      "/workspace",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(server.requests).toHaveLength(2);
   });
 
   test.each(["failed", "pending", "connecting", "disabled"])(

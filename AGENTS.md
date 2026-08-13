@@ -174,8 +174,8 @@ The OpenCode server sends these event types:
 
 ### Frontend
 
-| File                                            | Purpose                     |
-| ----------------------------------------------- | --------------------------- |
+| File                                                     | Purpose                     |
+| -------------------------------------------------------- | --------------------------- |
 | `apps/web/src/components/codex/CodexChatTab.tsx`         | Codex Native Mode chat      |
 | `apps/web/src/components/terminal/TerminalContainer.tsx` | xterm.js integration        |
 | `apps/web/src/components/opencode/OpenCodeChatTab.tsx`   | OpenCode Native Mode chat   |
@@ -197,21 +197,21 @@ See [`docs/adr/0001-codex-app-server-engine.md`](docs/adr/0001-codex-app-server-
 `codex exec` with a custom model catalog, read-only sandbox and user config
 ignored, so title generation cannot inherit the user's tools or instructions.
 
-| File | Purpose |
-| ---- | ------- |
-| `bridges/codex-bridge/src/index.ts` | Routes, SSE, composition root |
-| `bridges/codex-bridge/src/app-server-runtime.ts` | Session surface for the app-server engine |
-| `bridges/codex-bridge/src/event-ring.ts` | Bounded SSE replay buffer + cursor parsing |
-| `bridges/codex-bridge/src/app-server/process-supervisor.ts` | Child lifecycle, generations, restart policy |
-| `bridges/codex-bridge/src/app-server/jsonl-rpc-client.ts` | Transport; must never await consumer work |
-| `bridges/codex-bridge/src/app-server/approvals.ts` | Approval descriptors + per-method response mapping |
-| `bridges/codex-bridge/src/app-server/server-request-router.ts` | Answers every server request, exactly once |
-| `bridges/codex-bridge/src/app-server/notification-recorder.ts` | Opt-in capture of the inbound stream for fixtures |
-| `bridges/codex-bridge/src/sessions/dispatch-journal.ts` | At-most-once prompt dispatch |
-| `bridges/codex-bridge/src/messages/normalization.ts` | Item → normalized part rendering |
-| `bridges/codex-bridge/src/messages/diff-budget.ts` | Caps the diff state, the largest memory consumer |
-| `bridges/codex-bridge/src/codex-item-types.ts` | Local thread-item types (was the Codex SDK) |
-| `bridges/codex-bridge/src/testing/replay-recording.ts` | Replays a recording through the real pipeline |
+| File                                                           | Purpose                                            |
+| -------------------------------------------------------------- | -------------------------------------------------- |
+| `bridges/codex-bridge/src/index.ts`                            | Routes, SSE, composition root                      |
+| `bridges/codex-bridge/src/app-server-runtime.ts`               | Session surface for the app-server engine          |
+| `bridges/codex-bridge/src/event-ring.ts`                       | Bounded SSE replay buffer + cursor parsing         |
+| `bridges/codex-bridge/src/app-server/process-supervisor.ts`    | Child lifecycle, generations, restart policy       |
+| `bridges/codex-bridge/src/app-server/jsonl-rpc-client.ts`      | Transport; must never await consumer work          |
+| `bridges/codex-bridge/src/app-server/approvals.ts`             | Approval descriptors + per-method response mapping |
+| `bridges/codex-bridge/src/app-server/server-request-router.ts` | Answers every server request, exactly once         |
+| `bridges/codex-bridge/src/app-server/notification-recorder.ts` | Opt-in capture of the inbound stream for fixtures  |
+| `bridges/codex-bridge/src/sessions/dispatch-journal.ts`        | At-most-once prompt dispatch                       |
+| `bridges/codex-bridge/src/messages/normalization.ts`           | Item → normalized part rendering                   |
+| `bridges/codex-bridge/src/messages/diff-budget.ts`             | Caps the diff state, the largest memory consumer   |
+| `bridges/codex-bridge/src/codex-item-types.ts`                 | Local thread-item types (was the Codex SDK)        |
+| `bridges/codex-bridge/src/testing/replay-recording.ts`         | Replays a recording through the real pipeline      |
 
 When touching the app-server engine:
 
@@ -277,13 +277,13 @@ When touching the app-server engine:
 
 ### Backend
 
-| File                           | Purpose                                      |
-| ------------------------------ | -------------------------------------------- |
-| `apps/backend/src/core/commands.ts` | Backend command registry and Docker/local env management |
-| `apps/backend/src/core/tmux.ts`     | Claude tmux mode backend                     |
-| `apps/backend/src/core/storage.ts`  | JSON file persistence                        |
-| `apps/desktop/electron/ipc.ts`      | Main-process IPC handlers                    |
-| `apps/desktop/electron/preload-api.ts` | Renderer-facing native API                |
+| File                                   | Purpose                                                  |
+| -------------------------------------- | -------------------------------------------------------- |
+| `apps/backend/src/core/commands.ts`    | Backend command registry and Docker/local env management |
+| `apps/backend/src/core/tmux.ts`        | Claude tmux mode backend                                 |
+| `apps/backend/src/core/storage.ts`     | JSON file persistence                                    |
+| `apps/desktop/electron/ipc.ts`         | Main-process IPC handlers                                |
+| `apps/desktop/electron/preload-api.ts` | Renderer-facing native API                               |
 
 ### Docker
 
@@ -459,3 +459,7 @@ This project uses **shadcn/ui** components. When adding new UI:
 - **Zustand** for global state (`apps/web/src/stores/`)
 - **React Context** for component-tree state (`apps/web/src/contexts/`)
 - Stores use `Map<string, T>` pattern for per-environment/per-session state
+
+# Code review
+
+- When asked to code review, do not make changes to files until the user has specifically asked you to address issues or coverage gaps. A request for review is a request to just identify issues. It should not involve changes until approved.

@@ -392,6 +392,14 @@ const CONTAINER_CLAUDE_CREDENTIAL_FILE = "/home/node/.claude/.credentials.json";
 const CONTAINER_CURSOR_API_KEY_FILE = "/tmp/orkestrator-ai/cursor-api-key";
 const CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE =
   "/tmp/orkestrator-ai/cursor-api-key-fingerprint";
+/**
+ * Both Cursor credential files live here. Nothing in the image guarantees it
+ * exists: `workspace-setup.sh` only creates it past the `--prepare-only` exit
+ * and only when it runs as `node`, so every writer has to create it itself.
+ */
+const CONTAINER_CURSOR_CREDENTIAL_DIR = path.posix.dirname(
+  CONTAINER_CURSOR_API_KEY_FILE,
+);
 const HOST_CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const CLAUDE_GITHUB_CREDENTIAL_FILE_ENV = "ORKESTRATOR_GITHUB_CREDENTIAL_FILE";
 const CLAUDE_GITHUB_ENV_FINGERPRINT_FILE =
@@ -8195,7 +8203,7 @@ async function syncContainerCursorApiKey(
   }
   const command = [
     "set -eu",
-    `credential_dir=${quoteShell(path.posix.dirname(CONTAINER_CURSOR_API_KEY_FILE))}`,
+    `credential_dir=${quoteShell(CONTAINER_CURSOR_CREDENTIAL_DIR)}`,
     'mkdir -p "$credential_dir"',
     'chmod 700 "$credential_dir"',
     'credential_tmp="$(mktemp "$credential_dir/.cursor-api-key.XXXXXX")"',
@@ -10764,7 +10772,8 @@ export function createCommandRegistry(
           export ACP_AGENT_PATH="$(command -v ${acpExecutable} 2>/dev/null || echo ${acpExecutable})"
           export ACP_BRIDGE_TOKEN=${quoteShell(token)}
           ${acpProvider === "cursor"
-            ? `if [ -s ${CONTAINER_CURSOR_API_KEY_FILE} ]; then export CURSOR_API_KEY="$(cat ${CONTAINER_CURSOR_API_KEY_FILE})"; else unset CURSOR_API_KEY; fi
+            ? `mkdir -p ${quoteShell(CONTAINER_CURSOR_CREDENTIAL_DIR)}
+          if [ -s ${CONTAINER_CURSOR_API_KEY_FILE} ]; then export CURSOR_API_KEY="$(cat ${CONTAINER_CURSOR_API_KEY_FILE})"; else unset CURSOR_API_KEY; fi
           printf '%s' ${quoteShell(expectedCredentialFingerprint!)} > ${CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE}`
             : ""}
           setsid bun /opt/acp-bridge/dist/index.js --provider=${acpProvider} > ${logFile} 2>&1 &

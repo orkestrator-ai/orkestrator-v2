@@ -915,6 +915,17 @@ function isTrustedBridgeOrigin(origin: string | undefined): boolean {
   }
 }
 
+function requestPathname(request: IncomingMessage): string {
+  try {
+    return new URL(
+      request.url || "/",
+      `http://${request.headers.host || "localhost"}`,
+    ).pathname;
+  } catch {
+    return "";
+  }
+}
+
 function applyOriginPolicy(
   request: IncomingMessage,
   response: ServerResponse,
@@ -924,12 +935,21 @@ function applyOriginPolicy(
     json(response, 403, { error: "Origin is not allowed" });
     return false;
   }
-  if (origin) {
+  // `/global/health` answers before the token check so the backend can probe a
+  // bridge whose credential it does not hold, and its only client is that
+  // non-browser prober. Granting it CORS — and with it a Private Network
+  // Access opt-in — would let any page that can produce an accepted origin
+  // read it. `null` is an accepted origin, and every public site can mint one
+  // through a sandboxed iframe, so the loopback probing PNA exists to prevent
+  // would be reachable from the open web. Withhold both headers there; the
+  // route stays reachable, its body just stays unreadable to a browser.
+  const unauthenticatedRoute = requestPathname(request) === "/global/health";
+  if (origin) response.setHeader("Vary", "Origin");
+  if (origin && !unauthenticatedRoute) {
     response.setHeader("Access-Control-Allow-Origin", origin);
-    response.setHeader("Vary", "Origin");
   }
   if (request.method !== "OPTIONS") return true;
-  response.writeHead(204, {
+  response.writeHead(204, unauthenticatedRoute ? {} : {
     "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": `Content-Type, Authorization, ${ACP_TOKEN_HEADER}`,
     "Access-Control-Allow-Private-Network": "true",

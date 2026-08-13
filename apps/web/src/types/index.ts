@@ -453,6 +453,14 @@ export interface GlobalConfig {
   containerResources: ContainerResources;
   envFilePatterns: string[];
   anthropicApiKey?: string;
+  /** Whether a write-only Cursor API key is stored by the backend. */
+  cursorApiKeyConfigured?: boolean;
+  /**
+   * Which key a new container would actually receive. `host-env` means the
+   * backend process inherited `CURSOR_API_KEY`, which no stored-key edit in
+   * this pane can change.
+   */
+  cursorApiKeySource?: "config" | "host-env" | "none";
   /** Whether a write-only GitHub token is stored by the backend. */
   githubTokenConfigured?: boolean;
   /** Reuse the host's active `gh auth login` token for container GitHub access. */

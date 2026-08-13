@@ -783,11 +783,7 @@ function isPersistedNativeAgentSession(
     && isNonBlankString(value.key)
     && (expectedKey === undefined || value.key === expectedKey)
     && isNonBlankString(value.environmentId)
-    && (
-      value.agent === "claude"
-      || value.agent === "codex"
-      || value.agent === "opencode"
-    )
+    && isAgentPlatform(value.agent)
     && isNonBlankString(value.logicalSessionKey)
     && isNonBlankString(value.providerSessionId)
     && (
@@ -3560,9 +3556,29 @@ export class StorageService {
         };
   }
 
-  async saveConfig(config: AppConfig): Promise<void> {
+  async saveConfig(
+    config: AppConfig,
+    options: { preserveCredentials?: boolean } = {},
+  ): Promise<void> {
     const validated = validateConfigReviewInstruction(config);
-    await this.enqueueConfigMutation(() => this.saveJson(this.configFile(), validated));
+    await this.enqueueConfigMutation(async () => {
+      const current = options.preserveCredentials ? await this.loadConfig() : null;
+      const next = current
+        ? {
+            ...validated,
+            global: {
+              ...validated.global,
+              ...(current.global.githubToken
+                ? { githubToken: current.global.githubToken }
+                : {}),
+              ...(current.global.cursorApiKey
+                ? { cursorApiKey: current.global.cursorApiKey }
+                : {}),
+            },
+          }
+        : validated;
+      await this.saveJson(this.configFile(), next);
+    });
     this.announce("config", "app");
   }
 
@@ -3733,7 +3749,10 @@ export class StorageService {
     });
   }
 
-  async updateGlobalConfig(globalConfig: AppConfig["global"]): Promise<AppConfig> {
+  async updateGlobalConfig(
+    globalConfig: AppConfig["global"],
+    options: { preserveCredentials?: boolean } = {},
+  ): Promise<AppConfig> {
     const reviewValidated = validateGlobalReviewInstruction(globalConfig);
     const enabledAgentPlatforms = normalizeAgentPlatforms(
       reviewValidated.enabledAgentPlatforms,
@@ -3754,7 +3773,17 @@ export class StorageService {
     };
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadConfig();
-      config.global = validated;
+      config.global = options.preserveCredentials
+        ? {
+            ...validated,
+            ...(config.global.githubToken
+              ? { githubToken: config.global.githubToken }
+              : {}),
+            ...(config.global.cursorApiKey
+              ? { cursorApiKey: config.global.cursorApiKey }
+              : {}),
+          }
+        : validated;
       await this.saveJson(this.configFile(), config);
       this.announce("config", "app");
       return config;
@@ -3782,6 +3811,17 @@ export class StorageService {
       const config = await this.loadConfig();
       if (token === null) delete config.global.githubToken;
       else config.global.githubToken = token;
+      await this.saveJson(this.configFile(), config);
+      this.announce("config", "app");
+      return config;
+    });
+  }
+
+  async setCursorApiKey(apiKey: string | null): Promise<AppConfig> {
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadConfig();
+      if (apiKey === null) delete config.global.cursorApiKey;
+      else config.global.cursorApiKey = apiKey;
       await this.saveJson(this.configFile(), config);
       this.announce("config", "app");
       return config;

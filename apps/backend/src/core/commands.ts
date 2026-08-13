@@ -1114,8 +1114,13 @@ async function requireGitHubProject(
   return { token, repository: resolveGitHubRepository(project.gitUrl) };
 }
 
-type RendererGlobalConfig = Omit<AppConfig["global"], "githubToken"> & {
+type RendererGlobalConfig = Omit<
+  AppConfig["global"],
+  "githubToken" | "cursorApiKey"
+> & {
   githubTokenConfigured: boolean;
+  cursorApiKeyConfigured: boolean;
+  cursorApiKeySource: CursorApiKeySource;
 };
 
 type RendererAppConfig = Omit<AppConfig, "global"> & {
@@ -1136,11 +1141,36 @@ function asAgentModelConfigKey(value: unknown): AgentModelConfigKey {
   return key;
 }
 
+/**
+ * Where the key a new container would receive actually comes from. The stored
+ * key is write-only, so `cursorApiKeyConfigured` alone cannot tell the settings
+ * pane that a container is being handed a key inherited from this process's own
+ * environment — and clearing the stored key does not stop that one.
+ */
+export type CursorApiKeySource = "config" | "host-env" | "none";
+
+/**
+ * Single source of truth for the Cursor key. `createDockerContainer` forwards
+ * `apiKey`; the renderer is told only `source`, never the value.
+ */
+function resolveCursorApiKey(
+  global: AppConfig["global"],
+): { apiKey?: string; source: CursorApiKeySource } {
+  const configured = global.cursorApiKey?.trim();
+  if (configured) return { apiKey: configured, source: "config" };
+  const inherited = process.env.CURSOR_API_KEY?.trim();
+  if (inherited) return { apiKey: inherited, source: "host-env" };
+  return { source: "none" };
+}
+
 function redactGlobalConfig(global: AppConfig["global"]): RendererGlobalConfig {
-  const { githubToken, ...safeGlobal } = global;
+  const { source } = resolveCursorApiKey(global);
+  const { githubToken, cursorApiKey, ...safeGlobal } = global;
   return {
     ...safeGlobal,
     githubTokenConfigured: Boolean(githubToken?.trim()),
+    cursorApiKeyConfigured: Boolean(cursorApiKey?.trim()),
+    cursorApiKeySource: source,
   };
 }
 
@@ -1151,19 +1181,16 @@ function redactAppConfig(config: AppConfig): RendererAppConfig {
   };
 }
 
-function preserveStoredGitHubToken(
-  global: Record<string, unknown>,
-  githubToken: string | undefined,
-): AppConfig["global"] {
+function stripRendererCredentials(global: Record<string, unknown>): AppConfig["global"] {
   const {
     githubToken: _ignoredToken,
     githubTokenConfigured: _ignoredConfigured,
+    cursorApiKey: _ignoredCursorApiKey,
+    cursorApiKeyConfigured: _ignoredCursorConfigured,
+    cursorApiKeySource: _ignoredCursorSource,
     ...safeGlobal
   } = global;
-  return {
-    ...safeGlobal,
-    ...(githubToken ? { githubToken } : {}),
-  } as AppConfig["global"];
+  return safeGlobal as AppConfig["global"];
 }
 
 function asGitHubIssueStatus(value: unknown): GitHubIssueStatus {
@@ -8230,6 +8257,19 @@ async function createDockerContainer(environment: Environment, context: CommandC
     redactValues.push(anthropicApiKey);
     args.push("-e", "ANTHROPIC_API_KEY");
   }
+  // Cursor's macOS login lives in Keychain and cannot be represented by the
+  // read-only ~/.cursor import mounted into a Linux container. Cursor Agent's
+  // documented headless authentication path is CURSOR_API_KEY.
+  //
+  // The host-environment fallback inside `resolveCursorApiKey` is deliberate for
+  // headless runs, and the same helper reports its `source` to the settings pane
+  // so an inherited key is never forwarded invisibly.
+  const { apiKey: cursorApiKey } = resolveCursorApiKey(config.global);
+  if (cursorApiKey) {
+    dockerEnvironment.CURSOR_API_KEY = cursorApiKey;
+    redactValues.push(cursorApiKey);
+    args.push("-e", "CURSOR_API_KEY");
+  }
   if (config.global.opencodeModel) args.push("-e", `OPENCODE_MODEL=${config.global.opencodeModel}`);
   if (environment.networkAccessMode === "full") {
     args.push("-e", "NETWORK_MODE=full");
@@ -8251,9 +8291,13 @@ async function createDockerContainer(environment: Environment, context: CommandC
   await bindIfExists(path.join(home, ".claude"), "/claude-config");
   await bindIfExists(path.join(home, ".claude.json"), "/claude-config.json");
   await bindIfExists(path.join(home, ".codex"), "/codex-home");
-  await bindIfExists(path.join(home, ".cursor"), "/home/node/.cursor");
-  await bindIfExists(path.join(home, ".grok"), "/home/node/.grok");
-  await bindIfExists(path.join(home, ".config", "grok"), "/home/node/.config/grok");
+  // Agent homes must remain writable. Cursor creates project/session state and
+  // Grok creates session databases during ACP startup, so mounting the host
+  // directories directly over their homes makes both bridges fail immediately.
+  // Mount portable inputs separately; entrypoint.sh copies a bounded allowlist.
+  await bindIfExists(path.join(home, ".cursor"), "/cursor-config");
+  await bindIfExists(path.join(home, ".grok"), "/grok-home");
+  await bindIfExists(path.join(home, ".config", "grok"), "/grok-config");
   await bindIfExists(path.join(home, ".config", "opencode"), "/opencode-config");
   await bindIfExists(path.join(home, ".local", "share", "opencode"), "/opencode-data");
   await bindIfExists(path.join(home, ".local", "state", "opencode"), "/opencode-state");
@@ -9313,14 +9357,10 @@ export function createCommandRegistry(
   register("save_config", async ({ config }, context) => {
     const { storage } = context;
     const candidate = asRecord(config, "config") as unknown as AppConfig;
-    const stored = await storage.loadConfig();
     await storage.saveConfig({
       ...candidate,
-      global: preserveStoredGitHubToken(
-        asRecord(candidate.global, "config.global"),
-        stored.global.githubToken,
-      ),
-    });
+      global: stripRendererCredentials(asRecord(candidate.global, "config.global")),
+    }, { preserveCredentials: true });
     // A whole-config write can move any repository's baseline; see
     // `update_repository_config`.
     void syncDiffStatsTracking(context).catch(() => undefined);
@@ -9333,12 +9373,9 @@ export function createCommandRegistry(
     redactGlobalConfig((await storage.loadConfig()).global)
   );
   register("update_global_config", async ({ global }, { storage }) => {
-    const stored = await storage.loadConfig();
     const updated = await storage.updateGlobalConfig(
-      preserveStoredGitHubToken(
-        asRecord(global, "global"),
-        stored.global.githubToken,
-      ),
+      stripRendererCredentials(asRecord(global, "global")),
+      { preserveCredentials: true },
     );
     return redactAppConfig(updated);
   });
@@ -9358,6 +9395,13 @@ export function createCommandRegistry(
       throw new Error("GitHub token cannot be empty. Use null to clear it.");
     }
     return redactAppConfig(await storage.setGitHubToken(nextToken));
+  });
+  register("set_cursor_api_key", async ({ apiKey }, { storage }) => {
+    const nextApiKey = apiKey === null ? null : asString(apiKey, "apiKey").trim();
+    if (nextApiKey !== null && !nextApiKey) {
+      throw new Error("Cursor API key cannot be empty. Use null to clear it.");
+    }
+    return redactAppConfig(await storage.setCursorApiKey(nextApiKey));
   });
   register("get_repository_config", ({ projectId }, { storage }) => storage.getRepositoryConfig(asString(projectId, "projectId")));
   register("update_repository_config", async ({ projectId, repoConfig }, context) => {

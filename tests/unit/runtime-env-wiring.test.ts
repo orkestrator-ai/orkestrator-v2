@@ -166,10 +166,16 @@ describe("container runtime environment wiring", () => {
   test("every agent copies host state through the shared bounded helpers", () => {
     const entrypoint = read("docker/entrypoint.sh");
 
-    // One mechanism for all three agents. An unguarded `find -maxdepth 1 -type f`
+    // One mechanism for every agent. An unguarded `find -maxdepth 1 -type f`
     // or a bare recursive `cp` of a mounted home is what these helpers replaced;
     // none of them should reappear for any agent.
-    for (const mount of ["/claude-config", "/codex-home", "/opencode-data"]) {
+    for (const mount of [
+      "/claude-config",
+      "/codex-home",
+      "/opencode-data",
+      "/cursor-config",
+      "/grok-home",
+    ]) {
       expect(entrypoint).toContain(`copy_agent_file ${mount}`);
       expect(entrypoint).not.toContain(`find ${mount} -maxdepth 1 -type f`);
       expect(entrypoint).not.toContain(`cp -r ${mount}/.`);
@@ -181,12 +187,25 @@ describe("container runtime environment wiring", () => {
     expect(entrypoint).toContain("copy_agent_directory /codex-home");
     expect(entrypoint).toContain("copy_agent_directory_entries /claude-config");
     expect(entrypoint).toContain("copy_agent_directory_entries /opencode-data");
+    expect(entrypoint).toContain("copy_agent_directory_entries /cursor-config");
+    expect(entrypoint).toContain("copy_agent_directory_entries /grok-home");
+    expect(entrypoint).toContain("copy_agent_directory /grok-config");
     // Each call site names its agent so a skipped file is attributable.
-    for (const label of ["Claude", "Codex", "OpenCode"]) {
+    for (const label of ["Claude", "Codex", "OpenCode", "Cursor", "Grok"]) {
       expect(entrypoint).toMatch(
         new RegExp(`copy_agent_(file|directory) [^\\n]*\\s${label}$`, "m"),
       );
     }
+  });
+
+  test("Cursor and Grok host state mounts do not replace their writable container homes", () => {
+    const backend = read("apps/backend/src/core/commands.ts");
+
+    expect(backend).toContain('path.join(home, ".cursor"), "/cursor-config"');
+    expect(backend).toContain('path.join(home, ".grok"), "/grok-home"');
+    expect(backend).toContain('path.join(home, ".config", "grok"), "/grok-config"');
+    expect(backend).not.toContain('path.join(home, ".cursor"), "/home/node/.cursor"');
+    expect(backend).not.toContain('path.join(home, ".grok"), "/home/node/.grok"');
   });
 
   test("container startup copies only bounded Claude configuration state", () => {
@@ -1411,6 +1430,157 @@ eval "$codex_setup"
       expect(statSync(join(destination, "auth.json")).mode & 0o777).toBe(0o600);
       expect(() => statSync(join(destination, "plugins", ".plugin-appserver"))).toThrow();
       expect(() => statSync(join(destination, "sessions"))).toThrow();
+    });
+  });
+
+  test("Cursor and Grok setup copy portable inputs while leaving runtime homes writable", () => {
+    withTempDir((dir) => {
+      const cursorSource = join(dir, "cursor-config");
+      const grokSource = join(dir, "grok-home");
+      const grokConfig = join(dir, "grok-config");
+      const home = join(dir, "home");
+
+      mkdirSync(join(cursorSource, "skills-cursor"), { recursive: true });
+      mkdirSync(join(cursorSource, "projects", "host-project"), { recursive: true });
+      for (const file of ["cli-config.json", "agent-cli-state.json", "mcp.json", "argv.json"]) {
+        writeFileSync(join(cursorSource, file), `${file}\n`);
+      }
+      writeFileSync(join(cursorSource, "skills-cursor", "skill.md"), "cursor skill\n");
+      writeFileSync(join(cursorSource, "projects", "host-project", "session.json"), "excluded\n");
+
+      mkdirSync(join(grokSource, "hooks"), { recursive: true });
+      mkdirSync(join(grokSource, "skills"), { recursive: true });
+      mkdirSync(join(grokSource, "sessions"), { recursive: true });
+      for (const file of ["auth.json", "config.toml", "trusted_folders.toml", "agent_id"]) {
+        writeFileSync(join(grokSource, file), `${file}\n`, { mode: 0o644 });
+      }
+      writeFileSync(join(grokSource, "hooks", "hook.sh"), "hook\n");
+      writeFileSync(join(grokSource, "skills", "skill.md"), "grok skill\n");
+      writeFileSync(join(grokSource, "sessions", "host-session.json"), "excluded\n");
+      mkdirSync(grokConfig, { recursive: true });
+      writeFileSync(join(grokConfig, "settings.json"), "{\"portable\":true}\n");
+
+      const entrypoint = join(repoRoot, "docker", "entrypoint.sh");
+      const result = runShell(
+        agentCopyHelperHarness(`
+cursor_setup="$(sed -n '/^# Set up Cursor Agent configuration\./,/^log_progress "Cursor Agent configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/cursor-config#\\$AGENT_TEST_CURSOR#g")"
+grok_setup="$(sed -n '/^# Set up Grok configuration\./,/^log_progress "Grok configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/grok-home#\\$AGENT_TEST_GROK_HOME#g; s#/grok-config#\\$AGENT_TEST_GROK_CONFIG#g")"
+[ -n "$cursor_setup" ] || { echo "harness failed to extract the Cursor block"; exit 9; }
+[ -n "$grok_setup" ] || { echo "harness failed to extract the Grok block"; exit 9; }
+eval "$cursor_setup"
+eval "$grok_setup"
+`),
+        {
+          HOME: home,
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          AGENT_TEST_CURSOR: cursorSource,
+          AGENT_TEST_GROK_HOME: grokSource,
+          AGENT_TEST_GROK_CONFIG: grokConfig,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      for (const file of ["cli-config.json", "agent-cli-state.json", "mcp.json", "argv.json"]) {
+        expect(readFileSync(join(home, ".cursor", file), "utf8")).toBe(`${file}\n`);
+      }
+      expect(readFileSync(join(home, ".cursor", "skills-cursor", "skill.md"), "utf8"))
+        .toBe("cursor skill\n");
+      expect(() => statSync(join(home, ".cursor", "projects"))).toThrow();
+
+      for (const file of ["auth.json", "config.toml", "trusted_folders.toml", "agent_id"]) {
+        expect(readFileSync(join(home, ".grok", file), "utf8")).toBe(`${file}\n`);
+      }
+      expect(statSync(join(home, ".grok", "auth.json")).mode & 0o777).toBe(0o600);
+      expect(readFileSync(join(home, ".grok", "hooks", "hook.sh"), "utf8")).toBe("hook\n");
+      expect(readFileSync(join(home, ".grok", "skills", "skill.md"), "utf8")).toBe("grok skill\n");
+      expect(readFileSync(join(home, ".config", "grok", "settings.json"), "utf8"))
+        .toBe("{\"portable\":true}\n");
+      expect(() => statSync(join(home, ".grok", "sessions"))).toThrow();
+
+      // These homes are ordinary directories created under HOME, not read-only
+      // bind mount targets. Both agents can create the session state ACP needs.
+      writeFileSync(join(home, ".cursor", "runtime-write"), "ok\n");
+      writeFileSync(join(home, ".grok", "runtime-write"), "ok\n");
+    });
+  });
+
+  test("Cursor and Grok name every entry they drop, including the whole-mount grok config", () => {
+    withTempDir((dir) => {
+      const cursorSource = join(dir, "cursor-config");
+      const grokSource = join(dir, "grok-home");
+      const grokConfig = join(dir, "grok-config");
+      const outside = join(dir, "outside");
+      const home = join(dir, "home");
+
+      mkdirSync(join(outside, "real"), { recursive: true });
+      writeFileSync(join(outside, "real", "leaked.md"), "host-only\n");
+
+      // Cursor: one real skill beside a symlinked one. The per-entry helper must
+      // drop only the link and still land the rest.
+      mkdirSync(join(cursorSource, "skills-cursor"), { recursive: true });
+      writeFileSync(join(cursorSource, "cli-config.json"), "cli-config.json\n");
+      writeFileSync(join(cursorSource, "skills-cursor", "skill.md"), "cursor skill\n");
+      symlinkSync(join(outside, "real"), join(cursorSource, "skills-cursor", "linked"));
+
+      // Grok: an oversized file next to the allowlist, plus a link inside
+      // ~/.config/grok, which is copied whole rather than per entry.
+      mkdirSync(grokSource, { recursive: true });
+      writeFileSync(join(grokSource, "auth.json"), "auth.json\n");
+      writeFileSync(join(grokSource, "config.toml"), "x".repeat(64), { mode: 0o644 });
+      mkdirSync(grokConfig, { recursive: true });
+      writeFileSync(join(grokConfig, "settings.json"), "{\"portable\":true}\n");
+      symlinkSync(join(outside, "real"), join(grokConfig, "linked"));
+
+      const entrypoint = join(repoRoot, "docker", "entrypoint.sh");
+      const result = runShell(
+        agentCopyHelperHarness(`
+cursor_setup="$(sed -n '/^# Set up Cursor Agent configuration\./,/^log_progress "Cursor Agent configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/cursor-config#\\$AGENT_TEST_CURSOR#g")"
+grok_setup="$(sed -n '/^# Set up Grok configuration\./,/^log_progress "Grok configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/grok-home#\\$AGENT_TEST_GROK_HOME#g; s#/grok-config#\\$AGENT_TEST_GROK_CONFIG#g")"
+eval "$cursor_setup"
+eval "$grok_setup"
+`),
+        {
+          HOME: home,
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          // Small enough that the 64-byte config.toml above trips the file cap,
+          // while every other fixture file stays comfortably under it.
+          AGENT_COPY_MAX_FILE_BYTES: "32",
+          AGENT_TEST_CURSOR: cursorSource,
+          AGENT_TEST_GROK_HOME: grokSource,
+          AGENT_TEST_GROK_CONFIG: grokConfig,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+
+      // Each skip is attributed to the agent whose state was dropped, and the
+      // summaries do not leak across the two blocks.
+      expect(result.stdout).toContain(
+        "Cursor host config NOT copied into this container: skills-cursor/linked",
+      );
+      expect(result.stdout).toContain("Skipping oversized Grok file: config.toml");
+      // The mount is copied whole, so the entry the helper walks is ".". A
+      // summary reading "NOT copied into this container: ." would name nothing
+      // the user could act on.
+      expect(result.stdout).toContain(
+        "Grok host config NOT copied into this container: config.toml, .config/grok",
+      );
+      expect(result.stdout).not.toContain("container: .\n");
+
+      // Dropping one entry does not cost the others, and no link was followed.
+      expect(readFileSync(join(home, ".cursor", "cli-config.json"), "utf8"))
+        .toBe("cli-config.json\n");
+      expect(readFileSync(join(home, ".cursor", "skills-cursor", "skill.md"), "utf8"))
+        .toBe("cursor skill\n");
+      expect(() => statSync(join(home, ".cursor", "skills-cursor", "linked"))).toThrow();
+      expect(readFileSync(join(home, ".grok", "auth.json"), "utf8")).toBe("auth.json\n");
+      expect(() => statSync(join(home, ".grok", "config.toml"))).toThrow();
+      // The whole-directory helper is all-or-nothing, so the link takes the
+      // portable sibling with it rather than resolving out of the mount.
+      expect(() => statSync(join(home, ".config", "grok", "settings.json"))).toThrow();
+      expect(() => statSync(join(home, ".config", "grok", "linked"))).toThrow();
     });
   });
 

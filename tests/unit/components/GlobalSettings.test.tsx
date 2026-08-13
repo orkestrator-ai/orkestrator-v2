@@ -21,6 +21,14 @@ const mockSetGitHubToken = mock(async (token: string | null) => ({
   },
   repositories: {},
 }));
+const mockSetCursorApiKey = mock(async (apiKey: string | null) => ({
+  version: "1.0",
+  global: {
+    ...useConfigStore.getState().config.global,
+    cursorApiKeyConfigured: apiKey !== null,
+  },
+  repositories: {},
+}));
 const mockGetLogDirectory = mock(async () => null);
 const mockPropagateGithubCredentialsToContainers = mock(
   async (): Promise<{ updated: string[]; failed: [string, string][] }> => ({
@@ -68,6 +76,7 @@ mock.module("@/lib/backend", () => ({
   ...actualBackend,
   updateGlobalConfig: mockUpdateGlobalConfig,
   setGitHubToken: mockSetGitHubToken,
+  setCursorApiKey: mockSetCursorApiKey,
   getLogDirectory: mockGetLogDirectory,
   propagateGithubCredentialsToContainers: mockPropagateGithubCredentialsToContainers,
   getWebClientStatus: mockGetWebClientStatus,
@@ -110,6 +119,7 @@ describe("GlobalSettings", () => {
     cleanup();
     mockUpdateGlobalConfig.mockClear();
     mockSetGitHubToken.mockClear();
+    mockSetCursorApiKey.mockClear();
     mockGetLogDirectory.mockClear();
     mockPropagateGithubCredentialsToContainers.mockClear();
     mockPropagateGithubCredentialsToContainers.mockImplementation(async () => ({
@@ -1128,6 +1138,13 @@ describe("GlobalSettings", () => {
     expect(anthropicInput.type).toBe("text");
     fireEvent.change(anthropicInput, { target: { value: "test-anthropic-key" } });
 
+    rerender(<GlobalSettings activeSection="cursor" />);
+    const cursorInput = screen.getByLabelText("Cursor API key") as HTMLInputElement;
+    expect(cursorInput.type).toBe("password");
+    fireEvent.click(screen.getByRole("button", { name: "Show Cursor API key" }));
+    expect(cursorInput.type).toBe("text");
+    fireEvent.change(cursorInput, { target: { value: "test-cursor-key" } });
+
     rerender(<GlobalSettings activeSection="general" />);
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     const githubInput = screen.getByLabelText("GitHub token") as HTMLInputElement;
@@ -1139,13 +1156,83 @@ describe("GlobalSettings", () => {
 
     await waitFor(() => {
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ anthropicApiKey: "test-anthropic-key" }),
+        expect.objectContaining({
+          anthropicApiKey: "test-anthropic-key",
+        }),
       );
+      expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty(
+        "cursorApiKey",
+      );
+      expect(mockSetCursorApiKey).toHaveBeenCalledWith("test-cursor-key");
       expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty(
         "githubToken",
       );
       expect(mockSetGitHubToken).toHaveBeenCalledWith("test-github-token");
     });
+  });
+
+  test("treats a configured Cursor API key as write-only and clears it explicitly", async () => {
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          cursorApiKeyConfigured: true,
+        },
+      },
+    }));
+    render(<GlobalSettings activeSection="cursor" />);
+
+    const input = screen.getByLabelText("Cursor API key") as HTMLInputElement;
+    expect(input.value).toBe("");
+    expect(input.placeholder).toBe("API key configured — enter a replacement");
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear stored Cursor API key" }));
+    expect(screen.getByText("The stored Cursor API key will be cleared when you save."))
+      .toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockSetCursorApiKey).toHaveBeenCalledWith(null));
+    expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty("cursorApiKey");
+  });
+
+  test("warns that a Cursor key inherited from the host environment cannot be cleared here", async () => {
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          cursorApiKeyConfigured: false,
+          cursorApiKeySource: "host-env" as const,
+        },
+      },
+    }));
+    render(<GlobalSettings activeSection="cursor" />);
+
+    // Nothing is stored, so there is no clear button and the field is empty —
+    // without this notice the pane implies no key reaches new containers.
+    expect(screen.queryByRole("button", { name: "Clear stored Cursor API key" })).toBeNull();
+    expect((screen.getByLabelText("Cursor API key") as HTMLInputElement).placeholder)
+      .toBe("Cursor API key");
+    expect(screen.getByText(/inherited CURSOR_API_KEY from its own environment/))
+      .toBeTruthy();
+  });
+
+  test("shows no host-environment warning when the stored key is the one in use", async () => {
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          cursorApiKeyConfigured: true,
+          cursorApiKeySource: "config" as const,
+        },
+      },
+    }));
+    render(<GlobalSettings activeSection="cursor" />);
+
+    expect(screen.queryByText(/inherited CURSOR_API_KEY from its own environment/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Clear stored Cursor API key" })).toBeTruthy();
   });
 
   test("treats a configured GitHub token as write-only and replaces it explicitly", async () => {

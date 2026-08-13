@@ -233,6 +233,71 @@ describe("Electron StorageService", () => {
     expect(merged.defaultAgent).toBe("claude");
   });
 
+  test("preserves write-only credentials during renderer config writes and mutates Cursor keys explicitly", async () => {
+    const dataDir = await createTempDir("ork-storage-write-only-credentials-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.setGitHubToken("stored-github-token");
+    await storage.setCursorApiKey("stored-cursor-key");
+
+    const rendererGlobal = {
+      ...(await storage.loadConfig()).global,
+      debugLogging: true,
+    };
+    delete rendererGlobal.githubToken;
+    delete rendererGlobal.cursorApiKey;
+    await storage.updateGlobalConfig(rendererGlobal, { preserveCredentials: true });
+
+    let persisted = (await storage.loadConfig()).global;
+    expect(persisted.githubToken).toBe("stored-github-token");
+    expect(persisted.cursorApiKey).toBe("stored-cursor-key");
+    expect(persisted.debugLogging).toBe(true);
+
+    await storage.setCursorApiKey("replacement-cursor-key");
+    expect((await storage.loadConfig()).global.cursorApiKey)
+      .toBe("replacement-cursor-key");
+    await storage.setCursorApiKey(null);
+    persisted = (await storage.loadConfig()).global;
+    expect(persisted.cursorApiKey).toBeUndefined();
+    expect(persisted.githubToken).toBe("stored-github-token");
+  });
+
+  test("preserves write-only credentials through a whole-config renderer write", async () => {
+    // `save_config` hands the entire config back, and the renderer holds neither
+    // secret. Only the merge inside saveConfig keeps them, so exercise the real
+    // implementation: the command-layer coverage for this path runs against a
+    // hand-written mock storage and cannot catch a divergence here.
+    const dataDir = await createTempDir("ork-storage-save-config-credentials-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.saveConfig(defaultConfig());
+    await storage.setGitHubToken("stored-github-token");
+    await storage.setCursorApiKey("stored-cursor-key");
+
+    const loaded = await storage.loadConfig();
+    const { githubToken: _token, cursorApiKey: _apiKey, ...rendererGlobal } = loaded.global;
+    await storage.saveConfig(
+      { ...loaded, global: { ...rendererGlobal, debugLogging: true } },
+      { preserveCredentials: true },
+    );
+
+    const persisted = (await storage.loadConfig()).global;
+    expect(persisted.githubToken).toBe("stored-github-token");
+    expect(persisted.cursorApiKey).toBe("stored-cursor-key");
+    expect(persisted.debugLogging).toBe(true);
+
+    // Without the option a whole-config write stays authoritative, so a backend
+    // caller that genuinely means to drop both still can.
+    const authoritative = await storage.loadConfig();
+    const { githubToken: _dropped, cursorApiKey: _alsoDropped, ...withoutCredentials } =
+      authoritative.global;
+    await storage.saveConfig({ ...authoritative, global: withoutCredentials });
+
+    const cleared = (await storage.loadConfig()).global;
+    expect(cleared.githubToken).toBeUndefined();
+    expect(cleared.cursorApiKey).toBeUndefined();
+  });
+
   test("persists an agent model default for a StorageService instance created later", async () => {
     const dataDir = await createTempDir("ork-storage-agent-model-reload-");
     const writer = new StorageService(dataDir);

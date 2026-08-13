@@ -570,6 +570,8 @@ export interface AppConfig {
     containerResources: { cpuCores: number; memoryGb: number };
     envFilePatterns: string[];
     anthropicApiKey?: string;
+    /** Cursor API key forwarded to containerized Cursor Agent processes. */
+    cursorApiKey?: string;
     githubToken?: string;
     /** Reuse the host's active `gh auth login` token for container GitHub access. */
     useHostGitHubCredentials?: boolean;

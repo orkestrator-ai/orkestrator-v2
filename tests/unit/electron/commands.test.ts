@@ -1523,7 +1523,10 @@ describe("Electron backend command registry", () => {
     const revision = "b".repeat(32);
     const rawConfig = {
       version: "1.0.0",
-      global: { githubToken: "configured-token" },
+      global: {
+        githubToken: "configured-token",
+        cursorApiKey: "configured-cursor-key",
+      },
       repositories: {},
     };
     const storage = {
@@ -1560,7 +1563,11 @@ describe("Electron backend command registry", () => {
         args: {},
         snapshot: {
           version: "1.0.0",
-          global: { githubTokenConfigured: true },
+          global: {
+            githubTokenConfigured: true,
+            cursorApiKeyConfigured: true,
+            cursorApiKeySource: "config",
+          },
           repositories: {},
         },
       },
@@ -5397,6 +5404,7 @@ exit 0
   test("does not expose configured credentials in Docker argv or container creation errors", async () => {
     const githubToken = "github_secret_token";
     const anthropicApiKey = "anthropic_secret_key";
+    const cursorApiKey = "cursor_secret_key";
     const environment = createEnvironment({
       id: "env-container-secret-failure",
       environmentType: "containerized",
@@ -5409,7 +5417,12 @@ exit 0
     Object.assign(context.storage, {
       loadConfig: mock(async () => ({
         version: "1.0.0",
-        global: { useHostGitHubCredentials: false, githubToken, anthropicApiKey },
+        global: {
+          useHostGitHubCredentials: false,
+          githubToken,
+          anthropicApiKey,
+          cursorApiKey,
+        },
         repositories: {
           "project-1": { defaultBranch: "main", prBaseBranch: "main" },
         },
@@ -5420,7 +5433,7 @@ exit 0
     await withFakeDocker(`#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "create" ]; then
-  printf 'Docker permission denied for %s and %s\\n' "$GITHUB_TOKEN" "$ANTHROPIC_API_KEY" >&2
+  printf 'Docker permission denied for %s, %s and %s\\n' "$GITHUB_TOKEN" "$ANTHROPIC_API_KEY" "$CURSOR_API_KEY" >&2
   exit 42
 fi
 exit 0
@@ -5437,14 +5450,134 @@ exit 0
       expect((failure as Error).message).toContain("[REDACTED]");
       expect((failure as Error).message).not.toContain(githubToken);
       expect((failure as Error).message).not.toContain(anthropicApiKey);
+      expect((failure as Error).message).not.toContain(cursorApiKey);
 
       const dockerCalls = await fs.readFile(logs.all, "utf8");
       expect(dockerCalls).not.toContain("-e GITHUB_TOKEN");
       expect(dockerCalls).not.toContain("-e GH_TOKEN");
       expect(dockerCalls).toContain("-e ANTHROPIC_API_KEY");
+      expect(dockerCalls).toContain("-e CURSOR_API_KEY");
       expect(dockerCalls).not.toContain(githubToken);
       expect(dockerCalls).not.toContain(anthropicApiKey);
+      expect(dockerCalls).not.toContain(cursorApiKey);
     });
+  });
+
+  test("omits CURSOR_API_KEY from Docker argv when no key is configured or inherited", async () => {
+    const previousCursorApiKey = process.env.CURSOR_API_KEY;
+    delete process.env.CURSOR_API_KEY;
+    const environment = createEnvironment({
+      id: "env-container-cursor-absent",
+      environmentType: "containerized",
+      worktreePath: undefined,
+      containerId: null,
+      status: "stopped",
+      networkAccessMode: "full",
+    });
+    const { context } = createContext(environment);
+    Object.assign(context.storage, {
+      loadConfig: mock(async () => ({
+        version: "1.0.0",
+        global: { useHostGitHubCredentials: false },
+        repositories: {
+          "project-1": { defaultBranch: "main", prBaseBranch: "main" },
+        },
+      })),
+    });
+    const commands = createCommandRegistry();
+
+    try {
+      await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "create" ]; then
+  exit 42
+fi
+exit 0
+`, async (logs) => {
+        await commands.get("provision_environment")?.(
+          { environmentId: environment.id },
+          context,
+        ).catch(() => undefined);
+
+        // Passing `-e CURSOR_API_KEY` with nothing to forward would hand the
+        // container whatever the Docker CLI happened to inherit.
+        const dockerCalls = await fs.readFile(logs.all, "utf8");
+        expect(dockerCalls).toContain("create");
+        expect(dockerCalls).not.toContain("-e CURSOR_API_KEY");
+      });
+
+      await expect(commands.get("get_global_config")?.({}, context)).resolves.toMatchObject({
+        cursorApiKeyConfigured: false,
+        cursorApiKeySource: "none",
+      });
+    } finally {
+      if (previousCursorApiKey === undefined) delete process.env.CURSOR_API_KEY;
+      else process.env.CURSOR_API_KEY = previousCursorApiKey;
+    }
+  });
+
+  test("forwards a host-inherited Cursor API key but reports its source to the renderer", async () => {
+    const hostCursorApiKey = "cursor_host_env_key";
+    const previousCursorApiKey = process.env.CURSOR_API_KEY;
+    process.env.CURSOR_API_KEY = hostCursorApiKey;
+    const environment = createEnvironment({
+      id: "env-container-cursor-host-env",
+      environmentType: "containerized",
+      worktreePath: undefined,
+      containerId: null,
+      status: "stopped",
+      networkAccessMode: "full",
+    });
+    const { context } = createContext(environment);
+    let global: Record<string, unknown> = { useHostGitHubCredentials: false };
+    Object.assign(context.storage, {
+      loadConfig: mock(async () => ({
+        version: "1.0.0",
+        global,
+        repositories: {
+          "project-1": { defaultBranch: "main", prBaseBranch: "main" },
+        },
+      })),
+    });
+    const commands = createCommandRegistry();
+
+    try {
+      await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "create" ]; then
+  exit 42
+fi
+exit 0
+`, async (logs) => {
+        await commands.get("provision_environment")?.(
+          { environmentId: environment.id },
+          context,
+        ).catch(() => undefined);
+
+        const dockerCalls = await fs.readFile(logs.all, "utf8");
+        expect(dockerCalls).toContain("-e CURSOR_API_KEY");
+        expect(dockerCalls).not.toContain(hostCursorApiKey);
+      });
+
+      // Nothing is stored, so no edit in the settings pane can revoke this key.
+      // The renderer has to be told, or the empty field implies no key is in play.
+      await expect(commands.get("get_global_config")?.({}, context)).resolves.toMatchObject({
+        cursorApiKeyConfigured: false,
+        cursorApiKeySource: "host-env",
+      });
+
+      // A stored key takes precedence, and the source says so.
+      global = { ...global, cursorApiKey: "cursor_configured_key" };
+      await expect(commands.get("get_global_config")?.({}, context)).resolves.toMatchObject({
+        cursorApiKeyConfigured: true,
+        cursorApiKeySource: "config",
+      });
+      expect(JSON.stringify(await commands.get("get_global_config")?.({}, context)))
+        .not.toContain("cursor_configured_key");
+    } finally {
+      if (previousCursorApiKey === undefined) delete process.env.CURSOR_API_KEY;
+      else process.env.CURSOR_API_KEY = previousCursorApiKey;
+    }
   });
 
   test("stages configured gitignored files into new container environments", async () => {
@@ -16655,7 +16788,11 @@ describe("storage-backed command delegation", () => {
     const project = { id: "project-1", name: "repo" };
     let config = {
       version: "1.0.0",
-      global: { allowedDomains: [] as string[], githubToken: "github_secret_token" },
+      global: {
+        allowedDomains: [] as string[],
+        githubToken: "github_secret_token",
+        cursorApiKey: "cursor_secret_key",
+      },
       repositories: {} as Record<string, RepositoryConfig>,
     };
     const repositoryConfig = { defaultBranch: "develop", prBaseBranch: "develop" };
@@ -16667,11 +16804,35 @@ describe("storage-backed command delegation", () => {
       updateProject: mock(async (_id: string, updates: Record<string, unknown>) => updates),
       reorderProjects: mock(async (ids: string[]) => ids),
       loadConfig: mock(async () => config),
-      saveConfig: mock(async (value: typeof config) => {
-        config = value;
+      saveConfig: mock(async (
+        value: typeof config,
+        options?: { preserveCredentials?: boolean },
+      ) => {
+        config = options?.preserveCredentials
+          ? {
+              ...value,
+              global: {
+                ...value.global,
+                githubToken: config.global.githubToken,
+                cursorApiKey: config.global.cursorApiKey,
+              },
+            }
+          : value;
       }),
-      updateGlobalConfig: mock(async (value: typeof config.global) => {
-        config = { ...config, global: value };
+      updateGlobalConfig: mock(async (
+        value: typeof config.global,
+        options?: { preserveCredentials?: boolean },
+      ) => {
+        config = {
+          ...config,
+          global: options?.preserveCredentials
+            ? {
+                ...value,
+                githubToken: config.global.githubToken,
+                cursorApiKey: config.global.cursorApiKey,
+              }
+            : value,
+        };
         return config;
       }),
       updateAgentModelDefault: mock(async (
@@ -16686,6 +16847,14 @@ describe("storage-backed command delegation", () => {
         config = {
           ...config,
           global: token === null ? global : { ...global, githubToken: token },
+        };
+        return config;
+      }),
+      setCursorApiKey: mock(async (apiKey: string | null) => {
+        const { cursorApiKey: _removed, ...global } = config.global;
+        config = {
+          ...config,
+          global: apiKey === null ? global : { ...global, cursorApiKey: apiKey },
         };
         return config;
       }),
@@ -16726,12 +16895,19 @@ describe("storage-backed command delegation", () => {
 
     await expect(commands.get("get_config")?.({}, context)).resolves.toEqual({
       version: "1.0.0",
-      global: { allowedDomains: [], githubTokenConfigured: true },
+      global: {
+        allowedDomains: [],
+        githubTokenConfigured: true,
+        cursorApiKeyConfigured: true,
+        cursorApiKeySource: "config",
+      },
       repositories: {},
     });
     await expect(commands.get("get_global_config")?.({}, context)).resolves.toEqual({
       allowedDomains: [],
       githubTokenConfigured: true,
+      cursorApiKeyConfigured: true,
+      cursorApiKeySource: "config",
     });
 
     await expect(commands.get("save_config")?.({
@@ -16741,6 +16917,9 @@ describe("storage-backed command delegation", () => {
           allowedDomains: ["api.example.com"],
           githubToken: "renderer_attempted_secret",
           githubTokenConfigured: false,
+          cursorApiKey: "renderer_attempted_cursor_secret",
+          cursorApiKeyConfigured: false,
+          cursorApiKeySource: "none",
         },
         repositories: {},
       },
@@ -16749,26 +16928,32 @@ describe("storage-backed command delegation", () => {
       version: "1.0.0",
       global: {
         allowedDomains: ["api.example.com"],
-        githubToken: "github_secret_token",
       },
       repositories: {},
-    });
+    }, { preserveCredentials: true });
 
     await expect(commands.get("update_global_config")?.({
       global: {
         allowedDomains: ["github.com"],
         githubToken: "renderer_attempted_secret",
         githubTokenConfigured: false,
+        cursorApiKey: "renderer_attempted_cursor_secret",
+        cursorApiKeyConfigured: false,
+        cursorApiKeySource: "none",
       },
     }, context)).resolves.toEqual({
       version: "1.0.0",
-      global: { allowedDomains: ["github.com"], githubTokenConfigured: true },
+      global: {
+        allowedDomains: ["github.com"],
+        githubTokenConfigured: true,
+        cursorApiKeyConfigured: true,
+        cursorApiKeySource: "config",
+      },
       repositories: {},
     });
     expect(storage.updateGlobalConfig).toHaveBeenLastCalledWith({
       allowedDomains: ["github.com"],
-      githubToken: "github_secret_token",
-    });
+    }, { preserveCredentials: true });
 
     await expect(commands.get("update_agent_model_default")?.({
       key: "codexModel",
@@ -16822,6 +17007,21 @@ describe("storage-backed command delegation", () => {
     });
     await expect(commands.get("set_github_token")?.({ token: "   " }, context))
       .rejects.toThrow("GitHub token cannot be empty");
+
+    await expect(commands.get("set_cursor_api_key")?.({ apiKey: " replacement_cursor_key " }, context))
+      .resolves.toMatchObject({
+        global: { cursorApiKeyConfigured: true },
+      });
+    expect(storage.setCursorApiKey).toHaveBeenLastCalledWith("replacement_cursor_key");
+    expect(JSON.stringify(await commands.get("get_config")?.({}, context)))
+      .not.toContain("replacement_cursor_key");
+    await expect(commands.get("set_cursor_api_key")?.({ apiKey: null }, context))
+      .resolves.toMatchObject({
+        global: { cursorApiKeyConfigured: false },
+      });
+    expect(storage.setCursorApiKey).toHaveBeenLastCalledWith(null);
+    await expect(commands.get("set_cursor_api_key")?.({ apiKey: "   " }, context))
+      .rejects.toThrow("Cursor API key cannot be empty");
 
     await expect(commands.get("get_repository_config")?.({ projectId: "project-1" }, context))
       .resolves.toEqual(repositoryConfig);

@@ -59,6 +59,7 @@ const {
   setWebClientEnabled,
   setGatewayToken,
   setGitHubToken,
+  setCursorApiKey,
   setEnvironmentUnread,
   setEnvironmentPendingAgentLaunch,
   setEnvironmentInitialPrompt,
@@ -1025,6 +1026,28 @@ describe("backend setup wrappers", () => {
     expect(invokeMock.mock.calls).toEqual([
       ["set_github_token", { token: "ghp_replacement" }],
       ["set_github_token", { token: null }],
+    ]);
+  });
+
+  test("uses the write-only Cursor API key command for replacement and clearing", async () => {
+    const configured = {
+      version: "1.0",
+      global: { cursorApiKeyConfigured: true },
+      repositories: {},
+    } as AppConfig;
+    const cleared = {
+      version: "1.0",
+      global: { cursorApiKeyConfigured: false },
+      repositories: {},
+    } as AppConfig;
+    invokeMock.mockResolvedValueOnce(configured).mockResolvedValueOnce(cleared);
+
+    await expect(setCursorApiKey("cursor_replacement")).resolves.toBe(configured);
+    await expect(setCursorApiKey(null)).resolves.toBe(cleared);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["set_cursor_api_key", { apiKey: "cursor_replacement" }],
+      ["set_cursor_api_key", { apiKey: null }],
     ]);
   });
 

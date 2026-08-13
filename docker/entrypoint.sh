@@ -212,6 +212,11 @@ copy_agent_directory() {
     local relative_path="$3"
     # Display name of the calling agent, used only in warnings.
     local label="${4:-Agent}"
+    # What warnings and the consolidated summary call this directory. A caller
+    # that copies a whole mount passes "." as the relative path, and a summary
+    # reading "NOT copied into this container: ." names nothing the user can act
+    # on. Such callers pass the agent-relative name here instead.
+    local display_path="${5:-$relative_path}"
     local source_path="$source_root/$relative_path"
     local destination_path="$destination_root/$relative_path"
     local max_entries="${AGENT_COPY_MAX_DIRECTORY_ENTRIES:-5000}"
@@ -230,7 +235,7 @@ copy_agent_directory() {
     # can otherwise make "skills" or the "plugins" parent of "plugins/cache"
     # point at excluded runtime state.
     if agent_source_path_has_symlink "$source_root" "$relative_path"; then
-        agent_copy_warn "$relative_path" "Skipping symlinked $label directory"
+        agent_copy_warn "$display_path" "Skipping symlinked $label directory"
         return 0
     fi
 
@@ -239,7 +244,7 @@ copy_agent_directory() {
     fi
 
     if agent_destination_path_has_symlink "$destination_root" "$relative_path"; then
-        agent_copy_warn "$relative_path" "Skipping $label directory with symlinked destination"
+        agent_copy_warn "$display_path" "Skipping $label directory with symlinked destination"
         return 0
     fi
 
@@ -273,67 +278,67 @@ copy_agent_directory() {
     case "$head_status" in
         0) ;;
         *)
-            agent_copy_warn "$relative_path" "Failed to inspect $label directory"
+            agent_copy_warn "$display_path" "Failed to inspect $label directory"
             return 0
             ;;
     esac
     entry_count="${#entry_marks}"
     if [ "$entry_count" -gt "$max_entries" ]; then
-        agent_copy_warn "$relative_path" "Skipping oversized $label directory"
+        agent_copy_warn "$display_path" "Skipping oversized $label directory"
         return 0
     fi
     if [ "$find_status" -ne 0 ]; then
-        agent_copy_warn "$relative_path" "Failed to inspect $label directory"
+        agent_copy_warn "$display_path" "Failed to inspect $label directory"
         return 0
     fi
     found_symlink="$(find -P "$source_path" -type l -exec printf x \; -quit 2>/dev/null)" || {
-        agent_copy_warn "$relative_path" "Failed to inspect $label directory"
+        agent_copy_warn "$display_path" "Failed to inspect $label directory"
         return 0
     }
     if [ -n "$found_symlink" ]; then
-        agent_copy_warn "$relative_path" "Skipping $label directory containing symlink"
+        agent_copy_warn "$display_path" "Skipping $label directory containing symlink"
         return 0
     fi
     # Same reason as above: a partial du failure still prints an undercounted
     # total, so du's status has to be read before the total is parsed.
     directory_kib="$(du -sk "$source_path" 2>/dev/null)" || {
-        agent_copy_warn "$relative_path" "Failed to inspect $label directory"
+        agent_copy_warn "$display_path" "Failed to inspect $label directory"
         return 0
     }
     directory_kib="${directory_kib%%[!0-9]*}"
     case "$directory_kib" in
         ''|*[!0-9]*)
-            agent_copy_warn "$relative_path" "Failed to inspect $label directory"
+            agent_copy_warn "$display_path" "Failed to inspect $label directory"
             return 0
             ;;
     esac
     if [ "$directory_kib" -gt "$max_kib" ]; then
-        agent_copy_warn "$relative_path" "Skipping oversized $label directory"
+        agent_copy_warn "$display_path" "Skipping oversized $label directory"
         return 0
     fi
 
     if [ -e "$destination_path" ] && [ ! -d "$destination_path" ]; then
-        agent_copy_warn "$relative_path" "Failed to copy $label directory" "(destination is not a directory)"
+        agent_copy_warn "$display_path" "Failed to copy $label directory" "(destination is not a directory)"
         return 0
     fi
     if ! mkdir -p "$destination_path" 2>/dev/null; then
-        agent_copy_warn "$relative_path" "Failed to create destination for $label directory"
+        agent_copy_warn "$display_path" "Failed to create destination for $label directory"
         return 0
     fi
     if agent_destination_path_has_symlink "$destination_root" "$relative_path"; then
-        agent_copy_warn "$relative_path" "Skipping $label directory with symlinked destination"
+        agent_copy_warn "$display_path" "Skipping $label directory with symlinked destination"
         return 0
     fi
     found_symlink="$(find -P "$destination_path" -type l -exec printf x \; -quit 2>/dev/null)" || {
-        agent_copy_warn "$relative_path" "Failed to inspect $label directory destination"
+        agent_copy_warn "$display_path" "Failed to inspect $label directory destination"
         return 0
     }
     if [ -n "$found_symlink" ]; then
-        agent_copy_warn "$relative_path" "Skipping $label directory containing destination symlink"
+        agent_copy_warn "$display_path" "Skipping $label directory containing destination symlink"
         return 0
     fi
     if ! cp -R "$source_path/." "$destination_path/" 2>/dev/null; then
-        agent_copy_warn "$relative_path" "Failed to copy $label directory"
+        agent_copy_warn "$display_path" "Failed to copy $label directory"
     fi
 }
 
@@ -775,6 +780,72 @@ if [ -d /codex-home ]; then
 fi
 
 log_progress "Codex configuration ready"
+
+# Set up Cursor Agent configuration. The host directory is mounted read-only at
+# /cursor-config, while ~/.cursor stays writable for ACP sessions and per-project
+# runtime state.
+log_progress "Setting up Cursor Agent configuration..."
+mkdir -p "$HOME/.cursor"
+
+if [ -d /cursor-config ]; then
+    for file in \
+        cli-config.json \
+        agent-cli-state.json \
+        mcp.json \
+        argv.json
+    do
+        copy_agent_file /cursor-config "$HOME/.cursor" "$file" Cursor
+    done
+
+    # Preserve user-authored extensions without importing host sessions,
+    # project state, caches, downloads, or platform-specific binaries.
+    for dir in \
+        skills-cursor
+    do
+        copy_agent_directory_entries /cursor-config "$HOME/.cursor" "$dir" Cursor
+    done
+
+    report_agent_copy_skips Cursor
+fi
+
+log_progress "Cursor Agent configuration ready"
+
+# Set up Grok configuration. Grok writes active_sessions.json, SQLite state and
+# logs below ~/.grok as soon as ACP starts, so the host mount cannot live there.
+log_progress "Setting up Grok configuration..."
+mkdir -p "$HOME/.grok" "$HOME/.config/grok"
+
+if [ -d /grok-home ]; then
+    for file in \
+        auth.json \
+        config.toml \
+        trusted_folders.toml \
+        agent_id
+    do
+        copy_agent_file /grok-home "$HOME/.grok" "$file" Grok
+    done
+
+    for dir in \
+        hooks \
+        skills
+    do
+        copy_agent_directory_entries /grok-home "$HOME/.grok" "$dir" Grok
+    done
+
+    chmod 600 "$HOME/.grok/auth.json" 2>/dev/null || true
+fi
+
+if [ -d /grok-config ]; then
+    # ~/.config/grok is user-authored and normally small. Copy each entry through
+    # the bounded helper so an unexpected cache or symlink cannot escape the
+    # same limits applied to the primary agent homes. The mount is copied whole,
+    # so pass the agent-relative name explicitly: a skip reported as "." would
+    # tell the user nothing about what their container is missing.
+    copy_agent_directory /grok-config "$HOME/.config/grok" "." Grok ".config/grok"
+fi
+
+report_agent_copy_skips Grok
+log_progress "Grok configuration ready"
 
 # Verify the config file exists and is valid
 if [ -f "$HOME/.claude.json" ]; then

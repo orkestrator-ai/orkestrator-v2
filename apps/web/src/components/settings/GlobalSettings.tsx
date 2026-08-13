@@ -92,6 +92,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [memoryGb, setMemoryGb] = useState(global.containerResources.memoryGb);
   const [envPatterns, setEnvPatterns] = useState(global.envFilePatterns.join(", "));
   const [anthropicApiKey, setAnthropicApiKey] = useState(global.anthropicApiKey || "");
+  const [cursorApiKey, setCursorApiKey] = useState("");
+  const [clearCursorApiKey, setClearCursorApiKey] = useState(false);
   const [useHostGitHubCredentials, setUseHostGitHubCredentials] = useState(
     global.useHostGitHubCredentials ?? true
   );
@@ -168,6 +170,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [isLoadingGatewayToken, setIsLoadingGatewayToken] = useState(false);
   const [logDirectory, setLogDirectory] = useState<string | null>(null);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [showCursorApiKey, setShowCursorApiKey] = useState(false);
   const [showGithubToken, setShowGithubToken] = useState(false);
   const [showGatewayToken, setShowGatewayToken] = useState(false);
   const { copied: gatewayTokenCopied, copy: copyGatewayToken } = useTimedCopyFeedback();
@@ -187,6 +190,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     token: string;
     clear: boolean;
   } | null>(null);
+  const pendingCursorCredentialEditRef = useRef<{
+    apiKey: string;
+    clear: boolean;
+  } | null>(null);
 
   // Sync local state when config changes in the store
   useEffect(() => {
@@ -194,6 +201,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setMemoryGb(global.containerResources.memoryGb);
     setEnvPatterns(global.envFilePatterns.join(", "));
     setAnthropicApiKey(global.anthropicApiKey || "");
+    setCursorApiKey(pendingCursorCredentialEditRef.current?.apiKey ?? "");
+    setClearCursorApiKey(pendingCursorCredentialEditRef.current?.clear ?? false);
     setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
     setUseHostClaudeCredentials(global.useHostClaudeCredentials ?? true);
     setGithubToken(pendingGitHubCredentialEditRef.current?.token ?? "");
@@ -293,6 +302,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       memoryGb !== global.containerResources.memoryGb ||
       envPatterns !== global.envFilePatterns.join(", ") ||
       anthropicApiKey !== (global.anthropicApiKey || "") ||
+      cursorApiKey.trim().length > 0 ||
+      clearCursorApiKey ||
       useHostGitHubCredentials !== (global.useHostGitHubCredentials ?? true) ||
       useHostClaudeCredentials !== (global.useHostClaudeCredentials ?? true) ||
       githubToken.trim().length > 0 ||
@@ -325,7 +336,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     if (changed) {
       setSaveSuccess(false);
     }
-  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, useHostGitHubCredentials, useHostClaudeCredentials, githubToken, clearGithubToken, githubCredentialPropagationPending, allowedDomains, preferredEditor, enabledAgentPlatforms, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, codexMaxConcurrentThreads, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewInstruction, webClientApplyError, gatewayToken, savedGatewayToken, global]);
+  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, cursorApiKey, clearCursorApiKey, useHostGitHubCredentials, useHostClaudeCredentials, githubToken, clearGithubToken, githubCredentialPropagationPending, allowedDomains, preferredEditor, enabledAgentPlatforms, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, codexMaxConcurrentThreads, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewInstruction, webClientApplyError, gatewayToken, savedGatewayToken, global]);
 
   // Validate domains on change
   const validateDomainsLocally = useCallback((domainsText: string) => {
@@ -470,11 +481,19 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       }
 
       let newConfig = await backend.updateGlobalConfig(newGlobal);
+      const nextCursorApiKey = cursorApiKey.trim();
+      const cursorApiKeyChanged = clearCursorApiKey || nextCursorApiKey.length > 0;
       const nextGitHubToken = githubToken.trim();
       const githubCredentialSourceChanged =
         useHostGitHubCredentials !== (global.useHostGitHubCredentials ?? true);
       const githubTokenChanged = clearGithubToken || nextGitHubToken.length > 0;
       const githubCredentialChanged = githubCredentialSourceChanged || githubTokenChanged;
+      if (cursorApiKeyChanged) {
+        pendingCursorCredentialEditRef.current = {
+          apiKey: cursorApiKey,
+          clear: clearCursorApiKey,
+        };
+      }
       if (githubTokenChanged) {
         // Persisted non-secret settings are already authoritative at this point.
         // Preserve the credential edit across that store sync until its separate
@@ -485,6 +504,13 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         };
       }
       setConfig(newConfig);
+      if (cursorApiKeyChanged) {
+        newConfig = await backend.setCursorApiKey(
+          clearCursorApiKey ? null : nextCursorApiKey,
+        );
+        pendingCursorCredentialEditRef.current = null;
+        setConfig(newConfig);
+      }
       if (githubTokenChanged) {
         newConfig = await backend.setGitHubToken(
           clearGithubToken ? null : nextGitHubToken,
@@ -559,6 +585,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         }
       }
 
+      setCursorApiKey("");
+      setClearCursorApiKey(false);
+      pendingCursorCredentialEditRef.current = null;
       setGithubToken("");
       setClearGithubToken(false);
       pendingGitHubCredentialEditRef.current = null;
@@ -582,6 +611,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setMemoryGb(global.containerResources.memoryGb);
     setEnvPatterns(global.envFilePatterns.join(", "));
     setAnthropicApiKey(global.anthropicApiKey || "");
+    setCursorApiKey("");
+    setClearCursorApiKey(false);
+    pendingCursorCredentialEditRef.current = null;
     setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
     setUseHostClaudeCredentials(global.useHostClaudeCredentials ?? true);
     setGithubToken("");
@@ -1213,6 +1245,81 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     opencodeMode,
     setOpencodeMode,
     "Choose how OpenCode runs in environments",
+  );
+
+  const renderCursor = () => (
+    <div className="max-w-2xl space-y-8">
+      <div className="space-y-3">
+        <div>
+          <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <Key className="h-4 w-4" />
+            Cursor API Key
+          </h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Required for Cursor Agent inside Linux containers. A macOS Cursor login is stored in Keychain and cannot be mounted into a container.
+          </p>
+        </div>
+        <div className="relative">
+          <Input
+            aria-label="Cursor API key"
+            type={showCursorApiKey ? "text" : "password"}
+            value={cursorApiKey}
+            onChange={(event) => {
+              setCursorApiKey(event.target.value);
+              if (event.target.value) setClearCursorApiKey(false);
+            }}
+            placeholder={
+              global.cursorApiKeyConfigured && !clearCursorApiKey
+                ? "API key configured — enter a replacement"
+                : "Cursor API key"
+            }
+            className="pr-10 font-mono"
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2"
+            onClick={() => setShowCursorApiKey(!showCursorApiKey)}
+            aria-label={showCursorApiKey ? "Hide Cursor API key" : "Show Cursor API key"}
+          >
+            {showCursorApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+          </Button>
+        </div>
+        {global.cursorApiKeyConfigured && !clearCursorApiKey && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setCursorApiKey("");
+              setClearCursorApiKey(true);
+            }}
+          >
+            Clear stored Cursor API key
+          </Button>
+        )}
+        {clearCursorApiKey && (
+          <p className="text-xs text-amber-500">
+            The stored Cursor API key will be cleared when you save.
+          </p>
+        )}
+        {global.cursorApiKeySource === "host-env" && (
+          // A key inherited from the backend process environment is forwarded to
+          // every new container, but it is not stored here, so neither the field
+          // above nor the clear button can revoke it. Say so rather than showing
+          // an empty field that implies no key is in play.
+          <p className="text-xs text-amber-500">
+            No key is stored, but Orkestrator inherited CURSOR_API_KEY from its own environment and
+            forwards that key to new containers. Clearing the stored key does not stop it — unset the
+            variable and restart Orkestrator. Saving a key here overrides it.
+          </p>
+        )}
+        <p className="text-xs text-muted-foreground">
+          Applied to newly created or recreated containers. Docker receives the key by environment name, and its value is redacted from creation errors.
+        </p>
+      </div>
+    </div>
   );
 
   const renderCodex = () => (
@@ -1886,6 +1993,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     platforms: renderPlatforms,
     review: renderReview,
     claude: renderClaude,
+    cursor: renderCursor,
     opencode: renderOpenCode,
     codex: renderCodex,
     terminal: renderTerminal,

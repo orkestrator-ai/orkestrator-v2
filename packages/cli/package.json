@@ -1,6 +1,6 @@
 {
   "name": "orkestrator",
-  "version": "2.7.8",
+  "version": "2.8.1",
   "description": "Run the Orkestrator backend service without the desktop application",
   "type": "module",
   "bin": {

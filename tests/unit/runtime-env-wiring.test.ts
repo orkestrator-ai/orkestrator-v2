@@ -1505,6 +1505,85 @@ eval "$grok_setup"
     });
   });
 
+  test("Cursor and Grok name every entry they drop, including the whole-mount grok config", () => {
+    withTempDir((dir) => {
+      const cursorSource = join(dir, "cursor-config");
+      const grokSource = join(dir, "grok-home");
+      const grokConfig = join(dir, "grok-config");
+      const outside = join(dir, "outside");
+      const home = join(dir, "home");
+
+      mkdirSync(join(outside, "real"), { recursive: true });
+      writeFileSync(join(outside, "real", "leaked.md"), "host-only\n");
+
+      // Cursor: one real skill beside a symlinked one. The per-entry helper must
+      // drop only the link and still land the rest.
+      mkdirSync(join(cursorSource, "skills-cursor"), { recursive: true });
+      writeFileSync(join(cursorSource, "cli-config.json"), "cli-config.json\n");
+      writeFileSync(join(cursorSource, "skills-cursor", "skill.md"), "cursor skill\n");
+      symlinkSync(join(outside, "real"), join(cursorSource, "skills-cursor", "linked"));
+
+      // Grok: an oversized file next to the allowlist, plus a link inside
+      // ~/.config/grok, which is copied whole rather than per entry.
+      mkdirSync(grokSource, { recursive: true });
+      writeFileSync(join(grokSource, "auth.json"), "auth.json\n");
+      writeFileSync(join(grokSource, "config.toml"), "x".repeat(64), { mode: 0o644 });
+      mkdirSync(grokConfig, { recursive: true });
+      writeFileSync(join(grokConfig, "settings.json"), "{\"portable\":true}\n");
+      symlinkSync(join(outside, "real"), join(grokConfig, "linked"));
+
+      const entrypoint = join(repoRoot, "docker", "entrypoint.sh");
+      const result = runShell(
+        agentCopyHelperHarness(`
+cursor_setup="$(sed -n '/^# Set up Cursor Agent configuration\./,/^log_progress "Cursor Agent configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/cursor-config#\\$AGENT_TEST_CURSOR#g")"
+grok_setup="$(sed -n '/^# Set up Grok configuration\./,/^log_progress "Grok configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/grok-home#\\$AGENT_TEST_GROK_HOME#g; s#/grok-config#\\$AGENT_TEST_GROK_CONFIG#g")"
+eval "$cursor_setup"
+eval "$grok_setup"
+`),
+        {
+          HOME: home,
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          // Small enough that the 64-byte config.toml above trips the file cap,
+          // while every other fixture file stays comfortably under it.
+          AGENT_COPY_MAX_FILE_BYTES: "32",
+          AGENT_TEST_CURSOR: cursorSource,
+          AGENT_TEST_GROK_HOME: grokSource,
+          AGENT_TEST_GROK_CONFIG: grokConfig,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+
+      // Each skip is attributed to the agent whose state was dropped, and the
+      // summaries do not leak across the two blocks.
+      expect(result.stdout).toContain(
+        "Cursor host config NOT copied into this container: skills-cursor/linked",
+      );
+      expect(result.stdout).toContain("Skipping oversized Grok file: config.toml");
+      // The mount is copied whole, so the entry the helper walks is ".". A
+      // summary reading "NOT copied into this container: ." would name nothing
+      // the user could act on.
+      expect(result.stdout).toContain(
+        "Grok host config NOT copied into this container: config.toml, .config/grok",
+      );
+      expect(result.stdout).not.toContain("container: .\n");
+
+      // Dropping one entry does not cost the others, and no link was followed.
+      expect(readFileSync(join(home, ".cursor", "cli-config.json"), "utf8"))
+        .toBe("cli-config.json\n");
+      expect(readFileSync(join(home, ".cursor", "skills-cursor", "skill.md"), "utf8"))
+        .toBe("cursor skill\n");
+      expect(() => statSync(join(home, ".cursor", "skills-cursor", "linked"))).toThrow();
+      expect(readFileSync(join(home, ".grok", "auth.json"), "utf8")).toBe("auth.json\n");
+      expect(() => statSync(join(home, ".grok", "config.toml"))).toThrow();
+      // The whole-directory helper is all-or-nothing, so the link takes the
+      // portable sibling with it rather than resolving out of the mount.
+      expect(() => statSync(join(home, ".config", "grok", "settings.json"))).toThrow();
+      expect(() => statSync(join(home, ".config", "grok", "linked"))).toThrow();
+    });
+  });
+
   test("Claude setup block copies the allowlist, skips history, and drops only the symlinked command", () => {
     withTempDir((dir) => {
       const source = join(dir, "claude-config");

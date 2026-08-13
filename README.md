@@ -86,7 +86,7 @@ docker tag ghcr.io/orkestrator-ai/orkestrator-v2:latest orkestrator-v2:latest
 ```
 
 Versioned images are also available, for example
-`ghcr.io/orkestrator-ai/orkestrator-v2:2.7.8`. Pin a version or digest when a
+`ghcr.io/orkestrator-ai/orkestrator-v2:2.8.1`. Pin a version or digest when a
 reproducible environment is more important than automatically receiving the
 latest release.
 
@@ -97,8 +97,8 @@ version tag is pushed. The tag must match the version in the root
 `package.json`:
 
 ```bash
-git tag v2.7.8
-git push origin v2.7.8
+git tag v2.8.1
+git push origin v2.8.1
 ```
 
 Stable releases receive full, major/minor, major, `latest`, and commit-SHA

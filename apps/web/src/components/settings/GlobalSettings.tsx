@@ -1304,6 +1304,17 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
             The stored Cursor API key will be cleared when you save.
           </p>
         )}
+        {global.cursorApiKeySource === "host-env" && (
+          // A key inherited from the backend process environment is forwarded to
+          // every new container, but it is not stored here, so neither the field
+          // above nor the clear button can revoke it. Say so rather than showing
+          // an empty field that implies no key is in play.
+          <p className="text-xs text-amber-500">
+            No key is stored, but Orkestrator inherited CURSOR_API_KEY from its own environment and
+            forwards that key to new containers. Clearing the stored key does not stop it — unset the
+            variable and restart Orkestrator. Saving a key here overrides it.
+          </p>
+        )}
         <p className="text-xs text-muted-foreground">
           Applied to newly created or recreated containers. Docker receives the key by environment name, and its value is redacted from creation errors.
         </p>

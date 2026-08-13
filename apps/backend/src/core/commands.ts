@@ -1120,6 +1120,7 @@ type RendererGlobalConfig = Omit<
 > & {
   githubTokenConfigured: boolean;
   cursorApiKeyConfigured: boolean;
+  cursorApiKeySource: CursorApiKeySource;
 };
 
 type RendererAppConfig = Omit<AppConfig, "global"> & {
@@ -1140,12 +1141,36 @@ function asAgentModelConfigKey(value: unknown): AgentModelConfigKey {
   return key;
 }
 
+/**
+ * Where the key a new container would receive actually comes from. The stored
+ * key is write-only, so `cursorApiKeyConfigured` alone cannot tell the settings
+ * pane that a container is being handed a key inherited from this process's own
+ * environment — and clearing the stored key does not stop that one.
+ */
+export type CursorApiKeySource = "config" | "host-env" | "none";
+
+/**
+ * Single source of truth for the Cursor key. `createDockerContainer` forwards
+ * `apiKey`; the renderer is told only `source`, never the value.
+ */
+function resolveCursorApiKey(
+  global: AppConfig["global"],
+): { apiKey?: string; source: CursorApiKeySource } {
+  const configured = global.cursorApiKey?.trim();
+  if (configured) return { apiKey: configured, source: "config" };
+  const inherited = process.env.CURSOR_API_KEY?.trim();
+  if (inherited) return { apiKey: inherited, source: "host-env" };
+  return { source: "none" };
+}
+
 function redactGlobalConfig(global: AppConfig["global"]): RendererGlobalConfig {
+  const { source } = resolveCursorApiKey(global);
   const { githubToken, cursorApiKey, ...safeGlobal } = global;
   return {
     ...safeGlobal,
     githubTokenConfigured: Boolean(githubToken?.trim()),
     cursorApiKeyConfigured: Boolean(cursorApiKey?.trim()),
+    cursorApiKeySource: source,
   };
 }
 
@@ -1162,6 +1187,7 @@ function stripRendererCredentials(global: Record<string, unknown>): AppConfig["g
     githubTokenConfigured: _ignoredConfigured,
     cursorApiKey: _ignoredCursorApiKey,
     cursorApiKeyConfigured: _ignoredCursorConfigured,
+    cursorApiKeySource: _ignoredCursorSource,
     ...safeGlobal
   } = global;
   return safeGlobal as AppConfig["global"];
@@ -8234,8 +8260,11 @@ async function createDockerContainer(environment: Environment, context: CommandC
   // Cursor's macOS login lives in Keychain and cannot be represented by the
   // read-only ~/.cursor import mounted into a Linux container. Cursor Agent's
   // documented headless authentication path is CURSOR_API_KEY.
-  const cursorApiKey = config.global.cursorApiKey?.trim()
-    || process.env.CURSOR_API_KEY?.trim();
+  //
+  // The host-environment fallback inside `resolveCursorApiKey` is deliberate for
+  // headless runs, and the same helper reports its `source` to the settings pane
+  // so an inherited key is never forwarded invisibly.
+  const { apiKey: cursorApiKey } = resolveCursorApiKey(config.global);
   if (cursorApiKey) {
     dockerEnvironment.CURSOR_API_KEY = cursorApiKey;
     redactValues.push(cursorApiKey);

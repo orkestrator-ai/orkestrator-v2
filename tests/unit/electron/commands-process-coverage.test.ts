@@ -6,6 +6,10 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import type { CommandContext } from "../../../apps/backend/src/core/commands";
 import type { Environment } from "../../../apps/backend/src/core/models";
+import {
+  dockerContainerRuntimeName,
+  dockerOwnerNamespace,
+} from "../../../apps/backend/src/core/docker-ownership";
 
 const { createCommandRegistry, __testing } = await import("../../../apps/backend/src/core/commands");
 
@@ -76,7 +80,11 @@ fi
 if [ "$1" = "ps" ] && [ "$2" = "-a" ]; then
   case " $* " in
     *" -q "*) printf 'container-a\ncontainer-b\n' ;;
-    *) printf 'container-a\talpha\ncontainer-b\tbeta\n' ;;
+    *)
+      printf 'container-a\talpha\tapp=orkestrator-v2,orkestrator-owner=%s\n' "\${FAKE_DOCKER_OWNER:-}"
+      printf 'container-b\tbeta\tapp=orkestrator-v2\n'
+      printf 'container-c\tgamma\tapp=orkestrator-v2,orkestrator-owner=other-registry\n'
+      ;;
   esac
   exit 0
 fi
@@ -362,6 +370,9 @@ beforeAll(async () => {
   process.env.HOME = fakeHome;
   process.env.FAKE_DOCKER_LOG = commandLog;
   process.env.FAKE_LAUNCHER_LOG = launcherLog;
+  // Lets the fake `docker ps` label one row with the owner the registry under
+  // test will compute from `root`.
+  process.env.FAKE_DOCKER_OWNER = dockerOwnerNamespace(root);
   Object.defineProperty(os, "homedir", { configurable: true, value: () => fakeHome });
 });
 
@@ -485,10 +496,12 @@ describe("process and platform command behavior", () => {
     await expect(invoke("docker_start_container", { containerId: 7 })).rejects.toThrow("Expected containerId to be a string");
 
     const log = await readCommandLog();
-    expect(log).toContain("docker create --name ork-");
-    expect(log).toContain("-environment-1 --label app=orkestrator-v2");
+    const owner = dockerOwnerNamespace(root);
+    expect(log).toContain(
+      `docker create --name ${dockerContainerRuntimeName(owner, "environment-1")}`,
+    );
     expect(log).toContain("--label environment-name=feature-environment");
-    expect(log).toContain("--label orkestrator-owner=");
+    expect(log).toContain(`--label orkestrator-owner=${owner}`);
     expect(log).toContain("ALLOWED_DOMAINS=");
     // Neither ACP platform is enabled here, so the user's allowlist is used
     // verbatim rather than widened with vendor hosts they never asked for.
@@ -538,10 +551,15 @@ describe("process and platform command behavior", () => {
     process.env.FAKE_DOCKER_STATUS = "unexpected";
     expect(await invoke("docker_container_status", { containerId: "container-a" })).toBe("error");
 
+    // container-a is owned by this registry and container-b predates the owner
+    // label, so both are listed; container-c belongs to another registry.
     expect(await invoke("list_docker_containers")).toEqual([
       ["container-a", "alpha"],
       ["container-b", "beta"],
     ]);
+    expect(await readCommandLog()).not.toContain(
+      `--filter label=orkestrator-owner=${dockerOwnerNamespace(root)} --format`,
+    );
     expect(await invoke("get_container_host_port", { containerId: "container-a", containerPort: 4096 })).toBe(43123);
     process.env.FAKE_DOCKER_NO_PORT = "1";
     expect(await invoke("get_container_host_port", { containerId: "container-a", containerPort: 4096 })).toBeNull();
@@ -570,11 +588,14 @@ describe("process and platform command behavior", () => {
       diskUsed: 0,
     });
     const pruneLog = await readCommandLog();
-    expect(pruneLog).toContain("docker container prune -f --filter label=orkestrator-owner=");
+    expect(pruneLog).toContain(
+      `docker container prune -f --filter label=orkestrator-owner=${dockerOwnerNamespace(root)}`,
+    );
     // A second pass removes legacy containers that predate ownership labels,
     // so the cleanup matches what the listings adopt as this installation's.
     expect(pruneLog).toContain("docker container prune -f --filter label=app=orkestrator-v2 --filter label!=orkestrator-owner");
     expect(pruneLog).not.toContain("docker system prune");
+    expect(pruneLog).not.toContain("--volumes");
   });
 
   test("reattaches a container and persists its inspected status", async () => {

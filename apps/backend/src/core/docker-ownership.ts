@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 
-/** Stable, non-reversible identity for one backend registry. */
+/**
+ * Stable, non-reversible identifier for the backend registry that owns a
+ * Docker resource. Development and packaged Electron instances use different
+ * data directories, so this also separates their global Docker namespaces.
+ */
 export function dockerOwnerNamespace(dataDir: string): string {
   return createHash("sha256")
     .update(path.resolve(dataDir))
@@ -9,7 +13,10 @@ export function dockerOwnerNamespace(dataDir: string): string {
     .slice(0, 16);
 }
 
-/** Docker names are daemon-global, so display names are not safe runtime ids. */
+/**
+ * Docker names are daemon-global. Use the registry owner and environment id
+ * rather than the display name so equal names in two registries cannot race.
+ */
 export function dockerContainerRuntimeName(
   owner: string,
   environmentId: string,

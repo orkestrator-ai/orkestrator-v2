@@ -192,6 +192,17 @@
         "typescript": "^5.7.0",
       },
     },
+    "packages/cli": {
+      "name": "orkestrator",
+      "version": "2.7.8",
+      "bin": {
+        "orkestrator": "bin/orkestrator.js",
+      },
+      "dependencies": {
+        "@anthropic-ai/claude-agent-sdk": "0.3.228",
+        "sharp": "0.35.1",
+      },
+    },
     "packages/protocol": {
       "name": "@orkestrator/protocol",
       "version": "2.3.0",
@@ -1381,6 +1392,8 @@
     "once": ["once@1.4.0", "", { "dependencies": { "wrappy": "1" } }, "sha512-lNaJgI+2Q5URQBkccEKHTQOPaXdUxnZZElQTZY0MFUAuaEqe1E+Nyvgdz/aIyNi6Z9MzO5dv1H8n58/GELp3+w=="],
 
     "orderedmap": ["orderedmap@2.1.1", "", {}, "sha512-TvAWxi0nDe1j/rtMcWcIj94+Ffe6n7zhow33h40SKxmsmozs6dz/e+EajymfoFcHd7sxNn8yHM8839uixMOV6g=="],
+
+    "orkestrator": ["orkestrator@workspace:packages/cli"],
 
     "p-cancelable": ["p-cancelable@2.1.1", "", {}, "sha512-BZOr3nRQHOntUjTrH8+Lh54smKHoHyur8We1V8DSMVrl5A2malOOwuJRnKRDjSnkoeBh4at6BwEnb5I7Jl31wg=="],
 

@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
 import { createBackendWebClientControls, registerBackendShutdown } from "./backend-lifecycle.js";
-import { APP_SLUG, PRODUCT_NAME } from "./app-constants.js";
+import { PRODUCT_NAME, userDataDirectoryName } from "./app-constants.js";
 import { registerMainIpc } from "./ipc.js";
 import { resolveRuntimeRoots } from "./paths.js";
 import { createMainWindow } from "./window.js";
@@ -36,7 +36,7 @@ const __dirname = path.dirname(__filename);
 const isDev = process.env.ELECTRON_DEV === "1";
 
 app.setName(PRODUCT_NAME);
-app.setPath("userData", path.join(app.getPath("appData"), APP_SLUG));
+app.setPath("userData", path.join(app.getPath("appData"), userDataDirectoryName(isDev)));
 
 // Must follow the `userData` override above: the lock is scoped to that path.
 const isPrimaryInstance = claimSingleInstanceLock(app);
@@ -263,6 +263,10 @@ if (isPrimaryInstance) {
     );
     app.quit();
   });
+} else {
+  console.error(
+    `[Desktop] Another ${PRODUCT_NAME} instance is already using ${app.getPath("userData")}. Quit it and try again.`,
+  );
 }
 
 app.on("window-all-closed", () => {

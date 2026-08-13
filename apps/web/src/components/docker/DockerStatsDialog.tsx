@@ -406,22 +406,28 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* System Prune Confirmation Dialog */}
+      {/* Stopped Container Prune Confirmation Dialog */}
       <AlertDialog open={showPruneConfirm} onOpenChange={setShowPruneConfirm}>
         <AlertDialogContent
           className={Z_FULLSCREEN_DIALOG}
           overlayClassName={Z_FULLSCREEN_DIALOG}
         >
           <AlertDialogHeader>
-            <AlertDialogTitle>Clean Up Orkestrator Containers?</AlertDialogTitle>
+            <AlertDialogTitle>Remove Stopped Orkestrator Containers?</AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-3">
-                <p>This removes stopped containers owned by this Orkestrator installation.</p>
-                <ul className="list-disc list-inside text-sm space-y-1">
-                  <li>Stopped containers</li>
-                  <li>Containers from other applications and Orkestrator installations are left untouched</li>
-                  <li>Images, networks, and volumes are left untouched</li>
-                </ul>
+                <p>
+                  This removes every stopped container belonging to this
+                  Orkestrator instance, including containers for environments you
+                  have stopped but not deleted. Starting such an environment
+                  afterwards rebuilds its container from scratch.
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Containers from other applications and Orkestrator
+                  installations are left untouched. Images, networks and volumes
+                  are also left alone because they cannot be scoped safely to
+                  this installation.
+                </p>
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>

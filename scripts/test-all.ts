@@ -179,7 +179,7 @@ export function buildConcurrentGroups(cores: number): TestGroup[] {
   const workers = planWorkers(cores);
   return [
     {
-      name: "workspace (web, backend, web-public, protocol)",
+      name: "workspace (web, backend, web-public, cli, protocol)",
       command: "turbo",
       args: [
         "run", "test:workspace",
@@ -187,6 +187,7 @@ export function buildConcurrentGroups(cores: number): TestGroup[] {
         "--filter=@orkestrator/web",
         "--filter=@orkestrator/backend",
         "--filter=@orkestrator/web-public",
+        "--filter=orkestrator",
         "--filter=@orkestrator/protocol",
         `--concurrency=${workers.workspaceConcurrency}`,
         "--cache-dir", ".turbo",

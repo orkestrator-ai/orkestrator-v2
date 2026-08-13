@@ -886,23 +886,30 @@ export async function reattachContainer(
   return invoke<Environment>("reattach_container", { projectId, containerId, name });
 }
 
-/** Result of Docker system prune operation */
+/** Result of a Docker prune operation */
 export interface SystemPruneResult {
   /** Number of containers deleted */
   containersDeleted: number;
-  /** Number of images deleted */
+  /** Number of images deleted. Always 0: images are shared, so none are pruned. */
   imagesDeleted: number;
-  /** Number of networks deleted */
+  /** Number of networks deleted. Always 0: this app creates no networks. */
   networksDeleted: number;
-  /** Number of volumes deleted */
+  /** Number of volumes deleted. Always 0: this app creates no volumes. */
   volumesDeleted: number;
   /** Total space reclaimed in bytes */
   spaceReclaimed: number;
 }
 
-/** Remove stopped containers owned by this Orkestrator installation. */
+/**
+ * Remove this instance's stopped containers.
+ *
+ * Scoped to containers labelled with this backend registry's owner, plus legacy
+ * Orkestrator containers created before owner labels existed. Images, networks
+ * and volumes are deliberately left alone because they cannot be limited safely
+ * to resources this instance created.
+ */
 export async function dockerSystemPrune(): Promise<SystemPruneResult> {
-  return invoke<SystemPruneResult>("docker_system_prune", { pruneVolumes: false });
+  return invoke<SystemPruneResult>("docker_system_prune", {});
 }
 
 /** Get container logs (non-streaming, returns last N lines) */

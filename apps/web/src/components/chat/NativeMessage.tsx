@@ -122,7 +122,7 @@ interface NativeMessageProps {
   resolveModelLabel?: (modelId: string) => string;
 }
 
-const AgentExpansionScopeContext = createContext("native-message");
+const MessageExpansionScopeContext = createContext("native-message");
 
 function getAgentExpansionKey(
   part: NativeAgentActivityPart,
@@ -138,7 +138,7 @@ function getAgentExpansionKey(
 }
 
 function useAgentExpansion(part: NativeAgentActivityPart, partKey: string) {
-  const expansionScope = useContext(AgentExpansionScopeContext);
+  const expansionScope = useContext(MessageExpansionScopeContext);
   const expansionKey = getAgentExpansionKey(part, partKey);
   // Active agents live in a virtualized row that can be unmounted while Claude
   // streams or while the reader scrolls. Persist the user's explicit toggle in
@@ -147,6 +147,14 @@ function useAgentExpansion(part: NativeAgentActivityPart, partKey: string) {
   return useMessagePartExpansion(
     `native-agent:${expansionScope}:${expansionKey}`,
   );
+}
+
+function getToolExpansionKey(
+  part: Extract<NativeMessagePart, { type: "tool-invocation" }>,
+  partKey: string,
+): string {
+  const durableId = part.toolUseId?.trim() || part.sourcePartId?.trim();
+  return durableId ? `id:${durableId}` : `part:${partKey}`;
 }
 
 /** Render a thinking/reasoning part inline - expandable to show the full text */
@@ -257,6 +265,7 @@ function backgroundTaskState(
 
 /** Render a tool invocation part - expandable to show input/output */
 function ToolPart({
+  expansionKey,
   toolName,
   toolState,
   toolTitle,
@@ -265,6 +274,7 @@ function ToolPart({
   toolError,
   backgroundTask,
 }: {
+  expansionKey: string;
   toolName?: string;
   toolState?: "success" | "failure" | "pending";
   toolTitle?: string;
@@ -273,7 +283,7 @@ function ToolPart({
   toolError?: string;
   backgroundTask?: NativeBackgroundTask;
 }) {
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
   const displayToolName = getToolDisplayName(toolName);
   const displayToolTitle = getToolTitleDisplayName(toolTitle, toolName);
   const isTaskStop = isBackgroundTaskStopTool(toolName);
@@ -678,6 +688,7 @@ function countDiffStats(
 
 /** Render an edit tool invocation with diff view */
 function EditToolPart({
+  expansionKey,
   toolName,
   toolState,
   toolTitle,
@@ -685,6 +696,7 @@ function EditToolPart({
   toolError,
   toolDiff,
 }: {
+  expansionKey: string;
   toolName?: string;
   toolState?: "success" | "failure" | "pending";
   toolTitle?: string;
@@ -692,7 +704,7 @@ function EditToolPart({
   toolError?: string;
   toolDiff?: ToolDiffMetadata;
 }) {
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
   const { createFileTab } = useTerminalContext();
   const displayToolName = getToolDisplayName(toolName, "Edit");
   const displayToolTitle = getToolTitleDisplayName(toolTitle, toolName);
@@ -1708,6 +1720,11 @@ function MessagePart({
   /** Stable identity for this part's position, used to persist expansion state. */
   partKey: string;
 }) {
+  const expansionScope = useContext(MessageExpansionScopeContext);
+  const toolExpansionKey = part.type === "tool-invocation"
+    ? `native-tool:${expansionScope}:${getToolExpansionKey(part, partKey)}`
+    : "";
+
   switch (part.type) {
     case "thinking":
       // Thinking parts are typically rendered directly in NativeMessage with isComplete
@@ -1728,6 +1745,7 @@ function MessagePart({
       if (isEditTool(part.toolName)) {
         return (
           <EditToolPart
+            expansionKey={toolExpansionKey}
             toolName={part.toolName}
             toolState={part.toolState}
             toolTitle={part.toolTitle}
@@ -1753,6 +1771,7 @@ function MessagePart({
       // Use generic ToolPart for other tools
       return (
         <ToolPart
+          expansionKey={toolExpansionKey}
           toolName={part.toolName}
           toolState={part.toolState}
           toolTitle={part.toolTitle}
@@ -1947,7 +1966,7 @@ export const NativeMessage = memo(function NativeMessage({
   }
 
   return (
-    <AgentExpansionScopeContext.Provider value={messageAgentExpansionScope}>
+    <MessageExpansionScopeContext.Provider value={messageAgentExpansionScope}>
       <MessageShell
         isUser={isUser}
         authorLabel={
@@ -1986,7 +2005,7 @@ export const NativeMessage = memo(function NativeMessage({
           />
         )}
       </MessageShell>
-    </AgentExpansionScopeContext.Provider>
+    </MessageExpansionScopeContext.Provider>
   );
 });
 

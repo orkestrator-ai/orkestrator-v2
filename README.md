@@ -54,6 +54,43 @@ docker build -t orkestrator-v2:latest -f docker/Dockerfile .
 bun run dev
 ```
 
+### Published container image
+
+Release images are published for AMD64 and ARM64 through GitHub Container
+Registry. Pull the current stable image and give it the local tag expected by
+Orkestrator:
+
+```bash
+docker pull ghcr.io/orkestrator-ai/orkestrator-v2:latest
+docker tag ghcr.io/orkestrator-ai/orkestrator-v2:latest orkestrator-v2:latest
+```
+
+Versioned images are also available, for example
+`ghcr.io/orkestrator-ai/orkestrator-v2:2.7.8`. Pin a version or digest when a
+reproducible environment is more important than automatically receiving the
+latest release.
+
+#### Publishing a release
+
+The `Publish container image` GitHub Actions workflow runs when a semantic
+version tag is pushed. The tag must match the version in the root
+`package.json`:
+
+```bash
+git tag v2.7.8
+git push origin v2.7.8
+```
+
+Stable releases receive full, major/minor, major, `latest`, and commit-SHA
+tags. Pre-release versions receive version and commit-SHA tags but do not move
+`latest`. The workflow also publishes build-provenance attestations.
+
+GitHub creates a new container package as private. After the first successful
+publish, an owner of the `orkestrator-ai` organization must open **Packages >
+orkestrator-v2 > Package settings > Change visibility** and select **Public**.
+This is a one-time operation, and GitHub does not allow a public package to be
+made private again.
+
 ## Usage
 
 ### Adding a Project
@@ -95,6 +132,23 @@ For a standalone backend without Electron, run:
 
 ```bash
 bun run start:web-public
+```
+
+To install Bun when necessary and run the published backend without cloning the
+repository, use:
+
+```bash
+curl -fsSL https://orkestrator.dev/install.sh | \
+  bash -s -- --tailscale-serve \
+  --allowed-origins https://orkestrator.dev,https://www.orkestrator.dev
+```
+
+If Bun is already installed, the equivalent command is:
+
+```bash
+bunx orkestrator \
+  --tailscale-serve \
+  --allowed-origins https://orkestrator.dev,https://www.orkestrator.dev
 ```
 
 On macOS, Orkestrator automatically detects the CLI bundled with `/Applications/Tailscale.app`. If Tailscale is installed somewhere else, provide its executable explicitly:

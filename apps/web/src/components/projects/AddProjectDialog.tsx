@@ -25,6 +25,10 @@ import { cn } from "@/lib/utils";
 
 type ProjectSource = "existing" | "scratch";
 
+/** Matches the bordered option cards used on settings pages. */
+const SOURCE_SELECTOR_TRIGGER_CLASSES =
+  "h-auto justify-start gap-2 rounded-lg border-2 p-3 text-left text-sm font-medium !text-foreground shadow-none data-[state=active]:!border-primary data-[state=active]:!bg-primary/5 data-[state=active]:!text-foreground data-[state=active]:shadow-none data-[state=inactive]:border-transparent data-[state=inactive]:!bg-zinc-900 hover:data-[state=inactive]:border-zinc-600";
+
 interface AddProjectDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -220,12 +224,12 @@ export function AddProjectDialog({
 
         <form onSubmit={handleSubmit} className="space-y-5">
           <Tabs value={source} onValueChange={handleSourceChange}>
-            <TabsList className="grid h-auto w-full grid-cols-2">
-              <TabsTrigger value="existing" className="gap-2 py-2">
+            <TabsList className="grid h-auto w-full grid-cols-2 gap-2 bg-transparent p-0">
+              <TabsTrigger value="existing" className={SOURCE_SELECTOR_TRIGGER_CLASSES}>
                 <FolderGit2 className="h-4 w-4" />
                 Existing repository
               </TabsTrigger>
-              <TabsTrigger value="scratch" className="gap-2 py-2">
+              <TabsTrigger value="scratch" className={SOURCE_SELECTOR_TRIGGER_CLASSES}>
                 <Plus className="h-4 w-4" />
                 Create new
               </TabsTrigger>

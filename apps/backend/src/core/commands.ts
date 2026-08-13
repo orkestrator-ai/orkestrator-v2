@@ -3245,6 +3245,11 @@ function findEnvironmentByContainerId(environments: Environment[], containerId: 
   return environments.find((environment) => environment.containerId && containerIdMatches(environment.containerId, containerId));
 }
 
+/**
+ * Reads one label out of the flat `key=value,key=value` string Docker emits for
+ * `{{.Labels}}`. Match the complete key so similarly suffixed labels are not
+ * confused with the ownership label.
+ */
 function dockerLabelValue(labels: unknown, key: string): string | undefined {
   if (typeof labels !== "string") return undefined;
   for (const label of labels.split(",")) {
@@ -3255,11 +3260,27 @@ function dockerLabelValue(labels: unknown, key: string): string | undefined {
   return undefined;
 }
 
+/**
+ * Whether a container belongs to this backend registry.
+ *
+ * Containers created before the owner label existed carry no owner, and Docker
+ * cannot add a label to an existing container. Treating an absent owner as
+ * "someone else's" would strand every pre-upgrade container: invisible in the
+ * listing and unreachable by the orphan sweep, with no way to reclaim the disk.
+ * So adopt them. Only the `app` label gates the query, and this app is the sole
+ * writer of that label, so adoption can never reach a container it did not
+ * create.
+ */
 function dockerOwnerMatches(labels: unknown, owner: string): boolean {
   const value = dockerLabelValue(labels, DOCKER_LABEL_OWNER);
   return value === undefined || value === owner;
 }
 
+/**
+ * Counts the ids listed under a `docker … prune` report's `Deleted …:` heading.
+ * A prune that removed nothing prints the reclaimed-space line alone, so the
+ * absent heading is the zero case rather than a parse failure.
+ */
 function countPrunedDockerResources(stdout: string): number {
   const lines = stdout.split("\n").map((line) => line.trim());
   const start = lines.findIndex((line) => /^Deleted .+:$/.test(line));
@@ -3284,7 +3305,6 @@ function parseDockerByteSize(value: string): number {
     ? Math.round(amount * base ** power)
     : 0;
 }
-
 /** Explicit list projection: renderer hydration never receives backend internals. */
 export function toClientEnvironment(environment: Environment): ClientEnvironment {
   const {
@@ -8148,6 +8168,9 @@ async function createDockerContainer(environment: Environment, context: CommandC
     `${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`,
     "--label",
     `${DOCKER_LABEL_ENVIRONMENT_ID}=${environment.id}`,
+    // Creation-time name only: Docker cannot relabel an existing container, so a
+    // rename leaves this stale until the container is recreated. Readers resolve
+    // the environment id above first and reach for this only for a true orphan.
     "--label",
     `${DOCKER_LABEL_ENVIRONMENT_NAME}=${environment.name}`,
     "--label",
@@ -10087,10 +10110,21 @@ export function createCommandRegistry(
   register("docker_container_status", ({ containerId }) => getDockerStatus(asString(containerId, "containerId")));
   register("list_docker_containers", async (_args, { storage }) => {
     const dockerOwner = dockerOwnerNamespace(storage.getDataDir());
-    const { stdout } = await runCommand("docker", ["ps", "-a", "--no-trunc", "--filter", `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`, "--format", "{{.ID}}\t{{.Names}}\t{{.Labels}}"], { timeoutMs: 10_000 });
+    // Ownership is filtered here rather than by a second `--filter label=` so an
+    // unlabelled pre-upgrade container is still reachable. See dockerOwnerMatches.
+    const { stdout } = await runCommand("docker", [
+      "ps",
+      "-a",
+      "--no-trunc",
+      "--filter",
+      `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`,
+      "--format",
+      "{{.ID}}\t{{.Names}}\t{{.Labels}}",
+    ], { timeoutMs: 10_000 });
     return stdout.split("\n").filter(Boolean).flatMap((line) => {
       const [id = "", name = "", labels = ""] = line.split("\t");
-      return dockerOwnerMatches(labels, dockerOwner) ? [[id, name]] : [];
+      if (!dockerOwnerMatches(labels, dockerOwner)) return [];
+      return [[id, name]];
     });
   });
   register("get_container_host_port", ({ containerId, containerPort }) => getHostPort(asString(containerId, "containerId"), asNumber(containerPort, "containerPort")));
@@ -10106,7 +10140,7 @@ export function createCommandRegistry(
     // safely filter image/network/volume prune by container ownership, so those
     // resource classes remain untouched even when an older renderer sends the
     // legacy pruneVolumes flag.
-    asBoolean(pruneVolumes);
+    if (pruneVolumes !== undefined) asBoolean(pruneVolumes);
     const dockerOwner = dockerOwnerNamespace(storage.getDataDir());
     const pruneContainers = (filters: string[]) => runCommand("docker", [
       "container", "prune", "-f", ...filters.flatMap((filter) => ["--filter", filter]),
@@ -10140,16 +10174,23 @@ export function createCommandRegistry(
   register("get_orkestrator_containers", async ({}, { storage }) => {
     const environments = await storage.loadEnvironments();
     const dockerOwner = dockerOwnerNamespace(storage.getDataDir());
-    const environmentsById = new Map(environments.map((entry) => [entry.id, entry]));
     const { stdout } = await runCommand("docker", ["ps", "-a", "--no-trunc", "--filter", `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`, "--format", "{{json .}}"], { timeoutMs: 20_000 });
+    const environmentsById = new Map(environments.map((entry) => [entry.id, entry]));
     return stdout.split("\n").filter(Boolean).flatMap((line) => {
       const row = JSON.parse(line) as Record<string, unknown>;
       const id = typeof row.ID === "string" ? row.ID : "";
       const env = findEnvironmentByContainerId(environments, id);
-      if (!env && !dockerOwnerMatches(row.Labels, dockerOwner)) return [];
+      if (!env && !dockerOwnerMatches(row.Labels, dockerOwner)) {
+        return [];
+      }
       const labelledEnvironmentId = dockerLabelValue(row.Labels, DOCKER_LABEL_ENVIRONMENT_ID);
       return [{
         id,
+        // Docker cannot relabel a running container, so the name label is the
+        // name at creation time and goes stale on rename. Resolve through the
+        // environment id first — that survives both a rename and a container id
+        // that drifted from the record — and fall back to the label only for a
+        // true orphan, whose environment no longer exists to ask.
         name: env?.name
           ?? (labelledEnvironmentId ? environmentsById.get(labelledEnvironmentId)?.name : undefined)
           ?? dockerLabelValue(row.Labels, DOCKER_LABEL_ENVIRONMENT_NAME)

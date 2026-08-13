@@ -28,6 +28,7 @@ describe("monorepo orchestration scripts", () => {
     expect(dev).toContain('process.on("SIGINT"');
     expect(dev).toContain("Timed out waiting for");
     expect(dev).toContain('electron.on("exit"');
+    expect(dev).toContain("handleElectronExit(code, signal");
     expect(build).toContain('process.platform === "win32"');
     expect(dev).toContain('process.platform === "win32"');
   });
@@ -74,6 +75,48 @@ describe("monorepo orchestration scripts", () => {
     );
   });
 
+  test("CLI build cache includes every source tree bundled from outside its workspace", () => {
+    const turbo = JSON.parse(read("packages/cli/turbo.json")) as {
+      tasks?: Record<string, { inputs?: string[] }>;
+    };
+    const inputs = turbo.tasks?.build?.inputs ?? [];
+
+    expect(inputs).toContain("$TURBO_DEFAULT$");
+    for (const externalInput of [
+      "$TURBO_ROOT$/tsconfig.json",
+      "$TURBO_ROOT$/apps/backend/package.json",
+      "$TURBO_ROOT$/apps/backend/tsconfig.json",
+      "$TURBO_ROOT$/apps/backend/src/**",
+      "$TURBO_ROOT$/bridges/claude-bridge/package.json",
+      "$TURBO_ROOT$/bridges/claude-bridge/tsconfig.json",
+      "$TURBO_ROOT$/bridges/claude-bridge/src/**",
+      "$TURBO_ROOT$/bridges/codex-bridge/package.json",
+      "$TURBO_ROOT$/bridges/codex-bridge/tsconfig.json",
+      "$TURBO_ROOT$/bridges/codex-bridge/src/**",
+      "$TURBO_ROOT$/packages/protocol/package.json",
+      "$TURBO_ROOT$/packages/protocol/tsconfig.json",
+      "$TURBO_ROOT$/packages/protocol/src/**",
+    ]) {
+      expect(inputs).toContain(externalInput);
+    }
+  });
+
+  test("publishing the CLI is gated on the packed-tarball smoke test", () => {
+    // The smoke test installs the real tarball from a registry-style layout, so
+    // it needs the network and stays out of the default suite. Chaining it into
+    // publish is what stops a broken package reaching users unverified.
+    const scripts = (JSON.parse(read("package.json")) as {
+      scripts?: Record<string, string>;
+    }).scripts ?? {};
+
+    expect(scripts["smoke:cli"]).toBe("bun run --cwd packages/cli smoke:pack");
+    expect(scripts["publish:cli"]).toContain("bun run smoke:cli &&");
+    expect(scripts["publish:cli"]).toContain("bun publish --cwd packages/cli");
+    // The smoke script must verify the runtime dependencies actually resolve
+    // from the installed layout, not just that the backend boots.
+    expect(read("packages/cli/scripts/smoke-packed.ts")).toContain("Bun.resolveSync(specifier, directory)");
+  });
+
   test("full tests run workspace, root, bridge, and protocol checks concurrently", () => {
     // The groups are independent, so they run at once rather than in sequence.
     // Behaviour is asserted properly in tests/unit/test-all.test.ts; this only
@@ -81,6 +124,7 @@ describe("monorepo orchestration scripts", () => {
     const source = read("scripts/test-all.ts");
     expect(source).toContain("Promise.all(");
     expect(source).toContain('"--filter=@orkestrator/web-public"');
+    expect(source).toContain('"--filter=orkestrator"');
     expect(source).toContain('args: ["run", "codex:protocol:check"]');
     expect(source).toContain('args: ["scripts/test-ios.ts"]');
     expect(source).toContain('dependencies.platform === "darwin"');
@@ -121,6 +165,7 @@ describe("monorepo orchestration scripts", () => {
       "apps/web/package.json",
       "apps/backend/package.json",
       "apps/web-public/package.json",
+      "packages/cli/package.json",
     ]) {
       const scripts = (JSON.parse(read(pkg)) as { scripts?: Record<string, string> }).scripts ?? {};
       expect(scripts.test).toContain("--parallel");

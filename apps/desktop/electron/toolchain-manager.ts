@@ -634,6 +634,11 @@ async function extractTarGzipBundle(
   archive: ToolchainArchive,
 ): Promise<void> {
   const root = archive.bundleRoot!;
+  const executableRelativePath = archive.entryPath.slice(root.length);
+  const installedFiles = new Set([
+    executableRelativePath,
+    ...(archive.bundleFiles ?? []).map((file) => file.path),
+  ]);
   let foundExecutable = false;
   let entryCount = 0;
   let extractedBytes = 0;
@@ -671,13 +676,21 @@ async function extractTarGzipBundle(
     }
     const destination = path.join(destinationDirectory, ...normalized.split("/"));
     if (header.type === "directory") {
-      void mkdir(destination, { recursive: true, mode: 0o700 })
-        .then(() => { stream.once("end", next); stream.resume(); })
-        .catch((error: unknown) => extract.destroy(error instanceof Error ? error : new Error(String(error))));
+      stream.once("end", next);
+      stream.resume();
       return;
     }
     if (header.type !== "file") {
       extract.destroy(new Error(`${label} bundle contains an unsupported link or entry type`));
+      stream.resume();
+      return;
+    }
+    // Only materialize files whose bytes are individually pinned and checked
+    // on every startup. The upstream Cursor archive contains many incidental
+    // runtime files; extracting those would turn them into an unverified part
+    // of the reusable installation.
+    if (!installedFiles.has(normalized)) {
+      stream.once("end", next);
       stream.resume();
       return;
     }

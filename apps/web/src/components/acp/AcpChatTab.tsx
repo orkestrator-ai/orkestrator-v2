@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Send, Square } from "lucide-react";
-import { awaitBridgeReady, ensureNativeAgentSession } from "@/lib/backend";
+import {
+  adoptNativeAgentSession,
+  awaitBridgeReady,
+  dispatchNativeAgentPrompt,
+  ensureNativeAgentSession,
+} from "@/lib/backend";
 import {
   cancelAcpPrompt,
   createAcpClient,
   getAcpSession,
   getAcpApprovals,
   resolveAcpApproval,
-  sendAcpPrompt,
   type AcpClient,
   type AcpSessionSnapshot,
   type AcpApproval,
@@ -18,6 +22,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { CursorAgentIcon, GrokBuildIcon } from "@/components/icons/AgentIcons";
 import { cn } from "@/lib/utils";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 
 interface AcpChatTabProps {
@@ -35,8 +40,17 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
   const [connecting, setConnecting] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const sentInitialPrompt = useRef(false);
+  const pendingManualRequest = useRef<{ prompt: string; requestId: string } | null>(null);
+  const dispatchingPrompt = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const updateTabNativeSessionId = usePaneLayoutStore((state) => state.updateTabNativeSessionId);
+  const clearTabInitialPrompt = usePaneLayoutStore((state) => state.clearTabInitialPrompt);
+  const backendOwnsStartupPrompt = useEnvironmentStore((state) => {
+    if (tabId !== "startup-agent") return false;
+    const environment = state.getEnvironmentById(data.environmentId);
+    return environment?.pendingAgentLaunch === true
+      || environment?.startupAgentSession !== undefined;
+  });
   const label = data.provider === "cursor" ? "Cursor Agent" : "Grok Build";
   const Icon = data.provider === "cursor" ? CursorAgentIcon : GrokBuildIcon;
 
@@ -48,19 +62,28 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
         const ready = await awaitBridgeReady(data.environmentId, data.provider);
         if (ready.status !== "ready") throw new Error(ready.error.message);
         const nextClient = createAcpClient(`http://127.0.0.1:${ready.port}`, ready.authToken);
-        const mapped = await ensureNativeAgentSession({
+        const sessionInput = {
           environmentId: data.environmentId,
           agent: data.provider,
           logicalSessionKey: `env-${data.environmentId}:${tabId}`,
-          origin: "interactive-native",
+          origin: "interactive-native" as const,
           interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
-          title: label,
-        });
-        const nextSession = await getAcpSession(nextClient, mapped.providerSessionId);
+        };
+        const mapped = data.sessionId
+          ? await adoptNativeAgentSession({
+              ...sessionInput,
+              providerSessionId: data.sessionId,
+            })
+          : await ensureNativeAgentSession({ ...sessionInput, title: label });
+        const [nextSession, pendingApprovals] = await Promise.all([
+          getAcpSession(nextClient, mapped.providerSessionId),
+          getAcpApprovals(nextClient, mapped.providerSessionId),
+        ]);
         if (!mounted) return;
         setClient(nextClient);
         setSession(nextSession);
-        setError(null);
+        setApprovals(pendingApprovals);
+        setError(nextSession.error ?? null);
         updateTabNativeSessionId(tabId, nextSession.id, data.environmentId);
       } catch (caught) {
         if (mounted) setError(caught instanceof Error ? caught.message : String(caught));
@@ -92,24 +115,60 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
     return () => window.clearInterval(interval);
   }, [client, refresh, session?.status]);
 
-  const submit = useCallback(async (text: string) => {
+  const submit = useCallback(async (text: string, fixedRequestId?: string) => {
     const prompt = text.trim();
-    if (!client || !session || !prompt || session.status === "running") return;
+    if (!client || !session || !prompt || session.status === "running" || dispatchingPrompt.current) return false;
+    const pending = pendingManualRequest.current;
+    const requestId = fixedRequestId
+      ?? (pending?.prompt === prompt ? pending.requestId : crypto.randomUUID());
+    if (!fixedRequestId) pendingManualRequest.current = { prompt, requestId };
+    dispatchingPrompt.current = true;
     setDraft("");
     try {
-      await sendAcpPrompt(client, session.id, prompt);
+      await dispatchNativeAgentPrompt({
+        environmentId: data.environmentId,
+        agent: data.provider,
+        logicalSessionKey: `env-${data.environmentId}:${tabId}`,
+        origin: "interactive-native",
+        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+        title: label,
+        prompt,
+        requestId,
+      });
       await refresh();
+      if (!fixedRequestId) pendingManualRequest.current = null;
+      return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       setDraft(prompt);
+      return false;
+    } finally {
+      dispatchingPrompt.current = false;
     }
-  }, [client, refresh, session]);
+  }, [client, data.environmentId, data.provider, label, refresh, session, tabId]);
 
   useEffect(() => {
+    if (backendOwnsStartupPrompt && initialPrompt) {
+      clearTabInitialPrompt(tabId, data.environmentId);
+      return;
+    }
     if (!client || !session || sentInitialPrompt.current || !initialPrompt?.trim()) return;
     sentInitialPrompt.current = true;
-    void submit(initialPrompt);
-  }, [client, initialPrompt, session, submit]);
+    const requestId = `initial-prompt:${data.environmentId}:${tabId}`;
+    void submit(initialPrompt, requestId).then((accepted) => {
+      if (accepted) clearTabInitialPrompt(tabId, data.environmentId);
+      else sentInitialPrompt.current = false;
+    });
+  }, [
+    backendOwnsStartupPrompt,
+    clearTabInitialPrompt,
+    client,
+    data.environmentId,
+    initialPrompt,
+    session,
+    submit,
+    tabId,
+  ]);
 
   useEffect(() => {
     if (isActive) bottomRef.current?.scrollIntoView({ block: "end" });

@@ -178,6 +178,17 @@ describe("Electron StorageService", () => {
     }
   });
 
+  test("allows managed Cursor and Grok endpoints in restricted environments by default", () => {
+    const domains = defaultConfig().global.allowedDomains;
+
+    expect(domains).toContain("auth.x.ai");
+    expect(domains).toContain("api.x.ai");
+    expect(domains).toContain("cli-chat-proxy.grok.com");
+    expect(domains).toContain("api2.cursor.sh");
+    expect(domains).toContain("authenticator.cursor.sh");
+    expect(domains).toContain("marketplace.cursorapi.com");
+  });
+
   test("keeps concurrent unrelated global mutations that a whole-config write would clobber", async () => {
     const dataDir = await createTempDir("ork-storage-agent-model-merge-");
     const first = new StorageService(dataDir);

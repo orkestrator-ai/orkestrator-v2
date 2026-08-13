@@ -900,9 +900,9 @@ export interface SystemPruneResult {
   spaceReclaimed: number;
 }
 
-/** Perform Docker system prune - removes unused containers, images, networks, and optionally volumes */
-export async function dockerSystemPrune(pruneVolumes: boolean = false): Promise<SystemPruneResult> {
-  return invoke<SystemPruneResult>("docker_system_prune", { pruneVolumes });
+/** Remove stopped containers owned by this Orkestrator installation. */
+export async function dockerSystemPrune(): Promise<SystemPruneResult> {
+  return invoke<SystemPruneResult>("docker_system_prune", { pruneVolumes: false });
 }
 
 /** Get container logs (non-streaming, returns last N lines) */

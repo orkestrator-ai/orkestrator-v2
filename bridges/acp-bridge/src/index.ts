@@ -1,11 +1,17 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { promises as fs } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { resolve } from "node:path";
-import { createInterface } from "node:readline";
+import { dirname, resolve } from "node:path";
+import {
+  PARENT_PID_ENV,
+  parseParentPid,
+  startParentWatchdog,
+} from "@orkestrator/protocol/parent-watchdog";
 
 type Provider = "cursor" | "grok";
 type JsonObject = Record<string, unknown>;
+type SessionStatus = "idle" | "running" | "error";
 
 interface BridgeMessage {
   id: string;
@@ -15,16 +21,27 @@ interface BridgeMessage {
   createdAt: string;
 }
 
+interface PromptJournalEntry {
+  requestId: string;
+  state: "accepted" | "completed" | "failed" | "ambiguous";
+  acceptedAt: number;
+}
+
 interface SessionState {
   id: string;
+  clientSessionKey?: string;
   acpSessionId: string;
-  status: "idle" | "running" | "error";
+  status: SessionStatus;
   error?: string;
   messages: BridgeMessage[];
-  child: AcpProcess;
+  child: AcpProcess | null;
   revision: number;
   structured: Map<string, unknown>;
+  promptJournal: Map<string, PromptJournalEntry>;
   approvals: Map<string, ApprovalState>;
+  outputTruncated: boolean;
+  uncheckedTranscriptBytes: number;
+  currentTurnOutput: string | null;
 }
 
 interface ApprovalState {
@@ -37,26 +54,71 @@ interface ApprovalState {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface PersistedSession {
+  id: string;
+  clientSessionKey?: string;
+  acpSessionId: string;
+  status: SessionStatus;
+  error?: string;
+  messages: BridgeMessage[];
+  revision: number;
+  structured: Array<[string, unknown]>;
+  promptJournal: PromptJournalEntry[];
+}
+
+interface PersistedState {
+  version: 1;
+  provider: Provider;
+  sessions: PersistedSession[];
+}
+
 const provider = parseProvider(process.env.ACP_PROVIDER);
 const port = parsePort(process.env.PORT);
 const hostname = process.env.HOSTNAME?.trim() || "127.0.0.1";
 const workingDirectory = resolve(process.env.CWD?.trim() || process.cwd());
 const authToken = process.env.ACP_BRIDGE_TOKEN?.trim() || randomBytes(32).toString("base64url");
 const executable = process.env.ACP_AGENT_PATH?.trim() || (provider === "cursor" ? "cursor" : "grok");
+const stateDirectory = process.env.ACP_STATE_DIR?.trim();
+const stateFile = stateDirectory ? resolve(stateDirectory, "state.json") : null;
 const sessions = new Map<string, SessionState>();
+const clientSessionKeys = new Map<string, string>();
+const sessionCreations = new Map<string, Promise<SessionState>>();
+let anonymousSessionCreations = 0;
+let persistenceTail = Promise.resolve();
+let persistenceScheduled = false;
+let shuttingDown = false;
+
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_LINE_BYTES = 4 * 1024 * 1024;
 const MAX_MESSAGES = 500;
 const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
-const MAX_SESSIONS = 256;
+const MAX_MESSAGE_TEXT_BYTES = 2 * 1024 * 1024;
+const MAX_PARTS_PER_MESSAGE = 512;
+const MAX_SESSIONS = parseBoundedInteger(process.env.ACP_MAX_SESSIONS, 256, 1, 256);
 const MAX_APPROVALS_PER_SESSION = 64;
-const MAX_STRUCTURED_RESULTS = 200;
+const MAX_STRUCTURED_RESULTS = 4;
+const MAX_STRUCTURED_RESULT_BYTES = 1024 * 1024;
+const TRANSCRIPT_CHECK_INTERVAL_BYTES = 64 * 1024;
+const MAX_PROMPT_JOURNAL = 512;
+const MAX_STATE_FILE_BYTES = 16 * 1024 * 1024;
+const RPC_TIMEOUT_MS = parseDuration(process.env.ACP_RPC_TIMEOUT_MS, 30_000);
+const PROMPT_TIMEOUT_MS = parseDuration(process.env.ACP_PROMPT_TIMEOUT_MS, 30 * 60_000);
+const PARENT_WATCHDOG_INTERVAL_MS = parseDuration(
+  process.env.ACP_PARENT_WATCHDOG_INTERVAL_MS,
+  15_000,
+);
 
 class AcpProcess {
   readonly child: ChildProcessWithoutNullStreams;
   #nextId = 1;
-  #pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
+  #pending = new Map<number, {
+    resolve(value: unknown): void;
+    reject(error: Error): void;
+    timer: ReturnType<typeof setTimeout>;
+    cleanupAbort?: () => void;
+  }>();
   #closed = false;
+  #stdoutBuffer = Buffer.alloc(0);
   onUpdate: (params: JsonObject) => void = () => undefined;
   onPermission: (id: number, params: JsonObject) => void = (id) => {
     this.respond(id, { outcome: { outcome: "cancelled" } });
@@ -70,10 +132,10 @@ class AcpProcess {
       env: process.env,
       stdio: ["pipe", "pipe", "pipe"],
     });
-    const lines = createInterface({ input: this.child.stdout, crlfDelay: Infinity });
-    lines.on("line", (line) => this.#acceptLine(line));
-    // Agent stderr can contain prompts, file paths, or tool output. Drain it so
-    // the child cannot block, but never forward its contents into bridge logs.
+    this.child.stdout.on("data", (chunk: Buffer | string) => {
+      this.#acceptChunk(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    // Agent stderr may contain prompts or file contents. Drain but never log it.
     this.child.stderr.resume();
     this.child.once("error", (error) => this.#close(error));
     this.child.once("exit", (code, signal) => {
@@ -81,22 +143,54 @@ class AcpProcess {
     });
   }
 
-  async initialize(): Promise<void> {
-    await this.request("initialize", {
+  async initialize(signal?: AbortSignal): Promise<JsonObject> {
+    const result = await this.request("initialize", {
       protocolVersion: 1,
       clientCapabilities: {
         fs: { readTextFile: false, writeTextFile: false },
         terminal: false,
       },
       clientInfo: { name: "orkestrator", title: "Orkestrator", version: "1.0.0" },
-    });
+    }, RPC_TIMEOUT_MS, signal);
+    return isObject(result) ? result : {};
   }
 
-  request(method: string, params: JsonObject): Promise<unknown> {
+  request(
+    method: string,
+    params: JsonObject,
+    timeoutMs = RPC_TIMEOUT_MS,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
     if (this.#closed) return Promise.reject(new Error(`${provider} ACP process is not running`));
     const id = this.#nextId++;
     return new Promise((resolvePromise, reject) => {
-      this.#pending.set(id, { resolve: resolvePromise, reject });
+      const fail = (error: Error) => {
+        const pending = this.#pending.get(id);
+        if (!pending) return;
+        this.#pending.delete(id);
+        clearTimeout(pending.timer);
+        pending.cleanupAbort?.();
+        reject(error);
+      };
+      const timer = setTimeout(() => {
+        fail(new Error(`${provider} ACP ${method} timed out`));
+        void this.close();
+      }, timeoutMs);
+      timer.unref();
+      let cleanupAbort: (() => void) | undefined;
+      if (signal) {
+        const onAbort = () => {
+          fail(new Error(`${provider} ACP ${method} was cancelled`));
+          void this.close();
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        cleanupAbort = () => signal.removeEventListener("abort", onAbort);
+      }
+      this.#pending.set(id, { resolve: resolvePromise, reject, timer, cleanupAbort });
+      if (signal?.aborted) {
+        fail(new Error(`${provider} ACP ${method} was cancelled`));
+        return;
+      }
       this.#write({ jsonrpc: "2.0", id, method, params });
     });
   }
@@ -109,27 +203,62 @@ class AcpProcess {
     if (!this.#closed) this.#write({ jsonrpc: "2.0", id, result });
   }
 
-  close(): void {
-    if (this.#closed) return;
+  async close(): Promise<void> {
+    if (this.child.exitCode !== null || this.child.signalCode !== null) return;
+    const exited = new Promise<void>((resolvePromise) => this.child.once("exit", () => resolvePromise()));
     this.child.kill("SIGTERM");
+    const forced = setTimeout(() => {
+      if (this.child.exitCode === null && this.child.signalCode === null) this.child.kill("SIGKILL");
+    }, 2_000);
+    forced.unref();
+    await Promise.race([exited, new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 3_000))]);
+    clearTimeout(forced);
   }
 
   #write(value: JsonObject): void {
-    this.child.stdin.write(`${JSON.stringify(value)}\n`);
+    if (!this.child.stdin.write(`${JSON.stringify(value)}\n`)) {
+      // Node bounds writable buffering; a drain listener is unnecessary because
+      // callers never await stdout consumption and request count is bounded.
+    }
+  }
+
+  #acceptChunk(chunk: Buffer): void {
+    if (this.#closed) return;
+    this.#stdoutBuffer = Buffer.concat([this.#stdoutBuffer, chunk]);
+    while (true) {
+      const newline = this.#stdoutBuffer.indexOf(0x0a);
+      if (newline < 0) break;
+      if (newline > MAX_LINE_BYTES) {
+        this.#close(new Error(`${provider} ACP emitted an oversized JSONL frame`));
+        void this.close();
+        return;
+      }
+      const line = this.#stdoutBuffer.subarray(0, newline).toString("utf8");
+      this.#stdoutBuffer = this.#stdoutBuffer.subarray(newline + 1);
+      this.#acceptLine(line);
+    }
+    if (this.#stdoutBuffer.length > MAX_LINE_BYTES) {
+      this.#close(new Error(`${provider} ACP emitted an unterminated oversized JSONL frame`));
+      void this.close();
+    }
   }
 
   #acceptLine(line: string): void {
-    if (!line.trim() || Buffer.byteLength(line) > MAX_LINE_BYTES) return;
+    if (!line.trim()) return;
     let message: JsonObject;
     try {
       message = JSON.parse(line) as JsonObject;
     } catch {
+      this.#close(new Error(`${provider} ACP emitted malformed JSON`));
+      void this.close();
       return;
     }
     if (typeof message.id === "number" && ("result" in message || "error" in message)) {
       const pending = this.#pending.get(message.id);
       if (!pending) return;
       this.#pending.delete(message.id);
+      clearTimeout(pending.timer);
+      pending.cleanupAbort?.();
       if (message.error && typeof message.error === "object") {
         const error = message.error as JsonObject;
         pending.reject(new Error(typeof error.message === "string" ? error.message : "ACP request failed"));
@@ -139,7 +268,6 @@ class AcpProcess {
       return;
     }
     if (typeof message.id === "number" && typeof message.method === "string") {
-      // Permission and unsupported client-side operations deny/fail closed.
       if (message.method === "session/request_permission") {
         this.onPermission(message.id, isObject(message.params) ? message.params : {});
       } else {
@@ -159,45 +287,127 @@ class AcpProcess {
   #close(error: Error): void {
     if (this.#closed) return;
     this.#closed = true;
-    for (const pending of this.#pending.values()) pending.reject(error);
+    for (const pending of this.#pending.values()) {
+      clearTimeout(pending.timer);
+      pending.cleanupAbort?.();
+      pending.reject(error);
+    }
     this.#pending.clear();
     this.onClose(error);
   }
 }
 
-async function createSession(): Promise<SessionState> {
-  if (sessions.size >= MAX_SESSIONS) throw new Error("ACP session limit reached");
+function activeSessionReservations(): number {
+  return sessions.size + sessionCreations.size + anonymousSessionCreations;
+}
+
+async function createSession(clientSessionKey?: string, signal?: AbortSignal): Promise<SessionState> {
+  if (clientSessionKey) {
+    const existingId = clientSessionKeys.get(clientSessionKey);
+    if (existingId) {
+      const existing = sessions.get(existingId);
+      if (existing) return existing;
+    }
+    const pending = sessionCreations.get(clientSessionKey);
+    if (pending) return pending;
+  }
+  if (activeSessionReservations() >= MAX_SESSIONS) throw new HttpError(429, "ACP session limit reached");
+
+  const operation = createSessionReserved(clientSessionKey, signal);
+  if (clientSessionKey) sessionCreations.set(clientSessionKey, operation);
+  else anonymousSessionCreations += 1;
+  try {
+    return await operation;
+  } finally {
+    if (clientSessionKey) {
+      if (sessionCreations.get(clientSessionKey) === operation) sessionCreations.delete(clientSessionKey);
+    } else {
+      anonymousSessionCreations -= 1;
+    }
+  }
+}
+
+async function createSessionReserved(clientSessionKey?: string, signal?: AbortSignal): Promise<SessionState> {
   const child = new AcpProcess();
   try {
-    await child.initialize();
-    const created = await child.request("session/new", { cwd: workingDirectory, mcpServers: [] });
+    await child.initialize(signal);
+    const created = await child.request(
+      "session/new",
+      { cwd: workingDirectory, additionalDirectories: [], mcpServers: [] },
+      RPC_TIMEOUT_MS,
+      signal,
+    );
     if (!isObject(created) || typeof created.sessionId !== "string") {
       throw new Error(`${provider} returned an invalid ACP session`);
     }
     const id = randomBytes(16).toString("hex");
     const state: SessionState = {
       id,
+      ...(clientSessionKey ? { clientSessionKey } : {}),
       acpSessionId: created.sessionId,
       status: "idle",
       messages: [],
       child,
       revision: 0,
       structured: new Map(),
+      promptJournal: new Map(),
       approvals: new Map(),
+      outputTruncated: false,
+      uncheckedTranscriptBytes: 0,
+      currentTurnOutput: null,
     };
-    child.onUpdate = (params) => applySessionUpdate(state, params);
-    child.onPermission = (requestId, params) => parkPermission(state, requestId, params);
-    child.onClose = (error) => {
-      clearApprovals(state);
-      if (sessions.get(state.id) !== state) return;
-      state.status = "error";
-      state.error = error.message;
-      state.revision += 1;
-    };
+    attachChild(state, child);
     sessions.set(id, state);
+    if (clientSessionKey) clientSessionKeys.set(clientSessionKey, id);
+    await persistState();
     return state;
   } catch (error) {
-    child.close();
+    await child.close();
+    throw error;
+  }
+}
+
+function attachChild(state: SessionState, child: AcpProcess): void {
+  state.child = child;
+  child.onUpdate = (params) => applySessionUpdate(state, params);
+  child.onPermission = (requestId, params) => parkPermission(state, requestId, params);
+  child.onClose = (error) => {
+    clearApprovals(state);
+    if (state.child !== child || sessions.get(state.id) !== state || shuttingDown) return;
+    state.child = null;
+    state.status = "error";
+    state.error = error.message;
+    state.revision += 1;
+    schedulePersist();
+  };
+}
+
+async function ensureSessionProcess(state: SessionState, signal?: AbortSignal): Promise<AcpProcess> {
+  if (state.child) return state.child;
+  const child = new AcpProcess();
+  try {
+    const initialized = await child.initialize(signal);
+    const capabilities = isObject(initialized.agentCapabilities)
+      ? initialized.agentCapabilities
+      : undefined;
+    if (capabilities?.loadSession !== true) {
+      throw new HttpError(410, `${provider} cannot reload persisted ACP sessions`);
+    }
+    attachChild(state, child);
+    await child.request("session/load", {
+      cwd: workingDirectory,
+      additionalDirectories: [],
+      mcpServers: [],
+      sessionId: state.acpSessionId,
+    }, RPC_TIMEOUT_MS, signal);
+    state.status = "idle";
+    state.error = undefined;
+    state.revision += 1;
+    await persistState();
+    return child;
+  } catch (error) {
+    if (state.child === child) state.child = null;
+    await child.close();
     throw error;
   }
 }
@@ -208,8 +418,9 @@ function clearApprovals(state: SessionState): void {
 }
 
 function parkPermission(state: SessionState, requestId: number, params: JsonObject): void {
-  if (state.approvals.size >= MAX_APPROVALS_PER_SESSION) {
-    state.child.respond(requestId, { outcome: { outcome: "cancelled" } });
+  const child = state.child;
+  if (!child || params.sessionId !== state.acpSessionId || state.approvals.size >= MAX_APPROVALS_PER_SESSION) {
+    child?.respond(requestId, { outcome: { outcome: "cancelled" } });
     return;
   }
   const options = Array.isArray(params.options)
@@ -231,11 +442,12 @@ function parkPermission(state: SessionState, requestId: number, params: JsonObje
     clearTimeout(approval.timer);
     state.approvals.delete(id);
     if (optionId && approval.options.some((option) => option.optionId === optionId)) {
-      state.child.respond(requestId, { outcome: { outcome: "selected", optionId } });
+      child.respond(requestId, { outcome: { outcome: "selected", optionId } });
     } else {
-      state.child.respond(requestId, { outcome: { outcome: "cancelled" } });
+      child.respond(requestId, { outcome: { outcome: "cancelled" } });
     }
     state.revision += 1;
+    schedulePersist();
   };
   const timer = setTimeout(() => finish(), expiresAt - requestedAt);
   timer.unref();
@@ -249,6 +461,7 @@ function parkPermission(state: SessionState, requestId: number, params: JsonObje
     timer,
   });
   state.revision += 1;
+  schedulePersist();
 }
 
 function permissionTitle(params: JsonObject): string {
@@ -262,35 +475,64 @@ function permissionTitle(params: JsonObject): string {
 }
 
 function applySessionUpdate(state: SessionState, params: JsonObject): void {
-  if (params.sessionId !== state.acpSessionId || !isObject(params.update)) return;
+  if (params.sessionId !== state.acpSessionId || !isObject(params.update) || state.outputTruncated) return;
   const update = params.update;
   const kind = typeof update.sessionUpdate === "string"
     ? update.sessionUpdate
     : typeof update.type === "string"
       ? update.type
       : "";
-  if (kind === "agent_message_chunk" || kind === "agent_thought_chunk") {
-    const text = contentText(update.content);
-    if (!text) return;
-    let message = state.messages.at(-1);
-    if (!message || message.role !== "assistant" || state.status !== "running") {
-      message = {
-        id: randomBytes(12).toString("hex"),
-        role: "assistant",
-        content: "",
-        parts: [],
-        createdAt: new Date().toISOString(),
-      };
-      state.messages.push(message);
-    }
-    const partType = kind === "agent_thought_chunk" ? "reasoning" : "text";
-    const previous = message.parts.at(-1);
-    if (previous?.type === partType) previous.text += text;
-    else message.parts.push({ type: partType, text });
-    if (partType === "text") message.content += text;
-    state.revision += 1;
-    boundTranscript(state);
+  if (kind !== "agent_message_chunk" && kind !== "agent_thought_chunk") return;
+  const text = contentText(update.content);
+  if (!text) return;
+  let message = state.messages.at(-1);
+  if (!message || message.role !== "assistant" || state.status !== "running") {
+    message = {
+      id: randomBytes(12).toString("hex"),
+      role: "assistant",
+      content: "",
+      parts: [],
+      createdAt: new Date().toISOString(),
+    };
+    state.messages.push(message);
   }
+  const partType = kind === "agent_thought_chunk" ? "reasoning" : "text";
+  const previous = message.parts.at(-1);
+  if (previous?.type !== partType && message.parts.length >= MAX_PARTS_PER_MESSAGE) {
+    state.outputTruncated = true;
+    state.status = "error";
+    state.error = `${provider} output exceeded the transcript limit`;
+    state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
+    state.revision += 1;
+    schedulePersist();
+    return;
+  }
+  const currentPartText = previous?.type === partType ? previous.text : "";
+  const nextPartText = appendBounded(currentPartText, text, MAX_MESSAGE_TEXT_BYTES);
+  if (previous?.type === partType) previous.text = nextPartText.value;
+  else message.parts.push({ type: partType, text: nextPartText.value });
+  const nextContent = partType === "text"
+    ? appendBounded(message.content, text, MAX_MESSAGE_TEXT_BYTES)
+    : { value: message.content, truncated: false };
+  message.content = nextContent.value;
+  if (partType === "text" && state.currentTurnOutput !== null) {
+    const captured = appendBounded(state.currentTurnOutput, text, MAX_MESSAGE_TEXT_BYTES);
+    state.currentTurnOutput = captured.value;
+    if (captured.truncated) state.outputTruncated = true;
+  }
+  state.revision += 1;
+  state.uncheckedTranscriptBytes += Buffer.byteLength(text) * (partType === "text" ? 2 : 1);
+  const transcriptTruncated = state.messages.length > MAX_MESSAGES
+    || state.uncheckedTranscriptBytes >= TRANSCRIPT_CHECK_INTERVAL_BYTES
+    ? boundTranscript(state)
+    : false;
+  if (nextPartText.truncated || nextContent.truncated || transcriptTruncated) {
+    state.outputTruncated = true;
+    state.status = "error";
+    state.error = `${provider} output exceeded the transcript limit`;
+    state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
+  }
+  schedulePersist();
 }
 
 function contentText(value: unknown): string {
@@ -299,13 +541,51 @@ function contentText(value: unknown): string {
   return typeof value.text === "string" ? value.text : "";
 }
 
-function boundTranscript(state: SessionState): void {
+function appendBounded(current: string, addition: string, maximumBytes: number): {
+  value: string;
+  truncated: boolean;
+} {
+  const currentBytes = Buffer.byteLength(current);
+  const remaining = Math.max(0, maximumBytes - currentBytes);
+  if (Buffer.byteLength(addition) <= remaining) return { value: current + addition, truncated: false };
+  const marker = "\n[output truncated by Orkestrator]";
+  const markerBytes = Buffer.byteLength(marker);
+  const usable = Math.max(0, remaining - markerBytes);
+  return {
+    value: current + truncateUtf8(addition, usable) + (remaining >= markerBytes ? marker : ""),
+    truncated: true,
+  };
+}
+
+function truncateUtf8(value: string, maximumBytes: number): string {
+  if (maximumBytes <= 0) return "";
+  const encoded = Buffer.from(value);
+  if (encoded.length <= maximumBytes) return value;
+  return new TextDecoder("utf-8", { fatal: false }).decode(encoded.subarray(0, maximumBytes));
+}
+
+function boundTranscript(state: SessionState): boolean {
+  state.uncheckedTranscriptBytes = 0;
+  let truncatedCurrentMessage = false;
   while (state.messages.length > MAX_MESSAGES) state.messages.shift();
   let bytes = Buffer.byteLength(JSON.stringify(state.messages));
   while (bytes > MAX_TRANSCRIPT_BYTES && state.messages.length > 1) {
     state.messages.shift();
     bytes = Buffer.byteLength(JSON.stringify(state.messages));
   }
+  const onlyMessage = state.messages[0];
+  while (bytes > MAX_TRANSCRIPT_BYTES && onlyMessage && onlyMessage.parts.length > 1) {
+    onlyMessage.parts.shift();
+    truncatedCurrentMessage = true;
+    bytes = Buffer.byteLength(JSON.stringify(state.messages));
+  }
+  if (bytes > MAX_TRANSCRIPT_BYTES) {
+    state.outputTruncated = true;
+    state.status = "error";
+    state.error = `${provider} output exceeded the transcript limit`;
+    truncatedCurrentMessage = true;
+  }
+  return truncatedCurrentMessage;
 }
 
 function publicSession(state: SessionState): JsonObject {
@@ -325,8 +605,6 @@ function publicApprovals(state: SessionState): unknown[] {
     id,
     title,
     options,
-    // Compatibility fields let the backend's normalized interaction monitor
-    // observe and fail-close unattended ACP permissions just like Codex ones.
     approvalId: id,
     kind: "permissions",
     permissions: { fileSystem: true },
@@ -344,7 +622,19 @@ function setStructuredResult(state: SessionState, requestId: string, value: unkn
   state.structured.set(requestId, value);
 }
 
-async function route(request: IncomingMessage, response: ServerResponse): Promise<void> {
+function setPromptJournal(state: SessionState, entry: PromptJournalEntry): void {
+  if (!state.promptJournal.has(entry.requestId) && state.promptJournal.size >= MAX_PROMPT_JOURNAL) {
+    const oldest = state.promptJournal.keys().next().value;
+    if (typeof oldest === "string") state.promptJournal.delete(oldest);
+  }
+  state.promptJournal.set(entry.requestId, entry);
+}
+
+async function route(
+  request: IncomingMessage,
+  response: ServerResponse,
+  clientSignal: AbortSignal,
+): Promise<void> {
   const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
   if (url.pathname === "/global/health" && request.method === "GET") {
     return json(response, 200, { ok: true, provider, version: "1.0.0" });
@@ -354,7 +644,13 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return json(response, 200, { ok: true });
   }
   if (url.pathname === "/session/create" && request.method === "POST") {
-    const state = await createSession();
+    const body = await readJson(request);
+    const rawClientSessionKey = typeof body.clientSessionKey === "string" ? body.clientSessionKey.trim() : "";
+    if (Buffer.byteLength(rawClientSessionKey) > 512) {
+      return json(response, 400, { error: "clientSessionKey is too long" });
+    }
+    const clientSessionKey = rawClientSessionKey || undefined;
+    const state = await createSession(clientSessionKey || undefined, clientSignal);
     return json(response, 201, publicSession(state));
   }
   const match = /^\/session\/([^/]+)(?:\/(messages|status|activity|prompt|cancel|abort|structured-output|interactions|approvals(?:\/[^/]+)?))?$/.exec(url.pathname);
@@ -376,11 +672,14 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     if (!approval) return json(response, 404, { error: "Approval not found" });
     const body = await readJson(request);
     const explicitOption = typeof body.optionId === "string" ? body.optionId : undefined;
-    const approvedOption = body.decision === "approve"
+    const selectedByDecision = body.decision === "approve"
       ? approval.options.find((option) => option.kind === "allow_once")?.optionId
         ?? approval.options.find((option) => option.kind?.startsWith("allow"))?.optionId
-      : undefined;
-    approval.respond(explicitOption ?? approvedOption);
+      : body.decision === "deny"
+        ? approval.options.find((option) => option.kind === "reject_once")?.optionId
+          ?? approval.options.find((option) => option.kind?.startsWith("reject"))?.optionId
+        : undefined;
+    approval.respond(explicitOption ?? selectedByDecision);
     return json(response, 200, { resolved: true });
   }
   if (action === "structured-output" && request.method === "GET") {
@@ -388,31 +687,51 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return json(response, 200, { structuredOutput: state.structured.get(requestId) ?? null });
   }
   if (action === "prompt" && request.method === "POST") {
-    if (state.status === "running") return json(response, 409, { error: "Session is already running" });
     const body = await readJson(request);
     const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
-    const requestId = typeof body.requestId === "string" ? body.requestId : "";
+    const requestId = typeof body.requestId === "string" ? body.requestId.trim() : "";
     const schema = isObject(body.outputSchema) ? body.outputSchema : undefined;
     if (!prompt) return json(response, 400, { error: "prompt is required" });
+    if (Buffer.byteLength(requestId) > 512) return json(response, 400, { error: "requestId is too long" });
+    if (requestId && state.promptJournal.has(requestId)) {
+      return json(response, 202, { accepted: true, duplicate: true });
+    }
+    if (state.status === "running") return json(response, 409, { error: "Session is already running" });
+    const child = await ensureSessionProcess(state, clientSignal);
     state.messages.push({
       id: randomBytes(12).toString("hex"), role: "user", content: prompt,
       parts: [{ type: "text", text: prompt }], createdAt: new Date().toISOString(),
     });
     state.status = "running";
     state.error = undefined;
+    state.outputTruncated = false;
+    state.currentTurnOutput = schema ? "" : null;
     state.revision += 1;
     boundTranscript(state);
+    if (requestId) setPromptJournal(state, {
+      requestId,
+      state: "accepted",
+      acceptedAt: Date.now(),
+    });
+    await persistState();
     const acpPrompt = schema
       ? `${prompt}\n\nReturn only one JSON value matching this JSON Schema. Do not use a Markdown fence or add commentary.\n\n${JSON.stringify(schema)}`
       : prompt;
-    void state.child.request("session/prompt", {
+    void child.request("session/prompt", {
       sessionId: state.acpSessionId,
       prompt: [{ type: "text", text: acpPrompt }],
-    }).then(() => {
-      state.status = "idle";
+    }, PROMPT_TIMEOUT_MS).then(() => {
+      if (!state.outputTruncated) state.status = "idle";
       if (schema && requestId) {
-        const output = [...state.messages].reverse().find((message) => message.role === "assistant")?.content.trim() ?? "";
-        try {
+        const output = state.currentTurnOutput?.trim() ?? "";
+        if (Buffer.byteLength(output) > MAX_STRUCTURED_RESULT_BYTES) {
+          setStructuredResult(state, requestId, {
+            ok: false,
+            provider,
+            requestId,
+            error: { code: "output_too_large", message: `${provider} returned too much structured output`, provider, retryable: true },
+          });
+        } else try {
           setStructuredResult(state, requestId, { ok: true, value: JSON.parse(output), provider, requestId });
         } catch {
           setStructuredResult(state, requestId, {
@@ -423,23 +742,39 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
           });
         }
       }
+      if (requestId) setPromptJournal(state, {
+        requestId,
+        state: state.outputTruncated ? "failed" : "completed",
+        acceptedAt: state.promptJournal.get(requestId)?.acceptedAt ?? Date.now(),
+      });
+      state.currentTurnOutput = null;
       state.revision += 1;
+      schedulePersist();
     }, (error: unknown) => {
       state.status = "error";
       state.error = error instanceof Error ? error.message : String(error);
+      if (requestId) setPromptJournal(state, {
+        requestId,
+        state: "failed",
+        acceptedAt: state.promptJournal.get(requestId)?.acceptedAt ?? Date.now(),
+      });
+      state.currentTurnOutput = null;
       state.revision += 1;
+      schedulePersist();
     });
     return json(response, 202, { accepted: true });
   }
   if ((action === "cancel" || action === "abort") && request.method === "POST") {
     for (const approval of [...state.approvals.values()]) approval.respond();
-    state.child.notify("session/cancel", { sessionId: state.acpSessionId });
+    state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
     return json(response, 202, { accepted: true });
   }
   if (!action && request.method === "DELETE") {
-    for (const approval of state.approvals.values()) approval.respond();
-    state.child.close();
+    for (const approval of [...state.approvals.values()]) approval.respond();
+    await state.child?.close();
     sessions.delete(state.id);
+    if (state.clientSessionKey) clientSessionKeys.delete(state.clientSessionKey);
+    await persistState();
     return json(response, 200, { deleted: true });
   }
   return json(response, 405, { error: "Method not allowed" });
@@ -458,15 +793,21 @@ async function readJson(request: IncomingMessage): Promise<JsonObject> {
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     bytes += buffer.length;
-    if (bytes > MAX_BODY_BYTES) throw new Error("Request body is too large");
+    if (bytes > MAX_BODY_BYTES) throw new HttpError(413, "Request body is too large");
     chunks.push(buffer);
   }
-  const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
-  if (!isObject(parsed)) throw new Error("Expected a JSON object");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+  } catch {
+    throw new HttpError(400, "Request body must be valid JSON");
+  }
+  if (!isObject(parsed)) throw new HttpError(400, "Expected a JSON object");
   return parsed;
 }
 
 function json(response: ServerResponse, status: number, value: unknown): void {
+  if (response.headersSent || response.destroyed) return;
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
   response.end(JSON.stringify(value));
 }
@@ -486,18 +827,240 @@ function parsePort(value: string | undefined): number {
   return parsed;
 }
 
-const server = createServer((request, response) => {
-  void route(request, response).catch((error: unknown) => {
-    json(response, 500, { error: error instanceof Error ? error.message : String(error) });
+function parseDuration(value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 10 ? parsed : fallback;
+}
+
+function parseBoundedInteger(
+  value: string | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum
+    ? parsed
+    : fallback;
+}
+
+class HttpError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+  }
+}
+
+function persistedSnapshot(): PersistedState {
+  return {
+    version: 1,
+    provider,
+    sessions: [...sessions.values()].map((state) => ({
+      id: state.id,
+      ...(state.clientSessionKey ? { clientSessionKey: state.clientSessionKey } : {}),
+      acpSessionId: state.acpSessionId,
+      status: state.status === "running" ? "error" : state.status,
+      ...(state.status === "running"
+        ? { error: `${provider} prompt outcome is unknown after bridge restart` }
+        : state.error ? { error: state.error } : {}),
+      messages: state.messages,
+      revision: state.revision,
+      structured: [...state.structured.entries()],
+      promptJournal: [...state.promptJournal.values()].map((entry) =>
+        entry.state === "accepted" ? { ...entry, state: "ambiguous" as const } : entry
+      ),
+    })),
+  };
+}
+
+function schedulePersist(): void {
+  if (!stateFile || persistenceScheduled) return;
+  persistenceScheduled = true;
+  const operation = persistenceTail.then(async () => {
+    await new Promise<void>((resolvePromise) => {
+      const timer = setTimeout(resolvePromise, 25);
+      timer.unref();
+    });
+    persistenceScheduled = false;
+    await writePersistedState();
+  }, async () => {
+    persistenceScheduled = false;
+    await writePersistedState();
   });
+  persistenceTail = operation.catch(() => undefined);
+}
+
+function persistState(): Promise<void> {
+  const operation = persistenceTail.then(writePersistedState, writePersistedState);
+  persistenceTail = operation.catch(() => undefined);
+  return operation;
+}
+
+async function writePersistedState(): Promise<void> {
+  if (!stateFile) return;
+  const payload = `${JSON.stringify(persistedSnapshot())}\n`;
+  if (Buffer.byteLength(payload) > MAX_STATE_FILE_BYTES) {
+    throw new Error("ACP persisted state exceeds its byte limit");
+  }
+  await fs.mkdir(dirname(stateFile), { recursive: true, mode: 0o700 });
+  const temporary = `${stateFile}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  await fs.writeFile(temporary, payload, { mode: 0o600 });
+  await fs.rename(temporary, stateFile);
+}
+
+async function loadPersistedState(): Promise<void> {
+  if (!stateFile) return;
+  let bytes: Buffer;
+  try {
+    const stat = await fs.stat(stateFile);
+    if (stat.size > MAX_STATE_FILE_BYTES) throw new Error("ACP persisted state is too large");
+    bytes = await fs.readFile(stateFile);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    throw new Error("ACP persisted state is malformed");
+  }
+  if (!isObject(parsed) || parsed.version !== 1 || parsed.provider !== provider || !Array.isArray(parsed.sessions)) {
+    throw new Error("ACP persisted state is incompatible");
+  }
+  for (const candidate of parsed.sessions.slice(0, MAX_SESSIONS)) {
+    if (!isObject(candidate)
+      || typeof candidate.id !== "string"
+      || typeof candidate.acpSessionId !== "string"
+      || !Array.isArray(candidate.messages)) continue;
+    const messages = candidate.messages
+      .flatMap((message) => {
+        const normalized = normalizeBridgeMessage(message);
+        return normalized ? [normalized] : [];
+      })
+      .slice(-MAX_MESSAGES);
+    const state: SessionState = {
+      id: candidate.id.slice(0, 128),
+      ...(typeof candidate.clientSessionKey === "string"
+        ? { clientSessionKey: candidate.clientSessionKey.slice(0, 512) }
+        : {}),
+      acpSessionId: candidate.acpSessionId.slice(0, 512),
+      status: candidate.status === "idle" || candidate.status === "error" ? candidate.status : "error",
+      ...(typeof candidate.error === "string" ? { error: candidate.error.slice(0, 4_000) } : {}),
+      messages,
+      child: null,
+      revision: Number.isSafeInteger(candidate.revision) ? Number(candidate.revision) : 0,
+      structured: new Map(Array.isArray(candidate.structured)
+        ? candidate.structured.filter((entry): entry is [string, unknown] =>
+            isStringTuple(entry)
+            && Buffer.byteLength(JSON.stringify(entry[1])) <= MAX_STRUCTURED_RESULT_BYTES
+          ).slice(-MAX_STRUCTURED_RESULTS)
+        : []),
+      promptJournal: new Map(),
+      approvals: new Map(),
+      outputTruncated: false,
+      uncheckedTranscriptBytes: 0,
+      currentTurnOutput: null,
+    };
+    if (Array.isArray(candidate.promptJournal)) {
+      for (const rawEntry of candidate.promptJournal.slice(-MAX_PROMPT_JOURNAL)) {
+        if (!isObject(rawEntry) || typeof rawEntry.requestId !== "string") continue;
+        const journalState = rawEntry.state;
+        if (journalState !== "accepted" && journalState !== "completed" && journalState !== "failed" && journalState !== "ambiguous") continue;
+        const entry: PromptJournalEntry = {
+          requestId: rawEntry.requestId.slice(0, 512),
+          state: journalState === "accepted" ? "ambiguous" : journalState,
+          acceptedAt: Number.isSafeInteger(rawEntry.acceptedAt) ? Number(rawEntry.acceptedAt) : 0,
+        };
+        state.promptJournal.set(entry.requestId, entry);
+      }
+    }
+    boundTranscript(state);
+    sessions.set(state.id, state);
+    if (state.clientSessionKey) clientSessionKeys.set(state.clientSessionKey, state.id);
+  }
+}
+
+function normalizeBridgeMessage(value: unknown): BridgeMessage | null {
+  if (!(isObject(value)
+    && typeof value.id === "string"
+    && (value.role === "user" || value.role === "assistant")
+    && typeof value.content === "string"
+    && Array.isArray(value.parts)
+    && value.parts.every((part) => isObject(part)
+      && (part.type === "text" || part.type === "reasoning")
+      && typeof part.text === "string")
+    && typeof value.createdAt === "string")) return null;
+  return {
+    id: value.id.slice(0, 256),
+    role: value.role,
+    content: truncateUtf8(value.content, MAX_MESSAGE_TEXT_BYTES),
+    parts: value.parts.slice(-MAX_PARTS_PER_MESSAGE).map((part) => ({
+      type: part.type as "text" | "reasoning",
+      text: truncateUtf8(part.text as string, MAX_MESSAGE_TEXT_BYTES),
+    })),
+    createdAt: value.createdAt.slice(0, 64),
+  };
+}
+
+function isStringTuple(value: unknown): value is [string, unknown] {
+  return Array.isArray(value) && value.length === 2 && typeof value[0] === "string";
+}
+
+await loadPersistedState();
+
+const server = createServer((request, response) => {
+  const controller = new AbortController();
+  const abortDisconnectedClient = () => {
+    if (!response.writableEnded) controller.abort();
+  };
+  request.once("aborted", abortDisconnectedClient);
+  request.socket.once("end", abortDisconnectedClient);
+  request.socket.once("close", abortDisconnectedClient);
+  response.once("close", abortDisconnectedClient);
+  const disconnectPoll = setInterval(() => {
+    if (request.socket.destroyed || !request.socket.writable) abortDisconnectedClient();
+  }, 50);
+  disconnectPoll.unref();
+  void route(request, response, controller.signal)
+    .catch((error: unknown) => {
+      const status = error instanceof HttpError ? error.status : 500;
+      json(response, status, { error: error instanceof Error ? error.message : String(error) });
+    })
+    .finally(() => clearInterval(disconnectPoll));
 });
 
 server.listen(port, hostname, () => console.log(`ACP bridge (${provider}) listening on ${hostname}:${port}`));
 
-function shutdown(): void {
-  for (const state of sessions.values()) state.child.close();
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(1), 5_000).unref();
+let shutdownPromise: Promise<void> | null = null;
+function shutdown(): Promise<void> {
+  if (shutdownPromise) return shutdownPromise;
+  shuttingDown = true;
+  shutdownPromise = (async () => {
+    for (const state of sessions.values()) {
+      for (const approval of [...state.approvals.values()]) approval.respond();
+    }
+    await Promise.allSettled([...sessions.values()].map((state) => state.child?.close()));
+    await persistenceTail.catch(() => undefined);
+    await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+  })();
+  return shutdownPromise;
 }
-process.once("SIGTERM", shutdown);
-process.once("SIGINT", shutdown);
+
+const parentPid = parseParentPid(process.env[PARENT_PID_ENV]);
+if (parentPid !== null) {
+  startParentWatchdog({
+    parentPid,
+    pollIntervalMs: PARENT_WATCHDOG_INTERVAL_MS,
+    onParentExit: () => {
+      void shutdown().finally(() => process.exit(0));
+    },
+  });
+}
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.once(signal, () => {
+    void shutdown().then(() => process.exit(0), () => process.exit(1));
+    setTimeout(() => process.exit(1), 5_000).unref();
+  });
+}

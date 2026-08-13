@@ -100,7 +100,7 @@ if [ "$1" = "logs" ]; then
   esac
   exit 0
 fi
-if [ "$1" = "system" ] && [ "$2" = "prune" ]; then
+if [ "$1" = "container" ] && [ "$2" = "prune" ]; then
   printf 'Deleted Containers:\ncontainer-old\nTotal reclaimed space: 1.25GB\n'
   exit 0
 fi
@@ -187,6 +187,7 @@ function createContext(initialEnvironment = environment()): {
     resourceRoot: root,
     emit: mock((event: string, payload: unknown) => events.push({ event, payload })),
     storage: {
+      getDataDir: () => root,
       getEnvironment: mock(async (id: string) => id === initialEnvironment.id ? initialEnvironment : null),
       loadEnvironments: mock(async () => [initialEnvironment]),
       updateEnvironment: mock(async (id: string, update: Record<string, unknown>) => {
@@ -466,7 +467,13 @@ describe("process and platform command behavior", () => {
     await expect(invoke("docker_start_container", { containerId: 7 })).rejects.toThrow("Expected containerId to be a string");
 
     const log = await readCommandLog();
-    expect(log).toContain("docker create --name feature-environment");
+    expect(log).toContain("docker create --name ork-");
+    expect(log).toContain("-environment-1 --label app=orkestrator-v2");
+    expect(log).toContain("--label environment-name=feature-environment");
+    expect(log).toContain("--label orkestrator-owner=");
+    expect(log).toContain("ALLOWED_DOMAINS=");
+    expect(log).toContain("auth.x.ai");
+    expect(log).toContain("api2.cursor.sh");
     expect(log).toContain("GIT_URL=https://github.com/example/project.git");
     if (process.platform === "linux") {
       expect(log).toContain("--add-host host.docker.internal:host-gateway");
@@ -503,11 +510,11 @@ describe("process and platform command behavior", () => {
     ]);
 
     expect(await invoke("docker_system_prune", { pruneVolumes: true })).toEqual({
-      containersDeleted: 0,
+      containersDeleted: 1,
       imagesDeleted: 0,
       networksDeleted: 0,
       volumesDeleted: 0,
-      spaceReclaimed: "1.25GB",
+      spaceReclaimed: 1_250_000_000,
     });
     expect(await invoke("get_docker_system_stats")).toMatchObject({
       containersRunning: 1,
@@ -516,7 +523,9 @@ describe("process and platform command behavior", () => {
       memoryUsed: 0,
       diskUsed: 0,
     });
-    expect(await readCommandLog()).toContain("docker system prune -f --volumes");
+    const pruneLog = await readCommandLog();
+    expect(pruneLog).toContain("docker container prune -f --filter label=orkestrator-owner=");
+    expect(pruneLog).not.toContain("docker system prune");
   });
 
   test("reattaches a container and persists its inspected status", async () => {

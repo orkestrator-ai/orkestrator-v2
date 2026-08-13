@@ -73,13 +73,6 @@ export const REVIEW_TAB_OPTIONS: Array<{
     mode: "native",
   },
   {
-    value: "opencode-native",
-    label: "OpenCode Native",
-    description: "SDK v2 Markdown review",
-    agent: "opencode",
-    mode: "native",
-  },
-  {
     value: "cursor-native",
     label: "Cursor Agent",
     description: "Cursor ACP review",
@@ -91,6 +84,13 @@ export const REVIEW_TAB_OPTIONS: Array<{
     label: "Grok Build",
     description: "Grok ACP review",
     agent: "grok",
+    mode: "native",
+  },
+  {
+    value: "opencode-native",
+    label: "OpenCode Native",
+    description: "SDK v2 Markdown review",
+    agent: "opencode",
     mode: "native",
   },
 ];

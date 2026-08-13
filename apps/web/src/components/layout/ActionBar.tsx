@@ -6,6 +6,7 @@ import {
   useState,
   useEffect,
   useCallback,
+  useMemo,
   useRef,
   type FocusEvent as ReactFocusEvent,
   type MouseEvent as ReactMouseEvent,
@@ -477,7 +478,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   }, [environmentPortAddress]);
 
   // Get the default agent - per-environment override takes precedence over global config
-  const enabledAgents = new Set<DefaultAgent>(config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]);
+  const enabledAgents = useMemo(
+    () => new Set<DefaultAgent>(config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]),
+    [config.global.enabledAgentPlatforms],
+  );
   const configuredDefaultAgent: DefaultAgent = selectedEnvironment?.defaultAgent || config.global.defaultAgent || "claude";
   const defaultAgent: DefaultAgent = enabledAgents.has(configuredDefaultAgent)
     ? configuredDefaultAgent
@@ -1032,14 +1036,14 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           break;
         case "n":
           if (reportTabLimit()) break;
-          if (canCreateTab) {
+          if (canCreateTab && enabledAgents.has("claude")) {
             e.preventDefault();
             createTab?.("claude");
           }
           break;
         case "m":
           if (reportTabLimit()) break;
-          if (canCreateTab) {
+          if (canCreateTab && enabledAgents.has("opencode")) {
             e.preventDefault();
             createTab?.("opencode");
           }
@@ -1100,6 +1104,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     canRunCommands,
     handleRun,
     toggleFilesPanel,
+    enabledAgents,
   ]);
 
   // Handler for PR creation - launches agent tab with PR workflow prompt

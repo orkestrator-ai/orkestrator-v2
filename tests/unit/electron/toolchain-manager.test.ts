@@ -295,6 +295,7 @@ describe("pinned desktop toolchain cache", () => {
     const archive = await tarGzip([
       { name: "dist-package/cursor-agent", body: launcher },
       { name: "dist-package/node/bin/node", body: runtime },
+      { name: "dist-package/unpinned-runtime.js", body: Buffer.from("not installed") },
     ]);
     const artifact: ToolchainArtifact = { ...artifactWithBody(artifacts[1]!, archive, {
       entryPath: "dist-package/cursor-agent",
@@ -321,6 +322,9 @@ describe("pinned desktop toolchain cache", () => {
     const target = await readlink(path.join(result.binDir, "cursor"));
     expect(await readFile(target)).toEqual(launcher);
     expect(await readFile(path.join(path.dirname(target), "node/bin/node"))).toEqual(runtime);
+    await expect(readFile(path.join(path.dirname(target), "unpinned-runtime.js"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
 
     const runtimePath = path.join(path.dirname(target), "node/bin/node");
     await chmod(runtimePath, 0o600);

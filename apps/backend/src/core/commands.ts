@@ -89,12 +89,19 @@ import {
   DOCKER_LABEL_APP,
   DOCKER_LABEL_APP_VALUE,
   DOCKER_LABEL_ENVIRONMENT_ID,
+  DOCKER_LABEL_ENVIRONMENT_NAME,
+  DOCKER_LABEL_OWNER,
   DOCKER_LABEL_PROJECT_ID,
   GROK_ACP_BRIDGE_PORT,
   OPENCODE_SERVER_PORT,
   ORKESTRATOR_PROJECT_CONFIG,
+  REQUIRED_AGENT_NETWORK_DOMAINS,
   resolveCodexMaxConcurrentThreads,
 } from "./constants.js";
+import {
+  dockerContainerRuntimeName,
+  dockerOwnerNamespace,
+} from "./docker-ownership.js";
 import {
   createEnvironment,
   createProject,
@@ -3237,6 +3244,46 @@ function findEnvironmentByContainerId(environments: Environment[], containerId: 
   return environments.find((environment) => environment.containerId && containerIdMatches(environment.containerId, containerId));
 }
 
+function dockerLabelValue(labels: unknown, key: string): string | undefined {
+  if (typeof labels !== "string") return undefined;
+  for (const label of labels.split(",")) {
+    const separator = label.indexOf("=");
+    const candidateKey = separator < 0 ? label : label.slice(0, separator);
+    if (candidateKey === key) return separator < 0 ? "" : label.slice(separator + 1);
+  }
+  return undefined;
+}
+
+function dockerOwnerMatches(labels: unknown, owner: string): boolean {
+  const value = dockerLabelValue(labels, DOCKER_LABEL_OWNER);
+  return value === undefined || value === owner;
+}
+
+function countPrunedDockerResources(stdout: string): number {
+  const lines = stdout.split("\n").map((line) => line.trim());
+  const start = lines.findIndex((line) => /^Deleted .+:$/.test(line));
+  if (start < 0) return 0;
+  let count = 0;
+  for (const line of lines.slice(start + 1)) {
+    if (!line || /^Total reclaimed space:/i.test(line) || /^Deleted .+:$/.test(line)) break;
+    count += 1;
+  }
+  return count;
+}
+
+function parseDockerByteSize(value: string): number {
+  const match = /^\s*([0-9]+(?:\.[0-9]+)?)\s*([kmgtp]?i?b)\s*$/i.exec(value);
+  if (!match) return 0;
+  const amount = Number(match[1]);
+  const unit = match[2]!.toLowerCase();
+  const prefix = unit.replace(/i?b$/, "");
+  const power = ["", "k", "m", "g", "t", "p"].indexOf(prefix);
+  const base = unit.includes("i") ? 1024 : 1000;
+  return Number.isFinite(amount) && power >= 0
+    ? Math.round(amount * base ** power)
+    : 0;
+}
+
 /** Explicit list projection: renderer hydration never receives backend internals. */
 export function toClientEnvironment(environment: Environment): ClientEnvironment {
   const {
@@ -6253,6 +6300,12 @@ async function startLocalServerUnlocked(
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "acp-bridge");
     env.ACP_PROVIDER = kind;
+    env.ACP_STATE_DIR = path.join(
+      context.storage.getDataDir(),
+      "acp-bridge-state",
+      createHash("sha256").update(environmentId).digest("hex").slice(0, 32),
+      kind,
+    );
     env.ACP_AGENT_PATH = kind === "cursor"
       ? resolveCursorBinary(context)
       : resolveGrokBinary(context);
@@ -8076,14 +8129,19 @@ async function createDockerContainer(environment: Environment, context: CommandC
   if (configuredFilesToCopy.length > 0 && !project.localPath) {
     throw new Error("Project has files configured to copy, but no local path is set");
   }
+  const dockerOwner = dockerOwnerNamespace(context.storage.getDataDir());
   const args = [
     "create",
     "--name",
-    environment.name,
+    dockerContainerRuntimeName(dockerOwner, environment.id),
     "--label",
     `${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`,
     "--label",
     `${DOCKER_LABEL_ENVIRONMENT_ID}=${environment.id}`,
+    "--label",
+    `${DOCKER_LABEL_ENVIRONMENT_NAME}=${environment.name}`,
+    "--label",
+    `${DOCKER_LABEL_OWNER}=${dockerOwner}`,
     "--label",
     `${DOCKER_LABEL_PROJECT_ID}=${project.id}`,
     "--workdir",
@@ -8118,7 +8176,10 @@ async function createDockerContainer(environment: Environment, context: CommandC
   if (environment.networkAccessMode === "full") {
     args.push("-e", "NETWORK_MODE=full");
   } else {
-    const domains = environment.allowedDomains ?? config.global.allowedDomains;
+    const domains = [...new Set([
+      ...(environment.allowedDomains ?? config.global.allowedDomains),
+      ...REQUIRED_AGENT_NETWORK_DOMAINS,
+    ])];
     args.push("-e", "NETWORK_MODE=restricted", "-e", `ALLOWED_DOMAINS=${domains.join(",")}`);
   }
 
@@ -10011,9 +10072,13 @@ export function createCommandRegistry(
   register("docker_stop_container", ({ containerId }) => runCommand("docker", ["stop", asString(containerId, "containerId")], { timeoutMs: 60_000 }).then(() => undefined));
   register("docker_remove_container", ({ containerId }) => runCommand("docker", ["rm", "-f", asString(containerId, "containerId")], { timeoutMs: 60_000 }).then(() => undefined));
   register("docker_container_status", ({ containerId }) => getDockerStatus(asString(containerId, "containerId")));
-  register("list_docker_containers", async () => {
-    const { stdout } = await runCommand("docker", ["ps", "-a", "--no-trunc", "--filter", `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`, "--format", "{{.ID}}\t{{.Names}}"], { timeoutMs: 10_000 });
-    return stdout.split("\n").filter(Boolean).map((line) => line.split("\t"));
+  register("list_docker_containers", async (_args, { storage }) => {
+    const dockerOwner = dockerOwnerNamespace(storage.getDataDir());
+    const { stdout } = await runCommand("docker", ["ps", "-a", "--no-trunc", "--filter", `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`, "--format", "{{.ID}}\t{{.Names}}\t{{.Labels}}"], { timeoutMs: 10_000 });
+    return stdout.split("\n").filter(Boolean).flatMap((line) => {
+      const [id = "", name = "", labels = ""] = line.split("\t");
+      return dockerOwnerMatches(labels, dockerOwner) ? [[id, name]] : [];
+    });
   });
   register("get_container_host_port", ({ containerId, containerPort }) => getHostPort(asString(containerId, "containerId"), asNumber(containerPort, "containerPort")));
   register("get_container_logs", async ({ containerId, tail }) => (await runCommand("docker", ["logs", "--tail", asOptionalString(tail) ?? "200", asString(containerId, "containerId")], { timeoutMs: 30_000 })).stdout);
@@ -10023,12 +10088,24 @@ export function createCommandRegistry(
     child.stdout.on("data", (data) => emit("container-log", { containerId: id, line: data.toString() }));
     child.stderr.on("data", (data) => emit("container-log", { containerId: id, line: data.toString() }));
   });
-  register("docker_system_prune", async ({ pruneVolumes }) => {
-    const args = ["system", "prune", "-f"];
-    if (asBoolean(pruneVolumes)) args.push("--volumes");
-    const { stdout } = await runCommand("docker", args, { timeoutMs: 120_000 });
-    const reclaimed = /Total reclaimed space:\s*([^\n]+)/.exec(stdout)?.[1] ?? "0B";
-    return { containersDeleted: 0, imagesDeleted: 0, networksDeleted: 0, volumesDeleted: 0, spaceReclaimed: reclaimed };
+  register("docker_system_prune", async ({ pruneVolumes }, { storage }) => {
+    // The ordinary cleanup action is intentionally owner-scoped. Docker cannot
+    // safely filter image/network/volume prune by container ownership, so those
+    // resource classes remain untouched even when an older renderer sends the
+    // legacy pruneVolumes flag.
+    asBoolean(pruneVolumes);
+    const dockerOwner = dockerOwnerNamespace(storage.getDataDir());
+    const { stdout } = await runCommand("docker", [
+      "container", "prune", "-f", "--filter", `label=${DOCKER_LABEL_OWNER}=${dockerOwner}`,
+    ], { timeoutMs: 120_000 });
+    const reclaimedText = /Total reclaimed space:\s*([^\n]+)/.exec(stdout)?.[1] ?? "0B";
+    return {
+      containersDeleted: countPrunedDockerResources(stdout),
+      imagesDeleted: 0,
+      networksDeleted: 0,
+      volumesDeleted: 0,
+      spaceReclaimed: parseDockerByteSize(reclaimedText),
+    };
   });
   register("get_docker_system_stats", async () => {
     const containers = await runCommand("docker", ["ps", "-a", "-q"], { timeoutMs: 10_000 }).then((r) => r.stdout.split("\n").filter(Boolean).length, () => 0);
@@ -10038,12 +10115,30 @@ export function createCommandRegistry(
   });
   register("get_orkestrator_containers", async ({}, { storage }) => {
     const environments = await storage.loadEnvironments();
+    const dockerOwner = dockerOwnerNamespace(storage.getDataDir());
+    const environmentsById = new Map(environments.map((entry) => [entry.id, entry]));
     const { stdout } = await runCommand("docker", ["ps", "-a", "--no-trunc", "--filter", `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`, "--format", "{{json .}}"], { timeoutMs: 20_000 });
-    return stdout.split("\n").filter(Boolean).map((line) => {
-      const row = JSON.parse(line) as Record<string, string>;
-      const id = row.ID ?? "";
+    return stdout.split("\n").filter(Boolean).flatMap((line) => {
+      const row = JSON.parse(line) as Record<string, unknown>;
+      const id = typeof row.ID === "string" ? row.ID : "";
       const env = findEnvironmentByContainerId(environments, id);
-      return { id, name: row.Names ?? "", status: row.Status ?? "", state: row.State ?? "", image: row.Image ?? "", created: 0, environmentId: env?.id ?? null, projectId: env?.projectId ?? null, isAssigned: !!env, cpuPercent: null };
+      if (!env && !dockerOwnerMatches(row.Labels, dockerOwner)) return [];
+      const labelledEnvironmentId = dockerLabelValue(row.Labels, DOCKER_LABEL_ENVIRONMENT_ID);
+      return [{
+        id,
+        name: env?.name
+          ?? (labelledEnvironmentId ? environmentsById.get(labelledEnvironmentId)?.name : undefined)
+          ?? dockerLabelValue(row.Labels, DOCKER_LABEL_ENVIRONMENT_NAME)
+          ?? (typeof row.Names === "string" ? row.Names : ""),
+        status: typeof row.Status === "string" ? row.Status : "",
+        state: typeof row.State === "string" ? row.State : "",
+        image: typeof row.Image === "string" ? row.Image : "",
+        created: 0,
+        environmentId: env?.id ?? null,
+        projectId: env?.projectId ?? null,
+        isAssigned: !!env,
+        cpuPercent: null,
+      }];
     });
   });
   register("cleanup_orphaned_containers", async (_args, context) => {
@@ -10431,6 +10526,7 @@ export function createCommandRegistry(
           export HOSTNAME=0.0.0.0
           export CWD=/workspace
           export ACP_PROVIDER=${acpProvider}
+          export ACP_STATE_DIR=/tmp/orkestrator-acp-state/${acpProvider}
           export ACP_AGENT_PATH="$(command -v ${acpProvider} 2>/dev/null || echo ${acpProvider})"
           export ACP_BRIDGE_TOKEN=${quoteShell(token)}
           setsid bun /opt/acp-bridge/dist/index.js --provider=${acpProvider} > ${logFile} 2>&1 &
@@ -13164,6 +13260,9 @@ export function createCommandRegistry(
 export const __testing = {
   CONTAINER_PINNED_ATTACHMENT_WRITE,
   CONTAINER_PINNED_ATTACHMENT_REMOVE,
+  countPrunedDockerResources,
+  dockerOwnerMatches,
+  parseDockerByteSize,
   configureOpenCodeAgentTools,
   scheduleOpenCodeAgentToolsConfiguration,
   cancelOpenCodeAgentToolsConfiguration,

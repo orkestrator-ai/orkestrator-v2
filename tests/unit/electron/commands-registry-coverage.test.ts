@@ -39,7 +39,7 @@ let registry: Registry;
 const DOCKER_SCRIPT = `#!/bin/sh
 printf 'docker %s\n' "$*" >> "$FAKE_COMMAND_LOG"
 
-if [ "$1" = "system" ] && [ "$2" = "prune" ]; then
+if [ "$1" = "container" ] && [ "$2" = "prune" ]; then
   printf 'Deleted Containers:\\nold-container\\nTotal reclaimed space: 768MB\\n'
   exit 0
 fi
@@ -113,7 +113,7 @@ function contextWithStorage(
     appRoot: fixtureRoot,
     resourceRoot: fixtureRoot,
     emit: mock((event: string, payload: unknown) => events.push({ event, payload })),
-    storage,
+    storage: { getDataDir: () => fixtureRoot, ...storage },
   } as unknown as CommandContext;
 }
 
@@ -221,11 +221,11 @@ describe("direct backend command registry coverage", () => {
     await expect(
       invoke("docker_system_prune", { pruneVolumes: true }, context),
     ).resolves.toEqual({
-      containersDeleted: 0,
+      containersDeleted: 1,
       imagesDeleted: 0,
       networksDeleted: 0,
       volumesDeleted: 0,
-      spaceReclaimed: "768MB",
+      spaceReclaimed: 768_000_000,
     });
     await expect(invoke("get_docker_system_stats", {}, context)).resolves.toMatchObject({
       containersRunning: 1,
@@ -235,7 +235,7 @@ describe("direct backend command registry coverage", () => {
     await expect(invoke("get_orkestrator_containers", {}, context)).resolves.toEqual([
       {
         id: "assigned-container",
-        name: "assigned",
+        name: "Environment",
         status: "Up 2 minutes",
         state: "running",
         image: "orkestrator-v2:latest",
@@ -261,7 +261,8 @@ describe("direct backend command registry coverage", () => {
     await expect(invoke("cleanup_orphaned_containers", {}, context)).resolves.toBe(1);
 
     const log = await commandLogContents();
-    expect(log).toContain("docker system prune -f --volumes");
+    expect(log).toContain("docker container prune -f --filter label=orkestrator-owner=");
+    expect(log).not.toContain("docker system prune");
     expect(log).toContain("docker rm -f orphan-container");
     expect(log).not.toContain("docker rm -f assigned-container");
   });

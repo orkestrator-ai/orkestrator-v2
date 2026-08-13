@@ -5,7 +5,26 @@ export const DOCKER_IMAGE = "orkestrator-v2:latest";
 export const DOCKER_LABEL_APP = "app";
 export const DOCKER_LABEL_APP_VALUE = APP_SLUG;
 export const DOCKER_LABEL_ENVIRONMENT_ID = "environment-id";
+export const DOCKER_LABEL_ENVIRONMENT_NAME = "environment-name";
+export const DOCKER_LABEL_OWNER = "orkestrator-owner";
 export const DOCKER_LABEL_PROJECT_ID = "project-id";
+
+/** Endpoints the managed ACP providers require in restricted containers. */
+export const REQUIRED_AGENT_NETWORK_DOMAINS = Object.freeze([
+  "x.ai",
+  "auth.x.ai",
+  "api.x.ai",
+  "cli-chat-proxy.grok.com",
+  "api2.cursor.sh",
+  "api3.cursor.sh",
+  "api4.cursor.sh",
+  "api5.cursor.sh",
+  "repo42.cursor.sh",
+  "authenticator.cursor.sh",
+  "marketplace.cursorapi.com",
+  "cursor-cdn.com",
+  "cursor.com",
+] as const);
 
 export const OPENCODE_SERVER_PORT = 4096;
 export const CLAUDE_BRIDGE_PORT = 4097;

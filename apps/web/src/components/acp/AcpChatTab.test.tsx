@@ -1,11 +1,19 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import type { AcpApproval, AcpMessageWindow, AcpSessionSnapshot } from "@/lib/acp-client";
 // The merge is pure and is the contract under test in several cases below, so
 // keep the real implementation and stub only the network calls around it.
 import * as realAcpClient from "@/lib/acp-client";
+// The tab renders through the shared NativeChatShell, so keep the real shell
+// and the real NativeMessage: the prop wiring between them is exactly what
+// these tests need to hold. Only the virtualizer is stubbed, because
+// react-virtuoso cannot measure a viewport in happy-dom and would render no
+// rows at all.
+import * as realReactVirtuoso from "react-virtuoso";
 
 const realAcpClientSnapshot = { ...realAcpClient };
+const realReactVirtuosoSnapshot = { ...realReactVirtuoso };
 
 const awaitBridgeReady = mock(async () => ({ status: "ready" as const, port: 4099, authToken: "token" }));
 const ensureNativeAgentSession = mock(async () => ({ providerSessionId: "new-session" }));
@@ -49,9 +57,41 @@ mock.module("@/lib/acp-client", () => ({
   getAcpMessageWindow,
   resolveAcpApproval,
 }));
+mock.module("react-virtuoso", () => ({
+  ...realReactVirtuosoSnapshot,
+  Virtuoso: forwardRef<any, any>((props, ref) => {
+    const scrollerRef = useRef<HTMLDivElement>(null);
+    useImperativeHandle(ref, () => ({
+      scrollToIndex: () => undefined,
+      scrollTo: () => undefined,
+      getState: (callback: (state: unknown) => void) => callback(undefined),
+    }), []);
+    useEffect(() => {
+      props.scrollerRef?.(scrollerRef.current);
+      props.atBottomStateChange?.(true);
+      return () => props.scrollerRef?.(null);
+    }, [props.scrollerRef, props.atBottomStateChange]);
+
+    const data = props.data ?? [];
+    const Empty = props.components?.EmptyPlaceholder;
+    const Footer = props.components?.Footer;
+    return (
+      <div ref={scrollerRef}>
+        {data.length === 0 && Empty ? <Empty context={props.context} /> : null}
+        {data.map((item: any, index: number) => (
+          <div key={props.computeItemKey?.(index, item) ?? index}>
+            {props.itemContent(index, item)}
+          </div>
+        ))}
+        {Footer ? <Footer context={props.context} /> : null}
+      </div>
+    );
+  }),
+}));
 
 afterAll(() => {
   mock.module("@/lib/acp-client", () => realAcpClientSnapshot);
+  mock.module("react-virtuoso", () => realReactVirtuosoSnapshot);
 });
 mock.module("@/stores/paneLayoutStore", () => ({
   usePaneLayoutStore: (selector: (state: {
@@ -139,6 +179,84 @@ describe("AcpChatTab", () => {
       "persisted-session",
       "environment-1",
     );
+  });
+
+  test("renders reasoning as a collapsed thinking disclosure, not as assistant prose", async () => {
+    getAcpSession.mockImplementation(async () => ({
+      id: "persisted-session",
+      provider: "cursor" as const,
+      status: "idle" as const,
+      messages: [{
+        id: "message-1",
+        role: "assistant" as const,
+        content: "Final answer",
+        parts: [
+          { type: "reasoning" as const, text: "Deliberating about the repository" },
+          { type: "text" as const, text: "Final answer" },
+        ],
+        createdAt: "2026-08-13T00:00:00.000Z",
+      }],
+      baseIndex: 0,
+      revision: 4,
+    }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive />);
+
+    // The bridge's `reasoning` part maps onto the shell's `thinking` type, which
+    // counts as tool activity — so it collapses behind the "Thinking" disclosure
+    // while the answer itself stays plain prose. Mapping reasoning to `text`
+    // instead would silently promote the agent's scratchpad to an answer.
+    expect(await screen.findByText("Final answer")).toBeTruthy();
+    const disclosure = (await screen.findByText("Thinking")).closest("button");
+    expect(disclosure).toBeTruthy();
+    const reasoning = screen.getByText("Deliberating about the repository");
+    expect(disclosure!.contains(reasoning)).toBe(true);
+
+    fireEvent.click(disclosure!);
+    await waitFor(() => {
+      const shown = screen.getAllByText("Deliberating about the repository");
+      expect(shown.some((node) => !disclosure!.contains(node))).toBe(true);
+    });
+  });
+
+  test("drives the shared chat shell: docked composer, pinned approvals, and scroll affordance", async () => {
+    getAcpSession.mockImplementation(async () => ({
+      id: "persisted-session",
+      provider: "cursor" as const,
+      status: "running" as const,
+      messages: [{
+        id: "message-1",
+        role: "assistant" as const,
+        content: "Working",
+        parts: [{ type: "text" as const, text: "Working" }],
+        createdAt: "2026-08-13T00:00:00.000Z",
+      }],
+      baseIndex: 0,
+      revision: 4,
+    }));
+    getAcpApprovals.mockImplementation(async () => [{
+      id: "approval-1",
+      title: "Run command",
+      options: [{ optionId: "once", name: "Allow once", kind: "allow_once" }],
+    }]);
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive />);
+
+    // The real shell owns these, so they only appear if the tab actually wired
+    // messages, blocking cards, the composer and the scroll state into it.
+    expect(await screen.findByText("Working")).toBeTruthy();
+    const approval = await screen.findByText("Run command");
+    const dock = screen.getByTestId("compose-dock");
+    // Blocking prompts are pinned with the composer rather than left in the
+    // transcript, so answering one never requires scrolling.
+    expect(dock.contains(approval)).toBe(true);
+    expect(dock.contains(screen.getByPlaceholderText("Message Cursor Agent"))).toBe(true);
+    expect(screen.getByTestId("transcript-bottom-spacer")).toBeTruthy();
+    // A running turn shows the shell's thinking indicator, not a bare spinner.
+    expect(screen.getByLabelText("Stop")).toBeTruthy();
+    // The stubbed virtualizer reports "at bottom", so the shell must not offer
+    // the scroll-down affordance.
+    expect(screen.queryByLabelText("Scroll to bottom of conversation")).toBeNull();
   });
 
   test("durably dispatches an initial prompt while inactive and clears it only after acceptance", async () => {
@@ -346,15 +464,16 @@ describe("AcpChatTab", () => {
     });
     render(<AcpChatTab tabId="tab-1" data={data} isActive />);
 
-    const retry = await screen.findByRole("button", { name: "Retry connection" });
+    const retry = await screen.findByRole("button", { name: "Retry" });
     expect(screen.getByText("bridge is down")).toBeTruthy();
-    // The composer is visible but dead: no client and no session were reached.
-    expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true);
+    // Match the other native tabs: connection errors replace the chat shell
+    // instead of leaving a dead composer and a second status header visible.
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
 
     fireEvent.click(retry);
     // The second attempt uses the healthy default and reaches the composer.
     expect(await screen.findByText("Ask Cursor Agent to work on this repository.")).toBeTruthy();
     expect(awaitBridgeReady).toHaveBeenCalledTimes(2);
-    expect(screen.queryByRole("button", { name: "Retry connection" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 });

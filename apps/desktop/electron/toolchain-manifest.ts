@@ -58,6 +58,8 @@ export type ToolchainArtifact = {
   platform: ToolchainPlatform;
   architecture: ToolchainArchitecture;
   archive: ToolchainArchive;
+  /** Additional unambiguous command names exposed in the activation directory. */
+  activationAliases?: readonly string[];
   companions?: readonly ToolchainCompanion[];
   executable: {
     fileName: ToolchainName;
@@ -391,6 +393,7 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
     version: PINNED_TOOLCHAIN_VERSIONS.cursor,
     platform: "darwin",
     architecture: "arm64",
+    activationAliases: ["cursor-agent"],
     archive: {
       format: "tar.gz",
       url: `https://downloads.cursor.com/lab/${PINNED_TOOLCHAIN_VERSIONS.cursor}/darwin/arm64/agent-cli-package.tar.gz`,
@@ -416,6 +419,7 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
     version: PINNED_TOOLCHAIN_VERSIONS.cursor,
     platform: "darwin",
     architecture: "x64",
+    activationAliases: ["cursor-agent"],
     archive: {
       format: "tar.gz",
       url: `https://downloads.cursor.com/lab/${PINNED_TOOLCHAIN_VERSIONS.cursor}/darwin/x64/agent-cli-package.tar.gz`,
@@ -441,6 +445,7 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
     version: PINNED_TOOLCHAIN_VERSIONS.cursor,
     platform: "linux",
     architecture: "arm64",
+    activationAliases: ["cursor-agent"],
     archive: {
       format: "tar.gz",
       url: `https://downloads.cursor.com/lab/${PINNED_TOOLCHAIN_VERSIONS.cursor}/linux/arm64/agent-cli-package.tar.gz`,
@@ -465,6 +470,7 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
     version: PINNED_TOOLCHAIN_VERSIONS.cursor,
     platform: "linux",
     architecture: "x64",
+    activationAliases: ["cursor-agent"],
     archive: {
       format: "tar.gz",
       url: `https://downloads.cursor.com/lab/${PINNED_TOOLCHAIN_VERSIONS.cursor}/linux/x64/agent-cli-package.tar.gz`,

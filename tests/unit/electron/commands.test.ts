@@ -11166,9 +11166,15 @@ exit 0
       const commands = createCommandRegistry();
 
       // Toolchains download at app startup, so a platform enabled mid-session
-      // has no binary yet. That must be an explanation, not a spawn ENOENT.
+      // has no binary yet. A separate PATH install must not masquerade as the
+      // managed executable selected for this backend generation; that used to
+      // start a bridge which only failed later during session creation.
+      const pathFallbackDir = await createTempDir(`ork-electron-acp-path-${provider}-`);
+      const pathFallback = path.join(pathFallbackDir, provider);
+      await fs.writeFile(pathFallback, "#!/bin/sh\nexit 0\n");
+      await fs.chmod(pathFallback, 0o755);
       const previousPath = process.env.PATH;
-      process.env.PATH = "";
+      process.env.PATH = `${pathFallbackDir}:/usr/bin:/bin`;
       try {
         await expect(
           commands.get(`start_local_${provider}_server_cmd`)?.(
@@ -11182,7 +11188,18 @@ exit 0
       }
 
       // Once the managed binary lands, the bridge starts against exactly it.
-      await fs.writeFile(path.join(toolchainBinDir, provider), `managed ${provider}`);
+      const managedAgentPath = path.join(
+        toolchainBinDir,
+        provider === "cursor" ? "cursor-agent" : "grok",
+      );
+      if (provider === "cursor") {
+        // An activation directory predating the `cursor-agent` alias holds only
+        // the legacy managed name, and that bundle is still launchable — the
+        // upgrade must not strand it. Adding the unambiguous name then wins.
+        await fs.writeFile(path.join(toolchainBinDir, "cursor"), "legacy managed alias");
+        await expect(commands.get("check_cursor_cli")?.({}, context)).resolves.toBe(true);
+      }
+      await fs.writeFile(managedAgentPath, `managed ${provider}`);
       const started = await commands.get(`start_local_${provider}_server_cmd`)?.(
         { environmentId: environment.id },
         context,
@@ -11192,7 +11209,7 @@ exit 0
         expect(started.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
         const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as Record<string, unknown>;
         expect(marker.provider).toBe(provider);
-        expect(marker.agentPath).toBe(path.join(toolchainBinDir, provider));
+        expect(marker.agentPath).toBe(managedAgentPath);
         expect(marker.hasToken).toBe(true);
         // Local bridges bind loopback only, and each environment keeps its own
         // state directory so two environments cannot share a transcript.
@@ -12826,6 +12843,42 @@ exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:h
       ));
       await expect(commands.get("check_any_ai_cli")?.({}, context)).resolves.toBe(false);
       await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBeNull();
+
+      // `cursor` is the desktop editor command, and even the real `cursor-agent`
+      // and `grok` CLIs on PATH are not the managed executables this backend
+      // generation activated. Availability has to agree with what
+      // `start_local_*_server_cmd` will actually launch, so PATH answers
+      // nothing for the ACP providers.
+      const pathTools = await createTempDir("ork-electron-cli-path-");
+      for (const name of ["cursor", "cursor-agent", "grok"]) {
+        await fs.writeFile(path.join(pathTools, name), "#!/bin/sh\nexit 0\n");
+        await fs.chmod(path.join(pathTools, name), 0o755);
+      }
+      process.env.PATH = `${pathTools}:/usr/bin:/bin`;
+
+      await expect(commands.get("check_cursor_cli")?.({}, context)).resolves.toBe(false);
+      await expect(commands.get("check_grok_cli")?.({}, context)).resolves.toBe(false);
+      await expect(commands.get("check_any_ai_cli")?.({}, context)).resolves.toBe(false);
+      await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBeNull();
+
+      // An activation directory predating the `cursor-agent` alias still only
+      // holds the legacy managed name. It is the same bundle, so it counts.
+      await fs.writeFile(path.join(root, "cursor"), "legacy managed cursor");
+      await expect(commands.get("check_cursor_cli")?.({}, context)).resolves.toBe(true);
+      await expect(commands.get("check_any_ai_cli")?.({}, context)).resolves.toBe(true);
+      await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBe("cursor");
+
+      await fs.rm(path.join(root, "cursor"), { force: true });
+      await fs.writeFile(path.join(root, "cursor-agent"), "managed cursor-agent");
+      await expect(commands.get("check_cursor_cli")?.({}, context)).resolves.toBe(true);
+      await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBe("cursor");
+
+      // Grok has no alias, and Cursor still outranks it.
+      await fs.writeFile(path.join(root, "grok"), "managed grok");
+      await expect(commands.get("check_grok_cli")?.({}, context)).resolves.toBe(true);
+      await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBe("cursor");
+      await fs.rm(path.join(root, "cursor-agent"), { force: true });
+      await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBe("grok");
     } finally {
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;

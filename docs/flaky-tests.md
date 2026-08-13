@@ -10,6 +10,17 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `orkestrator CLI package` built-artifact checks (`packages/cli/tests/cli.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-13
+- **Original command:** `bun run test` (root group: `bun test tests --parallel=4`)
+- **Worker configuration:** Four Bun workers in the root group while the workspace, bridge, and protocol-lockfile groups ran concurrently. The workspace group also ran the CLI package's `test:workspace` task against the same package directory.
+- **Failure:** Six built-artifact checks failed because `packages/cli/dist/main.js` and related staged resources were absent: `stages a self-contained backend and both bridge entrypoints`, `declares exactly the packages its bundles resolve at runtime`, `resolves every unbundled import from the directory its bundle ships in`, `packs the runtime payload and nothing else`, `starts and gracefully stops the packaged backend`, and `starts when the caller's environment already sets NODE_ENV`. The root group completed in 138.6 seconds. A separate release-version assertion failed both aggregate and isolated runs (`packages/cli/package.json` is `2.7.8`, while the root package is `2.8.0`) and is therefore a deterministic failure, not part of this flake.
+- **Suite counts:** The aggregate root group's final counts were not retained in the buffered output; the six artifact failures above were retained along with the separate deterministic version failure.
+- **Isolated rerun:** `bun test packages/cli/tests/cli.test.ts` -> all six artifact checks passed; the file reported 7 passed, 1 failed, 18 assertions in 2.33 seconds, with only the deterministic release-version assertion still failing.
+- **Hypothesis:** The CLI build starts by recursively removing `packages/cli/dist` and `packages/cli/resources`. In the aggregate runner, the workspace CLI task and root CLI tests operate on those same paths concurrently, so a workspace rebuild can remove or partially restage artifacts while the root tests read them. The immediate isolated rerun had stable artifacts and all six affected checks passed.
+
 ## `AcpChatTab > keeps a rejected initial prompt available for a remount retry` (`apps/web/src/components/acp/AcpChatTab.test.tsx`)
 
 - **Status:** resolved

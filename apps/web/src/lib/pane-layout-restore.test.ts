@@ -91,6 +91,13 @@ describe("reconcilePersistedLayout", () => {
             sessionId: "session-1",
             isLocal: true,
           },
+          nativeAgentData: {
+            platform: "claude",
+            environmentId: "env-1",
+            containerId: "container-1",
+            sessionId: "session-1",
+            isLocal: false,
+          },
         },
         {
           id: "setup",
@@ -126,6 +133,30 @@ describe("reconcilePersistedLayout", () => {
     expect(json).not.toContain("initialCommands");
     expect(json).not.toContain("hostPort");
     expect(json).toContain('"isSetupTab":true');
+  });
+
+  test("restores a native session from canonical data when the legacy payload is absent", () => {
+    const restored = reconcilePersistedLayout(saved({
+      kind: "leaf",
+      id: "pane",
+      tabs: [{
+        id: "codex",
+        type: "codex-native",
+        nativeAgentData: {
+          platform: "codex",
+          environmentId: "env-1",
+          sessionId: "thread-1",
+        },
+      }],
+      activeTabId: "codex",
+    }), context);
+
+    expect(restored?.root).toMatchObject({
+      tabs: [{
+        nativeAgentData: { platform: "codex", sessionId: "thread-1" },
+        codexNativeData: { sessionId: "thread-1" },
+      }],
+    });
   });
 
   test("collapses a setup-marked tab to a plain terminal whatever type it was persisted as", () => {

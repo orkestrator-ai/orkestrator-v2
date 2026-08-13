@@ -1555,7 +1555,12 @@ describe("paneLayoutStore environment scoping", () => {
     }, "env-a");
 
     store.updateTabNativeSessionId("claude-a", "session-1", "env-a");
-    expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.claudeNativeData?.sessionId).toBe("session-1");
+    const updated = usePaneLayoutStore.getState().getAllTabs("env-a")[0];
+    expect(updated?.claudeNativeData?.sessionId).toBe("session-1");
+    expect(updated?.nativeAgentData).toMatchObject({
+      platform: "claude",
+      sessionId: "session-1",
+    });
 
     usePaneLayoutStore.getState().updateTabNativeSessionId("claude-a", undefined, "env-a");
     expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.claudeNativeData?.sessionId).toBeUndefined();

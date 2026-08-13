@@ -6,6 +6,7 @@ import {
   createDraggableTabId,
   createEdgeDroppableId,
   createTabbarDroppableId,
+  getNativeAgentData,
   isGitFileStatus,
   isPaneLeaf,
   isPaneSplit,
@@ -49,5 +50,23 @@ describe("pane layout runtime helpers", () => {
     expect(parseEdgeDroppableId("edge:pane:one:left")).toEqual({ paneId: "pane:one", direction: "left" });
     expect(parseEdgeDroppableId("edge:pane:one:diagonal")).toBeNull();
     expect(createTabbarDroppableId("pane:one")).toBe("tabbar:pane:one");
+  });
+
+  test("normalizes every legacy native tab onto one data contract", () => {
+    expect(getNativeAgentData({
+      id: "claude",
+      type: "claude-native",
+      claudeNativeData: { environmentId: "env", sessionId: "session" },
+    })).toEqual({
+      platform: "claude",
+      environmentId: "env",
+      sessionId: "session",
+    });
+    expect(getNativeAgentData({
+      id: "cursor",
+      type: "cursor-native",
+      acpNativeData: { provider: "cursor", environmentId: "env" },
+    })).toEqual({ platform: "cursor", environmentId: "env" });
+    expect(getNativeAgentData({ id: "plain", type: "plain" })).toBeNull();
   });
 });

@@ -80,7 +80,7 @@ import {
   forkAttachmentNotice,
   type MessageForkKind,
 } from "@/components/chat/message-fork";
-import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
+import { getNativeAgentAdapter } from "@/components/native-agent/adapter";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { CodexComposeBar } from "./CodexComposeBar";
 import { parseCodexSteerCommand } from "./codex-steer-command";
@@ -641,7 +641,7 @@ export function CodexChatTab({
   );
   const providerDisplayMessages = useMemo(
     () => pinActiveNativeAgentParts(
-      sessionMessages.map(normalizeCodexNativeMessage),
+      getNativeAgentAdapter("codex").normalizeMessages(sessionMessages),
     ),
     [sessionMessages],
   );

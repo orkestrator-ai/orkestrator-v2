@@ -1,4 +1,7 @@
 import type { TabType } from "@/contexts";
+import type {
+  NativeAgentTabData as ProtocolNativeAgentTabData,
+} from "@orkestrator/protocol/native-agent";
 export {
   LEGACY_PANE_LAYOUT_VERSION,
   PANE_LAYOUT_VERSION,
@@ -117,6 +120,9 @@ export interface AcpNativeData {
   isLocal?: boolean;
 }
 
+/** Canonical provider-neutral data for every native agent tab. */
+export type NativeAgentData = ProtocolNativeAgentTabData;
+
 // Data for build pipeline tabs
 export interface BuildTabData {
   /** Environment ID */
@@ -163,6 +169,11 @@ export interface TabInfo {
   codexNativeData?: CodexNativeData;
   /** Data for cursor-native and grok-native ACP tabs. */
   acpNativeData?: AcpNativeData;
+  /**
+   * Canonical native-agent identity. Legacy provider fields remain readable
+   * while persisted pane layouts are migrated incrementally.
+   */
+  nativeAgentData?: NativeAgentData;
   /** Data for claude-build tabs */
   buildTabData?: BuildTabData;
   /** Data for dedicated structured/looped review tabs. */
@@ -196,6 +207,38 @@ export interface TabInfo {
   consumedAgentHandoffId?: string;
   /** Whether this tab runs setup scripts (used to track completion) */
   isSetupTab?: boolean;
+}
+
+/**
+ * Read one canonical native-agent identity from either the new field or a
+ * legacy provider-specific pane record.
+ */
+export function getNativeAgentData(tab: TabInfo): NativeAgentData | null {
+  if (tab.nativeAgentData) return tab.nativeAgentData;
+
+  if (tab.type === "claude-native" && tab.claudeNativeData) {
+    return { platform: "claude", ...tab.claudeNativeData };
+  }
+  if (tab.type === "codex-native" && tab.codexNativeData) {
+    return { platform: "codex", ...tab.codexNativeData };
+  }
+  if (tab.type === "opencode-native" && tab.openCodeNativeData) {
+    return { platform: "opencode", ...tab.openCodeNativeData };
+  }
+  if (
+    (tab.type === "cursor-native" || tab.type === "grok-native")
+    && tab.acpNativeData
+  ) {
+    return {
+      platform: tab.acpNativeData.provider,
+      containerId: tab.acpNativeData.containerId,
+      environmentId: tab.acpNativeData.environmentId,
+      hostPort: tab.acpNativeData.hostPort,
+      sessionId: tab.acpNativeData.sessionId,
+      isLocal: tab.acpNativeData.isLocal,
+    };
+  }
+  return null;
 }
 
 // A leaf pane contains tabs and content

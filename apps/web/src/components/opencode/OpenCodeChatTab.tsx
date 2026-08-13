@@ -105,7 +105,7 @@ import {
   forkAttachmentNotice,
   type MessageForkKind,
 } from "@/components/chat/message-fork";
-import { normalizeOpenCodeNativeMessage } from "@/lib/chat/native-message-adapters";
+import { getNativeAgentAdapter } from "@/components/native-agent/adapter";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { OpenCodeComposeBar } from "./OpenCodeComposeBar";
 import { OpenCodePermissionCard } from "./OpenCodePermissionCard";
@@ -550,7 +550,7 @@ export function OpenCodeChatTab({
   const sessionMessages = useMemo(() => session?.messages ?? [], [session?.messages]);
   const providerDisplayMessages = useMemo(
     () => pinActiveNativeAgentParts(
-      sessionMessages.map(normalizeOpenCodeNativeMessage),
+      getNativeAgentAdapter("opencode").normalizeMessages(sessionMessages),
     ),
     [sessionMessages],
   );

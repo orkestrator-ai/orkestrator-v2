@@ -8,6 +8,7 @@ import type {
   EdgeDirection,
 } from "@/types/paneLayout";
 import {
+  getNativeAgentData,
   isPaneLeaf,
   MAX_SPLIT_DEPTH,
 } from "@/types/paneLayout";
@@ -665,10 +666,18 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
       return;
     }
 
+    // Every newly-created native tab immediately carries the canonical
+    // provider-neutral identity, even while legacy fields remain for callers
+    // restored from older pane records.
+    const nativeAgentData = getNativeAgentData(tab);
+    const canonicalTab = nativeAgentData
+      ? { ...tab, nativeAgentData }
+      : tab;
+
     // Tab doesn't exist - add it to the specified pane
     const newRoot = updateLeaf(envState.root, paneId, (leaf) => ({
       ...leaf,
-      tabs: [...leaf.tabs, tab],
+      tabs: [...leaf.tabs, canonicalTab],
       activeTabId: tab.id,
     }));
 
@@ -995,53 +1004,48 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
     if (!paneWithTab || !existingTab) return;
 
-    const hasNativeSessionData =
-      (existingTab.type === "claude-native" && !!existingTab.claudeNativeData)
-      || (existingTab.type === "codex-native" && !!existingTab.codexNativeData)
-      || (existingTab.type === "opencode-native" && !!existingTab.openCodeNativeData)
-      || ((existingTab.type === "cursor-native" || existingTab.type === "grok-native") && !!existingTab.acpNativeData);
-    if (!hasNativeSessionData) return;
+    const nativeAgentData = getNativeAgentData(existingTab);
+    if (!nativeAgentData) return;
 
-    const currentSessionId = existingTab.type === "claude-native"
-      ? existingTab.claudeNativeData?.sessionId
-      : existingTab.type === "codex-native"
-        ? existingTab.codexNativeData?.sessionId
-        : existingTab.type === "opencode-native"
-          ? existingTab.openCodeNativeData?.sessionId
-          : existingTab.type === "cursor-native" || existingTab.type === "grok-native"
-            ? existingTab.acpNativeData?.sessionId
-          : undefined;
+    const currentSessionId = nativeAgentData.sessionId;
     if (currentSessionId === sessionId) return;
 
     const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
       ...leaf,
       tabs: leaf.tabs.map((tab) => {
         if (tab.id !== tabId) return tab;
+        const nextNativeAgentData = getNativeAgentData(tab);
+        const withCanonicalData = nextNativeAgentData
+          ? {
+              ...tab,
+              nativeAgentData: { ...nextNativeAgentData, sessionId },
+            }
+          : tab;
         if (tab.type === "claude-native" && tab.claudeNativeData) {
           return {
-            ...tab,
+            ...withCanonicalData,
             claudeNativeData: { ...tab.claudeNativeData, sessionId },
           };
         }
         if (tab.type === "codex-native" && tab.codexNativeData) {
           return {
-            ...tab,
+            ...withCanonicalData,
             codexNativeData: { ...tab.codexNativeData, sessionId },
           };
         }
         if (tab.type === "opencode-native" && tab.openCodeNativeData) {
           return {
-            ...tab,
+            ...withCanonicalData,
             openCodeNativeData: { ...tab.openCodeNativeData, sessionId },
           };
         }
         if ((tab.type === "cursor-native" || tab.type === "grok-native") && tab.acpNativeData) {
           return {
-            ...tab,
+            ...withCanonicalData,
             acpNativeData: { ...tab.acpNativeData, sessionId },
           };
         }
-        return tab;
+        return withCanonicalData;
       }),
     }));
 

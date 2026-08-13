@@ -65,6 +65,16 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 const sessions = new Map<string, SessionState>();
 
 /**
+ * Monotonic id stamped on every turn that reaches the SDK.
+ *
+ * A turn released to background tasks keeps its provider process alive, so more
+ * than one turn can be mid-flight for the same session. Comparing the stamp
+ * against `session.latestTurnGeneration` is how an older turn recognises that it
+ * is no longer the one the session's foreground belongs to.
+ */
+let turnGenerationCounter = 0;
+
+/**
  * Stable prompt ids whose durable journal write is in flight.
  *
  * The paired session status is set to running before that write yields. The
@@ -4097,10 +4107,43 @@ async function releaseQueryControls(session: SessionState): Promise<void> {
   for (const control of session.backgroundTaskCandidates?.values() ?? []) {
     controls.add(control);
   }
+  // A control retained across a background-task notification is a live writer
+  // like any other. Deletion and abort are the two points at which the user has
+  // said that work should stop, so the pending continuation does not exempt it.
+  for (const control of session.retainedQueryControls ?? []) {
+    controls.add(control);
+  }
   session.queryControl = undefined;
   session.backgroundTaskControls = undefined;
   session.backgroundTaskCandidates = undefined;
+  session.retainedQueryControls = undefined;
   await Promise.all(Array.from(controls, closeQueryControl));
+}
+
+/**
+ * Keep `control` addressable while its released turn waits for the continuation
+ * a background-task notification triggers.
+ *
+ * The control is deliberately not closed there, so without this it would belong
+ * to none of the session's collections: `releaseQueryControls` could not reach
+ * it and the CLI would outlive the session that owns it.
+ */
+function retainQueryControl(
+  session: SessionState,
+  control: NonNullable<SessionState["queryControl"]>,
+): void {
+  (session.retainedQueryControls ??= new Set()).add(control);
+}
+
+function forgetRetainedQueryControl(
+  session: SessionState,
+  control: NonNullable<SessionState["queryControl"]> | undefined,
+): void {
+  if (!control || !session.retainedQueryControls) return;
+  session.retainedQueryControls.delete(control);
+  if (session.retainedQueryControls.size === 0) {
+    session.retainedQueryControls = undefined;
+  }
 }
 
 function closeQueryControlIfUnused(
@@ -4110,6 +4153,7 @@ function closeQueryControlIfUnused(
   if (!control || session.queryControl === control) return;
   if (Array.from(session.backgroundTaskControls?.values() ?? []).includes(control)) return;
   if (Array.from(session.backgroundTaskCandidates?.values() ?? []).includes(control)) return;
+  if (session.retainedQueryControls?.has(control)) return;
   void closeQueryControl(control);
 }
 
@@ -4595,6 +4639,18 @@ function holdSdkPromptOpen(
 const STREAM_EVENT_COALESCE_MS = 100;
 
 /**
+ * How long a released turn waits in silence for the continuation that a
+ * terminal background-task notification is expected to trigger.
+ *
+ * Any frame from the query disarms this, so it only expires when the provider
+ * answered the notification with nothing at all. Generous on purpose: cutting a
+ * legitimate continuation short is the corruption this retention exists to
+ * avoid, while never expiring would strand the CLI child for the lifetime of
+ * the bridge.
+ */
+const RETAINED_CONTINUATION_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
  * Highest content-block index accepted from a streamed SDK event.
  *
  * Real assistant responses use a small, dense sequence of content blocks.
@@ -4616,6 +4672,8 @@ export async function sendPrompt(
     afterAttachmentCanonicalValidation?: (filePath: string) => void | Promise<void>;
     afterAttachmentInitialValidation?: (filePath: string) => void | Promise<void>;
     onQueryStarted?: () => void;
+    /** Shortens the retained-continuation watchdog so tests can observe it. */
+    retainedContinuationTimeoutMs?: number;
   },
 ): Promise<void> {
   const session = sessions.get(sessionId);
@@ -4672,6 +4730,7 @@ export async function sendPrompt(
   const structuredOutputBeforeStartup = session.structuredOutput;
   const structuredOutputRequestIdBeforeStartup =
     session.structuredOutputRequestId;
+  const latestTurnGenerationBeforeStartup = session.latestTurnGeneration;
 
   if (ownsClaimedDispatch) {
     claimedPromptDispatches.delete(sessionId);
@@ -4702,6 +4761,10 @@ export async function sendPrompt(
   // Create abort controller for this query
   const abortController = new AbortController();
   session.abortController = abortController;
+  // Claimed with the controller: from here this turn owns the foreground, and
+  // any turn still alive from an earlier release must stop reclaiming it.
+  const turnGeneration = ++turnGenerationCounter;
+  session.latestTurnGeneration = turnGeneration;
   session.status = "running";
   session.completionBlockedByBackgroundTasks = false;
   // Preserve the original user-turn clock across bridge-internal re-prompts.
@@ -4732,6 +4795,11 @@ export async function sendPrompt(
         if (session.abortController === abortController) {
           abortController.abort();
           session.abortController = abortControllerBeforeStartup;
+        }
+        // This turn never reached the SDK, so it must hand the foreground back
+        // to whichever turn held it — including a released one still running.
+        if (session.latestTurnGeneration === turnGeneration) {
+          session.latestTurnGeneration = latestTurnGenerationBeforeStartup;
         }
         session.status = statusBeforeStartup;
         session.turnStartedAt = turnStartedAtBeforeStartup;
@@ -4870,6 +4938,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
   let finishTurnInputForThisTurn: (() => void) | undefined;
   let turnReleasedToBackgroundTasks = false;
   let releasedTurnStartedAt: string | undefined;
+  // Armed while a released turn is waiting for the continuation a background
+  // task notification triggers, so the `finally` can always disarm it.
+  let retainedContinuationTimer: ReturnType<typeof setTimeout> | null = null;
   // Hoisted out of the `try` so the error path can still publish whatever the
   // coalescing window was holding. Null until the streaming state it closes
   // over exists, which is everything before the SDK query is created.
@@ -5001,6 +5072,52 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         },
       });
     };
+    // The retained control is closed only by the paths that legitimately end
+    // the turn — a continuation result, session teardown, or the watchdog
+    // below. Everything else must find it, so retention is a tracked reference
+    // rather than an absent one.
+    const stopWaitingForContinuation = () => {
+      if (retainedContinuationTimer) {
+        clearTimeout(retainedContinuationTimer);
+        retainedContinuationTimer = null;
+      }
+      if (queryIteratorControl) {
+        forgetRetainedQueryControl(session, queryIteratorControl);
+      }
+    };
+    // A silence watchdog, not a turn deadline: every frame received while it is
+    // armed pushes it out again, so a slow continuation is never cut off.
+    // Without a bound, a provider that answers the notification with nothing
+    // would hold this query's stdin — and its CLI child — open forever.
+    const armContinuationWatchdog = () => {
+      if (retainedContinuationTimer) clearTimeout(retainedContinuationTimer);
+      retainedContinuationTimer = setTimeout(() => {
+        retainedContinuationTimer = null;
+        if (
+          hasLiveTaskOwnedByThisQuery()
+          || hasBackgroundTaskCandidateOwnedByThisQuery()
+        ) {
+          // Another task this query owns is still running, which is its own
+          // reason to hold stdin open — closing it here would kill that task.
+          // The control is reachable through `backgroundTaskControls` while
+          // that is true, so only the bound needs re-arming.
+          armContinuationWatchdog();
+          return;
+        }
+        console.warn(
+          "[session-manager] No continuation after a background task notification; releasing the retained query",
+          { sessionId },
+        );
+        stopWaitingForContinuation();
+        heldSdkPrompt.close();
+        closeQueryControlIfUnused(session, queryIteratorControl);
+      }, testHooks?.retainedContinuationTimeoutMs ?? RETAINED_CONTINUATION_TIMEOUT_MS);
+    };
+    const waitForContinuationAfterNotification = () => {
+      if (!queryIteratorControl) return;
+      retainQueryControl(session, queryIteratorControl);
+      armContinuationWatchdog();
+    };
     const reclaimReleasedTurnForAssistant = (message: SdkMessageBase) => {
       if (!turnReleasedToBackgroundTasks || ownsActiveTurn()) return;
       const parentToolUseId = (
@@ -5011,6 +5128,13 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           parentToolUseId,
           (message as { isSidechain?: unknown }).isSidechain,
         )
+        || sessions.get(sessionId) !== session
+        || session.deleting
+        // Releasing lets a follow-up turn start, so more than one turn can be
+        // mid-flight. Only the newest may publish `running` and take abort
+        // ownership; an older one doing so would point stop at the wrong CLI
+        // and lock the newer turn out of its own reclaim.
+        || session.latestTurnGeneration !== turnGeneration
         || session.status !== "idle"
         || session.abortController !== undefined
       ) {
@@ -5027,6 +5151,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       session.turnStartedAt = releasedTurnStartedAt ?? new Date().toISOString();
       session.abortController = abortController;
       session.queryControl = queryIteratorControl;
+      // The continuation arrived, so `queryControl` references this handle
+      // again and the standalone retention would only outlive its purpose.
+      stopWaitingForContinuation();
       // This query can cross more than one result boundary: the resumed root
       // loop may launch another background task and need to release ownership
       // again. Treat each reclaim as the start of a fresh release cycle.
@@ -5054,6 +5181,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         return;
       }
       setCompletionBlockedByBackgroundTasks(false);
+      // Nothing is owed to this query any more, so it must stop being retained
+      // or `closeQueryControlIfUnused` would keep treating it as referenced.
+      stopWaitingForContinuation();
       heldSdkPrompt.close();
     };
     finishTurnInputForThisTurn = finishTurnInputIfSettled;
@@ -5815,6 +5945,11 @@ Plan mode is read-only: do not write or edit files until the user approves your 
 
       sdkMessageCount += 1;
       lastSdkMessageAt = Date.now();
+      // Any frame is evidence the provider is still answering the notification,
+      // so the watchdog is pushed out rather than allowed to expire mid-stream.
+      // Retention itself is dropped by the reclaim, the result, or the watchdog
+      // firing — never by liveness alone.
+      if (retainedContinuationTimer) armContinuationWatchdog();
       // Fires once per streamed delta — i.e. per token. Both the object
       // literal and the write are guarded, not just the write.
       if (isDebugLoggingEnabled) {
@@ -6128,7 +6263,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           // so a released query must stay alive until that boundary arrives.
           // A later result closes held input, while abort/delete still closes
           // the control explicitly.
-          if (owner !== queryIteratorControl || !turnReleasedToBackgroundTasks) {
+          if (owner === queryIteratorControl && turnReleasedToBackgroundTasks) {
+            waitForContinuationAfterNotification();
+          } else {
             closeQueryControlIfUnused(session, owner);
           }
           emitBackgroundTasks();
@@ -6712,6 +6849,12 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         forgetPromptDispatch(sessionId, dispatchRequestId);
       }
     }
+    // The stream is over, so there is no continuation left to wait for and the
+    // watchdog has nothing to guard.
+    if (retainedContinuationTimer) {
+      clearTimeout(retainedContinuationTimer);
+      retainedContinuationTimer = null;
+    }
     // The loop above is the only consumer of this iterator, and it ends either
     // exhausted or through an abrupt exit — which invokes `return()`, i.e. the
     // SDK's `cleanup()` → `transport.close()`. So the handle is dead either
@@ -6719,6 +6862,8 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // request with a transport error. Settle what it owned instead of retaining
     // a handle that can only fail, and never leave a task at `running`.
     if (queryIteratorControl) {
+      // Dropping the retention is what lets the close below actually run.
+      forgetRetainedQueryControl(session, queryIteratorControl);
       removeBackgroundTaskCandidatesOwnedBy(session, queryIteratorControl);
       const settled = settleTasksOwnedByClosedControl(
         session,

@@ -346,6 +346,8 @@ const deletingLocalServerEnvironments = new Set<string>();
 const mergingEnvironments = new Set<string>();
 const mergeCleanupRecoveryTasks = new Map<string, Promise<void>>();
 type LocalServerKind = "opencode" | "claude" | "codex" | "cursor" | "grok";
+/** The ACP-speaking subset of `LocalServerKind`, launched through the ACP bridge. */
+type AcpLocalServerKind = Extract<LocalServerKind, "cursor" | "grok">;
 
 function retryableBridgeStartupError(
   message: string,
@@ -1781,20 +1783,27 @@ function resolveClaudeBinary(context: CommandContext): string {
   return resolveManagedBinary(context, "claude") ?? "claude";
 }
 
-function resolveManagedCursorAgentBinary(context: CommandContext): string | undefined {
-  return resolveManagedBinary(context, "cursor-agent")
-    ?? resolveManagedBinary(context, "cursor");
-}
-
-function resolveCursorAgentBinary(context: CommandContext): string {
-  // The managed activation is Cursor's downloaded cursor-agent bundle. Never
-  // fall back to the `cursor` shell command: on desktop systems that name
-  // belongs to the editor and opens a GUI instead of speaking ACP.
-  return resolveManagedCursorAgentBinary(context) ?? "cursor-agent";
-}
-
-function resolveGrokBinary(context: CommandContext): string {
-  return resolveManagedBinary(context, "grok") ?? "grok";
+/**
+ * The one resolver for a locally launchable Cursor or Grok agent.
+ *
+ * Unlike the other agents, these never fall back to a PATH lookup. `cursor` on
+ * PATH is the desktop editor, which opens a GUI instead of speaking ACP, and a
+ * platform enabled from Settings after startup can make `which` succeed for an
+ * executable this backend generation never activated — the bridge then starts
+ * healthy and only fails later, during session creation, with an opaque
+ * transport error. Availability reporting and bridge startup both go through
+ * here so they can never disagree about what is launchable.
+ *
+ * `cursor` is accepted as a secondary managed name for activation directories
+ * and packaged layouts predating the `cursor-agent` alias.
+ */
+function resolveManagedAcpBinary(
+  context: CommandContext,
+  kind: AcpLocalServerKind,
+): string | undefined {
+  return kind === "cursor"
+    ? resolveManagedBinary(context, "cursor-agent") ?? resolveManagedBinary(context, "cursor")
+    : resolveManagedBinary(context, "grok");
 }
 
 function resolveAgentBinary(
@@ -1984,10 +1993,10 @@ function hasPackagedOrPathBinary(context: CommandContext, name: string): Promise
     : commandExists(name);
 }
 
-function hasCursorAgentBinary(context: CommandContext): Promise<boolean> {
-  return resolveManagedCursorAgentBinary(context)
-    ? Promise.resolve(true)
-    : commandExists("cursor-agent");
+// Resolution is synchronous, but every sibling probe answers with a promise and
+// the registry hands these straight to callers that await them.
+function hasManagedAcpBinary(context: CommandContext, kind: AcpLocalServerKind): Promise<boolean> {
+  return Promise.resolve(resolveManagedAcpBinary(context, kind) !== undefined);
 }
 
 function managedBinaryPathEntries(context: CommandContext): string[] {
@@ -6343,27 +6352,18 @@ async function startLocalServerUnlocked(
     );
     // Toolchains are downloaded once at app startup from the stored platform
     // selection, so a platform enabled mid-session has no managed binary yet.
-    // Say that plainly instead of failing with a bare spawn ENOENT.
-    // Cursor and Grok are selected before the backend starts and activated in
-    // this process's immutable toolchain snapshot. Falling back to a random
-    // PATH install here is unsafe: a platform enabled from Settings after
-    // startup can make `which` succeed even though that executable is not the
-    // managed binary selected for this backend generation. The HTTP bridge can
-    // then become healthy while session creation fails later with an opaque
-    // transport error. Require the executable this generation actually
-    // activated; the next app launch downloads and activates it.
-    const managedAcpBinary = kind === "cursor"
-      ? resolveManagedCursorAgentBinary(context)
-      : resolveManagedBinary(context, "grok");
+    // Say that plainly instead of failing with a bare spawn ENOENT. Startup
+    // aborts unless every selected platform activated, so this is reachable
+    // only for a platform enabled after this backend generation started, which
+    // is exactly what the message tells the user to fix.
+    const managedAcpBinary = resolveManagedAcpBinary(context, kind);
     if (!managedAcpBinary) {
       throw new Error(
         `${AGENT_PLATFORM_LABELS[kind]} is enabled but not installed yet.`
         + " Restart Orkestrator to finish downloading it.",
       );
     }
-    env.ACP_AGENT_PATH = kind === "cursor"
-      ? resolveCursorAgentBinary(context)
-      : resolveGrokBinary(context);
+    env.ACP_AGENT_PATH = managedAcpBinary;
   }
 
   const bridgeEntrypoint = path.join(cwd, "dist", "index.js");
@@ -10706,8 +10706,11 @@ export function createCommandRegistry(
   register("check_claude_config", () => pathExists(homePath(".claude.json")));
   register("check_opencode_cli", (_args, context) => hasPackagedOrPathBinary(context, "opencode"));
   register("check_codex_cli", (_args, context) => hasPackagedOrPathBinary(context, "codex"));
-  register("check_cursor_cli", (_args, context) => hasCursorAgentBinary(context));
-  register("check_grok_cli", (_args, context) => hasPackagedOrPathBinary(context, "grok"));
+  // Cursor and Grok report only what this backend generation can actually
+  // launch. Answering from PATH would advertise an agent whose bridge start
+  // then refuses it — see `resolveManagedAcpBinary`.
+  register("check_cursor_cli", (_args, context) => hasManagedAcpBinary(context, "cursor"));
+  register("check_grok_cli", (_args, context) => hasManagedAcpBinary(context, "grok"));
   register("check_github_cli", () => commandExists("gh"));
   register("get_container_github_credential_status", async (_args, context) =>
     getContainerGitHubCredentialStatus((await context.storage.loadConfig()).global));
@@ -10715,8 +10718,8 @@ export function createCommandRegistry(
     await hasPackagedOrPathBinary(context, "claude")
     || await hasPackagedOrPathBinary(context, "opencode")
     || await hasPackagedOrPathBinary(context, "codex")
-    || await hasCursorAgentBinary(context)
-    || await hasPackagedOrPathBinary(context, "grok"));
+    || await hasManagedAcpBinary(context, "cursor")
+    || await hasManagedAcpBinary(context, "grok"));
   register("get_available_ai_cli", async (_args, context) =>
     await hasPackagedOrPathBinary(context, "claude")
       ? "claude"
@@ -10724,9 +10727,9 @@ export function createCommandRegistry(
         ? "opencode"
         : await hasPackagedOrPathBinary(context, "codex")
           ? "codex"
-          : await hasCursorAgentBinary(context)
+          : await hasManagedAcpBinary(context, "cursor")
             ? "cursor"
-            : await hasPackagedOrPathBinary(context, "grok")
+            : await hasManagedAcpBinary(context, "grok")
               ? "grok"
               : null);
 

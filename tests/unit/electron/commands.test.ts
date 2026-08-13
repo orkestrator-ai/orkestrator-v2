@@ -11192,12 +11192,14 @@ exit 0
         toolchainBinDir,
         provider === "cursor" ? "cursor-agent" : "grok",
       );
-      await fs.writeFile(managedAgentPath, `managed ${provider}`);
       if (provider === "cursor") {
-        // Keep the legacy managed alias present and prove the unambiguous
-        // cursor-agent activation is preferred.
+        // An activation directory predating the `cursor-agent` alias holds only
+        // the legacy managed name, and that bundle is still launchable — the
+        // upgrade must not strand it. Adding the unambiguous name then wins.
         await fs.writeFile(path.join(toolchainBinDir, "cursor"), "legacy managed alias");
+        await expect(commands.get("check_cursor_cli")?.({}, context)).resolves.toBe(true);
       }
+      await fs.writeFile(managedAgentPath, `managed ${provider}`);
       const started = await commands.get(`start_local_${provider}_server_cmd`)?.(
         { environmentId: environment.id },
         context,
@@ -12842,20 +12844,41 @@ exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:h
       await expect(commands.get("check_any_ai_cli")?.({}, context)).resolves.toBe(false);
       await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBeNull();
 
+      // `cursor` is the desktop editor command, and even the real `cursor-agent`
+      // and `grok` CLIs on PATH are not the managed executables this backend
+      // generation activated. Availability has to agree with what
+      // `start_local_*_server_cmd` will actually launch, so PATH answers
+      // nothing for the ACP providers.
       const pathTools = await createTempDir("ork-electron-cli-path-");
-      await fs.writeFile(path.join(pathTools, "cursor"), "#!/bin/sh\nexit 0\n");
-      await fs.chmod(path.join(pathTools, "cursor"), 0o755);
+      for (const name of ["cursor", "cursor-agent", "grok"]) {
+        await fs.writeFile(path.join(pathTools, name), "#!/bin/sh\nexit 0\n");
+        await fs.chmod(path.join(pathTools, name), 0o755);
+      }
       process.env.PATH = `${pathTools}:/usr/bin:/bin`;
 
-      // `cursor` is the desktop editor command, not the ACP-capable agent CLI.
-      // It must never make Cursor Agent appear available or become a fallback.
       await expect(commands.get("check_cursor_cli")?.({}, context)).resolves.toBe(false);
+      await expect(commands.get("check_grok_cli")?.({}, context)).resolves.toBe(false);
+      await expect(commands.get("check_any_ai_cli")?.({}, context)).resolves.toBe(false);
       await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBeNull();
 
-      await fs.writeFile(path.join(pathTools, "cursor-agent"), "#!/bin/sh\nexit 0\n");
-      await fs.chmod(path.join(pathTools, "cursor-agent"), 0o755);
+      // An activation directory predating the `cursor-agent` alias still only
+      // holds the legacy managed name. It is the same bundle, so it counts.
+      await fs.writeFile(path.join(root, "cursor"), "legacy managed cursor");
+      await expect(commands.get("check_cursor_cli")?.({}, context)).resolves.toBe(true);
+      await expect(commands.get("check_any_ai_cli")?.({}, context)).resolves.toBe(true);
+      await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBe("cursor");
+
+      await fs.rm(path.join(root, "cursor"), { force: true });
+      await fs.writeFile(path.join(root, "cursor-agent"), "managed cursor-agent");
       await expect(commands.get("check_cursor_cli")?.({}, context)).resolves.toBe(true);
       await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBe("cursor");
+
+      // Grok has no alias, and Cursor still outranks it.
+      await fs.writeFile(path.join(root, "grok"), "managed grok");
+      await expect(commands.get("check_grok_cli")?.({}, context)).resolves.toBe(true);
+      await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBe("cursor");
+      await fs.rm(path.join(root, "cursor-agent"), { force: true });
+      await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBe("grok");
     } finally {
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;

@@ -1051,8 +1051,15 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       );
     }
     if (!response.ok) {
+      // Bridges answer terminal rejections with an actionable message (e.g. an
+      // ACP prompt whose outcome is unknown after a restart). Surface it so the
+      // pipeline failure tells the user what to do instead of a bare status.
+      const detail = await response.json().catch(() => null) as { error?: unknown } | null;
+      const detailMessage = detail !== null && typeof detail.error === "string"
+        ? `: ${detail.error}`
+        : "";
       throw new PromptRejectedError(
-        `${this.agent} rejected the prompt (HTTP ${response.status})`,
+        `${this.agent} rejected the prompt (HTTP ${response.status})${detailMessage}`,
       );
     }
   }

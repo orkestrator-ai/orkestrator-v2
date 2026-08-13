@@ -761,6 +761,17 @@ async function route(
     if (!prompt) return json(response, 400, { error: "prompt is required" });
     if (Buffer.byteLength(requestId) > 512) return json(response, 400, { error: "requestId is too long" });
     if (requestId && state.promptJournal.has(requestId)) {
+      const journaled = state.promptJournal.get(requestId)!;
+      // A persisted "ambiguous" entry means an earlier bridge process accepted
+      // this requestId and died before its outcome was known. Never re-dispatch
+      // at-most-once work: refuse plainly so the caller resubmits under a fresh
+      // requestId instead of treating an accepted-looking 202 as a running turn
+      // that this process will never execute.
+      if (journaled.state === "ambiguous") {
+        return json(response, 410, {
+          error: `${provider} prompt outcome is unknown after a bridge restart; resubmit with a new requestId`,
+        });
+      }
       return json(response, 202, { accepted: true, duplicate: true });
     }
     if (state.status === "running" || state.dispatching) {

@@ -221,11 +221,11 @@ describe("direct backend command registry coverage", () => {
     await expect(
       invoke("docker_system_prune", { pruneVolumes: true }, context),
     ).resolves.toEqual({
-      containersDeleted: 1,
+      containersDeleted: 2,
       imagesDeleted: 0,
       networksDeleted: 0,
       volumesDeleted: 0,
-      spaceReclaimed: 768_000_000,
+      spaceReclaimed: 768_000_000 * 2,
     });
     await expect(invoke("get_docker_system_stats", {}, context)).resolves.toMatchObject({
       containersRunning: 1,

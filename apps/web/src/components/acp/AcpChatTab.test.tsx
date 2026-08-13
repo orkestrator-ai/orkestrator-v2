@@ -339,4 +339,22 @@ describe("AcpChatTab", () => {
     // Idle again, so the composer offers Send rather than Stop.
     expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
   });
+
+  test("retries the mount handshake from the error banner after a failed connect", async () => {
+    awaitBridgeReady.mockImplementationOnce(async () => {
+      throw new Error("bridge is down");
+    });
+    render(<AcpChatTab tabId="tab-1" data={data} isActive />);
+
+    const retry = await screen.findByRole("button", { name: "Retry connection" });
+    expect(screen.getByText("bridge is down")).toBeTruthy();
+    // The composer is visible but dead: no client and no session were reached.
+    expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(retry);
+    // The second attempt uses the healthy default and reaches the composer.
+    expect(await screen.findByText("Ask Cursor Agent to work on this repository.")).toBeTruthy();
+    expect(awaitBridgeReady).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("button", { name: "Retry connection" })).toBeNull();
+  });
 });

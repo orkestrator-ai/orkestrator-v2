@@ -41,6 +41,11 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
   const [approvals, setApprovals] = useState<AcpApproval[]>([]);
   const [connecting, setConnecting] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Bumping this re-runs the mount handshake after a failed connect. Without
+  // it a transient bridge failure would leave the tab permanently dead: the
+  // component stays mounted while hidden, so no later activation re-runs the
+  // effect and submit is a no-op without a client and session.
+  const [connectNonce, setConnectNonce] = useState(0);
   const sentInitialPrompt = useRef(false);
   const pendingManualRequest = useRef<{ prompt: string; requestId: string } | null>(null);
   const dispatchingPrompt = useRef(false);
@@ -113,7 +118,7 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
       }
     })();
     return () => { mounted = false; };
-  }, [applySession, data.environmentId, data.provider, data.sessionId, tabId, updateTabNativeSessionId]);
+  }, [applySession, connectNonce, data.environmentId, data.provider, data.sessionId, tabId, updateTabNativeSessionId]);
 
   const refresh = useCallback(async () => {
     const current = sessionRef.current;
@@ -256,7 +261,16 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
             </div>
           ))}
           {session?.status === "running" && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-          {error && <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{error}</div>}
+          {error && (
+            <div className="flex flex-col items-start gap-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+              <span>{error}</span>
+              {!session && !connecting && (
+                <Button size="sm" variant="outline" onClick={() => setConnectNonce((nonce) => nonce + 1)}>
+                  Retry connection
+                </Button>
+              )}
+            </div>
+          )}
           <div ref={bottomRef} />
         </div>
       </div>

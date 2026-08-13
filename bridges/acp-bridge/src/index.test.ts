@@ -90,6 +90,11 @@ async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
   children.delete(child);
 }
 
+async function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise<void>((resolvePromise) => child.once("exit", () => resolvePromise()));
+}
+
 describe("ACP bridge", () => {
   test("drives an ACP session and rehydrates a parked permission", async () => {
     const { base, headers } = await spawnBridge();
@@ -525,6 +530,60 @@ describe("ACP bridge", () => {
     const second = await send();
     expect(second.status).toBe(500);
     expect((await nativeFetch(`${bridge.base}/global/health`)).ok).toBe(true);
+  });
+
+  test("refuses to redispatch a prompt whose outcome a crash left unknown", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const first = await spawnBridge({ stateDirectory });
+    const created = await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ clientSessionKey: "env-1:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    const dispatch = await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ prompt: "Do the work", requestId: "request-1" }),
+    });
+    expect(dispatch.status).toBe(202);
+    // The fake agent parks a permission, so the turn is still in flight and the
+    // journal is still "accepted" when the bridge dies — it restores as
+    // "ambiguous" on the next process.
+    await waitFor(
+      async () => nativeFetch(`${first.base}/session/${created.id}/approvals`, { headers: first.headers })
+        .then((response) => response.json()) as Promise<{ approvals: unknown[] }>,
+      (value) => value.approvals.length === 1,
+    );
+
+    first.child.kill("SIGKILL");
+    await waitForExit(first.child);
+
+    const second = await spawnBridge({ stateDirectory });
+    const redelivery = await nativeFetch(`${second.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: second.headers,
+      body: JSON.stringify({ prompt: "Do the work", requestId: "request-1" }),
+    });
+    expect(redelivery.status).toBe(410);
+    expect(await redelivery.json()).toMatchObject({
+      error: "cursor prompt outcome is unknown after a bridge restart; resubmit with a new requestId",
+    });
+
+    // The at-most-once work was never re-executed and a fresh requestId still
+    // recovers the session through session/load.
+    const recovered = await nativeFetch(`${second.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: second.headers,
+      body: JSON.stringify({ prompt: "DIRECT:recovered", requestId: "request-2" }),
+    });
+    expect(recovered.status).toBe(202);
+    const session = await waitFor(
+      async () => nativeFetch(`${second.base}/session/${created.id}`, { headers: second.headers })
+        .then((response) => response.json()) as Promise<{ status: string; messages: Array<{ content: string }> }>,
+      (value) => value.status === "idle",
+    );
+    expect(session.messages.map((message) => message.content)).toContain("recovered");
   });
 
   test("dispatches a prompt at most once when concurrent requests race a reattach", async () => {

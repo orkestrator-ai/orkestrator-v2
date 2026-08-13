@@ -101,7 +101,14 @@ if [ "$1" = "logs" ]; then
   exit 0
 fi
 if [ "$1" = "container" ] && [ "$2" = "prune" ]; then
-  printf 'Deleted Containers:\ncontainer-old\nTotal reclaimed space: 1.25GB\n'
+  case "$*" in
+    *"label!=orkestrator-owner"*)
+      printf 'Deleted Containers:\nlegacy-old\nTotal reclaimed space: 512MB\n'
+      ;;
+    *)
+      printf 'Deleted Containers:\ncontainer-old\nTotal reclaimed space: 1.25GB\n'
+      ;;
+  esac
   exit 0
 fi
 if [ "$1" = "exec" ]; then
@@ -549,11 +556,11 @@ describe("process and platform command behavior", () => {
     ]);
 
     expect(await invoke("docker_system_prune", { pruneVolumes: true })).toEqual({
-      containersDeleted: 1,
+      containersDeleted: 2,
       imagesDeleted: 0,
       networksDeleted: 0,
       volumesDeleted: 0,
-      spaceReclaimed: 1_250_000_000,
+      spaceReclaimed: 1_250_000_000 + 512_000_000,
     });
     expect(await invoke("get_docker_system_stats")).toMatchObject({
       containersRunning: 1,
@@ -564,6 +571,9 @@ describe("process and platform command behavior", () => {
     });
     const pruneLog = await readCommandLog();
     expect(pruneLog).toContain("docker container prune -f --filter label=orkestrator-owner=");
+    // A second pass removes legacy containers that predate ownership labels,
+    // so the cleanup matches what the listings adopt as this installation's.
+    expect(pruneLog).toContain("docker container prune -f --filter label=app=orkestrator-v2 --filter label!=orkestrator-owner");
     expect(pruneLog).not.toContain("docker system prune");
   });
 

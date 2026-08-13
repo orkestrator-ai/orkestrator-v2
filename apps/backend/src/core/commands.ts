@@ -10108,16 +10108,27 @@ export function createCommandRegistry(
     // legacy pruneVolumes flag.
     asBoolean(pruneVolumes);
     const dockerOwner = dockerOwnerNamespace(storage.getDataDir());
-    const { stdout } = await runCommand("docker", [
-      "container", "prune", "-f", "--filter", `label=${DOCKER_LABEL_OWNER}=${dockerOwner}`,
+    const pruneContainers = (filters: string[]) => runCommand("docker", [
+      "container", "prune", "-f", ...filters.flatMap((filter) => ["--filter", filter]),
     ], { timeoutMs: 120_000 });
-    const reclaimedText = /Total reclaimed space:\s*([^\n]+)/.exec(stdout)?.[1] ?? "0B";
+    // Containers created before ownership labels existed carry no owner label,
+    // yet the listings adopt them as this installation's. A second pass scoped
+    // to this app's label minus the owner label removes exactly those legacy
+    // containers, so cleanup matches what the UI reports as owned.
+    const [owned, legacy] = await Promise.all([
+      pruneContainers([`label=${DOCKER_LABEL_OWNER}=${dockerOwner}`]),
+      pruneContainers([
+        `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`,
+        `label!=${DOCKER_LABEL_OWNER}`,
+      ]),
+    ]);
+    const reclaimedText = (stdout: string) => /Total reclaimed space:\s*([^\n]+)/.exec(stdout)?.[1] ?? "0B";
     return {
-      containersDeleted: countPrunedDockerResources(stdout),
+      containersDeleted: countPrunedDockerResources(owned.stdout) + countPrunedDockerResources(legacy.stdout),
       imagesDeleted: 0,
       networksDeleted: 0,
       volumesDeleted: 0,
-      spaceReclaimed: parseDockerByteSize(reclaimedText),
+      spaceReclaimed: parseDockerByteSize(reclaimedText(owned.stdout)) + parseDockerByteSize(reclaimedText(legacy.stdout)),
     };
   });
   register("get_docker_system_stats", async () => {

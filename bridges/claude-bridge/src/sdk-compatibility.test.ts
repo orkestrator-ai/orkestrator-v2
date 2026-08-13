@@ -359,6 +359,92 @@ describe("Claude Agent SDK runtime compatibility", () => {
     }
   }, 15_000);
 
+  test("delivers a root continuation and second result after a background notification", async () => {
+    const packageRoot = join(import.meta.dir, "..");
+    const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-background-continuation-"));
+    const executable = join(fixtureDir, "fake-claude");
+    const markerFile = join(fixtureDir, "background-marker.txt");
+    await copyFile(
+      join(import.meta.dir, "testing", "fake-background-task-cli.ts"),
+      executable,
+    );
+    await chmod(executable, 0o755);
+
+    try {
+      const probe = Bun.spawn(
+        [
+          process.execPath,
+          "-e",
+          `
+            import { query } from "@anthropic-ai/claude-agent-sdk";
+            let releaseInput;
+            async function* input() {
+              yield {
+                type: "user",
+                message: { role: "user", content: [{ type: "text", text: "background continuation contract" }] },
+                parent_tool_use_id: null,
+              };
+              await new Promise((resolve) => { releaseInput = resolve; });
+            }
+            const request = query({
+              prompt: input(),
+              options: {
+                pathToClaudeCodeExecutable: process.env.CLAUDE_SDK_CONTRACT_EXECUTABLE,
+                permissionMode: "bypassPermissions",
+                allowDangerouslySkipPermissions: true,
+                maxTurns: 2,
+              },
+            });
+            const sequence = [];
+            let resultCount = 0;
+            for await (const message of request) {
+              if (message.type === "result") {
+                resultCount += 1;
+                sequence.push(\`result:\${resultCount}\`);
+                if (resultCount === 2) releaseInput?.();
+              }
+              if (message.type === "system" && message.subtype === "task_notification") {
+                sequence.push("task_notification");
+              }
+              if (
+                message.type === "assistant"
+                && message.message?.id === "contract-background-continuation-assistant"
+              ) {
+                sequence.push("root_assistant");
+              }
+            }
+            console.log(JSON.stringify({ sequence, resultCount }));
+          `,
+        ],
+        {
+          cwd: packageRoot,
+          env: {
+            ...process.env,
+            CLAUDE_SDK_CONTRACT_EXECUTABLE: executable,
+            CLAUDE_SDK_BACKGROUND_MARKER_FILE: markerFile,
+            CLAUDE_SDK_BACKGROUND_CONTINUATION: "1",
+          },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(probe.stdout).text(),
+        new Response(probe.stderr).text(),
+        probe.exited,
+      ]);
+      expect(exitCode, stderr).toBe(0);
+      expect(JSON.parse(stdout)).toEqual({
+        sequence: ["result:1", "task_notification", "root_assistant", "result:2"],
+        resultCount: 2,
+      });
+      expect(await readFile(markerFile, "utf8")).toBe("completed");
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   test("background contract fixture rejects invalid setup and reports child failure", async () => {
     const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-background-fixture-"));
     const fixture = join(import.meta.dir, "testing", "fake-background-task-cli.ts");

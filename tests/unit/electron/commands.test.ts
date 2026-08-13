@@ -11284,6 +11284,10 @@ exit 0
             hostname: process.env.HOSTNAME ?? "",
             hasToken: Boolean(process.env.ACP_BRIDGE_TOKEN),
             hasCursorApiKey: Boolean(process.env.CURSOR_API_KEY),
+            cursorApiKeyFingerprint: require("node:crypto")
+              .createHash("sha256")
+              .update(process.env.CURSOR_API_KEY ?? "")
+              .digest("hex"),
           }));
           http.createServer((req, res) => {
             res.writeHead(req.url === "/global/health" ? 200 : 404, { "content-type": "application/json" });
@@ -11293,10 +11297,11 @@ exit 0
       );
 
       const environment = createEnvironment({ id: `env-acp-${provider}`, worktreePath });
+      const globalConfig: { cursorApiKey?: string } = provider === "cursor"
+        ? { cursorApiKey: "configured-cursor-key" }
+        : {};
       const { context } = createContext(environment, {
-        globalConfig: provider === "cursor"
-          ? { cursorApiKey: "configured-cursor-key" }
-          : {},
+        globalConfig,
       });
       context.appRoot = appRoot;
       context.resourceRoot = appRoot;
@@ -11350,6 +11355,11 @@ exit 0
         expect(marker.agentPath).toBe(managedAgentPath);
         expect(marker.hasToken).toBe(true);
         expect(marker.hasCursorApiKey).toBe(provider === "cursor");
+        expect(marker.cursorApiKeyFingerprint).toBe(
+          createHash("sha256")
+            .update(provider === "cursor" ? "configured-cursor-key" : "")
+            .digest("hex"),
+        );
         // Local bridges bind loopback only, and each environment keeps its own
         // state directory so two environments cannot share a transcript.
         expect(marker.hostname).toBe("127.0.0.1");
@@ -11361,6 +11371,37 @@ exit 0
           context,
         ) as { running: boolean; port: number };
         expect(status).toMatchObject({ running: true, port: started.port });
+
+        if (provider === "cursor") {
+          globalConfig.cursorApiKey = "rotated-cursor-key";
+          const rotated = await commands.get("start_local_cursor_server_cmd")?.(
+            { environmentId: environment.id },
+            context,
+          ) as { wasRunning: boolean; authToken: string };
+          expect(rotated.wasRunning).toBe(false);
+          expect(rotated.authToken).not.toBe(started.authToken);
+          const rotatedMarker = JSON.parse(
+            await fs.readFile(markerPath, "utf8"),
+          ) as Record<string, unknown>;
+          expect(rotatedMarker.cursorApiKeyFingerprint).toBe(
+            createHash("sha256").update("rotated-cursor-key").digest("hex"),
+          );
+
+          delete globalConfig.cursorApiKey;
+          const cleared = await commands.get("start_local_cursor_server_cmd")?.(
+            { environmentId: environment.id },
+            context,
+          ) as { wasRunning: boolean; authToken: string };
+          expect(cleared.wasRunning).toBe(false);
+          expect(cleared.authToken).not.toBe(rotated.authToken);
+          const clearedMarker = JSON.parse(
+            await fs.readFile(markerPath, "utf8"),
+          ) as Record<string, unknown>;
+          expect(clearedMarker.hasCursorApiKey).toBe(false);
+          expect(clearedMarker.cursorApiKeyFingerprint).toBe(
+            createHash("sha256").update("").digest("hex"),
+          );
+        }
       } finally {
         await commands.get(`stop_local_${provider}_server_cmd`)?.(
           { environmentId: environment.id },
@@ -13132,23 +13173,26 @@ exit 0
         status: "running",
       });
       const cursorApiKey = provider === "cursor" ? "configured-container-cursor-key" : undefined;
-      const cursorFingerprint = createHash("sha256").update(cursorApiKey ?? "").digest("hex");
+      const globalConfig: { cursorApiKey?: string } = cursorApiKey
+        ? { cursorApiKey }
+        : {};
       const { context } = createContext(environment, {
-        globalConfig: cursorApiKey ? { cursorApiKey } : {},
+        globalConfig,
       });
       const commands = createCommandRegistry();
 
       const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
       const previousPidFile = process.env.FAKE_BRIDGE_PID_FILE;
       const previousTokenFile = process.env.FAKE_BRIDGE_TOKEN_FILE;
-      const previousCursorFingerprint = process.env.FAKE_CURSOR_FINGERPRINT;
+      const previousCursorFingerprintFile = process.env.FAKE_CURSOR_FINGERPRINT_FILE;
       const previousCursorKeyCapture = process.env.FAKE_CURSOR_KEY_CAPTURE;
       const tokenFile = path.join(path.dirname(pidFile), "token");
       const cursorKeyCapture = path.join(path.dirname(pidFile), "cursor-key");
+      const cursorFingerprintFile = path.join(path.dirname(pidFile), "cursor-fingerprint");
       process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
       process.env.FAKE_BRIDGE_PID_FILE = pidFile;
       process.env.FAKE_BRIDGE_TOKEN_FILE = tokenFile;
-      process.env.FAKE_CURSOR_FINGERPRINT = cursorFingerprint;
+      process.env.FAKE_CURSOR_FINGERPRINT_FILE = cursorFingerprintFile;
       process.env.FAKE_CURSOR_KEY_CAPTURE = cursorKeyCapture;
 
       const dockerScript = `#!/bin/sh
@@ -13163,16 +13207,21 @@ case "$1" in
         cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
         exit 0 ;;
       *"cat /tmp/orkestrator-ai/cursor-api-key-fingerprint"*)
-        printf '%s' "$FAKE_CURSOR_FINGERPRINT"
+        cat "$FAKE_CURSOR_FINGERPRINT_FILE" 2>/dev/null || true
         exit 0 ;;
       *"cat /tmp/${provider}-acp-bridge.log"*)
         printf '${provider} acp log\\n'; exit 0 ;;
       *"bash -lc rm -f /tmp/orkestrator-ai/cursor-api-key"*)
+        rm -f "$FAKE_CURSOR_KEY_CAPTURE"
         exit 0 ;;
       *pkill*)
         rm -f "$FAKE_BRIDGE_TOKEN_FILE"
         pid=$(cat "$FAKE_BRIDGE_PID_FILE" 2>/dev/null || true)
         if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; fi
+        case "$*" in
+          *"rm -f /tmp/${provider}-acp-bridge-token"*)
+            rm -f "$FAKE_CURSOR_KEY_CAPTURE" "$FAKE_CURSOR_FINGERPRINT_FILE" ;;
+        esac
         exit 0 ;;
       *".cursor-api-key.XXXXXX"*)
         cat > "$FAKE_CURSOR_KEY_CAPTURE"
@@ -13180,6 +13229,10 @@ case "$1" in
     esac
     token=$(printf '%s' "$*" | sed -n "s/.*ACP_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
     printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
+    fingerprint=$(printf '%s' "$*" | sed -n "s#.*printf '%s' '\\([0-9a-f][0-9a-f]*\\)' > /tmp/orkestrator-ai/cursor-api-key-fingerprint.*#\\1#p")
+    if [ -n "$fingerprint" ]; then
+      printf '%s' "$fingerprint" > "$FAKE_CURSOR_FINGERPRINT_FILE"
+    fi
     bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
     printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
     exit 0 ;;
@@ -13224,6 +13277,34 @@ exit 0
             expect(await fs.readFile(cursorKeyCapture, "utf8")).toBe(cursorApiKey!);
             expect(execLog).toContain("exec -i container-cursor sh -c");
             expect(execLog).toContain("export CURSOR_API_KEY=\"$(cat /tmp/orkestrator-ai/cursor-api-key)\"");
+
+            globalConfig.cursorApiKey = "rotated-container-cursor-key";
+            const rotated = await commands.get("start_cursor_server")?.(
+              { containerId: "container-cursor" },
+              context,
+            ) as { hostPort: number; wasRunning: boolean; authToken: string };
+            expect(rotated).toMatchObject({ hostPort, wasRunning: false });
+            expect(rotated.authToken).not.toBe(first.authToken);
+            expect(await fs.readFile(cursorKeyCapture, "utf8"))
+              .toBe("rotated-container-cursor-key");
+            expect(await fs.readFile(cursorFingerprintFile, "utf8")).toBe(
+              createHash("sha256").update("rotated-container-cursor-key").digest("hex"),
+            );
+
+            delete globalConfig.cursorApiKey;
+            const cleared = await commands.get("start_cursor_server")?.(
+              { containerId: "container-cursor" },
+              context,
+            ) as { hostPort: number; wasRunning: boolean; authToken: string };
+            expect(cleared).toMatchObject({ hostPort, wasRunning: false });
+            expect(cleared.authToken).not.toBe(rotated.authToken);
+            await expect(fs.readFile(cursorKeyCapture, "utf8")).rejects.toThrow();
+            expect(await fs.readFile(cursorFingerprintFile, "utf8")).toBe(
+              createHash("sha256").update("").digest("hex"),
+            );
+            const rotatedExecLog = await fs.readFile(logs.exec, "utf8");
+            expect(rotatedExecLog.split("\n").filter((line) => line.startsWith("exec -d ")))
+              .toHaveLength(3);
           }
 
           await commands.get(`stop_${provider}_server`)?.(
@@ -13249,8 +13330,8 @@ exit 0
         else process.env.FAKE_BRIDGE_PID_FILE = previousPidFile;
         if (previousTokenFile === undefined) delete process.env.FAKE_BRIDGE_TOKEN_FILE;
         else process.env.FAKE_BRIDGE_TOKEN_FILE = previousTokenFile;
-        if (previousCursorFingerprint === undefined) delete process.env.FAKE_CURSOR_FINGERPRINT;
-        else process.env.FAKE_CURSOR_FINGERPRINT = previousCursorFingerprint;
+        if (previousCursorFingerprintFile === undefined) delete process.env.FAKE_CURSOR_FINGERPRINT_FILE;
+        else process.env.FAKE_CURSOR_FINGERPRINT_FILE = previousCursorFingerprintFile;
         if (previousCursorKeyCapture === undefined) delete process.env.FAKE_CURSOR_KEY_CAPTURE;
         else process.env.FAKE_CURSOR_KEY_CAPTURE = previousCursorKeyCapture;
       }

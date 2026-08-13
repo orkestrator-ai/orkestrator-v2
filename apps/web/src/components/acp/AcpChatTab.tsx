@@ -48,6 +48,10 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
   // component stays mounted while hidden, so no later activation re-runs the
   // effect and submit is a no-op without a client and session.
   const [connectNonce, setConnectNonce] = useState(0);
+  // A bridge restart changes its port and/or bearer credential. Direct ACP
+  // polling is intentionally renderer-owned, so a failed request must retire
+  // that client and re-run the authoritative backend readiness handshake.
+  const reconnecting = useRef(false);
   const sentInitialPrompt = useRef(false);
   const pendingManualRequest = useRef<{ prompt: string; requestId: string } | null>(null);
   const dispatchingPrompt = useRef(false);
@@ -88,6 +92,7 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
     let mounted = true;
     void (async () => {
       try {
+        reconnecting.current = true;
         setConnecting(true);
         const ready = await awaitBridgeReady(data.environmentId, data.provider);
         if (ready.status !== "ready") throw new Error(ready.error.message);
@@ -121,7 +126,10 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
       } catch (caught) {
         if (mounted) setError(caught instanceof Error ? caught.message : String(caught));
       } finally {
-        if (mounted) setConnecting(false);
+        if (mounted) {
+          reconnecting.current = false;
+          setConnecting(false);
+        }
       }
     })();
     return () => { mounted = false; };
@@ -154,6 +162,15 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+      if (!reconnecting.current) {
+        reconnecting.current = true;
+        // Removing the stale client also stops the polling effect before the
+        // replacement handshake starts. Keep the last session snapshot in
+        // memory so the successful handshake can replace it atomically.
+        setClient(null);
+        setConnecting(true);
+        setConnectNonce((nonce) => nonce + 1);
+      }
     } finally {
       refreshing.current = false;
     }
@@ -227,7 +244,7 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
 
   const connectionState = connecting
     ? "connecting" as const
-    : session
+    : client && session
       ? "connected" as const
       : "error" as const;
 

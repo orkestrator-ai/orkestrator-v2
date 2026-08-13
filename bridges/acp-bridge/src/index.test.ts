@@ -122,6 +122,19 @@ describe("ACP bridge", () => {
     });
     expect(created.status).toBe(201);
     expect(created.headers.get("access-control-allow-origin")).toBe(origin);
+    const session = await created.json() as { id: string };
+
+    // Packaged Electron renderers use an opaque origin. They still have to
+    // prove possession of the bridge credential, but must not be rejected by
+    // the browser-origin boundary before authentication runs.
+    const opaqueOrigin = await nativeFetch(`${base}/session/${session.id}`, {
+      headers: {
+        origin: "null",
+        "x-orkestrator-acp-token": "integration-test-token",
+      },
+    });
+    expect(opaqueOrigin.status).toBe(200);
+    expect(opaqueOrigin.headers.get("access-control-allow-origin")).toBe("null");
 
     const rejected = await nativeFetch(`${base}/global/health`, {
       headers: { origin: "https://attacker.invalid" },

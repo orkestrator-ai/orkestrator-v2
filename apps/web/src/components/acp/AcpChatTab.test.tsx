@@ -476,4 +476,60 @@ describe("AcpChatTab", () => {
     expect(awaitBridgeReady).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
+
+  test("reconnects and rehydrates when the mounted tab's bridge generation changes", async () => {
+    awaitBridgeReady
+      .mockImplementationOnce(async () => ({
+        status: "ready" as const,
+        port: 4099,
+        authToken: "token-a",
+      }))
+      .mockImplementationOnce(async () => ({
+        status: "ready" as const,
+        port: 4188,
+        authToken: "token-b",
+      }));
+    getAcpApprovals.mockImplementationOnce(async () => [{
+      id: "approval-1",
+      title: "Trigger refresh",
+      options: [],
+    }]);
+    getAcpMessageWindow.mockImplementationOnce(async () => {
+      throw new Error("Unauthorized");
+    });
+    getAcpSession
+      .mockImplementationOnce(async () => ({
+        id: "persisted-session",
+        provider: "cursor" as const,
+        status: "idle" as const,
+        messages: [],
+        baseIndex: 0,
+        revision: 1,
+      }))
+      .mockImplementationOnce(async () => ({
+        id: "persisted-session",
+        provider: "cursor" as const,
+        status: "idle" as const,
+        messages: [{
+          id: "message-after-reconnect",
+          role: "assistant" as const,
+          content: "Recovered on the new bridge",
+          parts: [{ type: "text" as const, text: "Recovered on the new bridge" }],
+          createdAt: "2026-08-13T00:00:10.000Z",
+        }],
+        baseIndex: 0,
+        revision: 2,
+      }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive />);
+    fireEvent.click(await screen.findByRole("button", { name: "Deny" }));
+
+    expect(await screen.findByText("Recovered on the new bridge")).toBeTruthy();
+    expect(awaitBridgeReady).toHaveBeenCalledTimes(2);
+    expect(getAcpSession).toHaveBeenLastCalledWith(
+      { baseUrl: "http://127.0.0.1:4188", authToken: "token-b" },
+      "persisted-session",
+    );
+    expect(screen.queryByText("Unauthorized")).toBeNull();
+  });
 });

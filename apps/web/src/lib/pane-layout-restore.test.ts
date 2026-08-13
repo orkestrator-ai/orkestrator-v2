@@ -4,6 +4,7 @@ import {
   preserveRendererLocalPaneFields,
   reconcilePersistedLayout,
 } from "./pane-layout-restore";
+import { mergePersistedPaneLayouts } from "./pane-layout-merge";
 import {
   LEGACY_PANE_LAYOUT_VERSION,
   PANE_LAYOUT_VERSION,
@@ -155,6 +156,50 @@ describe("reconcilePersistedLayout", () => {
       tabs: [{
         nativeAgentData: { platform: "codex", sessionId: "thread-1" },
         codexNativeData: { sessionId: "thread-1" },
+      }],
+    });
+  });
+
+  test("restores the newer session after a mixed-version layout conflict", () => {
+    const layout = (tab: TabInfo) => ({
+      version: PANE_LAYOUT_VERSION,
+      containerId: "container-1",
+      activePaneId: "pane",
+      root: {
+        kind: "leaf" as const,
+        id: "pane",
+        tabs: [tab],
+        activeTabId: tab.id,
+      },
+    });
+    const legacyTab = (sessionId: string): TabInfo => ({
+      id: "codex",
+      type: "codex-native",
+      codexNativeData: { environmentId: "env-1", sessionId },
+    });
+    const base = layout(legacyTab("thread-old"));
+    const local = layout(legacyTab("thread-new"));
+    const remote = layout({
+      ...legacyTab("thread-old"),
+      displayTitle: "Remote title",
+      nativeAgentData: {
+        platform: "codex",
+        environmentId: "env-1",
+        sessionId: "thread-old",
+      },
+    });
+
+    const merged = mergePersistedPaneLayouts(base, local, remote);
+    const restored = reconcilePersistedLayout(
+      saved(merged.root, { activePaneId: merged.activePaneId }),
+      context,
+    );
+
+    expect(restored?.root).toMatchObject({
+      tabs: [{
+        displayTitle: "Remote title",
+        nativeAgentData: { platform: "codex", sessionId: "thread-new" },
+        codexNativeData: { sessionId: "thread-new" },
       }],
     });
   });

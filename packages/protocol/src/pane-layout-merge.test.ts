@@ -168,6 +168,51 @@ describe("mergePersistedPaneLayouts", () => {
     }]);
   });
 
+  test("atomically merges legacy and canonical native session identities", () => {
+    const makeInput = (tab: TabInfo) => input({
+      kind: "leaf",
+      id: "default",
+      tabs: [tab],
+      activeTabId: tab.id,
+    });
+    const legacyTab = (sessionId: string): TabInfo => ({
+      id: "native",
+      type: "codex-native",
+      codexNativeData: {
+        environmentId: "env-1",
+        sessionId,
+      },
+    });
+    const base = makeInput(legacyTab("session-old"));
+    const local = makeInput(legacyTab("session-new"));
+    const remote = makeInput({
+      ...legacyTab("session-old"),
+      displayTitle: "Remote title",
+      nativeAgentData: {
+        platform: "codex",
+        environmentId: "env-1",
+        sessionId: "session-old",
+      },
+    });
+
+    const merged = mergePersistedPaneLayouts(base, local, remote);
+
+    expect(tabs(merged.root)).toEqual([{
+      id: "native",
+      type: "codex-native",
+      displayTitle: "Remote title",
+      codexNativeData: {
+        environmentId: "env-1",
+        sessionId: "session-new",
+      },
+      nativeAgentData: {
+        platform: "codex",
+        environmentId: "env-1",
+        sessionId: "session-new",
+      },
+    }]);
+  });
+
   test("a remote deletion wins over a local move", () => {
     const base = input(split(leaf("left", ["base", "moving"]), leaf("right", ["stay"])));
     const local = input(split(leaf("left", ["base"]), leaf("right", ["stay", "moving"])));

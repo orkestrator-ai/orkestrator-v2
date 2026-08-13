@@ -7,6 +7,7 @@ import * as realClaudeChatTab from "@/components/claude/ClaudeChatTab";
 import * as realClaudeTmuxChatTab from "@/components/claude/ClaudeTmuxChatTab";
 import * as realCodexChatTab from "@/components/codex/CodexChatTab";
 import * as realOpenCodeChatTab from "@/components/opencode/OpenCodeChatTab";
+import * as realAcpChatTab from "@/components/acp/AcpChatTab";
 import * as realBrowserTab from "@/components/browser/BrowserTab";
 import * as realLoopedReviewTab from "@/components/review/LoopedReviewTab";
 import * as realFileViewerTab from "@/components/terminal/FileViewerTab";
@@ -16,6 +17,7 @@ const realClaudeChatTabSnapshot = { ...realClaudeChatTab };
 const realClaudeTmuxChatTabSnapshot = { ...realClaudeTmuxChatTab };
 const realCodexChatTabSnapshot = { ...realCodexChatTab };
 const realOpenCodeChatTabSnapshot = { ...realOpenCodeChatTab };
+const realAcpChatTabSnapshot = { ...realAcpChatTab };
 const realBrowserTabSnapshot = { ...realBrowserTab };
 const realLoopedReviewTabSnapshot = { ...realLoopedReviewTab };
 const realFileViewerTabSnapshot = { ...realFileViewerTab };
@@ -214,6 +216,33 @@ mock.module("@/components/opencode/OpenCodeChatTab", () => ({
   ),
 }));
 
+mock.module("@/components/acp/AcpChatTab", () => ({
+  AcpChatTab: ({
+    tabId,
+    data,
+    isActive,
+    initialPrompt,
+  }: {
+    tabId: string;
+    data: {
+      provider: "cursor" | "grok";
+      environmentId: string;
+      sessionId?: string;
+    };
+    isActive: boolean;
+    initialPrompt?: string;
+  }) => (
+    <div
+      data-testid={`${data.provider}-tab`}
+      data-tab-id={tabId}
+      data-environment-id={data.environmentId}
+      data-session-id={data.sessionId}
+      data-active={String(isActive)}
+      data-initial-prompt={initialPrompt}
+    />
+  ),
+}));
+
 mock.module("@/components/browser/BrowserTab", () => ({
   BrowserTab: ({
     tabId,
@@ -332,6 +361,10 @@ describe("PaneLeafContainer", () => {
     mock.module(
       "@/components/opencode/OpenCodeChatTab",
       () => realOpenCodeChatTabSnapshot,
+    );
+    mock.module(
+      "@/components/acp/AcpChatTab",
+      () => realAcpChatTabSnapshot,
     );
     mock.module(
       "@/components/browser/BrowserTab",
@@ -648,6 +681,58 @@ describe("PaneLeafContainer", () => {
     expect((await screen.findByTestId("opencode-tab")).dataset).toMatchObject({
       agentModel: "provider/opencode-review",
       reasoningEffort: "deep",
+    });
+  });
+
+  test("routes Cursor and Grok through the shared native-agent boundary", async () => {
+    const pane = {
+      kind: "leaf" as const,
+      id: "pane-acp",
+      tabs: [
+        {
+          id: "tab-cursor",
+          type: "cursor-native" as const,
+          initialPrompt: "Inspect this",
+          acpNativeData: {
+            provider: "cursor" as const,
+            environmentId: "env-visible",
+            sessionId: "cursor-session",
+          },
+        },
+        {
+          id: "tab-grok",
+          type: "grok-native" as const,
+          nativeAgentData: {
+            platform: "grok" as const,
+            environmentId: "env-visible",
+            sessionId: "grok-session",
+          },
+        },
+      ],
+      activeTabId: "tab-cursor",
+    };
+
+    render(
+      <PaneLeafContainer
+        pane={pane}
+        containerId="container-visible"
+        environmentId="env-visible"
+        isActive
+      />,
+    );
+
+    expect((await screen.findByTestId("cursor-tab")).dataset).toMatchObject({
+      tabId: "tab-cursor",
+      environmentId: "env-visible",
+      sessionId: "cursor-session",
+      initialPrompt: "Inspect this",
+      active: "true",
+    });
+    expect((await screen.findByTestId("grok-tab")).dataset).toMatchObject({
+      tabId: "tab-grok",
+      environmentId: "env-visible",
+      sessionId: "grok-session",
+      active: "false",
     });
   });
 

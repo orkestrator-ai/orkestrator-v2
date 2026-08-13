@@ -86,13 +86,18 @@ describe("forced dark mode theming", () => {
     expect(css).toMatch(/color-scheme:\s*dark/);
   });
 
-  test("native scrollbars use the dark surface palette", () => {
+  test("native scrollbar tracks inherit the panel surface", () => {
     const css = read("apps/web/src/index.css");
 
     expect(css).toMatch(
-      /html\s*{[^}]*scrollbar-color:\s*var\(--color-border\)\s+var\(--color-background\)/s,
+      /html\s*{[^}]*scrollbar-color:\s*var\(--color-border\)\s+transparent/s,
     );
-    expect(css).toMatch(/::-webkit-scrollbar-track\s*{[^}]*@apply\s+bg-background/s);
+    expect(css).toMatch(
+      /::-webkit-scrollbar-track\s*{[^}]*background-color:\s*transparent/s,
+    );
+    expect(css).toMatch(
+      /::-webkit-scrollbar-corner\s*{[^}]*background-color:\s*transparent/s,
+    );
     expect(css).toMatch(/::-webkit-scrollbar\s*{[^}]*width:\s*8px[^}]*height:\s*8px/s);
     expect(css).toMatch(/::-webkit-scrollbar-thumb\s*{[^}]*@apply\s+bg-border\s+rounded-md/s);
     expect(css).toMatch(/::-webkit-scrollbar-thumb:hover\s*{[^}]*@apply\s+bg-muted-foreground/s);

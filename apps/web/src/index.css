@@ -83,7 +83,7 @@ html {
   /* Shared by the desktop shell and fullscreen surfaces that preserve its title bar. */
   --desktop-title-bar-height: 34px;
   color-scheme: dark;
-  scrollbar-color: var(--color-border) var(--color-background);
+  scrollbar-color: var(--color-border) transparent;
   height: 100%;
   overflow: hidden;
 }
@@ -174,14 +174,20 @@ body {
   background-color: var(--color-background);
 }
 
-/* Scrollbar styles for dark theme */
+/* Scrollbar styles for dark theme.
+ * Track is transparent so it inherits the panel behind it (zinc-900 files
+ * panel, black chat, etc.) instead of painting a black stripe. */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  @apply bg-background;
+  background-color: transparent;
+}
+
+::-webkit-scrollbar-corner {
+  background-color: transparent;
 }
 
 ::-webkit-scrollbar-thumb {

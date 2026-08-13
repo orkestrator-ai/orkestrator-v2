@@ -1,4 +1,9 @@
 import type { TabType } from "@/contexts";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import {
+  isNativeAgentTabData,
+  type NativeAgentTabData as ProtocolNativeAgentTabData,
+} from "@orkestrator/protocol/native-agent";
 export {
   LEGACY_PANE_LAYOUT_VERSION,
   PANE_LAYOUT_VERSION,
@@ -117,6 +122,9 @@ export interface AcpNativeData {
   isLocal?: boolean;
 }
 
+/** Canonical provider-neutral data for every native agent tab. */
+export type NativeAgentData = ProtocolNativeAgentTabData;
+
 // Data for build pipeline tabs
 export interface BuildTabData {
   /** Environment ID */
@@ -163,6 +171,11 @@ export interface TabInfo {
   codexNativeData?: CodexNativeData;
   /** Data for cursor-native and grok-native ACP tabs. */
   acpNativeData?: AcpNativeData;
+  /**
+   * Canonical native-agent identity. Legacy provider fields remain readable
+   * while persisted pane layouts are migrated incrementally.
+   */
+  nativeAgentData?: NativeAgentData;
   /** Data for claude-build tabs */
   buildTabData?: BuildTabData;
   /** Data for dedicated structured/looped review tabs. */
@@ -196,6 +209,88 @@ export interface TabInfo {
   consumedAgentHandoffId?: string;
   /** Whether this tab runs setup scripts (used to track completion) */
   isSetupTab?: boolean;
+}
+
+/**
+ * The tab type owns the platform. A persisted `platform`/`provider` value is
+ * never trusted to pick the controller: a record that disagrees with its tab
+ * type would otherwise load another provider's client for this tab.
+ */
+const NATIVE_AGENT_TAB_PLATFORMS: Readonly<Partial<Record<TabType, AgentPlatform>>> = {
+  "claude-native": "claude",
+  "codex-native": "codex",
+  "opencode-native": "opencode",
+  "cursor-native": "cursor",
+  "grok-native": "grok",
+};
+
+/** The legacy provider record a native tab type projects its identity onto. */
+type LegacyNativeAgentData =
+  | ClaudeNativeData
+  | CodexNativeData
+  | OpenCodeNativeData
+  | AcpNativeData;
+
+function legacyNativeAgentRecord(tab: TabInfo): LegacyNativeAgentData | undefined {
+  switch (tab.type) {
+    case "claude-native":
+      return tab.claudeNativeData;
+    case "codex-native":
+      return tab.codexNativeData;
+    case "opencode-native":
+      return tab.openCodeNativeData;
+    case "cursor-native":
+    case "grok-native":
+      return tab.acpNativeData;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Read one canonical native-agent identity from either the new field or a
+ * legacy provider-specific pane record.
+ *
+ * Both sources are validated. A canonical field that fails validation or names
+ * a platform other than the tab's own falls back to the legacy record rather
+ * than reaching the adapter registry, where an unknown platform has no entry.
+ */
+export function getNativeAgentData(tab: TabInfo): NativeAgentData | null {
+  const platform = NATIVE_AGENT_TAB_PLATFORMS[tab.type];
+  if (!platform) return null;
+
+  if (
+    isNativeAgentTabData(tab.nativeAgentData)
+    && tab.nativeAgentData.platform === platform
+  ) {
+    return tab.nativeAgentData;
+  }
+
+  const legacy = legacyNativeAgentRecord(tab);
+  if (!legacy) return null;
+  // Only keys the record actually carries are copied, so a derived identity
+  // compares equal to a persisted one under the pane-layout merge.
+  const derived: NativeAgentData = { platform, environmentId: legacy.environmentId };
+  if (legacy.containerId !== undefined) derived.containerId = legacy.containerId;
+  if (legacy.hostPort !== undefined) derived.hostPort = legacy.hostPort;
+  if (legacy.sessionId !== undefined) derived.sessionId = legacy.sessionId;
+  if (legacy.isLocal !== undefined) derived.isLocal = legacy.isLocal;
+  return isNativeAgentTabData(derived) ? derived : null;
+}
+
+/**
+ * Project a canonical identity back onto a legacy provider pane record.
+ *
+ * `platform` is dropped: it is redundant with the tab type, and a stray copy
+ * inside the legacy record would both bloat the persisted layout and be
+ * stripped again by the pane-layout merge, so the same tab would serialize two
+ * different ways depending on whether a write conflict occurred.
+ */
+export function toLegacyNativeAgentData(
+  data: NativeAgentData,
+): Omit<NativeAgentData, "platform"> {
+  const { platform: _platform, ...legacy } = data;
+  return legacy;
 }
 
 // A leaf pane contains tabs and content

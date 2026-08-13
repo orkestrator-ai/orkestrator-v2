@@ -95,8 +95,8 @@ import type { ClaudeAttachment, QueuedMessage } from "@/stores/claudeStore";
 import {
   applyClaudeBackgroundTaskStates,
   getClaudeSourceMessageId,
-  normalizeClaudeMessagesForDisplay,
 } from "@/lib/chat/native-message-adapters";
+import { getNativeAgentAdapter } from "@/components/native-agent/adapter";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 
 /**
@@ -884,7 +884,7 @@ export function ClaudeChatTab({
   );
   const providerDisplayMessages = useMemo(
     () => pinActiveNativeAgentParts(
-      normalizeClaudeMessagesForDisplay(lifecycleMessages),
+      getNativeAgentAdapter("claude").normalizeMessages(lifecycleMessages),
     ),
     [lifecycleMessages],
   );

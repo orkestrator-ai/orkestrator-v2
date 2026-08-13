@@ -27,6 +27,7 @@ import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agen
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
 import { useVirtuosoScrollState } from "@/hooks";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
+import { getNativeAgentAdapter } from "@/components/native-agent/adapter";
 
 interface AcpChatTabProps {
   tabId: string;
@@ -219,18 +220,10 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
     tabId,
   ]);
 
-  const messages = useMemo<NativeMessage[]>(() => (session?.messages ?? []).map((message) => ({
-    id: message.id,
-    role: message.role,
-    content: message.content,
-    createdAt: message.createdAt,
-    parts: message.parts.map((part, index) => ({
-      type: part.type === "reasoning" ? "thinking" as const : "text" as const,
-      content: part.text,
-      sourcePartId: `${message.id}:${index}`,
-      sourceMessageId: message.id,
-    })),
-  })), [session?.messages]);
+  const messages = useMemo<NativeMessage[]>(
+    () => getNativeAgentAdapter(data.provider).normalizeMessages(session?.messages ?? []),
+    [data.provider, session?.messages],
+  );
 
   const connectionState = connecting
     ? "connecting" as const

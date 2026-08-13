@@ -4,6 +4,7 @@ import {
   preserveRendererLocalPaneFields,
   reconcilePersistedLayout,
 } from "./pane-layout-restore";
+import { mergePersistedPaneLayouts } from "./pane-layout-merge";
 import {
   LEGACY_PANE_LAYOUT_VERSION,
   PANE_LAYOUT_VERSION,
@@ -91,6 +92,13 @@ describe("reconcilePersistedLayout", () => {
             sessionId: "session-1",
             isLocal: true,
           },
+          nativeAgentData: {
+            platform: "claude",
+            environmentId: "env-1",
+            containerId: "container-1",
+            sessionId: "session-1",
+            isLocal: false,
+          },
         },
         {
           id: "setup",
@@ -126,6 +134,74 @@ describe("reconcilePersistedLayout", () => {
     expect(json).not.toContain("initialCommands");
     expect(json).not.toContain("hostPort");
     expect(json).toContain('"isSetupTab":true');
+  });
+
+  test("restores a native session from canonical data when the legacy payload is absent", () => {
+    const restored = reconcilePersistedLayout(saved({
+      kind: "leaf",
+      id: "pane",
+      tabs: [{
+        id: "codex",
+        type: "codex-native",
+        nativeAgentData: {
+          platform: "codex",
+          environmentId: "env-1",
+          sessionId: "thread-1",
+        },
+      }],
+      activeTabId: "codex",
+    }), context);
+
+    expect(restored?.root).toMatchObject({
+      tabs: [{
+        nativeAgentData: { platform: "codex", sessionId: "thread-1" },
+        codexNativeData: { sessionId: "thread-1" },
+      }],
+    });
+  });
+
+  test("restores the newer session after a mixed-version layout conflict", () => {
+    const layout = (tab: TabInfo) => ({
+      version: PANE_LAYOUT_VERSION,
+      containerId: "container-1",
+      activePaneId: "pane",
+      root: {
+        kind: "leaf" as const,
+        id: "pane",
+        tabs: [tab],
+        activeTabId: tab.id,
+      },
+    });
+    const legacyTab = (sessionId: string): TabInfo => ({
+      id: "codex",
+      type: "codex-native",
+      codexNativeData: { environmentId: "env-1", sessionId },
+    });
+    const base = layout(legacyTab("thread-old"));
+    const local = layout(legacyTab("thread-new"));
+    const remote = layout({
+      ...legacyTab("thread-old"),
+      displayTitle: "Remote title",
+      nativeAgentData: {
+        platform: "codex",
+        environmentId: "env-1",
+        sessionId: "thread-old",
+      },
+    });
+
+    const merged = mergePersistedPaneLayouts(base, local, remote);
+    const restored = reconcilePersistedLayout(
+      saved(merged.root, { activePaneId: merged.activePaneId }),
+      context,
+    );
+
+    expect(restored?.root).toMatchObject({
+      tabs: [{
+        displayTitle: "Remote title",
+        nativeAgentData: { platform: "codex", sessionId: "thread-new" },
+        codexNativeData: { sessionId: "thread-new" },
+      }],
+    });
   });
 
   test("collapses a setup-marked tab to a plain terminal whatever type it was persisted as", () => {
@@ -987,6 +1063,124 @@ describe("pane field preservation", () => {
     ).toMatchObject({
       sessionId: "authoritative-opencode-session",
       hostPort: 4103,
+    });
+  });
+
+  test("carries a renderer-local host port onto the canonical identity", () => {
+    // Persistence strips `hostPort` and restore never writes it onto
+    // `nativeAgentData`, so the live port only ever exists on whichever
+    // projection its writer used. The pane renderer reads the canonical field,
+    // so it has to inherit the port regardless of where it was recorded.
+    const nativeTab = (
+      id: string,
+      type: TabInfo["type"],
+      legacy: Partial<TabInfo>,
+    ): TabInfo => ({
+      id,
+      type,
+      nativeAgentData: {
+        platform: type.replace("-native", "") as "claude",
+        environmentId: "env-1",
+        sessionId: `local-${id}-session`,
+      },
+      ...legacy,
+    });
+    const current: EnvironmentPaneState = {
+      containerId: "container-1",
+      activePaneId: "pane",
+      root: {
+        kind: "leaf",
+        id: "pane",
+        tabs: [
+          nativeTab("claude", "claude-native", {
+            claudeNativeData: { environmentId: "env-1", hostPort: 4101 },
+          }),
+          nativeTab("codex", "codex-native", {
+            codexNativeData: { environmentId: "env-1", hostPort: 4102 },
+          }),
+          nativeTab("opencode", "opencode-native", {
+            openCodeNativeData: { environmentId: "env-1", hostPort: 4103 },
+          }),
+          nativeTab("cursor", "cursor-native", {
+            acpNativeData: {
+              provider: "cursor",
+              environmentId: "env-1",
+              hostPort: 4104,
+            },
+          }),
+        ],
+        activeTabId: "claude",
+      },
+    };
+    const authoritativeTab = (id: string, type: TabInfo["type"]): TabInfo => ({
+      id,
+      type,
+      nativeAgentData: {
+        platform: type.replace("-native", "") as "claude",
+        environmentId: "env-1",
+        sessionId: `authoritative-${id}-session`,
+      },
+    });
+    const authoritative: EnvironmentPaneState = {
+      containerId: "container-1",
+      activePaneId: "pane",
+      root: {
+        kind: "leaf",
+        id: "pane",
+        tabs: [
+          authoritativeTab("claude", "claude-native"),
+          authoritativeTab("codex", "codex-native"),
+          authoritativeTab("opencode", "opencode-native"),
+          authoritativeTab("cursor", "cursor-native"),
+        ],
+        activeTabId: "claude",
+      },
+    };
+
+    const reconciled = preserveRendererLocalPaneFields(authoritative, current);
+    if (reconciled.root.kind !== "leaf") throw new Error("expected leaf");
+    const byId = new Map(reconciled.root.tabs.map((tab) => [tab.id, tab]));
+
+    for (const [id, hostPort] of [
+      ["claude", 4101],
+      ["codex", 4102],
+      ["opencode", 4103],
+      ["cursor", 4104],
+    ] as const) {
+      expect(byId.get(id)?.nativeAgentData).toMatchObject({
+        sessionId: `authoritative-${id}-session`,
+        hostPort,
+      });
+    }
+  });
+
+  test("leaves the canonical identity alone when no host port is known", () => {
+    const tab: TabInfo = {
+      id: "codex",
+      type: "codex-native",
+      nativeAgentData: {
+        platform: "codex",
+        environmentId: "env-1",
+        sessionId: "authoritative-session",
+      },
+      codexNativeData: { environmentId: "env-1" },
+    };
+    const state = (tabs: TabInfo[]): EnvironmentPaneState => ({
+      containerId: "container-1",
+      activePaneId: "pane",
+      root: { kind: "leaf", id: "pane", tabs, activeTabId: "codex" },
+    });
+
+    const reconciled = preserveRendererLocalPaneFields(
+      state([tab]),
+      state([{ ...tab, codexNativeData: { environmentId: "env-1" } }]),
+    );
+    if (reconciled.root.kind !== "leaf") throw new Error("expected leaf");
+
+    expect(reconciled.root.tabs[0]?.nativeAgentData).toEqual({
+      platform: "codex",
+      environmentId: "env-1",
+      sessionId: "authoritative-session",
     });
   });
 

@@ -4,7 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { usePaneLayoutStore, useEnvironmentStore, useConfigStore } from "@/stores";
 import { useTerminalPortalStore } from "@/stores/terminalPortalStore";
 import type { PaneLeaf } from "@/types/paneLayout";
-import { createTabbarDroppableId } from "@/types/paneLayout";
+import { createTabbarDroppableId, getNativeAgentData } from "@/types/paneLayout";
 import { cn } from "@/lib/utils";
 import { DraggableTabBar } from "./DraggableTabBar";
 import { DropZoneOverlay } from "./DropZoneOverlay";
@@ -17,20 +17,11 @@ import {
 const LazyFileViewerTab = lazy(async () => ({
   default: (await import("@/components/terminal/FileViewerTab")).FileViewerTab,
 }));
-const LazyOpenCodeChatTab = lazy(async () => ({
-  default: (await import("@/components/opencode")).OpenCodeChatTab,
-}));
-const LazyClaudeChatTab = lazy(async () => ({
-  default: (await import("@/components/claude/ClaudeChatTab")).ClaudeChatTab,
+const LazyNativeAgentTab = lazy(async () => ({
+  default: (await import("@/components/native-agent")).NativeAgentTab,
 }));
 const LazyClaudeTmuxChatTab = lazy(async () => ({
   default: (await import("@/components/claude/ClaudeTmuxChatTab")).ClaudeTmuxChatTab,
-}));
-const LazyCodexChatTab = lazy(async () => ({
-  default: (await import("@/components/codex")).CodexChatTab,
-}));
-const LazyAcpChatTab = lazy(async () => ({
-  default: (await import("@/components/acp")).AcpChatTab,
 }));
 const LazyBuildChatTab = lazy(async () => ({
   default: (await import("@/components/build-pipeline/BuildChatTab")).BuildChatTab,
@@ -235,8 +226,8 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
             );
           }
 
-          // OpenCode native chat tabs
-          if (tab.type === "opencode-native" && tab.openCodeNativeData) {
+          const nativeAgentData = getNativeAgentData(tab);
+          if (nativeAgentData) {
             return (
               <div
                 key={tab.id}
@@ -249,41 +240,9 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   loadingFallback={renderTabFallback(isTabActive && isActive)}
                   renderError={renderTabError(isTabActive && isActive)}
                 >
-                  <LazyOpenCodeChatTab
+                  <LazyNativeAgentTab
                     tabId={tab.id}
-                    data={tab.openCodeNativeData}
-                    isActive={isTabActive && isActive}
-                    ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
-                    initialPrompt={tab.initialPrompt}
-                    isReviewTab={tab.isReviewTab}
-                    initialAgentModel={tab.initialAgentModel}
-                    initialReasoningEffort={tab.initialReasoningEffort}
-                    agentHandoffId={tab.agentHandoffId}
-                    consumedAgentHandoffId={tab.consumedAgentHandoffId}
-                    refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
-                  />
-                </LazyLoadBoundary>
-              </div>
-            );
-          }
-
-          // Claude native chat tabs
-          if (tab.type === "claude-native" && tab.claudeNativeData) {
-            return (
-              <div
-                key={tab.id}
-                className={cn(
-                  "absolute inset-0",
-                  isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden"
-                )}
-              >
-                <LazyLoadBoundary
-                  loadingFallback={renderTabFallback(isTabActive && isActive)}
-                  renderError={renderTabError(isTabActive && isActive)}
-                >
-                  <LazyClaudeChatTab
-                    tabId={tab.id}
-                    data={tab.claudeNativeData}
+                    data={nativeAgentData}
                     isActive={isTabActive && isActive}
                     ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
                     initialPrompt={tab.initialPrompt}
@@ -323,62 +282,6 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                     initialAgentModel={tab.initialAgentModel}
                     initialReasoningEffort={tab.initialReasoningEffort}
                     refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
-                  />
-                </LazyLoadBoundary>
-              </div>
-            );
-          }
-
-          // Codex native chat tabs
-          if (tab.type === "codex-native" && tab.codexNativeData) {
-            return (
-              <div
-                key={tab.id}
-                className={cn(
-                  "absolute inset-0",
-                  isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden"
-                )}
-              >
-                <LazyLoadBoundary
-                  loadingFallback={renderTabFallback(isTabActive && isActive)}
-                  renderError={renderTabError(isTabActive && isActive)}
-                >
-                  <LazyCodexChatTab
-                    tabId={tab.id}
-                    data={tab.codexNativeData}
-                    isActive={isTabActive && isActive}
-                    ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
-                    initialPrompt={tab.initialPrompt}
-                    isReviewTab={tab.isReviewTab}
-                    initialAgentModel={tab.initialAgentModel}
-                    initialReasoningEffort={tab.initialReasoningEffort}
-                    agentHandoffId={tab.agentHandoffId}
-                    consumedAgentHandoffId={tab.consumedAgentHandoffId}
-                    refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
-                  />
-                </LazyLoadBoundary>
-              </div>
-            );
-          }
-
-          if ((tab.type === "cursor-native" || tab.type === "grok-native") && tab.acpNativeData) {
-            return (
-              <div
-                key={tab.id}
-                className={cn(
-                  "absolute inset-0",
-                  isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden",
-                )}
-              >
-                <LazyLoadBoundary
-                  loadingFallback={renderTabFallback(isTabActive && isActive)}
-                  renderError={renderTabError(isTabActive && isActive)}
-                >
-                  <LazyAcpChatTab
-                    tabId={tab.id}
-                    data={tab.acpNativeData}
-                    isActive={isTabActive && isActive}
-                    initialPrompt={tab.initialPrompt}
                   />
                 </LazyLoadBoundary>
               </div>

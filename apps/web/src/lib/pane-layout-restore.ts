@@ -1,4 +1,5 @@
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
   boundBrowserHistory,
   sanitizeBrowserHistoryForPersistence,
@@ -40,6 +41,46 @@ function optionalString(value: unknown): string | undefined {
 
 function optionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
+}
+
+function restoredNativeSessionId(
+  value: JsonObject,
+  platform: AgentPlatform,
+  legacyField: string,
+): string | undefined {
+  if (
+    isRecord(value.nativeAgentData)
+    && value.nativeAgentData.platform === platform
+  ) {
+    return nonEmptyString(value.nativeAgentData.sessionId) ?? undefined;
+  }
+  const legacy = value[legacyField];
+  return isRecord(legacy) ? nonEmptyString(legacy.sessionId) ?? undefined : undefined;
+}
+
+function hasNativeAgentSource(
+  value: JsonObject,
+  platform: AgentPlatform,
+  legacyField: string,
+): boolean {
+  return isRecord(value[legacyField])
+    || (isRecord(value.nativeAgentData) && value.nativeAgentData.platform === platform);
+}
+
+function legacyNativeData(
+  data: {
+    containerId?: string;
+    environmentId: string;
+    sessionId?: string;
+    isLocal?: boolean;
+  },
+) {
+  return {
+    containerId: data.containerId,
+    environmentId: data.environmentId,
+    sessionId: data.sessionId,
+    isLocal: data.isLocal,
+  };
 }
 
 function sanitizeSizes(value: unknown): [number, number] {
@@ -140,59 +181,76 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
   }
 
   if (type === "claude-native") {
-    if (!isRecord(value.claudeNativeData)) return null;
+    if (!hasNativeAgentSource(value, "claude", "claudeNativeData")) return null;
+    const nativeAgentData = {
+      platform: "claude" as const,
+      containerId: context.containerId ?? undefined,
+      environmentId: context.environmentId,
+      sessionId: restoredNativeSessionId(value, "claude", "claudeNativeData"),
+      isLocal: context.isLocal,
+    };
     return {
       ...common,
       type,
-      claudeNativeData: {
-        containerId: context.containerId ?? undefined,
-        environmentId: context.environmentId,
-        sessionId: nonEmptyString(value.claudeNativeData.sessionId) ?? undefined,
-        isLocal: context.isLocal,
-      },
+      nativeAgentData,
+      claudeNativeData: legacyNativeData(nativeAgentData),
     };
   }
 
   if (type === "codex-native") {
-    if (!isRecord(value.codexNativeData)) return null;
+    if (!hasNativeAgentSource(value, "codex", "codexNativeData")) return null;
+    const nativeAgentData = {
+      platform: "codex" as const,
+      containerId: context.containerId ?? undefined,
+      environmentId: context.environmentId,
+      sessionId: restoredNativeSessionId(value, "codex", "codexNativeData"),
+      isLocal: context.isLocal,
+    };
     return {
       ...common,
       type,
-      codexNativeData: {
-        containerId: context.containerId ?? undefined,
-        environmentId: context.environmentId,
-        sessionId: nonEmptyString(value.codexNativeData.sessionId) ?? undefined,
-        isLocal: context.isLocal,
-      },
+      nativeAgentData,
+      codexNativeData: legacyNativeData(nativeAgentData),
     };
   }
 
   if (type === "opencode-native") {
-    if (!isRecord(value.openCodeNativeData)) return null;
+    if (!hasNativeAgentSource(value, "opencode", "openCodeNativeData")) return null;
+    const nativeAgentData = {
+      platform: "opencode" as const,
+      containerId: context.containerId ?? undefined,
+      environmentId: context.environmentId,
+      sessionId: restoredNativeSessionId(value, "opencode", "openCodeNativeData"),
+      isLocal: context.isLocal,
+    };
     return {
       ...common,
       type,
-      openCodeNativeData: {
-        containerId: context.containerId ?? undefined,
-        environmentId: context.environmentId,
-        sessionId: nonEmptyString(value.openCodeNativeData.sessionId) ?? undefined,
-        isLocal: context.isLocal,
-      },
+      nativeAgentData,
+      openCodeNativeData: legacyNativeData(nativeAgentData),
     };
   }
 
   if (type === "cursor-native" || type === "grok-native") {
-    if (!isRecord(value.acpNativeData)) return null;
-    const provider = type === "cursor-native" ? "cursor" : "grok";
+    const provider: "cursor" | "grok" = type === "cursor-native" ? "cursor" : "grok";
+    if (!hasNativeAgentSource(value, provider, "acpNativeData")) return null;
+    const nativeAgentData = {
+      platform: provider,
+      containerId: context.containerId ?? undefined,
+      environmentId: context.environmentId,
+      sessionId: restoredNativeSessionId(value, provider, "acpNativeData"),
+      isLocal: context.isLocal,
+    };
     return {
       ...common,
       type,
+      nativeAgentData,
       acpNativeData: {
         provider,
-        containerId: context.containerId ?? undefined,
-        environmentId: context.environmentId,
-        sessionId: nonEmptyString(value.acpNativeData.sessionId) ?? undefined,
-        isLocal: context.isLocal,
+        containerId: nativeAgentData.containerId,
+        environmentId: nativeAgentData.environmentId,
+        sessionId: nativeAgentData.sessionId,
+        isLocal: nativeAgentData.isLocal,
       },
     };
   }
@@ -366,6 +424,23 @@ function preserveRendererLocalTabFields(
       ? { initialCommands: [...current.initialCommands] }
       : {}),
   };
+  // Read every projection, not just the canonical one. Persistence strips
+  // `hostPort` and restore never sets it on `nativeAgentData`, so a renderer's
+  // live port only ever survives in whichever field its writer used; keying
+  // solely off the canonical field would silently drop it on the very path the
+  // pane renderer now reads from.
+  const currentHostPort =
+    current.nativeAgentData?.hostPort
+    ?? current.claudeNativeData?.hostPort
+    ?? current.codexNativeData?.hostPort
+    ?? current.openCodeNativeData?.hostPort
+    ?? current.acpNativeData?.hostPort;
+  if (authoritative.nativeAgentData && currentHostPort !== undefined) {
+    preserved.nativeAgentData = {
+      ...authoritative.nativeAgentData,
+      hostPort: currentHostPort,
+    };
+  }
   if (
     authoritative.claudeNativeData
     && current.claudeNativeData?.hostPort !== undefined
@@ -391,6 +466,15 @@ function preserveRendererLocalTabFields(
     preserved.openCodeNativeData = {
       ...authoritative.openCodeNativeData,
       hostPort: current.openCodeNativeData.hostPort,
+    };
+  }
+  if (
+    authoritative.acpNativeData
+    && current.acpNativeData?.hostPort !== undefined
+  ) {
+    preserved.acpNativeData = {
+      ...authoritative.acpNativeData,
+      hostPort: current.acpNativeData.hostPort,
     };
   }
   return preserved;

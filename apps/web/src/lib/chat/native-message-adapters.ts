@@ -13,6 +13,7 @@ import type {
   NativeToolGroupPart,
   NativeToolInvocationPart,
 } from "./native-message-types";
+import type { AcpMessage } from "@/lib/acp-client";
 
 interface AttachmentTag {
   type: string;
@@ -431,6 +432,28 @@ export function normalizeOpenCodeNativeMessage(message: NativeMessage): NativeMe
 
 export function normalizeCodexNativeMessage(message: NativeMessage): NativeMessage {
   return normalizeNativeMessage(message);
+}
+
+const normalizedAcpMessageCache = new WeakMap<AcpMessage, NativeMessage>();
+
+/** Normalize ACP messages for Cursor and Grok below the shared tab boundary. */
+export function normalizeAcpNativeMessage(message: AcpMessage): NativeMessage {
+  const cached = normalizedAcpMessageCache.get(message);
+  if (cached) return cached;
+  const normalized = normalizeNativeMessage({
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    createdAt: message.createdAt,
+    parts: message.parts.map((part, index) => ({
+      type: part.type === "reasoning" ? "thinking" as const : "text" as const,
+      content: part.text,
+      sourcePartId: `${message.id}:${index}`,
+      sourceMessageId: message.id,
+    })),
+  });
+  normalizedAcpMessageCache.set(message, normalized);
+  return normalized;
 }
 
 /** Same identity-cache rationale as `normalizeNativeMessage`, for Claude. */

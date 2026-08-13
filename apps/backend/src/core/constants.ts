@@ -10,6 +10,8 @@ export const DOCKER_LABEL_PROJECT_ID = "project-id";
 export const OPENCODE_SERVER_PORT = 4096;
 export const CLAUDE_BRIDGE_PORT = 4097;
 export const CODEX_BRIDGE_PORT = 4098;
+export const CURSOR_ACP_BRIDGE_PORT = 4099;
+export const GROK_ACP_BRIDGE_PORT = 4100;
 export const DEFAULT_CODEX_MAX_CONCURRENT_THREADS = 5;
 // Codex multi-agent V2 counts the root thread in addition to these child
 // threads, so reserve one safe-integer slot for the bridge's conversion.

@@ -78,7 +78,7 @@ export function buildReviewModelCatalog(
         : model.supportsEffort
           ? ["low", "medium", "high"]
           : [],
-    resolvedModel: model.resolvedModel,
+    ...(model.resolvedModel ? { resolvedModel: model.resolvedModel } : {}),
   }));
   const claude = liveClaudeModels.length > 0
     ? liveClaudeModels
@@ -113,6 +113,8 @@ export function buildReviewModelCatalog(
   return {
     claude: claude.length > 0 ? claude : CLAUDE_FALLBACK_MODELS,
     codex,
+    cursor: [{ id: "default", name: "Cursor automatic", reasoningEfforts: [] }],
+    grok: [{ id: "default", name: "Grok Build default", reasoningEfforts: [] }],
     opencode: opencode.length > 0
       ? opencode
       : [{ id: "default", name: "Default", reasoningEfforts: [] }],
@@ -132,5 +134,5 @@ export function resolveDefaultReviewTabType(options: {
   // Environment mode preferences still govern ordinary tabs.
   if (options.defaultAgent === "claude") return "claude-native";
   if (options.defaultAgent === "opencode") return "opencode-native";
-  return "codex-native";
+  return `${options.defaultAgent}-native` as ReviewTabType;
 }

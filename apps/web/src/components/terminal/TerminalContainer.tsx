@@ -178,6 +178,10 @@ const STARTUP_AGENT_TAB_TYPES: Record<TabType, boolean> = {
   "codex-native": true,
   opencode: true,
   "opencode-native": true,
+  cursor: true,
+  "cursor-native": true,
+  grok: true,
+  "grok-native": true,
   // Not startup agents: pipeline/review surfaces and non-agent tabs.
   "claude-build": false,
   "looped-review": false,
@@ -1243,6 +1247,7 @@ export function TerminalContainer({
       const useNativeOpenCode = initialTabType === "opencode" && opencodeMode === "native";
       const useNativeClaude = initialTabType === "claude" && claudeMode === "native";
       const useNativeCodex = initialTabType === "codex" && codexMode === "native";
+      const useNativeAcp = initialTabType === "cursor" || initialTabType === "grok";
 
       if (backendSetupRunning) {
         console.info("[setup-terminal] adding backend-managed setup tab", {
@@ -1257,7 +1262,7 @@ export function TerminalContainer({
             initialPrompt: pendingInitialPrompt,
             targetPaneId: initialPaneId,
             agentType: initialTabType,
-            launchMode: useNativeOpenCode || useNativeClaude || useNativeCodex ? "native" : "terminal",
+            launchMode: useNativeOpenCode || useNativeClaude || useNativeCodex || useNativeAcp ? "native" : "terminal",
             claudeNativeBackend: useNativeClaude ? claudeNativeBackend : undefined,
             model: initialAgentModel,
             reasoningEffort: initialReasoningEffort,
@@ -1314,6 +1319,21 @@ export function TerminalContainer({
           id: initialTabId,
           type: "opencode-native",
           openCodeNativeData: {
+            containerId: isLocalEnvironment ? undefined : containerId ?? undefined,
+            environmentId,
+            isLocal: isLocalEnvironment,
+          },
+          initialPrompt: pendingInitialPrompt,
+          initialAgentModel,
+          initialReasoningEffort,
+        }, environmentId);
+      } else if (useNativeAcp) {
+        const provider = initialTabType as "cursor" | "grok";
+        addTab(initialPaneId, {
+          id: initialTabId,
+          type: `${provider}-native`,
+          acpNativeData: {
+            provider,
             containerId: isLocalEnvironment ? undefined : containerId ?? undefined,
             environmentId,
             isLocal: isLocalEnvironment,
@@ -1393,6 +1413,7 @@ export function TerminalContainer({
       if (containerMatch) {
         const isClaudeNative = pending.agentType === "claude";
         const isCodexNative = pending.agentType === "codex";
+        const isAcpNative = pending.agentType === "cursor" || pending.agentType === "grok";
         const launchMode = pending.launchMode ?? "native";
         console.log(
           "[TerminalContainer] Workspace ready, launching",
@@ -1449,6 +1470,23 @@ export function TerminalContainer({
             id: newTabId,
             type: "codex-native",
             codexNativeData: {
+              containerId: isLocalEnvironment ? undefined : pending.containerId ?? undefined,
+              environmentId: pending.environmentId,
+              isLocal: isLocalEnvironment,
+              sessionId: pending.providerSessionId,
+            },
+            initialPrompt: pending.initialPrompt,
+            initialAgentModel: pending.model,
+            initialReasoningEffort: pending.reasoningEffort,
+          };
+          addTab(targetPaneId, newTab, environmentId);
+        } else if (isAcpNative) {
+          const provider = pending.agentType as "cursor" | "grok";
+          const newTab: TabInfo = {
+            id: newTabId,
+            type: `${provider}-native`,
+            acpNativeData: {
+              provider,
               containerId: isLocalEnvironment ? undefined : pending.containerId ?? undefined,
               environmentId: pending.environmentId,
               isLocal: isLocalEnvironment,
@@ -1634,6 +1672,7 @@ export function TerminalContainer({
       const shouldUseCodexNative =
         type === "codex" &&
         (launchModeOverride === "native" || (!launchModeOverride && codexMode === "native"));
+      const shouldUseAcpNative = type === "cursor" || type === "grok";
 
       // Check if we should create an opencode-native tab instead
       if (shouldUseOpenCodeNative) {
@@ -1700,6 +1739,28 @@ export function TerminalContainer({
           initialReasoningEffort: options?.initialReasoningEffort,
         };
         console.debug("[TerminalContainer] Creating codex-native tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
+        addTab(activePaneId, newTab, environmentId);
+        return true;
+      }
+
+      if (shouldUseAcpNative) {
+        const provider = type as "cursor" | "grok";
+        const newTab: TabInfo = {
+          id: newTabId,
+          type: `${provider}-native`,
+          acpNativeData: {
+            provider,
+            containerId: isLocalEnvironment ? undefined : containerId ?? undefined,
+            environmentId,
+            isLocal: isLocalEnvironment,
+            sessionId: options?.resumeSessionId,
+          },
+          initialPrompt: options?.initialPrompt,
+          displayTitle: options?.displayTitle,
+          isReviewTab: options?.isReviewTab,
+          initialAgentModel: options?.initialAgentModel,
+          initialReasoningEffort: options?.initialReasoningEffort,
+        };
         addTab(activePaneId, newTab, environmentId);
         return true;
       }

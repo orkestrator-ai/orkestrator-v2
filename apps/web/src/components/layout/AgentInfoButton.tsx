@@ -30,6 +30,7 @@ import type { TabInfo } from "@/types/paneLayout";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
+import { useConfigStore } from "@/stores/configStore";
 import {
   compactClaudeSession,
   forkClaudeSession,
@@ -649,6 +650,9 @@ export function AgentInfoButton({
   const activeSession = useMemo(
     () => resolveActiveNativeSession(activeTab),
     [activeTab],
+  );
+  const enabledAgentPlatforms = useConfigStore(
+    (state) => state.config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
   );
 
   const claudeUsage = useClaudeStore((state) =>
@@ -1523,7 +1527,10 @@ export function AgentInfoButton({
                         <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                         <div className="grid min-w-0 flex-1 grid-cols-2 gap-1.5">
                           {(Object.keys(AGENT_PROVIDER_LABELS) as AgentProvider[])
-                            .filter((provider) => provider !== activeSession.provider)
+                            .filter((provider) =>
+                              provider !== activeSession.provider
+                              && enabledAgentPlatforms.includes(provider)
+                            )
                             .map((provider) => (
                               <Button
                                 key={provider}

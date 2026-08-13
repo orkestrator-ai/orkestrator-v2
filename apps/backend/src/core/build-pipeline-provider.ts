@@ -828,6 +828,8 @@ function authHeaders(connection: BridgeConnection): Headers {
     headers.set("X-Orkestrator-Claude-Token", connection.authToken);
   } else if (connection.agent === "codex") {
     headers.set("X-Orkestrator-Codex-Token", connection.authToken);
+  } else if (connection.agent === "cursor" || connection.agent === "grok") {
+    headers.set("Authorization", `Bearer ${connection.authToken}`);
   }
   return headers;
 }
@@ -906,7 +908,7 @@ async function resolvePromptAttachments(
 }
 
 class HttpBridgeProvider implements BuildPipelineProvider {
-  readonly agent: "claude" | "codex";
+  readonly agent: "claude" | "codex" | "cursor" | "grok";
   private readonly stageImages?: ProviderDependencies["stageImages"];
   private readonly interactionTracker = new InteractionSnapshotTracker();
   private readonly providerInteractionIds = new Map<
@@ -914,11 +916,7 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     { providerRequestId: string; sessionId: string; actionable?: boolean }
   >();
   private readonly resolvingInteractions = new Set<string>();
-  readonly interactions: AgentInteractionProviderCapability = {
-    listPendingInteractions: (sessionId) => this.listPendingInteractions(sessionId),
-    resolveInteraction: (sessionId, interactionId, resolution) =>
-      this.resolveInteraction(sessionId, interactionId, resolution),
-  };
+  readonly interactions?: AgentInteractionProviderCapability;
   /**
    * The Codex mode each session was last known to be in.
    *
@@ -935,8 +933,13 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     private readonly fetchImpl: typeof fetch,
     stageImages?: ProviderDependencies["stageImages"],
   ) {
-    this.agent = connection.agent as "claude" | "codex";
+    this.agent = connection.agent as "claude" | "codex" | "cursor" | "grok";
     this.stageImages = stageImages;
+    this.interactions = {
+      listPendingInteractions: (sessionId) => this.listPendingInteractions(sessionId),
+      resolveInteraction: (sessionId, interactionId, resolution) =>
+        this.resolveInteraction(sessionId, interactionId, resolution),
+    };
   }
 
   registerSession(
@@ -994,6 +997,9 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       this.codexModes.set(sessionId, options.mode);
     }
     const attachments = await resolvePromptAttachments(options, this.stageImages);
+    if ((this.agent === "cursor" || this.agent === "grok") && attachments?.length) {
+      throw new PromptRejectedError(`${this.agent} ACP image attachments are not supported yet`);
+    }
     let response: Response;
     try {
       response = await bridgeFetch(

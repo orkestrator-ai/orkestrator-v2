@@ -151,8 +151,41 @@ type InstalledExecutableState = {
 };
 
 function assertValidArtifactMetadata(artifact: ToolchainArtifact): void {
-  if (artifact.archive.format !== "zip" && artifact.archive.format !== "tar.gz") {
+  if (!["zip", "tar.gz", "raw"].includes(artifact.archive.format)) {
     throw new Error(`${artifact.name} manifest has unsupported archive format`);
+  }
+  if (
+    artifact.archive.bundleRoot !== undefined
+    && (
+      artifact.archive.format !== "tar.gz"
+      || !artifact.archive.bundleRoot.endsWith("/")
+      || artifact.archive.bundleRoot.startsWith("/")
+      || artifact.archive.bundleRoot.includes("..")
+    )
+  ) {
+    throw new Error(`${artifact.name} manifest has an unsafe bundle root`);
+  }
+  if (artifact.archive.bundleFiles !== undefined) {
+    if (!artifact.archive.bundleRoot || artifact.archive.bundleFiles.length === 0) {
+      throw new Error(`${artifact.name} manifest has bundle files without a bundle root`);
+    }
+    const paths = new Set<string>();
+    for (const file of artifact.archive.bundleFiles) {
+      const normalized = path.posix.normalize(file.path);
+      if (
+        normalized !== file.path
+        || normalized.startsWith("../")
+        || normalized.startsWith("/")
+        || normalized.includes("\\")
+        || paths.has(normalized)
+        || !Number.isSafeInteger(file.size)
+        || file.size < 1
+        || !/^[a-f0-9]{64}$/.test(file.sha256)
+      ) {
+        throw new Error(`${artifact.name} manifest has an unsafe bundle file`);
+      }
+      paths.add(normalized);
+    }
   }
   const hasSize = artifact.executable.installedSize !== undefined;
   const hasSha256 = artifact.executable.installedSha256 !== undefined;
@@ -202,6 +235,10 @@ function assertValidArtifactMetadata(artifact: ToolchainArtifact): void {
       throw new Error(`${artifact.name} companion ${companion.fileName} has invalid executable metadata`);
     }
   }
+}
+
+function archiveExtension(archive: ToolchainArchive): string {
+  return archive.format === "zip" ? "zip" : archive.format === "raw" ? "bin" : "tar.gz";
 }
 
 /**
@@ -286,6 +323,11 @@ async function isValidExecutable(rootDir: string, artifact: ToolchainArtifact): 
     if (!file.isFile() || file.isSymbolicLink() || file.size !== expected.size) return false;
     if (await sha256File(executablePath) !== expected.sha256) return false;
     if ((file.mode & 0o777) !== 0o500) await chmod(executablePath, 0o500);
+    for (const bundled of artifact.archive.bundleFiles ?? []) {
+      if (!await isValidFile(path.join(artifactDirectory(rootDir, artifact), ...bundled.path.split("/")), bundled)) {
+        return false;
+      }
+    }
     return true;
   } catch {
     return false;
@@ -585,6 +627,75 @@ async function extractTarGzipEntry(
   if (!found) throw new Error(`${label} executable was not found in its archive`);
 }
 
+async function extractTarGzipBundle(
+  archivePath: string,
+  destinationDirectory: string,
+  label: string,
+  archive: ToolchainArchive,
+): Promise<void> {
+  const root = archive.bundleRoot!;
+  let foundExecutable = false;
+  let entryCount = 0;
+  let extractedBytes = 0;
+  const maxExtractedBytes = Math.max(archive.size * 6, archive.size);
+  const extract = tar.extract();
+  extract.on("entry", (header, stream, next) => {
+    if (!header.name.startsWith(root)) {
+      stream.on("end", next);
+      stream.resume();
+      return;
+    }
+    const relative = header.name.slice(root.length);
+    if (!relative) {
+      stream.on("end", next);
+      stream.resume();
+      return;
+    }
+    const normalized = path.posix.normalize(relative);
+    if (
+      normalized.startsWith("../")
+      || normalized.startsWith("/")
+      || normalized.includes("\\")
+      || path.isAbsolute(normalized)
+    ) {
+      extract.destroy(new Error(`Unsafe path in ${label} bundle`));
+      stream.resume();
+      return;
+    }
+    entryCount += 1;
+    extractedBytes += header.size ?? 0;
+    if (entryCount > 20_000 || extractedBytes > maxExtractedBytes) {
+      extract.destroy(new Error(`${label} bundle exceeded its extraction bounds`));
+      stream.resume();
+      return;
+    }
+    const destination = path.join(destinationDirectory, ...normalized.split("/"));
+    if (header.type === "directory") {
+      void mkdir(destination, { recursive: true, mode: 0o700 })
+        .then(() => { stream.once("end", next); stream.resume(); })
+        .catch((error: unknown) => extract.destroy(error instanceof Error ? error : new Error(String(error))));
+      return;
+    }
+    if (header.type !== "file") {
+      extract.destroy(new Error(`${label} bundle contains an unsupported link or entry type`));
+      stream.resume();
+      return;
+    }
+    if (header.name === archive.entryPath) foundExecutable = true;
+    void mkdir(path.dirname(destination), { recursive: true, mode: 0o700 })
+      .then(() => pipeline(
+        stream,
+        createWriteStream(destination, {
+          flags: "wx",
+          mode: (header.mode ?? 0) & 0o111 ? 0o500 : 0o400,
+        }),
+      ))
+      .then(next, (error: unknown) => extract.destroy(error instanceof Error ? error : new Error(String(error))));
+  });
+  await pipeline(createReadStream(archivePath), createGunzip(), extract);
+  if (!foundExecutable) throw new Error(`${label} executable was not found in its bundle`);
+}
+
 function openZip(archivePath: string): Promise<yauzl.ZipFile> {
   return new Promise((resolve, reject) => {
     yauzl.open(
@@ -865,7 +976,7 @@ async function stageCompanions(
   for (const companion of companions) {
     const companionArchivePath = path.join(
       stagingDirectory,
-      `.archive-${companion.fileName}.${companion.archive.format === "zip" ? "zip" : "tar.gz"}`,
+      `.archive-${companion.fileName}.${archiveExtension(companion.archive)}`,
     );
     const companionFilePath = path.join(stagingDirectory, companion.fileName);
     const precedingBytes = downloadedBytes;
@@ -887,7 +998,7 @@ async function stageCompanions(
         companion.archive,
         companion.executable.size,
       );
-    } else {
+    } else if (companion.archive.format === "tar.gz") {
       await extractTarGzipEntry(
         companionArchivePath,
         companionFilePath,
@@ -895,7 +1006,7 @@ async function stageCompanions(
         companion.archive,
         companion.executable.size,
       );
-    }
+    } else await rename(companionArchivePath, companionFilePath);
     await rm(companionArchivePath, { force: true });
 
     const installedCompanion = await lstat(companionFilePath);
@@ -981,7 +1092,7 @@ async function installArtifact(
   spawnProcess: typeof spawn,
 ): Promise<string> {
   const stagingDirectory = await mkdtemp(path.join(rootDir, `.staging-${artifact.name}-`));
-  const archivePath = path.join(stagingDirectory, `archive.${artifact.archive.format === "zip" ? "zip" : "tar.gz"}`);
+  const archivePath = path.join(stagingDirectory, `archive.${archiveExtension(artifact.archive)}`);
   const executablePath = path.join(stagingDirectory, artifact.executable.fileName);
   const extractedPath = artifact.executable.repairInvalidMacSignature
     ? path.join(stagingDirectory, `.upstream-${artifact.executable.fileName}`)
@@ -996,7 +1107,23 @@ async function installArtifact(
       allowInsecureDownloadsForTests,
       timings.downloadTimeoutMs,
     );
-    if (artifact.archive.format === "zip") {
+    if (artifact.archive.bundleRoot) {
+      await extractTarGzipBundle(
+        archivePath,
+        stagingDirectory,
+        artifact.name,
+        artifact.archive,
+      );
+      const bundledExecutable = path.join(
+        stagingDirectory,
+        ...artifact.archive.entryPath
+          .slice(artifact.archive.bundleRoot.length)
+          .split("/"),
+      );
+      if (bundledExecutable !== extractedPath) {
+        await rename(bundledExecutable, extractedPath);
+      }
+    } else if (artifact.archive.format === "zip") {
       await extractZipEntry(
         archivePath,
         extractedPath,
@@ -1004,7 +1131,7 @@ async function installArtifact(
         artifact.archive,
         artifact.executable.size,
       );
-    } else {
+    } else if (artifact.archive.format === "tar.gz") {
       await extractTarGzipEntry(
         archivePath,
         extractedPath,
@@ -1012,8 +1139,10 @@ async function installArtifact(
         artifact.archive,
         artifact.executable.size,
       );
+    } else {
+      await rename(archivePath, extractedPath);
     }
-    await rm(archivePath, { force: true });
+    if (artifact.archive.format !== "raw") await rm(archivePath, { force: true });
     await chmod(extractedPath, 0o700);
 
     const extracted = await lstat(extractedPath);
@@ -1033,7 +1162,11 @@ async function installArtifact(
         spawnProcess,
       );
       await chmod(extractedPath, 0o400);
-    } else if (!skipExecutableProbeForTests && artifact.platform === "darwin") {
+    } else if (
+      !skipExecutableProbeForTests
+      && artifact.platform === "darwin"
+      && !artifact.executable.skipMacSignatureVerification
+    ) {
       try {
         await verifyMacCodeSignature(executablePath, artifact.name, timings.processTimeoutMs, spawnProcess);
       } catch (error) {
@@ -1248,6 +1381,7 @@ function activationSetId(artifacts: readonly ToolchainArtifact[]): string {
       installedSize: artifact.executable.installedSize,
       installedSha256: artifact.executable.installedSha256,
       repairInvalidMacSignature: artifact.executable.repairInvalidMacSignature ?? false,
+      bundleFiles: artifact.archive.bundleFiles ?? [],
       // Companions are part of the activated set: adding or changing one has to
       // produce a new bin directory, so a running older build keeps the exact
       // sibling layout its `codex` was launched against.

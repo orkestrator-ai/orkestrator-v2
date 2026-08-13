@@ -62,6 +62,14 @@ describe("defaultConfig", () => {
     expectTypeOf<AppConfig["global"]["reviewInstruction"]>().toEqualTypeOf<string | undefined>();
   });
 
+  test("keeps legacy agent systems enabled for an existing unconfigured installation", () => {
+    expect(defaultConfig().global.enabledAgentPlatforms).toEqual([
+      "claude",
+      "codex",
+      "opencode",
+    ]);
+  });
+
   test("does not point defaults at any retired model id", () => {
     const { global } = defaultConfig();
     const selected = [global.opencodeModel, global.claudeModel, global.codexModel];
@@ -87,6 +95,39 @@ describe("defaultConfig", () => {
     expect(defaultRepositoryConfig()).toEqual({
       defaultBranch: "main",
       prBaseBranch: "main",
+    });
+  });
+});
+
+describe("first-run agent platform selection", () => {
+  test("hydrates the pre-backend sidecar and chooses an enabled default", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await fs.writeFile(
+        path.join(dataDir, "agent-platforms.json"),
+        `${JSON.stringify({ version: 1, enabled: ["cursor", "grok"] })}\n`,
+        "utf8",
+      );
+
+      const loaded = await storage.loadConfig();
+      expect(loaded.global.enabledAgentPlatforms).toEqual(["cursor", "grok"]);
+      expect(loaded.global.defaultAgent).toBe("cursor");
+    });
+  });
+
+  test("rejects an empty platform update and corrects a disabled default", async () => {
+    await withTemporaryStorage(async (storage) => {
+      await expect(storage.updateGlobalConfig({
+        ...defaultConfig().global,
+        enabledAgentPlatforms: [],
+      })).rejects.toThrow("Select at least one agent platform");
+
+      const updated = await storage.updateGlobalConfig({
+        ...defaultConfig().global,
+        enabledAgentPlatforms: ["cursor", "grok"],
+        defaultAgent: "claude",
+      });
+      expect(updated.global.enabledAgentPlatforms).toEqual(["cursor", "grok"]);
+      expect(updated.global.defaultAgent).toBe("cursor");
     });
   });
 });

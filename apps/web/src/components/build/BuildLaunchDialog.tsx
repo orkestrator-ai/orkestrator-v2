@@ -35,7 +35,9 @@ import {
   defaultEffortFor,
   effortLabel,
   firstModelFor,
+  modelsForAgent,
   type AgentModelCatalog,
+  type AgentModelOption,
   type LaunchAgent,
 } from "@/lib/agent-launch";
 import { cn } from "@/lib/utils";
@@ -305,7 +307,7 @@ export function BuildLaunchDialog({
   const resolved = useMemo(() => {
     const entries = BUILD_STEPS.map(({ key }) => {
       const step = steps[key];
-      const models = catalog[step.agent];
+      const models = modelsForAgent(catalog, step.agent);
       const model = models.find((option) => option.id === step.model) ?? models[0];
       const efforts = model?.reasoningEfforts ?? [];
       const effort =
@@ -322,8 +324,8 @@ export function BuildLaunchDialog({
     return Object.fromEntries(entries) as Record<
       BuildStepKey,
       {
-        models: AgentModelCatalog[LaunchAgent];
-        model: AgentModelCatalog[LaunchAgent][number] | undefined;
+        models: AgentModelOption[];
+        model: AgentModelOption | undefined;
         efforts: string[];
         effort: string;
       }

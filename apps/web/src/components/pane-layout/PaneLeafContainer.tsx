@@ -29,6 +29,9 @@ const LazyClaudeTmuxChatTab = lazy(async () => ({
 const LazyCodexChatTab = lazy(async () => ({
   default: (await import("@/components/codex")).CodexChatTab,
 }));
+const LazyAcpChatTab = lazy(async () => ({
+  default: (await import("@/components/acp")).AcpChatTab,
+}));
 const LazyBuildChatTab = lazy(async () => ({
   default: (await import("@/components/build-pipeline/BuildChatTab")).BuildChatTab,
 }));
@@ -352,6 +355,30 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                     agentHandoffId={tab.agentHandoffId}
                     consumedAgentHandoffId={tab.consumedAgentHandoffId}
                     refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
+                  />
+                </LazyLoadBoundary>
+              </div>
+            );
+          }
+
+          if ((tab.type === "cursor-native" || tab.type === "grok-native") && tab.acpNativeData) {
+            return (
+              <div
+                key={tab.id}
+                className={cn(
+                  "absolute inset-0",
+                  isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden",
+                )}
+              >
+                <LazyLoadBoundary
+                  loadingFallback={renderTabFallback(isTabActive && isActive)}
+                  renderError={renderTabError(isTabActive && isActive)}
+                >
+                  <LazyAcpChatTab
+                    tabId={tab.id}
+                    data={tab.acpNativeData}
+                    isActive={isTabActive && isActive}
+                    initialPrompt={tab.initialPrompt}
                   />
                 </LazyLoadBoundary>
               </div>

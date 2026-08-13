@@ -103,6 +103,10 @@ function sanitizeTab(tab: TabInfo): TabInfo {
     const { hostPort: _hostPort, ...data } = rest.openCodeNativeData;
     return { ...rest, openCodeNativeData: data };
   }
+  if (rest.acpNativeData) {
+    const { hostPort: _hostPort, ...data } = rest.acpNativeData;
+    return { ...rest, acpNativeData: data };
+  }
   return rest;
 }
 

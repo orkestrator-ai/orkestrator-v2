@@ -1,4 +1,4 @@
-export const AGENT_BRIDGE_KINDS = ["claude", "codex", "opencode"] as const;
+export const AGENT_BRIDGE_KINDS = ["claude", "codex", "opencode", "cursor", "grok"] as const;
 
 export type AgentBridgeKind = (typeof AGENT_BRIDGE_KINDS)[number];
 

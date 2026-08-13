@@ -61,10 +61,11 @@ import {
   Workflow,
 } from "lucide-react";
 import { toast } from "sonner";
-import { ClaudeIcon, CodexIcon, OpenCodeIcon, DockerIcon } from "@/components/icons/AgentIcons";
+import { ClaudeIcon, CodexIcon, CursorAgentIcon, GrokBuildIcon, OpenCodeIcon, DockerIcon } from "@/components/icons/AgentIcons";
 import { useUIStore, useEnvironmentStore, useProjectStore, useConfigStore, useFilesPanelStore, useLoopedReviewStore, type ProjectBoardTab } from "@/stores";
 import { useShallow } from "zustand/react/shallow";
 import { useTerminalContext, MAX_TABS, type AgentLaunchModeOverride } from "@/contexts";
+import type { DefaultAgent } from "@/types";
 import { usePullRequest, useProjects, useEnvironments } from "@/hooks";
 import {
   createPRPrompt,
@@ -476,7 +477,11 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   }, [environmentPortAddress]);
 
   // Get the default agent - per-environment override takes precedence over global config
-  const defaultAgent = selectedEnvironment?.defaultAgent || config.global.defaultAgent || "claude";
+  const enabledAgents = new Set<DefaultAgent>(config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]);
+  const configuredDefaultAgent: DefaultAgent = selectedEnvironment?.defaultAgent || config.global.defaultAgent || "claude";
+  const defaultAgent: DefaultAgent = enabledAgents.has(configuredDefaultAgent)
+    ? configuredDefaultAgent
+    : (enabledAgents.values().next().value ?? "claude");
   const { installLoopedReviewWorkflow, removeLoopedReviewWorkflow } =
     useLoopedReviewStore(useShallow((state) => ({
       installLoopedReviewWorkflow: state.replaceWorkflow,
@@ -485,7 +490,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
   // Handler for code review
   const handleReview = useCallback((
-    agentOverride?: "claude" | "opencode" | "codex",
+    agentOverride?: "claude" | "opencode" | "codex" | "cursor" | "grok",
     launchOptions?: {
       agentLaunchMode?: AgentLaunchModeOverride;
       initialAgentModel?: string;
@@ -532,7 +537,9 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       ? config.global.claudeModel
       : agent === "codex"
         ? config.global.codexModel
-        : config.global.opencodeModel;
+        : agent === "opencode"
+          ? config.global.opencodeModel
+          : undefined;
     const requestedModel = launchOptions?.initialAgentModel ?? preferredModel;
     const model = requestedModel === "default"
       ? undefined
@@ -876,7 +883,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     createTab("plain", { initialCommands: runCommands });
   }, [createTab, canCreateTab, runCommands]);
 
-  const handleCreateScript = useCallback((agentOverride?: "claude" | "opencode" | "codex") => {
+  const handleCreateScript = useCallback((agentOverride?: DefaultAgent) => {
     if (!createTab || !canCreateTab || !isRunning) return;
 
     const initialPrompt = createOrkestratorScriptPrompt(isLocalEnvironment);
@@ -884,7 +891,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   }, [createTab, canCreateTab, isRunning, isLocalEnvironment, defaultAgent]);
 
   const handleCreateAgentTab = useCallback((
-    agent: "claude" | "opencode" | "codex",
+    agent: DefaultAgent,
     agentLaunchMode?: AgentLaunchModeOverride,
   ) => {
     if (!createTab || !canCreateTab) return;
@@ -1096,7 +1103,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   ]);
 
   // Handler for PR creation - launches agent tab with PR workflow prompt
-  const handleCreatePR = useCallback((agentOverride?: "claude" | "opencode" | "codex") => {
+  const handleCreatePR = useCallback((agentOverride?: "claude" | "opencode" | "codex" | "cursor" | "grok") => {
     if (!createTab || !selectedProjectId || !canCreateTab) return;
 
     const repoConfig = config.repositories[selectedProjectId];
@@ -1113,7 +1120,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   }, [createTab, selectedProjectId, canCreateTab, config.repositories, defaultAgent, setModeCreatePending]);
 
   // Handler for pushing changes to an existing PR - launches agent tab with commit/push prompt
-  const handlePushChanges = useCallback((agentOverride?: "claude" | "opencode" | "codex") => {
+  const handlePushChanges = useCallback((agentOverride?: "claude" | "opencode" | "codex" | "cursor" | "grok") => {
     if (!createTab || !canCreateTab) return;
 
     const pushPrompt = createPushChangesPrompt();
@@ -1124,7 +1131,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   }, [createTab, canCreateTab, defaultAgent]);
 
   // Handler for resolving merge conflicts - launches agent tab with conflict resolution prompt
-  const handleResolveConflicts = useCallback(async (agentOverride?: "claude" | "opencode" | "codex") => {
+  const handleResolveConflicts = useCallback(async (agentOverride?: "claude" | "opencode" | "codex" | "cursor" | "grok") => {
     const operationEnvironmentId = selectedEnvironmentId;
     if (
       !createTab
@@ -1472,7 +1479,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   </Button>
               </ToolbarTooltipTrigger>
 
-              <ContextMenu>
+              {enabledAgents.has("claude") && <ContextMenu>
                 <ToolbarContextMenuTrigger
                   tooltip={
                     <>
@@ -1507,9 +1514,9 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     Claude Tmux
                   </ContextMenuItem>
                 </ContextMenuContent>
-              </ContextMenu>
+              </ContextMenu>}
 
-              <ContextMenu>
+              {enabledAgents.has("codex") && <ContextMenu>
                 <ToolbarContextMenuTrigger
                   tooltip={
                     <>
@@ -1540,9 +1547,9 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     Codex Native
                   </ContextMenuItem>
                 </ContextMenuContent>
-              </ContextMenu>
+              </ContextMenu>}
 
-              <ContextMenu>
+              {enabledAgents.has("opencode") && <ContextMenu>
                 <ToolbarContextMenuTrigger
                   tooltip={
                     <>
@@ -1573,7 +1580,39 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     OpenCode Native
                   </ContextMenuItem>
                 </ContextMenuContent>
-              </ContextMenu>
+              </ContextMenu>}
+
+              {enabledAgents.has("cursor") && (
+                <ToolbarTooltipTrigger tooltip="New native Cursor Agent tab">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={() => handleCreateAgentTab("cursor", "native")}
+                    disabled={!selectedEnvironment || !canCreateTab}
+                    aria-label="New tab with Cursor Agent"
+                  >
+                    <CursorAgentIcon className="h-4 w-4" />
+                    {isGrid && <span className="truncate text-xs">New Cursor tab</span>}
+                  </Button>
+                </ToolbarTooltipTrigger>
+              )}
+
+              {enabledAgents.has("grok") && (
+                <ToolbarTooltipTrigger tooltip="New native Grok Build tab">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={() => handleCreateAgentTab("grok", "native")}
+                    disabled={!selectedEnvironment || !canCreateTab}
+                    aria-label="New tab with Grok Build"
+                  >
+                    <GrokBuildIcon className="h-4 w-4" />
+                    {isGrid && <span className="truncate text-xs">New Grok tab</span>}
+                  </Button>
+                </ToolbarTooltipTrigger>
+              )}
 
               <ToolbarTooltipTrigger
                 tooltip={
@@ -1691,27 +1730,41 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     <Play className="mr-2 h-4 w-4" />
                     Run Commands
                   </ContextMenuItem>
-                  <ContextMenuItem
+                  {enabledAgents.has("claude") && <ContextMenuItem
                     onClick={() => handleCreateScript("claude")}
                     disabled={!canCreateTab || !isRunning}
                   >
                     <FilePlus2 className="mr-2 h-4 w-4" />
                     Create Script with Claude
-                  </ContextMenuItem>
-                  <ContextMenuItem
+                  </ContextMenuItem>}
+                  {enabledAgents.has("codex") && <ContextMenuItem
                     onClick={() => handleCreateScript("codex")}
                     disabled={!canCreateTab || !isRunning}
                   >
                     <FilePlus2 className="mr-2 h-4 w-4" />
                     Create Script with Codex
-                  </ContextMenuItem>
-                  <ContextMenuItem
+                  </ContextMenuItem>}
+                  {enabledAgents.has("opencode") && <ContextMenuItem
                     onClick={() => handleCreateScript("opencode")}
                     disabled={!canCreateTab || !isRunning}
                   >
                     <FilePlus2 className="mr-2 h-4 w-4" />
                     Create Script with OpenCode
-                  </ContextMenuItem>
+                  </ContextMenuItem>}
+                  {enabledAgents.has("cursor") && <ContextMenuItem
+                    onClick={() => handleCreateScript("cursor")}
+                    disabled={!canCreateTab || !isRunning}
+                  >
+                    <FilePlus2 className="mr-2 h-4 w-4" />
+                    Create Script with Cursor Agent
+                  </ContextMenuItem>}
+                  {enabledAgents.has("grok") && <ContextMenuItem
+                    onClick={() => handleCreateScript("grok")}
+                    disabled={!canCreateTab || !isRunning}
+                  >
+                    <FilePlus2 className="mr-2 h-4 w-4" />
+                    Create Script with Grok Build
+                  </ContextMenuItem>}
                 </ContextMenuContent>
               </ContextMenu>
               <div className={cn("mx-2 h-4 w-px bg-border", isGrid && "hidden")} />
@@ -1800,18 +1853,26 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                 </Button>
               </ToolbarContextMenuTrigger>
               <ContextMenuContent>
-                <ContextMenuItem onClick={() => handleCreatePR("claude")}>
+                {enabledAgents.has("claude") && <ContextMenuItem onClick={() => handleCreatePR("claude")}>
                   <ClaudeIcon className="mr-2 h-4 w-4" />
                   Create PR with Claude
-                </ContextMenuItem>
-                <ContextMenuItem onClick={() => handleCreatePR("codex")}>
+                </ContextMenuItem>}
+                {enabledAgents.has("codex") && <ContextMenuItem onClick={() => handleCreatePR("codex")}>
                   <CodexIcon className="mr-2 h-4 w-4" />
                   Create PR with Codex
-                </ContextMenuItem>
-                <ContextMenuItem onClick={() => handleCreatePR("opencode")}>
+                </ContextMenuItem>}
+                {enabledAgents.has("opencode") && <ContextMenuItem onClick={() => handleCreatePR("opencode")}>
                   <OpenCodeIcon className="mr-2 h-4 w-4" />
                   Create PR with OpenCode
-                </ContextMenuItem>
+                </ContextMenuItem>}
+                {enabledAgents.has("cursor") && <ContextMenuItem onClick={() => handleCreatePR("cursor")}>
+                  <CursorAgentIcon className="mr-2 h-4 w-4" />
+                  Create PR with Cursor
+                </ContextMenuItem>}
+                {enabledAgents.has("grok") && <ContextMenuItem onClick={() => handleCreatePR("grok")}>
+                  <GrokBuildIcon className="mr-2 h-4 w-4" />
+                  Create PR with Grok
+                </ContextMenuItem>}
               </ContextMenuContent>
             </ContextMenu>
           )}
@@ -1918,27 +1979,35 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     </Button>
                   </ToolbarContextMenuTrigger>
                   <ContextMenuContent>
-                    <ContextMenuItem
+                    {enabledAgents.has("claude") && <ContextMenuItem
                       onClick={() => handleResolveConflicts("claude")}
                       disabled={resolveLaunchEnvironmentId !== null}
                     >
                       <ClaudeIcon className="mr-2 h-4 w-4" />
                       Resolve with Claude
-                    </ContextMenuItem>
-                    <ContextMenuItem
+                    </ContextMenuItem>}
+                    {enabledAgents.has("codex") && <ContextMenuItem
                       onClick={() => handleResolveConflicts("codex")}
                       disabled={resolveLaunchEnvironmentId !== null}
                     >
                       <CodexIcon className="mr-2 h-4 w-4" />
                       Resolve with Codex
-                    </ContextMenuItem>
-                    <ContextMenuItem
+                    </ContextMenuItem>}
+                    {enabledAgents.has("opencode") && <ContextMenuItem
                       onClick={() => handleResolveConflicts("opencode")}
                       disabled={resolveLaunchEnvironmentId !== null}
                     >
                       <OpenCodeIcon className="mr-2 h-4 w-4" />
                       Resolve with OpenCode
-                    </ContextMenuItem>
+                    </ContextMenuItem>}
+                    {enabledAgents.has("cursor") && <ContextMenuItem onClick={() => handleResolveConflicts("cursor")} disabled={resolveLaunchEnvironmentId !== null}>
+                      <CursorAgentIcon className="mr-2 h-4 w-4" />
+                      Resolve with Cursor
+                    </ContextMenuItem>}
+                    {enabledAgents.has("grok") && <ContextMenuItem onClick={() => handleResolveConflicts("grok")} disabled={resolveLaunchEnvironmentId !== null}>
+                      <GrokBuildIcon className="mr-2 h-4 w-4" />
+                      Resolve with Grok
+                    </ContextMenuItem>}
                   </ContextMenuContent>
                 </ContextMenu>
               )}
@@ -1990,18 +2059,26 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     </Button>
                   </ToolbarContextMenuTrigger>
                   <ContextMenuContent>
-                    <ContextMenuItem onClick={() => handlePushChanges("claude")}>
+                    {enabledAgents.has("claude") && <ContextMenuItem onClick={() => handlePushChanges("claude")}>
                       <ClaudeIcon className="mr-2 h-4 w-4" />
                       Push with Claude
-                    </ContextMenuItem>
-                    <ContextMenuItem onClick={() => handlePushChanges("codex")}>
+                    </ContextMenuItem>}
+                    {enabledAgents.has("codex") && <ContextMenuItem onClick={() => handlePushChanges("codex")}>
                       <CodexIcon className="mr-2 h-4 w-4" />
                       Push with Codex
-                    </ContextMenuItem>
-                    <ContextMenuItem onClick={() => handlePushChanges("opencode")}>
+                    </ContextMenuItem>}
+                    {enabledAgents.has("opencode") && <ContextMenuItem onClick={() => handlePushChanges("opencode")}>
                       <OpenCodeIcon className="mr-2 h-4 w-4" />
                       Push with OpenCode
-                    </ContextMenuItem>
+                    </ContextMenuItem>}
+                    {enabledAgents.has("cursor") && <ContextMenuItem onClick={() => handlePushChanges("cursor")}>
+                      <CursorAgentIcon className="mr-2 h-4 w-4" />
+                      Push with Cursor
+                    </ContextMenuItem>}
+                    {enabledAgents.has("grok") && <ContextMenuItem onClick={() => handlePushChanges("grok")}>
+                      <GrokBuildIcon className="mr-2 h-4 w-4" />
+                      Push with Grok
+                    </ContextMenuItem>}
                   </ContextMenuContent>
                 </ContextMenu>
               )}

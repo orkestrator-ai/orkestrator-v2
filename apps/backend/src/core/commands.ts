@@ -83,12 +83,14 @@ import {
   APP_VERSION,
   CLAUDE_BRIDGE_PORT,
   CODEX_BRIDGE_PORT,
+  CURSOR_ACP_BRIDGE_PORT,
   CODEX_MAX_CONCURRENT_THREADS_ENV,
   DOCKER_IMAGE,
   DOCKER_LABEL_APP,
   DOCKER_LABEL_APP_VALUE,
   DOCKER_LABEL_ENVIRONMENT_ID,
   DOCKER_LABEL_PROJECT_ID,
+  GROK_ACP_BRIDGE_PORT,
   OPENCODE_SERVER_PORT,
   ORKESTRATOR_PROJECT_CONFIG,
   resolveCodexMaxConcurrentThreads,
@@ -169,6 +171,7 @@ import {
   type GitHubRepositoryRef,
 } from "./github.js";
 import {
+  BUILD_PIPELINE_AGENTS,
   isStartBuildPipelineInput,
   type StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
@@ -296,6 +299,9 @@ const localCodexBridgeTokens = new Map<string, string>();
 const localClaudeBridgeTokens = new Map<string, string>();
 /** Per-process HTTP Basic passwords for renderer → local OpenCode requests. */
 const localOpenCodeServerPasswords = new Map<string, string>();
+/** Per-process bearer tokens for renderer → ACP bridge requests. */
+const localCursorBridgeTokens = new Map<string, string>();
+const localGrokBridgeTokens = new Map<string, string>();
 type OpenCodeAgentToolsConfiguration = {
   fingerprint: string;
   controller: AbortController;
@@ -331,7 +337,7 @@ const containerBridgeOperations = new Map<string, Promise<void>>();
 const deletingLocalServerEnvironments = new Set<string>();
 const mergingEnvironments = new Set<string>();
 const mergeCleanupRecoveryTasks = new Map<string, Promise<void>>();
-type LocalServerKind = "opencode" | "claude" | "codex";
+type LocalServerKind = "opencode" | "claude" | "codex" | "cursor" | "grok";
 
 function retryableBridgeStartupError(
   message: string,
@@ -339,7 +345,7 @@ function retryableBridgeStartupError(
 ): Error & { retryable: true; retryAfterMs: number } {
   return Object.assign(new Error(message), { retryable: true as const, retryAfterMs });
 }
-const LOCAL_SERVER_KINDS: readonly LocalServerKind[] = ["opencode", "claude", "codex"];
+const LOCAL_SERVER_KINDS: readonly LocalServerKind[] = ["opencode", "claude", "codex", "cursor", "grok"];
 // Codex bridge shutdown can spend five seconds draining app-server before its
 // one-second hard-kill fallback. Give that path time to reap the MCP process
 // group before escalating the bridge itself.
@@ -1765,6 +1771,14 @@ function resolveOpenCodeBinary(context: CommandContext): string {
 
 function resolveClaudeBinary(context: CommandContext): string {
   return resolveManagedBinary(context, "claude") ?? "claude";
+}
+
+function resolveCursorBinary(context: CommandContext): string {
+  return resolveManagedBinary(context, "cursor") ?? "cursor";
+}
+
+function resolveGrokBinary(context: CommandContext): string {
+  return resolveManagedBinary(context, "grok") ?? "grok";
 }
 
 function resolveAgentBinary(
@@ -3233,6 +3247,8 @@ export function toClientEnvironment(environment: Environment): ClientEnvironment
     opencodePid: _opencodePid,
     claudeBridgePid: _claudeBridgePid,
     codexBridgePid: _codexBridgePid,
+    cursorBridgePid: _cursorBridgePid,
+    grokBridgePid: _grokBridgePid,
     pendingRenamePrompt: _pendingRenamePrompt,
     prRecheckAfterAgentCompletionArmedAt: _prRecheckArm,
     ...client
@@ -5581,7 +5597,7 @@ async function waitForUnhealthy(port: number, attempts = 50): Promise<void> {
 async function waitForLocalServerStartup(
   child: ChildProcessWithoutNullStreams,
   port: number,
-  kind: "opencode" | "claude" | "codex",
+  kind: LocalServerKind,
   headers?: Record<string, string>,
 ): Promise<void> {
   let settled = false;
@@ -5611,7 +5627,7 @@ async function waitForLocalServerStartup(
   });
 }
 
-function getBridgePath(context: CommandContext, bridgeName: "claude-bridge" | "codex-bridge"): string {
+function getBridgePath(context: CommandContext, bridgeName: "claude-bridge" | "codex-bridge" | "acp-bridge"): string {
   const devPath = path.join(context.appRoot, "bridges", bridgeName);
   if (process.env.NODE_ENV !== "production" && existsSync(devPath)) return devPath;
   return path.join(context.resourceRoot, bridgeName);
@@ -5634,7 +5650,7 @@ function enqueueLocalServerEnvironmentOperation<T>(
 }
 
 function enqueueContainerBridgeOperation<T>(
-  agent: "codex" | "claude" | "opencode",
+  agent: LocalServerKind,
   containerId: string,
   operation: () => Promise<T>,
 ): Promise<T> {
@@ -5664,13 +5680,35 @@ function assertLocalServerStartAllowed(environmentId: string): void {
 function localBridgeTokens(kind: LocalServerKind): Map<string, string> {
   if (kind === "codex") return localCodexBridgeTokens;
   if (kind === "claude") return localClaudeBridgeTokens;
+  if (kind === "cursor") return localCursorBridgeTokens;
+  if (kind === "grok") return localGrokBridgeTokens;
   return localOpenCodeServerPasswords;
+}
+
+function localServerPort(environment: Environment | null | undefined, kind: LocalServerKind): number | undefined {
+  if (kind === "opencode") return environment?.localOpencodePort;
+  if (kind === "claude") return environment?.localClaudePort;
+  if (kind === "codex") return environment?.localCodexPort;
+  if (kind === "cursor") return environment?.localCursorPort;
+  return environment?.localGrokPort;
+}
+
+function localServerFields(kind: LocalServerKind): { port: keyof Environment; pid: keyof Environment } {
+  if (kind === "opencode") return { port: "localOpencodePort", pid: "opencodePid" };
+  if (kind === "claude") return { port: "localClaudePort", pid: "claudeBridgePid" };
+  if (kind === "codex") return { port: "localCodexPort", pid: "codexBridgePid" };
+  if (kind === "cursor") return { port: "localCursorPort", pid: "cursorBridgePid" };
+  return { port: "localGrokPort", pid: "grokBridgePid" };
 }
 
 function openCodeHealthHeaders(password: string): Record<string, string> {
   return {
     Authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`,
   };
+}
+
+function bearerBridgeHeaders(token: string): Record<string, string> {
+  return { Authorization: `Bearer ${token}` };
 }
 
 function asLocalServerKind(value: unknown, field: string): LocalServerKind {
@@ -5687,6 +5725,8 @@ const CONTAINER_BRIDGE_PEEK: Record<
 > = {
   claude: { containerPort: CLAUDE_BRIDGE_PORT, tokenFile: "/tmp/claude-bridge-token" },
   codex: { containerPort: CODEX_BRIDGE_PORT, tokenFile: "/tmp/codex-bridge-token" },
+  cursor: { containerPort: CURSOR_ACP_BRIDGE_PORT, tokenFile: "/tmp/cursor-acp-bridge-token" },
+  grok: { containerPort: GROK_ACP_BRIDGE_PORT, tokenFile: "/tmp/grok-acp-bridge-token" },
   opencode: {
     containerPort: OPENCODE_SERVER_PORT,
     tokenFile: "/tmp/opencode-server-password",
@@ -5713,16 +5753,16 @@ async function peekLocalAgentBridge(
   const authToken = localBridgeTokens(kind).get(environmentId);
   if (!authToken) return null;
   const environment = await context.storage.getEnvironment(environmentId);
-  const port = kind === "opencode"
-    ? environment?.localOpencodePort
-    : kind === "claude"
-      ? environment?.localClaudePort
-      : environment?.localCodexPort;
+  const port = localServerPort(environment, kind);
   if (!port) return null;
   const healthy = await checkHttpHealth(
     port,
     "/global/health",
-    kind === "opencode" ? openCodeHealthHeaders(authToken) : undefined,
+    kind === "opencode"
+      ? openCodeHealthHeaders(authToken)
+      : kind === "cursor" || kind === "grok"
+        ? bearerBridgeHeaders(authToken)
+        : undefined,
   );
   return healthy ? { port, authToken } : null;
 }
@@ -5748,7 +5788,11 @@ async function peekContainerAgentBridge(
   const healthy = await checkHttpHealth(
     hostPort,
     "/global/health",
-    kind === "opencode" ? openCodeHealthHeaders(authToken) : undefined,
+    kind === "opencode"
+      ? openCodeHealthHeaders(authToken)
+      : kind === "cursor" || kind === "grok"
+        ? bearerBridgeHeaders(authToken)
+        : undefined,
   );
   return healthy ? { hostPort, authToken } : null;
 }
@@ -6111,6 +6155,10 @@ function releaseLocalServerOwnership(
     const environmentId = key.slice("opencode:".length);
     localOpenCodeServerPasswords.delete(environmentId);
     cancelOpenCodeAgentToolsConfiguration(`local:${environmentId}`);
+  } else if (key.startsWith("cursor:")) {
+    localCursorBridgeTokens.delete(key.slice("cursor:".length));
+  } else if (key.startsWith("grok:")) {
+    localGrokBridgeTokens.delete(key.slice("grok:".length));
   }
 }
 
@@ -6123,11 +6171,15 @@ async function startLocalServerUnlocked(
   const existing = localServerProcesses.get(key);
   if (existing && !existing.killed && existing.pid) {
     const env = await context.storage.getEnvironment(environmentId);
-    const port = kind === "opencode" ? env?.localOpencodePort : kind === "claude" ? env?.localClaudePort : env?.localCodexPort;
+    const port = localServerPort(env, kind);
     const tokens = localBridgeTokens(kind);
     const authToken = tokens?.get(environmentId);
-    const healthHeaders = kind === "opencode" && authToken
-      ? openCodeHealthHeaders(authToken)
+    const healthHeaders = authToken
+      ? kind === "opencode"
+        ? openCodeHealthHeaders(authToken)
+        : kind === "cursor" || kind === "grok"
+          ? bearerBridgeHeaders(authToken)
+          : undefined
       : undefined;
     if (port && authToken && await checkHttpHealth(port, "/global/health", healthHeaders)) {
       if (kind === "opencode" && env?.worktreePath && context.agentTools) {
@@ -6185,7 +6237,7 @@ async function startLocalServerUnlocked(
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "claude-bridge");
     env.CLAUDE_CLI_PATH = resolveClaudeBinary(context);
-  } else {
+  } else if (kind === "codex") {
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "codex-bridge");
     const config = await context.storage.loadConfig();
@@ -6197,6 +6249,13 @@ async function startLocalServerUnlocked(
     );
     // Forwarded to app-server as clientInfo.version.
     env.ORKESTRATOR_VERSION = APP_VERSION;
+  } else {
+    command = resolveBunBinary(context);
+    cwd = getBridgePath(context, "acp-bridge");
+    env.ACP_PROVIDER = kind;
+    env.ACP_AGENT_PATH = kind === "cursor"
+      ? resolveCursorBinary(context)
+      : resolveGrokBinary(context);
   }
 
   const bridgeEntrypoint = path.join(cwd, "dist", "index.js");
@@ -6219,7 +6278,9 @@ async function startLocalServerUnlocked(
         ? "CODEX_BRIDGE_TOKEN"
         : kind === "claude"
           ? "CLAUDE_BRIDGE_TOKEN"
-          : "OPENCODE_SERVER_PASSWORD"
+          : kind === "opencode"
+            ? "OPENCODE_SERVER_PASSWORD"
+            : "ACP_BRIDGE_TOKEN"
     ] = authToken;
     if (kind === "opencode") env.OPENCODE_SERVER_USERNAME = "opencode";
     tokens.set(environmentId, authToken);
@@ -6250,15 +6311,20 @@ async function startLocalServerUnlocked(
     releaseLocalServerOwnership(key, child);
   });
 
-  const field = kind === "opencode" ? "localOpencodePort" : kind === "claude" ? "localClaudePort" : "localCodexPort";
-  const pidField = kind === "opencode" ? "opencodePid" : kind === "claude" ? "claudeBridgePid" : "codexBridgePid";
+  const { port: field, pid: pidField } = localServerFields(kind);
   try {
     const authToken = tokens?.get(environmentId);
     await waitForLocalServerStartup(
       child,
       port,
       kind,
-      kind === "opencode" && authToken ? openCodeHealthHeaders(authToken) : undefined,
+      authToken
+        ? kind === "opencode"
+          ? openCodeHealthHeaders(authToken)
+          : kind === "cursor" || kind === "grok"
+            ? bearerBridgeHeaders(authToken)
+            : undefined
+        : undefined,
     );
     if (kind === "opencode" && authToken && agentToolConnection) {
       scheduleOpenCodeAgentToolsConfiguration(
@@ -6338,11 +6404,8 @@ async function stopLocalServerUnlocked(
   }
   const child = localServerProcesses.get(key);
   if (child) await terminateLocalServerChild(key, child);
-  const fields = kind === "opencode"
-    ? { opencodePid: null, localOpencodePort: null }
-    : kind === "claude"
-      ? { claudeBridgePid: null, localClaudePort: null }
-      : { codexBridgePid: null, localCodexPort: null };
+  const { port, pid } = localServerFields(kind);
+  const fields = { [port]: null, [pid]: null };
   await context.storage.updateEnvironment(environmentId, fields);
 }
 
@@ -6653,8 +6716,10 @@ async function readLocalServerStatus(environmentId: string, context: CommandCont
   // after the await so an exit handler that released the process cannot leave
   // this snapshot claiming that a dead child is still running.
   const child = localServerProcesses.get(key);
-  const port = kind === "opencode" ? env?.localOpencodePort : kind === "claude" ? env?.localClaudePort : env?.localCodexPort;
-  const pid = kind === "opencode" ? env?.opencodePid : kind === "claude" ? env?.claudeBridgePid : env?.codexBridgePid;
+  const port = localServerPort(env, kind);
+  const { pid: pidField } = localServerFields(kind);
+  const persistedPid = env?.[pidField];
+  const pid = typeof persistedPid === "number" ? persistedPid : undefined;
   const authToken = localBridgeTokens(kind)?.get(environmentId);
   if (
     kind === "opencode"
@@ -8064,6 +8129,9 @@ async function createDockerContainer(environment: Environment, context: CommandC
   await bindIfExists(path.join(home, ".claude"), "/claude-config");
   await bindIfExists(path.join(home, ".claude.json"), "/claude-config.json");
   await bindIfExists(path.join(home, ".codex"), "/codex-home");
+  await bindIfExists(path.join(home, ".cursor"), "/home/node/.cursor");
+  await bindIfExists(path.join(home, ".grok"), "/home/node/.grok");
+  await bindIfExists(path.join(home, ".config", "grok"), "/home/node/.config/grok");
   await bindIfExists(path.join(home, ".config", "opencode"), "/opencode-config");
   await bindIfExists(path.join(home, ".local", "share", "opencode"), "/opencode-data");
   await bindIfExists(path.join(home, ".local", "state", "opencode"), "/opencode-state");
@@ -8081,6 +8149,8 @@ async function createDockerContainer(environment: Environment, context: CommandC
   args.push("-p", `127.0.0.1::${OPENCODE_SERVER_PORT}/tcp`);
   args.push("-p", `127.0.0.1::${CLAUDE_BRIDGE_PORT}/tcp`);
   args.push("-p", `127.0.0.1::${CODEX_BRIDGE_PORT}/tcp`);
+  args.push("-p", `127.0.0.1::${CURSOR_ACP_BRIDGE_PORT}/tcp`);
+  args.push("-p", `127.0.0.1::${GROK_ACP_BRIDGE_PORT}/tcp`);
   if (repoConfig.entryPort) args.push("-p", `127.0.0.1::${repoConfig.entryPort}/tcp`);
   args.push(DOCKER_IMAGE);
 
@@ -8104,7 +8174,7 @@ async function createDockerContainer(environment: Environment, context: CommandC
 async function startContainerServer(
   containerId: string,
   port: number,
-  processName: "opencode" | "claude" | "codex",
+  processName: LocalServerKind,
   command: string,
   redactValues?: ReadonlyArray<string | null | undefined>,
 ): Promise<{ hostPort: number; wasRunning: boolean }> {
@@ -8116,7 +8186,13 @@ async function startContainerServer(
   if (await checkHttpHealth(hostPort)) return { hostPort, wasRunning: true };
   await dockerExecDetached(containerId, command, redactValues);
   await waitForHealth(hostPort).catch(async (error) => {
-    const logFile = processName === "opencode" ? "/tmp/opencode-serve.log" : processName === "claude" ? "/tmp/claude-bridge.log" : "/tmp/codex-bridge.log";
+    const logFile = processName === "opencode"
+      ? "/tmp/opencode-serve.log"
+      : processName === "claude"
+        ? "/tmp/claude-bridge.log"
+        : processName === "codex"
+          ? "/tmp/codex-bridge.log"
+          : `/tmp/${processName}-acp-bridge.log`;
     const log = await dockerExec(containerId, `cat ${logFile} 2>/dev/null || true`, undefined, redactValues).catch(() => "");
     throw new Error(`${error instanceof Error ? error.message : String(error)}${log.trim() ? `\n${log.trim()}` : ""}`);
   });
@@ -10325,6 +10401,70 @@ export function createCommandRegistry(
   });
   register("get_codex_server_log", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "cat /tmp/codex-bridge.log 2>/dev/null || true"));
 
+  for (const acpProvider of ["cursor", "grok"] as const) {
+    const containerPort = acpProvider === "cursor"
+      ? CURSOR_ACP_BRIDGE_PORT
+      : GROK_ACP_BRIDGE_PORT;
+    const tokenFile = `/tmp/${acpProvider}-acp-bridge-token`;
+    const logFile = `/tmp/${acpProvider}-acp-bridge.log`;
+    register(`start_${acpProvider}_server`, ({ containerId }) => {
+      const id = asString(containerId, "containerId");
+      return enqueueContainerBridgeOperation(acpProvider, id, async () => {
+        const hostPort = await getHostPort(id, containerPort);
+        if (hostPort && await checkHttpHealth(hostPort)) {
+          const existingToken = (await dockerExec(id, `cat ${tokenFile} 2>/dev/null || true`)).trim();
+          if (BRIDGE_TOKEN_PATTERN.test(existingToken)) {
+            return { hostPort, wasRunning: true, authToken: existingToken };
+          }
+          await dockerExec(id, `pkill -f '[a]cp-bridge/dist/index.js --provider=${acpProvider}' || true`);
+          await waitForUnhealthy(hostPort);
+        }
+        const token = randomBytes(32).toString("base64url");
+        const started = await startContainerServer(id, containerPort, acpProvider, `
+          cd /workspace
+          rm -f ${logFile}
+          umask 077
+          printf '%s' ${quoteShell(token)} > ${tokenFile}
+          source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
+          orkestrator_source_runtime_env 2>/dev/null || true
+          export PORT=${containerPort}
+          export HOSTNAME=0.0.0.0
+          export CWD=/workspace
+          export ACP_PROVIDER=${acpProvider}
+          export ACP_AGENT_PATH="$(command -v ${acpProvider} 2>/dev/null || echo ${acpProvider})"
+          export ACP_BRIDGE_TOKEN=${quoteShell(token)}
+          setsid bun /opt/acp-bridge/dist/index.js --provider=${acpProvider} > ${logFile} 2>&1 &
+        `, [token]);
+        return { ...started, authToken: token };
+      });
+    });
+    register(`stop_${acpProvider}_server`, ({ containerId }) => {
+      const id = asString(containerId, "containerId");
+      return enqueueContainerBridgeOperation(acpProvider, id, () =>
+        dockerExec(
+          id,
+          `pkill -f '[a]cp-bridge/dist/index.js --provider=${acpProvider}' || true; rm -f ${tokenFile}`,
+        ).then(() => undefined)
+      );
+    });
+    register(`get_${acpProvider}_server_status`, async ({ containerId }) => {
+      const id = asString(containerId, "containerId");
+      const hostPort = await getHostPort(id, containerPort);
+      const authToken = hostPort
+        ? (await dockerExec(id, `cat ${tokenFile} 2>/dev/null || true`)).trim()
+        : "";
+      const running = !!hostPort && BRIDGE_TOKEN_PATTERN.test(authToken)
+        && await checkHttpHealth(hostPort, "/global/health");
+      return {
+        running,
+        hostPort,
+        ...(running ? { authToken } : {}),
+      };
+    });
+    register(`get_${acpProvider}_server_log`, ({ containerId }) =>
+      dockerExec(asString(containerId, "containerId"), `cat ${logFile} 2>/dev/null || true`));
+  }
+
   register("list_agent_skills", async (args) => {
     assertOnlyKeys(args, ["provider"], "list_agent_skills argument");
     return scanAgentSkills(asAgentSkillProvider(args.provider));
@@ -10379,13 +10519,17 @@ export function createCommandRegistry(
   register("check_claude_config", () => pathExists(homePath(".claude.json")));
   register("check_opencode_cli", (_args, context) => hasPackagedOrPathBinary(context, "opencode"));
   register("check_codex_cli", (_args, context) => hasPackagedOrPathBinary(context, "codex"));
+  register("check_cursor_cli", (_args, context) => hasPackagedOrPathBinary(context, "cursor"));
+  register("check_grok_cli", (_args, context) => hasPackagedOrPathBinary(context, "grok"));
   register("check_github_cli", () => commandExists("gh"));
   register("get_container_github_credential_status", async (_args, context) =>
     getContainerGitHubCredentialStatus((await context.storage.loadConfig()).global));
   register("check_any_ai_cli", async (_args, context) =>
     await hasPackagedOrPathBinary(context, "claude")
     || await hasPackagedOrPathBinary(context, "opencode")
-    || await hasPackagedOrPathBinary(context, "codex"));
+    || await hasPackagedOrPathBinary(context, "codex")
+    || await hasPackagedOrPathBinary(context, "cursor")
+    || await hasPackagedOrPathBinary(context, "grok"));
   register("get_available_ai_cli", async (_args, context) =>
     await hasPackagedOrPathBinary(context, "claude")
       ? "claude"
@@ -10393,7 +10537,11 @@ export function createCommandRegistry(
         ? "opencode"
         : await hasPackagedOrPathBinary(context, "codex")
           ? "codex"
-          : null);
+          : await hasPackagedOrPathBinary(context, "cursor")
+            ? "cursor"
+            : await hasPackagedOrPathBinary(context, "grok")
+              ? "grok"
+              : null);
 
   register("open_in_browser", ({ url }) => {
     const { command, args } = resolveBrowserOpenCommand(asString(url, "url"));
@@ -10551,7 +10699,7 @@ export function createCommandRegistry(
     }
     return context.nativeAgents.ensureSession({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
-      agent: asString(args.agent, "agent") as "claude" | "codex" | "opencode",
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
       logicalSessionKey: asNonBlankString(
         args.logicalSessionKey,
         "logicalSessionKey",
@@ -10583,7 +10731,7 @@ export function createCommandRegistry(
     }
     return context.nativeAgents.adoptSession({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
-      agent: asString(args.agent, "agent") as "claude" | "codex" | "opencode",
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
       logicalSessionKey: asNonBlankString(
         args.logicalSessionKey,
         "logicalSessionKey",
@@ -10620,7 +10768,7 @@ export function createCommandRegistry(
     }
     return context.nativeAgents.dispatchPrompt({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
-      agent: asString(args.agent, "agent") as "claude" | "codex" | "opencode",
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
       logicalSessionKey: asNonBlankString(
         args.logicalSessionKey,
         "logicalSessionKey",
@@ -10672,12 +10820,12 @@ export function createCommandRegistry(
 
   register("get_native_agent_session", async (args, context) => {
     const environmentId = asNonBlankString(args.environmentId, "environmentId");
-    const agent = asString(args.agent, "agent") as "claude" | "codex" | "opencode";
+    const agent = asString(args.agent, "agent") as import("./models.js").NativeAgentProvider;
     const logicalSessionKey = asNonBlankString(
       args.logicalSessionKey,
       "logicalSessionKey",
     );
-    if (!["claude", "codex", "opencode"].includes(agent)) {
+    if (!BUILD_PIPELINE_AGENTS.includes(agent)) {
       throw new Error("Native agent provider is invalid");
     }
     const session = await context.storage.getNativeAgentSession(
@@ -12299,13 +12447,19 @@ export function createCommandRegistry(
   register("start_local_codex_server_cmd", ({ environmentId }, context) => startLocalServer(asString(environmentId, "environmentId"), context, "codex"));
   register("stop_local_codex_server_cmd", ({ environmentId }, context) => stopLocalServer(asString(environmentId, "environmentId"), context, "codex"));
   register("get_local_codex_server_status", ({ environmentId }, context) => getLocalServerStatus(asString(environmentId, "environmentId"), context, "codex"));
+  register("start_local_cursor_server_cmd", ({ environmentId }, context) => startLocalServer(asString(environmentId, "environmentId"), context, "cursor"));
+  register("stop_local_cursor_server_cmd", ({ environmentId }, context) => stopLocalServer(asString(environmentId, "environmentId"), context, "cursor"));
+  register("get_local_cursor_server_status", ({ environmentId }, context) => getLocalServerStatus(asString(environmentId, "environmentId"), context, "cursor"));
+  register("start_local_grok_server_cmd", ({ environmentId }, context) => startLocalServer(asString(environmentId, "environmentId"), context, "grok"));
+  register("stop_local_grok_server_cmd", ({ environmentId }, context) => stopLocalServer(asString(environmentId, "environmentId"), context, "grok"));
+  register("get_local_grok_server_status", ({ environmentId }, context) => getLocalServerStatus(asString(environmentId, "environmentId"), context, "grok"));
   register("cleanup_stale_local_servers_cmd", () => undefined);
 
   register("await_bridge_ready", (args, context) => {
     assertOnlyKeys(args, ["environmentId", "agent", "timeoutMs"], "arguments");
     const environmentId = asNonBlankString(args.environmentId, "environmentId");
     if (!isAgentBridgeKind(args.agent)) {
-      throw new Error("agent must be one of: claude, codex, opencode");
+      throw new Error(`agent must be one of: ${LOCAL_SERVER_KINDS.join(", ")}`);
     }
     const agent = args.agent;
     const timeoutMs = asNumber(args.timeoutMs, "timeoutMs");
@@ -12736,6 +12890,10 @@ export function createCommandRegistry(
         ? "codex"
         : intent.kind === "opencode-native"
           ? "opencode"
+          : intent.kind === "cursor-native"
+            ? "cursor"
+            : intent.kind === "grok-native"
+              ? "grok"
           : null;
     if (!agent) return;
     const logicalSessionKey = `env-${environment.id}:${intent.tabId}`;
@@ -12948,7 +13106,11 @@ export function createCommandRegistry(
           ? "claude-native"
           : startup.agent === "codex"
             ? "codex-native"
-            : "opencode-native";
+            : startup.agent === "cursor"
+              ? "cursor-native"
+              : startup.agent === "grok"
+                ? "grok-native"
+                : "opencode-native";
         await teardownTab({
           environmentId: environment.id,
           tabId: startup.tabId,
@@ -12974,7 +13136,11 @@ export function createCommandRegistry(
           ? "claude-native"
           : session.agent === "codex"
             ? "codex-native"
-            : "opencode-native";
+            : session.agent === "cursor"
+              ? "cursor-native"
+              : session.agent === "grok"
+                ? "grok-native"
+                : "opencode-native";
         console.warn(`[backend] Reaping orphaned native session ${session.environmentId}/${tabId}`);
         await teardownTab({
           environmentId: session.environmentId,

@@ -12,6 +12,7 @@ import {
   Globe2,
   Eye,
   Sparkles,
+  Boxes,
 } from "lucide-react";
 import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { GlobalSettings } from "./GlobalSettings";
@@ -20,6 +21,7 @@ import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSet
 
 const MENU_ITEMS: SettingsMenuItem[] = [
   { id: "general", label: "General", icon: <Settings2 className="h-4 w-4" /> },
+  { id: "platforms", label: "Platforms", icon: <Boxes className="h-4 w-4" /> },
   { id: "review", label: "Review", icon: <Eye className="h-4 w-4" /> },
   { id: "claude", label: "Claude", icon: <ClaudeIcon className="h-4 w-4" /> },
   { id: "codex", label: "Codex", icon: <CodexIcon className="h-4 w-4 text-emerald-400" /> },

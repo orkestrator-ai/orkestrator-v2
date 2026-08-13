@@ -54,6 +54,8 @@ describe("buildReviewModelCatalog", () => {
         description: "Live Codex model",
         reasoningEfforts: ["medium", "high"],
       }],
+      cursor: [{ id: "default", name: "Cursor automatic", reasoningEfforts: [] }],
+      grok: [{ id: "default", name: "Grok Build default", reasoningEfforts: [] }],
       opencode: [{
         id: "provider/model-live",
         name: "OpenCode Live",

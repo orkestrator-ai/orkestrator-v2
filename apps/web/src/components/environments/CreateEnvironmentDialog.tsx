@@ -40,7 +40,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
+import { ClaudeIcon, CodexIcon, CursorAgentIcon, GrokBuildIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { OpenCodeModelSelect } from "@/components/opencode/OpenCodeModelSelect";
 import { cn } from "@/lib/utils";
 import { readImage } from "@/lib/native/clipboard";
@@ -71,6 +71,7 @@ import { useClaudeStore } from "@/stores/claudeStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import type { InitialPromptImageAttachment } from "@/lib/initial-prompt-attachments";
 import { buildReviewModelCatalog } from "@/lib/review-launch-options";
+import { modelsForAgent } from "@/lib/agent-launch";
 import {
   getCachedOpenCodeModelCatalog,
   getOpencodeModelPreferences,
@@ -82,6 +83,7 @@ import {
   openCodeModelRefToId,
 } from "@/lib/opencode-model-preferences";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
+import { firstEnabledAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 // Stable empty array reference to prevent infinite re-renders when no default port mappings are provided
 const EMPTY_PORT_MAPPINGS: PortMapping[] = [];
@@ -216,7 +218,10 @@ export function CreateEnvironmentDialog({
 
   // Resolve effective defaults: project-level overrides > app-level
   const resolved = resolveAgentDefaults(config.global, repoConfig);
-  const configDefaultAgent = resolved.defaultAgent as AgentType;
+  const configDefaultAgent = firstEnabledAgentPlatform(
+    config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
+    resolved.defaultAgent as AgentType,
+  );
   const configClaudeMode = resolved.claudeMode as ClaudeMode;
   const configOpencodeMode = resolved.opencodeMode as OpenCodeMode;
   const configCodexMode = resolved.codexMode as CodexMode;
@@ -341,13 +346,15 @@ export function CreateEnvironmentDialog({
 
   const getInitialAgentSelection = useCallback(
     (nextAgent: AgentType) => {
-      const models = modelCatalog[nextAgent];
+      const models = modelsForAgent(modelCatalog, nextAgent);
       const globalPreferredModel =
         nextAgent === "claude"
           ? config.global.claudeModel
           : nextAgent === "codex"
             ? config.global.codexModel
-            : config.global.opencodeModel;
+            : nextAgent === "opencode"
+              ? config.global.opencodeModel
+              : undefined;
       const projectPreferredModel =
         nextAgent === configDefaultAgent ? repoConfig?.defaultModel : undefined;
       const preferredModel = projectPreferredModel || globalPreferredModel;
@@ -642,8 +649,10 @@ export function CreateEnvironmentDialog({
       ? claudeMode
       : agentType === "opencode"
         ? opencodeMode
-        : codexMode;
-  const availableModels = modelCatalog[agentType];
+        : agentType === "codex"
+          ? codexMode
+          : "native";
+  const availableModels = modelsForAgent(modelCatalog, agentType);
   const availableReasoningEfforts =
     availableModels.find((candidate) => candidate.id === model)?.reasoningEfforts ?? [];
 
@@ -1107,7 +1116,7 @@ export function CreateEnvironmentDialog({
                   id="use-tui"
                   checked={selectedMode === "terminal"}
                   onCheckedChange={setUseTui}
-                  disabled={isLoading || !launchAgent}
+                  disabled={isLoading || !launchAgent || agentType === "cursor" || agentType === "grok"}
                 />
                 <Label
                   htmlFor="use-tui"
@@ -1143,7 +1152,19 @@ export function CreateEnvironmentDialog({
                       label: "OpenCode",
                       icon: <OpenCodeIcon className="h-4 w-4" />,
                     },
-                  ] as const).map((option) => (
+                    {
+                      value: "cursor",
+                      label: "Cursor Agent",
+                      icon: <CursorAgentIcon className="h-4 w-4" />,
+                    },
+                    {
+                      value: "grok",
+                      label: "Grok Build",
+                      icon: <GrokBuildIcon className="h-4 w-4" />,
+                    },
+                  ] as const)
+                    .filter((option) => (config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]).includes(option.value))
+                    .map((option) => (
                     <button
                       key={option.value}
                       type="button"

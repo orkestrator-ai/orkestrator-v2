@@ -1984,7 +1984,7 @@ export async function deleteLoopedReviewWorkflow(
 
 export async function ensureNativeAgentSession(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode";
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
   logicalSessionKey: string;
   origin?: AgentInteractionOrigin;
   interactionPolicy?: AgentInteractionPolicy;
@@ -2008,7 +2008,7 @@ export async function ensureNativeAgentSession(input: {
 
 export async function adoptNativeAgentSession(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode";
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
   logicalSessionKey: string;
   origin?: AgentInteractionOrigin;
   interactionPolicy?: AgentInteractionPolicy;
@@ -2025,7 +2025,7 @@ export async function adoptNativeAgentSession(input: {
 
 export async function getNativeAgentSession(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode";
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
   logicalSessionKey: string;
 }): Promise<PersistedNativeAgentSession | null> {
   return invoke<PersistedNativeAgentSession | null>(
@@ -2054,7 +2054,7 @@ export async function releaseOpenCodeManualPrompt(input: {
 
 export async function dispatchNativeAgentPrompt(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode";
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
   logicalSessionKey: string;
   origin?: AgentInteractionOrigin;
   interactionPolicy?: AgentInteractionPolicy;

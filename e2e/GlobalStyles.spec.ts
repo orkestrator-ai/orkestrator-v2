@@ -244,7 +244,7 @@ test("global dark surfaces, fonts, terminal, and scrollbar rules compile into br
   });
 
   expect(styles.colorScheme).toBe("dark");
-  expect(styles.scrollbarColor).toBe("rgb(63, 63, 70) rgb(0, 0, 0)");
+  expect(styles.scrollbarColor).toBe("rgb(63, 63, 70) rgba(0, 0, 0, 0)");
   expect(styles.theme).toEqual({
     background: "#000000",
     foreground: "#e4e4e7",
@@ -293,7 +293,7 @@ test("global dark surfaces, fonts, terminal, and scrollbar rules compile into br
   expect(styles.scrollbar).toEqual({
     width: "8px",
     height: "8px",
-    trackBackground: "rgb(0, 0, 0)",
+    trackBackground: "rgba(0, 0, 0, 0)",
     thumbBackground: "rgb(63, 63, 70)",
     thumbRadius: "6px",
     hoverRule: expect.stringContaining("background-color: var(--color-muted-foreground)"),

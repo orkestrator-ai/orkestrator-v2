@@ -118,6 +118,7 @@ const PARENT_WATCHDOG_INTERVAL_MS = parseDuration(
   process.env.ACP_PARENT_WATCHDOG_INTERVAL_MS,
   15_000,
 );
+const ACP_TOKEN_HEADER = "x-orkestrator-acp-token";
 
 class AcpProcess {
   readonly child: ChildProcessWithoutNullStreams;
@@ -882,10 +883,59 @@ async function route(
 }
 
 function authenticated(request: IncomingMessage): boolean {
-  const supplied = request.headers.authorization?.replace(/^Bearer\s+/i, "") || "";
-  const left = Buffer.from(supplied);
+  const dedicated = request.headers[ACP_TOKEN_HEADER];
+  const candidates = [
+    Array.isArray(dedicated) ? dedicated[0] : dedicated,
+    request.headers.authorization?.replace(/^Bearer\s+/i, ""),
+  ];
   const right = Buffer.from(authToken);
-  return left.length === right.length && timingSafeEqual(left, right);
+  return candidates.some((candidate) => {
+    const left = Buffer.from(candidate?.trim() || "");
+    return left.length === right.length && timingSafeEqual(left, right);
+  });
+}
+
+function isTrustedBridgeOrigin(origin: string | undefined): boolean {
+  if (!origin) return true;
+  // Electron's packaged renderer has an opaque origin. The bridge token is
+  // still mandatory on every data route, so accepting that origin does not
+  // make the loopback API ambiently accessible.
+  if (origin === "null" || origin === "file://") return true;
+  try {
+    const parsed = new URL(origin);
+    return (
+      (parsed.protocol === "http:" || parsed.protocol === "https:")
+      && (parsed.hostname === "127.0.0.1"
+        || parsed.hostname === "localhost"
+        || parsed.hostname === "::1"
+        || parsed.hostname === "[::1]")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function applyOriginPolicy(
+  request: IncomingMessage,
+  response: ServerResponse,
+): boolean {
+  const origin = request.headers.origin;
+  if (!isTrustedBridgeOrigin(origin)) {
+    json(response, 403, { error: "Origin is not allowed" });
+    return false;
+  }
+  if (origin) {
+    response.setHeader("Access-Control-Allow-Origin", origin);
+    response.setHeader("Vary", "Origin");
+  }
+  if (request.method !== "OPTIONS") return true;
+  response.writeHead(204, {
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": `Content-Type, Authorization, ${ACP_TOKEN_HEADER}`,
+    "Access-Control-Allow-Private-Network": "true",
+  });
+  response.end();
+  return false;
 }
 
 async function readJson(request: IncomingMessage): Promise<JsonObject> {
@@ -1136,6 +1186,7 @@ function isStringTuple(value: unknown): value is [string, unknown] {
 await restorePersistedState();
 
 const server = createServer((request, response) => {
+  if (!applyOriginPolicy(request, response)) return;
   const controller = new AbortController();
   const abortDisconnectedClient = () => {
     if (!response.writableEnded) controller.abort();
@@ -1153,7 +1204,13 @@ const server = createServer((request, response) => {
       const status = error instanceof HttpError ? error.status : 500;
       json(response, status, { error: error instanceof Error ? error.message : String(error) });
     })
-    .finally(() => clearInterval(disconnectPoll));
+    .finally(() => {
+      clearInterval(disconnectPoll);
+      request.off("aborted", abortDisconnectedClient);
+      request.socket.off("end", abortDisconnectedClient);
+      request.socket.off("close", abortDisconnectedClient);
+      response.off("close", abortDisconnectedClient);
+    });
 });
 
 server.listen(port, hostname, () => console.log(`ACP bridge (${provider}) listening on ${hostname}:${port}`));

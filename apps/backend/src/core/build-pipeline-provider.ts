@@ -875,6 +875,25 @@ function assertOk(response: Response, operation: string): void {
   }
 }
 
+async function assertOkWithErrorDetail(
+  response: Response,
+  operation: string,
+): Promise<void> {
+  if (response.ok) return;
+  const payload = await boundedJson(response, operation).catch(() => null);
+  const rawDetail = nonEmptyString(asRecord(payload)?.error);
+  const detail = rawDetail
+    ? rawDetail.replace(/[\r\n\t]+/g, " ").slice(0, 500)
+    : "";
+  const message = `${operation} ${isTransientHttpStatus(response.status)
+    ? "is temporarily unavailable"
+    : "failed"} (HTTP ${response.status})${detail ? `: ${detail}` : ""}`;
+  if (isTransientHttpStatus(response.status)) {
+    throw new ProviderUnavailableError(message);
+  }
+  throw new Error(message);
+}
+
 function isTransientHttpStatus(status: number): boolean {
   return status === 408
     || status === 425
@@ -973,7 +992,7 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       },
       this.fetchImpl,
     );
-    assertOk(response, `${this.agent} session creation`);
+    await assertOkWithErrorDetail(response, `${this.agent} session creation`);
     const body = await response.json() as { sessionId?: unknown };
     if (typeof body.sessionId !== "string") {
       throw new Error(`${this.agent} returned a malformed session`);

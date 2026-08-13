@@ -282,6 +282,11 @@ type PromptDispatchPreparation =
  */
 export class NativeAgentService {
   private readonly providers = new Map<string, BuildPipelineProvider>();
+  /**
+   * Identity of the live bridge generation behind each production provider.
+   * Ports and bearer credentials both change when a bridge is replaced.
+   */
+  private readonly providerConnections = new Map<string, string>();
   private readonly launchTasks = new Map<string, Promise<void>>();
   private readonly launchRetryAt = new Map<string, number>();
   private readonly queueTasks = new Map<string, Promise<void>>();
@@ -704,6 +709,7 @@ export class NativeAgentService {
     this.openCodeManualPromptClaims.clear();
     this.openCodeRecoveryDispatches.clear();
     this.providers.clear();
+    this.providerConnections.clear();
   }
 
   /**
@@ -2427,21 +2433,30 @@ export class NativeAgentService {
     const cacheKey = `${input.environmentId}\0${input.agent}`;
     const environment = await this.assertEnvironmentLive(input.environmentId);
     const cached = this.providers.get(cacheKey);
-    if (cached) return cached;
 
     if (this.options.provider) {
+      if (cached) return cached;
       const provider = await this.options.provider(input, environment);
       await this.assertEnvironmentLive(input.environmentId);
       this.assertAcceptingWork();
       this.cacheProvider(cacheKey, provider);
       return provider;
     }
+    // A renderer readiness request or tab teardown can replace the bridge
+    // without going through this service. Re-resolve its generation before
+    // trusting a cached provider, otherwise that provider keeps sending to the
+    // dead port/token for the rest of the backend process.
     const connection = await this.bridgeConnection(
       input.agent,
       environment,
       input.model,
       input.reasoningEffort,
     );
+    const connectionIdentity = this.bridgeConnectionIdentity(connection);
+    if (
+      cached
+      && this.providerConnections.get(cacheKey) === connectionIdentity
+    ) return cached;
     await this.assertEnvironmentLive(input.environmentId);
     this.assertAcceptingWork();
     const provider = createBuildPipelineProvider(connection, {
@@ -2452,7 +2467,7 @@ export class NativeAgentService {
       stageImages: (images) =>
         this.stageImages(input.environmentId, images),
     });
-    this.cacheProvider(cacheKey, provider);
+    this.cacheProvider(cacheKey, provider, connectionIdentity);
     return provider;
   }
 
@@ -2466,9 +2481,25 @@ export class NativeAgentService {
   private cacheProvider(
     cacheKey: string,
     provider: BuildPipelineProvider,
+    connectionIdentity?: string,
   ): void {
     this.providers.set(cacheKey, provider);
+    if (connectionIdentity) {
+      this.providerConnections.set(cacheKey, connectionIdentity);
+    } else {
+      this.providerConnections.delete(cacheKey);
+    }
     this.absentBridgeUntil.delete(cacheKey);
+  }
+
+  private bridgeConnectionIdentity(connection: BridgeConnection): string {
+    return createHash("sha256")
+      .update(connection.agent)
+      .update("\0")
+      .update(connection.baseUrl)
+      .update("\0")
+      .update(connection.authToken)
+      .digest("hex");
   }
 
   /**
@@ -2498,6 +2529,7 @@ export class NativeAgentService {
       await this.assertEnvironmentLive(input.environmentId);
       this.assertAcceptingWork();
       this.providers.set(cacheKey, provider);
+      this.providerConnections.delete(cacheKey);
       return provider;
     }
     const connection = await this.observeBridgeConnection(
@@ -2518,13 +2550,18 @@ export class NativeAgentService {
       stageImages: (images) =>
         this.stageImages(input.environmentId, images),
     });
-    this.cacheProvider(cacheKey, provider);
+    this.cacheProvider(
+      cacheKey,
+      provider,
+      this.bridgeConnectionIdentity(connection),
+    );
     return provider;
   }
 
   /** Forget a provider whose environment is gone, along with its observer state. */
   private forgetProviderState(cacheKey: string): void {
     this.providers.delete(cacheKey);
+    this.providerConnections.delete(cacheKey);
     this.absentBridgeUntil.delete(cacheKey);
     this.activityRetryAt.delete(cacheKey);
     this.activityAttempts.delete(cacheKey);
@@ -2551,6 +2588,7 @@ export class NativeAgentService {
     const cacheKey = `${input.environmentId}\0${input.agent}`;
     if (this.providers.get(cacheKey) !== provider) return;
     this.providers.delete(cacheKey);
+    this.providerConnections.delete(cacheKey);
   }
 
   /** Stage base64 images into the workspace so a bridge will accept them. */

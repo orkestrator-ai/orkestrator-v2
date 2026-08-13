@@ -310,6 +310,8 @@ const localOpenCodeServerPasswords = new Map<string, string>();
 /** Per-process bearer tokens for renderer → ACP bridge requests. */
 const localCursorBridgeTokens = new Map<string, string>();
 const localGrokBridgeTokens = new Map<string, string>();
+/** Credential generation used by each live local Cursor bridge. */
+const localCursorCredentialFingerprints = new Map<string, string>();
 type OpenCodeAgentToolsConfiguration = {
   fingerprint: string;
   controller: AbortController;
@@ -387,6 +389,9 @@ const CONTAINER_INTERACTIVE_SHELL_COMMAND = [
 ].join("\n");
 const CONTAINER_GITHUB_CREDENTIAL_FILE = "/tmp/orkestrator-ai/github-token";
 const CONTAINER_CLAUDE_CREDENTIAL_FILE = "/home/node/.claude/.credentials.json";
+const CONTAINER_CURSOR_API_KEY_FILE = "/tmp/orkestrator-ai/cursor-api-key";
+const CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE =
+  "/tmp/orkestrator-ai/cursor-api-key-fingerprint";
 const HOST_CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const CLAUDE_GITHUB_CREDENTIAL_FILE_ENV = "ORKESTRATOR_GITHUB_CREDENTIAL_FILE";
 const CLAUDE_GITHUB_ENV_FINGERPRINT_FILE =
@@ -1161,6 +1166,12 @@ function resolveCursorApiKey(
   const inherited = process.env.CURSOR_API_KEY?.trim();
   if (inherited) return { apiKey: inherited, source: "host-env" };
   return { source: "none" };
+}
+
+function cursorApiKeyFingerprint(apiKey: string | undefined): string {
+  return createHash("sha256")
+    .update(apiKey ?? "")
+    .digest("hex");
 }
 
 function redactGlobalConfig(global: AppConfig["global"]): RendererGlobalConfig {
@@ -6274,7 +6285,9 @@ function releaseLocalServerOwnership(
     localOpenCodeServerPasswords.delete(environmentId);
     cancelOpenCodeAgentToolsConfiguration(`local:${environmentId}`);
   } else if (key.startsWith("cursor:")) {
-    localCursorBridgeTokens.delete(key.slice("cursor:".length));
+    const environmentId = key.slice("cursor:".length);
+    localCursorBridgeTokens.delete(environmentId);
+    localCursorCredentialFingerprints.delete(environmentId);
   } else if (key.startsWith("grok:")) {
     localGrokBridgeTokens.delete(key.slice("grok:".length));
   }
@@ -6286,6 +6299,12 @@ async function startLocalServerUnlocked(
   kind: LocalServerKind,
 ): Promise<{ port: number; pid: number; wasRunning: boolean; authToken?: string }> {
   const key = `${kind}:${environmentId}`;
+  const cursorApiKey = kind === "cursor"
+    ? resolveCursorApiKey((await context.storage.loadConfig()).global).apiKey
+    : undefined;
+  const cursorCredentialFingerprint = kind === "cursor"
+    ? cursorApiKeyFingerprint(cursorApiKey)
+    : undefined;
   const existing = localServerProcesses.get(key);
   if (existing && !existing.killed && existing.pid) {
     const env = await context.storage.getEnvironment(environmentId);
@@ -6299,7 +6318,15 @@ async function startLocalServerUnlocked(
           ? bearerBridgeHeaders(authToken)
           : undefined
       : undefined;
-    if (port && authToken && await checkHttpHealth(port, "/global/health", healthHeaders)) {
+    const credentialMatches = kind !== "cursor"
+      || localCursorCredentialFingerprints.get(environmentId)
+        === cursorCredentialFingerprint;
+    if (
+      credentialMatches
+      && port
+      && authToken
+      && await checkHttpHealth(port, "/global/health", healthHeaders)
+    ) {
       if (kind === "opencode" && env?.worktreePath && context.agentTools) {
         scheduleOpenCodeAgentToolsConfiguration(
           `local:${environmentId}`,
@@ -6391,6 +6418,10 @@ async function startLocalServerUnlocked(
       );
     }
     env.ACP_AGENT_PATH = managedAcpBinary;
+    if (kind === "cursor") {
+      if (cursorApiKey) env.CURSOR_API_KEY = cursorApiKey;
+      else delete env.CURSOR_API_KEY;
+    }
   }
 
   const bridgeEntrypoint = path.join(cwd, "dist", "index.js");
@@ -6435,7 +6466,16 @@ async function startLocalServerUnlocked(
     });
   } catch (error) {
     tokens?.delete(environmentId);
+    if (kind === "cursor") {
+      localCursorCredentialFingerprints.delete(environmentId);
+    }
     throw error;
+  }
+  if (kind === "cursor" && cursorCredentialFingerprint) {
+    localCursorCredentialFingerprints.set(
+      environmentId,
+      cursorCredentialFingerprint,
+    );
   }
   localServerProcesses.set(key, child);
   child.stdout.on("data", (data) => console.debug(`[${kind}:${environmentId}] ${data.toString()}`));
@@ -8134,6 +8174,44 @@ async function syncContainerClaudeCredential(
       stdin: credentials,
       timeoutMs: 30_000,
       redactValues: [credentials],
+    },
+  );
+}
+
+/**
+ * Deliver the current Cursor key without putting it in Docker argv, logs, or a
+ * shell command. Bridge startup reads the owner-only file into its environment.
+ */
+async function syncContainerCursorApiKey(
+  containerId: string,
+  apiKey: string | undefined,
+): Promise<void> {
+  if (!apiKey) {
+    await dockerExec(
+      containerId,
+      `rm -f ${CONTAINER_CURSOR_API_KEY_FILE}`,
+    );
+    return;
+  }
+  const command = [
+    "set -eu",
+    `credential_dir=${quoteShell(path.posix.dirname(CONTAINER_CURSOR_API_KEY_FILE))}`,
+    'mkdir -p "$credential_dir"',
+    'chmod 700 "$credential_dir"',
+    'credential_tmp="$(mktemp "$credential_dir/.cursor-api-key.XXXXXX")"',
+    'trap \'rm -f "$credential_tmp"\' EXIT',
+    'cat > "$credential_tmp"',
+    'chmod 600 "$credential_tmp"',
+    `mv "$credential_tmp" ${quoteShell(CONTAINER_CURSOR_API_KEY_FILE)}`,
+    "trap - EXIT",
+  ].join("\n");
+  await runCommand(
+    "docker",
+    ["exec", "-i", containerId, "sh", "-c", command],
+    {
+      stdin: apiKey,
+      timeoutMs: 30_000,
+      redactValues: [apiKey],
     },
   );
 }
@@ -10637,13 +10715,34 @@ export function createCommandRegistry(
     const acpExecutable = acpProvider === "cursor" ? "cursor-agent" : "grok";
     const tokenFile = `/tmp/${acpProvider}-acp-bridge-token`;
     const logFile = `/tmp/${acpProvider}-acp-bridge.log`;
-    register(`start_${acpProvider}_server`, ({ containerId }) => {
+    register(`start_${acpProvider}_server`, ({ containerId }, context) => {
       const id = asString(containerId, "containerId");
       return enqueueContainerBridgeOperation(acpProvider, id, async () => {
+        const cursorApiKey = acpProvider === "cursor"
+          ? resolveCursorApiKey((await context.storage.loadConfig()).global).apiKey
+          : undefined;
+        const expectedCredentialFingerprint = acpProvider === "cursor"
+          ? cursorApiKeyFingerprint(cursorApiKey)
+          : undefined;
+        if (acpProvider === "cursor") {
+          await syncContainerCursorApiKey(id, cursorApiKey);
+        }
         const hostPort = await getHostPort(id, containerPort);
         if (hostPort && await checkHttpHealth(hostPort)) {
+          const credentialFingerprint = acpProvider === "cursor"
+            ? (await dockerExec(
+                id,
+                `cat ${CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE} 2>/dev/null || true`,
+              )).trim()
+            : undefined;
           const existingToken = (await dockerExec(id, `cat ${tokenFile} 2>/dev/null || true`)).trim();
-          if (BRIDGE_TOKEN_PATTERN.test(existingToken)) {
+          if (
+            BRIDGE_TOKEN_PATTERN.test(existingToken)
+            && (
+              acpProvider !== "cursor"
+              || credentialFingerprint === expectedCredentialFingerprint
+            )
+          ) {
             return { hostPort, wasRunning: true, authToken: existingToken };
           }
           await dockerExec(id, `pkill -f '[a]cp-bridge/dist/index.js --provider=${acpProvider}' || true`);
@@ -10664,6 +10763,10 @@ export function createCommandRegistry(
           export ACP_STATE_DIR=/tmp/orkestrator-acp-state/${acpProvider}
           export ACP_AGENT_PATH="$(command -v ${acpExecutable} 2>/dev/null || echo ${acpExecutable})"
           export ACP_BRIDGE_TOKEN=${quoteShell(token)}
+          ${acpProvider === "cursor"
+            ? `if [ -s ${CONTAINER_CURSOR_API_KEY_FILE} ]; then export CURSOR_API_KEY="$(cat ${CONTAINER_CURSOR_API_KEY_FILE})"; else unset CURSOR_API_KEY; fi
+          printf '%s' ${quoteShell(expectedCredentialFingerprint!)} > ${CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE}`
+            : ""}
           setsid bun /opt/acp-bridge/dist/index.js --provider=${acpProvider} > ${logFile} 2>&1 &
         `, [token]);
         return { ...started, authToken: token };
@@ -10674,7 +10777,10 @@ export function createCommandRegistry(
       return enqueueContainerBridgeOperation(acpProvider, id, () =>
         dockerExec(
           id,
-          `pkill -f '[a]cp-bridge/dist/index.js --provider=${acpProvider}' || true; rm -f ${tokenFile}`,
+          `pkill -f '[a]cp-bridge/dist/index.js --provider=${acpProvider}' || true; rm -f ${tokenFile}`
+          + (acpProvider === "cursor"
+            ? ` ${CONTAINER_CURSOR_API_KEY_FILE} ${CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE}`
+            : ""),
         ).then(() => undefined)
       );
     });

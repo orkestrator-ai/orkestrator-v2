@@ -96,6 +96,39 @@ async function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void>
 }
 
 describe("ACP bridge", () => {
+  test("allows authenticated renderer requests from trusted local origins", async () => {
+    const { base } = await spawnBridge();
+    const origin = "http://127.0.0.1:1420";
+    const preflight = await nativeFetch(`${base}/session/create`, {
+      method: "OPTIONS",
+      headers: {
+        origin,
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "x-orkestrator-acp-token, content-type",
+      },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get("access-control-allow-origin")).toBe(origin);
+    expect(preflight.headers.get("access-control-allow-headers")?.toLowerCase())
+      .toContain("x-orkestrator-acp-token");
+
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers: {
+        origin,
+        "x-orkestrator-acp-token": "integration-test-token",
+        "content-type": "application/json",
+      },
+    });
+    expect(created.status).toBe(201);
+    expect(created.headers.get("access-control-allow-origin")).toBe(origin);
+
+    const rejected = await nativeFetch(`${base}/global/health`, {
+      headers: { origin: "https://attacker.invalid" },
+    });
+    expect(rejected.status).toBe(403);
+  });
+
   test("drives an ACP session and rehydrates a parked permission", async () => {
     const { base, headers } = await spawnBridge();
 

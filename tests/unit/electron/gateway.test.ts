@@ -5822,7 +5822,7 @@ describe("remote gateway", () => {
     // preflight that omits one blocks every request to that bridge from the
     // browser.
     expect(preflight.headers["access-control-allow-headers"]).toBe(
-      "Authorization, Content-Type, X-Orkestrator-Codex-Token, X-Orkestrator-Claude-Token, X-Orkestrator-OpenCode-Token",
+      "Authorization, Content-Type, X-Orkestrator-Codex-Token, X-Orkestrator-Claude-Token, X-Orkestrator-OpenCode-Token, X-Orkestrator-Acp-Token",
     );
 
     const connected = await requestUrl(endpoint, {
@@ -6914,6 +6914,7 @@ describe("remote gateway", () => {
       authorization?: string;
       proxyAuthorization?: string;
       codexToken?: string;
+      acpToken?: string;
       openCodeToken?: string;
       cookie?: string;
       origin?: string;
@@ -6928,6 +6929,7 @@ describe("remote gateway", () => {
           authorization: request.headers.authorization,
           proxyAuthorization: request.headers["proxy-authorization"],
           codexToken: request.headers["x-orkestrator-codex-token"] as string | undefined,
+          acpToken: request.headers["x-orkestrator-acp-token"] as string | undefined,
           openCodeToken: request.headers["x-orkestrator-opencode-token"] as string | undefined,
           cookie: request.headers.cookie,
           origin: request.headers.origin,
@@ -6971,6 +6973,7 @@ describe("remote gateway", () => {
           "content-type": "application/json",
           "x-orkestrator-codex-token": "codex-bridge-token",
           "x-orkestrator-opencode-token": "opencode-password",
+          "x-orkestrator-acp-token": "acp-bridge-token",
         },
         body: JSON.stringify({ prompt: "review" }),
       });
@@ -6980,6 +6983,7 @@ describe("remote gateway", () => {
         authorization: `Basic ${Buffer.from("opencode:opencode-password").toString("base64")}`,
         proxyAuthorization: undefined,
         codexToken: "codex-bridge-token",
+        acpToken: "acp-bridge-token",
         openCodeToken: undefined,
         cookie: "app_session=abc123",
         origin: undefined,

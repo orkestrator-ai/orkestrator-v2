@@ -24,7 +24,7 @@ describe("Electron packaging configuration", () => {
         directories: { buildResources: string; output: string };
         files: string[];
         extraResources: Array<{ from: string; to: string; filter: string[] }>;
-        mac: { icon: string };
+        mac: { icon: string; identity: string | null; notarize: boolean; target: string[] };
         win?: { icon: string };
         linux: { icon: string };
       };
@@ -40,12 +40,17 @@ describe("Electron packaging configuration", () => {
     expect(packageJson.scripts.package).toContain("bun run download:bun");
     expect(packageJson.scripts.package).toContain("bun run build:all");
     expect(packageJson.scripts.package).toContain("electron-builder");
+    expect(packageJson.scripts.package).toContain("electron-builder --dir");
+    expect(packageJson.scripts["package:release"]).toContain("electron-builder.release.config.ts");
     expect(packageJson.scripts.setup).not.toContain("download:binaries");
     expect(packageJson.scripts["build:all"]).not.toContain("download:binaries");
     expect(packageJson.scripts["docker:build"]).not.toContain("--no-cache");
     expect(packageJson.devDependencies.electron).toBeDefined();
     expect(packageJson.build.directories).toMatchObject({ buildResources: "apps/desktop/electron/resources", output: "release" });
     expect(packageJson.build.mac.icon).toBe("icon.icns");
+    expect(packageJson.build.mac.identity).toBeNull();
+    expect(packageJson.build.mac.notarize).toBe(false);
+    expect(packageJson.build.mac.target).toEqual(["dmg"]);
     expect(packageJson.build.win).toBeUndefined();
     expect(packageJson.build.linux.icon).toBe("icons");
     expect(packageJson.build.files).toEqual(expect.arrayContaining(["apps/desktop/dist/**", "package.json"]));
@@ -70,6 +75,24 @@ describe("Electron packaging configuration", () => {
     expect(desktopMain).toContain("browserPreviews: browserPreviewManager ?? undefined");
     expect(desktopMain).toContain("registerBrowserPreviewWindowCleanup");
     expect(desktopMain).toContain("registerBrowserPreviewWindowActivation");
+  });
+
+  test("opts signing and notarization back in only for release packages", async () => {
+    const { createReleaseConfig, hasNotarizationCredentials } = await import("../../../electron-builder.release.config");
+    const notarizationEnvironment = {
+      APPLE_API_KEY: "/private/key.p8",
+      APPLE_API_KEY_ID: "key-id",
+      APPLE_API_ISSUER: "issuer-id",
+    };
+    const releaseConfig = createReleaseConfig(notarizationEnvironment);
+
+    expect(hasNotarizationCredentials({})).toBe(false);
+    expect(hasNotarizationCredentials(notarizationEnvironment)).toBe(true);
+    expect(() => createReleaseConfig({})).toThrow("package:release requires Apple notarization credentials");
+    expect(releaseConfig.forceCodeSigning).toBe(true);
+    expect(releaseConfig.mac?.identity).toBeUndefined();
+    expect(releaseConfig.mac?.notarize).toBe(true);
+    expect(releaseConfig.mac?.target).toEqual(["dmg"]);
   });
 
   test("uses the Bun-based container image before running the simplified workspace setup", async () => {

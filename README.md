@@ -54,6 +54,26 @@ docker build -t orkestrator-v2:latest -f docker/Dockerfile .
 bun run dev
 ```
 
+### Packaging the macOS app
+
+For a fast local build, package and install the unpacked app without code
+signing, notarization, or DMG creation:
+
+```bash
+bun run package
+```
+
+For a distributable DMG, opt into both Developer ID signing and Apple
+notarization:
+
+```bash
+bun run package:release
+```
+
+The release command relies on electron-builder's standard signing identity and
+Apple notarization environment variables. It is expected to fail when the
+required certificate or notarization credentials are unavailable.
+
 ### Published container image
 
 Release images are published for AMD64 and ARM64 through GitHub Container

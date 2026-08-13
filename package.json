@@ -49,7 +49,8 @@
     "verify:toolchains:live": "RUN_LIVE_TOOLCHAIN_ARTIFACTS=1 bun scripts/verify-toolchain-artifacts.ts",
     "verify:codex:protocol": "CODEX_PROTOCOL_CHECK_ALLOW_MISSING_BINARY=0 bun scripts/generate-codex-app-server-protocol.ts --check",
     "docker:build": "docker build -t orkestrator-v2:latest -f docker/Dockerfile .",
-    "package": "bun install --frozen-lockfile && bun run download:bun && bun run build:all && bunx electron-builder && bun scripts/install-packaged-app.ts"
+    "package": "bun install --frozen-lockfile && bun run download:bun && bun run build:all && bunx electron-builder --dir && bun scripts/install-packaged-app.ts",
+    "package:release": "bun install --frozen-lockfile && bun run download:bun && bun run build:all && bunx electron-builder --config electron-builder.release.config.ts && bun scripts/install-packaged-app.ts"
   },
   "build": {
     "appId": "com.orkestrator.v2",
@@ -122,6 +123,8 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "icon.icns",
+      "identity": null,
+      "notarize": false,
       "target": [
         "dmg"
       ]

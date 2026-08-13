@@ -24,7 +24,7 @@ describe("Electron packaging configuration", () => {
         directories: { buildResources: string; output: string };
         files: string[];
         extraResources: Array<{ from: string; to: string; filter: string[] }>;
-        mac: { icon: string; identity: string | null; notarize: boolean; target: string[] };
+        mac: { icon: string; identity: string | null; hardenedRuntime: boolean; notarize: boolean; target: string[] };
         win?: { icon: string };
         linux: { icon: string };
       };
@@ -48,7 +48,8 @@ describe("Electron packaging configuration", () => {
     expect(packageJson.devDependencies.electron).toBeDefined();
     expect(packageJson.build.directories).toMatchObject({ buildResources: "apps/desktop/electron/resources", output: "release" });
     expect(packageJson.build.mac.icon).toBe("icon.icns");
-    expect(packageJson.build.mac.identity).toBeNull();
+    expect(packageJson.build.mac.identity).toBe("-");
+    expect(packageJson.build.mac.hardenedRuntime).toBe(false);
     expect(packageJson.build.mac.notarize).toBe(false);
     expect(packageJson.build.mac.target).toEqual(["dmg"]);
     expect(packageJson.build.win).toBeUndefined();
@@ -91,6 +92,7 @@ describe("Electron packaging configuration", () => {
     expect(() => createReleaseConfig({})).toThrow("package:release requires Apple notarization credentials");
     expect(releaseConfig.forceCodeSigning).toBe(true);
     expect(releaseConfig.mac?.identity).toBeUndefined();
+    expect(releaseConfig.mac?.hardenedRuntime).toBe(true);
     expect(releaseConfig.mac?.notarize).toBe(true);
     expect(releaseConfig.mac?.target).toEqual(["dmg"]);
   });

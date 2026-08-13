@@ -187,6 +187,20 @@ function assertValidArtifactMetadata(artifact: ToolchainArtifact): void {
       paths.add(normalized);
     }
   }
+  if (artifact.archive.bundleIntegrity !== undefined) {
+    const integrity = artifact.archive.bundleIntegrity;
+    if (
+      !artifact.archive.bundleRoot
+      || artifact.archive.bundleFiles !== undefined
+      || !Number.isSafeInteger(integrity.fileCount)
+      || integrity.fileCount < 1
+      || !Number.isSafeInteger(integrity.totalSize)
+      || integrity.totalSize < 1
+      || !/^[a-f0-9]{64}$/.test(integrity.sha256)
+    ) {
+      throw new Error(`${artifact.name} manifest has invalid bundle integrity`);
+    }
+  }
   const hasSize = artifact.executable.installedSize !== undefined;
   const hasSha256 = artifact.executable.installedSha256 !== undefined;
   if (hasSize !== hasSha256) {
@@ -350,10 +364,85 @@ async function isValidExecutable(rootDir: string, artifact: ToolchainArtifact): 
         return false;
       }
     }
+    if (
+      artifact.archive.bundleIntegrity
+      && !await hasValidBundleIntegrity(artifactDirectory(rootDir, artifact), artifact)
+    ) {
+      return false;
+    }
     return true;
   } catch {
     return false;
   }
+}
+
+type BundleTreeEntry = {
+  path: string;
+  size: number;
+  executable: boolean;
+  sha256: string;
+};
+
+async function bundleTreeEntries(
+  directory: string,
+  executableFileName: string,
+): Promise<BundleTreeEntry[]> {
+  const entries: BundleTreeEntry[] = [];
+  const visit = async (currentDirectory: string, prefix = ""): Promise<void> => {
+    for (const entry of await readdir(currentDirectory, { withFileTypes: true })) {
+      const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const filePath = path.join(currentDirectory, entry.name);
+      if (entry.isDirectory()) {
+        await visit(filePath, relativePath);
+      } else if (entry.isFile() && !entry.isSymbolicLink()) {
+        if (relativePath === executableFileName) continue;
+        const info = await lstat(filePath);
+        entries.push({
+          path: relativePath,
+          size: info.size,
+          executable: (info.mode & 0o111) !== 0,
+          sha256: await sha256File(filePath),
+        });
+      } else {
+        throw new Error(`Bundle contains unsupported entry: ${relativePath}`);
+      }
+    }
+  };
+  await visit(directory);
+  return entries.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function bundleTreeDigest(entries: readonly BundleTreeEntry[]): {
+  fileCount: number;
+  totalSize: number;
+  sha256: string;
+} {
+  const hash = createHash("sha256");
+  let totalSize = 0;
+  for (const entry of entries) {
+    totalSize += entry.size;
+    hash.update(entry.path);
+    hash.update("\0");
+    hash.update(String(entry.size));
+    hash.update("\0");
+    hash.update(entry.executable ? "x" : "-");
+    hash.update("\0");
+    hash.update(entry.sha256);
+    hash.update("\n");
+  }
+  return { fileCount: entries.length, totalSize, sha256: hash.digest("hex") };
+}
+
+async function hasValidBundleIntegrity(
+  directory: string,
+  artifact: ToolchainArtifact,
+): Promise<boolean> {
+  const expected = artifact.archive.bundleIntegrity;
+  if (!expected) return true;
+  const actual = bundleTreeDigest(await bundleTreeEntries(directory, artifact.executable.fileName));
+  return actual.fileCount === expected.fileCount
+    && actual.totalSize === expected.totalSize
+    && actual.sha256 === expected.sha256;
 }
 
 async function isValidCompanion(
@@ -707,11 +796,10 @@ async function extractTarGzipBundle(
       stream.resume();
       return;
     }
-    // Only materialize files whose bytes are individually pinned and checked
-    // on every startup. The upstream Cursor archive contains many incidental
-    // runtime files; extracting those would turn them into an unverified part
-    // of the reusable installation.
-    if (!installedFiles.has(normalized)) {
+    // Small bundles use a per-file allowlist. Runtimes that load code and native
+    // modules dynamically retain the complete, archive-pinned tree and verify
+    // its aggregate digest on every startup.
+    if (!archive.bundleIntegrity && !installedFiles.has(normalized)) {
       stream.once("end", next);
       stream.resume();
       return;
@@ -1178,6 +1266,12 @@ async function installArtifact(
       await rename(archivePath, extractedPath);
     }
     if (artifact.archive.format !== "raw") await rm(archivePath, { force: true });
+    if (
+      artifact.archive.bundleIntegrity
+      && !await hasValidBundleIntegrity(stagingDirectory, artifact)
+    ) {
+      throw new Error(`${artifact.name} extracted bundle did not match the pinned manifest`);
+    }
     await chmod(extractedPath, 0o700);
 
     const extracted = await lstat(extractedPath);
@@ -1418,6 +1512,7 @@ function activationSetId(artifacts: readonly ToolchainArtifact[]): string {
       repairInvalidMacSignature: artifact.executable.repairInvalidMacSignature ?? false,
       activationAliases: artifact.activationAliases ?? [],
       bundleFiles: artifact.archive.bundleFiles ?? [],
+      bundleIntegrity: artifact.archive.bundleIntegrity ?? null,
       // Aliases and companions are part of the activated set: adding or
       // changing one has to produce a new bin directory, so a running older
       // build keeps the exact sibling layout it was launched against.

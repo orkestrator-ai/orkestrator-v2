@@ -29,6 +29,14 @@ export type ToolchainArchive = {
   bundleRoot?: string;
   /** Runtime files the launcher needs, pinned for cache revalidation. */
   bundleFiles?: readonly { path: string; size: number; sha256: string }[];
+  /**
+   * Integrity root for a complete launcher bundle. Every regular file below
+   * `bundleRoot`, except the separately pinned launcher, is extracted and
+   * included in this deterministic tree digest. Use this when the runtime can
+   * load chunks or native modules dynamically and cannot be reduced to a small
+   * fixed `bundleFiles` allowlist.
+   */
+  bundleIntegrity?: { fileCount: number; totalSize: number; sha256: string };
   size: number;
   sha256: string;
   allowedHosts: readonly string[];
@@ -399,10 +407,11 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       url: `https://downloads.cursor.com/lab/${PINNED_TOOLCHAIN_VERSIONS.cursor}/darwin/arm64/agent-cli-package.tar.gz`,
       entryPath: "dist-package/cursor-agent",
       bundleRoot: "dist-package/",
-      bundleFiles: [
-        { path: "node", size: 116_870_064, sha256: "336b5b3ebc5deb86df842102b20b6e4761605b7a667823e68dda7761b91a161b" },
-        { path: "index.js", size: 9_386_977, sha256: "6aceb24b7c7ecddb1993946ebb18a7dd4d025842e6efda955eb0c13255b1e5f0" },
-      ],
+      bundleIntegrity: {
+        fileCount: 435,
+        totalSize: 233_915_000,
+        sha256: "c8cb6eb3dda11f10bb185a3159c34358999c6d120f409e28e7c5dcd0c98443c2",
+      },
       size: 74_746_275,
       sha256: "46044d6d7bcbd7b49a0cf1cd01aa4ca79aaa2ea5f2c7a32965fc0ebe29841790",
       allowedHosts: CURSOR_DOWNLOAD_HOSTS,
@@ -425,10 +434,11 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       url: `https://downloads.cursor.com/lab/${PINNED_TOOLCHAIN_VERSIONS.cursor}/darwin/x64/agent-cli-package.tar.gz`,
       entryPath: "dist-package/cursor-agent",
       bundleRoot: "dist-package/",
-      bundleFiles: [
-        { path: "node", size: 119_195_696, sha256: "f1f2f5700285deadd6836f66463687f13275177b92ad744fa2699cfb50dcd0a5" },
-        { path: "index.js", size: 9_378_331, sha256: "2def6db128c49b95f33b8b6f9624a15e65616f074ae505c06ffccf35fe0feb7b" },
-      ],
+      bundleIntegrity: {
+        fileCount: 435,
+        totalSize: 239_811_650,
+        sha256: "09567340b9337525d9f4073913c36f077ced7f136dd07d2435fe9c9ca678a4c6",
+      },
       size: 77_650_670,
       sha256: "d5c1ce96dd36469e0231d818d4ccf390caac52d94e607c56ebeecc247cab2b1b",
       allowedHosts: CURSOR_DOWNLOAD_HOSTS,
@@ -451,10 +461,11 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       url: `https://downloads.cursor.com/lab/${PINNED_TOOLCHAIN_VERSIONS.cursor}/linux/arm64/agent-cli-package.tar.gz`,
       entryPath: "dist-package/cursor-agent",
       bundleRoot: "dist-package/",
-      bundleFiles: [
-        { path: "node", size: 125_906_320, sha256: "47befb5f57df96771ce343d6293349ecf4d46c91110b626423ec3a49d2fee7c1" },
-        { path: "index.js", size: 8_702_391, sha256: "468106299df5dcebf227e0d478172a7241a202d25c4b2b7060b6723ee19cabac" },
-      ],
+      bundleIntegrity: {
+        fileCount: 441,
+        totalSize: 248_799_966,
+        sha256: "2559dbe9372301df47c5833a84b35d4025baaab7b76edcf6d86a7b81f4d512e6",
+      },
       size: 83_117_637,
       sha256: "ea13f92e295f523a99ce8d8f57d6894d21e5d1e2d030ffad718ccd5955ca2eed",
       allowedHosts: CURSOR_DOWNLOAD_HOSTS,
@@ -476,10 +487,11 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       url: `https://downloads.cursor.com/lab/${PINNED_TOOLCHAIN_VERSIONS.cursor}/linux/x64/agent-cli-package.tar.gz`,
       entryPath: "dist-package/cursor-agent",
       bundleRoot: "dist-package/",
-      bundleFiles: [
-        { path: "node", size: 129_074_464, sha256: "e0e46d3a1c0667117303412647cafcbcefb1be7612493015ec8fd6b7440162a4" },
-        { path: "index.js", size: 8_702_383, sha256: "f6fd4e6bf3d6ecbf66cc2dcabcf708b8a7c37b400d10c82a58658b5e331c36d0" },
-      ],
+      bundleIntegrity: {
+        fileCount: 441,
+        totalSize: 254_357_686,
+        sha256: "76a35725239f2fa87a2afbc9d43f76d57cfecb5aadc99f5a5581d5f8ab9843f9",
+      },
       size: 84_532_310,
       sha256: "bfff4bf6f4e9dd30c1d0ef0a70b6077b074015dd2948e4c50685d53afdcfce5a",
       allowedHosts: CURSOR_DOWNLOAD_HOSTS,

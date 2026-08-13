@@ -123,7 +123,8 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "icon.icns",
-      "identity": null,
+      "identity": "-",
+      "hardenedRuntime": false,
       "notarize": false,
       "target": [
         "dmg"

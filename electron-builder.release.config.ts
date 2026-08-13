@@ -5,7 +5,12 @@ const packageJson = JSON.parse(readFileSync(new URL("./package.json", import.met
   build: Configuration;
 };
 
-const { identity: _localIdentity, notarize: _localNotarize, ...baseMac } = packageJson.build.mac ?? {};
+const {
+  identity: _localIdentity,
+  hardenedRuntime: _localHardenedRuntime,
+  notarize: _localNotarize,
+  ...baseMac
+} = packageJson.build.mac ?? {};
 
 const notarizationCredentialSets = [
   ["APPLE_API_KEY", "APPLE_API_KEY_ID", "APPLE_API_ISSUER"],
@@ -38,6 +43,7 @@ export function createReleaseConfig(environment: NodeJS.ProcessEnv): Configurati
     forceCodeSigning: true,
     mac: {
       ...baseMac,
+      hardenedRuntime: true,
       notarize: true,
       target: ["dmg"],
     },

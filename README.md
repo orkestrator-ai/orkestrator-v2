@@ -56,8 +56,8 @@ bun run dev
 
 ### Packaging the macOS app
 
-For a fast local build, package and install the unpacked app without code
-signing, notarization, or DMG creation:
+For a fast local build, package and install the unpacked app with local ad-hoc
+signing, without Apple Developer ID signing, notarization, or DMG creation:
 
 ```bash
 bun run package

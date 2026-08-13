@@ -562,6 +562,11 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
         expect(artifact.executable.installedSha256).toMatch(/^[a-f0-9]{64}$/);
         expect(artifact.executable.installedSize).toBeGreaterThan(0);
       }
+      if (artifact.archive.bundleIntegrity) {
+        expect(artifact.archive.bundleIntegrity.sha256).toMatch(/^[a-f0-9]{64}$/);
+        expect(artifact.archive.bundleIntegrity.fileCount).toBeGreaterThan(0);
+        expect(artifact.archive.bundleIntegrity.totalSize).toBeGreaterThan(0);
+      }
       expect(artifact.archive.size).toBeGreaterThan(0);
       expect(artifact.executable.size).toBeGreaterThan(0);
       expect(artifact.version).toBe(PINNED_TOOLCHAIN_VERSIONS[artifact.name]);
@@ -598,6 +603,9 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
         ...(artifact.archive.bundleRoot
           ? []
           : [["executable.sha256", artifact.executable.sha256] as const]),
+        ...(artifact.archive.bundleIntegrity
+          ? [["archive.bundleIntegrity.sha256", artifact.archive.bundleIntegrity.sha256] as const]
+          : []),
         ...(artifact.executable.installedSha256
           ? [["executable.installedSha256", artifact.executable.installedSha256] as const]
           : []),

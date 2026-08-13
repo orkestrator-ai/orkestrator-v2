@@ -355,6 +355,56 @@ describe("pinned desktop toolchain cache", () => {
     expect(await readFile(path.join(path.dirname(target), "node/bin/node"))).toEqual(runtime);
   });
 
+  test("retains and revalidates a complete runtime bundle by its tree digest", async () => {
+    const dataDir = await createDataDir();
+    const launcher = Buffer.from("#!/bin/sh\nexit 0\n");
+    const runtime = Buffer.from("bundled runtime");
+    const lazyChunk = Buffer.from("lazy runtime");
+    const archive = await tarGzip([
+      { name: "dist-package/cursor-agent", body: launcher },
+      { name: "dist-package/node", body: runtime },
+      { name: "dist-package/chunks/lazy.js", body: lazyChunk },
+    ]);
+    const artifact: ToolchainArtifact = { ...artifactWithBody(artifacts[1]!, archive, {
+      entryPath: "dist-package/cursor-agent",
+      bundleRoot: "dist-package/",
+      bundleIntegrity: {
+        fileCount: 2,
+        totalSize: 27,
+        sha256: "46ed76bffe64e3672843d3c536ff0fbd0d91e3dd3528b12e1c870264856d8855",
+      },
+      url: "https://downloads.example.test/cursor.tar.gz",
+    }, {
+      fileName: "cursor",
+      size: launcher.byteLength,
+      sha256: sha256(launcher),
+    }), name: "cursor", activationAliases: ["cursor-agent"] };
+    const install = async (onFetch = () => undefined) => ensurePinnedToolchains({
+      dataDir,
+      artifacts: [artifact],
+      fetchImpl: async () => {
+        onFetch();
+        return new Response(archive, {
+          status: 200,
+          headers: { "content-length": String(archive.byteLength) },
+        });
+      },
+      skipExecutableProbeForTests: true,
+    });
+
+    const result = await install();
+    const target = await readlink(path.join(result.binDir, "cursor"));
+    const lazyChunkPath = path.join(path.dirname(target), "chunks/lazy.js");
+    expect(await readFile(lazyChunkPath)).toEqual(lazyChunk);
+
+    await chmod(lazyChunkPath, 0o600);
+    await writeFile(lazyChunkPath, "corrupt");
+    let downloads = 0;
+    await install(() => downloads += 1);
+    expect(downloads).toBe(1);
+    expect(await readFile(lazyChunkPath)).toEqual(lazyChunk);
+  });
+
   test("installs ZIP and tar.gz artifacts once, activates them, and reuses verified files", async () => {
     const dataDir = await createDataDir();
     const fetchImpl = createFetch();

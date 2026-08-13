@@ -77,6 +77,10 @@ interface QueryCall {
   fail: (err: Error) => void;
 }
 
+function pushSuccessfulContinuationResult(call: QueryCall): void {
+  call.push({ type: "result", subtype: "success" });
+}
+
 const pendingCalls: QueryCall[] = [];
 const queryWaiters: Array<(call: QueryCall) => void> = [];
 
@@ -8396,7 +8400,7 @@ describe("background task reducer", () => {
     expect(created.backgroundTaskCandidates).toBeUndefined();
   });
 
-  test("releases the completed turn while retaining its background runtime", async () => {
+  test("lets a background notification resume before closing the completed turn", async () => {
     const created = createSession("held input");
     track(created.id);
     const { events, stop } = captureEvents();
@@ -8453,6 +8457,41 @@ describe("background task reducer", () => {
         status: "completed",
         summary: "Review complete",
       });
+      await waitFor(
+        () => getSession(created.id)?.backgroundTasks?.["agent-1"]?.status === "completed",
+      );
+      expect(inputClosed).toBe(false);
+      expect(getSession(created.id)?.status).toBe("idle");
+
+      // Claude Code injects the notification into the root loop. The first
+      // assistant frame proves the released query resumed and must reclaim the
+      // foreground until its own result arrives.
+      call.push({
+        type: "assistant",
+        message: {
+          id: "assistant-after-background-notification",
+          role: "assistant",
+          content: [{ type: "text", text: "The review is complete." }],
+          stop_reason: "end_turn",
+        },
+        parent_tool_use_id: null,
+      });
+      await waitFor(() => getSession(created.id)?.status === "running");
+      expect(getSession(created.id)?.turnStartedAt).toBeDefined();
+      expect(inputClosed).toBe(false);
+
+      call.push({
+        type: "result",
+        subtype: "success",
+        usage: { input_tokens: 2, output_tokens: 2 },
+        modelUsage: {
+          "claude-mock": {
+            inputTokens: 2,
+            outputTokens: 2,
+            contextWindow: 200_000,
+          },
+        },
+      });
       await waitFor(() => inputClosed);
       expect(await inputCompletion).toEqual({ done: true, value: undefined });
       expect(getSession(created.id)?.completionBlockedByBackgroundTasks).toBe(false);
@@ -8461,8 +8500,8 @@ describe("background task reducer", () => {
         return typeof data.completionBlockedByBackgroundTasks === "boolean"
           ? [data.completionBlockedByBackgroundTasks]
           : [];
-      })).toEqual([false, false]);
-      expect(getSession(created.id)?.status).toBe("idle");
+      })).toEqual([false, false, false]);
+      expect(getSession(created.id)?.status).toBe("running");
 
       call.finish();
       await promptPromise;
@@ -8807,6 +8846,7 @@ describe("background task reducer", () => {
       status: "completed",
       summary: "Tests passed",
     });
+    pushSuccessfulContinuationResult(call);
     await waitFor(() => inputClosed);
     expect(await inputCompletion).toEqual({ done: true, value: undefined });
 
@@ -8895,6 +8935,7 @@ describe("background task reducer", () => {
       tool_use_id: "bash-tool-provisional",
       status: "completed",
     });
+    pushSuccessfulContinuationResult(call);
     expect(await inputCompletion).toEqual({ done: true, value: undefined });
     call.finish();
     await promptPromise;
@@ -9040,6 +9081,7 @@ describe("background task reducer", () => {
       tool_use_id: "bash-provisional-one",
       status: "completed",
     });
+    pushSuccessfulContinuationResult(call);
     expect(await inputCompletion).toEqual({ done: true, value: undefined });
     call.finish();
     await promptPromise;
@@ -9169,6 +9211,7 @@ describe("background task reducer", () => {
       tool_use_id: `tool-${taskId}`,
       status: "completed",
     });
+    pushSuccessfulContinuationResult(call);
     expect(await inputCompletion).toEqual({ done: true, value: undefined });
     call.finish();
     await promptPromise;
@@ -9239,6 +9282,7 @@ describe("background task reducer", () => {
       tool_use_id: "tool-missing-background-id",
       status: "completed",
     });
+    pushSuccessfulContinuationResult(call);
     expect(await inputCompletion).toEqual({ done: true, value: undefined });
     call.finish();
     await promptPromise;
@@ -9317,6 +9361,7 @@ describe("background task reducer", () => {
       tool_use_id: "batched-backgrounded",
       status: "completed",
     });
+    pushSuccessfulContinuationResult(call);
     expect(await inputCompletion).toEqual({ done: true, value: undefined });
     call.finish();
     await promptPromise;
@@ -9433,6 +9478,7 @@ describe("background task reducer", () => {
       task_id: "old-runtime-task",
       status: "completed",
     });
+    pushSuccessfulContinuationResult(firstCall);
     expect(await firstInputCompletion).toEqual({ done: true, value: undefined });
     firstCall.finish();
     await firstPrompt;

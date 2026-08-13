@@ -4869,6 +4869,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
   let closeSdkInput: (() => void) | undefined;
   let finishTurnInputForThisTurn: (() => void) | undefined;
   let turnReleasedToBackgroundTasks = false;
+  let releasedTurnStartedAt: string | undefined;
   // Hoisted out of the `try` so the error path can still publish whatever the
   // coalescing window was holding. Null until the streaming state it closes
   // over exists, which is everything before the SDK query is created.
@@ -4979,6 +4980,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       if (turnReleasedToBackgroundTasks || !ownsActiveTurn()) return;
       turnReleasedToBackgroundTasks = true;
       scheduleTitleGeneration();
+      releasedTurnStartedAt = session.turnStartedAt;
       session.status = "idle";
       session.turnStartedAt = undefined;
       session.abortController = undefined;
@@ -4995,6 +4997,42 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         data: {
           success: true,
           backgroundTasksRunning,
+          completionBlockedByBackgroundTasks: false,
+        },
+      });
+    };
+    const reclaimReleasedTurnForAssistant = (message: SdkMessageBase) => {
+      if (!turnReleasedToBackgroundTasks || ownsActiveTurn()) return;
+      const parentToolUseId = (
+        message as { parent_tool_use_id?: unknown }
+      ).parent_tool_use_id;
+      if (
+        !isRootAssistantRecord(
+          parentToolUseId,
+          (message as { isSidechain?: unknown }).isSidechain,
+        )
+        || session.status !== "idle"
+        || session.abortController !== undefined
+      ) {
+        return;
+      }
+
+      // A terminal background-task notification is injected back into the
+      // same streaming Claude session and can start another root model turn.
+      // The preceding result released the UI while the task ran, but it is no
+      // longer the final result once Claude resumes. Reclaim ownership so the
+      // resumed response is shown as running and its later result can publish
+      // the real idle edge.
+      session.status = "running";
+      session.turnStartedAt = releasedTurnStartedAt ?? new Date().toISOString();
+      session.abortController = abortController;
+      session.queryControl = queryIteratorControl;
+      eventEmitter.emit({
+        type: "session.updated",
+        sessionId,
+        data: {
+          status: "running",
+          turnStartedAt: session.turnStartedAt,
           completionBlockedByBackgroundTasks: false,
         },
       });
@@ -6036,6 +6074,13 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           closeQueryControlIfUnused(session, correlated.owner);
           emitBackgroundTasks();
         } else if (taskMessage.subtype === "task_notification" && taskMessage.task_id) {
+          // A task notification can re-enter the root agent loop after an
+          // earlier result. That earlier result is only the response boundary
+          // before the notification, not permission to close streaming input.
+          // Wait for the resumed loop's own result; otherwise stdin EOF lands
+          // between its final tool result and final assistant message and the
+          // rollout records `[Request interrupted by user]`.
+          receivedResult = false;
           // The terminal edge. Without it nothing ever leaves `running`, so
           // `GET /session/:id` reported a finished task as live indefinitely.
           const correlated = takeProvisionalBackgroundTask(
@@ -6154,6 +6199,8 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           });
         }
       } else if (message.type === "assistant") {
+        reclaimReleasedTurnForAssistant(message as SdkMessageBase);
+
         // If we receive a new assistant message after a plan denial, it means
         // the SDK continued the agent loop and Claude did see the feedback.
         // Clear the pending feedback so we don't re-prompt unnecessarily.

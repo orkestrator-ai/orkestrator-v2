@@ -1067,6 +1067,47 @@ describe("NativeMessage task list rendering", () => {
     expect(container.textContent).toContain("$ echo hi; echo hi;…");
   });
 
+  test("keeps a failed command expanded when its virtualized row remounts", () => {
+    const message = makeMessage([{
+      type: "tool-group",
+      content: "",
+      parts: [{
+        type: "tool-invocation",
+        content: "",
+        toolName: "Bash",
+        toolState: "failure",
+        toolUseId: "failed-test-run",
+        toolArgs: { command: "bun run test" },
+        toolError: "workspace test group failed",
+      }],
+    }], { id: "assistant-failed-test-run" });
+
+    const first = render(
+      <NativeMessage message={message} agentExpansionScope="environment-1" />,
+    );
+    const trigger = screen.getByRole("button", {
+      name: /Run Command bun run test failure/i,
+    });
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("workspace test group failed")).toBeTruthy();
+
+    // Expanding changes the virtual row height. The list may unmount and
+    // recreate that row while reconciling its measurements, so local state
+    // would make the disclosure immediately snap shut again.
+    first.unmount();
+    render(
+      <NativeMessage message={message} agentExpansionScope="environment-1" />,
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: /Run Command bun run test failure/i,
+      }).getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(screen.getByText("workspace test group failed")).toBeTruthy();
+  });
+
   test("uses uniform outer spacing for native part wrapper variants", () => {
     const message = makeMessage([
       {

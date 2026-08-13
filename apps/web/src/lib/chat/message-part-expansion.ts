@@ -3,8 +3,10 @@
  *
  * Transcripts render in a virtualized list, so a message is unmounted as soon
  * as it scrolls out of the viewport window. Local `useState` would silently
- * collapse whatever the reader opened and scrolled past, so the authoritative
- * flag lives in the shared store and the component rehydrates from it on mount.
+ * collapse whatever the reader opened and scrolled past (including when a
+ * command's newly visible output changes the virtual row height), so the
+ * authoritative flag lives in the shared store and the component rehydrates
+ * from it on mount.
  *
  * Callers pass a key derived from the stable `partKey` their part was given,
  * which keeps the identity tied to the part's position rather than to a render.

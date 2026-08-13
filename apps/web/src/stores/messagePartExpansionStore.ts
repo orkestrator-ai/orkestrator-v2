@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 /**
- * Expansion state for individual thinking, JSON, and agent message parts.
+ * Expansion state for individual thinking, JSON, tool, and agent message parts.
  *
  * Transcripts render inside a virtualized list, so a message component is
  * unmounted as soon as it scrolls out of the viewport window. Keeping the

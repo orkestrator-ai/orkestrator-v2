@@ -3298,7 +3298,7 @@ export function CodexChatTab({
           />
         ) : null
       }
-      composer={useCodexNativeComposer({
+      composer={<CodexNativeComposer composerProps={{
           environmentId,
           containerId,
           sessionKey,
@@ -3333,7 +3333,7 @@ export function CodexChatTab({
           onFastModeChange: handleFastModeChange,
           showAddressAll,
           layout: centerCompose ? "centered" : "bottom",
-        })}
+        }} />}
       resumeDialog={
         client ? (
           <CodexResumeSessionDialog
@@ -3347,4 +3347,11 @@ export function CodexChatTab({
       }
     />
   );
+}
+function CodexNativeComposer({
+  composerProps,
+}: {
+  composerProps: Parameters<typeof useCodexNativeComposer>[0];
+}) {
+  return useCodexNativeComposer(composerProps);
 }

@@ -119,15 +119,38 @@ function identity(platform: NativeAgentTabData["platform"]): NativeAgentTabData 
   };
 }
 
-function PaneBackedAgentNativeTab() {
+function PaneBackedAgentNativeTab({ tabId = "tab-resume" }: { tabId?: string }) {
   const data = usePaneLayoutStore((state) => {
     const root = state.environments.get("env-1")?.root;
     if (!root || root.kind !== "leaf") return undefined;
-    const tab = root.tabs.find((candidate) => candidate.id === "tab-resume");
+    const tab = root.tabs.find((candidate) => candidate.id === tabId);
     return tab ? getNativeAgentData(tab) ?? undefined : undefined;
   });
   if (!data) return null;
-  return <AgentNativeTab tabId="tab-resume" data={data} isActive />;
+  return <AgentNativeTab tabId={tabId} data={data} isActive />;
+}
+
+function seedUnassignedPane(tabId: string) {
+  usePaneLayoutStore.setState({
+    environments: new Map([
+      ["env-1", {
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [{
+            id: tabId,
+            type: "agent-native",
+            nativeAgentData: { environmentId: "env-1" },
+          }],
+          activeTabId: tabId,
+        },
+        activePaneId: "default",
+        containerId: null,
+      }],
+    ]),
+    hydration: new Map([["env-1", "done"]]),
+    activeEnvironmentId: "env-1",
+  });
 }
 
 describe("AgentNativeTab", () => {
@@ -295,6 +318,50 @@ describe("AgentNativeTab", () => {
     expect(tab?.initialPrompt).toContain("[@widget.ts](src/widget.ts)");
     expect(tab?.initialPrompt).toContain("layout.png: /workspace/.orkestrator/clipboard/layout.png");
     expect(getNativeAgentData(tab!)?.platform).toBe("claude");
+  });
+
+  test("retries a failed first-prompt provider-lock save without losing the draft", async () => {
+    const tabId = "tab-retry-send";
+    const sessionKey = createSessionKey("env-1", tabId);
+    seedUnassignedPane(tabId);
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      text: "Keep this prompt",
+      platform: "claude",
+    });
+    flushPaneLayoutNowMock.mockImplementationOnce(async () => {
+      throw new Error("temporary save failure");
+    });
+
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
+
+    expect(await screen.findByText("The agent choice is locked, but could not be saved."))
+      .toBeTruthy();
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe("Keep this prompt");
+    fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
+
+    expect(await screen.findByTestId("claude-controller")).toBeTruthy();
+    expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(2);
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined();
+  });
+
+  test("retries a failed resume provider-lock save before opening the provider dialog", async () => {
+    const tabId = "tab-retry-resume";
+    seedUnassignedPane(tabId);
+    flushPaneLayoutNowMock.mockImplementationOnce(async () => {
+      throw new Error("temporary save failure");
+    });
+
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Codex/ }));
+
+    expect(await screen.findByRole("button", { name: "Retry save" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
+
+    const controller = await screen.findByTestId("codex-controller");
+    expect(controller.dataset.initialResumeOpen).toBe("true");
+    expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(2);
   });
 
   for (const platform of AGENT_PLATFORMS) {

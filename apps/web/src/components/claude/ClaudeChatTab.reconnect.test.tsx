@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { createSessionKey } from "@/lib/utils";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -59,7 +60,10 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
 }));
 
 mock.module("./useClaudeNativeComposer", () => ({
-  useClaudeNativeComposer: () => <div data-testid="compose" />,
+  useClaudeNativeComposer: () => {
+    useState(null);
+    return <div data-testid="compose" />;
+  },
 }));
 
 import { ClaudeChatTab } from "./ClaudeChatTab";
@@ -315,6 +319,22 @@ describe("ClaudeChatTab SSE reconnect", () => {
     console.log = ORIGINAL_CONSOLE_LOG;
     cleanup();
     mock.restore();
+  });
+
+  test("mounts the hook-owning composer after setup becomes ready", async () => {
+    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+      setupPhase: "running",
+    });
+    renderChat();
+
+    await waitFor(() => expect(document.querySelector('[data-testid="compose"]')).toBeNull());
+    act(() => {
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        setupPhase: "ready",
+      });
+    });
+
+    await waitFor(() => expect(document.querySelector('[data-testid="compose"]')).toBeTruthy());
   });
 
   test("reconnects after the base delay when the stream ends unexpectedly", async () => {

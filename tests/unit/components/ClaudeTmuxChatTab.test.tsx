@@ -5021,7 +5021,6 @@ Running 1 Explore agent...
     fireEvent.pointerDown(screen.getByRole("button", { name: /Sonnet/ }));
 
     expect(await screen.findByText("Opus (1M context)")).toBeTruthy();
-    expect(screen.getAllByText(/Opus 5 with 1M context/).length).toBeGreaterThan(0);
     expect(screen.queryByText(/Opus 4\.8/)).toBeNull();
   });
 

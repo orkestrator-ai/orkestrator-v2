@@ -1,7 +1,7 @@
 import { createSessionKey } from "@/lib/utils";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { StrictMode } from "react";
+import { StrictMode, useState } from "react";
 import {useCodexStore} from "@/stores/codexStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -435,8 +435,10 @@ mock.module("./useCodexNativeComposer", () => ({
     isLoading?: boolean;
     showAddressAll?: boolean;
     layout?: "bottom" | "centered";
-  }) => (
-    <>
+  }) => {
+    useState(null);
+    return (
+      <>
       <div data-testid="codex-address-all-state">
         {showAddressAll ? "shown" : "hidden"}
       </div>
@@ -527,8 +529,9 @@ mock.module("./useCodexNativeComposer", () => ({
       >
         Plan mode
       </button>
-    </>
-  ),
+      </>
+    );
+  },
 }));
 
 mock.module("./CodexPlanModeCard", () => ({
@@ -1255,6 +1258,7 @@ describe("CodexChatTab", () => {
       );
       expect(mockCheckHealth).toHaveBeenCalledWith(MOCK_CLIENT);
     });
+    expect(screen.getByTestId("codex-send")).toBeTruthy();
     expect(mockCreateSession).not.toHaveBeenCalled();
   });
 

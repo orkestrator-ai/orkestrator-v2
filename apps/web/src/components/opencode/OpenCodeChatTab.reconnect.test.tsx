@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { createSessionKey } from "@/lib/utils";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
@@ -67,7 +68,10 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
 }));
 
 mock.module("./useOpenCodeNativeComposer", () => ({
-  useOpenCodeNativeComposer: () => <div data-testid="compose" />,
+  useOpenCodeNativeComposer: () => {
+    useState(null);
+    return <div data-testid="compose" />;
+  },
 }));
 
 import { OpenCodeChatTab } from "./OpenCodeChatTab";
@@ -311,6 +315,22 @@ describe("OpenCodeChatTab SSE reconnect", () => {
     console.log = ORIGINAL_CONSOLE_LOG;
     cleanup();
     mock.restore();
+  });
+
+  test("mounts the hook-owning composer after setup becomes ready", async () => {
+    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+      setupPhase: "running",
+    });
+    renderChat();
+
+    await waitFor(() => expect(document.querySelector('[data-testid="compose"]')).toBeNull());
+    act(() => {
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        setupPhase: "ready",
+      });
+    });
+
+    await waitFor(() => expect(document.querySelector('[data-testid="compose"]')).toBeTruthy());
   });
 
   test("logs a rejected subscription and reconnects after the base delay", async () => {

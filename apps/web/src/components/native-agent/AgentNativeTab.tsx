@@ -408,6 +408,9 @@ export const AgentNativeTab = memo(function AgentNativeTab(
 ) {
   const [awaitingDurability, setAwaitingDurability] = useState(false);
   const [durabilityError, setDurabilityError] = useState<string | null>(null);
+  const [pendingDurabilityOperation, setPendingDurabilityOperation] = useState<
+    "send" | "resume" | null
+  >(null);
   const [resumeRequestedPlatform, setResumeRequestedPlatform] = useState<AgentPlatform | null>(null);
   const adapter = useMemo(
     () => props.data.platform
@@ -419,6 +422,34 @@ export const AgentNativeTab = memo(function AgentNativeTab(
     () => (adapter ? controllerFor(adapter) : null),
     [adapter],
   );
+  const persistLockedPane = useCallback(async (operation: "send" | "resume") => {
+    setAwaitingDurability(true);
+    setDurabilityError(null);
+    setPendingDurabilityOperation(operation);
+    const environment = usePaneLayoutStore.getState().environments.get(props.data.environmentId);
+    if (!environment) {
+      setDurabilityError("The locked agent tab is no longer available to save.");
+      setAwaitingDurability(false);
+      return;
+    }
+    try {
+      await flushPaneLayoutNow(
+        props.data.environmentId,
+        createPersistedPaneLayoutInput(environment),
+      );
+      if (operation === "send") {
+        useNativeComposeStore.getState().clearDraft(
+          createSessionKey(props.data.environmentId, props.tabId),
+        );
+      }
+      setPendingDurabilityOperation(null);
+      setAwaitingDurability(false);
+    } catch (error) {
+      console.warn("[AgentNativeTab] Failed to persist provider lock:", error);
+      setDurabilityError("The agent choice is locked, but could not be saved.");
+      setAwaitingDurability(false);
+    }
+  }, [props.data.environmentId, props.tabId]);
   const lockAndSend = useCallback(async (
     platform: AgentPlatform,
     prompt: string,
@@ -437,9 +468,9 @@ export const AgentNativeTab = memo(function AgentNativeTab(
         initialReasoningEffort: options.reasoningId,
       },
     );
-    const environment = usePaneLayoutStore.getState().environments.get(props.data.environmentId);
-    if (!lockedPlatform || !environment) {
+    if (!lockedPlatform) {
       setDurabilityError("This tab could not be locked to an agent.");
+      setPendingDurabilityOperation(null);
       setAwaitingDurability(false);
       return;
     }
@@ -464,19 +495,8 @@ export const AgentNativeTab = memo(function AgentNativeTab(
         store.setSelectedMode(sessionKey, options.mode);
       }
     }
-    try {
-      await flushPaneLayoutNow(
-        props.data.environmentId,
-        createPersistedPaneLayoutInput(environment),
-      );
-      useNativeComposeStore.getState().clearDraft(sessionKey);
-      setAwaitingDurability(false);
-    } catch (error) {
-      console.warn("[AgentNativeTab] Failed to persist provider lock:", error);
-      setDurabilityError("The agent choice is locked, but could not be saved. Retry before connecting.");
-      setAwaitingDurability(false);
-    }
-  }, [props.data.environmentId, props.tabId]);
+    await persistLockedPane("send");
+  }, [persistLockedPane, props.data.environmentId, props.tabId]);
   const lockAndResume = useCallback(async (platform: AgentPlatform) => {
     const selectedAdapter = findNativeAgentAdapter(platform);
     if (!selectedAdapter?.capabilities.resume) return;
@@ -488,26 +508,16 @@ export const AgentNativeTab = memo(function AgentNativeTab(
       platform,
       props.data.environmentId,
     );
-    const environment = usePaneLayoutStore.getState().environments.get(props.data.environmentId);
     const lockedAdapter = lockedPlatform ? findNativeAgentAdapter(lockedPlatform) : undefined;
-    if (!lockedPlatform || !lockedAdapter?.capabilities.resume || !environment) {
+    if (!lockedPlatform || !lockedAdapter?.capabilities.resume) {
       setDurabilityError("This tab could not be opened for session resume.");
+      setPendingDurabilityOperation(null);
       setAwaitingDurability(false);
       return;
     }
     setResumeRequestedPlatform(lockedPlatform);
-    try {
-      await flushPaneLayoutNow(
-        props.data.environmentId,
-        createPersistedPaneLayoutInput(environment),
-      );
-      setAwaitingDurability(false);
-    } catch (error) {
-      console.warn("[AgentNativeTab] Failed to persist provider lock for resume:", error);
-      setDurabilityError("The agent choice is locked, but could not be saved. Retry before connecting.");
-      setAwaitingDurability(false);
-    }
-  }, [props.data.environmentId, props.tabId]);
+    await persistLockedPane("resume");
+  }, [persistLockedPane, props.data.environmentId, props.tabId]);
 
   // A tab whose platform has no adapter is a data problem, not a crash. Render
   // the mismatch instead of throwing out of the pane and taking its siblings
@@ -528,7 +538,20 @@ export const AgentNativeTab = memo(function AgentNativeTab(
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Saving agent choice…</div>;
   }
   if (durabilityError) {
-    return <div className="flex h-full items-center justify-center p-4 text-center text-sm text-destructive">{durabilityError}</div>;
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center text-sm text-destructive">
+        <p>{durabilityError}</p>
+        {pendingDurabilityOperation ? (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => { void persistLockedPane(pendingDurabilityOperation); }}
+          >
+            Retry save
+          </Button>
+        ) : null}
+      </div>
+    );
   }
   if (!adapter || !Controller) {
     return (

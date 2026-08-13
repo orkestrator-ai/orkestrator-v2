@@ -3016,7 +3016,7 @@ export function ClaudeChatTab({
           </>
         ) : null
       }
-      composer={useClaudeNativeComposer({
+      composer={<ClaudeNativeComposer composerProps={{
           environmentId,
           tabId,
           containerId,
@@ -3039,7 +3039,7 @@ export function ClaudeChatTab({
           onPlanModeChange: handlePlanModeChange,
           showAddressAll,
           layout: centerCompose ? "centered" : "bottom",
-        })}
+        }} />}
       resumeDialog={
         client ? (
           <ResumeSessionDialog
@@ -3053,4 +3053,11 @@ export function ClaudeChatTab({
       }
     />
   );
+}
+function ClaudeNativeComposer({
+  composerProps,
+}: {
+  composerProps: Parameters<typeof useClaudeNativeComposer>[0];
+}) {
+  return useClaudeNativeComposer(composerProps);
 }

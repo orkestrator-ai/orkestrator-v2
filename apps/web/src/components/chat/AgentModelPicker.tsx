@@ -481,6 +481,56 @@ export function AgentModelPicker({
         ) : isMobile ? (
           <div>
             <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Agent
+            </DropdownMenuLabel>
+            <div
+              className="flex max-w-full gap-1 overflow-x-auto px-2 pb-2"
+              role="group"
+              aria-label="Agent platforms"
+              data-native-mobile-platforms
+            >
+              <button
+                type="button"
+                aria-label="Favorite models"
+                aria-pressed={catalogView === "favorites"}
+                onClick={(event) => {
+                  event.preventDefault();
+                  setCatalogView("favorites");
+                }}
+                className={cn(
+                  "grid size-8 shrink-0 place-items-center rounded",
+                  catalogView === "favorites"
+                    ? "bg-muted text-amber-400"
+                    : "text-muted-foreground hover:bg-muted/60",
+                )}
+              >
+                <Star className="size-4" />
+              </button>
+              {availablePlatforms.map((availablePlatform) => (
+                <button
+                  key={availablePlatform}
+                  type="button"
+                  aria-label={`${availablePlatform} models`}
+                  aria-pressed={catalogView === availablePlatform}
+                  disabled={platformSelectionLocked && availablePlatform !== selectedPlatform}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    setSearch("");
+                    setCatalogView(availablePlatform);
+                    onPlatformChange?.(availablePlatform);
+                  }}
+                  className={cn(
+                    "grid size-8 shrink-0 place-items-center rounded disabled:cursor-not-allowed disabled:opacity-30",
+                    catalogView === availablePlatform
+                      ? "bg-muted text-foreground"
+                      : "text-muted-foreground hover:bg-muted/60",
+                  )}
+                >
+                  <PlatformIcon platform={availablePlatform} />
+                </button>
+              ))}
+            </div>
+            <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
               Model
             </DropdownMenuLabel>
             <div className="max-h-70 overflow-y-auto overscroll-contain" data-native-model-list>
@@ -491,7 +541,7 @@ export function AgentModelPicker({
                 disabled={disabled}
                 onModelChange={onModelChange}
                 onPlatformChange={onPlatformChange}
-                emptyLabel={models.length > 0 ? "No matches" : "No models available"}
+                emptyLabel={normalizedSearch ? "No matches" : "No models available"}
                 favorites={favorites}
                 onToggleFavorite={onToggleFavorite}
               />

@@ -878,7 +878,7 @@ describe("process and platform command behavior", () => {
       projectId: "project-a",
       catalogVersion: "cached",
       updatedAt: "2026-07-27T12:00:00.000Z",
-      models: [],
+      models: [{ id: "opencode/cached", name: "Cached", provider: "opencode" }],
     };
     const getOpenCodeModelCatalog = mock(async (_projectId: string) => cached);
     const cacheOpenCodeModelCatalog = mock(async (
@@ -909,9 +909,9 @@ describe("process and platform command behavior", () => {
 
     const models = [
       {
-        id: " openrouter/openai/gpt-5 ",
+        id: " opencode/openai/gpt-5 ",
         name: " GPT-5 ",
-        provider: " openrouter ",
+        provider: " opencode ",
         variants: [" low ", "high"],
         inputCost: 0,
         outputCost: Number.MAX_VALUE,
@@ -928,9 +928,9 @@ describe("process and platform command behavior", () => {
       ...cached,
       catalogVersion: "updated",
       models: [{
-        id: "openrouter/openai/gpt-5",
+        id: "opencode/openai/gpt-5",
         name: "GPT-5",
-        provider: "openrouter",
+        provider: "opencode",
         variants: ["low", "high"],
         inputCost: 0,
         outputCost: Number.MAX_VALUE,
@@ -938,9 +938,9 @@ describe("process and platform command behavior", () => {
       }],
     });
     expect(cacheOpenCodeModelCatalog).toHaveBeenCalledWith("project-a", [{
-      id: "openrouter/openai/gpt-5",
+      id: "opencode/openai/gpt-5",
       name: "GPT-5",
-      provider: "openrouter",
+      provider: "opencode",
       variants: ["low", "high"],
       inputCost: 0,
       outputCost: Number.MAX_VALUE,
@@ -977,21 +977,21 @@ describe("process and platform command behavior", () => {
       {
         projectId: "project-a",
         models: [
-          { id: "openai/good", name: "Good", provider: "openai" },
+          { id: "opencode/good", name: "Good", provider: "opencode" },
           // Every rejection reason, one per entry.
-          { id: "openai/nan-cost", name: "NaN", provider: "openai", inputCost: Number.NaN },
-          { id: "openai/unknown-key", name: "Unknown", provider: "openai", tier: "pro" },
-          { id: " ", name: "Blank id", provider: "openai" },
+          { id: "opencode/nan-cost", name: "NaN", provider: "opencode", inputCost: Number.NaN },
+          { id: "opencode/unknown-key", name: "Unknown", provider: "opencode", tier: "pro" },
+          { id: " ", name: "Blank id", provider: "opencode" },
           null,
-          { id: "openai/also-good", name: "Also Good", provider: "openai", variants: ["high"] },
+          { id: "opencode/also-good", name: "Also Good", provider: "opencode", variants: ["high"] },
         ],
       },
       context,
     );
 
     expect(cacheOpenCodeModelCatalog).toHaveBeenCalledWith("project-a", [
-      { id: "openai/good", name: "Good", provider: "openai" },
-      { id: "openai/also-good", name: "Also Good", provider: "openai", variants: ["high"] },
+      { id: "opencode/good", name: "Good", provider: "opencode" },
+      { id: "opencode/also-good", name: "Also Good", provider: "opencode", variants: ["high"] },
     ]);
   });
 
@@ -1000,8 +1000,8 @@ describe("process and platform command behavior", () => {
       invoke("cache_opencode_model_catalog", {
         projectId: "project-a",
         models: [
-          { id: "openai/a", name: "A", provider: "openai", contextWindow: 1.5 },
-          { id: "openai/b", name: "B", provider: "openai", inputCost: -1 },
+          { id: "opencode/a", name: "A", provider: "opencode", contextWindow: 1.5 },
+          { id: "opencode/b", name: "B", provider: "opencode", inputCost: -1 },
         ],
       }),
     ).rejects.toThrow(

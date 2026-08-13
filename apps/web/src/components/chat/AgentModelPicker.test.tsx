@@ -123,6 +123,31 @@ describe("AgentModelPicker", () => {
     expect(onFastModeChange).toHaveBeenCalledWith(false);
   });
 
+  test("switches providers on mobile, including agents without model catalogs", () => {
+    setMobileViewport(true);
+    const onPlatformChange = mock(() => {});
+    renderPicker({
+      models: [
+        { platform: "codex", id: "codex-model", label: "Codex model" },
+        { platform: "opencode", id: "opencode-model", label: "OpenCode model" },
+      ],
+      enabledPlatforms: ["codex", "opencode", "cursor"],
+      selectedPlatform: "codex",
+      selectedModelId: "codex-model",
+      onPlatformChange,
+    });
+
+    openPicker();
+    expect(screen.getByRole("group", { name: "Agent platforms" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "opencode models" }));
+    expect(onPlatformChange).toHaveBeenLastCalledWith("opencode");
+    expect(screen.getByRole("menuitemradio", { name: /OpenCode model/ })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "cursor models" }));
+    expect(onPlatformChange).toHaveBeenLastCalledWith("cursor");
+    expect(screen.getByText("No models available")).toBeTruthy();
+  });
+
   test.each(["reasoning", "speed"] as const)(
     "returns from the mobile %s view with Back and restores focus",
     async (kind) => {

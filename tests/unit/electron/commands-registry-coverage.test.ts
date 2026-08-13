@@ -284,7 +284,7 @@ describe("direct backend command registry coverage", () => {
       projectId: "project-1",
       catalogVersion: "v1",
       updatedAt: "2026-07-29T00:00:00.000Z",
-      models: [],
+      models: [{ id: "opencode/cached", name: "Cached", provider: "opencode" }],
     };
     const getOpenCodeModelCatalog = mock(async () => cached);
     const cacheOpenCodeModelCatalog = mock(async (_projectId: string, models: unknown[]) => ({
@@ -345,7 +345,7 @@ describe("direct backend command registry coverage", () => {
     await expect(
       invoke("get_opencode_model_catalog_cache", { projectId: " project-1 " }, context),
     ).resolves.toEqual(cached);
-    const models = [{ id: "openai/gpt-5", name: "GPT-5", provider: "openai" }];
+    const models = [{ id: "opencode/gpt-5", name: "GPT-5", provider: "opencode" }];
     await expect(
       invoke("cache_opencode_model_catalog", { projectId: "project-1", models }, context),
     ).resolves.toEqual({ ...cached, models });

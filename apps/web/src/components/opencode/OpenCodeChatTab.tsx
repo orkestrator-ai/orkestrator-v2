@@ -3348,7 +3348,7 @@ export function OpenCodeChatTab({
           </>
         ) : null
       }
-      composer={useOpenCodeNativeComposer({
+      composer={<OpenCodeNativeComposer composerProps={{
           environmentId,
           tabId,
           containerId,
@@ -3368,7 +3368,7 @@ export function OpenCodeChatTab({
           onRefreshModels: refreshModels,
           showAddressAll,
           layout: centerCompose ? "centered" : "bottom",
-        })}
+        }} />}
       resumeDialog={
         client ? (
           <OpenCodeResumeSessionDialog
@@ -3382,4 +3382,11 @@ export function OpenCodeChatTab({
       }
     />
   );
+}
+function OpenCodeNativeComposer({
+  composerProps,
+}: {
+  composerProps: Parameters<typeof useOpenCodeNativeComposer>[0];
+}) {
+  return useOpenCodeNativeComposer(composerProps);
 }

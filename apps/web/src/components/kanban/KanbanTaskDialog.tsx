@@ -167,7 +167,6 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
   const {
     catalog: launchCatalog,
     defaults: launchDefaults,
-    favoriteOpenCodeModelIds,
   } = useBuildLaunchOptions(buildProjectId, open);
 
   const [isEditing, setIsEditing] = useState(false);
@@ -885,7 +884,6 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
           open={buildDialogOpen}
           onOpenChange={setBuildDialogOpen}
           catalog={launchCatalog}
-          favoriteOpenCodeModelIds={favoriteOpenCodeModelIds}
           busy={isBuildStarting}
           localEnvironmentAvailable={localEnvironmentAvailable}
           {...launchDefaults}
@@ -1152,7 +1150,6 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
         open={buildDialogOpen}
         onOpenChange={setBuildDialogOpen}
         catalog={launchCatalog}
-        favoriteOpenCodeModelIds={favoriteOpenCodeModelIds}
         busy={isBuildStarting}
         localEnvironmentAvailable={localEnvironmentAvailable}
         {...launchDefaults}

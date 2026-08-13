@@ -278,19 +278,19 @@ describe("resolveDefaultReviewTabType", () => {
       defaultAgent: "claude",
       environment: { claudeMode: "native", claudeNativeBackend: "sdk" },
       global,
-    })).toBe("claude-native");
+    })).toBe("claude");
 
     expect(resolveDefaultReviewTabType({
       defaultAgent: "claude",
       environment: { claudeMode: "native", claudeNativeBackend: "tmux" },
       global,
-    })).toBe("claude-native");
+    })).toBe("claude");
 
     expect(resolveDefaultReviewTabType({
       defaultAgent: "claude",
       environment: { claudeMode: "terminal" },
       global,
-    })).toBe("claude-native");
+    })).toBe("claude");
   });
 
   test("forces Codex and OpenCode reviews into native mode", () => {
@@ -298,11 +298,11 @@ describe("resolveDefaultReviewTabType", () => {
       defaultAgent: "codex",
       environment: { codexMode: "native" },
       global,
-    })).toBe("codex-native");
+    })).toBe("codex");
     expect(resolveDefaultReviewTabType({
       defaultAgent: "opencode",
       environment: { opencodeMode: "terminal" },
       global,
-    })).toBe("opencode-native");
+    })).toBe("opencode");
   });
 });

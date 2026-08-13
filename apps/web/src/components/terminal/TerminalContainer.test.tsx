@@ -6,6 +6,7 @@ import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import {
   readStoredPaneSelection,
@@ -17,6 +18,7 @@ import {
 } from "@/stores/loopedReviewStore";
 import { loopedReviewFixture } from "@/test/looped-review-fixture";
 import { createSessionKey, useTerminalSessionStore } from "@/stores/terminalSessionStore";
+import { createSessionKey as createNativeSessionKey } from "@/lib/utils";
 import {
   LEGACY_PANE_LAYOUT_VERSION,
   PANE_LAYOUT_VERSION,
@@ -433,6 +435,7 @@ describe("TerminalContainer", () => {
       composeDraftText: new Map(),
       composeDraftImages: new Map(),
     });
+    useNativeComposeStore.setState({ drafts: new Map() });
     useLoopedReviewStore.setState({ workflows: new Map() });
     useBuildPipelineStore.setState({
       pipelines: new Map(),
@@ -2279,7 +2282,7 @@ describe("TerminalContainer", () => {
 
       expect(envHidden.root.tabs).toHaveLength(1);
       expect(envHidden.root.tabs[0]?.id).toBe("startup-agent");
-      expect(envHidden.root.tabs[0]?.type).toBe("codex-native");
+      expect(envHidden.root.tabs[0]?.type).toBe("agent-native");
       expect(envHidden.root.tabs[0]?.initialPrompt).toBe("Ship it");
     });
 
@@ -2352,7 +2355,7 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       const codexTabs = usePaneLayoutStore.getState().getAllTabs("env-hidden")
-        .filter((tab) => tab.type === "codex-native");
+        .filter((tab) => tab.type === "agent-native");
       expect(codexTabs).toHaveLength(1);
       expect(codexTabs[0]?.id).toBe("startup-agent");
       expect(codexTabs[0]?.initialPrompt).toContain(
@@ -2635,16 +2638,16 @@ describe("TerminalContainer", () => {
     await waitFor(() => {
       expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toMatchObject([
         {
-          type: "codex-native",
+          type: "agent-native",
           initialPrompt: "Codex after setup",
-          codexNativeData: { environmentId: "env-visible", isLocal: true },
+          nativeAgentData: { environmentId: "env-visible", isLocal: true },
         },
       ]);
       expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
         {
-          type: "opencode-native",
+          type: "agent-native",
           initialPrompt: "OpenCode after setup",
-          openCodeNativeData: { environmentId: "env-hidden", isLocal: true },
+          nativeAgentData: { environmentId: "env-hidden", isLocal: true },
         },
       ]);
     });
@@ -2698,16 +2701,16 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       expect(usePaneLayoutStore.getState().getAllTabs("env-visible")[0]).toMatchObject({
-        type: "opencode-native",
-        openCodeNativeData: {
+        type: "agent-native",
+        nativeAgentData: {
           containerId: undefined,
           environmentId: "env-visible",
           isLocal: true,
         },
       });
       expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")[0]).toMatchObject({
-        type: "claude-native",
-        claudeNativeData: {
+        type: "agent-native",
+        nativeAgentData: {
           containerId: undefined,
           environmentId: "env-hidden",
           isLocal: true,
@@ -2790,24 +2793,24 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       expect(usePaneLayoutStore.getState().getAllTabs("env-visible")[0]).toMatchObject({
-        type: "opencode-native",
-        openCodeNativeData: {
+        type: "agent-native",
+        nativeAgentData: {
           containerId: "container-visible",
           environmentId: "env-visible",
           isLocal: false,
         },
       });
       expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")[0]).toMatchObject({
-        type: "codex-native",
-        codexNativeData: {
+        type: "agent-native",
+        nativeAgentData: {
           containerId: "container-hidden",
           environmentId: "env-hidden",
           isLocal: false,
         },
       });
       expect(usePaneLayoutStore.getState().getAllTabs("env-third")[0]).toMatchObject({
-        type: "claude-native",
-        claudeNativeData: {
+        type: "agent-native",
+        nativeAgentData: {
           containerId: "container-third",
           environmentId: "env-third",
           isLocal: false,
@@ -2904,7 +2907,7 @@ describe("TerminalContainer", () => {
         throw new Error("env-hidden root should be a leaf");
       }
 
-      const nativeTab = envHidden.root.tabs.find((tab) => tab.type === "codex-native");
+      const nativeTab = envHidden.root.tabs.find((tab) => tab.type === "agent-native");
       expect(nativeTab?.id).toBe("startup-agent");
       expect(nativeTab?.initialPrompt).toBe("Continue after setup");
       expect(nativeTab?.initialAgentModel).toBe("gpt-5.6-sol");
@@ -2974,7 +2977,7 @@ describe("TerminalContainer", () => {
         throw new Error("env-hidden root should be a leaf");
       }
 
-      const nativeTab = envHidden.root.tabs.find((tab) => tab.type === "codex-native");
+      const nativeTab = envHidden.root.tabs.find((tab) => tab.type === "agent-native");
       expect(nativeTab?.initialPrompt).toBe("Recover from stale setup state");
       expect(
         useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")
@@ -3036,7 +3039,7 @@ describe("TerminalContainer", () => {
       );
       expect(survivor?.tabs).toContainEqual(expect.objectContaining({
         id: "startup-agent",
-        type: "codex-native",
+        type: "agent-native",
       }));
       expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden"))
         .toBeUndefined();
@@ -3108,7 +3111,7 @@ describe("TerminalContainer", () => {
    * so would strand the flag whenever an agent surface reaches a steady state
    * without applying the model.
    */
-  const waitForDurableAgentTab = async (type = "codex-native") => {
+  const waitForDurableAgentTab = async (type = "agent-native") => {
     let tabId: string | undefined;
     await waitFor(() => {
       const agentTab = usePaneLayoutStore.getState().getAllTabs("env-hidden")
@@ -3173,7 +3176,7 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       const codexTab = usePaneLayoutStore.getState().getAllTabs("env-hidden")
-        .find((tab) => tab.type === "codex-native");
+        .find((tab) => tab.type === "agent-native");
       // Every renderer must choose the same logical tab so pane-layout merging,
       // Codex session creation, and initial-prompt dispatch are idempotent.
       expect(codexTab?.id).toBe("startup-agent");
@@ -3203,7 +3206,7 @@ describe("TerminalContainer", () => {
       .findIndex((order) => order < clearOrder);
     expect(flushIndex).toBeGreaterThanOrEqual(0);
     const flushedLayout = savePaneLayoutMock.mock.calls[flushIndex]?.[1];
-    expect(JSON.stringify(flushedLayout)).toContain("codex-native");
+    expect(JSON.stringify(flushedLayout)).toContain("agent-native");
     expect(JSON.stringify(flushedLayout)).toContain('"initialAgentModel":"gpt-5.6-sol"');
     expect(JSON.stringify(flushedLayout)).toContain('"initialReasoningEffort":"high"');
   });
@@ -3234,8 +3237,8 @@ describe("TerminalContainer", () => {
       const tabs = usePaneLayoutStore.getState().getAllTabs("env-hidden");
       expect(tabs.filter((tab) => tab.id === "startup-agent")).toHaveLength(1);
       expect(tabs.find((tab) => tab.id === "startup-agent")).toMatchObject({
-        type: "codex-native",
-        codexNativeData: { sessionId: "provider-session" },
+        type: "agent-native",
+        nativeAgentData: { sessionId: "provider-session" },
         initialAgentModel: "gpt-5.6-sol",
         initialReasoningEffort: "high",
       });
@@ -3293,8 +3296,8 @@ describe("TerminalContainer", () => {
         .filter((tab) => tab.id === "startup-agent");
       expect(startupTabs).toHaveLength(1);
       expect(startupTabs[0]).toMatchObject({
-        type: "codex-native",
-        codexNativeData: { sessionId: "backend-provider-session" },
+        type: "agent-native",
+        nativeAgentData: { sessionId: "backend-provider-session" },
         initialAgentModel: "backend-model",
         initialReasoningEffort: "high",
       });
@@ -3458,13 +3461,13 @@ describe("TerminalContainer", () => {
     {
       label: "Claude native",
       overrides: { defaultAgent: "claude", claudeMode: "native" },
-      expectedType: "claude-native",
+      expectedType: "agent-native",
       model: "claude-fable-5[1m]",
     },
     {
       label: "OpenCode native",
       overrides: { defaultAgent: "opencode", opencodeMode: "native" },
-      expectedType: "opencode-native",
+      expectedType: "agent-native",
       model: "provider/review-model",
     },
     {
@@ -3514,7 +3517,7 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       const agentTab = usePaneLayoutStore.getState().getAllTabs("env-hidden")
-        .find((tab) => tab.type === "codex-native");
+        .find((tab) => tab.type === "agent-native");
       expect(agentTab?.initialReasoningEffort).toBe("xhigh");
       expect(agentTab?.initialAgentModel).toBeUndefined();
     });
@@ -3665,9 +3668,9 @@ describe("TerminalContainer", () => {
     // overwrite it and produce a second agent tab.
     await waitFor(() => {
       const agentTabs = usePaneLayoutStore.getState().getAllTabs("env-hidden")
-        .filter((tab) => tab.type === "claude-native" || tab.type === "codex-native");
+        .filter((tab) => tab.type === "agent-native");
       expect(agentTabs).toHaveLength(1);
-      expect(agentTabs[0]?.type).toBe("claude-native");
+      expect(agentTabs[0]?.type).toBe("agent-native");
       expect(agentTabs[0]?.initialPrompt).toBe("already queued");
     });
   });
@@ -3686,7 +3689,7 @@ describe("TerminalContainer", () => {
     // Terminal mode must not produce a native tab.
     expect(
       usePaneLayoutStore.getState().getAllTabs("env-hidden")
-        .some((tab) => tab.type === "codex-native"),
+        .some((tab) => tab.type === "agent-native"),
     ).toBe(false);
   });
 
@@ -3724,7 +3727,7 @@ describe("TerminalContainer", () => {
     await waitFor(() => {
       expect(
         usePaneLayoutStore.getState().getAllTabs("env-hidden")
-          .some((tab) => tab.type === "opencode-native"),
+          .some((tab) => tab.type === "agent-native"),
       ).toBe(true);
     });
   });
@@ -3750,10 +3753,10 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       const agentTab = usePaneLayoutStore.getState().getAllTabs("env-hidden")
-        .find((tab) => tab.type === "codex-native");
+        .find((tab) => tab.type === "agent-native");
       expect(agentTab).toBeDefined();
-      expect(agentTab?.codexNativeData?.isLocal).toBe(true);
-      expect(agentTab?.codexNativeData?.containerId).toBeUndefined();
+      expect(agentTab?.nativeAgentData?.isLocal).toBe(true);
+      expect(agentTab?.nativeAgentData?.containerId).toBeUndefined();
     });
   });
 
@@ -3768,7 +3771,7 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       const agentTab = usePaneLayoutStore.getState().getAllTabs("env-hidden")
-        .find((tab) => tab.type === "codex-native");
+        .find((tab) => tab.type === "agent-native");
       expect(agentTab).toBeDefined();
       // A blank stored prompt must not dispatch an empty turn to the agent.
       expect(agentTab?.initialPrompt).toBeUndefined();
@@ -3798,7 +3801,7 @@ describe("TerminalContainer", () => {
               {
                 kind: "leaf",
                 id: "right",
-                tabs: [{ id: "agent-1", type: "claude-native" }],
+                tabs: [{ id: "agent-1", type: "agent-native" }],
                 activeTabId: "agent-1",
               },
             ],
@@ -3852,7 +3855,7 @@ describe("TerminalContainer", () => {
     await waitFor(() => {
       expect(
         usePaneLayoutStore.getState().getAllTabs("env-hidden")
-          .some((tab) => tab.type === "codex-native"),
+          .some((tab) => tab.type === "agent-native"),
       ).toBe(true);
     });
   });
@@ -3902,10 +3905,10 @@ describe("TerminalContainer", () => {
       const openCodeTab = usePaneLayoutStore
         .getState()
         .getAllTabs("env-hidden")
-        .find((tab) => tab.type === "opencode-native");
+        .find((tab) => tab.type === "agent-native");
       expect(openCodeTab).toMatchObject({
         initialPrompt: "Resume OpenCode",
-        openCodeNativeData: {
+        nativeAgentData: {
           containerId: "container-hidden",
           environmentId: "env-hidden",
           isLocal: false,
@@ -5127,7 +5130,7 @@ describe("TerminalContainer", () => {
       }
 
       expect(envHidden.root.tabs).toHaveLength(1);
-      expect(envHidden.root.tabs[0]?.type).toBe("codex-native");
+      expect(envHidden.root.tabs[0]?.type).toBe("agent-native");
       expect(envHidden.root.tabs[0]?.isSetupTab).toBeUndefined();
       expect(envHidden.root.tabs[0]?.initialPrompt).toBe("Review this build");
       expect(envHidden.root.tabs[0]?.initialAgentModel).toBe("gpt-5.6-sol");
@@ -5148,8 +5151,8 @@ describe("TerminalContainer", () => {
             { id: "default", type: "plain", isSetupTab: true },
             {
               id: "codex",
-              type: "codex-native",
-              codexNativeData: { environmentId: "env-hidden", isLocal: true },
+              type: "agent-native",
+              nativeAgentData: { environmentId: "env-hidden", isLocal: true },
             },
           ],
           activeTabId: "default",
@@ -5192,7 +5195,7 @@ describe("TerminalContainer", () => {
       }
 
       expect(envHidden.root.tabs).toHaveLength(1);
-      expect(envHidden.root.tabs[0]?.type).toBe("codex-native");
+      expect(envHidden.root.tabs[0]?.type).toBe("agent-native");
       expect(envHidden.root.tabs[0]?.isSetupTab).toBeUndefined();
     });
     expect(ensureEnvironmentSetupMock).not.toHaveBeenCalled();
@@ -6187,9 +6190,9 @@ describe("TerminalContainer", () => {
 
       await waitFor(() => expect(usePaneLayoutStore.getState().getAllTabs("env-visible"))
         .toContainEqual(expect.objectContaining({
-          type: "codex-native",
+          type: "agent-native",
           isReviewTab: true,
-          codexNativeData: expect.objectContaining({ sessionId: "provider-thread-1" }),
+          nativeAgentData: expect.objectContaining({ sessionId: "provider-thread-1" }),
         })));
     });
 
@@ -6215,9 +6218,9 @@ describe("TerminalContainer", () => {
 
       await waitFor(() => expect(usePaneLayoutStore.getState().getAllTabs("env-visible"))
         .toContainEqual(expect.objectContaining({
-          type: "claude-native",
+          type: "agent-native",
           isReviewTab: true,
-          claudeNativeData: expect.objectContaining({ sessionId: "provider-claude-1" }),
+          nativeAgentData: expect.objectContaining({ sessionId: "provider-claude-1" }),
         })));
     });
 
@@ -6243,9 +6246,9 @@ describe("TerminalContainer", () => {
 
       await waitFor(() => expect(usePaneLayoutStore.getState().getAllTabs("env-visible"))
         .toContainEqual(expect.objectContaining({
-          type: "opencode-native",
+          type: "agent-native",
           isReviewTab: true,
-          openCodeNativeData: expect.objectContaining({ sessionId: "provider-opencode-1" }),
+          nativeAgentData: expect.objectContaining({ sessionId: "provider-opencode-1" }),
         })));
     });
 
@@ -6338,6 +6341,71 @@ describe("TerminalContainer", () => {
         expect(created?.isReviewTab).toBe(true);
       });
     });
+
+    test("creates a provider-neutral native tab from the dedicated native action", async () => {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateTabHarness
+            type="agent-native"
+            options={{ tabId: "neutral-native" }}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => {
+        const created = usePaneLayoutStore.getState()
+          .getAllTabs("env-visible")
+          .find((tab) => tab.id === "neutral-native");
+        expect(created).toMatchObject({
+          type: "agent-native",
+          nativeAgentData: {
+            environmentId: "env-visible",
+            platform: undefined,
+          },
+        });
+        expect(
+          useNativeComposeStore.getState().drafts
+            .get(createNativeSessionKey("env-visible", "neutral-native")),
+        ).toBeUndefined();
+      });
+    });
+
+    test.each(["cursor", "grok"] as const)(
+      "creates a %s terminal tab when CLI mode is explicit",
+      async (platform) => {
+        render(
+          <TerminalProvider>
+            <TerminalContainer
+              environmentId="env-visible"
+              containerId="container-visible"
+              isContainerRunning
+              isActive
+            />
+            <CreateTabHarness
+              type={platform}
+              options={{
+                tabId: `${platform}-cli`,
+                agentLaunchMode: "cli",
+              }}
+            />
+          </TerminalProvider>,
+        );
+
+        await waitFor(() => {
+          expect(
+            usePaneLayoutStore.getState()
+              .getAllTabs("env-visible")
+              .find((tab) => tab.id === `${platform}-cli`),
+          ).toMatchObject({ id: `${platform}-cli`, type: platform });
+        });
+      },
+    );
 
     test("browser tabs receive their initial backend-local address", async () => {
       render(
@@ -6613,6 +6681,67 @@ describe("TerminalContainer", () => {
         });
         expect(rightPane.tabs.some((tab) => tab.type === "browser")).toBe(false);
         expect(environment.activePaneId).toBe("left");
+      });
+    });
+
+    test("closes the live active pane tab from Electron's native menu shortcut", async () => {
+      let closeTabListener: (() => void) | undefined;
+      listenMock.mockImplementation(async (event: string, handler: () => void) => {
+        if (event === "menu-close-tab") closeTabListener = handler;
+        return () => undefined;
+      });
+
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+        </TerminalProvider>,
+      );
+      await waitFor(() => expect(closeTabListener).toBeDefined());
+
+      // Change the active pane after listener registration. The menu callback
+      // must read current store state rather than a pane id captured at render.
+      act(() => {
+        usePaneLayoutStore.setState((state) => ({
+          environments: new Map(state.environments).set("env-visible", {
+            root: {
+              kind: "split",
+              id: "split",
+              direction: "horizontal",
+              sizes: [50, 50],
+              depth: 1,
+              children: [
+                {
+                  kind: "leaf",
+                  id: "left",
+                  tabs: [{ id: "left-tab", type: "plain" }],
+                  activeTabId: "left-tab",
+                },
+                {
+                  kind: "leaf",
+                  id: "right",
+                  tabs: [{ id: "right-tab", type: "agent-native" }],
+                  activeTabId: "right-tab",
+                },
+              ],
+            },
+            activePaneId: "right",
+            containerId: "container-visible",
+          }),
+        }));
+        closeTabListener?.();
+      });
+
+      await waitFor(() => {
+        const environment = usePaneLayoutStore.getState().environments.get("env-visible");
+        expect(environment?.root.kind).toBe("leaf");
+        if (environment?.root.kind !== "leaf") return;
+        expect(environment.root.id).toBe("left");
+        expect(environment.root.tabs.map((tab) => tab.id)).toEqual(["left-tab"]);
       });
     });
 
@@ -6920,7 +7049,7 @@ describe("TerminalContainer", () => {
       await waitFor(() => {
         const env = usePaneLayoutStore.getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
-        const created = env.root.tabs.find((t) => t.type === "claude-native");
+        const created = env.root.tabs.find((t) => t.type === "agent-native");
         expect(created?.displayTitle).toBe("Review");
       });
     });
@@ -7036,7 +7165,7 @@ describe("TerminalContainer", () => {
       await waitFor(() => {
         const env = usePaneLayoutStore.getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
-        const created = env.root.tabs.find((t) => t.type === "codex-native");
+        const created = env.root.tabs.find((t) => t.type === "agent-native");
         expect(created?.displayTitle).toBe("PR");
         expect(created?.isReviewTab).toBe(true);
       });
@@ -7067,7 +7196,7 @@ describe("TerminalContainer", () => {
       await waitFor(() => {
         const env = usePaneLayoutStore.getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
-        const created = env.root.tabs.find((t) => t.type === "opencode-native");
+        const created = env.root.tabs.find((t) => t.type === "agent-native");
         expect(created?.displayTitle).toBe("Conflict");
       });
     });
@@ -7137,10 +7266,51 @@ describe("TerminalContainer", () => {
       await waitFor(() => {
         const env = usePaneLayoutStore.getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
-        const created = env.root.tabs.find((t) => t.type === "codex-native");
+        const created = env.root.tabs.find((t) => t.type === "agent-native");
         expect(created?.displayTitle).toBe("Forced native");
       });
     });
+
+    test.each(["claude", "codex", "opencode", "cursor", "grok"] as const)(
+      "seeds an unassigned native composer with the explicitly launched %s provider",
+      async (platform) => {
+        render(
+          <TerminalProvider>
+            <TerminalContainer
+              environmentId="env-visible"
+              containerId="container-visible"
+              isContainerRunning
+              isActive
+            />
+            <CreateTabHarness
+              type={platform}
+              options={{
+                tabId: `explicit-${platform}`,
+                agentLaunchMode: "native",
+              }}
+            />
+          </TerminalProvider>,
+        );
+
+        await waitFor(() => {
+          const created = usePaneLayoutStore.getState()
+            .getAllTabs("env-visible")
+            .find((tab) => tab.id === `explicit-${platform}`);
+          expect(created).toMatchObject({
+            type: "agent-native",
+            nativeAgentData: {
+              environmentId: "env-visible",
+              platform: undefined,
+            },
+          });
+          expect(
+            useNativeComposeStore.getState().drafts
+              .get(createNativeSessionKey("env-visible", `explicit-${platform}`))
+              ?.platform,
+          ).toBe(platform);
+        });
+      },
+    );
 
     test("carries one-shot review model and effort settings into the created native tab", async () => {
       render(
@@ -7169,7 +7339,7 @@ describe("TerminalContainer", () => {
       await waitFor(() => {
         const env = usePaneLayoutStore.getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
-        const created = env.root.tabs.find((t) => t.type === "codex-native");
+        const created = env.root.tabs.find((t) => t.type === "agent-native");
         expect(created).toMatchObject({
           id: "review-tab-owned-by-launcher",
           displayTitle: "Review",
@@ -7224,12 +7394,12 @@ describe("TerminalContainer", () => {
     test("carries one-shot review options through every agent launch mode", async () => {
       const launchCases = [
         { type: "claude", mode: "cli", title: "Claude CLI review", expectedType: "claude" },
-        { type: "claude", mode: "native", title: "Claude Native review", expectedType: "claude-native" },
+        { type: "claude", mode: "native", title: "Claude Native review", expectedType: "agent-native" },
         { type: "claude", mode: "tmux", title: "Claude Tmux review", expectedType: "claude-tmux" },
         { type: "codex", mode: "cli", title: "Codex CLI review", expectedType: "codex" },
-        { type: "codex", mode: "native", title: "Codex Native review", expectedType: "codex-native" },
+        { type: "codex", mode: "native", title: "Codex Native review", expectedType: "agent-native" },
         { type: "opencode", mode: "cli", title: "OpenCode CLI review", expectedType: "opencode" },
-        { type: "opencode", mode: "native", title: "OpenCode Native review", expectedType: "opencode-native" },
+        { type: "opencode", mode: "native", title: "OpenCode Native review", expectedType: "agent-native" },
       ] as const;
 
       render(
@@ -7375,7 +7545,7 @@ describe("TerminalContainer", () => {
       await waitFor(() => {
         const env = usePaneLayoutStore.getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
-        const created = env.root.tabs.find((t) => t.type === "claude-native");
+        const created = env.root.tabs.find((t) => t.type === "agent-native");
         expect(created?.displayTitle).toBe("Forced Claude Native");
         expect(env.root.tabs.some((t) => t.type === "claude-tmux")).toBe(false);
       });
@@ -7442,7 +7612,7 @@ describe("TerminalContainer", () => {
       await waitFor(() => {
         const env = usePaneLayoutStore.getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
-        const created = env.root.tabs.find((t) => t.type === "opencode-native");
+        const created = env.root.tabs.find((t) => t.type === "agent-native");
         expect(created?.displayTitle).toBe("Forced OpenCode Native");
       });
     });

@@ -89,6 +89,69 @@ async function withCommands<T>(
 
 const KEY = "claude env-e1:tab-1";
 
+describe("native agent model catalogue command", () => {
+  test("normalizes provider catalogues and filters OpenCode providers in the backend", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.updateEnvironment("e1", {
+        claudeModelCatalog: {
+          environmentId: "e1",
+          models: [{
+            id: "claude-opus",
+            name: "Opus",
+            supportedEffortLevels: ["low", "high"],
+          }],
+          source: "sdk",
+          fetchedAt: new Date(0).toISOString(),
+          stale: false,
+        },
+      });
+      await storage.cacheAgentModelCatalog("codex", [{
+        id: "gpt-codex",
+        name: "Codex",
+        reasoningEfforts: ["medium", "high"],
+        defaultReasoningEffort: "high",
+      }]);
+      await storage.cacheOpenCodeModelCatalog("proj-1", [
+        { id: "opencode/a", name: "OpenCode A", provider: "opencode" },
+        { id: "opencode-go/b", name: "OpenCode Go B", provider: "opencode-go" },
+        { id: "openrouter/c", name: "OpenRouter C", provider: "openrouter" },
+      ]);
+
+      const cached = await invoke("get_opencode_model_catalog_cache", {
+        projectId: "proj-1",
+      }) as { models: Array<{ provider: string }> };
+      expect(cached.models.map((model) => model.provider)).toEqual([
+        "opencode-go",
+        "opencode",
+      ]);
+
+      const models = await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+      }) as Array<Record<string, unknown>>;
+
+      expect(models.map((model) => model.id)).toEqual([
+        "claude-opus",
+        "gpt-codex",
+        "opencode-go/b",
+        "opencode/a",
+      ]);
+      expect(models.slice(2).map((model) => model.providerLabel)).toEqual([
+        "OpenCode/opencode-go",
+        "OpenCode/opencode",
+      ]);
+
+      const rewritten = await invoke("cache_opencode_model_catalog", {
+        projectId: "proj-1",
+        models: [
+          { id: "opencode/a", name: "OpenCode A", provider: "opencode" },
+          { id: "hpc-ai/b", name: "HPC B", provider: "hpc-ai" },
+        ],
+      }) as { models: Array<{ provider: string }> };
+      expect(rewritten.models.map((model) => model.provider)).toEqual(["opencode"]);
+    });
+  });
+});
+
 describe("bridge readiness command", () => {
   test("coalesces waiters and returns the authoritative ready endpoint", async () => {
     await withCommands(async (invoke, storage, _dataDir, commands) => {
@@ -983,7 +1046,7 @@ describe("pane layout intent command", () => {
   test("rebases concurrent optimistic additions inside the backend mutation queue", async () => {
     await withCommands(async (invoke) => {
       const layout = (tabIds: string[]) => ({
-        version: 2,
+        version: 3,
         containerId: null,
         activePaneId: "pane-1",
         root: {
@@ -1021,7 +1084,7 @@ describe("pane layout intent command", () => {
   test("rejects a stale container generation without replacing its layout", async () => {
     await withCommands(async (invoke, storage) => {
       const layout = (containerId: string, tabId: string) => ({
-        version: 2,
+        version: 3,
         containerId,
         activePaneId: "pane-1",
         root: {
@@ -1058,7 +1121,7 @@ describe("pane layout intent command", () => {
   test("rejects malformed layout envelopes and oversized selection intents", async () => {
     await withCommands(async (invoke) => {
       const layout = {
-        version: 2,
+        version: 3,
         containerId: null,
         activePaneId: "pane-1",
         root: { kind: "leaf", id: "pane-1", tabs: [], activeTabId: null },

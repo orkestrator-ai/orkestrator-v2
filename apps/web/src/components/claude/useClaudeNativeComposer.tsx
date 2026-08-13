@@ -1,17 +1,15 @@
 import { useRef, useEffect, useCallback, useMemo, useState, type KeyboardEvent } from "react";
-import { AlertCircle, X, FileText, ChevronDown, ArrowUp, Check, Square } from "lucide-react";
+import { ChevronDown, Check } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Button } from "@/components/ui/button";
-import {cn, createSessionKey} from "@/lib/utils";
+import { createSessionKey } from "@/lib/utils";
 import { toast } from "sonner";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import {useClaudeStore, type ClaudeAttachment, type QueuedMessage, type ClaudeEffortLevel} from "@/stores/claudeStore";
-import { ContextUsageWheel } from "@/components/chat/ContextUsageWheel";
 import { persistAgentModelDefault } from "@/lib/chat/agent-model-preferences";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import type { ClaudeModel } from "@/lib/claude-client";
@@ -19,17 +17,15 @@ import { SlashCommandMenu } from "@/components/chat/SlashCommandMenu";
 import { parseSlashCommands } from "@/lib/chat/slash-commands";
 import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
 import { usePromptQueueDispatchRecovery } from "@/hooks/usePromptQueueDispatchRecovery";
-import {
-  COMPOSE_MAX_INPUT_HEIGHT,
-  COMPOSE_MIN_INPUT_HEIGHT,
-} from "@/components/chat/compose-metrics";
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
-import { MentionableInput, type MentionableInputRef } from "@/components/chat/MentionableInput";
+import type { MentionableInputRef } from "@/components/chat/MentionableInput";
+import { NativeComposeBar } from "@/components/chat/NativeComposeBar";
 import {
   createWorkspaceAttachment,
   NativeAttachmentMenu,
 } from "@/components/chat/NativeAttachmentMenu";
-import { NativeModelPicker } from "@/components/chat/NativeModelPicker";
+import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
+import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import { useFileSearch } from "@/hooks/useFileSearch";
 import { useFileMentions } from "@/hooks/useFileMentions";
 import { useNativeComposeBarPaste } from "@/hooks/useNativeComposeBarPaste";
@@ -59,7 +55,7 @@ const EFFORT_DESCRIPTIONS: Record<ClaudeEffortLevel, string> = {
   max: "Maximum effort (Opus only)",
 };
 
-interface ClaudeComposeBarProps {
+export interface ClaudeNativeComposerOptions {
   environmentId: string;
   /** Tab ID for multi-tab support */
   tabId: string;
@@ -83,7 +79,7 @@ interface ClaudeComposeBarProps {
   layout?: "bottom" | "centered";
 }
 
-export function ClaudeComposeBar({
+export function useClaudeNativeComposer({
   environmentId,
   tabId,
   containerId,
@@ -97,7 +93,8 @@ export function ClaudeComposeBar({
   onPlanModeChange,
   showAddressAll = false,
   layout = "bottom",
-}: ClaudeComposeBarProps) {
+}: ClaudeNativeComposerOptions) {
+  const { favorites, enabledPlatforms, toggleFavorite } = useAgentModelFavorites();
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
@@ -109,7 +106,7 @@ export function ClaudeComposeBar({
   // Create sessionKey for store lookups (format: "env-{environmentId}:{tabId}")
   const sessionKey = createSessionKey(environmentId, tabId);
 
-  // Narrow store subscriptions (mirrors CodexComposeBar): actions are stable
+  // Narrow store subscriptions: actions are stable
   // references, and per-key value selectors keep unrelated store writes (other
   // sessions' drafts, transcripts, event bookkeeping) from re-rendering the bar.
   const addAttachment = useClaudeStore((state) => state.addAttachment);
@@ -373,7 +370,7 @@ export function ClaudeComposeBar({
       (attachment) => addAttachment(sessionKey, attachment),
       [addAttachment, sessionKey],
     ),
-    logLabel: "ClaudeComposeBar",
+    logLabel: "useClaudeNativeComposer",
   });
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -399,11 +396,6 @@ export function ClaudeComposeBar({
     }
   };
 
-  const handleStop = () => {
-    if (onStop) {
-      onStop();
-    }
-  };
 
   const handleRemoveQueuedMessage = useCallback(
     async (messageId: string) => {
@@ -491,89 +483,43 @@ export function ClaudeComposeBar({
   }, [selectedModelObj, selectedModelSupportsFastMode, fastModeEnabled, sessionKey, setFastMode]);
 
   return (
-    <div
-      className={cn(
-        "mx-auto w-[calc(100%_-_0.75rem)] shrink-0 rounded-2xl border border-border/70 bg-zinc-900/90 p-3 shadow-xl shadow-black/20 sm:w-[min(calc(100%_-_2rem),56rem)]",
-        layout === "bottom" ? "mb-4 mt-2" : "my-0",
-      )}
-    >
-      {/* Attachments preview */}
-      {attachments.length > 0 && (
-        <div className="flex flex-wrap gap-2 mb-2">
-          {attachments.map((att) => (
-            <div
-              key={att.id}
-              className="relative group flex items-center gap-1.5 px-2 py-1 rounded bg-muted/50 border border-border text-xs"
-            >
-              {att.type === "image" && att.previewUrl ? (
-                <img
-                  src={att.previewUrl}
-                  alt={att.name}
-                  className="w-6 h-6 object-cover rounded"
-                />
-              ) : (
-                <FileText className="w-4 h-4 text-muted-foreground" />
-              )}
-              <span className="max-w-[120px] truncate">{att.name}</span>
-              <button
-                onClick={() => handleRemoveAttachment(att.id)}
-                disabled={disabled || isSending}
-                className="ml-1 p-0.5 rounded-full hover:bg-muted"
-                aria-label={`Remove ${att.name}`}
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Text input area container with menus */}
-      <div className="relative" data-mentionable-input ref={inputContainerRef}>
-        {/* Slash command menu - appears above input */}
-        {slashMenuOpen && filteredSlashCommands.length > 0 && (
-          <SlashCommandMenu
-            commands={filteredSlashCommands}
-            selectedIndex={slashSelectedIndex}
-            onSelect={handleSlashCommandSelect}
-            onClose={closeSlashMenu}
-          />
-        )}
-
-        {/* File mention menu - appears above input */}
-        {fileMentionMenuOpen && (
-          <FileMentionMenu
-            files={filteredFiles}
-            selectedIndex={fileMentionSelectedIndex}
-            onSelect={handleFileMentionSelect}
-            onClose={closeFileMentionMenu}
-          />
-        )}
-
-        {/* Mentionable input with @ file references */}
-        <MentionableInput
-          ref={inputRef}
-          value={text}
-          mentions={mentions}
-          onChange={handleTextAndMentionsChange}
-          onCursorChange={handleCursorPositionChange}
-          onKeyDown={handleKeyDown}
-          placeholder="Ask Claude anything..."
-          disabled={disabled || isSending}
-          minHeight={COMPOSE_MIN_INPUT_HEIGHT}
-          maxHeight={COMPOSE_MAX_INPUT_HEIGHT}
-        />
-      </div>
-
-      {/* Bottom toolbar */}
-      <div
-        data-native-compose-toolbar
-        className="flex min-w-0 items-center gap-1 overflow-x-auto pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-      >
-        <div
-          data-native-compose-controls="primary"
-          className="flex min-w-0 flex-1 items-center gap-1"
-        >
+    <NativeComposeBar
+      layout={layout}
+      attachments={attachments}
+      onRemoveAttachment={handleRemoveAttachment}
+      inputRef={inputRef}
+      inputContainerRef={inputContainerRef}
+      text={text}
+      mentions={mentions}
+      onTextAndMentionsChange={handleTextAndMentionsChange}
+      onCursorPositionChange={handleCursorPositionChange}
+      onKeyDown={handleKeyDown}
+      placeholder="Ask Claude anything..."
+      disabled={disabled}
+      isSending={isSending}
+      isLoading={isLoading}
+      menus={
+        <>
+          {slashMenuOpen && filteredSlashCommands.length > 0 ? (
+            <SlashCommandMenu
+              commands={filteredSlashCommands}
+              selectedIndex={slashSelectedIndex}
+              onSelect={handleSlashCommandSelect}
+              onClose={closeSlashMenu}
+            />
+          ) : null}
+          {fileMentionMenuOpen ? (
+            <FileMentionMenu
+              files={filteredFiles}
+              selectedIndex={fileMentionSelectedIndex}
+              onSelect={handleFileMentionSelect}
+              onClose={closeFileMentionMenu}
+            />
+          ) : null}
+        </>
+      }
+      primaryControls={
+        <>
           <NativeAttachmentMenu
             key={isSending ? "sending" : "idle"}
             disabled={disabled || isSending}
@@ -581,173 +527,102 @@ export function ClaudeComposeBar({
             onSelectFile={handleWorkspaceFileSelect}
             onCloseAutoFocus={() => inputRef.current?.focus()}
           />
-
-        <NativeModelPicker
-          models={models.map((model) => ({
-            id: model.id,
-            label: model.name,
-            description: model.description,
-          }))}
-          selectedModelId={effectiveSelectedModel}
-          selectedModelLabel={selectedModelName}
-          onModelChange={handleModelChange}
-          reasoningOptions={(selectedModelObj?.supportedEffortLevels
-            ?? (["low", "medium", "high"] as ClaudeEffortLevel[])).map((level) => ({
-              id: level,
-              label: EFFORT_LABELS[level],
-              description: EFFORT_DESCRIPTIONS[level],
-              annotation: level === "high" ? "default" : effort === level ? "current" : undefined,
+          <AgentModelPicker
+            favorites={favorites}
+            enabledPlatforms={enabledPlatforms}
+            selectedPlatform="claude"
+            platformSelectionLocked
+            onToggleFavorite={toggleFavorite}
+            models={models.map((model) => ({
+              id: model.id,
+              platform: "claude",
+              label: model.name,
+              description: model.description,
             }))}
-          selectedReasoningId={effort}
-          selectedReasoningLabel={EFFORT_LABELS[effort]}
-          onReasoningChange={(level) => setEffort(sessionKey, level as ClaudeEffortLevel)}
-          fastModeEnabled={fastModeEnabled}
-          fastModeAvailable={selectedModelSupportsFastMode}
-          onFastModeChange={(enabled) => setFastMode(sessionKey, enabled)}
-          disabled={disabled}
+            selectedModelId={effectiveSelectedModel}
+            selectedModelLabel={selectedModelName}
+            onModelChange={handleModelChange}
+            reasoningOptions={(selectedModelObj?.supportedEffortLevels
+              ?? (["low", "medium", "high"] as ClaudeEffortLevel[])).map((level) => ({
+                id: level,
+                label: EFFORT_LABELS[level],
+                description: EFFORT_DESCRIPTIONS[level],
+                annotation: level === "high" ? "default" : effort === level ? "current" : undefined,
+              }))}
+            selectedReasoningId={effort}
+            selectedReasoningLabel={EFFORT_LABELS[effort]}
+            onReasoningChange={(level) => setEffort(sessionKey, level as ClaudeEffortLevel)}
+            fastModeEnabled={fastModeEnabled}
+            fastModeAvailable={selectedModelSupportsFastMode}
+            onFastModeChange={(enabled) => setFastMode(sessionKey, enabled)}
+            disabled={disabled}
+          />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                disabled={disabled}
+                className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+                title="Choose mode (Shift+Tab to toggle)"
+              >
+                <ChevronDown className="h-3 w-3" />
+                <span>{planModeEnabled ? "Plan" : "Build"}</span>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuItem onClick={() => applyPlanMode(false)}>
+                <div className="mr-2 h-4 w-4 shrink-0">
+                  {!planModeEnabled ? <Check className="h-4 w-4 text-primary" /> : null}
+                </div>
+                Build
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => applyPlanMode(true)}>
+                <div className="mr-2 h-4 w-4 shrink-0">
+                  {planModeEnabled ? <Check className="h-4 w-4 text-primary" /> : null}
+                </div>
+                Plan
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </>
+      }
+      contextUsage={contextUsage}
+      queue={{
+        length: queueLength,
+        error: queueRecovery.dispatchError,
+        onOpen: () => setQueueDialogOpen(true),
+      }}
+      onStop={onStop}
+      showAddressAll={showAddressAll}
+      onAddressAll={handleAddressAll}
+      showSendButton={showSendButton}
+      sendDisabled={sendDisabled}
+      onSend={submit}
+      footer={
+        <QueuedPromptsDialog
+          open={queueDialogOpen}
+          onOpenChange={setQueueDialogOpen}
+          messages={queuedMessages}
+          onEdit={handleQueuedMessageClick}
+          onMove={handleMoveQueuedMessage}
+          onRemove={handleRemoveQueuedMessage}
+          dispatchError={queueRecovery.dispatchError}
+          onRetryDispatch={queueRecovery.retry}
+          renderMeta={(message) => (
+            <>
+              <span>Effort: {EFFORT_LABELS[message.effort]}</span>
+              {message.planModeEnabled ? <span>Plan mode</span> : null}
+              {message.fastModeEnabled ? <span>Fast mode</span> : null}
+              {message.attachments.length > 0 ? (
+                <span>
+                  {message.attachments.length} attachment
+                  {message.attachments.length === 1 ? "" : "s"}
+                </span>
+              ) : null}
+            </>
+          )}
         />
-
-        {/* Plan/Build mode dropdown */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              disabled={disabled}
-              className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-              title="Choose mode (Shift+Tab to toggle)"
-            >
-              <ChevronDown className="w-3 h-3" />
-              <span>{planModeEnabled ? "Plan" : "Build"}</span>
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            <DropdownMenuItem onClick={() => applyPlanMode(false)}>
-              <div className="w-4 h-4 shrink-0 mr-2">
-                {!planModeEnabled && <Check className="w-4 h-4 text-primary" />}
-              </div>
-              Build
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => applyPlanMode(true)}>
-              <div className="w-4 h-4 shrink-0 mr-2">
-                {planModeEnabled && <Check className="w-4 h-4 text-primary" />}
-              </div>
-              Plan
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        </div>
-
-        <div
-          data-native-compose-controls="secondary"
-          className="flex shrink-0 items-center gap-1"
-        >
-        <ContextUsageWheel usage={contextUsage} className="ml-1" />
-
-        {/* Queue indicator. A parked queue stops draining until a human retries,
-            so the failure has to be legible without opening the dialog. */}
-        {queueLength > 0 && (
-          <button
-            type="button"
-            onClick={() => setQueueDialogOpen(true)}
-            className={cn(
-              "flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors",
-              queueRecovery.dispatchError
-                ? "bg-destructive/10 text-destructive hover:bg-destructive/20"
-                : "text-muted-foreground bg-muted/50 hover:bg-muted",
-            )}
-            aria-label={
-              queueRecovery.dispatchError
-                ? `${queueLength} queued prompts blocked: ${queueRecovery.dispatchError.message}`
-                : undefined
-            }
-            title={
-              queueRecovery.dispatchError
-                ? `Queued prompt was not sent: ${queueRecovery.dispatchError.message}`
-                : "View queued prompts"
-            }
-          >
-            {queueRecovery.dispatchError && (
-              <AlertCircle className="h-3 w-3 shrink-0" aria-hidden="true" />
-            )}
-            <span>+{queueLength} queued</span>
-          </button>
-        )}
-
-        {/* Stop button stays available while loading */}
-        {isLoading && (
-          <button
-            onClick={handleStop}
-            disabled={disabled || !onStop}
-            className={cn(
-              "w-8 h-8 rounded-full flex items-center justify-center transition-colors",
-              "bg-destructive/10 hover:bg-destructive/20 text-destructive",
-              "disabled:opacity-50 disabled:cursor-not-allowed"
-            )}
-            title="Stop current query"
-          >
-            <Square className="w-4 h-4 fill-current" />
-          </button>
-        )}
-
-        {showAddressAll && !isLoading && (
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            onClick={() => {
-              void handleAddressAll();
-            }}
-            disabled={disabled || isSending}
-            className="h-8 rounded-full px-3 text-xs"
-            title="Send the review follow-up prompt"
-          >
-            Address all
-          </Button>
-        )}
-
-        {/* Send button (immediate send or queue) */}
-        {showSendButton && (
-          <button
-            onClick={() => void submit()}
-            disabled={sendDisabled}
-            className={cn(
-              "w-8 h-8 rounded-full flex items-center justify-center transition-colors",
-              isLoading
-                ? "bg-primary/20 hover:bg-primary/30 text-primary"
-                : "bg-muted hover:bg-muted/80",
-              "disabled:opacity-50 disabled:cursor-not-allowed"
-            )}
-            title={isLoading ? "Add to queue" : "Send message"}
-          >
-            <ArrowUp className="w-4 h-4" />
-          </button>
-        )}
-        </div>
-      </div>
-
-      <QueuedPromptsDialog
-        open={queueDialogOpen}
-        onOpenChange={setQueueDialogOpen}
-        messages={queuedMessages}
-        onEdit={handleQueuedMessageClick}
-        onMove={handleMoveQueuedMessage}
-        onRemove={handleRemoveQueuedMessage}
-        dispatchError={queueRecovery.dispatchError}
-        onRetryDispatch={queueRecovery.retry}
-        renderMeta={(message) => (
-          <>
-            <span>Effort: {EFFORT_LABELS[message.effort]}</span>
-            {message.planModeEnabled && <span>Plan mode</span>}
-            {message.fastModeEnabled && <span>Fast mode</span>}
-            {message.attachments.length > 0 && (
-              <span>
-                {message.attachments.length} attachment
-                {message.attachments.length === 1 ? "" : "s"}
-              </span>
-            )}
-          </>
-        )}
-      />
-    </div>
+      }
+    />
   );
 }
+

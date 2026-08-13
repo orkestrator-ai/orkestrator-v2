@@ -183,6 +183,10 @@ import {
   type StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
+import type {
+  AgentModel,
+  AgentReasoningOption,
+} from "@orkestrator/protocol/native-agent";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import { isTabTeardownKind } from "@orkestrator/protocol/tab-teardown";
 import {
@@ -1371,7 +1375,10 @@ function asOpenCodeModelCatalog(value: unknown): OpenCodeModelCatalogEntry[] {
   let firstRejection: string | undefined;
   value.forEach((candidate, index) => {
     try {
-      models.push(asOpenCodeModelCatalogEntry(candidate, `models[${index}]`));
+      const model = asOpenCodeModelCatalogEntry(candidate, `models[${index}]`);
+      if (model.provider === "opencode" || model.provider === "opencode-go") {
+        models.push(model);
+      }
     } catch (error) {
       firstRejection ??= error instanceof Error ? error.message : String(error);
     }
@@ -9424,6 +9431,66 @@ export function createCommandRegistry(
   register("get_agent_model_catalog_cache", (_args, { storage }) =>
     storage.getAgentModelCatalogCache()
   );
+  register("get_native_agent_model_catalog", async ({ environmentId }, { storage }) => {
+    const id = asNonBlankString(environmentId, "environmentId");
+    const environment = await storage.getEnvironment(id);
+    if (!environment) throw new Error(`Environment not found: ${id}`);
+    const cache = await storage.getAgentModelCatalogCache();
+    const claudeModels = environment.claudeModelCatalog?.models
+      ?? cache.claude?.models
+      ?? [];
+    const codexModels = cache.codex?.models ?? [];
+    const openCodeModels = (await storage.getOpenCodeModelCatalog(environment.projectId))
+      ?.models ?? [];
+    const effortLabel = (effort: string) => {
+      if (effort === "xhigh") return "Extra high";
+      return effort.replace(/[-_]+/g, " ").replace(/^\w/, (letter) => letter.toUpperCase());
+    };
+    const reasoning = (ids: readonly string[]): AgentReasoningOption[] =>
+      ids.map((effort) => ({ id: effort, label: effortLabel(effort) }));
+    const result: AgentModel[] = [
+      ...claudeModels.map((model): AgentModel => ({
+        platform: "claude",
+        id: model.id,
+        label: model.name,
+        providerLabel: "Claude",
+        reasoning: reasoning(model.supportedEffortLevels ?? ["low", "medium", "high"]),
+        defaultReasoningId: "high",
+        supportsSpeed: model.supportsFastMode !== false,
+        supportsMode: true,
+      })),
+      ...codexModels.map((model): AgentModel => ({
+        platform: "codex",
+        id: model.id,
+        label: model.name,
+        providerLabel: "Codex",
+        reasoning: model.reasoningOptions?.map((option) => ({
+          id: option.effort,
+          label: option.label,
+        })) ?? reasoning(model.reasoningEfforts ?? ["medium", "high"]),
+        defaultReasoningId: model.defaultReasoningEffort,
+        supportsSpeed: true,
+        supportsMode: true,
+      })),
+      ...openCodeModels.flatMap((model): AgentModel[] => {
+        if (model.provider !== "opencode" && model.provider !== "opencode-go") return [];
+        return [{
+          platform: "opencode",
+          id: model.id,
+          label: model.name,
+          providerLabel: `OpenCode/${model.provider}`,
+          reasoning: [
+            { id: "default", label: "Default" },
+            ...reasoning(model.variants ?? []),
+          ],
+          defaultReasoningId: "default",
+          supportsSpeed: false,
+          supportsMode: true,
+        }];
+      }),
+    ];
+    return result;
+  });
   register("cache_agent_model_catalog", (args, { storage }) => {
     assertOnlyKeys(args, ["agent", "models"], "arguments");
     const agent = asNonBlankString(args.agent, "agent");
@@ -10476,7 +10543,13 @@ export function createCommandRegistry(
     assertOnlyKeys(args, ["projectId"], "arguments");
     return storage.getOpenCodeModelCatalog(
       asNonBlankString(args.projectId, "projectId"),
-    );
+    ).then((snapshot) => {
+      if (!snapshot) return null;
+      const models = snapshot.models.filter(
+        (model) => model.provider === "opencode" || model.provider === "opencode-go",
+      );
+      return models.length > 0 ? { ...snapshot, models } : null;
+    });
   });
   register("cache_opencode_model_catalog", (args, { storage }) => {
     assertOnlyKeys(args, ["projectId", "models"], "arguments");

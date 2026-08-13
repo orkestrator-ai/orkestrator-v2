@@ -225,8 +225,18 @@ describe("ACP bridge", () => {
     );
     expect(session.messages.map((message) => message.content)).toEqual(["Do the work", "approved:once"]);
     expect(session.messages[1]?.parts).toEqual([
-      { type: "reasoning", text: "Checking permission. " },
-      { type: "text", text: "approved:once" },
+      {
+        type: "thinking",
+        content: "Checking permission. ",
+        sourcePartId: expect.any(String),
+        sourceMessageId: expect.any(String),
+      },
+      {
+        type: "text",
+        content: "approved:once",
+        sourcePartId: expect.any(String),
+        sourceMessageId: expect.any(String),
+      },
     ]);
   });
 

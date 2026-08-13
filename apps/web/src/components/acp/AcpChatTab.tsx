@@ -18,7 +18,7 @@ import {
   type AcpSessionSnapshot,
   type AcpApproval,
 } from "@/lib/acp-client";
-import type { AcpNativeData } from "@/types/paneLayout";
+import type { NativeAgentData } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -27,7 +27,7 @@ import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agen
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
 import { useVirtuosoScrollState } from "@/hooks";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
-import { getNativeAgentAdapter } from "@/components/native-agent/adapter";
+import { normalizeNativeMessages } from "@/lib/chat/native-message-adapters";
 
 // A reconnect runs the full readiness handshake, which for a container
 // environment performs Docker work in the backend. The first failure recovers
@@ -46,7 +46,7 @@ function reconnectDelayMs(attempt: number): number {
 
 interface AcpChatTabProps {
   tabId: string;
-  data: AcpNativeData;
+  data: NativeAgentData & { platform: "cursor" | "grok" };
   isActive: boolean;
   initialPrompt?: string;
 }
@@ -83,7 +83,7 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
     return environment?.pendingAgentLaunch === true
       || environment?.startupAgentSession !== undefined;
   });
-  const label = data.provider === "cursor" ? "Cursor Agent" : "Grok Build";
+  const label = data.platform === "cursor" ? "Cursor Agent" : "Grok Build";
   const sessionKey = `env-${data.environmentId}:${tabId}`;
   const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
     isActive,
@@ -124,12 +124,12 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
       try {
         reconnecting.current = true;
         setConnecting(true);
-        const ready = await awaitBridgeReady(data.environmentId, data.provider);
+        const ready = await awaitBridgeReady(data.environmentId, data.platform);
         if (ready.status !== "ready") throw new Error(ready.error.message);
         const nextClient = createAcpClient(`http://127.0.0.1:${ready.port}`, ready.authToken);
         const sessionInput = {
           environmentId: data.environmentId,
-          agent: data.provider,
+          agent: data.platform,
           logicalSessionKey: sessionKey,
           origin: "interactive-native" as const,
           interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
@@ -163,7 +163,7 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
       }
     })();
     return () => { mounted = false; };
-  }, [applySession, connectNonce, data.environmentId, data.provider, data.sessionId, label, sessionKey, tabId, updateTabNativeSessionId]);
+  }, [applySession, connectNonce, data.environmentId, data.platform, data.sessionId, label, sessionKey, tabId, updateTabNativeSessionId]);
 
   const refresh = useCallback(async () => {
     const current = sessionRef.current;
@@ -233,7 +233,7 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
     try {
       await dispatchNativeAgentPrompt({
         environmentId: data.environmentId,
-        agent: data.provider,
+        agent: data.platform,
         logicalSessionKey: sessionKey,
         origin: "interactive-native",
         interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
@@ -251,7 +251,7 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
     } finally {
       dispatchingPrompt.current = false;
     }
-  }, [client, data.environmentId, data.provider, label, refresh, session, sessionKey]);
+  }, [client, data.environmentId, data.platform, label, refresh, session, sessionKey]);
 
   useEffect(() => {
     if (backendOwnsStartupPrompt && initialPrompt) {
@@ -277,8 +277,8 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
   ]);
 
   const messages = useMemo<NativeMessage[]>(
-    () => getNativeAgentAdapter(data.provider).normalizeMessages(session?.messages ?? []),
-    [data.provider, session?.messages],
+    () => normalizeNativeMessages(session?.messages ?? []),
+    [data.platform, session?.messages],
   );
 
   // An explicit retry is a fresh start: drop any backed-off attempt so the

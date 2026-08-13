@@ -8,12 +8,12 @@ import type { OpenCodeEvent } from "@/lib/opencode-client";
 import * as realHooks from "@/hooks";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import * as realOpenCodeClient from "@/lib/opencode-client";
-import * as realOpenCodeComposeBar from "./OpenCodeComposeBar";
+import * as realOpenCodeNativeComposer from "./useOpenCodeNativeComposer";
 
 const realHooksSnapshot = { ...realHooks };
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
 const realOpenCodeClientSnapshot = { ...realOpenCodeClient };
-const realOpenCodeComposeBarSnapshot = { ...realOpenCodeComposeBar };
+const realOpenCodeNativeComposerSnapshot = { ...realOpenCodeNativeComposer };
 
 const mockSubscribeToEvents = mock<
   (_client: unknown) => Promise<AsyncIterable<OpenCodeEvent>>
@@ -66,8 +66,8 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
   VirtualizedMessageList: () => <div data-testid="messages" />,
 }));
 
-mock.module("./OpenCodeComposeBar", () => ({
-  OpenCodeComposeBar: () => <div data-testid="compose" />,
+mock.module("./useOpenCodeNativeComposer", () => ({
+  useOpenCodeNativeComposer: () => <div data-testid="compose" />,
 }));
 
 import { OpenCodeChatTab } from "./OpenCodeChatTab";
@@ -217,8 +217,8 @@ function seedStores() {
             tabs: [
               {
                 id: TAB_ID,
-                type: "opencode-native",
-                openCodeNativeData: {
+                type: "agent-native",
+                nativeAgentData: {
                   environmentId: ENVIRONMENT_ID,
                   containerId: "container-reconnect",
                 },
@@ -263,7 +263,7 @@ afterAll(() => {
     "@/components/chat/VirtualizedMessageList",
     () => realVirtualizedMessageListSnapshot,
   );
-  mock.module("./OpenCodeComposeBar", () => realOpenCodeComposeBarSnapshot);
+  mock.module("./useOpenCodeNativeComposer", () => realOpenCodeNativeComposerSnapshot);
 });
 
 describe("OpenCodeChatTab SSE reconnect", () => {

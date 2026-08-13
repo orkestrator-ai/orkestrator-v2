@@ -927,12 +927,12 @@ describe("claude-client", () => {
             role: "assistant",
             content: "",
             parts: [{
-              type: "tool-invocation",
+              type: "tool-invocation", content: "",
               toolName: "TodoWrite",
               toolArgs: { todos: [{ content: "task", status: "in_progress" }] },
               toolState: "success",
             }],
-            timestamp: "2026-03-10T11:00:00.000Z",
+            createdAt: "2026-03-10T11:00:00.000Z",
           },
         ],
       });
@@ -947,8 +947,8 @@ describe("claude-client", () => {
           id: "msg-1",
           role: "assistant",
           content: "Hello",
-          parts: [{ type: "tool-invocation", toolName: "Read", toolArgs: { file_path: "/foo" }, toolState: "success" }],
-          timestamp: "2026-03-10T11:00:00.000Z",
+          parts: [{ type: "tool-invocation", content: "", toolName: "Read", toolArgs: { file_path: "/foo" }, toolState: "success" }],
+          createdAt: "2026-03-10T11:00:00.000Z",
         }],
       });
       const messages = await getSessionMessages(client, "s-1");
@@ -1545,7 +1545,7 @@ describe("claude-client", () => {
 
       MockEventSource.latest!.emit("keepalive", {
         sessionId: "s-1",
-        timestamp: "now",
+        createdAt: "now",
       });
 
       await expect(pending).resolves.toMatchObject({
@@ -1627,7 +1627,7 @@ describe("claude-client", () => {
         baseUrl: "http://127.0.0.1:9876",
       };
       const first = subscribeToEvents(cursorClient)[Symbol.asyncIterator]();
-      MockEventSource.latest!.emit("keepalive", { timestamp: "now" }, "42");
+      MockEventSource.latest!.emit("keepalive", { createdAt: "now" }, "42");
       await first.next();
       await first.return?.();
 
@@ -1645,7 +1645,7 @@ describe("claude-client", () => {
         baseUrl: "http://127.0.0.1:9877",
       };
       const first = subscribeToEvents(cursorClient)[Symbol.asyncIterator]();
-      MockEventSource.latest!.emit("keepalive", { timestamp: "now" }, "generation-A:42");
+      MockEventSource.latest!.emit("keepalive", { createdAt: "now" }, "generation-A:42");
       await first.next();
       await first.return?.();
 
@@ -1663,8 +1663,8 @@ describe("claude-client", () => {
         baseUrl: "http://127.0.0.1:9879",
       };
       const first = subscribeToEvents(cursorClient)[Symbol.asyncIterator]();
-      MockEventSource.latest!.emit("keepalive", { timestamp: "newer" }, "generation-A:44");
-      MockEventSource.latest!.emit("keepalive", { timestamp: "older" }, "generation-A:43");
+      MockEventSource.latest!.emit("keepalive", { createdAt: "newer" }, "generation-A:44");
+      MockEventSource.latest!.emit("keepalive", { createdAt: "older" }, "generation-A:43");
       await first.next();
       await first.next();
       await first.return?.();
@@ -1703,7 +1703,7 @@ describe("claude-client", () => {
         baseUrl: "http://127.0.0.1:9878",
       };
       const first = subscribeToEvents(cursorClient)[Symbol.asyncIterator]();
-      MockEventSource.latest!.emit("keepalive", { timestamp: "now" }, "bad cursor?value");
+      MockEventSource.latest!.emit("keepalive", { createdAt: "now" }, "bad cursor?value");
       await first.next();
       await first.return?.();
 
@@ -1725,7 +1725,7 @@ describe("claude-client", () => {
         const iterator = subscribeToEvents(cursorClient)[Symbol.asyncIterator]();
         MockEventSource.latest!.emit(
           "keepalive",
-          { timestamp: `${index}` },
+          { createdAt: `${index}` },
           `generation-${index}:1`,
         );
         await iterator.next();
@@ -1784,7 +1784,7 @@ describe("claude-client", () => {
       const source = MockEventSource.latest!;
 
       await iterator.return?.();
-      source.emit("keepalive", { timestamp: "too late" });
+      source.emit("keepalive", { createdAt: "too late" });
 
       await expect(iterator.next()).resolves.toMatchObject({ done: true });
       expect(source.close).toHaveBeenCalledTimes(1);
@@ -1812,10 +1812,10 @@ describe("claude-client", () => {
           data: "{not-json",
           lastEventId: "10",
         } as MessageEvent);
-      source.emit("keepalive", { timestamp: "valid" }, "11");
+      source.emit("keepalive", { createdAt: "valid" }, "11");
       await expect(iterator.next()).resolves.toMatchObject({
         done: false,
-        value: { type: "keepalive", data: { timestamp: "valid" } },
+        value: { type: "keepalive", data: { createdAt: "valid" } },
       });
       await iterator.return?.();
     });
@@ -1828,7 +1828,7 @@ describe("claude-client", () => {
         messageId: "m-1",
         partCount: 1,
         changedParts: [{ index: 0, part: { type: "text", content: "streamed" } }],
-        timestamp: "2026-07-20T12:00:00.000Z",
+        createdAt: "2026-07-20T12:00:00.000Z",
         revision: 7,
       });
 
@@ -2013,16 +2013,14 @@ describe("claude-client", () => {
         contentFromParts([
           { type: "text", content: "a" },
           { type: "thinking", content: "IGNORED" },
-          { type: "tool-invocation", toolName: "Read" },
+          { type: "tool-invocation", content: "", toolName: "Read" },
           { type: "text", content: "b" },
         ]),
       ).toBe("ab");
     });
 
-    test("treats a text part with no content as empty rather than 'undefined'", () => {
-      // A streamed block starts with no content at all; stringifying it would
-      // put the literal word "undefined" into the transcript.
-      expect(contentFromParts([{ type: "text" }, { type: "text", content: "x" }])).toBe("x");
+    test("concatenates an empty streamed text part without adding output", () => {
+      expect(contentFromParts([{ type: "text", content: "" }, { type: "text", content: "x" }])).toBe("x");
     });
 
     test("returns an empty string for no parts", () => {
@@ -2037,9 +2035,9 @@ describe("claude-client", () => {
       content: "hello",
       parts: [
         { type: "text", content: "hello" },
-        { type: "tool-invocation", toolName: "Read", toolUseId: "t-1", toolState: "pending" },
+        { type: "tool-invocation", content: "", toolName: "Read", toolUseId: "t-1", toolState: "pending" },
       ],
-      timestamp: "2026-07-20T12:00:00.000Z",
+      createdAt: "2026-07-20T12:00:00.000Z",
       revision: 4,
     };
 
@@ -2048,7 +2046,7 @@ describe("claude-client", () => {
       messageId: "m-1",
       partCount: 2,
       changedParts: [{ index: 0, part: { type: "text", content: "hello there" } }],
-      timestamp: "2026-07-20T12:00:01.000Z",
+      createdAt: "2026-07-20T12:00:01.000Z",
       revision: 5,
       ...overrides,
     });

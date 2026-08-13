@@ -392,7 +392,12 @@ export function PersistentTerminal({
   // Track mount lifecycle - reset restoration flag on mount
   useEffect(() => {
     initialRestorationCompleteRef.current = false;
-    // No cleanup needed - flag reset happens on next mount
+    return () => {
+      // React Strict Mode cancels the first development-only connection before
+      // replaying mount effects. Rearm the one-shot connection gate for that
+      // replay; a genuine remount receives a fresh ref and behaves the same way.
+      hasInitiatedConnectionRef.current = false;
+    };
   }, [tabId, environmentId]);
 
   // Reset state when containerId changes
@@ -644,7 +649,12 @@ export function PersistentTerminal({
 
   // Determine user based on tab type - root tabs connect as orkroot
   const terminalUser = tabType === "root" ? ROOT_TERMINAL_USER : undefined;
-  const trackEnvironmentActivity = tabType === "claude" || tabType === "opencode" || tabType === "codex";
+  const trackEnvironmentActivity =
+    tabType === "claude"
+    || tabType === "opencode"
+    || tabType === "codex"
+    || tabType === "cursor"
+    || tabType === "grok";
 
   const {
     sessionId,
@@ -986,16 +996,16 @@ export function PersistentTerminal({
         scheduleFit();
       }, 50);
 
-      // Immediately connect after opening terminal to avoid race condition
-      // where the state update from markTerminalOpened doesn't trigger
-      // the connect effect in time for the first terminal
+      // Immediately connect after opening terminal to avoid a race where the
+      // portal store update has not yet exposed terminalIsOpened to the
+      // fallback effect. The mount-lifecycle cleanup rearms this under Strict
+      // Mode after useTerminal cancels the probe connection.
       if (!hasInitiatedConnectionRef.current) {
         hasInitiatedConnectionRef.current = true;
-        // Mark restoration complete since this is a fresh terminal (no buffer to restore)
         if (!isReconnecting) {
           initialRestorationCompleteRef.current = true;
         }
-        connectRef.current();
+        void connectRef.current();
       }
     } else if (containerElement) {
       // Terminal already opened - reuse the stored container element
@@ -1122,6 +1132,12 @@ export function PersistentTerminal({
       if (key === "enter" && isShift && !isCtrl && !isMeta && !isAlt) {
         event.preventDefault();
         terminal.input("\n");
+        return false;
+      }
+
+      // Cmd+W belongs to the application tab manager. If xterm processes it,
+      // the window-level close shortcut never sees the focused-terminal event.
+      if (isMeta && key === "w" && !isCtrl && !isAlt && !isShift) {
         return false;
       }
 

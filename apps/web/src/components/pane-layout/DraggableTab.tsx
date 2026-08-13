@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 import type { TabInfo } from "@/types/paneLayout";
-import { createDraggableTabId } from "@/types/paneLayout";
+import { createDraggableTabId, getNativeAgentData } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
@@ -26,18 +26,18 @@ import type { TabType } from "@/contexts";
 
 /** Check if a tab type is an OpenCode variant (terminal or native mode) */
 const isOpenCodeTab = (type: TabType): boolean =>
-  type === "opencode" || type === "opencode-native";
+  type === "opencode";
 
 /** Check if a tab type is a Claude variant (terminal, native, or tmux mode) */
 const isClaudeTab = (type: TabType): boolean =>
-  type === "claude" || type === "claude-native" || type === "claude-tmux";
+  type === "claude" || type === "claude-tmux";
 
 /** Check if a tab type is a Codex variant */
 const isCodexTab = (type: TabType): boolean =>
-  type === "codex" || type === "codex-native";
+  type === "codex";
 
-const isCursorTab = (type: TabType): boolean => type === "cursor" || type === "cursor-native";
-const isGrokTab = (type: TabType): boolean => type === "grok" || type === "grok-native";
+const isCursorTab = (type: TabType): boolean => type === "cursor";
+const isGrokTab = (type: TabType): boolean => type === "grok";
 
 /** Check if a tab type is a build pipeline tab */
 const isBuildTab = (type: TabType): boolean => type === "claude-build";
@@ -107,27 +107,28 @@ export function DraggableTab({
   // Get session for this tab to check for custom name
   const sessions = useSessionStore((state) => state.sessions);
   const session = Array.from(sessions.values()).find((s) => s.tabId === tab.id);
+  const nativeAgentData = getNativeAgentData(tab);
 
   // Agent-assigned session titles. All three native agents populate these, so
   // all three label their tab with the session name once the agent picks one.
   const claudeSessionTitle = useClaudeStore((state) => {
-    if (tab.type !== "claude-native" || !tab.claudeNativeData) return undefined;
+    if (nativeAgentData?.platform !== "claude") return undefined;
     return state.sessions.get(
-      createSessionKey(tab.claudeNativeData.environmentId, tab.id),
+      createSessionKey(nativeAgentData.environmentId, tab.id),
     )?.title;
   });
   const codexSessionTitle = useCodexStore((state) => {
-    if (tab.type !== "codex-native" || !tab.codexNativeData) return undefined;
+    if (nativeAgentData?.platform !== "codex") return undefined;
     return state.sessions.get(
-      createSessionKey(tab.codexNativeData.environmentId, tab.id),
+      createSessionKey(nativeAgentData.environmentId, tab.id),
     )?.title;
   });
   const openCodeSessionTitle = useOpenCodeStore((state) => {
-    if (tab.type !== "opencode-native" || !tab.openCodeNativeData) {
+    if (nativeAgentData?.platform !== "opencode") {
       return undefined;
     }
     return state.sessions.get(
-      createSessionKey(tab.openCodeNativeData.environmentId, tab.id),
+      createSessionKey(nativeAgentData.environmentId, tab.id),
     )?.title;
   });
   const nativeSessionTitle =
@@ -191,6 +192,21 @@ export function DraggableTab({
       return `Build: ${buildPipelineTitle}`;
     }
 
+    if (tab.type === "agent-native") {
+      const label = nativeAgentData?.platform === "opencode"
+        ? "OpenCode"
+        : nativeAgentData?.platform === "cursor"
+          ? "Cursor"
+          : nativeAgentData?.platform === "grok"
+            ? "Grok"
+            : nativeAgentData?.platform === "codex"
+              ? "Codex"
+              : nativeAgentData?.platform === "claude"
+                ? "Claude"
+                : "Agent";
+      return `${label} ${tabNumber}`;
+    }
+
     // Default names
     if (tab.type === "plain") return `Terminal ${tabNumber}`;
     if (isClaudeTab(tab.type)) return `Claude ${tabNumber}`;
@@ -216,6 +232,14 @@ export function DraggableTab({
     }
     if (tab.type === "browser") {
       return <Globe2 className="h-3 w-3 shrink-0 text-sky-400" />;
+    }
+    if (tab.type === "agent-native") {
+      if (nativeAgentData?.platform === "opencode") return <OpenCodeIcon className="h-3 w-3 shrink-0 text-green-500" />;
+      if (nativeAgentData?.platform === "claude") return <ClaudeIcon className="h-3 w-3 shrink-0 text-orange-400" />;
+      if (nativeAgentData?.platform === "codex") return <CodexIcon className="h-3 w-3 shrink-0 text-emerald-400" />;
+      if (nativeAgentData?.platform === "cursor") return <CursorAgentIcon className="h-3 w-3 shrink-0 text-violet-400" />;
+      if (nativeAgentData?.platform === "grok") return <GrokBuildIcon className="h-3 w-3 shrink-0 text-sky-400" />;
+      return <TerminalIcon className="h-3 w-3 shrink-0 text-muted-foreground" />;
     }
     if (isOpenCodeTab(tab.type)) {
       return <OpenCodeIcon className="h-3 w-3 shrink-0 text-green-500" />;

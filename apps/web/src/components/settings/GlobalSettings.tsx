@@ -419,6 +419,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         useHostClaudeCredentials: boolean;
         preferredEditor?: PreferredEditor;
         enabledAgentPlatforms: AgentPlatform[];
+        favoriteModels: Array<{ platform: AgentPlatform; modelId: string }>;
         defaultAgent: DefaultAgent;
         opencodeModel: string;
         claudeModel: string;
@@ -452,6 +453,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         useHostClaudeCredentials,
         preferredEditor,
         enabledAgentPlatforms,
+        favoriteModels: global.favoriteModels ?? [],
         defaultAgent,
         opencodeModel,
         claudeModel: global.claudeModel || "claude-sonnet-5",

@@ -52,6 +52,7 @@ export interface WorkspaceAttachment {
   type: "file" | "image";
   path: string;
   name: string;
+  previewUrl?: string;
 }
 
 interface NativeAttachmentMenuProps {

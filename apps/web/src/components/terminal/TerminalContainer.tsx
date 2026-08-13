@@ -18,6 +18,7 @@ import {
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { useTerminalContext, MAX_TABS, type CreatableTabType, type TabType, type TerminalTabType, type CreateTabOptions, type CreateFileTabOptions } from "@/contexts";
 import { createSessionKey, useClaudeOptionsStore, usePaneLayoutStore, useEnvironmentStore, useConfigStore, useTerminalSessionStore, getAllLeaves } from "@/stores";
+import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,7 +30,7 @@ import {
 import { FilePlus2, Play, Terminal as TerminalIcon } from "lucide-react";
 import { toast } from "sonner";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
-import { cn } from "@/lib/utils";
+import { cn, createSessionKey as createNativeSessionKey } from "@/lib/utils";
 import * as backend from "@/lib/backend";
 import {
   buildInitialPromptWithAttachmentReferences,
@@ -72,6 +73,7 @@ import {
   type TabInfo,
 } from "@/types/paneLayout";
 import type { ClaudeNativeBackend } from "@/types";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 const SETUP_SESSION_BIND_RETRY_DELAY_MS = 250;
 const MAX_SETUP_SESSION_BIND_ATTEMPTS = 3;
@@ -172,16 +174,12 @@ const STARTUP_AGENT_TAB_ID = "startup-agent";
  */
 const STARTUP_AGENT_TAB_TYPES: Record<TabType, boolean> = {
   claude: true,
-  "claude-native": true,
+  "agent-native": true,
   "claude-tmux": true,
   codex: true,
-  "codex-native": true,
   opencode: true,
-  "opencode-native": true,
   cursor: true,
-  "cursor-native": true,
   grok: true,
-  "grok-native": true,
   // Not startup agents: pipeline/review surfaces and non-agent tabs.
   "claude-build": false,
   "looped-review": false,
@@ -341,6 +339,7 @@ function createClaudeNativeLikeTab({
   initialAgentModel,
   initialReasoningEffort,
   sessionId,
+  deferPlatform = false,
 }: {
   id: string;
   nativeBackend: ClaudeNativeBackend;
@@ -353,6 +352,7 @@ function createClaudeNativeLikeTab({
   initialAgentModel?: string;
   initialReasoningEffort?: string;
   sessionId?: string;
+  deferPlatform?: boolean;
 }): TabInfo {
   if (nativeBackend === "tmux") {
     return {
@@ -373,8 +373,9 @@ function createClaudeNativeLikeTab({
 
   return {
     id,
-    type: "claude-native",
-    claudeNativeData: {
+    type: "agent-native",
+    nativeAgentData: {
+      platform: deferPlatform ? undefined : "claude",
       containerId: isLocal ? undefined : containerId,
       environmentId,
       isLocal,
@@ -386,6 +387,64 @@ function createClaudeNativeLikeTab({
     initialAgentModel,
     initialReasoningEffort,
   };
+}
+
+function createAgentNativeTab({
+  id,
+  platform,
+  containerId,
+  environmentId,
+  isLocal,
+  sessionId,
+  initialPrompt,
+  displayTitle,
+  isReviewTab,
+  initialAgentModel,
+  initialReasoningEffort,
+}: {
+  id: string;
+  platform: AgentPlatform | undefined;
+  containerId?: string;
+  environmentId: string;
+  isLocal: boolean;
+  sessionId?: string;
+  initialPrompt?: string;
+  displayTitle?: string;
+  isReviewTab?: boolean;
+  initialAgentModel?: string;
+  initialReasoningEffort?: string;
+}): TabInfo {
+  return {
+    id,
+    type: "agent-native",
+    nativeAgentData: {
+      platform,
+      containerId: isLocal ? undefined : containerId,
+      environmentId,
+      isLocal,
+      sessionId,
+    },
+    initialPrompt,
+    displayTitle,
+    isReviewTab,
+    initialAgentModel,
+    initialReasoningEffort,
+  };
+}
+
+/**
+ * Empty native tabs stay durably unassigned until their first dispatch, but a
+ * provider-specific launcher still has to seed the neutral composer with the
+ * provider the user clicked. Otherwise the composer falls back to the global
+ * default and a Grok/Cursor/Codex/OpenCode button can silently launch Claude.
+ */
+function seedDeferredNativePlatform(tab: TabInfo, platform: AgentPlatform): void {
+  const data = tab.nativeAgentData;
+  if (tab.type !== "agent-native" || !data || data.platform) return;
+  useNativeComposeStore.getState().updateDraft(
+    createNativeSessionKey(data.environmentId, tab.id),
+    { platform },
+  );
 }
 
 export function TerminalContainer({
@@ -1097,14 +1156,11 @@ export function TerminalContainer({
               }
             }
 
-            if (restored && persisted?.version === LEGACY_PANE_LAYOUT_VERSION) {
-              // V1 stored canonical focus pointers and relied on renderer-local
-              // storage for the user's actual selection. Install that selection
-              // once, then upgrade the complete reconciled layout through the
-              // normal per-environment CAS chain. The local record is retained
-              // until the v2 write is durable so a transient failure can retry
-              // on the next launch. Updated backends reject v1 writes, keeping a
-              // still-running older renderer from downgrading the record again.
+            if (restored && persisted && persisted.version < PANE_LAYOUT_VERSION) {
+              // V1 contributes renderer-local selection; v2 contributes legacy
+              // provider-specific native tab records. Reconciliation has now
+              // converted either schema to v3, so persist that exact snapshot
+              // through the normal CAS chain before considering it migrated.
               const migrated = usePaneLayoutStore
                 .getState()
                 .environments.get(environmentId);
@@ -1113,7 +1169,11 @@ export function TerminalContainer({
                   environmentId,
                   createPersistedPaneLayoutInput(migrated),
                 )
-                  .then(() => clearStoredPaneSelection(environmentId))
+                  .then(() => {
+                    if (persisted.version === LEGACY_PANE_LAYOUT_VERSION) {
+                      clearStoredPaneSelection(environmentId);
+                    }
+                  })
                   .catch((error) => {
                     console.warn(
                       "[TerminalContainer] Failed to migrate legacy pane selection:",
@@ -1301,47 +1361,18 @@ export function TerminalContainer({
           initialAgentModel,
           initialReasoningEffort,
         }), environmentId);
-      } else if (useNativeCodex) {
-        addTab(initialPaneId, {
+      } else if (useNativeCodex || useNativeOpenCode || useNativeAcp) {
+        const platform = initialTabType as AgentPlatform;
+        addTab(initialPaneId, createAgentNativeTab({
           id: initialTabId,
-          type: "codex-native",
-          codexNativeData: {
-            containerId: isLocalEnvironment ? undefined : containerId ?? undefined,
-            environmentId,
-            isLocal: isLocalEnvironment,
-          },
+          platform,
+          containerId: containerId ?? undefined,
+          environmentId,
+          isLocal: isLocalEnvironment,
           initialPrompt: pendingInitialPrompt,
           initialAgentModel,
           initialReasoningEffort,
-        }, environmentId);
-      } else if (useNativeOpenCode) {
-        addTab(initialPaneId, {
-          id: initialTabId,
-          type: "opencode-native",
-          openCodeNativeData: {
-            containerId: isLocalEnvironment ? undefined : containerId ?? undefined,
-            environmentId,
-            isLocal: isLocalEnvironment,
-          },
-          initialPrompt: pendingInitialPrompt,
-          initialAgentModel,
-          initialReasoningEffort,
-        }, environmentId);
-      } else if (useNativeAcp) {
-        const provider = initialTabType as "cursor" | "grok";
-        addTab(initialPaneId, {
-          id: initialTabId,
-          type: `${provider}-native`,
-          acpNativeData: {
-            provider,
-            containerId: isLocalEnvironment ? undefined : containerId ?? undefined,
-            environmentId,
-            isLocal: isLocalEnvironment,
-          },
-          initialPrompt: pendingInitialPrompt,
-          initialAgentModel,
-          initialReasoningEffort,
-        }, environmentId);
+        }), environmentId);
       } else {
         addTab(initialPaneId, {
           id: initialTabId,
@@ -1413,7 +1444,6 @@ export function TerminalContainer({
       if (containerMatch) {
         const isClaudeNative = pending.agentType === "claude";
         const isCodexNative = pending.agentType === "codex";
-        const isAcpNative = pending.agentType === "cursor" || pending.agentType === "grok";
         const launchMode = pending.launchMode ?? "native";
         console.log(
           "[TerminalContainer] Workspace ready, launching",
@@ -1465,53 +1495,18 @@ export function TerminalContainer({
             initialReasoningEffort: pending.reasoningEffort,
           });
           addTab(targetPaneId, newTab, environmentId);
-        } else if (isCodexNative) {
-          const newTab: TabInfo = {
-            id: newTabId,
-            type: "codex-native",
-            codexNativeData: {
-              containerId: isLocalEnvironment ? undefined : pending.containerId ?? undefined,
-              environmentId: pending.environmentId,
-              isLocal: isLocalEnvironment,
-              sessionId: pending.providerSessionId,
-            },
-            initialPrompt: pending.initialPrompt,
-            initialAgentModel: pending.model,
-            initialReasoningEffort: pending.reasoningEffort,
-          };
-          addTab(targetPaneId, newTab, environmentId);
-        } else if (isAcpNative) {
-          const provider = pending.agentType as "cursor" | "grok";
-          const newTab: TabInfo = {
-            id: newTabId,
-            type: `${provider}-native`,
-            acpNativeData: {
-              provider,
-              containerId: isLocalEnvironment ? undefined : pending.containerId ?? undefined,
-              environmentId: pending.environmentId,
-              isLocal: isLocalEnvironment,
-              sessionId: pending.providerSessionId,
-            },
-            initialPrompt: pending.initialPrompt,
-            initialAgentModel: pending.model,
-            initialReasoningEffort: pending.reasoningEffort,
-          };
-          addTab(targetPaneId, newTab, environmentId);
         } else {
-          // Create OpenCode native tab
-          const newTab: TabInfo = {
+          const newTab = createAgentNativeTab({
             id: newTabId,
-            type: "opencode-native",
-            openCodeNativeData: {
-              containerId: isLocalEnvironment ? undefined : pending.containerId ?? undefined,
-              environmentId: pending.environmentId,
-              isLocal: isLocalEnvironment,
-              sessionId: pending.providerSessionId,
-            },
+            platform: pending.agentType,
+            containerId: pending.containerId ?? undefined,
+            environmentId: pending.environmentId,
+            isLocal: isLocalEnvironment,
+            sessionId: pending.providerSessionId,
             initialPrompt: pending.initialPrompt,
             initialAgentModel: pending.model,
             initialReasoningEffort: pending.reasoningEffort,
-          };
+          });
           addTab(targetPaneId, newTab, environmentId);
         }
 
@@ -1660,6 +1655,26 @@ export function TerminalContainer({
         console.warn("[TerminalContainer] Refusing duplicate tab ID:", newTabId);
         return false;
       }
+
+      if (type === "agent-native") {
+        const newTab = createAgentNativeTab({
+          id: newTabId,
+          platform: undefined,
+          containerId: containerId ?? undefined,
+          environmentId,
+          isLocal: isLocalEnvironment,
+          displayTitle: options?.displayTitle,
+        });
+        console.debug(
+          "[TerminalContainer] Creating unassigned agent-native tab:",
+          newTabId,
+          "for environment:",
+          environmentId,
+        );
+        addTab(activePaneId, newTab, environmentId);
+        return true;
+      }
+
       const launchModeOverride = options?.agentLaunchMode;
       const shouldUseOpenCodeNative =
         type === "opencode" &&
@@ -1672,26 +1687,33 @@ export function TerminalContainer({
       const shouldUseCodexNative =
         type === "codex" &&
         (launchModeOverride === "native" || (!launchModeOverride && codexMode === "native"));
-      const shouldUseAcpNative = type === "cursor" || type === "grok";
+      const shouldUseAcpNative =
+        (type === "cursor" || type === "grok") && launchModeOverride !== "cli";
+      const prelockNativePlatform = Boolean(
+        options?.initialPrompt
+        || options?.isReviewTab
+        || options?.resumeSessionId
+        || options?.initialAgentModel
+        || options?.initialReasoningEffort,
+      );
 
       // Check if we should create an opencode-native tab instead
       if (shouldUseOpenCodeNative) {
-        const newTab: TabInfo = {
+        const newTab = createAgentNativeTab({
           id: newTabId,
-          type: "opencode-native",
-          openCodeNativeData: {
-            containerId: isLocalEnvironment ? undefined : containerId ?? undefined,
-            environmentId,
-            isLocal: isLocalEnvironment,
-            sessionId: options?.resumeSessionId,
-          },
+          platform: prelockNativePlatform ? "opencode" : undefined,
+          containerId: containerId ?? undefined,
+          environmentId,
+          isLocal: isLocalEnvironment,
+          sessionId: options?.resumeSessionId,
           initialPrompt: options?.initialPrompt,
           displayTitle: options?.displayTitle,
           isReviewTab: options?.isReviewTab,
           initialAgentModel: options?.initialAgentModel,
           initialReasoningEffort: options?.initialReasoningEffort,
-        };
+        });
         console.debug("[TerminalContainer] Creating opencode-native tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
+        seedDeferredNativePlatform(newTab, "opencode");
         addTab(activePaneId, newTab, environmentId);
         return true;
       }
@@ -1716,51 +1738,50 @@ export function TerminalContainer({
           initialAgentModel: options?.initialAgentModel,
           initialReasoningEffort: options?.initialReasoningEffort,
           sessionId: options?.resumeSessionId,
+          deferPlatform: !prelockNativePlatform,
         });
         console.debug("[TerminalContainer] Creating", newTab.type, "tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
+        seedDeferredNativePlatform(newTab, "claude");
         addTab(activePaneId, newTab, environmentId);
         return true;
       }
 
       if (shouldUseCodexNative) {
-        const newTab: TabInfo = {
+        const newTab = createAgentNativeTab({
           id: newTabId,
-          type: "codex-native",
-          codexNativeData: {
-            containerId: isLocalEnvironment ? undefined : containerId ?? undefined,
-            environmentId,
-            isLocal: isLocalEnvironment,
-            sessionId: options?.resumeSessionId,
-          },
+          platform: prelockNativePlatform ? "codex" : undefined,
+          containerId: containerId ?? undefined,
+          environmentId,
+          isLocal: isLocalEnvironment,
+          sessionId: options?.resumeSessionId,
           initialPrompt: options?.initialPrompt,
           displayTitle: options?.displayTitle,
           isReviewTab: options?.isReviewTab,
           initialAgentModel: options?.initialAgentModel,
           initialReasoningEffort: options?.initialReasoningEffort,
-        };
+        });
         console.debug("[TerminalContainer] Creating codex-native tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
+        seedDeferredNativePlatform(newTab, "codex");
         addTab(activePaneId, newTab, environmentId);
         return true;
       }
 
       if (shouldUseAcpNative) {
         const provider = type as "cursor" | "grok";
-        const newTab: TabInfo = {
+        const newTab = createAgentNativeTab({
           id: newTabId,
-          type: `${provider}-native`,
-          acpNativeData: {
-            provider,
-            containerId: isLocalEnvironment ? undefined : containerId ?? undefined,
-            environmentId,
-            isLocal: isLocalEnvironment,
-            sessionId: options?.resumeSessionId,
-          },
+          platform: prelockNativePlatform ? provider : undefined,
+          containerId: containerId ?? undefined,
+          environmentId,
+          isLocal: isLocalEnvironment,
+          sessionId: options?.resumeSessionId,
           initialPrompt: options?.initialPrompt,
           displayTitle: options?.displayTitle,
           isReviewTab: options?.isReviewTab,
           initialAgentModel: options?.initialAgentModel,
           initialReasoningEffort: options?.initialReasoningEffort,
-        };
+        });
+        seedDeferredNativePlatform(newTab, provider);
         addTab(activePaneId, newTab, environmentId);
         return true;
       }
@@ -1877,9 +1898,22 @@ export function TerminalContainer({
   const handleCloseActiveTab = useCallback(() => {
     const activePane = getActivePane(environmentId);
     if (activePane && activePane.activeTabId) {
-      removeTab(activePaneId, activePane.activeTabId, environmentId);
+      removeTab(activePane.id, activePane.activeTabId, environmentId);
     }
-  }, [activePaneId, environmentId, getActivePane, removeTab]);
+  }, [environmentId, getActivePane, removeTab]);
+
+  // Electron owns Command+W as a native menu accelerator. Route its event to
+  // the currently active environment and resolve the pane from live store
+  // state so a stale render cannot close the wrong pane (or no pane at all).
+  useEffect(() => {
+    if (!isActive) return;
+    const unlisten = listen<void>("menu-close-tab", () => {
+      handleCloseActiveTab();
+    });
+    return () => {
+      void unlisten.then((dispose) => dispose());
+    };
+  }, [handleCloseActiveTab, isActive]);
 
   // Clear launch options after they've been applied to the first tab.
   useEffect(() => {

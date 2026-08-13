@@ -97,12 +97,12 @@ function mergeClaudeMessagesPreservingClientOnly(
 
   const merged = [...incoming];
   for (const clientMsg of existingClientMessages) {
-    const clientTime = new Date(clientMsg.timestamp || 0).getTime();
+    const clientTime = new Date(clientMsg.createdAt || 0).getTime();
     let insertIndex = merged.length;
     for (let i = merged.length - 1; i >= 0; i--) {
       const msg = merged[i];
       if (!msg) continue;
-      const msgTime = new Date(msg.timestamp || 0).getTime();
+      const msgTime = new Date(msg.createdAt || 0).getTime();
       if (msgTime <= clientTime) {
         insertIndex = i + 1;
         break;

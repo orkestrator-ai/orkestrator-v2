@@ -1,9 +1,18 @@
 import { createSessionKey } from "@/lib/utils";
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render, screen } from "@testing-library/react";
-import { ClaudeComposeBar } from "@/components/claude/ClaudeComposeBar";
-import { CodexComposeBar } from "@/components/codex/CodexComposeBar";
-import { OpenCodeComposeBar } from "@/components/opencode/OpenCodeComposeBar";
+import {
+  useClaudeNativeComposer,
+  type ClaudeNativeComposerOptions,
+} from "@/components/claude/useClaudeNativeComposer";
+import {
+  useCodexNativeComposer,
+  type CodexNativeComposerOptions,
+} from "@/components/codex/useCodexNativeComposer";
+import {
+  useOpenCodeNativeComposer,
+  type OpenCodeNativeComposerOptions,
+} from "@/components/opencode/useOpenCodeNativeComposer";
 import {useOpenCodeStore} from "@/stores/openCodeStore";
 import {useCodexStore} from "@/stores/codexStore";
 import {useClaudeStore} from "@/stores/claudeStore";
@@ -16,60 +25,69 @@ const noop = () => {};
 const noopAsync = async () => {};
 
 function renderClaudeComposeBar(
-  overrides: Partial<Parameters<typeof ClaudeComposeBar>[0]> = {},
+  overrides: Partial<ClaudeNativeComposerOptions> = {},
 ) {
+  function Harness() {
+    return useClaudeNativeComposer({
+      environmentId: "claude-environment",
+      tabId: "claude-tab",
+      models: [],
+      onSend: noop,
+      ...overrides,
+    });
+  }
   return render(
-    <ClaudeComposeBar
-      environmentId="claude-environment"
-      tabId="claude-tab"
-      models={[]}
-      onSend={noop}
-      {...overrides}
-    />,
+    <Harness />,
   );
 }
 
 function renderCodexComposeBar(
   isLoading = false,
-  overrides: Partial<Parameters<typeof CodexComposeBar>[0]> = {},
+  overrides: Partial<CodexNativeComposerOptions> = {},
 ) {
+  function Harness() {
+    return useCodexNativeComposer({
+      environmentId: "codex-environment",
+      sessionKey: "codex-session",
+      models: [],
+      selectedMode: "build",
+      selectedModel: "",
+      selectedReasoningEffort: "high",
+      fastModeEnabled: false,
+      isLoading,
+      onSend: noopAsync,
+      onQueue: noop,
+      onStop: noopAsync,
+      onModeChange: noop,
+      onModelChange: noop,
+      onReasoningEffortChange: noop,
+      onFastModeChange: noop,
+      ...overrides,
+    });
+  }
   return render(
-    <CodexComposeBar
-      environmentId="codex-environment"
-      sessionKey="codex-session"
-      models={[]}
-      selectedMode="build"
-      selectedModel=""
-      selectedReasoningEffort="high"
-      fastModeEnabled={false}
-      isLoading={isLoading}
-      onSend={noopAsync}
-      onQueue={noop}
-      onStop={noopAsync}
-      onModeChange={noop}
-      onModelChange={noop}
-      onReasoningEffortChange={noop}
-      onFastModeChange={noop}
-      {...overrides}
-    />,
+    <Harness />,
   );
 }
 
 function renderOpenCodeComposeBar(
   isLoading = false,
-  overrides: Partial<Parameters<typeof OpenCodeComposeBar>[0]> = {},
+  overrides: Partial<OpenCodeNativeComposerOptions> = {},
 ) {
+  function Harness() {
+    return useOpenCodeNativeComposer({
+      environmentId: "opencode-environment",
+      tabId: "opencode-tab",
+      models: [],
+      isLoading,
+      onSend: noop,
+      onQueue: noop,
+      onStop: noop,
+      ...overrides,
+    });
+  }
   return render(
-    <OpenCodeComposeBar
-      environmentId="opencode-environment"
-      tabId="opencode-tab"
-      models={[]}
-      isLoading={isLoading}
-      onSend={noop}
-      onQueue={noop}
-      onStop={noop}
-      {...overrides}
-    />,
+    <Harness />,
   );
 }
 
@@ -117,6 +135,25 @@ describe("native compose bar controls", () => {
       expect(primary?.className).not.toContain("w-full");
       expect(secondary?.className).toContain("shrink-0");
       expect(secondary?.className).not.toContain("w-full");
+    }
+  });
+
+  test("keeps attachment, model, and mode controls in the same order for every provider", () => {
+    const { container: claude } = renderClaudeComposeBar();
+    const { container: codex } = renderCodexComposeBar();
+    const { container: openCode } = renderOpenCodeComposeBar();
+
+    for (const container of [claude, codex, openCode]) {
+      const primary = container.querySelector<HTMLElement>(
+        '[data-native-compose-controls="primary"]',
+      )!;
+      const buttons = Array.from(primary.children).filter(
+        (element): element is HTMLButtonElement => element instanceof HTMLButtonElement,
+      );
+
+      expect(buttons[0]?.getAttribute("aria-label")).toBe("Add attachment");
+      expect(buttons[1]?.getAttribute("title")).toContain("Choose model");
+      expect(buttons[2]?.textContent).toMatch(/Build|Plan|Planning/);
     }
   });
 

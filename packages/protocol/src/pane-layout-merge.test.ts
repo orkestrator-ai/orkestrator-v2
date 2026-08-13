@@ -125,10 +125,11 @@ describe("mergePersistedPaneLayouts", () => {
   test("merges independent concurrent fields on the same native tab", () => {
     const baseTab: TabInfo = {
       id: "native",
-      type: "codex-native",
+      type: "agent-native",
       initialAgentModel: "gpt-5.6-sol",
       displayTitle: "Original",
-      codexNativeData: {
+      nativeAgentData: {
+        platform: "codex",
         environmentId: "env-1",
         containerId: "container-1",
         sessionId: "session-old",
@@ -144,8 +145,8 @@ describe("mergePersistedPaneLayouts", () => {
     const remoteTab: TabInfo = {
       ...baseTab,
       displayTitle: "Remote title",
-      codexNativeData: {
-        ...(baseTab.codexNativeData as Record<string, unknown>),
+      nativeAgentData: {
+        ...(baseTab.nativeAgentData as Record<string, unknown>),
         sessionId: "session-new",
       },
     };
@@ -158,9 +159,10 @@ describe("mergePersistedPaneLayouts", () => {
 
     expect(tabs(merged.root)).toEqual([{
       id: "native",
-      type: "codex-native",
+      type: "agent-native",
       displayTitle: "Remote title",
-      codexNativeData: {
+      nativeAgentData: {
+        platform: "codex",
         environmentId: "env-1",
         containerId: "container-1",
         sessionId: "session-new",
@@ -168,43 +170,35 @@ describe("mergePersistedPaneLayouts", () => {
     }]);
   });
 
-  test("atomically merges legacy and canonical native session identities", () => {
+  test("merges canonical native session identity with unrelated metadata", () => {
     const makeInput = (tab: TabInfo) => input({
       kind: "leaf",
       id: "default",
       tabs: [tab],
       activeTabId: tab.id,
     });
-    const legacyTab = (sessionId: string): TabInfo => ({
+    const nativeTab = (sessionId: string): TabInfo => ({
       id: "native",
-      type: "codex-native",
-      codexNativeData: {
+      type: "agent-native",
+      nativeAgentData: {
+        platform: "codex",
         environmentId: "env-1",
         sessionId,
       },
     });
-    const base = makeInput(legacyTab("session-old"));
-    const local = makeInput(legacyTab("session-new"));
+    const base = makeInput(nativeTab("session-old"));
+    const local = makeInput(nativeTab("session-new"));
     const remote = makeInput({
-      ...legacyTab("session-old"),
+      ...nativeTab("session-old"),
       displayTitle: "Remote title",
-      nativeAgentData: {
-        platform: "codex",
-        environmentId: "env-1",
-        sessionId: "session-old",
-      },
     });
 
     const merged = mergePersistedPaneLayouts(base, local, remote);
 
     expect(tabs(merged.root)).toEqual([{
       id: "native",
-      type: "codex-native",
+      type: "agent-native",
       displayTitle: "Remote title",
-      codexNativeData: {
-        environmentId: "env-1",
-        sessionId: "session-new",
-      },
       nativeAgentData: {
         platform: "codex",
         environmentId: "env-1",
@@ -213,90 +207,61 @@ describe("mergePersistedPaneLayouts", () => {
     }]);
   });
 
-  test("keeps the ACP provider when synchronizing a cursor identity", () => {
+  test("locks an assigned platform against a conflicting later write", () => {
     const makeInput = (tab: TabInfo) => input({
       kind: "leaf",
       id: "default",
       tabs: [tab],
       activeTabId: tab.id,
     });
-    const legacyTab = (sessionId: string): TabInfo => ({
+    const nativeTab = (platform: string): TabInfo => ({
       id: "native",
-      type: "cursor-native",
-      acpNativeData: {
-        provider: "cursor",
-        environmentId: "env-1",
-        sessionId,
-      },
-    });
-    const base = makeInput(legacyTab("session-old"));
-    const local = makeInput(legacyTab("session-new"));
-    const remote = makeInput({
-      ...legacyTab("session-old"),
+      type: "agent-native",
       nativeAgentData: {
-        platform: "cursor",
+        platform,
         environmentId: "env-1",
-        sessionId: "session-old",
       },
     });
+    const base = makeInput(nativeTab("cursor"));
+    const local = makeInput(nativeTab("grok"));
+    const remote = makeInput(nativeTab("cursor"));
 
     const merged = mergePersistedPaneLayouts(base, local, remote);
 
-    // `provider` is re-attached from the tab type: the legacy ACP record is
-    // rebuilt from the identity whitelist, which does not carry it.
     expect(tabs(merged.root)).toEqual([{
       id: "native",
-      type: "cursor-native",
-      acpNativeData: {
-        provider: "cursor",
-        environmentId: "env-1",
-        sessionId: "session-new",
-      },
+      type: "agent-native",
       nativeAgentData: {
         platform: "cursor",
         environmentId: "env-1",
-        sessionId: "session-new",
       },
     }]);
   });
 
-  test("re-derives the ACP provider from the tab type, not the stored record", () => {
+  test("converges two concurrent first platform locks", () => {
     const makeInput = (tab: TabInfo) => input({
       kind: "leaf",
       id: "default",
       tabs: [tab],
       activeTabId: tab.id,
     });
-    // A grok tab whose persisted record claims `cursor` would otherwise load
-    // the wrong provider's client after the merge rewrote the legacy field.
-    const legacyTab = (sessionId: string): TabInfo => ({
+    const nativeTab = (platform?: string): TabInfo => ({
       id: "native",
-      type: "grok-native",
-      acpNativeData: {
-        provider: "cursor",
+      type: "agent-native",
+      nativeAgentData: {
+        ...(platform ? { platform } : {}),
         environmentId: "env-1",
-        sessionId,
       },
     });
-    const base = makeInput(legacyTab("session-old"));
-    const local = makeInput(legacyTab("session-new"));
-    const remote = makeInput({
-      ...legacyTab("session-old"),
-      displayTitle: "Remote title",
-    });
+    const base = makeInput(nativeTab());
+    const local = makeInput(nativeTab("grok"));
+    const remote = makeInput(nativeTab("cursor"));
 
     const merged = mergePersistedPaneLayouts(base, local, remote);
+    const reversed = mergePersistedPaneLayouts(base, remote, local);
 
-    expect(tabs(merged.root)).toEqual([{
-      id: "native",
-      type: "grok-native",
-      displayTitle: "Remote title",
-      acpNativeData: {
-        provider: "grok",
-        environmentId: "env-1",
-        sessionId: "session-new",
-      },
-    }]);
+    expect((tabs(merged.root)[0]?.nativeAgentData as { platform?: string })?.platform).toBe("cursor");
+    expect((tabs(reversed.root)[0]?.nativeAgentData as { platform?: string })?.platform).toBe("cursor");
   });
 
   test("does not resurrect a native identity both writers dropped", () => {

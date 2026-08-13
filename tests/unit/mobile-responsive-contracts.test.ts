@@ -11,16 +11,14 @@ describe("mobile responsive layout contracts", () => {
     ["apps/web/src/components/chat/FileMentionMenu.tsx", "w-full min-w-0", "sm:w-96"],
     ["apps/web/src/components/chat/NativeComposeDock.tsx", "px-2", "sm:px-4"],
     [
-      "apps/web/src/components/chat/NativeModelPicker.tsx",
+      "apps/web/src/components/chat/AgentModelPicker.tsx",
       "w-[calc(100vw-1rem)]",
       "collisionPadding={{ top: 52, right: 8, bottom: 8, left: 8 }}",
       "overflow-y-auto",
     ],
     ["apps/web/src/components/chat/VirtualizedMessageList.tsx", "min-w-0"],
-    ["apps/web/src/components/claude/ClaudeComposeBar.tsx", "overflow-x-auto"],
+    ["apps/web/src/components/chat/NativeComposeBar.tsx", "overflow-x-auto"],
     ["apps/web/src/components/claude/ClaudeTmuxChatTab.tsx", "overflow-x-auto", "sm:w-[min(calc(100%_-_2rem),56rem)]"],
-    ["apps/web/src/components/codex/CodexComposeBar.tsx", "overflow-x-auto"],
-    ["apps/web/src/components/opencode/OpenCodeComposeBar.tsx", "overflow-x-auto"],
     ["apps/web/src/components/docker/DockerStatsDialog.tsx", "grid-cols-1 gap-3 sm:grid-cols-3"],
     [
       "apps/web/src/components/environments/CreateEnvironmentDialog.tsx",
@@ -43,7 +41,7 @@ describe("mobile responsive layout contracts", () => {
   });
 
   test("native model picker inherits viewport bounds and owns per-column scrolling", () => {
-    const picker = read("apps/web/src/components/chat/NativeModelPicker.tsx");
+    const picker = read("apps/web/src/components/chat/AgentModelPicker.tsx");
     const dropdown = read("apps/web/src/components/ui/dropdown-menu.tsx");
 
     expect(picker).toContain("<DropdownMenuContent");
@@ -64,16 +62,10 @@ describe("mobile responsive layout contracts", () => {
     expect(css).toContain("min-height: 2.75rem");
   });
 
-  test("native compose bars keep context usage visible at mobile widths", () => {
-    for (const file of [
-      "apps/web/src/components/claude/ClaudeComposeBar.tsx",
-      "apps/web/src/components/codex/CodexComposeBar.tsx",
-      "apps/web/src/components/opencode/OpenCodeComposeBar.tsx",
-    ]) {
-      const source = read(file);
-      expect(source).toContain("<ContextUsageWheel usage={contextUsage}");
-      expect(source).not.toContain("!isMobile && <ContextUsageWheel");
-    }
+  test("the native compose bar keeps context usage visible at mobile widths", () => {
+    const source = read("apps/web/src/components/chat/NativeComposeBar.tsx");
+    expect(source).toContain("<ContextUsageWheel usage={contextUsage}");
+    expect(source).not.toContain("!isMobile && <ContextUsageWheel");
   });
 
   test("message actions only opt into hidden hover controls for precise pointers", () => {

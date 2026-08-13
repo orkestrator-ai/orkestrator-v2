@@ -90,6 +90,7 @@ beforeEach(() => {
       global: {
         ...config.global,
         enabledAgentPlatforms: ["claude", "codex", "cursor", "grok", "opencode"],
+        favoriteModels: [{ platform: "opencode", modelId: "provider/model-a" }],
       },
     },
   });
@@ -143,10 +144,6 @@ const openCodeCatalog: ReviewModelCatalog = {
   ],
 };
 
-/** True when `first` appears before `second` in document order. */
-const renderedBefore = (first: Element, second: Element) =>
-  Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
-
 const openModelPicker = () => {
   const trigger = screen.getByRole("combobox", { name: "Model" });
   act(() => {
@@ -161,7 +158,7 @@ function renderDialog(overrides: Partial<Parameters<typeof ReviewLaunchDialog>[0
   const props = {
     open: true,
     onOpenChange: () => undefined,
-    defaultTabType: "claude-native" as const,
+    defaultTabType: "claude" as const,
     catalog,
     onConfirm,
     ...overrides,
@@ -176,7 +173,7 @@ describe("ReviewLaunchDialog", () => {
       <ReviewLaunchDialog
         open
         onOpenChange={() => undefined}
-        defaultTabType="claude-native"
+        defaultTabType="claude"
         catalog={catalog}
         preferredModels={{ claude: "claude-b" }}
         preferredReasoningEfforts={{ claude: "xhigh" }}
@@ -192,7 +189,7 @@ describe("ReviewLaunchDialog", () => {
     ).toHaveLength(5);
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onConfirm).toHaveBeenCalledWith({
-      tabType: "claude-native",
+      tabType: "claude",
       model: "claude-b",
       reasoningEffort: "xhigh",
     });
@@ -205,7 +202,7 @@ describe("ReviewLaunchDialog", () => {
         kind="looped"
         open
         onOpenChange={() => undefined}
-        defaultTabType="codex-native"
+        defaultTabType="codex"
         catalog={catalog}
         onConfirm={onConfirm}
       />,
@@ -223,7 +220,7 @@ describe("ReviewLaunchDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
     expect(onConfirm).toHaveBeenCalledWith({
-      tabType: "codex-native",
+      tabType: "codex",
       model: "codex-a",
       reasoningEffort: undefined,
       passAllowance: 10,
@@ -256,7 +253,7 @@ describe("ReviewLaunchDialog", () => {
       <ReviewLaunchDialog
         open
         onOpenChange={() => undefined}
-        defaultTabType="claude-native"
+        defaultTabType="claude"
         catalog={catalog}
         preferredModels={{ codex: "codex-a" }}
         preferredReasoningEfforts={{ codex: "high" }}
@@ -270,7 +267,7 @@ describe("ReviewLaunchDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
 
     expect(onConfirm).toHaveBeenCalledWith({
-      tabType: "codex-native",
+      tabType: "codex",
       model: "codex-a",
       reasoningEffort: "high",
     });
@@ -310,7 +307,7 @@ describe("ReviewLaunchDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onConfirm).toHaveBeenCalledWith({
-      tabType: "claude-native",
+      tabType: "claude",
       model: "claude-a",
       reasoningEffort: "high",
     });
@@ -329,7 +326,7 @@ describe("ReviewLaunchDialog", () => {
     fireEvent.click(screen.getByRole("option", { name: "Extra high" }));
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onConfirm).toHaveBeenCalledWith({
-      tabType: "claude-native",
+      tabType: "claude",
       model: "claude-b",
       reasoningEffort: "xhigh",
     });
@@ -356,7 +353,7 @@ describe("ReviewLaunchDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onConfirm).toHaveBeenCalledWith({
-      tabType: "claude-native",
+      tabType: "claude",
       model: "claude-b",
       reasoningEffort: "xhigh",
     });
@@ -381,7 +378,7 @@ describe("ReviewLaunchDialog", () => {
     // The preferences are per provider, so switching must read OpenCode's own
     // rather than carrying Claude's forward or falling back to a default.
     expect(onConfirm).toHaveBeenCalledWith({
-      tabType: "opencode-native",
+      tabType: "opencode",
       model: "provider/model-a",
       reasoningEffort: "deep",
     });
@@ -390,7 +387,6 @@ describe("ReviewLaunchDialog", () => {
   test("swaps the model list for the searchable picker when OpenCode is chosen", () => {
     renderDialog({
       preferredModels: { opencode: "provider/model-a" },
-      opencodeFavoriteModelIds: ["provider/model-a"],
     });
 
     // The searchable OpenCode picker exposes the catalogue in a combobox with
@@ -406,7 +402,7 @@ describe("ReviewLaunchDialog", () => {
     // The defining feature of the swap is the search field, so assert it rather
     // than only the attribute that distinguishes the two triggers.
     openModelPicker();
-    expect(screen.getByPlaceholderText("Search models or providers…")).toBeTruthy();
+    expect(screen.getByPlaceholderText("Search models...")).toBeTruthy();
   });
 
   test("keeps the OpenCode trigger sized like the other review controls", () => {
@@ -419,52 +415,48 @@ describe("ReviewLaunchDialog", () => {
 
     const trigger = screen.getByRole("combobox", { name: "Model" });
     expect(trigger.className).toContain("min-h-11");
-    // `showDescriptionInTrigger` puts the provider under the model name, which
-    // is what the plain Select did before the swap.
     expect(trigger.textContent).toContain("OpenCode A");
-    expect(trigger.textContent).toContain("provider");
   });
 
   test("orders OpenCode models favourites-first in the searchable picker", () => {
     renderDialog({
       catalog: openCodeCatalog,
       preferredModels: { opencode: "provider/model-a" },
-      opencodeFavoriteModelIds: ["provider/model-a"],
     });
 
     fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
     openModelPicker();
 
-    // Order, not mere presence: the favourite is pinned under "Favorites" ahead
-    // of the rest of the catalogue under "All models".
-    const favouritesLabel = screen.getByText("Favorites");
-    const favourite = screen.getByText("provider/model-a");
-    const allModelsLabel = screen.getByText("All models");
-    const other = screen.getByText("other/model-b");
-    expect(renderedBefore(favouritesLabel, favourite)).toBe(true);
-    expect(renderedBefore(favourite, allModelsLabel)).toBe(true);
-    expect(renderedBefore(allModelsLabel, other)).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
+    expect(screen.getByRole("menuitemradio", { name: /OpenCode A/ })).toBeTruthy();
+    expect(screen.queryByRole("menuitemradio", { name: /OpenCode B/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "opencode models" }));
+    expect(screen.getByRole("menuitemradio", { name: /OpenCode B/ })).toBeTruthy();
   });
 
   test("orders OpenCode models favourites-first in the looped dialog too", () => {
+    const config = useConfigStore.getState().config;
+    useConfigStore.setState({
+      config: {
+        ...config,
+        global: {
+          ...config.global,
+          favoriteModels: [{ platform: "opencode", modelId: "other/model-b" }],
+        },
+      },
+    });
     renderDialog({
       kind: "looped",
       catalog: openCodeCatalog,
       preferredModels: { opencode: "provider/model-a" },
-      opencodeFavoriteModelIds: ["other/model-b"],
     });
 
     fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
     openModelPicker();
 
-    expect(renderedBefore(
-      screen.getByText("other/model-b"),
-      screen.getByText("All models"),
-    )).toBe(true);
-    expect(renderedBefore(
-      screen.getByText("All models"),
-      screen.getByText("provider/model-a"),
-    )).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
+    expect(screen.getByRole("menuitemradio", { name: /OpenCode B/ })).toBeTruthy();
+    expect(screen.queryByRole("menuitemradio", { name: /OpenCode A/ })).toBeNull();
   });
 
   test("closes without launching when cancelled", () => {
@@ -585,7 +577,7 @@ describe("ReviewLaunchDialog provider keyboard navigation", () => {
   });
 
   test("moves backward with ArrowLeft and ArrowUp", () => {
-    renderDialog({ defaultTabType: "opencode-native" });
+    renderDialog({ defaultTabType: "opencode" });
 
     expect(fireEvent.keyDown(radios()[4]!, { key: "ArrowLeft" })).toBe(false);
     expect(selectedModelName()).toContain("Grok A");
@@ -659,7 +651,7 @@ describe("ReviewLaunchDialog reopen behaviour", () => {
       .toContain("Claude B");
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onConfirm).toHaveBeenCalledWith({
-      tabType: "claude-native",
+      tabType: "claude",
       model: "claude-b",
       reasoningEffort: "xhigh",
     });
@@ -729,7 +721,7 @@ describe("ReviewLaunchDialog reopen behaviour", () => {
     expect(screen.getByRole("combobox", { name: "Model" }).textContent).toContain("Claude A");
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onConfirm).toHaveBeenCalledWith({
-      tabType: "claude-native",
+      tabType: "claude",
       model: "claude-a",
       reasoningEffort: undefined,
     });
@@ -763,7 +755,7 @@ describe("ReviewLaunchDialog reopen behaviour", () => {
       .toContain("default");
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onConfirm).toHaveBeenCalledWith({
-      tabType: "claude-native",
+      tabType: "claude",
       model: "claude-a",
       reasoningEffort: undefined,
     });
@@ -782,7 +774,7 @@ describe("ReviewLaunchDialog degraded catalogs", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onConfirm).toHaveBeenCalledWith({
-      tabType: "claude-native",
+      tabType: "claude",
       model: "claude-fixed",
       reasoningEffort: undefined,
     });
@@ -801,7 +793,7 @@ describe("ReviewLaunchDialog degraded catalogs", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onConfirm).toHaveBeenCalledWith({
-      tabType: "claude-native",
+      tabType: "claude",
       model: "claude-fixed",
       reasoningEffort: undefined,
     });
@@ -819,7 +811,7 @@ describe("ReviewLaunchDialog degraded catalogs", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onConfirm).toHaveBeenCalledWith({
-      tabType: "opencode-native",
+      tabType: "opencode",
       model: "default",
       reasoningEffort: undefined,
     });
@@ -833,7 +825,7 @@ describe("ReviewLaunchDialog degraded catalogs", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onConfirm).toHaveBeenCalledWith({
-      tabType: "claude-native",
+      tabType: "claude",
       model: "claude-a",
       reasoningEffort: undefined,
     });
@@ -881,10 +873,10 @@ test("review tab mapping is native-only", () => {
     "native",
     "native",
   ]);
-  expect(getReviewAgent("claude-native")).toBe("claude");
-  expect(getReviewAgent("codex-native")).toBe("codex");
-  expect(getReviewAgent("opencode-native")).toBe("opencode");
-  expect(getReviewAgent("cursor-native")).toBe("cursor");
-  expect(getReviewAgent("grok-native")).toBe("grok");
+  expect(getReviewAgent("claude")).toBe("claude");
+  expect(getReviewAgent("codex")).toBe("codex");
+  expect(getReviewAgent("opencode")).toBe("opencode");
+  expect(getReviewAgent("cursor")).toBe("cursor");
+  expect(getReviewAgent("grok")).toBe("grok");
   expect(getReviewAgent("unsupported" as ReviewTabType)).toBe("claude");
 });

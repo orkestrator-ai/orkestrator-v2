@@ -58,7 +58,7 @@ interface UseNativeComposeBarPasteOptions {
   canAttachImage?: (attachment: PendingPastedImage) => boolean;
   /** Fired when `canAttachImage` refuses the paste, so the caller can explain. */
   onImageRejected?: () => void;
-  /** Log prefix for unexpected errors, e.g. "ClaudeComposeBar" */
+  /** Log prefix for unexpected errors, e.g. "useClaudeNativeComposer" */
   logLabel: string;
 }
 

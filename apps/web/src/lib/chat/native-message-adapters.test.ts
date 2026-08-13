@@ -27,10 +27,9 @@ describe("native message adapters", () => {
       id: "assistant-background-agent",
       role: "assistant",
       content: "",
-      timestamp: "2026-06-18T12:00:00.000Z",
+      createdAt: "2026-06-18T12:00:00.000Z",
       parts: [{
-        type: "tool-invocation",
-        content: "Agent",
+        type: "tool-invocation", content: "Agent",
         toolName: "Agent",
         toolUseId: "agent-launch",
         toolState: "success",
@@ -74,10 +73,9 @@ describe("native message adapters", () => {
         id: `assistant-${status}`,
         role: "assistant",
         content: "",
-        timestamp: "2026-06-18T12:00:00.000Z",
+        createdAt: "2026-06-18T12:00:00.000Z",
         parts: [{
-          type: "tool-invocation",
-          content: "Agent",
+          type: "tool-invocation", content: "Agent",
           toolName: "Agent",
           toolUseId: "agent-launch",
           toolState: "success",
@@ -102,12 +100,12 @@ describe("native message adapters", () => {
       content: "Agent",
     };
     const missingToolUseId: ClaudeMessagePart = {
-      type: "tool-invocation",
+      type: "tool-invocation", content: "",
       toolName: "Agent",
       toolState: "success",
     };
     const nonAgentTool: ClaudeMessagePart = {
-      type: "tool-invocation",
+      type: "tool-invocation", content: "",
       toolName: "Read",
       toolUseId: "read-tool",
       toolState: "success",
@@ -116,7 +114,7 @@ describe("native message adapters", () => {
       id: "assistant-guards",
       role: "assistant",
       content: "",
-      timestamp: "2026-06-18T12:00:00.000Z",
+      createdAt: "2026-06-18T12:00:00.000Z",
       parts: [nonToolPart, missingToolUseId, nonAgentTool],
     }];
 
@@ -140,7 +138,7 @@ describe("native message adapters", () => {
 
   test("preserves message and part identity when the agent state is already current", () => {
     const part: ClaudeMessagePart = {
-      type: "tool-invocation",
+      type: "tool-invocation", content: "",
       toolName: "Task",
       toolUseId: "task-launch",
       toolState: "success",
@@ -150,7 +148,7 @@ describe("native message adapters", () => {
       id: "assistant-current-state",
       role: "assistant",
       content: "",
-      timestamp: "2026-06-18T12:00:00.000Z",
+      createdAt: "2026-06-18T12:00:00.000Z",
       parts: [part],
     };
     const messages = [message];
@@ -173,9 +171,9 @@ describe("native message adapters", () => {
       id: "assistant-unmatched-agent",
       role: "assistant",
       content: "",
-      timestamp: "2026-06-18T12:00:00.000Z",
+      createdAt: "2026-06-18T12:00:00.000Z",
       parts: [{
-        type: "tool-invocation",
+        type: "tool-invocation", content: "",
         toolName: "Task",
         toolUseId: "different-tool-use",
         toolState: "success",
@@ -199,9 +197,9 @@ describe("native message adapters", () => {
         id: "assistant-launch",
         role: "assistant",
         content: "",
-        timestamp: "2026-06-18T12:00:00.000Z",
+        createdAt: "2026-06-18T12:00:00.000Z",
         parts: [{
-          type: "tool-invocation",
+          type: "tool-invocation", content: "",
           toolName: "Bash",
           toolUseId: "bash-launch",
           toolState: "success",
@@ -218,9 +216,9 @@ describe("native message adapters", () => {
         id: "assistant-output",
         role: "assistant",
         content: "",
-        timestamp: "2026-06-18T12:01:00.000Z",
+        createdAt: "2026-06-18T12:01:00.000Z",
         parts: [{
-          type: "tool-invocation",
+          type: "tool-invocation", content: "",
           toolName: "TaskOutput",
           toolState: "success",
           toolArgs: { task_id: "bg-wait" },
@@ -230,9 +228,9 @@ describe("native message adapters", () => {
         id: "assistant-stop",
         role: "assistant",
         content: "",
-        timestamp: "2026-06-18T12:02:00.000Z",
+        createdAt: "2026-06-18T12:02:00.000Z",
         parts: [{
-          type: "tool-invocation",
+          type: "tool-invocation", content: "",
           toolName: "TaskStop",
           toolState: "success",
           toolArgs: { task_id: "bg-wait" },
@@ -258,9 +256,9 @@ describe("native message adapters", () => {
         id: "assistant-launch",
         role: "assistant",
         content: "",
-        timestamp: "2026-06-18T12:00:00.000Z",
+        createdAt: "2026-06-18T12:00:00.000Z",
         parts: [{
-          type: "tool-invocation",
+          type: "tool-invocation", content: "",
           toolName: "Bash",
           toolUseId: "bash-launch",
           toolState: "success",
@@ -275,9 +273,9 @@ describe("native message adapters", () => {
         id: "assistant-stop",
         role: "assistant",
         content: "",
-        timestamp: "2026-06-18T12:01:00.000Z",
+        createdAt: "2026-06-18T12:01:00.000Z",
         parts: [{
-          type: "tool-invocation",
+          type: "tool-invocation", content: "",
           toolName: "TaskStop",
           toolState: "success",
           toolArgs: { task_id: "bg-suite" },
@@ -334,9 +332,9 @@ describe("native message adapters", () => {
           id: "assistant-launch",
           role: "assistant",
           content: "",
-          timestamp: "2026-06-18T12:00:00.000Z",
+          createdAt: "2026-06-18T12:00:00.000Z",
           parts: [{
-            type: "tool-invocation",
+            type: "tool-invocation", content: "",
             toolName: "Bash",
             toolState: "success",
             toolArgs: {
@@ -351,9 +349,9 @@ describe("native message adapters", () => {
           id: "assistant-stop",
           role: "assistant",
           content: "",
-          timestamp: "2026-06-18T12:02:00.000Z",
+          createdAt: "2026-06-18T12:02:00.000Z",
           parts: [{
-            type: "tool-invocation",
+            type: "tool-invocation", content: "",
             toolName: "TaskStop",
             toolState: "success",
             toolArgs: { task_id: "bg-wait" },
@@ -380,9 +378,9 @@ describe("native message adapters", () => {
         id: "assistant-launch",
         role: "assistant",
         content: "",
-        timestamp: "2026-06-18T12:00:00.000Z",
+        createdAt: "2026-06-18T12:00:00.000Z",
         parts: [{
-          type: "tool-invocation",
+          type: "tool-invocation", content: "",
           toolName: "Bash",
           toolState: "success",
           toolArgs: {
@@ -410,9 +408,9 @@ describe("native message adapters", () => {
         id: "assistant-launch",
         role: "assistant",
         content: "",
-        timestamp: "2026-06-18T12:00:00.000Z",
+        createdAt: "2026-06-18T12:00:00.000Z",
         parts: [{
-          type: "tool-invocation",
+          type: "tool-invocation", content: "",
           toolName: "Bash",
           toolUseId: "bash-launch",
           toolState: "success",
@@ -427,9 +425,9 @@ describe("native message adapters", () => {
         id: "assistant-stop",
         role: "assistant",
         content: "",
-        timestamp: "2026-06-18T12:01:00.000Z",
+        createdAt: "2026-06-18T12:01:00.000Z",
         parts: [{
-          type: "tool-invocation",
+          type: "tool-invocation", content: "",
           toolName: "TaskStop",
           toolState: "success",
           toolArgs: { task_id: "bg-suite" },
@@ -462,10 +460,10 @@ describe("native message adapters", () => {
       id: "assistant-plain",
       role: "assistant",
       content: "",
-      timestamp: "2026-06-18T12:00:00.000Z",
+      createdAt: "2026-06-18T12:00:00.000Z",
       parts: [
         {
-          type: "tool-invocation",
+          type: "tool-invocation", content: "",
           toolName: "Bash",
           toolUseId: "bash-foreground",
           toolState: "success",
@@ -474,7 +472,7 @@ describe("native message adapters", () => {
         {
           // A launch whose id was never persisted stays undecorated rather
           // than inventing an identity from the description.
-          type: "tool-invocation",
+          type: "tool-invocation", content: "",
           toolName: "Bash",
           toolState: "success",
           toolArgs: {
@@ -486,7 +484,7 @@ describe("native message adapters", () => {
         },
         {
           // A stop for a task with no launch and no snapshot behind it.
-          type: "tool-invocation",
+          type: "tool-invocation", content: "",
           toolName: "TaskStop",
           toolState: "success",
           toolArgs: { task_id: "bg-unknown" },
@@ -503,9 +501,9 @@ describe("native message adapters", () => {
         id: "assistant-launch",
         role: "assistant",
         content: "",
-        timestamp: "2026-06-18T12:00:00.000Z",
+        createdAt: "2026-06-18T12:00:00.000Z",
         parts: [{
-          type: "tool-invocation",
+          type: "tool-invocation", content: "",
           toolName: "Bash",
           toolState: "success",
           toolArgs: {
@@ -520,9 +518,9 @@ describe("native message adapters", () => {
         id: "assistant-stop",
         role: "assistant",
         content: "",
-        timestamp: "2026-06-18T12:01:00.000Z",
+        createdAt: "2026-06-18T12:01:00.000Z",
         parts: [{
-          type: "tool-invocation",
+          type: "tool-invocation", content: "",
           toolName: "TaskStop",
           toolState: "success",
           toolArgs: { task_id: "bg-other" },
@@ -554,9 +552,9 @@ describe("native message adapters", () => {
         id: "assistant-action",
         role: "assistant",
         content: "",
-        timestamp: "2026-06-18T12:01:00.000Z",
+        createdAt: "2026-06-18T12:01:00.000Z",
         parts: [{
-          type: "tool-invocation",
+          type: "tool-invocation", content: "",
           toolName,
           toolState: "success",
           toolArgs: { [idKey]: "bg-suite" },
@@ -584,9 +582,9 @@ describe("native message adapters", () => {
       id: "assistant-agent-launch",
       role: "assistant",
       content: "",
-      timestamp: "2026-06-18T12:00:00.000Z",
+      createdAt: "2026-06-18T12:00:00.000Z",
       parts: [{
-        type: "tool-invocation",
+        type: "tool-invocation", content: "",
         toolName: "Agent",
         toolUseId: "agent-launch",
         toolState: "success",
@@ -629,23 +627,23 @@ describe("native message adapters", () => {
       id: "claude-model",
       role: "assistant",
       content: "FirstSecond",
-      timestamp: "2026-06-18T12:00:00.000Z",
+      createdAt: "2026-06-18T12:00:00.000Z",
       modelId: "claude-opus-5",
       parts: [
         {
           type: "text",
           content: "First",
-          timestamp: "2026-06-18T12:00:00.000Z",
+          createdAt: "2026-06-18T12:00:00.000Z",
         },
         {
           type: "thinking",
           content: "Inspecting",
-          timestamp: "2026-06-18T12:01:00.000Z",
+          createdAt: "2026-06-18T12:01:00.000Z",
         },
         {
           type: "text",
           content: "Second",
-          timestamp: "2026-06-18T12:03:00.000Z",
+          createdAt: "2026-06-18T12:03:00.000Z",
         },
       ],
     });
@@ -749,7 +747,7 @@ describe("native message adapters", () => {
       id: "claude-empty-thinking",
       role: "assistant",
       content: "",
-      timestamp: "2026-06-18T12:00:00.000Z",
+      createdAt: "2026-06-18T12:00:00.000Z",
       parts: [
         { type: "thinking", content: "  " },
         { type: "text", content: "Done" },
@@ -799,13 +797,13 @@ describe("native message adapters", () => {
       id: "claude-user",
       role: "user",
       content: `Inspect this\n<attached-files>\n<attachment type="image" path="/workspace/screen.png" filename="screen.png" />\n</attached-files>`,
-      timestamp: "2026-06-18T12:01:00.000Z",
+      createdAt: "2026-06-18T12:01:00.000Z",
       parts: [{ type: "text", content: "ignored raw xml" }],
     };
 
     const normalized = normalizeClaudeMessage(message);
 
-    expect(normalized.createdAt).toBe(message.timestamp);
+    expect(normalized.createdAt).toBe(message.createdAt);
     expect(normalized.content).toBe("Inspect this");
     expect(normalized.parts).toEqual([
       { type: "text", content: "Inspect this" },
@@ -825,7 +823,7 @@ describe("native message adapters", () => {
       normalizeClaudePart({
         type: "text",
         content: "Answer",
-        timestamp: textTimestamp,
+        createdAt: textTimestamp,
       }),
     ).toMatchObject({
       type: "text",
@@ -836,7 +834,7 @@ describe("native message adapters", () => {
       normalizeClaudePart({
         type: "thinking",
         content: "Reasoning",
-        timestamp: thinkingTimestamp,
+        createdAt: thinkingTimestamp,
       }),
     ).toMatchObject({
       type: "thinking",
@@ -850,7 +848,7 @@ describe("native message adapters", () => {
       id: "claude-assistant",
       role: "assistant",
       content: "",
-      timestamp: "2026-06-18T12:02:00.000Z",
+      createdAt: "2026-06-18T12:02:00.000Z",
       parts: [
         {
           type: "tool-invocation",
@@ -882,7 +880,7 @@ describe("native message adapters", () => {
       id: "claude-agent-assistant",
       role: "assistant",
       content: "",
-      timestamp: "2026-06-18T12:02:30.000Z",
+      createdAt: "2026-06-18T12:02:30.000Z",
       parts: [
         {
           type: "tool-invocation",
@@ -920,7 +918,7 @@ describe("native message adapters", () => {
       id: "claude-agent-positional-child",
       role: "assistant",
       content: "",
-      timestamp: "2026-06-18T12:02:30.000Z",
+      createdAt: "2026-06-18T12:02:30.000Z",
       parts: [
         {
           type: "tool-invocation",
@@ -957,7 +955,7 @@ describe("native message adapters", () => {
       id: "claude-standalone-tool-result",
       role: "assistant",
       content: "",
-      timestamp: "2026-06-18T12:02:30.000Z",
+      createdAt: "2026-06-18T12:02:30.000Z",
       parts: [{
         type: "tool-result",
         toolName: "Read",
@@ -974,7 +972,7 @@ describe("native message adapters", () => {
       id: "claude-agent-activity",
       role: "assistant",
       content: "Subagent answer",
-      timestamp: "2026-07-28T08:00:00.000Z",
+      createdAt: "2026-07-28T08:00:00.000Z",
       parts: [
         {
           type: "tool-invocation",
@@ -1025,8 +1023,7 @@ describe("native message adapters", () => {
           parentTaskUseId: "agent-activity-1",
         },
         {
-          type: "tool-invocation",
-          content: "Edit",
+          type: "tool-invocation", content: "Edit",
           parentTaskUseId: "agent-activity-1",
         },
       ]);
@@ -1038,7 +1035,7 @@ describe("native message adapters", () => {
       id: "claude-agent-usage",
       role: "assistant",
       content: "",
-      timestamp: "2026-06-18T12:02:30.000Z",
+      createdAt: "2026-06-18T12:02:30.000Z",
       parts: [
         {
           type: "tool-invocation",
@@ -1069,7 +1066,7 @@ describe("native message adapters", () => {
       id: "claude-agent-upper",
       role: "assistant",
       content: "",
-      timestamp: "2026-06-18T12:02:30.000Z",
+      createdAt: "2026-06-18T12:02:30.000Z",
       parts: [
         {
           type: "tool-invocation",
@@ -1100,7 +1097,7 @@ describe("native message adapters", () => {
       id: "claude-agentic",
       role: "assistant",
       content: "",
-      timestamp: "2026-06-18T12:02:30.000Z",
+      createdAt: "2026-06-18T12:02:30.000Z",
       parts: [
         {
           type: "tool-invocation",
@@ -1251,19 +1248,17 @@ describe("native message adapters", () => {
 
   test("normalizes every supported Claude part and rejects unknown variants", () => {
     const supported: ClaudeMessagePart[] = [
-      { type: "text", content: undefined, _messageUuid: "text-id" },
-      { type: "thinking", content: "Reason", _messageUuid: "thinking-id" },
+      { type: "text", content: "", sourcePartId: "text-id" },
+      { type: "thinking", content: "Reason", sourcePartId: "thinking-id" },
       { type: "file", content: "/workspace/a.txt" },
       {
-        type: "tool-invocation",
-        content: "Read",
+        type: "tool-invocation", content: "Read",
         toolName: "Read",
         toolUseId: "tool-1",
         toolState: "pending",
       },
       {
-        type: "tool-result",
-        content: "contents",
+        type: "tool-result", content: "contents",
         toolName: "Read",
         toolState: "success",
         toolOutput: "contents",
@@ -1275,14 +1270,13 @@ describe("native message adapters", () => {
       { type: "thinking", content: "Reason", sourcePartId: "thinking-id" },
       { type: "file", content: "/workspace/a.txt" },
       expect.objectContaining({
-        type: "tool-invocation",
+        type: "tool-invocation", content: "Read",
         toolName: "Read",
         toolUseId: "tool-1",
         toolState: "pending",
       }),
       expect.objectContaining({
-        type: "tool-result",
-        content: "contents",
+        type: "tool-result", content: "contents",
         toolOutput: "contents",
       }),
     ]);
@@ -1363,7 +1357,7 @@ describe("native message adapters", () => {
     // The whole task-list feature is invisible if this one field is dropped in
     // translation, and nothing else in the pipeline would fail.
     const part: ClaudeMessagePart = {
-      type: "tool-invocation",
+      type: "tool-invocation", content: "",
       toolName: "TaskUpdate",
       toolState: "success",
       toolArgs: { taskId: "2", status: "in_progress" },
@@ -1386,7 +1380,7 @@ describe("native message adapters", () => {
 
   test("leaves the task snapshot absent when the backend supplied none", () => {
     const normalized = normalizeClaudePart({
-      type: "tool-invocation",
+      type: "tool-invocation", content: "",
       toolName: "TaskCreate",
       toolState: "success",
       toolArgs: { subject: "No snapshot" },
@@ -1401,14 +1395,14 @@ describe("native message adapters", () => {
         id: "user-1",
         role: "user",
         content: "Question",
-        timestamp: "2026-06-18T12:00:00.000Z",
+        createdAt: "2026-06-18T12:00:00.000Z",
         parts: [],
       },
       {
         id: "assistant-1",
         role: "assistant",
         content: "Answer",
-        timestamp: "2026-06-18T12:00:01.000Z",
+        createdAt: "2026-06-18T12:00:01.000Z",
         parts: [{ type: "text", content: "Answer" }],
       },
     ];
@@ -1425,32 +1419,30 @@ describe("native message adapters", () => {
         id: "assistant-fast",
         role: "assistant",
         content: "FirstSecondThird",
-        timestamp: "2026-06-18T12:00:00.000Z",
+        createdAt: "2026-06-18T12:00:00.000Z",
         parts: [
           {
             type: "text",
             content: "First",
-            timestamp: "2026-06-18T12:00:00.000Z",
+            createdAt: "2026-06-18T12:00:00.000Z",
           },
           {
-            type: "tool-invocation",
-            content: "Read",
+            type: "tool-invocation", content: "Read",
             toolName: "Read",
           },
           {
             type: "text",
             content: "Second",
-            timestamp: "2026-06-18T12:01:00.000Z",
+            createdAt: "2026-06-18T12:01:00.000Z",
           },
           {
-            type: "tool-invocation",
-            content: "Bash",
+            type: "tool-invocation", content: "Bash",
             toolName: "Bash",
           },
           {
             type: "text",
             content: "Third",
-            timestamp: "2026-06-18T12:02:00.000Z",
+            createdAt: "2026-06-18T12:02:00.000Z",
           },
         ],
       },
@@ -1475,32 +1467,30 @@ describe("native message adapters", () => {
         id: "assistant-slow",
         role: "assistant",
         content: "FirstSecondThird",
-        timestamp: "2026-06-18T12:00:00.000Z",
+        createdAt: "2026-06-18T12:00:00.000Z",
         parts: [
           {
             type: "text",
             content: "First",
-            timestamp: "2026-06-18T12:00:00.000Z",
+            createdAt: "2026-06-18T12:00:00.000Z",
           },
           {
-            type: "tool-invocation",
-            content: "Read",
+            type: "tool-invocation", content: "Read",
             toolName: "Read",
           },
           {
             type: "text",
             content: "Second",
-            timestamp: "2026-06-18T12:01:30.000Z",
+            createdAt: "2026-06-18T12:01:30.000Z",
           },
           {
-            type: "tool-invocation",
-            content: "Bash",
+            type: "tool-invocation", content: "Bash",
             toolName: "Bash",
           },
           {
             type: "text",
             content: "Third",
-            timestamp: "2026-06-18T12:02:01.000Z",
+            createdAt: "2026-06-18T12:02:01.000Z",
           },
         ],
       },
@@ -1538,12 +1528,12 @@ describe("native message adapters", () => {
       id: "assistant-stable-timestamp",
       role: "assistant",
       content: "First",
-      timestamp: messageTimestamp,
+      createdAt: messageTimestamp,
       parts: [
         {
           type: "text",
           content: "First",
-          timestamp: firstTextTimestamp,
+          createdAt: firstTextTimestamp,
         },
       ],
     };
@@ -1556,14 +1546,13 @@ describe("native message adapters", () => {
         parts: [
           ...baseMessage.parts,
           {
-            type: "tool-invocation",
-            content: "Read",
+            type: "tool-invocation", content: "Read",
             toolName: "Read",
           },
           {
             type: "text",
             content: "Second",
-            timestamp: delayedTextTimestamp,
+            createdAt: delayedTextTimestamp,
           },
         ],
       },
@@ -1582,22 +1571,22 @@ describe("native message adapters", () => {
         id: "assistant-reasoning-boundary",
         role: "assistant",
         content: "FirstSecond",
-        timestamp: "2026-06-18T12:00:00.000Z",
+        createdAt: "2026-06-18T12:00:00.000Z",
         parts: [
           {
             type: "text",
             content: "First",
-            timestamp: "2026-06-18T12:00:00.000Z",
+            createdAt: "2026-06-18T12:00:00.000Z",
           },
           {
             type: "thinking",
             content: "I should inspect another path.",
-            timestamp: "2026-06-18T12:01:00.000Z",
+            createdAt: "2026-06-18T12:01:00.000Z",
           },
           {
             type: "text",
             content: "Second",
-            timestamp: "2026-06-18T12:02:01.000Z",
+            createdAt: "2026-06-18T12:02:01.000Z",
           },
         ],
       },
@@ -1654,22 +1643,21 @@ describe("native message adapters", () => {
         id: "assistant-unusable-timestamp",
         role: "assistant",
         content: "FirstSecond",
-        timestamp: "2026-06-18T12:00:00.000Z",
+        createdAt: "2026-06-18T12:00:00.000Z",
         parts: [
           {
             type: "text",
             content: "First",
-            timestamp: firstTimestamp,
+            createdAt: firstTimestamp,
           },
           {
-            type: "tool-invocation",
-            content: "Read",
+            type: "tool-invocation", content: "Read",
             toolName: "Read",
           },
           {
             type: "text",
             content: "Second",
-            timestamp: secondTimestamp,
+            createdAt: secondTimestamp,
           },
         ],
       },
@@ -1685,32 +1673,30 @@ describe("native message adapters", () => {
         id: "assistant-three-rows",
         role: "assistant",
         content: "FirstSecondThird",
-        timestamp: "2026-06-18T12:00:00.000Z",
+        createdAt: "2026-06-18T12:00:00.000Z",
         parts: [
           {
             type: "text",
             content: "First",
-            timestamp: "2026-06-18T12:00:00.000Z",
+            createdAt: "2026-06-18T12:00:00.000Z",
           },
           {
-            type: "tool-invocation",
-            content: "Read",
+            type: "tool-invocation", content: "Read",
             toolName: "Read",
           },
           {
             type: "text",
             content: "Second",
-            timestamp: "2026-06-18T12:02:01.000Z",
+            createdAt: "2026-06-18T12:02:01.000Z",
           },
           {
-            type: "tool-invocation",
-            content: "Bash",
+            type: "tool-invocation", content: "Bash",
             toolName: "Bash",
           },
           {
             type: "text",
             content: "Third",
-            timestamp: "2026-06-18T12:04:02.000Z",
+            createdAt: "2026-06-18T12:04:02.000Z",
           },
         ],
       },
@@ -1772,17 +1758,17 @@ describe("native message adapters", () => {
         id: "assistant-adjacent",
         role: "assistant",
         content: "FirstSecond",
-        timestamp: "2026-06-18T12:00:00.000Z",
+        createdAt: "2026-06-18T12:00:00.000Z",
         parts: [
           {
             type: "text",
             content: "First",
-            timestamp: "2026-06-18T12:00:00.000Z",
+            createdAt: "2026-06-18T12:00:00.000Z",
           },
           {
             type: "text",
             content: "Second",
-            timestamp: "2026-06-18T12:05:00.000Z",
+            createdAt: "2026-06-18T12:05:00.000Z",
           },
         ],
       },
@@ -1817,8 +1803,7 @@ describe("getClaudeSourceMessageId", () => {
           createdAt: "2026-06-18T12:00:00.000Z",
         },
         {
-          type: "tool-invocation",
-          content: "Bash",
+          type: "tool-invocation", content: "Bash",
           createdAt: "2026-06-18T12:01:00.000Z",
         },
         {
@@ -1901,9 +1886,9 @@ describe("normalization identity cache", () => {
       id: "assistant-1",
       role: "assistant",
       content: "Hello",
-      timestamp: "2026-06-18T12:00:00.000Z",
+      createdAt: "2026-06-18T12:00:00.000Z",
       parts: [
-        { type: "text", content: "Hello", timestamp: "2026-06-18T12:00:00.000Z" },
+        { type: "text", content: "Hello", createdAt: "2026-06-18T12:00:00.000Z" },
       ],
     };
 

@@ -19,13 +19,13 @@ import { dispatchResourceChange } from "@/lib/resource-sync";
 // would leak these stubs into other test files (notably OpenCodeComposeBar.test.tsx
 // and slash-command-{directory,registry}.test.ts) and cause them to receive
 // stub modules instead of the real ones.
-import * as realOpenCodeComposeBar from "./OpenCodeComposeBar";
+import * as realOpenCodeNativeComposer from "./useOpenCodeNativeComposer";
 import * as realOpenCodePermissionCard from "./OpenCodePermissionCard";
 import * as realOpenCodeQuestionCard from "./OpenCodeQuestionCard";
 import * as realOpenCodeResumeSessionDialog from "./OpenCodeResumeSessionDialog";
 import * as realSlashCommandDirectory from "./slash-command-directory";
 import * as realSlashCommandRegistry from "./slash-command-registry";
-const realOpenCodeComposeBarSnapshot = { ...realOpenCodeComposeBar };
+const realOpenCodeNativeComposerSnapshot = { ...realOpenCodeNativeComposer };
 const realOpenCodePermissionCardSnapshot = { ...realOpenCodePermissionCard };
 const realOpenCodeQuestionCardSnapshot = { ...realOpenCodeQuestionCard };
 const realOpenCodeResumeSessionDialogSnapshot = { ...realOpenCodeResumeSessionDialog };
@@ -294,7 +294,7 @@ const openCodeClientModuleFactory = () => ({
   ...realOpenCodeClientSnapshot,
   checkClientHealth: mockCheckClientHealth,
   createClient: mockCreateClient,
-  getModelsWithDefaults: mockGetModelsWithDefaults,
+  getSelectableModelsWithDefaults: mockGetModelsWithDefaults,
   createSession: mockCreateSession,
   getSessionMessages: mockGetSessionMessages,
   getSessionStatus: mockGetSessionStatus,
@@ -387,8 +387,8 @@ let composeAttachments: Array<{
 }> = [];
 let lastComposeSendError: unknown;
 
-mock.module("./OpenCodeComposeBar", () => ({
-  OpenCodeComposeBar: ({
+mock.module("./useOpenCodeNativeComposer", () => ({
+  useOpenCodeNativeComposer: ({
     onSend,
     onStop,
     onRefreshModels,
@@ -651,8 +651,8 @@ function seedPaneLayout(
             tabs: [
               {
                 id: TAB_ID,
-                type: "opencode-native",
-                openCodeNativeData: createData({ sessionId }),
+                type: "agent-native",
+                nativeAgentData: createData({ sessionId }),
                 initialAgentModel: launchOptions?.initialAgentModel,
                 initialReasoningEffort: launchOptions?.initialReasoningEffort,
                 agentHandoffId,
@@ -674,7 +674,7 @@ function PaneBackedOpenCodeChatTab() {
   const data = usePaneLayoutStore((state) => {
     const root = state.environments.get(ENVIRONMENT_ID)?.root;
     if (!root || root.kind !== "leaf") return undefined;
-    return root.tabs.find((tab) => tab.id === TAB_ID)?.openCodeNativeData;
+    return root.tabs.find((tab) => tab.id === TAB_ID)?.nativeAgentData;
   });
 
   if (!data) return null;
@@ -817,7 +817,7 @@ function nativeMessage(id: string, content = id): NativeMessage {
 // test files see the real modules.
 afterAll(() => {
   mock.module("@/lib/opencode-client", () => realOpenCodeClientSnapshot);
-  mock.module("./OpenCodeComposeBar", () => realOpenCodeComposeBarSnapshot);
+  mock.module("./useOpenCodeNativeComposer", () => realOpenCodeNativeComposerSnapshot);
   mock.module("./OpenCodePermissionCard", () => realOpenCodePermissionCardSnapshot);
   mock.module("./OpenCodeQuestionCard", () => realOpenCodeQuestionCardSnapshot);
   mock.module("./OpenCodeResumeSessionDialog", () => realOpenCodeResumeSessionDialogSnapshot);
@@ -1688,8 +1688,8 @@ describe("OpenCodeChatTab", () => {
               tabs: [
                 {
                   id: startupTabId,
-                  type: "opencode-native",
-                  openCodeNativeData: createData({
+                  type: "agent-native",
+                  nativeAgentData: createData({
                     sessionId: "startup-session",
                   }),
                   initialPrompt: "Renderer copy that the backend already owns",
@@ -2719,7 +2719,7 @@ describe("OpenCodeChatTab", () => {
     expect(restoredRoot?.kind).toBe("leaf");
     if (!restoredRoot || restoredRoot.kind !== "leaf") throw new Error("Expected pane leaf");
     const restoredTab = restoredRoot.tabs.find((tab) => tab.id === TAB_ID);
-    expect(restoredTab?.openCodeNativeData?.sessionId).toBe(restoredSessionId);
+    expect(restoredTab?.nativeAgentData?.sessionId).toBe(restoredSessionId);
   });
 
   test("adopts a late projected session with its busy status and pending requests", async () => {
@@ -2833,7 +2833,7 @@ describe("OpenCodeChatTab", () => {
     );
     expect(
       usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]
-        ?.openCodeNativeData?.sessionId,
+        ?.nativeAgentData?.sessionId,
     ).toBe(projectedSessionId);
     expect(mockAdoptNativeAgentSession).toHaveBeenCalledTimes(1);
     expect(mockCreateSession).not.toHaveBeenCalled();
@@ -2960,7 +2960,7 @@ describe("OpenCodeChatTab", () => {
     await waitFor(() => {
       expect(mockCreateSession).toHaveBeenCalledWith(MOCK_CLIENT);
       expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe("session-1");
-      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.openCodeNativeData?.sessionId)
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.nativeAgentData?.sessionId)
         .toBe("session-1");
     });
   });
@@ -2982,7 +2982,7 @@ describe("OpenCodeChatTab", () => {
       expect(mockCreateSession).toHaveBeenCalledWith(MOCK_CLIENT);
       expect(
         usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]
-          ?.openCodeNativeData?.sessionId,
+          ?.nativeAgentData?.sessionId,
       ).toBe(missingSessionId);
     });
     expect(useOpenCodeStore.getState().sessions.has(SESSION_KEY)).toBe(false);
@@ -3000,7 +3000,7 @@ describe("OpenCodeChatTab", () => {
       );
       expect(
         usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]
-          ?.openCodeNativeData?.sessionId,
+          ?.nativeAgentData?.sessionId,
       ).toBe("replacement-after-cleanup");
     });
     expect(mockCreateSession).toHaveBeenCalledTimes(1);
@@ -3033,7 +3033,7 @@ describe("OpenCodeChatTab", () => {
     ).toBeTruthy();
     expect(
       usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]
-        ?.openCodeNativeData?.sessionId,
+        ?.nativeAgentData?.sessionId,
     ).toBe(projectedSessionId);
     expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(
       projectedSessionId,
@@ -3146,7 +3146,7 @@ describe("OpenCodeChatTab", () => {
 
     await waitFor(() => {
       expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe("session-1");
-      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.openCodeNativeData?.sessionId)
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.nativeAgentData?.sessionId)
         .toBe("session-1");
     });
     expect(mockCreateSession).toHaveBeenCalledTimes(1);
@@ -3197,7 +3197,7 @@ describe("OpenCodeChatTab", () => {
         isLoading: true,
         loadingStartedAt: Date.parse(turnStartedAt),
       });
-      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.openCodeNativeData?.sessionId)
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.nativeAgentData?.sessionId)
         .toBe("resumed-opencode");
       expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]).toMatchObject({
         agentHandoffId: undefined,
@@ -3282,7 +3282,7 @@ describe("OpenCodeChatTab", () => {
         messages: [],
       });
       expect(
-        usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.openCodeNativeData?.sessionId,
+        usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.nativeAgentData?.sessionId,
       ).toBe("session-1");
       expect(screen.getByTestId("opencode-resume-choice")).toBeTruthy();
     } finally {
@@ -3314,7 +3314,7 @@ describe("OpenCodeChatTab", () => {
         .toBe("session-1");
       expect(
         usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]
-          ?.openCodeNativeData?.sessionId,
+          ?.nativeAgentData?.sessionId,
       ).toBe("session-1");
       expect(screen.getByTestId("opencode-resume-choice")).toBeTruthy();
     } finally {
@@ -4800,9 +4800,9 @@ describe("OpenCodeChatTab", () => {
         )?.tabs ?? [];
         expect(tabs).toHaveLength(2);
         expect(tabs[1]).toMatchObject({
-          type: "opencode-native",
+          type: "agent-native",
           displayTitle: "OpenCode fork",
-          openCodeNativeData: {
+          nativeAgentData: {
             environmentId: ENVIRONMENT_ID,
             sessionId: "fork-session",
           },
@@ -6743,8 +6743,8 @@ describe("OpenCodeChatTab", () => {
         "default",
         {
           id: secondTabId,
-          type: "opencode-native",
-          openCodeNativeData: createData({ sessionId: "session-2" }),
+          type: "agent-native",
+          nativeAgentData: createData({ sessionId: "session-2" }),
         },
         ENVIRONMENT_ID,
       );
@@ -7846,7 +7846,7 @@ describe("OpenCodeChatTab", () => {
       });
     });
 
-    test("normalizes and deduplicates string and object model preferences", async () => {
+    test("normalizes and deduplicates recent and variant model preferences", async () => {
       useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, "removed/model");
       const refreshedModels = [
         {
@@ -7892,9 +7892,9 @@ describe("OpenCodeChatTab", () => {
         expect(useOpenCodeStore.getState().getSelectedVariant(SESSION_KEY)).toBe(
           "high",
         );
-        expect(screen.getByTestId("opencode-favorite-models").textContent).toBe(
-          "openai/gpt-5,anthropic/claude-sonnet",
-        );
+        // OpenCode's own favourites are deliberately ignored. Favourites are
+        // now global Orkestrator config consumed by AgentModelPicker.
+        expect(screen.getByTestId("opencode-favorite-models").textContent).toBe("");
       });
     });
 

@@ -41,7 +41,8 @@ import {
   X,
 } from "lucide-react";
 import { ClaudeIcon, CodexIcon, CursorAgentIcon, GrokBuildIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
-import { OpenCodeModelSelect } from "@/components/opencode/OpenCodeModelSelect";
+import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
+import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import { cn } from "@/lib/utils";
 import { readImage } from "@/lib/native/clipboard";
 import {
@@ -74,14 +75,8 @@ import { buildReviewModelCatalog } from "@/lib/review-launch-options";
 import { modelsForAgent } from "@/lib/agent-launch";
 import {
   getCachedOpenCodeModelCatalog,
-  getOpencodeModelPreferences,
   type CachedOpenCodeModel,
-  type OpenCodeModelPreferences,
 } from "@/lib/backend";
-import {
-  EMPTY_OPENCODE_MODEL_PREFERENCES,
-  openCodeModelRefToId,
-} from "@/lib/opencode-model-preferences";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { firstEnabledAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
@@ -240,8 +235,7 @@ export function CreateEnvironmentDialog({
   const [cachedOpenCodeModels, setCachedOpenCodeModels] = useState<
     CachedOpenCodeModel[]
   >([]);
-  const [openCodeModelPreferences, setOpenCodeModelPreferences] =
-    useState<OpenCodeModelPreferences>(EMPTY_OPENCODE_MODEL_PREFERENCES);
+  const { favorites: favoriteModels, toggleFavorite: toggleFavoriteModel } = useAgentModelFavorites();
   const configuredOpenCodeModel =
     (configDefaultAgent === "opencode" ? repoConfig?.defaultModel : undefined)
     ?? config.global.opencodeModel;
@@ -332,17 +326,6 @@ export function CreateEnvironmentDialog({
       openCodeModels,
     ],
   );
-  const favoriteOpenCodeModelIds = useMemo(() => {
-    const ids: string[] = [];
-    const seen = new Set<string>();
-    for (const favorite of openCodeModelPreferences.favorite) {
-      const id = openCodeModelRefToId(favorite);
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      ids.push(id);
-    }
-    return ids;
-  }, [openCodeModelPreferences.favorite]);
 
   const getInitialAgentSelection = useCallback(
     (nextAgent: AgentType) => {
@@ -437,7 +420,6 @@ export function CreateEnvironmentDialog({
   useEffect(() => {
     if (!open) {
       setCachedOpenCodeModels([]);
-      setOpenCodeModelPreferences(EMPTY_OPENCODE_MODEL_PREFERENCES);
       return;
     }
     let cancelled = false;
@@ -446,7 +428,6 @@ export function CreateEnvironmentDialog({
     // rejected, malformed, or late response must not leave another project's
     // model catalog or preferences visible in this dialog.
     setCachedOpenCodeModels([]);
-    setOpenCodeModelPreferences(EMPTY_OPENCODE_MODEL_PREFERENCES);
 
     const normalizedProjectId = projectId?.trim();
     if (normalizedProjectId) {
@@ -469,24 +450,6 @@ export function CreateEnvironmentDialog({
           );
         });
     }
-
-    void getOpencodeModelPreferences()
-      .then((preferences) => {
-        if (
-          !cancelled &&
-          preferences &&
-          Array.isArray(preferences.favorite) &&
-          Array.isArray(preferences.recent)
-        ) {
-          setOpenCodeModelPreferences(preferences);
-        }
-      })
-      .catch((error) => {
-        console.warn(
-          "[CreateEnvironmentDialog] Failed to load OpenCode model preferences:",
-          error,
-        );
-      });
 
     return () => {
       cancelled = true;
@@ -1192,13 +1155,25 @@ export function CreateEnvironmentDialog({
                   Model
                 </Label>
                 {agentType === "opencode" ? (
-                  <OpenCodeModelSelect
+                  <AgentModelPicker
                     id="agent-model"
-                    value={model}
-                    options={availableModels}
-                    favoriteModelIds={favoriteOpenCodeModelIds}
-                    onValueChange={selectModel}
+                    ariaLabel="Model"
+                    models={availableModels.map((option) => ({
+                      platform: "opencode" as const,
+                      id: option.id,
+                      label: option.name,
+                      description: option.description,
+                    }))}
+                    enabledPlatforms={["opencode"]}
+                    selectedPlatform="opencode"
+                    favorites={favoriteModels}
+                    onToggleFavorite={toggleFavoriteModel}
+                    selectedModelId={model}
+                    selectedModelLabel={availableModels.find((option) => option.id === model)?.name ?? "Select model"}
+                    onModelChange={selectModel}
+                    reasoningOptions={[]}
                     disabled={isLoading || !launchAgent}
+                    title="Agent model"
                   />
                 ) : (
                   <Select

@@ -639,7 +639,7 @@ describe("claudeStore message patching", () => {
     messageId: "assistant-1",
     partCount: 1,
     changedParts: [{ index: 0, part: { type: "text" as const, content: "streamed" } }],
-    timestamp: "2026-07-20T12:00:01.000Z",
+    createdAt: "2026-07-20T12:00:01.000Z",
     revision: 2,
     ...overrides,
   });
@@ -654,7 +654,7 @@ describe("claudeStore message patching", () => {
           role: "assistant",
           content: "",
           parts: [{ type: "text", content: "" }],
-          timestamp: "2026-07-20T12:00:00.000Z",
+          createdAt: "2026-07-20T12:00:00.000Z",
           revision: 1,
         },
       ],
@@ -756,7 +756,7 @@ describe("claudeStore message patching", () => {
       role: "assistant",
       content: "second",
       parts: [{ type: "text", content: "second" }],
-      timestamp: "2026-07-20T12:00:02.000Z",
+      createdAt: "2026-07-20T12:00:02.000Z",
     });
     const untouched = useClaudeStore.getState().sessions.get(SESSION_KEY)!.messages[1];
 
@@ -778,7 +778,7 @@ describe("claudeStore message patching", () => {
         role: "assistant",
         content: "",
         parts: [{ type: "text", content: "" }],
-        timestamp: "2026-07-20T12:00:00.000Z",
+        createdAt: "2026-07-20T12:00:00.000Z",
         revision: 1,
       },
     ]);
@@ -791,7 +791,7 @@ describe("claudeStore message patching", () => {
         role: "assistant",
         content: "caught up",
         parts: [{ type: "text", content: "caught up" }],
-        timestamp: "2026-07-20T12:00:00.000Z",
+        createdAt: "2026-07-20T12:00:00.000Z",
         revision: 3,
       },
     ]);
@@ -800,12 +800,12 @@ describe("claudeStore message patching", () => {
 });
 
 describe("claudeStore client-only message merge", () => {
-  const message = (id: string, timestamp: string): ClaudeMessage => ({
+  const message = (id: string, createdAt: string): ClaudeMessage => ({
     id,
     role: id.startsWith(ERROR_MESSAGE_PREFIX) ? "system" : "assistant",
     content: id,
     parts: [{ type: "text", content: id }],
-    timestamp,
+    createdAt,
   });
 
   const seed = (messages: ClaudeMessage[]) => {

@@ -16,7 +16,9 @@ export const PANE_LAYOUT_REVISION_CONFLICT_MARKER = "Pane layout revision confli
  * the renderer and backend from accepting different pane-layout schemas.
  */
 export const LEGACY_PANE_LAYOUT_VERSION = 1;
-export const PANE_LAYOUT_VERSION = 2;
+/** Last provider-specific native-tab schema, retained as a one-release read path. */
+export const PROVIDER_NATIVE_PANE_LAYOUT_VERSION = 2;
+export const PANE_LAYOUT_VERSION = 3;
 
 export const PANE_LAYOUT_UNSUPPORTED_VERSION_MARKER =
   "Unsupported pane layout version:";

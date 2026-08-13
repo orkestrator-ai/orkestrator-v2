@@ -42,11 +42,11 @@ const realCodexClientSnapshot = { ...realCodexClient };
 // them when this file finishes. Without this, Bun's global mock.module cache
 // would leak these stubs into other test files (notably CodexComposeBar.test.tsx)
 // and cause them to receive the stub component instead of the real one.
-import * as realCodexComposeBar from "./CodexComposeBar";
+import * as realCodexNativeComposer from "./useCodexNativeComposer";
 import * as realCodexPlanModeCard from "./CodexPlanModeCard";
 import * as realCodexResumeSessionDialog from "./CodexResumeSessionDialog";
 import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
-const realCodexComposeBarSnapshot = { ...realCodexComposeBar };
+const realCodexNativeComposerSnapshot = { ...realCodexNativeComposer };
 const realCodexPlanModeCardSnapshot = { ...realCodexPlanModeCard };
 const realCodexResumeSessionDialogSnapshot = { ...realCodexResumeSessionDialog };
 const realHooksSnapshot = { ...realHooks };
@@ -410,8 +410,8 @@ let composeAttachments: Array<{
 let lastComposeSendError: unknown;
 let beforeComposeQueue: (() => void) | undefined;
 
-mock.module("./CodexComposeBar", () => ({
-  CodexComposeBar: ({
+mock.module("./useCodexNativeComposer", () => ({
+  useCodexNativeComposer: ({
     onSend,
     onStop,
     onModeChange,
@@ -877,8 +877,8 @@ function seedPaneLayout(
             tabs: [
               {
                 id: TAB_ID,
-                type: "codex-native" as any,
-                codexNativeData: createData(),
+                type: "agent-native" as any,
+                nativeAgentData: createData(),
                 initialPrompt,
                 initialAgentModel: launchOptions?.initialAgentModel,
                 initialReasoningEffort: launchOptions?.initialReasoningEffort,
@@ -900,7 +900,7 @@ function PaneProjectedCodexChatTab({ tabId = TAB_ID }: { tabId?: string }) {
   const data = usePaneLayoutStore((state) => {
     const root = state.environments.get(ENVIRONMENT_ID)?.root;
     if (!root || root.kind !== "leaf") return undefined;
-    return root.tabs.find((tab) => tab.id === tabId)?.codexNativeData;
+    return root.tabs.find((tab) => tab.id === tabId)?.nativeAgentData;
   });
   if (!data) throw new Error("Expected projected Codex pane data");
   return <CodexChatTab tabId={tabId} data={data} isActive />;
@@ -978,7 +978,7 @@ function resetStores() {
 // Restore the real sibling modules once this file's tests finish so later
 // test files (e.g. CodexComposeBar.test.tsx) see the real components.
 afterAll(() => {
-  mock.module("./CodexComposeBar", () => realCodexComposeBarSnapshot);
+  mock.module("./useCodexNativeComposer", () => realCodexNativeComposerSnapshot);
   mock.module("./CodexPlanModeCard", () => realCodexPlanModeCardSnapshot);
   mock.module("./CodexResumeSessionDialog", () => realCodexResumeSessionDialogSnapshot);
   mock.module("@/hooks", () => realHooksSnapshot);
@@ -2084,7 +2084,7 @@ describe("CodexChatTab", () => {
     expect(restoredRoot?.kind).toBe("leaf");
     if (!restoredRoot || restoredRoot.kind !== "leaf") throw new Error("Expected pane leaf");
     const restoredTab = restoredRoot.tabs.find((tab) => tab.id === TAB_ID);
-    expect(restoredTab?.codexNativeData?.sessionId).toBe(restoredSessionId);
+    expect(restoredTab?.nativeAgentData?.sessionId).toBe(restoredSessionId);
   });
 
   test("registers a newly created warm session with backend activity", async () => {
@@ -2176,8 +2176,8 @@ describe("CodexChatTab", () => {
             ...layout.root.tabs,
             {
               id: startupTabId,
-              type: "codex-native" as const,
-              codexNativeData: createData(),
+              type: "agent-native" as const,
+              nativeAgentData: createData(),
             },
           ],
         },
@@ -2434,7 +2434,7 @@ describe("CodexChatTab", () => {
 
     await screen.findByText("status transport failed");
     expect(mockCreateSession).not.toHaveBeenCalled();
-    expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.codexNativeData?.sessionId)
+    expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.nativeAgentData?.sessionId)
       .toBe(restoredSessionId);
 
     fireEvent.click(screen.getByRole("button", { name: /Retry/i }));
@@ -2460,7 +2460,7 @@ describe("CodexChatTab", () => {
     // intermediate undefined value rerenders this wrapper and cancels the
     // initializer that owns the in-flight creation.
     expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]
-      ?.codexNativeData?.sessionId).toBe(missingSessionId);
+      ?.nativeAgentData?.sessionId).toBe(missingSessionId);
 
     await act(async () => {
       replacement.resolve({ sessionId: "replacement-codex", title: "Replacement" });
@@ -2471,7 +2471,7 @@ describe("CodexChatTab", () => {
       expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(
         "replacement-codex",
       );
-      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.codexNativeData?.sessionId)
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.nativeAgentData?.sessionId)
         .toBe("replacement-codex");
     });
     expect(mockCreateSession).toHaveBeenCalledTimes(1);
@@ -2506,7 +2506,7 @@ describe("CodexChatTab", () => {
       );
       expect(mockCreateSession).toHaveBeenCalled();
       expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]
-        ?.codexNativeData?.sessionId).toBe(SESSION_ID);
+        ?.nativeAgentData?.sessionId).toBe(SESSION_ID);
     });
   });
 
@@ -2527,7 +2527,7 @@ describe("CodexChatTab", () => {
         sessionId: "resumed-codex",
         messages: [resumedMessage],
       });
-      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.codexNativeData?.sessionId)
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.nativeAgentData?.sessionId)
         .toBe("resumed-codex");
     });
   });
@@ -9978,9 +9978,9 @@ describe("CodexChatTab", () => {
         .getState()
         .getAllTabs(ENVIRONMENT_ID)
         .find((tab) => tab.id !== TAB_ID)!;
-      expect(forked.type).toBe("codex-native");
+      expect(forked.type).toBe("agent-native");
       expect(forked.displayTitle).toBe("Codex fork");
-      expect(forked.codexNativeData?.sessionId).toBe("fork-session");
+      expect(forked.nativeAgentData?.sessionId).toBe("fork-session");
       expect(forked.initialPrompt).toBeUndefined();
       expect(
         useCodexStore.getState().getDraftText(
@@ -10016,7 +10016,7 @@ describe("CodexChatTab", () => {
         .getState()
         .getAllTabs(ENVIRONMENT_ID)
         .find((tab) => tab.id !== TAB_ID)!;
-      expect(forked.codexNativeData?.sessionId).toBe("empty-fork");
+      expect(forked.nativeAgentData?.sessionId).toBe("empty-fork");
       expect(
         useCodexStore.getState().getDraftText(
           createSessionKey(ENVIRONMENT_ID, forked.id),

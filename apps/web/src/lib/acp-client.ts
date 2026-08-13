@@ -1,14 +1,9 @@
 import { resolveGatewayLoopbackBaseUrl } from "./gateway-url";
+import type { NativeMessage } from "./chat/native-message-types";
 
 export type AcpProvider = "cursor" | "grok";
 
-export interface AcpMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  parts: Array<{ type: "text" | "reasoning"; text: string }>;
-  createdAt: string;
-}
+export type AcpMessage = NativeMessage;
 
 export interface AcpSessionSnapshot {
   id: string;

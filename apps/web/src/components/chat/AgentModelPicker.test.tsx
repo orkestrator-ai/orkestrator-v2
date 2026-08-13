@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
-import { NativeModelPicker } from "./NativeModelPicker";
+import { AgentModelPicker } from "./AgentModelPicker";
 
 function setMobileViewport(mobile: boolean) {
   Object.defineProperty(window, "matchMedia", {
@@ -20,17 +20,18 @@ function setMobileViewport(mobile: boolean) {
 }
 
 const models = Array.from({ length: 7 }, (_, index) => ({
+  platform: "codex" as const,
   id: `model-${index + 1}`,
   label: `Model ${index + 1}`,
   description: `Model ${index + 1} description`,
 }));
 
-function renderPicker(overrides: Partial<Parameters<typeof NativeModelPicker>[0]> = {}) {
+function renderPicker(overrides: Partial<Parameters<typeof AgentModelPicker>[0]> = {}) {
   const onModelChange = mock(() => {});
   const onReasoningChange = mock(() => {});
   const onFastModeChange = mock(() => {});
   const result = render(
-    <NativeModelPicker
+    <AgentModelPicker
       models={models}
       selectedModelId="model-1"
       selectedModelLabel="A model name that can become very long"
@@ -61,7 +62,7 @@ function getMobileTrigger(kind: "reasoning" | "speed") {
   return document.querySelector<HTMLElement>(`[data-native-mobile-${kind}-trigger]`)!;
 }
 
-describe("NativeModelPicker", () => {
+describe("AgentModelPicker", () => {
   afterEach(() => cleanup());
 
   test("keeps the mobile menu inset, truncates the trigger, and signals overflow", () => {
@@ -218,7 +219,8 @@ describe("NativeModelPicker", () => {
     const trigger = screen.getByTitle("Choose model, reasoning, and speed");
 
     fireEvent.pointerDown(trigger);
-    expect(document.querySelector("[data-native-model-picker] .grid-cols-3")).toBeTruthy();
+    expect(document.querySelector("[data-native-model-picker] .grid")?.className)
+      .toContain("grid-cols-[3rem_repeat(3,minmax(0,1fr))]");
     expect(document.querySelector("[data-native-model-picker]")?.className)
       .toContain("md:h-[23.5rem]");
     expect(screen.getByRole("group", { name: "Models" })).toBeTruthy();
@@ -294,7 +296,8 @@ describe("NativeModelPicker", () => {
     fireEvent.pointerDown(screen.getByTitle("Choose model and speed"));
     expect(screen.queryByRole("group", { name: "Reasoning" })).toBeNull();
     expect(screen.queryByText("No reasoning options")).toBeNull();
-    expect(document.querySelector("[data-native-model-picker] .grid-cols-2")).toBeTruthy();
+    expect(document.querySelector("[data-native-model-picker] .grid")?.className)
+      .toContain("grid-cols-[3rem_repeat(2,minmax(0,1fr))]");
   });
 
   test("omits speed controls when the integration cannot change speed", () => {
@@ -303,7 +306,8 @@ describe("NativeModelPicker", () => {
     const trigger = screen.getByTitle("Choose model and reasoning");
     fireEvent.pointerDown(trigger);
 
-    expect(document.querySelector("[data-native-model-picker] .grid-cols-2")).toBeTruthy();
+    expect(document.querySelector("[data-native-model-picker] .grid")?.className)
+      .toContain("grid-cols-[3rem_repeat(2,minmax(0,1fr))]");
     expect(screen.queryByRole("group", { name: "Speed mode" })).toBeNull();
     expect(screen.queryByText("Normal")).toBeNull();
     expect(screen.queryByText("Fast")).toBeNull();
@@ -314,19 +318,23 @@ describe("NativeModelPicker", () => {
     const onRefreshModels = mock(() => {});
     renderPicker({
       models: [
-        { id: "plain", label: "Plain" },
-        { id: "fav", label: "Favorite model", favorite: true },
-        { id: "provider/SPECIAL-ID", label: "By id" },
-        { id: "description", label: "By description", description: "Deep Reasoning" },
-        { id: "alias", label: "By alias", searchText: "Hidden Alias" },
+        { platform: "codex", id: "plain", label: "Plain" },
+        { platform: "codex", id: "fav", label: "Favorite model" },
+        { platform: "codex", id: "provider/SPECIAL-ID", label: "By id" },
+        { platform: "codex", id: "description", label: "By description", description: "Deep Reasoning" },
+        { platform: "codex", id: "alias", label: "Hidden Alias" },
       ],
+      favorites: [{ platform: "codex", modelId: "fav" }],
+      selectedPlatform: "codex",
       selectedModelId: "plain",
       onRefreshModels,
     });
     fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
 
+    fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
     const items = screen.getAllByRole("menuitemradio");
     expect(items[0]?.textContent).toContain("Favorite model");
+    fireEvent.click(screen.getByRole("button", { name: "codex models" }));
     fireEvent.change(screen.getByPlaceholderText("Search models..."), {
       target: { value: "  special-id  " },
     });
@@ -343,12 +351,113 @@ describe("NativeModelPicker", () => {
     fireEvent.change(screen.getByPlaceholderText("Search models..."), {
       target: { value: " HIDDEN ALIAS " },
     });
-    expect(screen.getByRole("menuitemradio", { name: /By alias/ })).toBeTruthy();
+    expect(screen.getByRole("menuitemradio", { name: /Hidden Alias/ })).toBeTruthy();
     expect(screen.queryByText("By description")).toBeNull();
 
     fireEvent.click(screen.getByTitle("Refresh models"));
     expect(onRefreshModels).toHaveBeenCalledTimes(1);
     expect(screen.getByPlaceholderText("Search models...")).toBeTruthy();
+  });
+
+  test("keeps identical provider model ids distinct in the cross-platform favorites view", () => {
+    setMobileViewport(false);
+    const onPlatformChange = mock(() => {});
+    const { onModelChange } = renderPicker({
+      models: [
+        { platform: "codex", id: "shared", label: "Shared Codex" },
+        { platform: "opencode", id: "shared", label: "Shared OpenCode" },
+      ],
+      enabledPlatforms: ["codex", "opencode"],
+      favorites: [
+        { platform: "codex", modelId: "shared" },
+        { platform: "opencode", modelId: "shared" },
+      ],
+      selectedPlatform: "codex",
+      selectedModelId: "shared",
+      onPlatformChange,
+    });
+
+    fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
+    fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
+    const choices = screen.getAllByRole("menuitemradio", { name: /Shared/ });
+    expect(choices).toHaveLength(2);
+    expect(choices[0]?.getAttribute("aria-checked")).toBe("true");
+    expect(choices[1]?.getAttribute("aria-checked")).toBe("false");
+
+    fireEvent.click(choices[1]!);
+    expect(onPlatformChange).toHaveBeenCalledWith("opencode");
+    expect(onModelChange).toHaveBeenCalledWith("shared");
+  });
+
+  test("keeps provider choices visible but disables non-selected providers after lock", () => {
+    setMobileViewport(false);
+    renderPicker({
+      models: [
+        { platform: "codex", id: "codex-model", label: "Codex model" },
+        { platform: "opencode", id: "opencode-model", label: "OpenCode model" },
+      ],
+      enabledPlatforms: ["codex", "opencode"],
+      selectedPlatform: "codex",
+      selectedModelId: "codex-model",
+      platformSelectionLocked: true,
+    });
+
+    openPicker();
+    expect(screen.getByRole("button", { name: "codex models" }).hasAttribute("disabled"))
+      .toBe(false);
+    expect(screen.getByRole("button", { name: "opencode models" }).hasAttribute("disabled"))
+      .toBe(true);
+    expect(screen.getByRole("menuitemradio", { name: /Codex model/ })).toBeTruthy();
+  });
+
+  test("toggles a model favorite without selecting it and adds it to the favorites view", () => {
+    setMobileViewport(false);
+    const onModelChange = mock(() => {});
+
+    function FavoritePicker() {
+      const [favorites, setFavorites] = useState<Array<{ platform: "codex"; modelId: string }>>([]);
+      return (
+        <AgentModelPicker
+          models={models}
+          selectedPlatform="codex"
+          selectedModelId="model-1"
+          selectedModelLabel="Model 1"
+          onModelChange={onModelChange}
+          reasoningOptions={[]}
+          favorites={favorites}
+          onToggleFavorite={(model) => {
+            setFavorites((current) => current.some((favorite) => favorite.modelId === model.id)
+              ? current.filter((favorite) => favorite.modelId !== model.id)
+              : [...current, { platform: "codex", modelId: model.id }]);
+          }}
+        />
+      );
+    }
+
+    render(<FavoritePicker />);
+    fireEvent.pointerDown(screen.getByTitle("Choose model"));
+    const addFavorite = screen.getByRole("button", { name: "Add Model 2 to favorites" });
+    expect(addFavorite.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.pointerDown(addFavorite);
+    fireEvent.click(addFavorite);
+
+    expect(onModelChange).not.toHaveBeenCalled();
+    const removeFavorite = screen.getByRole("button", { name: "Remove Model 2 from favorites" });
+    expect(removeFavorite.getAttribute("aria-pressed")).toBe("true");
+    expect(removeFavorite.querySelector("svg")?.getAttribute("class")).toContain("fill-amber-400");
+
+    fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
+    expect(screen.getByRole("menuitemradio", { name: /Model 2/ })).toBeTruthy();
+    expect(screen.queryByRole("menuitemradio", { name: /Model 1/ })).toBeNull();
+  });
+
+  test("does not render numeric shortcut hints for model rows", () => {
+    setMobileViewport(false);
+    renderPicker();
+    openPicker();
+
+    expect(document.querySelector("[data-native-model-list]")?.textContent).not.toContain("⌘");
   });
 
   test("uses singular overflow copy for exactly one hidden model", () => {
@@ -435,17 +544,24 @@ describe("NativeModelPicker", () => {
       .toBe(true);
   });
 
-  test("renders reasoning annotations", () => {
+  test("shows only model names, providers, and reasoning names", () => {
     setMobileViewport(false);
     renderPicker({
       reasoningOptions: [
-        { id: "low", label: "Low", annotation: "current" },
-        { id: "high", label: "High", annotation: "default" },
+        { id: "low", label: "Low", annotation: "current", description: "Quick answers" },
+        { id: "high", label: "High", annotation: "default", description: "Deep reasoning" },
       ],
     });
     fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
-    expect(screen.getByText("Low (current)")).toBeTruthy();
-    expect(screen.getByText("High (default)")).toBeTruthy();
+    expect(screen.getByText("Model 1")).toBeTruthy();
+    expect(screen.getAllByText("Codex").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Model 1 description")).toBeNull();
+    expect(screen.getByRole("menuitemradio", { name: "Low" })).toBeTruthy();
+    expect(screen.getByRole("menuitemradio", { name: "High" })).toBeTruthy();
+    expect(screen.queryByText("Low (current)")).toBeNull();
+    expect(screen.queryByText("High (default)")).toBeNull();
+    expect(screen.queryByText("Quick answers")).toBeNull();
+    expect(screen.queryByText("Deep reasoning")).toBeNull();
   });
 
   test("keeps search keystrokes in the input and clears the query after close", () => {
@@ -511,7 +627,7 @@ describe("NativeModelPicker", () => {
       return (
         <>
           <button type="button" onClick={() => setLocked(true)}>Lock settings</button>
-          <NativeModelPicker
+          <AgentModelPicker
             models={models}
             selectedModelId="model-1"
             selectedModelLabel="Model 1"

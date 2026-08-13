@@ -43,5 +43,8 @@ export function buildAgentLaunchCommand(options: {
     return args.join(" ");
   }
 
+  if (tabType === "cursor") return "cursor-agent";
+  if (tabType === "grok") return "grok";
+
   return null;
 }

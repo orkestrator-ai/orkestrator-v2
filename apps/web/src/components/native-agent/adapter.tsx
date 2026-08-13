@@ -1,14 +1,11 @@
-import { useMemo, type ComponentType } from "react";
+import type { ComponentType } from "react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type {
   NativeAgentCapabilities,
   NativeAgentTabData,
 } from "@orkestrator/protocol/native-agent";
-import type { NativeMessage } from "@/lib/chat/native-message-types";
-import { toLegacyNativeAgentData } from "@/types/paneLayout";
-import { normalizeNativeAgentMessages } from "./normalization";
 
-export interface NativeAgentTabProps {
+export interface AgentNativeTabProps {
   tabId: string;
   data: NativeAgentTabData;
   isActive: boolean;
@@ -20,6 +17,8 @@ export interface NativeAgentTabProps {
   agentHandoffId?: string;
   consumedAgentHandoffId?: string;
   refreshRequestId?: number;
+  /** Open this provider's normal resume dialog as soon as its controller mounts. */
+  initialResumeOpen?: boolean;
 }
 
 /**
@@ -30,30 +29,7 @@ export interface NativeAgentAdapter {
   platform: AgentPlatform;
   label: string;
   capabilities: NativeAgentCapabilities;
-  normalizeMessages: (messages: readonly unknown[]) => NativeMessage[];
-  loadController: () => Promise<ComponentType<NativeAgentTabProps>>;
-}
-
-function normalizer(platform: AgentPlatform) {
-  return (messages: readonly unknown[]): NativeMessage[] =>
-    normalizeNativeAgentMessages(platform, messages as never);
-}
-
-/**
- * Controllers still take their own legacy pane record, and several of them
- * spread that record straight back into the pane layout when forking a tab.
- * Handing them the canonical identity unchanged would carry `platform` into
- * the legacy field, where the pane-layout merge strips it again — the same tab
- * would then serialize two different ways depending on whether a write
- * conflict occurred. Project once, here, so the value a controller receives is
- * exactly the shape its props declare.
- *
- * Memoized on `data`, which is the tab's stored identity object: the
- * controllers key `useCallback`/`useEffect` off this prop, and a fresh object
- * per render would invalidate the transcript memoization on every tick.
- */
-function useLegacyNativeAgentData(data: NativeAgentTabData) {
-  return useMemo(() => toLegacyNativeAgentData(data), [data]);
+  loadController: () => Promise<ComponentType<AgentNativeTabProps>>;
 }
 
 function acpAdapter(
@@ -70,20 +46,21 @@ function acpAdapter(
       fork: false,
       slashCommands: false,
       backgroundTasks: false,
+      composer: {
+        provider: true,
+        model: false,
+        reasoning: false,
+        speed: false,
+        mode: false,
+      },
     },
-    normalizeMessages: normalizer(provider),
     loadController: async () => {
       const { AcpChatTab } = await import("@/components/acp");
-      return function AcpNativeAgentController(props: NativeAgentTabProps) {
-        const legacyData = useLegacyNativeAgentData(props.data);
-        const data = useMemo(
-          () => ({ ...legacyData, provider }),
-          [legacyData],
-        );
+      return function AcpNativeAgentController(props: AgentNativeTabProps) {
         return (
           <AcpChatTab
             tabId={props.tabId}
-            data={data}
+            data={props.data as AgentNativeTabProps["data"] & { platform: "cursor" | "grok" }}
             isActive={props.isActive}
             initialPrompt={props.initialPrompt}
           />
@@ -100,6 +77,13 @@ const richCapabilities: NativeAgentCapabilities = {
   fork: true,
   slashCommands: true,
   backgroundTasks: false,
+  composer: {
+    provider: true,
+    model: true,
+    reasoning: true,
+    speed: true,
+    mode: true,
+  },
 };
 
 export const nativeAgentAdapters: Readonly<
@@ -109,12 +93,10 @@ export const nativeAgentAdapters: Readonly<
     platform: "claude",
     label: "Claude",
     capabilities: { ...richCapabilities, backgroundTasks: true },
-    normalizeMessages: normalizer("claude"),
     loadController: async () => {
       const { ClaudeChatTab } = await import("@/components/claude/ClaudeChatTab");
-      return function ClaudeNativeAgentController(props: NativeAgentTabProps) {
-        const data = useLegacyNativeAgentData(props.data);
-        return <ClaudeChatTab {...props} data={data} />;
+      return function ClaudeNativeAgentController(props: AgentNativeTabProps) {
+        return <ClaudeChatTab {...props} data={props.data} />;
       };
     },
   },
@@ -122,25 +104,24 @@ export const nativeAgentAdapters: Readonly<
     platform: "codex",
     label: "Codex",
     capabilities: richCapabilities,
-    normalizeMessages: normalizer("codex"),
     loadController: async () => {
       const { CodexChatTab } = await import("@/components/codex/CodexChatTab");
-      return function CodexNativeAgentController(props: NativeAgentTabProps) {
-        const data = useLegacyNativeAgentData(props.data);
-        return <CodexChatTab {...props} data={data} />;
+      return function CodexNativeAgentController(props: AgentNativeTabProps) {
+        return <CodexChatTab {...props} data={props.data} />;
       };
     },
   },
   opencode: {
     platform: "opencode",
     label: "OpenCode",
-    capabilities: richCapabilities,
-    normalizeMessages: normalizer("opencode"),
+    capabilities: {
+      ...richCapabilities,
+      composer: { ...richCapabilities.composer, speed: false },
+    },
     loadController: async () => {
       const { OpenCodeChatTab } = await import("@/components/opencode");
-      return function OpenCodeNativeAgentController(props: NativeAgentTabProps) {
-        const data = useLegacyNativeAgentData(props.data);
-        return <OpenCodeChatTab {...props} data={data} />;
+      return function OpenCodeNativeAgentController(props: AgentNativeTabProps) {
+        return <OpenCodeChatTab {...props} data={props.data} />;
       };
     },
   },

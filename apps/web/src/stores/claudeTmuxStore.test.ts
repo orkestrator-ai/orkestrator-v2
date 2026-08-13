@@ -315,7 +315,7 @@ describe("applyTranscriptLine", () => {
     const line: TranscriptLine = {
       type: "user",
       uuid: "u1",
-      timestamp: "2026-01-01T00:00:00Z",
+      createdAt: "2026-01-01T00:00:00Z",
       message: { role: "user", content: "hello" },
     };
     useClaudeTmuxStore.getState().applyTranscriptLine("env-1", line);
@@ -872,17 +872,17 @@ describe("compactConsecutiveAssistantMessages", () => {
         id: "u1",
         role: "user",
         content: "inspect",
-        timestamp: "2026-01-01T00:00:00Z",
+        createdAt: "2026-01-01T00:00:00Z",
         parts: [{ type: "text", content: "inspect" }],
       },
       {
         id: "a1",
         role: "assistant",
         content: "",
-        timestamp: "2026-01-01T00:00:01Z",
+        createdAt: "2026-01-01T00:00:01Z",
         parts: [
           {
-            type: "tool-invocation",
+            type: "tool-invocation", content: "",
             toolName: "Read",
             toolUseId: "tu1",
             toolState: "success",
@@ -893,10 +893,10 @@ describe("compactConsecutiveAssistantMessages", () => {
         id: "a2",
         role: "assistant",
         content: "",
-        timestamp: "2026-01-01T00:00:02Z",
+        createdAt: "2026-01-01T00:00:02Z",
         parts: [
           {
-            type: "tool-invocation",
+            type: "tool-invocation", content: "",
             toolName: "Grep",
             toolUseId: "tu2",
             toolState: "success",
@@ -907,7 +907,7 @@ describe("compactConsecutiveAssistantMessages", () => {
         id: "a3",
         role: "assistant",
         content: "done",
-        timestamp: "2026-01-01T00:00:03Z",
+        createdAt: "2026-01-01T00:00:03Z",
         parts: [{ type: "text", content: "done" }],
       },
     ];
@@ -916,7 +916,7 @@ describe("compactConsecutiveAssistantMessages", () => {
 
     expect(compacted).toHaveLength(2);
     expect(compacted[1]!.id).toBe("a1");
-    expect(compacted[1]!.timestamp).toBe("2026-01-01T00:00:01Z");
+    expect(compacted[1]!.createdAt).toBe("2026-01-01T00:00:01Z");
     expect(compacted[1]!.content).toBe("done");
     expect(compacted[1]!.parts.map((part) => part.type)).toEqual([
       "tool-invocation",
@@ -931,14 +931,14 @@ describe("compactConsecutiveAssistantMessages", () => {
         id: "a1",
         role: "assistant",
         content: "partial",
-        timestamp: "2026-01-01T00:00:01Z",
+        createdAt: "2026-01-01T00:00:01Z",
         parts: [{ type: "text", content: "partial" }],
       },
       {
         id: "a2",
         role: "assistant",
         content: "final",
-        timestamp: "2026-01-01T00:00:02Z",
+        createdAt: "2026-01-01T00:00:02Z",
         parts: [{ type: "text", content: "final" }],
         modelId: "claude-opus-5",
       },
@@ -954,21 +954,21 @@ describe("compactConsecutiveAssistantMessages", () => {
         id: "a1",
         role: "assistant",
         content: "first",
-        timestamp: "2026-01-01T00:00:00Z",
+        createdAt: "2026-01-01T00:00:00Z",
         parts: [{ type: "text", content: "first" }],
       },
       {
         id: "u1",
         role: "user",
         content: "next",
-        timestamp: "2026-01-01T00:01:00Z",
+        createdAt: "2026-01-01T00:01:00Z",
         parts: [{ type: "text", content: "next" }],
       },
       {
         id: "a2",
         role: "assistant",
         content: "second",
-        timestamp: "2026-01-01T00:02:00Z",
+        createdAt: "2026-01-01T00:02:00Z",
         parts: [{ type: "text", content: "second" }],
       },
     ];
@@ -982,21 +982,21 @@ describe("compactConsecutiveAssistantMessages", () => {
         id: "a1",
         role: "assistant",
         content: "first",
-        timestamp: "2026-01-01T00:00:00Z",
+        createdAt: "2026-01-01T00:00:00Z",
         parts: [{ type: "text", content: "first" }],
       },
       {
         id: `${ERROR_MESSAGE_PREFIX}auth`,
         role: "assistant",
         content: "auth failed",
-        timestamp: "2026-01-01T00:00:01Z",
+        createdAt: "2026-01-01T00:00:01Z",
         parts: [],
       },
       {
         id: "a2",
         role: "assistant",
         content: "second",
-        timestamp: "2026-01-01T00:00:02Z",
+        createdAt: "2026-01-01T00:00:02Z",
         parts: [{ type: "text", content: "second" }],
       },
     ];

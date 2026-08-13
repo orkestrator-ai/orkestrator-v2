@@ -402,9 +402,9 @@ describe("pane-layout binding", () => {
     paneStore.initialize(null, "env-1");
     paneStore.addTab("default", {
       id: "review-3",
-      type: "claude-native",
+      type: "agent-native",
       displayTitle: "Review",
-      claudeNativeData: {
+      nativeAgentData: {
         environmentId: "env-1",
         isLocal: true,
         sessionId: "session-3",
@@ -427,9 +427,9 @@ describe("pane-layout binding", () => {
         tabs: [
           {
             id: "review-3",
-            type: "claude-native",
+            type: "agent-native",
             displayTitle: "Review",
-            claudeNativeData: {
+            nativeAgentData: {
               environmentId: "env-1",
               sessionId: "session-3",
               isLocal: true,
@@ -437,9 +437,9 @@ describe("pane-layout binding", () => {
           },
           {
             id: "review-4",
-            type: "claude-native",
+            type: "agent-native",
             displayTitle: "Review",
-            claudeNativeData: {
+            nativeAgentData: {
               environmentId: "env-1",
               sessionId: "session-4",
               isLocal: true,
@@ -460,7 +460,7 @@ describe("pane-layout binding", () => {
     expect(getPaneLayout).toHaveBeenCalledWith("env-1");
     expect(pane?.tabs.map(({ id }) => id)).toEqual(["review-3", "review-4"]);
     expect(pane?.activeTabId).toBe("review-4");
-    expect(pane?.tabs[1]?.claudeNativeData?.sessionId).toBe("session-4");
+    expect(pane?.tabs[1]?.nativeAgentData?.sessionId).toBe("session-4");
   });
 
   test("moves focus to the build tab on setup completion without a pane-layout frame", async () => {
@@ -667,8 +667,8 @@ describe("pane-layout binding", () => {
           { id: "terminal-1", type: "plain" },
           {
             id: "review-mobile",
-            type: "claude-native",
-            claudeNativeData: {
+            type: "agent-native",
+            nativeAgentData: {
               environmentId: "env-1",
               sessionId: "session-mobile",
               isLocal: true,
@@ -710,9 +710,9 @@ describe("pane-layout binding", () => {
     const paneStore = usePaneLayoutStore.getState();
     paneStore.initialize(null, "env-1");
     for (const [id, type, dataKey, port] of [
-      ["claude", "claude-native", "claudeNativeData", 4101],
-      ["codex", "codex-native", "codexNativeData", 4102],
-      ["opencode", "opencode-native", "openCodeNativeData", 4103],
+      ["claude", "agent-native", "nativeAgentData", 4101],
+      ["codex", "agent-native", "nativeAgentData", 4102],
+      ["opencode", "agent-native", "nativeAgentData", 4103],
     ] as const) {
       paneStore.addTab("default", {
         id,
@@ -743,8 +743,8 @@ describe("pane-layout binding", () => {
         tabs: [
           {
             id: "claude",
-            type: "claude-native",
-            claudeNativeData: {
+            type: "agent-native",
+            nativeAgentData: {
               environmentId: "env-1",
               isLocal: true,
               sessionId: "backend-claude",
@@ -752,8 +752,8 @@ describe("pane-layout binding", () => {
           },
           {
             id: "codex",
-            type: "codex-native",
-            codexNativeData: {
+            type: "agent-native",
+            nativeAgentData: {
               environmentId: "env-1",
               isLocal: true,
               sessionId: "backend-codex",
@@ -761,8 +761,8 @@ describe("pane-layout binding", () => {
           },
           {
             id: "opencode",
-            type: "opencode-native",
-            openCodeNativeData: {
+            type: "agent-native",
+            nativeAgentData: {
               environmentId: "env-1",
               isLocal: true,
               sessionId: "backend-opencode",
@@ -786,17 +786,17 @@ describe("pane-layout binding", () => {
     expect(byId.get("claude")).toMatchObject({
       initialPrompt: "prompt-claude",
       initialCommands: ["command-claude"],
-      claudeNativeData: { hostPort: 4101, sessionId: "backend-claude" },
+      nativeAgentData: { hostPort: 4101, sessionId: "backend-claude" },
     });
     expect(byId.get("codex")).toMatchObject({
       initialPrompt: "prompt-codex",
       initialCommands: ["command-codex"],
-      codexNativeData: { hostPort: 4102, sessionId: "backend-codex" },
+      nativeAgentData: { hostPort: 4102, sessionId: "backend-codex" },
     });
     expect(byId.get("opencode")).toMatchObject({
       initialPrompt: "prompt-opencode",
       initialCommands: ["command-opencode"],
-      openCodeNativeData: { hostPort: 4103, sessionId: "backend-opencode" },
+      nativeAgentData: { hostPort: 4103, sessionId: "backend-opencode" },
     });
     expect(byId.has("remote")).toBe(true);
   });

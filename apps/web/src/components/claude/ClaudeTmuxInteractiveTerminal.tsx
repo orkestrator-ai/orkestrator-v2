@@ -202,6 +202,16 @@ export function ClaudeTmuxInteractiveTerminal({
 
       const key = event.key.toLowerCase();
       if (
+        key === "w"
+        && event.metaKey
+        && !event.ctrlKey
+        && !event.altKey
+        && !event.shiftKey
+      ) {
+        return false;
+      }
+
+      if (
         key === "enter"
         && event.shiftKey
         && !event.ctrlKey

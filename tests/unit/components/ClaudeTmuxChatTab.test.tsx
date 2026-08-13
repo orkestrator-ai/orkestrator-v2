@@ -6075,14 +6075,14 @@ Running 1 Explore agent...
         role: "user" as const,
         content: "Question",
         parts: [{ type: "text" as const, content: "Question" }],
-        timestamp: "2026-03-07T12:00:00.000Z",
+        createdAt: "2026-03-07T12:00:00.000Z",
       },
       {
         id: "msg-empty",
         role: "assistant" as const,
         content: "",
         parts: [],
-        timestamp: "2026-03-07T12:00:20.000Z",
+        createdAt: "2026-03-07T12:00:20.000Z",
         modelId: "claude-test-model",
       },
     ];
@@ -6125,14 +6125,14 @@ Running 1 Explore agent...
         role: "user" as const,
         content: "Question",
         parts: [{ type: "text" as const, content: "Question" }],
-        timestamp: "2026-03-07T12:00:00.000Z",
+        createdAt: "2026-03-07T12:00:00.000Z",
       },
       {
         id: "msg-empty",
         role: "assistant" as const,
         content: "",
         parts: [],
-        timestamp: "2026-03-07T12:00:20.000Z",
+        createdAt: "2026-03-07T12:00:20.000Z",
         modelId: "claude-test-model",
       },
       {
@@ -6140,7 +6140,7 @@ Running 1 Explore agent...
         role: "assistant" as const,
         content: "Answer",
         parts: [{ type: "text" as const, content: "Answer" }],
-        timestamp: "2026-03-07T12:00:45.000Z",
+        createdAt: "2026-03-07T12:00:45.000Z",
         modelId: "claude-test-model",
       },
     ];

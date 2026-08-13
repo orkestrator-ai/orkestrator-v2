@@ -26,7 +26,7 @@ import type {
   ContextUsageSnapshot,
 } from "@/lib/context-usage";
 import { formatTokenCount } from "@/lib/context-usage";
-import type { TabInfo } from "@/types/paneLayout";
+import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
@@ -112,34 +112,15 @@ interface ActiveNativeSession {
 }
 
 function resolveActiveNativeSession(tab: TabInfo | null): ActiveNativeSession | null {
-  if (tab?.type === "claude-native" && tab.claudeNativeData) {
-    const environmentId = tab.claudeNativeData.environmentId;
-    return {
-      provider: "claude",
-      providerLabel: "Claude Native",
-      environmentId,
-      sessionKey: createSessionKey(environmentId, tab.id),
-    };
-  }
-  if (tab?.type === "opencode-native" && tab.openCodeNativeData) {
-    const environmentId = tab.openCodeNativeData.environmentId;
-    return {
-      provider: "opencode",
-      providerLabel: "OpenCode",
-      environmentId,
-      sessionKey: createSessionKey(environmentId, tab.id),
-    };
-  }
-  if (tab?.type === "codex-native" && tab.codexNativeData) {
-    const environmentId = tab.codexNativeData.environmentId;
-    return {
-      provider: "codex",
-      providerLabel: "Codex Native",
-      environmentId,
-      sessionKey: createSessionKey(environmentId, tab.id),
-    };
-  }
-  return null;
+  if (!tab) return null;
+  const data = getNativeAgentData(tab);
+  if (data?.platform !== "claude" && data?.platform !== "opencode" && data?.platform !== "codex") return null;
+  return {
+    provider: data.platform,
+    providerLabel: data.platform === "opencode" ? "OpenCode" : `${AGENT_PROVIDER_LABELS[data.platform]} Native`,
+    environmentId: data.environmentId,
+    sessionKey: createSessionKey(data.environmentId, tab.id),
+  };
 }
 
 function formatUsd(value: number): string {
@@ -870,28 +851,13 @@ export function AgentInfoButton({
      */
     const tab: TabInfo = {
       id,
-      type: activeTab.type,
+      type: "agent-native",
       displayTitle: title ?? `${activeSession.providerLabel} fork`,
-      ...(activeSession.provider === "claude"
-        ? {
-            claudeNativeData: {
-              ...activeTab.claudeNativeData!,
-              sessionId,
-            },
-          }
-        : activeSession.provider === "opencode"
-          ? {
-              openCodeNativeData: {
-                ...activeTab.openCodeNativeData!,
-                sessionId,
-              },
-            }
-          : {
-              codexNativeData: {
-                ...activeTab.codexNativeData!,
-                sessionId,
-              },
-            }),
+      nativeAgentData: {
+        ...getNativeAgentData(activeTab)!,
+        platform: activeSession.provider,
+        sessionId,
+      },
     };
     const panes = usePaneLayoutStore.getState();
     panes.addTab(
@@ -907,10 +873,7 @@ export function AgentInfoButton({
     handoffId: string,
   ) => {
     if (!activeTab || !activeSession) return;
-    const sourceData =
-      activeTab.claudeNativeData
-      ?? activeTab.openCodeNativeData
-      ?? activeTab.codexNativeData;
+    const sourceData = getNativeAgentData(activeTab);
     if (!sourceData) return;
     const nativeData = {
       containerId: sourceData.containerId,
@@ -921,14 +884,10 @@ export function AgentInfoButton({
     const destinationLabel = AGENT_PROVIDER_LABELS[destination];
     const tab: TabInfo = {
       id,
-      type: `${destination}-native` as TabInfo["type"],
+      type: "agent-native",
       displayTitle: `${destinationLabel} · from ${AGENT_PROVIDER_LABELS[activeSession.provider]}`,
       agentHandoffId: handoffId,
-      ...(destination === "claude"
-        ? { claudeNativeData: nativeData }
-        : destination === "opencode"
-          ? { openCodeNativeData: nativeData }
-          : { codexNativeData: nativeData }),
+      nativeAgentData: { ...nativeData, platform: destination },
     };
     const panes = usePaneLayoutStore.getState();
     panes.addTab(

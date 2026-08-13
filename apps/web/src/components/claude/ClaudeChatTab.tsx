@@ -10,6 +10,7 @@ import {
 import type { QueueDispatchOutcome } from "@/lib/prompt-queue-persistence";
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
+import { useNativeAgentSession } from "@/hooks/useNativeAgentSession";
 import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
@@ -77,12 +78,12 @@ import {
   forkAttachmentNotice,
   type MessageForkKind,
 } from "@/components/chat/message-fork";
-import { ClaudeComposeBar } from "./ClaudeComposeBar";
+import { useClaudeNativeComposer } from "./useClaudeNativeComposer";
 import { ClaudeQuestionCard } from "./ClaudeQuestionCard";
 import { ClaudePlanApprovalCard } from "./ClaudePlanApprovalCard";
 import { ClaudeBackgroundTaskHoldCard } from "./ClaudeBackgroundTaskHoldCard";
 import { ResumeSessionDialog } from "./ResumeSessionDialog";
-import type { ClaudeNativeData } from "@/types/paneLayout";
+import type { NativeAgentData as ClaudeNativeData } from "@/types/paneLayout";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupBlocked } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
@@ -95,8 +96,8 @@ import type { ClaudeAttachment, QueuedMessage } from "@/stores/claudeStore";
 import {
   applyClaudeBackgroundTaskStates,
   getClaudeSourceMessageId,
+  normalizeClaudeMessagesForDisplay,
 } from "@/lib/chat/native-message-adapters";
-import { getNativeAgentAdapter } from "@/components/native-agent/adapter";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 
 /**
@@ -198,6 +199,7 @@ interface ClaudeChatTabProps {
   agentHandoffId?: string;
   consumedAgentHandoffId?: string;
   refreshRequestId?: number;
+  initialResumeOpen?: boolean;
 }
 type ConnectionState = "connecting" | "connected" | "error";
 
@@ -223,6 +225,7 @@ export function ClaudeChatTab({
   agentHandoffId,
   consumedAgentHandoffId,
   refreshRequestId = 0,
+  initialResumeOpen = false,
 }: ClaudeChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
   const projectedSessionId = data.sessionId;
@@ -236,12 +239,10 @@ export function ClaudeChatTab({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
   const [serverLog, setServerLog] = useState<string | null>(null);
-  const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
+  const [resumeDialogOpen, setResumeDialogOpen] = useState(initialResumeOpen);
   const [forkInFlight, setForkInFlight] = useState(false);
 
-  const forkInFlightRef = useRef(false);
   const tabSessionIdRef = useRef<string | null>(null);
-  const isInitializedRef = useRef(false);
   const initialPromptSentRef = useRef(false);
   const slashCmdCleanupRef = useRef<(() => void) | null>(null);
   const initializationSequenceRef = useRef(0);
@@ -382,20 +383,23 @@ export function ClaudeChatTab({
 
   // Create a unique session key that combines environmentId and tabId
   // This prevents session collisions when multiple environments use the same tab IDs (e.g., "default")
-  const sessionKey = useMemo(() => createSessionKey(environmentId, tabId), [environmentId, tabId]);
-  useNativeComposeDraftPersistence("claude", environmentId, sessionKey, useClaudeStore);
-  const initialLaunchOptionsRef = useRef({
-    model: initialAgentModel,
-    reasoningEffort: initialReasoningEffort,
+  const {
+    sessionKey,
+    initialLaunchOptionsRef,
+    acknowledgeInitialLaunchOptions,
+    isInitializedRef,
+    lastInitTimeRef,
+    forkInFlightRef,
+  } = useNativeAgentSession({
+    platform: "claude",
+    environmentId,
+    tabId,
+    initialAgentModel,
+    initialReasoningEffort,
   });
-  const initialLaunchOptionsPendingRef = useRef(
-    Boolean(initialAgentModel || initialReasoningEffort),
-  );
+  useNativeComposeDraftPersistence("claude", environmentId, sessionKey, useClaudeStore);
   const initialLaunchModel = initialLaunchOptionsRef.current.model;
   const initialLaunchReasoningEffort = initialLaunchOptionsRef.current.reasoningEffort;
-  const clearTabInitialAgentOptions = usePaneLayoutStore(
-    (state) => state.clearTabInitialAgentOptions,
-  );
 
   useEffect(() => {
     if (!initialLaunchReasoningEffort) return;
@@ -404,12 +408,6 @@ export function ClaudeChatTab({
       useClaudeStore.getState().setEffort(sessionKey, initialLaunchReasoningEffort as ClaudeEffortLevel);
     }
   }, [initialLaunchReasoningEffort, sessionKey]);
-
-  const acknowledgeInitialLaunchOptions = useCallback(() => {
-    if (!initialLaunchOptionsPendingRef.current) return;
-    initialLaunchOptionsPendingRef.current = false;
-    clearTabInitialAgentOptions(tabId, environmentId);
-  }, [clearTabInitialAgentOptions, environmentId, tabId]);
 
   const seedInitialFastMode = useCallback(() => {
     const claudeState = useClaudeStore.getState();
@@ -884,7 +882,7 @@ export function ClaudeChatTab({
   );
   const providerDisplayMessages = useMemo(
     () => pinActiveNativeAgentParts(
-      getNativeAgentAdapter("claude").normalizeMessages(lifecycleMessages),
+      normalizeClaudeMessagesForDisplay(lifecycleMessages),
     ),
     [lifecycleMessages],
   );
@@ -979,7 +977,6 @@ export function ClaudeChatTab({
     setupPhase,
   });
 
-  const lastInitTimeRef = useRef<number>(0);
   const INIT_DEBOUNCE_MS = 1000;
   const startSharedEventSubscriptionRef = useRef<((client: ReturnType<typeof createClient>) => void) | null>(null);
   const MAX_SSE_RECONNECT_ATTEMPTS = 10;
@@ -1480,7 +1477,7 @@ export function ClaudeChatTab({
               role: "user" as const,
               content: pendingLaunchPrompt,
               parts: [{ type: "text" as const, content: pendingLaunchPrompt }],
-              timestamp: new Date().toISOString(),
+              createdAt: new Date().toISOString(),
             };
 
             console.debug("[ClaudeChatTab] Sending initial prompt during initialization", {
@@ -1530,7 +1527,7 @@ export function ClaudeChatTab({
                 role: "assistant" as const,
                 content: "Failed to send message. Please try again.",
                 parts: [{ type: "text" as const, content: "Failed to send message. Please try again." }],
-                timestamp: new Date().toISOString(),
+                createdAt: new Date().toISOString(),
               };
               addMessage(sessionKey, errorMessage);
             } else if (
@@ -2061,7 +2058,7 @@ export function ClaudeChatTab({
                 role: "assistant" as const,
                 content: errorMsg,
                 parts: [{ type: "text" as const, content: errorMsg }],
-                timestamp: new Date().toISOString(),
+                createdAt: new Date().toISOString(),
               };
               addMessage(sessionTabId, errorMessage);
             }
@@ -2189,7 +2186,7 @@ export function ClaudeChatTab({
                 role: "system",
                 content: "Conversation compacted.",
                 parts: [{ type: "text", content: "Conversation compacted." }],
-                timestamp: new Date().toISOString(),
+                createdAt: new Date().toISOString(),
               };
               addMessage(matchedSessionKey, systemMessage);
             }
@@ -2214,7 +2211,7 @@ export function ClaudeChatTab({
                   role: "system",
                   content,
                   parts: [{ type: "text", content }],
-                  timestamp: new Date().toISOString(),
+                  createdAt: new Date().toISOString(),
                 };
                 addMessage(matchedSessionKey, systemMessage);
               } else {
@@ -2344,7 +2341,7 @@ export function ClaudeChatTab({
         // without briefly exposing the serialized history.
         content: promptText,
         parts: [{ type: "text" as const, content: promptText }],
-        timestamp: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
       };
       addMessage(sessionKey, userMessage);
       setSessionError(sessionKey, undefined);
@@ -2362,7 +2359,7 @@ export function ClaudeChatTab({
             role: "system" as const,
             content: "Naming environment...",
             parts: [{ type: "text" as const, content: "Naming environment..." }],
-            timestamp: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
           });
           try {
             await renameEnvironmentFromPrompt(environmentId, text);
@@ -2536,7 +2533,7 @@ export function ClaudeChatTab({
         role: "system",
         content: TURN_STOPPED_BY_USER,
         parts: [{ type: "text", content: TURN_STOPPED_BY_USER }],
-        timestamp: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
       };
       addMessage(sessionKey, systemMessage);
       await promoteNextQueuedPromptToDraft().catch((error) => {
@@ -2881,9 +2878,9 @@ export function ClaudeChatTab({
         paneStore.getActivePaneId(environmentId),
         {
           id: forkTabId,
-          type: "claude-native",
+          type: "agent-native",
           displayTitle: fork.title ?? "Claude fork",
-          claudeNativeData: { ...data, sessionId: fork.sessionId },
+          nativeAgentData: { ...data, platform: "claude", sessionId: fork.sessionId },
         },
         environmentId,
       );
@@ -3019,13 +3016,12 @@ export function ClaudeChatTab({
           </>
         ) : null
       }
-      composer={
-        <ClaudeComposeBar
-          environmentId={environmentId}
-          tabId={tabId}
-          containerId={containerId}
-          models={models}
-          onSend={async (...args) => {
+      composer={useClaudeNativeComposer({
+          environmentId,
+          tabId,
+          containerId,
+          models,
+          onSend: async (...args) => {
             const outcome = await handleSend(...args);
             if (outcome === "rejected") {
               // Direct compose submissions must reject their promise so the
@@ -3034,17 +3030,16 @@ export function ClaudeChatTab({
               // the raw dispatch outcome.
               throw new Error("Claude rejected the prompt. Please try again.");
             }
-          }}
-          disabled={!handoff.ready || !client || !session}
-          isLoading={session?.isLoading ?? false}
-          queueLength={queueLength}
-          onStop={handleStop}
-          onQueue={handleQueue}
-          onPlanModeChange={handlePlanModeChange}
-          showAddressAll={showAddressAll}
-          layout={centerCompose ? "centered" : "bottom"}
-        />
-      }
+          },
+          disabled: !handoff.ready || !client || !session,
+          isLoading: session?.isLoading ?? false,
+          queueLength,
+          onStop: handleStop,
+          onQueue: handleQueue,
+          onPlanModeChange: handlePlanModeChange,
+          showAddressAll,
+          layout: centerCompose ? "centered" : "bottom",
+        })}
       resumeDialog={
         client ? (
           <ResumeSessionDialog

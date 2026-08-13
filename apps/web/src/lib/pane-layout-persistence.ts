@@ -97,22 +97,6 @@ function sanitizeTab(tab: TabInfo): TabInfo {
       },
     };
   }
-  if (rest.claudeNativeData) {
-    const { hostPort: _hostPort, ...data } = rest.claudeNativeData;
-    return { ...rest, claudeNativeData: data, nativeAgentData: persistedNativeAgentData };
-  }
-  if (rest.codexNativeData) {
-    const { hostPort: _hostPort, ...data } = rest.codexNativeData;
-    return { ...rest, codexNativeData: data, nativeAgentData: persistedNativeAgentData };
-  }
-  if (rest.openCodeNativeData) {
-    const { hostPort: _hostPort, ...data } = rest.openCodeNativeData;
-    return { ...rest, openCodeNativeData: data, nativeAgentData: persistedNativeAgentData };
-  }
-  if (rest.acpNativeData) {
-    const { hostPort: _hostPort, ...data } = rest.acpNativeData;
-    return { ...rest, acpNativeData: data, nativeAgentData: persistedNativeAgentData };
-  }
   return persistedNativeAgentData
     ? { ...rest, nativeAgentData: persistedNativeAgentData }
     : rest;

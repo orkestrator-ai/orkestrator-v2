@@ -18,7 +18,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { AgentRadioGroup } from "@/components/agents/AgentRadioGroup";
-import { OpenCodeModelSelect } from "@/components/opencode/OpenCodeModelSelect";
+import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
+import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import {
   defaultEffortFor,
   effortLabel,
@@ -31,12 +32,7 @@ import {
 import { LOOPED_REVIEW_DEFAULT_ALLOWANCE } from "@/stores/loopedReviewStore";
 import { cn } from "@/lib/utils";
 
-export type ReviewTabType =
-  | "claude-native"
-  | "codex-native"
-  | "cursor-native"
-  | "grok-native"
-  | "opencode-native";
+export type ReviewTabType = LaunchAgent;
 
 export type ReviewAgent = LaunchAgent;
 
@@ -59,35 +55,35 @@ export const REVIEW_TAB_OPTIONS: Array<{
   mode: "native";
 }> = [
   {
-    value: "claude-native",
+    value: "claude",
     label: "Claude Native",
     description: "Agent SDK Markdown review",
     agent: "claude",
     mode: "native",
   },
   {
-    value: "codex-native",
+    value: "codex",
     label: "Codex Native",
     description: "App-server Markdown review",
     agent: "codex",
     mode: "native",
   },
   {
-    value: "cursor-native",
+    value: "cursor",
     label: "Cursor Agent",
     description: "Cursor ACP review",
     agent: "cursor",
     mode: "native",
   },
   {
-    value: "grok-native",
+    value: "grok",
     label: "Grok Build",
     description: "Grok ACP review",
     agent: "grok",
     mode: "native",
   },
   {
-    value: "opencode-native",
+    value: "opencode",
     label: "OpenCode Native",
     description: "SDK v2 Markdown review",
     agent: "opencode",
@@ -105,7 +101,7 @@ export function getReviewAgent(tabType: ReviewTabType): ReviewAgent {
 }
 
 function nativeTabType(agent: ReviewAgent): ReviewTabType {
-  return `${agent}-native` as ReviewTabType;
+  return agent;
 }
 
 function Step({
@@ -142,11 +138,6 @@ interface ReviewLaunchDialogProps {
   catalog: ReviewModelCatalog;
   preferredModels?: Partial<Record<ReviewAgent, string>>;
   preferredReasoningEfforts?: Partial<Record<ReviewAgent, string>>;
-  /**
-   * OpenCode `provider/model` ids pinned as favorites in the OpenCode TUI.
-   * Rendered first in the searchable OpenCode model list.
-   */
-  opencodeFavoriteModelIds?: string[];
   kind?: "review" | "looped";
   busy?: boolean;
   onConfirm: (selection: ReviewLaunchSelection) => void;
@@ -159,11 +150,11 @@ export function ReviewLaunchDialog({
   catalog,
   preferredModels,
   preferredReasoningEfforts,
-  opencodeFavoriteModelIds,
   kind = "review",
   busy = false,
   onConfirm,
 }: ReviewLaunchDialogProps) {
+  const { favorites, toggleFavorite } = useAgentModelFavorites();
   const initialModel = firstModelFor(
     getReviewAgent(defaultTabType),
     catalog,
@@ -334,15 +325,25 @@ export function ReviewLaunchDialog({
                 Model
               </Label>
               {agent === "opencode" ? (
-                <OpenCodeModelSelect
+                <AgentModelPicker
                   id="review-model"
-                  value={selectedModel?.id ?? model}
-                  options={models}
-                  favoriteModelIds={opencodeFavoriteModelIds ?? []}
-                  onValueChange={handleModelChange}
-                  showDescriptionInTrigger
-                  emptyLabel="Choose a model"
-                  className="min-h-11"
+                  ariaLabel="Model"
+                  models={models.map((option) => ({
+                    platform: "opencode" as const,
+                    id: option.id,
+                    label: option.name,
+                    description: option.description,
+                  }))}
+                  enabledPlatforms={["opencode"]}
+                  selectedPlatform="opencode"
+                  favorites={favorites}
+                  onToggleFavorite={toggleFavorite}
+                  selectedModelId={selectedModel?.id ?? model}
+                  selectedModelLabel={selectedModel?.name ?? "Choose a model"}
+                  onModelChange={handleModelChange}
+                  reasoningOptions={[]}
+                  title="Review model"
+                  className="min-h-11 w-full border border-zinc-700/80 bg-zinc-900 py-2.5"
                 />
               ) : (
                 <Select value={selectedModel?.id ?? model} onValueChange={handleModelChange}>

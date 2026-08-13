@@ -132,6 +132,45 @@ describe("first-run agent platform selection", () => {
   });
 });
 
+describe("ACP bridge runtime persistence", () => {
+  test("round-trips and clears Cursor and Grok process coordinates", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = createEnvironment("project-1", { environmentType: "local" });
+      environment.id = "env-acp-runtime";
+      await storage.addEnvironment(environment);
+
+      await storage.updateEnvironment(environment.id, {
+        cursorBridgePid: 4101,
+        grokBridgePid: 4102,
+        localCursorPort: 57101,
+        localGrokPort: 57102,
+      });
+
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      expect(await restarted.getEnvironment(environment.id)).toMatchObject({
+        cursorBridgePid: 4101,
+        grokBridgePid: 4102,
+        localCursorPort: 57101,
+        localGrokPort: 57102,
+      });
+
+      await restarted.updateEnvironment(environment.id, {
+        cursorBridgePid: null,
+        grokBridgePid: null,
+        localCursorPort: null,
+        localGrokPort: null,
+      });
+      expect(await restarted.getEnvironment(environment.id)).not.toMatchObject({
+        cursorBridgePid: expect.any(Number),
+        grokBridgePid: expect.any(Number),
+        localCursorPort: expect.any(Number),
+        localGrokPort: expect.any(Number),
+      });
+    });
+  });
+});
+
 describe("backend-owned setup and build surfaces", () => {
   test("normalizes pre-setupPhase environment records on every read", async () => {
     await withTemporaryStorage(async (_storage, dataDir) => {

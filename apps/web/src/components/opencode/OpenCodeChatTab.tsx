@@ -10,6 +10,7 @@ import {
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
+import { useNativeAgentSession } from "@/hooks/useNativeAgentSession";
 import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
@@ -44,7 +45,7 @@ import {
 import {
   checkClientHealth,
   createClient,
-  getModelsWithDefaults,
+  getSelectableModelsWithDefaults,
   getSessionMessages,
   getSessionStatus,
   lookupSessionStatus,
@@ -105,9 +106,9 @@ import {
   forkAttachmentNotice,
   type MessageForkKind,
 } from "@/components/chat/message-fork";
-import { getNativeAgentAdapter } from "@/components/native-agent/adapter";
+import { normalizeNativeMessages } from "@/lib/chat/native-message-adapters";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
-import { OpenCodeComposeBar } from "./OpenCodeComposeBar";
+import { useOpenCodeNativeComposer } from "./useOpenCodeNativeComposer";
 import { OpenCodePermissionCard } from "./OpenCodePermissionCard";
 import { OpenCodeQuestionCard } from "./OpenCodeQuestionCard";
 import { OpenCodeResumeSessionDialog } from "./OpenCodeResumeSessionDialog";
@@ -116,7 +117,7 @@ import {
   shouldLoadSlashCommands,
 } from "./slash-command-directory";
 import { getNativeSlashCommands } from "./slash-command-registry";
-import type { OpenCodeNativeData } from "@/types/paneLayout";
+import type { NativeAgentData as OpenCodeNativeData } from "@/types/paneLayout";
 import type {
   OpenCodeAttachment,
   OpenCodeQueuedMessage,
@@ -136,6 +137,7 @@ interface OpenCodeChatTabProps {
   agentHandoffId?: string;
   consumedAgentHandoffId?: string;
   refreshRequestId?: number;
+  initialResumeOpen?: boolean;
 }
 
 type ConnectionState = "connecting" | "connected" | "error";
@@ -325,9 +327,29 @@ export function OpenCodeChatTab({
   agentHandoffId,
   consumedAgentHandoffId,
   refreshRequestId = 0,
+  initialResumeOpen = false,
 }: OpenCodeChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
   const projectedSessionId = data.sessionId;
+  // Provider-neutral identity and one-shot launch state must exist before any
+  // state initializer reads it. Keeping this at the top also makes the hook
+  // order independent of connection state.
+  const {
+    sessionKey,
+    initialLaunchOptionsRef,
+    initialLaunchOptionsPendingRef,
+    acknowledgeInitialLaunchOptions,
+    isInitializedRef,
+    lastInitTimeRef,
+    forkInFlightRef,
+  } = useNativeAgentSession({
+    platform: "opencode",
+    environmentId,
+    tabId,
+    initialAgentModel,
+    initialReasoningEffort,
+  });
+  useNativeComposeDraftPersistence("opencode", environmentId, sessionKey, useOpenCodeStore);
   // Initialize as "connected" if we already have a client and session from a previous init.
   // This avoids even a single frame of spinner when switching back to an already-connected env.
   const [connectionState, setConnectionState] = useState<ConnectionState>(() => {
@@ -338,27 +360,19 @@ export function OpenCodeChatTab({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
   const [serverLog, setServerLog] = useState<string | null>(null);
-  const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
+  const [resumeDialogOpen, setResumeDialogOpen] = useState(initialResumeOpen);
   const [modelPreferences, setModelPreferences] =
     useState<OpenCodeModelPreferences>(EMPTY_MODEL_PREFERENCES);
 
   // Track this tab's session ID locally to prevent interference between tabs
   const tabSessionIdRef = useRef<string | null>(null);
   // Track if this tab has been initialized (to differentiate first mount vs re-activation)
-  const isInitializedRef = useRef(false);
   // Invalidates async initialization work when its props change underneath it.
   // `mounted` protects unmounts; the generation also protects overlapping effect
   // instances when a projected backend session arrives during an awaited probe.
   const initializationGenerationRef = useRef(0);
   // Track if initial prompt has been sent (to prevent duplicate sends)
   const initialPromptSentRef = useRef(false);
-  const initialLaunchOptionsRef = useRef({
-    model: initialAgentModel,
-    reasoningEffort: initialReasoningEffort,
-  });
-  const initialLaunchOptionsPendingRef = useRef(
-    Boolean(initialAgentModel || initialReasoningEffort),
-  );
   /**
    * Whether initialization has finished deciding what to do with the one-shot
    * launch options.
@@ -449,29 +463,12 @@ export function OpenCodeChatTab({
   const clearTabInitialPrompt = usePaneLayoutStore(
     (state) => state.clearTabInitialPrompt,
   );
-  const clearTabInitialAgentOptions = usePaneLayoutStore(
-    (state) => state.clearTabInitialAgentOptions,
-  );
   const clearTabAgentHandoff = usePaneLayoutStore(
     (state) => state.clearTabAgentHandoff,
   );
   const updateTabNativeSessionId = usePaneLayoutStore(
     (state) => state.updateTabNativeSessionId,
   );
-
-  // Create a unique session key that combines environmentId and tabId
-  // This prevents session collisions when multiple environments use the same tab IDs (e.g., "default")
-  const sessionKey = useMemo(
-    () => createSessionKey(environmentId, tabId),
-    [environmentId, tabId],
-  );
-  useNativeComposeDraftPersistence("opencode", environmentId, sessionKey, useOpenCodeStore);
-
-  const acknowledgeInitialLaunchOptions = useCallback(() => {
-    if (!initialLaunchOptionsPendingRef.current) return;
-    initialLaunchOptionsPendingRef.current = false;
-    clearTabInitialAgentOptions(tabId, environmentId);
-  }, [clearTabInitialAgentOptions, environmentId, tabId]);
 
   // Get client for this environment (shared per environment). Per-key selector:
   // re-renders only when this environment's client changes.
@@ -544,13 +541,12 @@ export function OpenCodeChatTab({
     sessionKey,
   ]);
 
-  const forkInFlightRef = useRef(false);
   const [forkInFlight, setForkInFlight] = useState(false);
 
   const sessionMessages = useMemo(() => session?.messages ?? [], [session?.messages]);
   const providerDisplayMessages = useMemo(
     () => pinActiveNativeAgentParts(
-      getNativeAgentAdapter("opencode").normalizeMessages(sessionMessages),
+      normalizeNativeMessages(sessionMessages),
     ),
     [sessionMessages],
   );
@@ -657,20 +653,6 @@ export function OpenCodeChatTab({
     }
     return permissions;
   }, [session?.sessionId, pendingPermissionsMap]);
-
-  const favoriteModelIds = useMemo(() => {
-    const ids: string[] = [];
-    const seen = new Set<string>();
-
-    for (const favorite of modelPreferences.favorite) {
-      const modelId = openCodeModelRefToId(favorite);
-      if (!modelId || seen.has(modelId)) continue;
-      seen.add(modelId);
-      ids.push(modelId);
-    }
-
-    return ids;
-  }, [modelPreferences]);
 
   // Elapsed timer: counts up while agent is working
   const { elapsedSeconds, finalElapsedSeconds } = useElapsedTimer(
@@ -823,7 +805,6 @@ export function OpenCodeChatTab({
   // (in App.tsx), which derives state from this store's session data.
 
   // Track last initialization time to prevent rapid re-initialization
-  const lastInitTimeRef = useRef<number>(0);
   const INIT_DEBOUNCE_MS = 1000; // Don't re-initialize within 1 second
   const startSharedEventSubscriptionRef = useRef<((client: ReturnType<typeof createClient>) => void) | null>(null);
   const MAX_SSE_RECONNECT_ATTEMPTS = 10;
@@ -1132,7 +1113,7 @@ export function OpenCodeChatTab({
           if (pendingLaunchOptions && liveModels.length === 0) {
             // Best-effort: failing to validate a launch option must not turn a
             // reconnect that would otherwise have worked into a broken tab.
-            const { models: refreshedModels } = await getModelsWithDefaults(
+            const { models: refreshedModels } = await getSelectableModelsWithDefaults(
               existingClient,
             ).catch((error) => {
               console.warn(
@@ -1411,7 +1392,7 @@ export function OpenCodeChatTab({
         // Fetch available models, server defaults, and model preferences
         const [{ models: availableModels, defaults }, rawPreferences] =
           await Promise.all([
-            getModelsWithDefaults(sdkClient),
+            getSelectableModelsWithDefaults(sdkClient),
             getOpencodeModelPreferences().catch((error) => {
               console.warn(
                 "[OpenCodeChatTab] Failed to load model preferences:",
@@ -3211,9 +3192,9 @@ export function OpenCodeChatTab({
         paneStore.getActivePaneId(environmentId),
         {
           id: forkTabId,
-          type: "opencode-native",
+          type: "agent-native",
           displayTitle: fork.title ?? "OpenCode fork",
-          openCodeNativeData: { ...data, sessionId: fork.id },
+          nativeAgentData: { ...data, platform: "opencode", sessionId: fork.id },
         },
         environmentId,
       );
@@ -3244,7 +3225,7 @@ export function OpenCodeChatTab({
 
     try {
       const { models: availableModels, defaults } =
-        await getModelsWithDefaults(client);
+        await getSelectableModelsWithDefaults(client);
       const hasLiveCatalog = availableModels.length > 0;
       if (hasLiveCatalog) {
         setModels(environmentId, availableModels);
@@ -3367,30 +3348,27 @@ export function OpenCodeChatTab({
           </>
         ) : null
       }
-      composer={
-        <OpenCodeComposeBar
-          environmentId={environmentId}
-          tabId={tabId}
-          containerId={containerId}
-          models={models}
-          slashCommands={slashCommands}
-          favoriteModelIds={favoriteModelIds}
-          onSend={async (text, attachments) => {
+      composer={useOpenCodeNativeComposer({
+          environmentId,
+          tabId,
+          containerId,
+          models,
+          slashCommands,
+          onSend: async (text, attachments) => {
             const result = await handleSend(text, attachments);
             if (result && !result.success) {
               throw new Error(result.error || "Failed to send prompt");
             }
-          }}
-          disabled={!handoff.ready || !client || !session}
-          isLoading={session?.isLoading ?? false}
-          queueLength={queueLength}
-          onStop={handleStop}
-          onQueue={handleQueue}
-          onRefreshModels={refreshModels}
-          showAddressAll={showAddressAll}
-          layout={centerCompose ? "centered" : "bottom"}
-        />
-      }
+          },
+          disabled: !handoff.ready || !client || !session,
+          isLoading: session?.isLoading ?? false,
+          queueLength,
+          onStop: handleStop,
+          onQueue: handleQueue,
+          onRefreshModels: refreshModels,
+          showAddressAll,
+          layout: centerCompose ? "centered" : "bottom",
+        })}
       resumeDialog={
         client ? (
           <OpenCodeResumeSessionDialog

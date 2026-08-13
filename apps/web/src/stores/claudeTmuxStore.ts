@@ -833,7 +833,7 @@ function applyLine(state: TmuxTabState, line: TranscriptLine): TmuxTabState {
     role,
     content: textOfParts(parts),
     parts,
-    timestamp,
+    createdAt: timestamp,
     ...(modelId ? { modelId } : {}),
   };
 
@@ -887,7 +887,7 @@ function contentToParts(
       case "tool_use": {
         const toolArgs = (c.input ?? {}) as Record<string, unknown>;
         parts.push({
-          type: "tool-invocation",
+          type: "tool-invocation", content: "",
           toolName: c.name,
           toolUseId: c.id,
           toolArgs,
@@ -900,7 +900,7 @@ function contentToParts(
       case "tool_result": {
         const txt = toolResultText(c.content);
         parts.push({
-          type: "tool-result",
+          type: "tool-result", content: "",
           toolUseId: c.tool_use_id,
           toolState: c.is_error ? "failure" : "success",
           toolOutput: c.is_error ? undefined : txt,
@@ -1123,7 +1123,7 @@ function mergeMessage(prev: ClaudeMessage, next: ClaudeMessage): ClaudeMessage {
     role: next.role || prev.role,
     content: textOfParts(parts),
     parts,
-    timestamp: next.timestamp || prev.timestamp,
+    createdAt: next.createdAt || prev.createdAt,
     ...(next.modelId ? { modelId: next.modelId } : {}),
   };
 }

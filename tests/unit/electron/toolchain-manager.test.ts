@@ -552,13 +552,12 @@ describe("pinned desktop toolchain cache", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
-  test("removes a stale dead-owner lock but preserves a stale-looking live-owner lock", async () => {
+  test("removes a fresh dead-owner lock but preserves a stale-looking live-owner lock", async () => {
     const staleDataDir = await createDataDir();
     const staleRoot = path.join(staleDataDir, "toolchains");
     const staleLock = path.join(staleRoot, ".install.lock");
     await mkdir(staleRoot, { recursive: true });
     await writeFile(staleLock, JSON.stringify({ token: "dead", pid: 999_999, createdAt: new Date(0).toISOString() }));
-    await utimes(staleLock, new Date(0), new Date(0));
 
     const staleResult = await ensurePinnedToolchains({
       dataDir: staleDataDir,
@@ -566,7 +565,7 @@ describe("pinned desktop toolchain cache", () => {
       fetchImpl: createFetch(),
       skipExecutableProbeForTests: true,
       processExistsForTests: () => false,
-      timingsForTests: { lockPollMs: 1, lockStaleAfterMs: 1, lockWaitTimeoutMs: 100 },
+      timingsForTests: { lockPollMs: 1, lockStaleAfterMs: 10_000, lockWaitTimeoutMs: 100 },
     });
     expect(path.dirname(staleResult.binDir)).toBe(path.join(staleRoot, "bin"));
 

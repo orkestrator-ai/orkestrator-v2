@@ -22,7 +22,7 @@ describe("terminal-utils", () => {
 
   test("falls back to plain for non-terminal agent tabs", () => {
     expect(tabTypeToSessionType("plain")).toBe("plain");
-    expect(tabTypeToSessionType("claude-native")).toBe("plain");
+    expect(tabTypeToSessionType("agent-native")).toBe("plain");
   });
 
   test("strips ANSI control sequences", () => {

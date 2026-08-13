@@ -394,10 +394,10 @@ function PaneBackedClaudeChatTab() {
     throw new Error("Expected pane leaf");
   }
   const tab = paneEnvironment.root.tabs.find((candidate) => candidate.id === TAB_ID);
-  if (!tab?.claudeNativeData) {
+  if (!tab?.nativeAgentData) {
     throw new Error("Expected Claude pane tab");
   }
-  return <ClaudeChatTab tabId={TAB_ID} data={tab.claudeNativeData} isActive />;
+  return <ClaudeChatTab tabId={TAB_ID} data={tab.nativeAgentData} isActive />;
 }
 
 function agentHandoffRecord(id: string, bootstrapPrompt: string) {
@@ -493,8 +493,8 @@ function seedPaneLayout(
             tabs: [
               {
                 id: TAB_ID,
-                type: "claude-native",
-                claudeNativeData: createData({ sessionId }),
+                type: "agent-native",
+                nativeAgentData: createData({ sessionId }),
                 initialPrompt,
                 initialAgentModel: launchOptions?.initialAgentModel,
                 initialReasoningEffort: launchOptions?.initialReasoningEffort,
@@ -524,8 +524,8 @@ function seedStartupAgentPane(initialPrompt: string) {
             tabs: [
               {
                 id: "startup-agent",
-                type: "claude-native",
-                claudeNativeData: createData(),
+                type: "agent-native",
+                nativeAgentData: createData(),
                 initialPrompt,
               },
             ],
@@ -886,7 +886,7 @@ describe("ClaudeChatTab", () => {
       role: "assistant",
       content: "Catalog-attributed response",
       parts: [{ type: "text", content: "Catalog-attributed response" }],
-      timestamp: "2026-07-28T12:00:00.000Z",
+      createdAt: "2026-07-28T12:00:00.000Z",
       modelId: "claude-sonnet-5",
     };
     mockGetModels.mockResolvedValue([catalogModel]);
@@ -1139,7 +1139,7 @@ describe("ClaudeChatTab", () => {
           role: "user",
           content: transportedPrompt!,
           parts: [{ type: "text", content: transportedPrompt! }],
-          timestamp: "2026-07-27T12:01:00.000Z",
+          createdAt: "2026-07-27T12:01:00.000Z",
         }],
       });
     });
@@ -1479,14 +1479,14 @@ describe("ClaudeChatTab", () => {
           role: "user",
           content: snapshot.bootstrapPrompt,
           parts: [{ type: "text", content: snapshot.bootstrapPrompt }],
-          timestamp: "2026-07-27T10:00:00.000Z",
+          createdAt: "2026-07-27T10:00:00.000Z",
         },
         {
           id: "answer",
           role: "assistant",
           content: "Continuing the work.",
           parts: [{ type: "text", content: "Continuing the work." }],
-          timestamp: "2026-07-27T10:01:00.000Z",
+          createdAt: "2026-07-27T10:01:00.000Z",
         },
       ],
     } as never);
@@ -1684,7 +1684,7 @@ describe("ClaudeChatTab", () => {
       role: "assistant",
       content: "Search the complete Claude transcript",
       parts: [{ type: "text", content: "Search the complete Claude transcript" }],
-      timestamp: "2026-07-28T10:00:00.000Z",
+      createdAt: "2026-07-28T10:00:00.000Z",
     };
     useClaudeStore.getState().setMessages(SESSION_KEY, [message]);
 
@@ -1735,7 +1735,7 @@ describe("ClaudeChatTab", () => {
       role: "assistant",
       content: "Updated by another client",
       parts: [{ type: "text", content: "Updated by another client" }],
-      timestamp: "2026-07-16T12:00:00.000Z",
+      createdAt: "2026-07-16T12:00:00.000Z",
     };
     mockGetSessionMessages.mockResolvedValue([serverMessage]);
     mockGetSession.mockResolvedValue({
@@ -1945,7 +1945,7 @@ describe("ClaudeChatTab", () => {
       role: "assistant",
       content: "Keep this message",
       parts: [{ type: "text", content: "Keep this message" }],
-      timestamp: "2026-07-16T12:00:00.000Z",
+      createdAt: "2026-07-16T12:00:00.000Z",
     };
     act(() => useClaudeStore.getState().setMessages(SESSION_KEY, [currentMessage]));
     mockGetSession.mockReset();
@@ -2018,7 +2018,7 @@ describe("ClaudeChatTab", () => {
       role: "assistant",
       content: "Do not apply this snapshot",
       parts: [{ type: "text", content: "Do not apply this snapshot" }],
-      timestamp: "2026-07-28T12:00:00.000Z",
+      createdAt: "2026-07-28T12:00:00.000Z",
     };
     const replacementMessage: ClaudeMessageType = {
       ...staleMessage,
@@ -2071,7 +2071,7 @@ describe("ClaudeChatTab", () => {
       role: "assistant",
       content: "Current transcript",
       parts: [{ type: "text", content: "Current transcript" }],
-      timestamp: "2026-07-16T12:00:00.000Z",
+      createdAt: "2026-07-16T12:00:00.000Z",
     };
     const staleMessage: ClaudeMessageType = {
       ...currentMessage,
@@ -2155,7 +2155,7 @@ describe("ClaudeChatTab", () => {
       role: "assistant",
       content: "Arrived over SSE",
       parts: [{ type: "text", content: "Arrived over SSE" }],
-      timestamp: "2026-07-16T12:00:01.000Z",
+      createdAt: "2026-07-16T12:00:01.000Z",
     };
     act(() => useClaudeStore.getState().upsertMessage(SESSION_KEY, liveMessage));
     await act(async () => {
@@ -2369,7 +2369,7 @@ describe("ClaudeChatTab", () => {
       role: "assistant" as const,
       content: "Existing response",
       parts: [{ type: "text" as const, content: "Existing response" }],
-      timestamp: "2026-03-07T12:00:00.000Z",
+      createdAt: "2026-03-07T12:00:00.000Z",
     };
 
     act(() => {
@@ -2485,7 +2485,7 @@ describe("ClaudeChatTab", () => {
         role: "assistant",
         content: "Recovered from snapshot",
         parts: [{ type: "text", content: "Recovered from snapshot" }],
-        timestamp: "2026-07-20T12:00:00.000Z",
+        createdAt: "2026-07-20T12:00:00.000Z",
       };
       mockGetSession.mockReset();
       mockGetSession.mockResolvedValue({
@@ -2565,7 +2565,7 @@ describe("ClaudeChatTab", () => {
           role: "assistant",
           content: "Recovered from snapshot",
           parts: [{ type: "text", content: "Recovered from snapshot" }],
-          timestamp: "2026-07-20T12:00:00.000Z",
+          createdAt: "2026-07-20T12:00:00.000Z",
         };
         mockGetSession.mockReset();
         mockGetSession.mockResolvedValue({
@@ -2754,7 +2754,7 @@ describe("ClaudeChatTab", () => {
           role: "assistant",
           content: "Streaming from Claude",
           parts: [{ type: "text", content: "Streaming from Claude" }],
-          timestamp: "2026-07-20T12:00:00.000Z",
+          createdAt: "2026-07-20T12:00:00.000Z",
         };
         channel.push({
           type: "message.updated",
@@ -2869,7 +2869,7 @@ describe("ClaudeChatTab", () => {
           role: "system",
           content: "Server-originated system response",
           parts: [{ type: "text", content: "Server-originated system response" }],
-          timestamp: "2026-07-20T12:00:00.000Z",
+          createdAt: "2026-07-20T12:00:00.000Z",
         };
         mockGetSessionMessages.mockResolvedValue([firstRefetch]);
         channel.push({
@@ -2926,9 +2926,9 @@ describe("ClaudeChatTab", () => {
           content: "Reading",
           parts: [
             { type: "text", content: "Reading" },
-            { type: "tool-invocation", toolName: "Read", toolUseId: "t-1", toolState: "pending" },
+            { type: "tool-invocation", content: "", toolName: "Read", toolUseId: "t-1", toolState: "pending" },
           ],
-          timestamp: "2026-07-20T12:00:00.000Z",
+          createdAt: "2026-07-20T12:00:00.000Z",
           revision: 1,
         };
         channel.push({
@@ -2951,7 +2951,7 @@ describe("ClaudeChatTab", () => {
             messageId: "patched-assistant",
             partCount: 2,
             changedParts: [{ index: 0, part: { type: "text", content: "Reading the file" } }],
-            timestamp: "2026-07-20T12:00:01.000Z",
+            createdAt: "2026-07-20T12:00:01.000Z",
             revision: 2,
           },
         });
@@ -2973,7 +2973,7 @@ describe("ClaudeChatTab", () => {
           role: "assistant",
           content: "Recovered from the server",
           parts: [{ type: "text", content: "Recovered from the server" }],
-          timestamp: "2026-07-20T12:00:02.000Z",
+          createdAt: "2026-07-20T12:00:02.000Z",
           revision: 3,
         };
         mockGetSessionMessages.mockResolvedValue([refetched]);
@@ -2984,7 +2984,7 @@ describe("ClaudeChatTab", () => {
             messageId: "arrived-mid-turn",
             partCount: 1,
             changedParts: [{ index: 0, part: { type: "text", content: "unseen" } }],
-            timestamp: "2026-07-20T12:00:02.000Z",
+            createdAt: "2026-07-20T12:00:02.000Z",
             revision: 4,
           },
         });
@@ -3015,9 +3015,9 @@ describe("ClaudeChatTab", () => {
           content: "Working",
           parts: [
             { type: "text", content: "Working" },
-            { type: "tool-invocation", toolName: "Read", toolUseId: "t-1", toolState: "pending" },
+            { type: "tool-invocation", content: "", toolName: "Read", toolUseId: "t-1", toolState: "pending" },
           ],
-          timestamp: "2026-07-20T12:00:00.000Z",
+          createdAt: "2026-07-20T12:00:00.000Z",
           revision: 1,
         };
         channel.push({
@@ -3044,12 +3044,12 @@ describe("ClaudeChatTab", () => {
           content: "Working and done",
           parts: [
             { type: "text", content: "Working" },
-            { type: "tool-invocation", toolName: "Read", toolUseId: "t-1", toolState: "success" },
+            { type: "tool-invocation", content: "", toolName: "Read", toolUseId: "t-1", toolState: "success" },
             { type: "thinking", content: "considering" },
-            { type: "tool-invocation", toolName: "Grep", toolUseId: "t-2", toolState: "success" },
+            { type: "tool-invocation", content: "", toolName: "Grep", toolUseId: "t-2", toolState: "success" },
             { type: "text", content: " and done" },
           ],
-          timestamp: "2026-07-20T12:00:05.000Z",
+          createdAt: "2026-07-20T12:00:05.000Z",
           revision: 6,
         };
         mockGetSessionMessages.mockResolvedValue([recovered]);
@@ -3060,7 +3060,7 @@ describe("ClaudeChatTab", () => {
             messageId: "gap-assistant",
             partCount: 5,
             changedParts: [{ index: 4, part: { type: "text", content: " and done" } }],
-            timestamp: "2026-07-20T12:00:05.000Z",
+            createdAt: "2026-07-20T12:00:05.000Z",
             revision: 6,
           },
         });
@@ -3095,7 +3095,7 @@ describe("ClaudeChatTab", () => {
             messageId: "gap-assistant",
             partCount: 5,
             changedParts: [{ index: 4, part: { type: "text", content: " and finished" } }],
-            timestamp: "2026-07-20T12:00:06.000Z",
+            createdAt: "2026-07-20T12:00:06.000Z",
             revision: 7,
           },
         });
@@ -3127,7 +3127,7 @@ describe("ClaudeChatTab", () => {
           role: "assistant",
           content: "Working",
           parts: [{ type: "text", content: "Working" }],
-          timestamp: "2026-07-20T12:00:00.000Z",
+          createdAt: "2026-07-20T12:00:00.000Z",
           revision: 1,
         };
         channel.push({
@@ -3151,7 +3151,7 @@ describe("ClaudeChatTab", () => {
           data: {
             messageId: "malformed-assistant",
             partCount: 2,
-            timestamp: "2026-07-20T12:00:01.000Z",
+            createdAt: "2026-07-20T12:00:01.000Z",
             revision: 2,
           },
         });
@@ -3726,7 +3726,7 @@ describe("ClaudeChatTab", () => {
             type: "text",
             content: "A transcript frame is not a lifecycle edge",
           }],
-          timestamp: "2026-07-30T12:00:00.000Z",
+          createdAt: "2026-07-30T12:00:00.000Z",
         },
       },
     } as ClaudeEvent);
@@ -3933,7 +3933,7 @@ describe("ClaudeChatTab", () => {
     expect(restoredRoot?.kind).toBe("leaf");
     if (!restoredRoot || restoredRoot.kind !== "leaf") throw new Error("Expected pane leaf");
     const restoredTab = restoredRoot.tabs.find((tab) => tab.id === TAB_ID);
-    expect(restoredTab?.claudeNativeData?.sessionId).toBe(restoredSessionId);
+    expect(restoredTab?.nativeAgentData?.sessionId).toBe(restoredSessionId);
   });
 
   test("adopts a late backend projection over a cached temporary session", async () => {
@@ -3943,7 +3943,7 @@ describe("ClaudeChatTab", () => {
       role: "user",
       content: "Backend-dispatched startup prompt",
       parts: [{ type: "text", content: "Backend-dispatched startup prompt" }],
-      timestamp: "2026-07-31T12:00:00.000Z",
+      createdAt: "2026-07-31T12:00:00.000Z",
     };
     const projectedQuestion: ClaudeQuestionRequest = {
       id: "backend-startup-question",
@@ -3993,7 +3993,7 @@ describe("ClaudeChatTab", () => {
       role: "assistant",
       content: "Keep the newest backend projection",
       parts: [{ type: "text", content: "Keep the newest backend projection" }],
-      timestamp: "2026-07-31T12:30:00.000Z",
+      createdAt: "2026-07-31T12:30:00.000Z",
     };
     useClaudeStore.setState((state) => ({
       ...state,
@@ -4045,7 +4045,7 @@ describe("ClaudeChatTab", () => {
         isLoading: true,
       });
       expect(
-        usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.claudeNativeData?.sessionId,
+        usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.nativeAgentData?.sessionId,
       ).toBe(secondProjection);
     });
   });
@@ -4080,7 +4080,7 @@ describe("ClaudeChatTab", () => {
 
     await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
     expect(
-      usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.claudeNativeData?.sessionId,
+      usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.nativeAgentData?.sessionId,
     ).toBe(expiredSessionId);
 
     await act(async () => {
@@ -4092,7 +4092,7 @@ describe("ClaudeChatTab", () => {
       expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.sessionId)
         .toBe("session-1");
       expect(
-        usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.claudeNativeData?.sessionId,
+        usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.nativeAgentData?.sessionId,
       ).toBe("session-1");
     });
     const state = useClaudeStore.getState();
@@ -4137,7 +4137,7 @@ describe("ClaudeChatTab", () => {
       role: "assistant",
       content: "Keep this transcript",
       parts: [{ type: "text", content: "Keep this transcript" }],
-      timestamp: "2026-04-15T10:00:00.000Z",
+      createdAt: "2026-04-15T10:00:00.000Z",
     };
     useClaudeStore.setState((state) => ({
       ...state,
@@ -4181,7 +4181,7 @@ describe("ClaudeChatTab", () => {
       role: "assistant",
       content: "Persisted Claude transcript",
       parts: [{ type: "text", content: "Persisted Claude transcript" }],
-      timestamp: "2026-04-15T10:00:00.000Z",
+      createdAt: "2026-04-15T10:00:00.000Z",
     };
     useClaudeStore.setState((state) => ({
       ...state,
@@ -4250,7 +4250,7 @@ describe("ClaudeChatTab", () => {
     await waitFor(() => {
       expect(mockCreateSession).toHaveBeenCalledWith(MOCK_CLIENT);
       expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe("session-1");
-      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.claudeNativeData?.sessionId)
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.nativeAgentData?.sessionId)
         .toBe("session-1");
     });
   });
@@ -4278,7 +4278,7 @@ describe("ClaudeChatTab", () => {
 
     await waitFor(() => {
       expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe("session-1");
-      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.claudeNativeData?.sessionId)
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.nativeAgentData?.sessionId)
         .toBe("session-1");
     });
     expect(mockCreateSession).toHaveBeenCalledTimes(1);
@@ -4293,7 +4293,7 @@ describe("ClaudeChatTab", () => {
       role: "assistant",
       content: "Resumed Claude transcript",
       parts: [{ type: "text", content: "Resumed Claude transcript" }],
-      timestamp: "2026-04-15T10:00:00.000Z",
+      createdAt: "2026-04-15T10:00:00.000Z",
     };
     mockGetSessionMessages.mockImplementation(async (_client, sessionId) =>
       sessionId === "resumed-claude" ? [resumedMessage] : []
@@ -4318,7 +4318,7 @@ describe("ClaudeChatTab", () => {
         sessionId: "resumed-claude",
         messages: [resumedMessage],
       });
-      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.claudeNativeData?.sessionId)
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.nativeAgentData?.sessionId)
         .toBe("resumed-claude");
     });
   });
@@ -4480,7 +4480,7 @@ describe("ClaudeChatTab", () => {
       expect(screen.getByTestId("claude-resume-choice")).toBeTruthy();
       expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe("session-1");
       expect(
-        usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.claudeNativeData?.sessionId,
+        usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.nativeAgentData?.sessionId,
       ).not.toBe("resumed-claude");
     } finally {
       console.error = originalError;
@@ -4514,7 +4514,7 @@ describe("ClaudeChatTab", () => {
               role: "assistant",
               content: "Do not publish this transcript",
               parts: [{ type: "text", content: "Do not publish this transcript" }],
-              timestamp: "2026-04-15T10:00:00.000Z",
+              createdAt: "2026-04-15T10:00:00.000Z",
             }]
           : []
       );
@@ -4540,7 +4540,7 @@ describe("ClaudeChatTab", () => {
           ),
         ).toBe(false);
         expect(
-          usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.claudeNativeData?.sessionId,
+          usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.nativeAgentData?.sessionId,
         ).not.toBe("resumed-claude");
       } finally {
         console.error = originalError;
@@ -4801,7 +4801,7 @@ describe("ClaudeChatTab", () => {
       role: "assistant" as const,
       content: "Review complete",
       parts: [{ type: "text" as const, content: "Review complete" }],
-      timestamp: "2026-03-07T12:00:00.000Z",
+      createdAt: "2026-03-07T12:00:00.000Z",
     };
 
     act(() => {
@@ -4992,7 +4992,7 @@ describe("ClaudeChatTab", () => {
           content: 'Preview this\n\n<attached-files>\n<attachment type="image" path="/workspace/.orkestrator/clipboard/clipboard.png" filename="clipboard.png" />\n</attached-files>',
         },
       ],
-      timestamp: "2026-03-07T12:00:00.000Z",
+      createdAt: "2026-03-07T12:00:00.000Z",
     };
     mockGetSessionMessages.mockImplementation(async () => [message]);
 
@@ -5040,14 +5040,14 @@ describe("ClaudeChatTab", () => {
         },
         { type: "text" as const, content: "Parent continued" },
       ],
-      timestamp: "2026-03-07T12:00:00.000Z",
+      createdAt: "2026-03-07T12:00:00.000Z",
     };
     const laterMessage: ClaudeMessageType = {
       id: "assistant-later",
       role: "assistant" as const,
       content: "Later response",
       parts: [{ type: "text" as const, content: "Later response" }],
-      timestamp: "2026-03-07T12:00:30.000Z",
+      createdAt: "2026-03-07T12:00:30.000Z",
     };
 
     act(() => {
@@ -5108,14 +5108,13 @@ describe("ClaudeChatTab", () => {
       role: "assistant",
       content: "",
       parts: [{
-        type: "tool-invocation",
-        content: "Agent",
+        type: "tool-invocation", content: "Agent",
         toolName: "Agent",
         toolUseId: "agent-launch-1",
         toolState: "success",
         toolArgs: { description: "Background worker" },
       }],
-      timestamp: "2026-03-07T12:00:00.000Z",
+      createdAt: "2026-03-07T12:00:00.000Z",
     };
 
     act(() => {
@@ -5165,7 +5164,7 @@ describe("ClaudeChatTab", () => {
         {
           type: "text",
           content: "Parent started",
-          timestamp: "2026-03-07T12:00:30.000Z",
+          createdAt: "2026-03-07T12:00:30.000Z",
         },
         {
           type: "tool-invocation",
@@ -5178,10 +5177,10 @@ describe("ClaudeChatTab", () => {
         {
           type: "text",
           content: "Parent resumed later",
-          timestamp: "2026-03-07T12:03:01.000Z",
+          createdAt: "2026-03-07T12:03:01.000Z",
         },
       ],
-      timestamp: "2026-03-07T12:00:00.000Z",
+      createdAt: "2026-03-07T12:00:00.000Z",
     };
 
     act(() => {
@@ -5669,14 +5668,14 @@ describe("ClaudeChatTab", () => {
       role: "assistant",
       content: "Local delivery warning",
       parts: [{ type: "text", content: "Local delivery warning" }],
-      timestamp: "2026-07-30T10:02:00.000Z",
+      createdAt: "2026-07-30T10:02:00.000Z",
     };
     const serverMessage: ClaudeMessageType = {
       id: "server-restored",
       role: "assistant",
       content: "Authoritative transcript",
       parts: [{ type: "text", content: "Authoritative transcript" }],
-      timestamp: "2026-07-30T10:01:00.000Z",
+      createdAt: "2026-07-30T10:01:00.000Z",
     };
     console.warn = consoleWarn as unknown as typeof console.warn;
     useClaudeStore.setState((state) => ({
@@ -5917,10 +5916,9 @@ describe("ClaudeChatTab", () => {
         id: "assistant-stop-background-task",
         role: "assistant",
         content: "",
-        timestamp: "2026-07-26T01:00:00.000Z",
+        createdAt: "2026-07-26T01:00:00.000Z",
         parts: [{
-          type: "tool-invocation",
-          content: "TaskStop",
+          type: "tool-invocation", content: "TaskStop",
           toolName: "TaskStop",
           toolState: "success",
           toolArgs: { task_id: "bg-wait" },
@@ -6478,14 +6476,13 @@ describe("ClaudeChatTab", () => {
         role: "assistant",
         content: "",
         parts: [{
-          type: "tool-invocation",
-          content: "Agent",
+          type: "tool-invocation", content: "Agent",
           toolName: "Agent",
           toolUseId: "agent-launch-1",
           toolState: "success",
           toolArgs: { description: "Background worker" },
         }],
-        timestamp: "2026-07-26T01:00:00.000Z",
+        createdAt: "2026-07-26T01:00:00.000Z",
       };
       useClaudeStore.getState().setMessages(SESSION_KEY, [backgroundAgent]);
 
@@ -6668,7 +6665,7 @@ describe("ClaudeChatTab", () => {
         role: "assistant",
         content: "Done",
         parts: [{ type: "text", content: "Done" }],
-        timestamp: "2026-07-26T00:00:00.000Z",
+        createdAt: "2026-07-26T00:00:00.000Z",
       };
       mockGetSessionMessages.mockImplementation(async () => [message]);
       useClaudeStore.getState().setSession(SESSION_KEY, {
@@ -6888,14 +6885,14 @@ describe("ClaudeChatTab", () => {
           role: "assistant",
           content: "Existing answer",
           parts: [{ type: "text", content: "Existing answer" }],
-          timestamp: "2026-07-26T00:00:00.000Z",
+          createdAt: "2026-07-26T00:00:00.000Z",
         },
         {
           id: "user-1",
           role: "user",
           content: "Add pagination",
           parts: [{ type: "text", content: "Add pagination" }],
-          timestamp: "2026-07-26T00:01:00.000Z",
+          createdAt: "2026-07-26T00:01:00.000Z",
         },
       ];
       mockGetSessionMessages.mockImplementation(async () => messages);
@@ -6926,9 +6923,9 @@ describe("ClaudeChatTab", () => {
         .getState()
         .getAllTabs(ENVIRONMENT_ID)
         .find((tab) => tab.id !== TAB_ID)!;
-      expect(forked.type).toBe("claude-native");
+      expect(forked.type).toBe("agent-native");
       expect(forked.displayTitle).toBe("Claude fork");
-      expect(forked.claudeNativeData?.sessionId).toBe("claude-fork");
+      expect(forked.nativeAgentData?.sessionId).toBe("claude-fork");
       expect(forked.initialPrompt).toBeUndefined();
       expect(
         useClaudeStore.getState().getDraftText(
@@ -6943,7 +6940,7 @@ describe("ClaudeChatTab", () => {
         role: "user",
         content: "First prompt",
         parts: [{ type: "text", content: "First prompt" }],
-        timestamp: "2026-07-26T00:00:00.000Z",
+        createdAt: "2026-07-26T00:00:00.000Z",
       };
       mockCreateSession.mockResolvedValue({
         sessionId: "empty-fork",
@@ -6969,7 +6966,7 @@ describe("ClaudeChatTab", () => {
         .getState()
         .getAllTabs(ENVIRONMENT_ID)
         .find((tab) => tab.id !== TAB_ID)!;
-      expect(forked.claudeNativeData?.sessionId).toBe("empty-fork");
+      expect(forked.nativeAgentData?.sessionId).toBe("empty-fork");
       expect(
         useClaudeStore.getState().getDraftText(
           createSessionKey(ENVIRONMENT_ID, forked.id),
@@ -6983,7 +6980,7 @@ describe("ClaudeChatTab", () => {
         role: "user",
         content: "First prompt",
         parts: [{ type: "text", content: "First prompt" }],
-        timestamp: "2026-07-26T00:00:00.000Z",
+        createdAt: "2026-07-26T00:00:00.000Z",
       };
       mockCreateSession.mockResolvedValueOnce(null);
       mockGetSessionMessages.mockResolvedValue([message]);
@@ -7016,14 +7013,14 @@ describe("ClaudeChatTab", () => {
           role: "user",
           content: "Add pagination",
           parts: [{ type: "text", content: "Add pagination" }],
-          timestamp: "2026-07-26T00:00:00.000Z",
+          createdAt: "2026-07-26T00:00:00.000Z",
         },
         {
           id: "assistant-1",
           role: "assistant",
           content: "Done",
           parts: [{ type: "text", content: "Done" }],
-          timestamp: "2026-07-26T00:01:00.000Z",
+          createdAt: "2026-07-26T00:01:00.000Z",
         },
       ];
       act(() => {
@@ -7070,29 +7067,28 @@ describe("ClaudeChatTab", () => {
           role: "user",
           content: "Add pagination",
           parts: [{ type: "text", content: "Add pagination" }],
-          timestamp: "2026-07-26T00:00:00.000Z",
+          createdAt: "2026-07-26T00:00:00.000Z",
         },
         {
           id: "assistant-1",
           role: "assistant",
           content: "",
-          timestamp: "2026-07-26T00:01:00.000Z",
+          createdAt: "2026-07-26T00:01:00.000Z",
           parts: [
             {
               type: "text",
               content: "Starting",
-              timestamp: "2026-07-26T00:01:00.000Z",
+              createdAt: "2026-07-26T00:01:00.000Z",
             },
             {
-              type: "tool-invocation",
-              content: "Bash",
+              type: "tool-invocation", content: "Bash",
               toolName: "Bash",
-              timestamp: "2026-07-26T00:02:00.000Z",
+              createdAt: "2026-07-26T00:02:00.000Z",
             },
             {
               type: "text",
               content: "Finished",
-              timestamp: "2026-07-26T00:20:00.000Z",
+              createdAt: "2026-07-26T00:20:00.000Z",
             },
           ],
         } as ClaudeMessageType,
@@ -7138,23 +7134,22 @@ describe("ClaudeChatTab", () => {
           id: "assistant-1",
           role: "assistant",
           content: "",
-          timestamp: "2026-07-26T00:01:00.000Z",
+          createdAt: "2026-07-26T00:01:00.000Z",
           parts: [
             {
               type: "text",
               content: "Starting",
-              timestamp: "2026-07-26T00:01:00.000Z",
+              createdAt: "2026-07-26T00:01:00.000Z",
             },
             {
-              type: "tool-invocation",
-              content: "Bash",
+              type: "tool-invocation", content: "Bash",
               toolName: "Bash",
-              timestamp: "2026-07-26T00:02:00.000Z",
+              createdAt: "2026-07-26T00:02:00.000Z",
             },
             {
               type: "text",
               content: "Finished",
-              timestamp: "2026-07-26T00:20:00.000Z",
+              createdAt: "2026-07-26T00:20:00.000Z",
             },
           ],
         } as ClaudeMessageType,
@@ -7163,7 +7158,7 @@ describe("ClaudeChatTab", () => {
           role: "user",
           content: "Now paginate",
           parts: [{ type: "text", content: "Now paginate" }],
-          timestamp: "2026-07-26T00:30:00.000Z",
+          createdAt: "2026-07-26T00:30:00.000Z",
         },
       ];
       mockGetSessionMessages.mockImplementation(async () => messages);
@@ -7205,7 +7200,7 @@ describe("ClaudeChatTab", () => {
           role: "assistant",
           content: "Existing answer",
           parts: [{ type: "text", content: "Existing answer" }],
-          timestamp: "2026-07-26T00:00:00.000Z",
+          createdAt: "2026-07-26T00:00:00.000Z",
         },
         {
           id: "user-1",
@@ -7215,7 +7210,7 @@ describe("ClaudeChatTab", () => {
             + '<attachment type="image" path="/tmp/mock.png" filename="mock.png" />\n'
             + "</attached-files>",
           parts: [],
-          timestamp: "2026-07-26T00:01:00.000Z",
+          createdAt: "2026-07-26T00:01:00.000Z",
         },
       ];
       mockGetSessionMessages.mockImplementation(async () => messages);

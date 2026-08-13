@@ -73,18 +73,18 @@ describe("DraggableTabBar", () => {
       tabs: [
         {
           id: "claude",
-          type: "claude-native",
-          claudeNativeData: { environmentId: "environment" },
+          type: "agent-native",
+          nativeAgentData: { platform: "claude", environmentId: "environment" },
         },
         {
           id: "codex",
-          type: "codex-native",
-          codexNativeData: { environmentId: "environment" },
+          type: "agent-native",
+          nativeAgentData: { platform: "codex", environmentId: "environment" },
         },
         {
           id: "opencode",
-          type: "opencode-native",
-          openCodeNativeData: { environmentId: "environment" },
+          type: "agent-native",
+          nativeAgentData: { platform: "opencode", environmentId: "environment" },
         },
         {
           id: "tmux",
@@ -196,8 +196,8 @@ describe("DraggableTabBar", () => {
     usePaneLayoutStore.getState().initialize("container", environmentId);
     usePaneLayoutStore.getState().addTab("default", {
       id: "claude-tab",
-      type: "claude-native",
-      claudeNativeData: { environmentId, containerId: "container" },
+      type: "agent-native",
+      nativeAgentData: { platform: "claude", environmentId, containerId: "container" },
     }, environmentId);
     useClaudeStore.getState().setDraftText(sessionKey, "orphaned prompt");
     const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;

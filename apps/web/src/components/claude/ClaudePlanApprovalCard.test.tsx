@@ -46,10 +46,10 @@ function assistantMessage(
     id,
     role: overrides.role ?? "assistant",
     content: "",
-    timestamp: "2026-07-20T10:00:00.000Z",
+    createdAt: "2026-07-20T10:00:00.000Z",
     parts: [
       {
-        type: "tool-invocation",
+        type: "tool-invocation", content: "",
         toolName: overrides.toolName ?? "Write",
         toolArgs: overrides.omitContent
           ? { file_path: filePath }

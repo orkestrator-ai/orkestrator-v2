@@ -12,14 +12,9 @@ import * as realHooks from "@/hooks";
 import * as realContexts from "@/contexts";
 import * as realBackend from "@/lib/backend";
 import * as realKanbanStore from "@/stores/kanbanStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import type { Environment, PrState, Project } from "@/types";
-import type {
-  KanbanTask,
-  OpenCodeModelCatalogSnapshot,
-  OpenCodeModelPreferences,
-} from "@/lib/backend";
+import type { KanbanTask } from "@/lib/backend";
 import {
   mockToastError as toastErrorMock,
   mockToastSuccess as toastSuccessMock,
@@ -76,16 +71,6 @@ const setEnvironmentPrBackendMock = mock(async (
   _prState: PrState,
   _hasMergeConflicts: boolean | null,
 ) => {});
-const getOpencodeModelPreferencesMock = mock(
-  async (): Promise<OpenCodeModelPreferences> => ({
-    recent: [],
-    favorite: [],
-    variant: {},
-  }),
-);
-const getCachedOpenCodeModelCatalogMock = mock(
-  async (): Promise<OpenCodeModelCatalogSnapshot | null> => null,
-);
 const setEnvironmentPRStoreMock = mock(() => {});
 const createTabMock = mock((_agent: string, _options?: unknown) => true);
 const enqueuePromptQueueMessageMock = mock(async (
@@ -605,8 +590,6 @@ mock.module("@/lib/backend", () => ({
   startLoopedReview: startLoopedReviewMock,
   cancelLoopedReview: cancelLoopedReviewMock,
   deleteLoopedReviewWorkflow: deleteLoopedReviewMock,
-  getOpencodeModelPreferences: getOpencodeModelPreferencesMock,
-  getCachedOpenCodeModelCatalog: getCachedOpenCodeModelCatalogMock,
   enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,
 }));
 
@@ -653,14 +636,6 @@ beforeEach(() => {
   readLocalFileMock.mockReset();
   setEnvironmentPrBackendMock.mockReset();
   setEnvironmentPRStoreMock.mockReset();
-  getOpencodeModelPreferencesMock.mockReset();
-  getOpencodeModelPreferencesMock.mockImplementation(async () => ({
-    recent: [],
-    favorite: [],
-    variant: {},
-  }));
-  getCachedOpenCodeModelCatalogMock.mockReset();
-  getCachedOpenCodeModelCatalogMock.mockImplementation(async () => null);
   createTabMock.mockReset();
   createTabMock.mockImplementation(() => true);
   enqueuePromptQueueMessageMock.mockReset();
@@ -764,42 +739,42 @@ describe("ActionBar grid presentation", () => {
     render(<ActionBar presentation="grid" />);
 
     const dockerButton = screen.getByRole("button", { name: "Docker configuration" });
-    const claudeButton = screen.getByRole("button", { name: "New tab with Claude" });
+    const nativeButton = screen.getByRole("button", { name: "New native agent tab" });
     fireEvent.mouseEnter(dockerButton.parentElement!);
-    fireEvent.mouseEnter(claudeButton);
+    fireEvent.mouseEnter(nativeButton);
     await new Promise((resolve) => setTimeout(resolve, 550));
 
     expect(screen.queryByText("Docker configuration")).toBeNull();
-    expect(screen.queryByText("New Tab with Claude")).toBeNull();
+    expect(screen.queryByText("New Native Agent Tab")).toBeNull();
   });
 
   test("keeps context-menu tooltips enabled on desktop hover", async () => {
     render(<ActionBar />);
 
-    const claudeButton = screen.getByRole("button", { name: "New tab with Claude" });
-    fireEvent.mouseEnter(claudeButton);
+    const nativeButton = screen.getByRole("button", { name: "New native agent tab" });
+    fireEvent.mouseEnter(nativeButton);
 
     const tooltipTitle = await waitFor(() =>
-      screen.getByText("New Tab with Claude"),
+      screen.getByText("New Native Agent Tab"),
     );
 
-    fireEvent.mouseLeave(claudeButton);
+    fireEvent.mouseLeave(nativeButton);
     fireEvent.mouseLeave(tooltipTitle.parentElement!);
     await waitFor(() => {
-      expect(screen.queryByText("New Tab with Claude")).toBeNull();
+      expect(screen.queryByText("New Native Agent Tab")).toBeNull();
     }, { timeout: 10_000 });
   }, 20_000);
 
   test("keeps context-menu tooltips enabled on desktop keyboard focus", async () => {
     render(<ActionBar />);
 
-    const claudeButton = screen.getByRole("button", { name: "New tab with Claude" });
-    fireEvent.focus(claudeButton);
-    expect(screen.getByText("New Tab with Claude")).toBeTruthy();
+    const nativeButton = screen.getByRole("button", { name: "New native agent tab" });
+    fireEvent.focus(nativeButton);
+    expect(screen.getByText("New Native Agent Tab")).toBeTruthy();
 
-    fireEvent.blur(claudeButton);
+    fireEvent.blur(nativeButton);
     await waitFor(() => {
-      expect(screen.queryByText("New Tab with Claude")).toBeNull();
+      expect(screen.queryByText("New Native Agent Tab")).toBeNull();
     }, { timeout: 10_000 });
   // Radix closes the portalled tooltip on a timer. Under the repository's
   // concurrent workspace run this file shares a saturated runner with the web
@@ -815,19 +790,17 @@ describe("ActionBar grid presentation", () => {
     expect(toolbar?.querySelectorAll(".grid-cols-2").length).toBeGreaterThanOrEqual(2);
 
     const globalSettings = screen.getByRole("button", { name: "Global settings" });
-    const claude = screen.getByRole("button", { name: "New tab with Claude" });
+    const native = screen.getByRole("button", { name: "New native agent tab" });
     expect(globalSettings.lastElementChild?.textContent).toBe("Global settings");
-    expect(claude.lastElementChild?.textContent).toBe("New Claude tab");
+    expect(native.lastElementChild?.textContent).toBe("New agent");
+    expect(screen.getByRole("button", { name: "New terminal tab" }).lastElementChild?.textContent)
+      .toBe("New terminal");
     expect(
       screen
         .getAllByRole("button")
         .map((button) => button.getAttribute("aria-label"))
         .filter((label) => label?.startsWith("New tab with ")),
-    ).toEqual([
-      "New tab with Claude",
-      "New tab with Codex",
-      "New tab with OpenCode",
-    ]);
+    ).toEqual([]);
   });
 
   test("keeps project and environment tools visible but disabled in the empty state", () => {
@@ -837,6 +810,7 @@ describe("ActionBar grid presentation", () => {
 
     expect(screen.getByRole("button", { name: "Global settings" }).hasAttribute("disabled")).toBe(false);
     expect(screen.getByRole("button", { name: "Repository settings" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "New native agent tab" }).hasAttribute("disabled")).toBe(true);
     expect(screen.getByRole("button", { name: "New terminal tab" }).hasAttribute("disabled")).toBe(true);
     expect(screen.getByRole("button", { name: "Kanban board" }).hasAttribute("disabled")).toBe(true);
     expect(screen.getByRole("button", { name: "Show file panel" }).hasAttribute("disabled")).toBe(true);
@@ -1591,20 +1565,20 @@ describe("ActionBar toolbar interactions", () => {
     const { container } = render(<ActionBar presentation="grid" />);
     const globalSettings = screen.getByRole("button", { name: "Global settings" });
     const globalSettingsIcon = globalSettings.querySelector("svg")!;
-    const claudeButton = screen.getByRole("button", { name: "New tab with Claude" });
-    const claudeLabel = Array.from(claudeButton.querySelectorAll("span")).find(
-      (element) => element.textContent === "New Claude tab",
+    const nativeButton = screen.getByRole("button", { name: "New native agent tab" });
+    const nativeLabel = Array.from(nativeButton.querySelectorAll("span")).find(
+      (element) => element.textContent === "New agent",
     )!;
 
     expect(fireEvent.contextMenu(globalSettings)).toBe(false);
     expect(fireEvent.contextMenu(globalSettingsIcon)).toBe(true);
-    fireEvent.contextMenu(claudeLabel);
+    fireEvent.contextMenu(nativeLabel);
 
-    expect(screen.getByRole("button", { name: "Claude Tmux" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Claude Tmux Tab" })).toBeTruthy();
     expect(container.querySelector("[data-mobile-toolbar]")).toBeTruthy();
   });
 
-  test("handles numeric, tab creation, close, and file-panel shortcuts", () => {
+  test("handles numeric, tab creation, and file-panel shortcuts", () => {
     currentTabCount = 1;
     render(<ActionBar />);
 
@@ -1613,25 +1587,24 @@ describe("ActionBar toolbar interactions", () => {
     fireEvent.keyDown(window, { key: "t", code: "KeyT", metaKey: true });
     fireEvent.keyDown(window, { key: "n", code: "KeyN", metaKey: true });
     fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true });
-    fireEvent.keyDown(window, { key: "w", code: "KeyW", metaKey: true });
     fireEvent.keyDown(window, { key: "e", code: "KeyE", metaKey: true });
 
     expect(selectTabMock.mock.calls.map(([index]) => index)).toEqual([2, 3]);
     expect(createTabMock).toHaveBeenCalledWith("plain");
-    expect(createTabMock).toHaveBeenCalledWith("claude");
-    expect(createTabMock).toHaveBeenCalledWith("opencode");
-    expect(closeActiveTabMock).toHaveBeenCalledTimes(1);
+    expect(createTabMock).toHaveBeenCalledWith("agent-native");
+    expect(createTabMock).not.toHaveBeenCalledWith("claude");
+    expect(createTabMock).not.toHaveBeenCalledWith("opencode");
+    expect(closeActiveTabMock).not.toHaveBeenCalled();
     expect(toggleFilesPanelMock).toHaveBeenCalledTimes(1);
   });
 
-  test("ignores out-of-range tab selection and disabled close and panel shortcuts", () => {
+  test("ignores out-of-range tab selection and disabled panel shortcuts", () => {
     currentSelectedEnvironmentId = null;
     currentTabCount = 0;
     render(<ActionBar />);
 
     fireEvent.keyDown(window, { key: "0", code: "Digit0", ctrlKey: true });
     fireEvent.keyDown(window, { key: "9", code: "Digit9", ctrlKey: true, shiftKey: true });
-    fireEvent.keyDown(window, { key: "w", code: "KeyW", metaKey: true });
     fireEvent.keyDown(window, { key: "e", code: "KeyE", metaKey: true });
 
     expect(selectTabMock).not.toHaveBeenCalled();
@@ -1639,13 +1612,14 @@ describe("ActionBar toolbar interactions", () => {
     expect(toggleFilesPanelMock).not.toHaveBeenCalled();
   });
 
-  test("does not launch agents disabled in platform settings through keyboard shortcuts", () => {
+  test("opens a neutral native tab without routing removed provider shortcuts", () => {
     currentEnabledAgentPlatforms = ["codex"];
     render(<ActionBar />);
 
     fireEvent.keyDown(window, { key: "n", code: "KeyN", metaKey: true });
     fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true });
 
+    expect(createTabMock).toHaveBeenCalledWith("agent-native");
     expect(createTabMock).not.toHaveBeenCalledWith("claude");
     expect(createTabMock).not.toHaveBeenCalledWith("opencode");
   });
@@ -1765,7 +1739,7 @@ describe("ActionBar workflow tabs", () => {
     expect(screen.queryByRole("button", { name: "Project Notes" })).toBeNull();
   });
 
-  test("agent context menu items pass one-shot launch mode overrides", () => {
+  test("native and terminal context menus route neutral, tmux, and CLI tabs", () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
@@ -1773,22 +1747,67 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: null,
     };
 
-    const { container } = render(<ActionBar />);
-    const customMenuTriggers = container.querySelectorAll("[data-toolbar-custom-context-menu='true']");
+    render(<ActionBar />);
 
-    expect(screen.queryByRole("button", { name: "Claude Tmux" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Claude Tmux Tab" })).toBeNull();
 
-    fireEvent.contextMenu(customMenuTriggers[0]!);
-    fireEvent.click(screen.getByRole("button", { name: "Claude Tmux" }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: "New native agent tab" }));
+    fireEvent.click(screen.getByRole("button", { name: "Native Tab" }));
+    expect(createTabMock).toHaveBeenLastCalledWith("agent-native");
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "New native agent tab" }));
+    fireEvent.click(screen.getByRole("button", { name: "Claude Tmux Tab" }));
     expect(createTabMock).toHaveBeenLastCalledWith("claude", { agentLaunchMode: "tmux" });
 
-    fireEvent.contextMenu(customMenuTriggers[1]!);
-    fireEvent.click(screen.getByRole("button", { name: "Codex Native" }));
-    expect(createTabMock).toHaveBeenLastCalledWith("codex", { agentLaunchMode: "native" });
-
-    fireEvent.contextMenu(customMenuTriggers[2]!);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "New terminal tab" }));
     fireEvent.click(screen.getByRole("button", { name: "OpenCode CLI" }));
     expect(createTabMock).toHaveBeenLastCalledWith("opencode", { agentLaunchMode: "cli" });
+  });
+
+  test("shows enabled CLI providers on the terminal control and removes legacy provider buttons", () => {
+    currentEnabledAgentPlatforms = ["claude", "codex", "cursor", "grok", "opencode"];
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "New native agent tab" }));
+    expect(createTabMock).toHaveBeenLastCalledWith("agent-native");
+    fireEvent.click(screen.getByRole("button", { name: "New terminal tab" }));
+    expect(createTabMock).toHaveBeenLastCalledWith("plain");
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "New terminal tab" }));
+    for (const label of ["Claude CLI", "Codex CLI", "OpenCode CLI", "Cursor CLI", "Grok CLI"]) {
+      expect(screen.getByRole("button", { name: label })).toBeTruthy();
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Cursor CLI" }));
+    expect(createTabMock).toHaveBeenLastCalledWith("cursor", { agentLaunchMode: "cli" });
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "New terminal tab" }));
+    fireEvent.click(screen.getByRole("button", { name: "Grok CLI" }));
+    expect(createTabMock).toHaveBeenLastCalledWith("grok", { agentLaunchMode: "cli" });
+
+    for (const legacyLabel of [
+      "New tab with Claude",
+      "New tab with Codex",
+      "New tab with OpenCode",
+      "New tab with Cursor Agent",
+      "New tab with Grok Build",
+    ]) {
+      expect(screen.queryByRole("button", { name: legacyLabel })).toBeNull();
+    }
+  });
+
+  test("filters terminal CLI and Claude Tmux options using enabled providers", () => {
+    currentEnabledAgentPlatforms = ["codex"];
+    render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "New native agent tab" }));
+    expect(screen.getByRole("button", { name: "Native Tab" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Claude Tmux Tab" })).toBeNull();
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "New terminal tab" }));
+    expect(screen.getByRole("button", { name: "Codex CLI" })).toBeTruthy();
+    for (const label of ["Claude CLI", "OpenCode CLI", "Cursor CLI", "Grok CLI"]) {
+      expect(screen.queryByRole("button", { name: label })).toBeNull();
+    }
   });
 
   test("names review tabs with the workflow title", () => {
@@ -2971,301 +2990,6 @@ describe("ActionBar workflow tabs", () => {
   });
 });
 
-describe("ActionBar OpenCode review model preferences", () => {
-  const preferences = (favorite: string[]): OpenCodeModelPreferences => ({
-    recent: [],
-    favorite,
-    variant: {},
-  });
-
-  const seedOpenCodeCatalog = () => {
-    useOpenCodeStore.getState().setModels("env-1", [
-      { id: "openrouter/model-a", name: "OpenCode A", provider: "openrouter" },
-      { id: "anthropic/claude-sonnet-5", name: "Claude Sonnet 5", provider: "anthropic" },
-    ], "server");
-  };
-
-  const readyEnvironment = () => {
-    currentEnvironment = {
-      ...selectedEnvironment,
-      prUrl: null,
-      prState: null,
-      hasMergeConflicts: null,
-    };
-    currentWorkspaceReady = true;
-  };
-
-  const openReviewDialog = () =>
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Code review" }));
-  const chooseOpenCode = () =>
-    fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
-  const openModelPicker = () => {
-    const trigger = screen.getByRole("combobox", { name: "Model" });
-    act(() => {
-      fireEvent.pointerDown(trigger);
-      fireEvent.click(trigger);
-    });
-    return trigger;
-  };
-  /** True when `first` appears before `second` in document order. */
-  const renderedBefore = (first: Element, second: Element) =>
-    Boolean(
-      first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING,
-    );
-
-  // The OpenCode store is shared by every test in this file, so it has to be
-  // cleared unconditionally rather than at the end of a test body: a failed
-  // assertion must not leak a catalogue into `buildReviewModelCatalog` for the
-  // remaining tests.
-  afterEach(() => {
-    useOpenCodeStore.setState({ models: new Map(), modelSource: new Map() });
-  });
-
-  test("does not read OpenCode model preferences until a review dialog opens", () => {
-    readyEnvironment();
-    render(<ActionBar />);
-
-    expect(getOpencodeModelPreferencesMock).not.toHaveBeenCalled();
-
-    openReviewDialog();
-
-    expect(getOpencodeModelPreferencesMock).toHaveBeenCalled();
-  });
-
-  test("hydrates the project model cache while keeping Default selected", async () => {
-    getCachedOpenCodeModelCatalogMock.mockResolvedValueOnce({
-      schemaVersion: 2,
-      projectId: "project-1",
-      catalogVersion: "catalog-1",
-      updatedAt: "2026-08-07T12:00:00.000Z",
-      models: [{
-        id: "openrouter/cached-model",
-        name: "Cached Model",
-        provider: "openrouter",
-        variants: ["fast"],
-      }],
-    });
-    readyEnvironment();
-    render(<ActionBar />);
-
-    openReviewDialog();
-    chooseOpenCode();
-
-    await waitFor(() => {
-      expect(getCachedOpenCodeModelCatalogMock).toHaveBeenCalledWith("project-1");
-    });
-    expect(screen.getByRole("combobox", { name: "Model" }).textContent)
-      .toContain("Default");
-
-    openModelPicker();
-    await waitFor(() => expect(screen.getByText("openrouter/cached-model")).toBeTruthy());
-    expect(screen.getByText("Cached Model")).toBeTruthy();
-
-    fireEvent.keyDown(screen.getByPlaceholderText("Search models or providers…"), {
-      key: "Escape",
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
-    expect(createTabMock).toHaveBeenCalledWith(
-      "opencode",
-      expect.objectContaining({ initialAgentModel: "default" }),
-    );
-  });
-
-  test("keeps review launches working when OpenCode preferences cannot be read", async () => {
-    getOpencodeModelPreferencesMock.mockRejectedValueOnce(new Error("preferences unavailable"));
-    seedOpenCodeCatalog();
-    readyEnvironment();
-    render(<ActionBar />);
-
-    openReviewDialog();
-
-    await waitFor(() => expect(console.warn).toHaveBeenCalledWith(
-      "[ActionBar] Failed to load OpenCode model preferences:",
-      expect.any(Error),
-    ));
-
-    // The dialog must still open and launch despite the failed preferences read.
-    chooseOpenCode();
-    openModelPicker();
-    // A failed read leaves the favourites empty, so the picker shows the plain
-    // catalogue with no "Favorites" section.
-    expect(screen.queryByText("Favorites")).toBeNull();
-    expect(screen.queryByText("All models")).toBeNull();
-    expect(screen.getByText("openrouter/model-a")).toBeTruthy();
-
-    fireEvent.keyDown(screen.getByPlaceholderText("Search models or providers…"), {
-      key: "Escape",
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
-    expect(createTabMock).toHaveBeenCalledWith(
-      "opencode",
-      expect.objectContaining({
-        agentLaunchMode: "native",
-        isReviewTab: true,
-      }),
-    );
-  });
-
-  test("pins OpenCode TUI favourites above the rest of the catalogue", async () => {
-    seedOpenCodeCatalog();
-    getOpencodeModelPreferencesMock.mockResolvedValueOnce(
-      preferences(["openrouter/model-a"]),
-    );
-    readyEnvironment();
-    render(<ActionBar />);
-
-    openReviewDialog();
-    await waitFor(() => expect(getOpencodeModelPreferencesMock).toHaveBeenCalled());
-
-    chooseOpenCode();
-    expect(screen.getByRole("combobox", { name: "Model" }).textContent)
-      .toContain("Default");
-    openModelPicker();
-
-    await waitFor(() => expect(screen.getByText("Favorites")).toBeTruthy());
-    const favouritesLabel = screen.getByText("Favorites");
-    const allModelsLabel = screen.getByText("All models");
-    const favourite = screen.getByText("openrouter/model-a");
-    const other = screen.getByText("anthropic/claude-sonnet-5");
-
-    // Order, not mere presence: an inversion must fail this test.
-    expect(renderedBefore(favouritesLabel, favourite)).toBe(true);
-    expect(renderedBefore(favourite, allModelsLabel)).toBe(true);
-    expect(renderedBefore(allModelsLabel, other)).toBe(true);
-  });
-
-  test("re-reads the TUI favourites every time a review dialog opens", async () => {
-    seedOpenCodeCatalog();
-    getOpencodeModelPreferencesMock.mockResolvedValueOnce(
-      preferences(["openrouter/model-a"]),
-    );
-    getOpencodeModelPreferencesMock.mockResolvedValueOnce(
-      preferences(["anthropic/claude-sonnet-5"]),
-    );
-    readyEnvironment();
-    render(<ActionBar />);
-
-    openReviewDialog();
-    await waitFor(() => expect(getOpencodeModelPreferencesMock).toHaveBeenCalledTimes(1));
-    chooseOpenCode();
-    openModelPicker();
-    await waitFor(() => expect(screen.getByText("Favorites")).toBeTruthy());
-    expect(renderedBefore(
-      screen.getByText("openrouter/model-a"),
-      screen.getByText("All models"),
-    )).toBe(true);
-
-    fireEvent.keyDown(screen.getByPlaceholderText("Search models or providers…"), {
-      key: "Escape",
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-
-    // The TUI favourite changed while Orkestrator stayed open; reopening the
-    // dialog must pick it up rather than reuse the mount-time snapshot.
-    openReviewDialog();
-    await waitFor(() => expect(getOpencodeModelPreferencesMock).toHaveBeenCalledTimes(2));
-    chooseOpenCode();
-    openModelPicker();
-
-    await waitFor(() => expect(screen.getByText("Favorites")).toBeTruthy());
-    expect(renderedBefore(
-      screen.getByText("anthropic/claude-sonnet-5"),
-      screen.getByText("All models"),
-    )).toBe(true);
-    expect(renderedBefore(
-      screen.getByText("All models"),
-      screen.getByText("openrouter/model-a"),
-    )).toBe(true);
-  });
-
-  test("ignores a preferences read that resolves after the dialog closed", async () => {
-    seedOpenCodeCatalog();
-    let resolveStaleRead: (value: OpenCodeModelPreferences) => void = () => {};
-    const staleRead = new Promise<OpenCodeModelPreferences>((resolve) => {
-      resolveStaleRead = resolve;
-    });
-    getOpencodeModelPreferencesMock.mockImplementationOnce(() => staleRead);
-    getOpencodeModelPreferencesMock.mockRejectedValueOnce(new Error("still unavailable"));
-    readyEnvironment();
-    render(<ActionBar />);
-
-    openReviewDialog();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    openReviewDialog();
-    await waitFor(() => expect(getOpencodeModelPreferencesMock).toHaveBeenCalledTimes(2));
-
-    // The first read only lands now, after its dialog was dismissed. Without the
-    // cancellation guard it would repopulate the favourites behind the newer,
-    // failed read.
-    await act(async () => {
-      resolveStaleRead(preferences(["openrouter/model-a"]));
-      await staleRead;
-    });
-
-    chooseOpenCode();
-    openModelPicker();
-    expect(screen.queryByText("Favorites")).toBeNull();
-  });
-
-  test("renders no favourites section when the TUI has no favourites", async () => {
-    seedOpenCodeCatalog();
-    getOpencodeModelPreferencesMock.mockResolvedValueOnce(preferences([]));
-    readyEnvironment();
-    render(<ActionBar />);
-
-    openReviewDialog();
-    await waitFor(() => expect(getOpencodeModelPreferencesMock).toHaveBeenCalled());
-    chooseOpenCode();
-    openModelPicker();
-
-    await waitFor(() => expect(screen.getByText("openrouter/model-a")).toBeTruthy());
-    expect(screen.queryByText("Favorites")).toBeNull();
-    expect(screen.queryByText("All models")).toBeNull();
-  });
-
-  test("drops favourite ids that the environment catalogue does not contain", async () => {
-    seedOpenCodeCatalog();
-    getOpencodeModelPreferencesMock.mockResolvedValueOnce(
-      preferences(["openrouter/uninstalled-model", "not-a-model-ref"]),
-    );
-    readyEnvironment();
-    render(<ActionBar />);
-
-    openReviewDialog();
-    await waitFor(() => expect(getOpencodeModelPreferencesMock).toHaveBeenCalled());
-    chooseOpenCode();
-    openModelPicker();
-
-    await waitFor(() => expect(screen.getByText("openrouter/model-a")).toBeTruthy());
-    expect(screen.queryByText("Favorites")).toBeNull();
-    expect(screen.queryByText("openrouter/uninstalled-model")).toBeNull();
-  });
-
-  test("pins the TUI favourites in the looped review dialog too", async () => {
-    seedOpenCodeCatalog();
-    getOpencodeModelPreferencesMock.mockResolvedValueOnce(
-      preferences(["openrouter/model-a"]),
-    );
-    readyEnvironment();
-    render(<ActionBar />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
-    expect(
-      screen.getByRole("dialog", { name: "Configure looped code review" }),
-    ).toBeTruthy();
-    await waitFor(() => expect(getOpencodeModelPreferencesMock).toHaveBeenCalled());
-
-    chooseOpenCode();
-    openModelPicker();
-
-    await waitFor(() => expect(screen.getByText("Favorites")).toBeTruthy());
-    expect(renderedBefore(
-      screen.getByText("openrouter/model-a"),
-      screen.getByText("All models"),
-    )).toBe(true);
-  });
-});
-
 describe("ActionBar pull request actions", () => {
   test("hides Push Changes for every terminal pull request state", () => {
     currentEnvironment = { ...selectedEnvironment, prState: "merged" };
@@ -3789,7 +3513,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
 });
 
 describe("ActionBar keyboard shortcuts and tab guards", () => {
-  test("dispatches tab, workflow, editor, close, and panel shortcuts", async () => {
+  test("dispatches tab, workflow, editor, and panel shortcuts", async () => {
     currentWorkspaceReady = true;
     currentTabCount = 1;
     readContainerFileMock.mockResolvedValueOnce({ content: '{"run":["bun test"]}' });
@@ -3805,20 +3529,20 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     fireEvent.keyDown(window, { key: "r", code: "KeyR", metaKey: true });
     fireEvent.keyDown(window, { key: "p", code: "KeyP", metaKey: true });
     fireEvent.keyDown(window, { key: "o", code: "KeyO", metaKey: true });
-    fireEvent.keyDown(window, { key: "w", code: "KeyW", metaKey: true });
     fireEvent.keyDown(window, { key: "e", code: "KeyE", metaKey: true });
 
     expect(selectTabMock).toHaveBeenCalledWith(2);
     expect(createTabMock).toHaveBeenCalledWith("plain");
-    expect(createTabMock).toHaveBeenCalledWith("claude");
-    expect(createTabMock).toHaveBeenCalledWith("opencode");
+    expect(createTabMock).toHaveBeenCalledWith("agent-native");
+    expect(createTabMock).not.toHaveBeenCalledWith("claude");
+    expect(createTabMock).not.toHaveBeenCalledWith("opencode");
     expect(createTabMock).toHaveBeenCalledWith(
       "codex",
       expect.objectContaining({ displayTitle: "Review" }),
     );
     expect(createTabMock).toHaveBeenCalledWith("plain", { initialCommands: ["bun test"] });
     await waitFor(() => expect(openInEditorMock).toHaveBeenCalledWith("container-1", "vscode"));
-    expect(closeActiveTabMock).toHaveBeenCalledTimes(1);
+    expect(closeActiveTabMock).not.toHaveBeenCalled();
     expect(toggleFilesPanelMock).toHaveBeenCalledTimes(1);
   });
 
@@ -3837,7 +3561,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
       screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
     ).toBe("true"));
 
-    for (const key of ["t", "n", "m", "r", "p"]) {
+    for (const key of ["t", "n", "r", "p"]) {
       toastErrorMock.mockClear();
       const event = createEvent.keyDown(window, {
         key,

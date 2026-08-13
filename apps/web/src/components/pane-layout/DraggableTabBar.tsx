@@ -6,7 +6,7 @@ import {
 } from "@dnd-kit/sortable";
 import { usePaneLayoutStore, useFileDirtyStore } from "@/stores";
 import type { PaneLeaf } from "@/types/paneLayout";
-import { createDraggableTabId, parseDraggableTabId } from "@/types/paneLayout";
+import { createDraggableTabId, getNativeAgentData, parseDraggableTabId } from "@/types/paneLayout";
 import { cn, createSessionKey } from "@/lib/utils";
 import {
   discardFileDraft,
@@ -96,13 +96,10 @@ export function DraggableTabBar({
         throw error;
       });
     }
-    const namespace = tab?.type === "claude-native"
-      ? "claude"
-      : tab?.type === "codex-native"
-        ? "codex"
-        : tab?.type === "opencode-native"
-          ? "opencode"
-          : null;
+    const platform = tab ? getNativeAgentData(tab)?.platform : undefined;
+    const namespace = platform === "claude" || platform === "codex" || platform === "opencode"
+      ? platform
+      : null;
     if (!namespace) return Promise.resolve();
     const sessionKey = createSessionKey(environmentId, tabId);
     const draftKey = composeDraftKey(namespace, environmentId, sessionKey);
@@ -159,9 +156,7 @@ export function DraggableTabBar({
 
   const isRefreshableAgentTab = useCallback(
     (type: PaneLeaf["tabs"][number]["type"]) =>
-      type === "claude-native" ||
-      type === "codex-native" ||
-      type === "opencode-native" ||
+      type === "agent-native" ||
       type === "claude-tmux" ||
       type === "browser",
     [],

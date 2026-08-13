@@ -32,6 +32,7 @@ let lastPersistentTerminalProps:
       initialCommands?: string[];
       initialAgentModel?: string;
       initialReasoningEffort?: string;
+      tabType?: string;
     }
   | undefined;
 
@@ -44,6 +45,7 @@ mock.module("./PersistentTerminal", () => ({
     initialCommands?: string[];
     initialAgentModel?: string;
     initialReasoningEffort?: string;
+    tabType?: string;
   }) => {
     lastPersistentTerminalProps = props;
     return null;
@@ -272,4 +274,29 @@ describe("TerminalPortalHost", () => {
       expect(lastPersistentTerminalProps?.initialReasoningEffort).toBe("high");
     });
   });
+
+  test.each(["cursor", "grok"] as const)(
+    "mounts %s CLI tabs as persistent terminals",
+    async (tabType) => {
+      usePaneLayoutStore.setState((state) => {
+        const environments = new Map(state.environments);
+        const current = environments.get("env-1");
+        if (!current || current.root.kind !== "leaf") throw new Error("expected env-1 leaf");
+        environments.set("env-1", {
+          ...current,
+          root: {
+            ...current.root,
+            tabs: [{ id: "default", type: tabType }],
+          },
+        });
+        return { environments };
+      });
+
+      render(<TerminalPortalHost environmentId="env-1" containerId="container-1" />);
+
+      await waitFor(() => {
+        expect(lastPersistentTerminalProps?.tabType).toBe(tabType);
+      });
+    },
+  );
 });

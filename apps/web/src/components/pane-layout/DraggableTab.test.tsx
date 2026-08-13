@@ -115,9 +115,9 @@ describe("DraggableTab title precedence", () => {
   test("session.name beats every other source", () => {
     const tab: TabInfo = {
       id: "tab-a",
-      type: "claude-native",
+      type: "agent-native",
       displayTitle: "Implementation",
-      claudeNativeData: { environmentId: "env-1" },
+      nativeAgentData: { platform: "claude", environmentId: "env-1" },
     };
 
     useSessionStore.setState({
@@ -150,10 +150,10 @@ describe("DraggableTab title precedence", () => {
   test("review tabs keep their numbered workflow title after the agent names the session", () => {
     const tab: TabInfo = {
       id: "tab-a",
-      type: "claude-native",
+      type: "agent-native",
       displayTitle: "Review",
       isReviewTab: true,
-      claudeNativeData: { environmentId: "env-1" },
+      nativeAgentData: { platform: "claude", environmentId: "env-1" },
     };
 
     useClaudeStore.setState({
@@ -171,10 +171,10 @@ describe("DraggableTab title precedence", () => {
   test("workflow tabs keep their label and reveal the user-defined session name on hover", async () => {
     const tab: TabInfo = {
       id: "tab-review",
-      type: "claude-native",
+      type: "agent-native",
       displayTitle: "Review",
       isReviewTab: true,
-      claudeNativeData: { environmentId: "env-1" },
+      nativeAgentData: { platform: "claude", environmentId: "env-1" },
     };
     useSessionStore.setState({
       sessions: new Map([
@@ -214,9 +214,9 @@ describe("DraggableTab title precedence", () => {
   test("workflow hover text falls back to the agent-generated session title", async () => {
     const tab: TabInfo = {
       id: "tab-pr",
-      type: "codex-native",
+      type: "agent-native",
       displayTitle: "PR",
-      codexNativeData: { environmentId: "env-1" },
+      nativeAgentData: { platform: "codex", environmentId: "env-1" },
     };
     useCodexStore.setState({
       sessions: new Map([
@@ -237,9 +237,9 @@ describe("DraggableTab title precedence", () => {
   test("PR tabs keep their numbered workflow title after Codex names the session", () => {
     const tab: TabInfo = {
       id: "tab-codex",
-      type: "codex-native",
+      type: "agent-native",
       displayTitle: "PR",
-      codexNativeData: { environmentId: "env-1" },
+      nativeAgentData: { platform: "codex", environmentId: "env-1" },
     };
     useCodexStore.setState({
       sessions: new Map([
@@ -258,9 +258,9 @@ describe("DraggableTab title precedence", () => {
   test("resolve tabs keep their numbered workflow title after OpenCode names the session", () => {
     const tab: TabInfo = {
       id: "tab-opencode",
-      type: "opencode-native",
+      type: "agent-native",
       displayTitle: "Resolve",
-      openCodeNativeData: { environmentId: "env-1" },
+      nativeAgentData: { platform: "opencode", environmentId: "env-1" },
     };
     useOpenCodeStore.setState({
       sessions: new Map([
@@ -277,9 +277,9 @@ describe("DraggableTab title precedence", () => {
   test("restored legacy Conflict tabs use the Resolve label", () => {
     const tab: TabInfo = {
       id: "tab-codex",
-      type: "codex-native",
+      type: "agent-native",
       displayTitle: "Conflict",
-      codexNativeData: { environmentId: "env-1" },
+      nativeAgentData: { platform: "codex", environmentId: "env-1" },
     };
     useCodexStore.setState({
       sessions: new Map([
@@ -296,9 +296,9 @@ describe("DraggableTab title precedence", () => {
   test("uses the OpenCode title before the workflow display title", () => {
     const tab: TabInfo = {
       id: "tab-opencode",
-      type: "opencode-native",
+      type: "agent-native",
       displayTitle: "Implementation",
-      openCodeNativeData: { environmentId: "env-1" },
+      nativeAgentData: { platform: "opencode", environmentId: "env-1" },
     };
     useOpenCodeStore.setState({
       sessions: new Map([
@@ -315,8 +315,8 @@ describe("DraggableTab title precedence", () => {
   test("a custom terminal session name beats a Codex session title", () => {
     const tab: TabInfo = {
       id: "tab-codex",
-      type: "codex-native",
-      codexNativeData: { environmentId: "env-1" },
+      type: "agent-native",
+      nativeAgentData: { platform: "codex", environmentId: "env-1" },
     };
     useSessionStore.setState({
       sessions: new Map([
@@ -349,9 +349,9 @@ describe("DraggableTab title precedence", () => {
   test("displayTitle is used when no claude session title exists", () => {
     const tab: TabInfo = {
       id: "tab-a",
-      type: "codex-native",
+      type: "agent-native",
       displayTitle: "Review",
-      codexNativeData: { environmentId: "env-1" },
+      nativeAgentData: { platform: "codex", environmentId: "env-1" },
     };
 
     renderTab(tab, 0);
@@ -362,9 +362,9 @@ describe("DraggableTab title precedence", () => {
   test("displayTitle includes the tab number from index + 1", () => {
     const tab: TabInfo = {
       id: "tab-a",
-      type: "codex-native",
+      type: "agent-native",
       displayTitle: "PR",
-      codexNativeData: { environmentId: "env-1" },
+      nativeAgentData: { platform: "codex", environmentId: "env-1" },
     };
 
     renderTab(tab, 4);
@@ -375,8 +375,8 @@ describe("DraggableTab title precedence", () => {
   test("falls back to type-default when no title sources are present", () => {
     const tab: TabInfo = {
       id: "tab-a",
-      type: "codex-native",
-      codexNativeData: { environmentId: "env-1" },
+      type: "agent-native",
+      nativeAgentData: { platform: "codex", environmentId: "env-1" },
     };
 
     renderTab(tab, 1);
@@ -478,9 +478,9 @@ describe("DraggableTab title precedence", () => {
     // win over — or stand in for — the Claude title on a Claude tab.
     const tab: TabInfo = {
       id: "tab-a",
-      type: "claude-native",
+      type: "agent-native",
       displayTitle: "Review",
-      claudeNativeData: { environmentId: "env-1" },
+      nativeAgentData: { platform: "claude", environmentId: "env-1" },
     };
     useClaudeStore.setState({
       sessions: new Map([
@@ -510,9 +510,9 @@ describe("DraggableTab title precedence", () => {
     // with no Claude entry the chain yields undefined, not the Codex title.
     const tab: TabInfo = {
       id: "tab-a",
-      type: "claude-native",
+      type: "agent-native",
       displayTitle: "Review",
-      claudeNativeData: { environmentId: "env-1" },
+      nativeAgentData: { platform: "claude", environmentId: "env-1" },
     };
     useCodexStore.setState({
       sessions: new Map([
@@ -627,11 +627,11 @@ describe("DraggableTab icons", () => {
       selector: "svg.text-green-500",
     },
     {
-      name: "opencode-native",
+      name: "agent-native",
       tab: {
         id: "t",
-        type: "opencode-native",
-        openCodeNativeData: { environmentId: "env-1" },
+        type: "agent-native",
+        nativeAgentData: { platform: "opencode", environmentId: "env-1" },
       },
       selector: "svg.text-green-500",
     },
@@ -641,11 +641,11 @@ describe("DraggableTab icons", () => {
       selector: "svg.text-orange-400",
     },
     {
-      name: "claude-native",
+      name: "agent-native",
       tab: {
         id: "t",
-        type: "claude-native",
-        claudeNativeData: { environmentId: "env-1" },
+        type: "agent-native",
+        nativeAgentData: { platform: "claude", environmentId: "env-1" },
       },
       selector: "svg.text-orange-400",
     },
@@ -664,11 +664,11 @@ describe("DraggableTab icons", () => {
       selector: "svg.text-emerald-400",
     },
     {
-      name: "codex-native",
+      name: "agent-native",
       tab: {
         id: "t",
-        type: "codex-native",
-        codexNativeData: { environmentId: "env-1" },
+        type: "agent-native",
+        nativeAgentData: { platform: "codex", environmentId: "env-1" },
       },
       selector: "svg.text-emerald-400",
     },
@@ -861,8 +861,8 @@ describe("DraggableTab tooltip and context menu structure", () => {
       <DraggableTab
         tab={{
           id: "tab-claude",
-          type: "claude-native",
-          claudeNativeData: { environmentId: "env-1" },
+          type: "agent-native",
+          nativeAgentData: { platform: "claude", environmentId: "env-1" },
         }}
         paneId="pane-1"
         index={0}

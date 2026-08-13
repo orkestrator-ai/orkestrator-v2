@@ -110,9 +110,9 @@ export interface ToolDiffMetadata {
 /** Normalized message part */
 export interface NormalizedPart {
   type: "text" | "thinking" | "tool-invocation" | "tool-result" | "file";
-  content?: string;
+  content: string;
   /** When this content block first arrived from the SDK. */
-  timestamp?: string;
+  createdAt?: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   toolState?: "success" | "failure" | "pending";
@@ -125,7 +125,7 @@ export interface NormalizedPart {
   /** Parent Task tool use ID - used to group child tools under their parent Task */
   parentTaskUseId?: string;
   /** Internal: Message UUID for tracking thinking parts across streaming updates */
-  _messageUuid?: string;
+  sourcePartId?: string;
   /** Whether this tool is from an MCP server */
   isMcpTool?: boolean;
   /** The MCP server name if this is an MCP tool */
@@ -147,7 +147,7 @@ export interface NormalizedMessage {
   role: "user" | "assistant" | "system";
   content: string;
   parts: NormalizedPart[];
-  timestamp: string;
+  createdAt: string;
   /** Model observed on the provider's assistant response. */
   modelId?: string;
   /**
@@ -527,7 +527,7 @@ export interface MessagePatchEventData {
   /** Final length of the parts array after applying this patch. */
   partCount: number;
   changedParts: { index: number; part: NormalizedPart }[];
-  timestamp: string;
+  createdAt: string;
   /**
    * Revision this patch produces. Applying it is only valid against a copy at
    * `revision - 1`; anything else means frames were missed (a reconnect, or a

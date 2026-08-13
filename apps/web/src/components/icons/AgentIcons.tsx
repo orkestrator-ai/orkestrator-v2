@@ -54,18 +54,19 @@ export function CodexIcon({ className }: IconProps) {
 
 export function CursorAgentIcon({ className }: IconProps) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" className={cn("h-4 w-4", className)} aria-hidden="true">
-      <path d="M19 7.2A8 8 0 1 0 19 16.8" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
-      <path d="m14.2 8.1 4.9 3.9-4.9 3.9V8.1Z" fill="currentColor" />
+    <svg viewBox="0 0 49 56" fill="none" className={cn("h-4 w-4", className)} aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M48.0226 13.2547L25.6601 0.311786C24.942 -0.103929 24.0559 -0.103929 23.3378 0.311786L0.976347 13.2547C0.372691 13.6041 0 14.2503 0 14.9502V41.0498C0 41.7496 0.372691 42.3958 0.976347 42.7453L23.3389 55.6882C24.057 56.1039 24.943 56.1039 25.6611 55.6882L48.0237 42.7453C48.6273 42.3958 49 41.7496 49 41.0498V14.9502C49 14.2503 48.6273 13.6041 48.0237 13.2547H48.0226ZM46.6179 15.9964L25.0302 53.4802C24.8842 53.7328 24.4989 53.6296 24.4989 53.337V28.793C24.4989 28.3026 24.2375 27.849 23.8134 27.6027L2.61094 15.3312C2.35898 15.1849 2.46186 14.7987 2.75372 14.7987H45.9292C46.5423 14.7987 46.9255 15.4649 46.619 15.9974L46.6179 15.9964Z"
+      />
     </svg>
   );
 }
 
 export function GrokBuildIcon({ className }: IconProps) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" className={cn("h-4 w-4", className)} aria-hidden="true">
-      <path d="M5 5.5 19 18.5M19 5.5 5 18.5" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" />
-      <path d="M12 3v4M12 17v4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" opacity=".55" />
+    <svg viewBox="0 0 33 32" fill="currentColor" className={cn("h-4 w-4", className)} aria-hidden="true">
+      <path d="M12.745 20.54l10.97-8.19c.539-.4 1.307-.244 1.564.38 1.349 3.288.746 7.241-1.938 9.955-2.683 2.714-6.417 3.31-9.83 1.954l-3.728 1.745c5.347 3.697 11.84 2.782 15.898-1.324 3.219-3.255 4.216-7.692 3.284-11.693l.008.009c-1.351-5.878.332-8.227 3.782-13.031L33 0l-4.54 4.59v-.014L12.743 20.544m-2.263 1.987c-3.837-3.707-3.175-9.446.1-12.755 2.42-2.449 6.388-3.448 9.852-1.979l3.72-1.737c-.67-.49-1.53-1.017-2.515-1.387-4.455-1.854-9.789-.931-13.41 2.728-3.483 3.523-4.579 8.94-2.697 13.561 1.405 3.454-.899 5.898-3.22 8.364C1.49 30.2.666 31.074 0 32l10.478-9.466" />
     </svg>
   );
 }

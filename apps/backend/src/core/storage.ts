@@ -36,6 +36,12 @@ import {
   parseReviewInstruction,
 } from "@orkestrator/protocol/review-instruction";
 import {
+  LEGACY_ENABLED_AGENT_PLATFORMS,
+  firstEnabledAgentPlatform,
+  isAgentPlatform,
+  normalizeAgentPlatforms,
+} from "@orkestrator/protocol/agent-platforms";
+import {
   PANE_LAYOUT_VERSION,
   paneLayoutRevisionConflictMessage,
 } from "@orkestrator/protocol/pane-layout";
@@ -475,7 +481,7 @@ function isStartupAgentSession(
 ): value is NonNullable<Environment["startupAgentSession"]> {
   return isRecord(value)
     && value.tabId === "startup-agent"
-    && isOneOf(value.agent, ["claude", "codex", "opencode"])
+    && isAgentPlatform(value.agent)
     && isOneOf(value.style, ["terminal", "native"])
     && isOneOf(value.status, ["starting", "running", "error"])
     && (value.model === undefined || typeof value.model === "string")
@@ -1345,9 +1351,22 @@ function normalizePersistedConfig(config: AppConfig): AppConfig {
   const useHostGitHubCredentials = hasExplicitGitHubCredentialSource
     ? global.useHostGitHubCredentials
     : !hasLegacyGitHubToken;
+  const normalizedEnabledAgentPlatforms = normalizeAgentPlatforms(
+    global.enabledAgentPlatforms,
+    LEGACY_ENABLED_AGENT_PLATFORMS,
+  );
+  const enabledAgentPlatforms = normalizedEnabledAgentPlatforms.length > 0
+    ? normalizedEnabledAgentPlatforms
+    : [...LEGACY_ENABLED_AGENT_PLATFORMS];
+  const defaultAgent = firstEnabledAgentPlatform(
+    enabledAgentPlatforms,
+    isAgentPlatform(global.defaultAgent) ? global.defaultAgent : undefined,
+  );
   if (
     global.codexMaxConcurrentThreads === codexMaxConcurrentThreads
     && global.useHostGitHubCredentials === useHostGitHubCredentials
+    && JSON.stringify(global.enabledAgentPlatforms) === JSON.stringify(enabledAgentPlatforms)
+    && global.defaultAgent === defaultAgent
   ) {
     return reviewInstructionSanitized;
   }
@@ -1358,6 +1377,8 @@ function normalizePersistedConfig(config: AppConfig): AppConfig {
       ...global,
       codexMaxConcurrentThreads,
       useHostGitHubCredentials,
+      enabledAgentPlatforms,
+      defaultAgent,
     } as unknown as AppConfig["global"],
   };
 }
@@ -1410,6 +1431,7 @@ export function defaultConfig(): AppConfig {
       useHostGitHubCredentials: true,
       useHostClaudeCredentials: true,
       allowedDomains: [...DEFAULT_ALLOWED_DOMAINS],
+      enabledAgentPlatforms: [...LEGACY_ENABLED_AGENT_PLATFORMS],
       defaultAgent: "claude",
       opencodeModel: "opencode/claude-sonnet-5",
       claudeModel: "claude-sonnet-5",
@@ -1824,6 +1846,10 @@ export class StorageService {
 
   private configFile(): string {
     return this.file("config.json");
+  }
+
+  private agentPlatformsFile(): string {
+    return this.file("agent-platforms.json");
   }
 
   private openCodeModelCatalogFile(): string {
@@ -2913,7 +2939,7 @@ export class StorageService {
       }
       if ("defaultAgent" in updates) {
         if (updates.defaultAgent == null) environment.defaultAgent = undefined;
-        else if (isOneOf(updates.defaultAgent, ["claude", "opencode", "codex"])) environment.defaultAgent = updates.defaultAgent;
+        else if (isAgentPlatform(updates.defaultAgent)) environment.defaultAgent = updates.defaultAgent;
       }
       if ("claudeMode" in updates) {
         if (updates.claudeMode == null) environment.claudeMode = undefined;
@@ -3506,8 +3532,32 @@ export class StorageService {
   }
 
   async loadConfig(): Promise<AppConfig> {
+    const configExists = await fs.access(this.configFile()).then(
+      () => true,
+      () => false,
+    );
     const config = await this.loadJsonCached<AppConfig>(this.configFile(), defaultConfig);
-    return normalizePersistedConfig(config);
+    const normalized = normalizePersistedConfig(config);
+    if (configExists) return normalized;
+    const sidecar = await this.loadJson<unknown>(
+      this.agentPlatformsFile(),
+      () => null,
+    );
+    if (!sidecar || !isRecord(sidecar)) return normalized;
+    const enabledAgentPlatforms = normalizeAgentPlatforms(sidecar.enabled, []);
+    return enabledAgentPlatforms.length === 0
+      ? normalized
+      : {
+          ...normalized,
+          global: {
+            ...normalized.global,
+            enabledAgentPlatforms,
+            defaultAgent: firstEnabledAgentPlatform(
+              enabledAgentPlatforms,
+              normalized.global.defaultAgent,
+            ),
+          },
+        };
   }
 
   async saveConfig(config: AppConfig): Promise<void> {
@@ -3684,7 +3734,24 @@ export class StorageService {
   }
 
   async updateGlobalConfig(globalConfig: AppConfig["global"]): Promise<AppConfig> {
-    const validated = validateGlobalReviewInstruction(globalConfig);
+    const reviewValidated = validateGlobalReviewInstruction(globalConfig);
+    const enabledAgentPlatforms = normalizeAgentPlatforms(
+      reviewValidated.enabledAgentPlatforms,
+      [],
+    );
+    if (enabledAgentPlatforms.length === 0) {
+      throw new Error("Select at least one agent platform");
+    }
+    const validated: AppConfig["global"] = {
+      ...reviewValidated,
+      enabledAgentPlatforms,
+      defaultAgent: firstEnabledAgentPlatform(
+        enabledAgentPlatforms,
+        isAgentPlatform(reviewValidated.defaultAgent)
+          ? reviewValidated.defaultAgent
+          : undefined,
+      ),
+    };
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadConfig();
       config.global = validated;
@@ -4491,7 +4558,7 @@ export class StorageService {
       !isNonBlankString(input.key)
       || !isNonBlankString(input.environmentId)
       || !isNonBlankString(input.logicalSessionKey)
-      || !["claude", "codex", "opencode"].includes(input.agent)
+      || !isAgentPlatform(input.agent)
       || !interactionMetadata
     ) {
       throw new Error("Native agent session input is invalid");
@@ -4566,7 +4633,7 @@ export class StorageService {
       || !isNonBlankString(input.environmentId)
       || !isNonBlankString(input.logicalSessionKey)
       || !isNonBlankString(input.providerSessionId)
-      || !["claude", "codex", "opencode"].includes(input.agent)
+      || !isAgentPlatform(input.agent)
       || !interactionMetadata
       || (
         input.expectedProviderSessionId !== undefined

@@ -2,7 +2,7 @@ import { useCallback, useRef } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { FileCode, Globe2, Terminal as TerminalIcon, X, Hammer, Repeat2 } from "lucide-react";
-import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
+import { ClaudeIcon, CodexIcon, CursorAgentIcon, GrokBuildIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import {
   ContextMenu,
@@ -35,6 +35,9 @@ const isClaudeTab = (type: TabType): boolean =>
 /** Check if a tab type is a Codex variant */
 const isCodexTab = (type: TabType): boolean =>
   type === "codex" || type === "codex-native";
+
+const isCursorTab = (type: TabType): boolean => type === "cursor" || type === "cursor-native";
+const isGrokTab = (type: TabType): boolean => type === "grok" || type === "grok-native";
 
 /** Check if a tab type is a build pipeline tab */
 const isBuildTab = (type: TabType): boolean => type === "claude-build";
@@ -193,6 +196,8 @@ export function DraggableTab({
     if (isClaudeTab(tab.type)) return `Claude ${tabNumber}`;
     if (isOpenCodeTab(tab.type)) return `OpenCode ${tabNumber}`;
     if (isCodexTab(tab.type)) return `Codex ${tabNumber}`;
+    if (isCursorTab(tab.type)) return `Cursor ${tabNumber}`;
+    if (isGrokTab(tab.type)) return `Grok ${tabNumber}`;
     if (isBuildTab(tab.type)) return `Build ${tabNumber}`;
     if (tab.type === "looped-review") {
       return loopedReviewPhase === "completed"
@@ -220,6 +225,12 @@ export function DraggableTab({
     }
     if (isCodexTab(tab.type)) {
       return <CodexIcon className="h-3 w-3 shrink-0 text-emerald-400" />;
+    }
+    if (isCursorTab(tab.type)) {
+      return <CursorAgentIcon className="h-3 w-3 shrink-0 text-violet-400" />;
+    }
+    if (isGrokTab(tab.type)) {
+      return <GrokBuildIcon className="h-3 w-3 shrink-0 text-sky-400" />;
     }
     if (isBuildTab(tab.type)) {
       return <Hammer className="h-3 w-3 shrink-0 text-yellow-400" />;

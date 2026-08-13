@@ -307,13 +307,13 @@ describe("RepositorySettings", () => {
       expect(screen.getByText("Agent Style")).toBeTruthy();
 
       const group = getAgentGroup();
-      expect(within(group).getByRole("radio", { name: "Use App Default (Claude)" }).getAttribute("aria-checked")).toBe("true");
-      expect(within(group).getByRole("radio", { name: "Claude" })).toBeTruthy();
+      expect(within(group).getByRole("radio", { name: "Use App Default (Claude Code)" }).getAttribute("aria-checked")).toBe("true");
+      expect(within(group).getByRole("radio", { name: "Claude Code" })).toBeTruthy();
       expect(within(group).getByRole("radio", { name: "OpenCode" })).toBeTruthy();
       expect(within(group).getByRole("radio", { name: "Codex" })).toBeTruthy();
       expect(
         within(group).getAllByRole("radio").map((radio) => radio.textContent?.trim()),
-      ).toEqual(["Use App Default (Claude)", "Claude", "Codex", "OpenCode"]);
+      ).toEqual(["Use App Default (Claude Code)", "Claude Code", "Codex", "OpenCode"]);
 
       const [styleSelect] = getMockSelects();
       expect(styleSelect.value).toBe("__app_default__");
@@ -333,7 +333,7 @@ describe("RepositorySettings", () => {
         },
       });
 
-      expect(getAgentRadio("Use App Default (Claude)")).toBeTruthy();
+      expect(getAgentRadio("Use App Default (Claude Code)")).toBeTruthy();
       expect(getAgentRadio("OpenCode").getAttribute("aria-checked")).toBe("true");
       expect(container.querySelector("span.text-xs.text-muted-foreground.bg-zinc-800")?.textContent).toBe("OpenCode");
     });

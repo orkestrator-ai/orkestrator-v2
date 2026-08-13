@@ -106,10 +106,12 @@ describe("effortLabel", () => {
 });
 
 describe("LAUNCH_AGENT_OPTIONS", () => {
-  test("offers exactly the three native agents in order", () => {
+  test("offers every supported native agent in product order", () => {
     expect(LAUNCH_AGENT_OPTIONS).toEqual([
       { value: "claude", label: "Claude" },
       { value: "codex", label: "Codex" },
+      { value: "cursor", label: "Cursor Agent" },
+      { value: "grok", label: "Grok Build" },
       { value: "opencode", label: "OpenCode" },
     ]);
   });

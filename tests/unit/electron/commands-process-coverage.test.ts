@@ -109,7 +109,14 @@ if [ "$1" = "logs" ]; then
   exit 0
 fi
 if [ "$1" = "container" ] && [ "$2" = "prune" ]; then
-  printf 'Deleted Containers:\ncontainer-old\ncontainer-older\n\nTotal reclaimed space: 1.25GB\n'
+  case "$*" in
+    *"label!=orkestrator-owner"*)
+      printf 'Deleted Containers:\nlegacy-old\nTotal reclaimed space: 512MB\n'
+      ;;
+    *)
+      printf 'Deleted Containers:\ncontainer-old\nTotal reclaimed space: 1.25GB\n'
+      ;;
+  esac
   exit 0
 fi
 if [ "$1" = "exec" ]; then
@@ -186,7 +193,12 @@ function createContext(initialEnvironment = environment()): {
   updates: Array<Record<string, unknown>>;
   added: Environment[];
   events: Array<{ event: string; payload: unknown }>;
+  /** Mutable so a test can change the enabled platforms before provisioning. */
+  globalConfig: Record<string, unknown>;
+  /** Mutable so a test can change the per-environment allowlist. */
+  environment: Environment;
 } {
+  const globalConfig: Record<string, unknown> = { allowedDomains: [] };
   const updates: Array<Record<string, unknown>> = [];
   const added: Environment[] = [];
   const events: Array<{ event: string; payload: unknown }> = [];
@@ -214,7 +226,7 @@ function createContext(initialEnvironment = environment()): {
       } : null),
       loadConfig: mock(async () => ({
         version: "1.0.0",
-        global: { allowedDomains: [] },
+        global: globalConfig,
         repositories: { "project-1": { defaultBranch: "main", prBaseBranch: "main" } },
       })),
       addEnvironment: mock(async (item: Environment) => {
@@ -223,7 +235,7 @@ function createContext(initialEnvironment = environment()): {
       }),
     },
   } as unknown as CommandContext;
-  return { context, updates, added, events };
+  return { context, updates, added, events, globalConfig, environment: initialEnvironment };
 }
 
 let registry: ReturnType<typeof createCommandRegistry>;
@@ -233,6 +245,12 @@ async function invoke(name: string, args: Record<string, unknown> = {}, context 
   const handler = registry.get(name) as Handler | undefined;
   expect(handler).toBeDefined();
   return handler!(args, context);
+}
+
+/** The command log accumulates, so only the most recent create matters. */
+function lastAllowedDomains(log: string): string[] {
+  const matches = [...log.matchAll(/ALLOWED_DOMAINS=([^\s]+)/g)];
+  return matches.at(-1)?.[1]?.split(",") ?? [];
 }
 
 async function readCommandLog(): Promise<string> {
@@ -482,7 +500,13 @@ describe("process and platform command behavior", () => {
     expect(log).toContain(
       `docker create --name ${dockerContainerRuntimeName(owner, "environment-1")}`,
     );
+    expect(log).toContain("--label environment-name=feature-environment");
     expect(log).toContain(`--label orkestrator-owner=${owner}`);
+    expect(log).toContain("ALLOWED_DOMAINS=");
+    // Neither ACP platform is enabled here, so the user's allowlist is used
+    // verbatim rather than widened with vendor hosts they never asked for.
+    expect(log).not.toContain("auth.x.ai");
+    expect(log).not.toContain("api2.cursor.sh");
     expect(log).toContain("GIT_URL=https://github.com/example/project.git");
     if (process.platform === "linux") {
       expect(log).toContain("--add-host host.docker.internal:host-gateway");
@@ -492,6 +516,32 @@ describe("process and platform command behavior", () => {
     expect(log).toContain("docker start container-a");
     expect(log).toContain("docker stop container-a");
     expect(log).toContain("docker rm -f container-a");
+  });
+
+  test("adds ACP vendor hosts only for the platforms that are enabled", async () => {
+    fixture.environment.allowedDomains = ["github.com"];
+    fixture.globalConfig.enabledAgentPlatforms = ["claude", "cursor"];
+    await invoke("provision_environment", { environmentId: "environment-1" });
+
+    const allowed = lastAllowedDomains(await readCommandLog());
+    expect(allowed).toContain("github.com");
+    // Cursor is enabled, so its endpoints are reachable.
+    expect(allowed).toContain("api2.cursor.sh");
+    expect(allowed).toContain("cursor.com");
+    // Grok is not, so its endpoints stay blocked.
+    expect(allowed).not.toContain("auth.x.ai");
+    expect(allowed).not.toContain("cli-chat-proxy.grok.com");
+    // The user's own entries are preserved and never duplicated.
+    expect(allowed.filter((domain) => domain === "github.com")).toHaveLength(1);
+  });
+
+  test("keeps an explicit per-environment allowlist intact when no ACP platform is enabled", async () => {
+    fixture.environment.allowedDomains = ["github.com", "registry.npmjs.org"];
+    fixture.globalConfig.enabledAgentPlatforms = ["claude", "codex", "opencode"];
+    await invoke("provision_environment", { environmentId: "environment-1" });
+
+    const allowed = lastAllowedDomains(await readCommandLog());
+    expect(allowed).toEqual(["github.com", "registry.npmjs.org"]);
   });
 
   test("parses container status, listings, ports, logs, prune output, and aggregate stats", async () => {
@@ -523,12 +573,12 @@ describe("process and platform command behavior", () => {
       { event: "container-log", payload: { containerId: "container-a", line: "stream stderr\n" } },
     ]);
 
-    expect(await invoke("docker_system_prune", {})).toEqual({
+    expect(await invoke("docker_system_prune", { pruneVolumes: true })).toEqual({
       containersDeleted: 2,
       imagesDeleted: 0,
       networksDeleted: 0,
       volumesDeleted: 0,
-      spaceReclaimed: "1.25GB",
+      spaceReclaimed: 1_250_000_000 + 512_000_000,
     });
     expect(await invoke("get_docker_system_stats")).toMatchObject({
       containersRunning: 1,
@@ -537,12 +587,13 @@ describe("process and platform command behavior", () => {
       memoryUsed: 0,
       diskUsed: 0,
     });
-    // Scoped to this registry's containers. `system prune` would apply the same
-    // label filter to images, networks and volumes, which never carry it.
     const pruneLog = await readCommandLog();
     expect(pruneLog).toContain(
       `docker container prune -f --filter label=orkestrator-owner=${dockerOwnerNamespace(root)}`,
     );
+    // A second pass removes legacy containers that predate ownership labels,
+    // so the cleanup matches what the listings adopt as this installation's.
+    expect(pruneLog).toContain("docker container prune -f --filter label=app=orkestrator-v2 --filter label!=orkestrator-owner");
     expect(pruneLog).not.toContain("docker system prune");
     expect(pruneLog).not.toContain("--volumes");
   });

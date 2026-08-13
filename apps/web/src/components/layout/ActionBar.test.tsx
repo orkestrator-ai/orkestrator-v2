@@ -170,6 +170,7 @@ let currentChanges: unknown[] = [];
 let currentFilesPanelOpen = false;
 let currentReviewPrompt: string | undefined;
 let currentDefaultAgent: "claude" | "opencode" | "codex" | undefined = "codex";
+let currentEnabledAgentPlatforms: Array<"claude" | "codex" | "cursor" | "grok" | "opencode"> | undefined;
 let currentPreferredEditor: "vscode" | "cursor" | undefined = "vscode";
 let currentRepositoryConfig: Record<string, { prBaseBranch?: string }> = {
   "project-1": { prBaseBranch: "main" },
@@ -444,6 +445,7 @@ mock.module("@/stores", () => ({
         codexReasoningEffort: string;
         codexNativeFastModeDefault?: boolean;
         opencodeModel: string;
+        enabledAgentPlatforms?: Array<"claude" | "codex" | "cursor" | "grok" | "opencode">;
       };
       repositories: Record<string, { prBaseBranch?: string }>;
     };
@@ -461,6 +463,7 @@ mock.module("@/stores", () => ({
             codexReasoningEffort: currentCodexReasoningEffort,
             codexNativeFastModeDefault: currentCodexFastModeDefault,
             opencodeModel: currentOpenCodeModel,
+            enabledAgentPlatforms: currentEnabledAgentPlatforms,
           },
           repositories: currentRepositoryConfig,
         },
@@ -724,6 +727,7 @@ beforeEach(() => {
   currentFilesPanelOpen = false;
   currentReviewPrompt = undefined;
   currentDefaultAgent = "codex";
+  currentEnabledAgentPlatforms = undefined;
   currentClaudeModel = "claude-default-model";
   currentClaudeFastModeDefault = false;
   currentCodexModel = "codex-default-model";
@@ -1633,6 +1637,17 @@ describe("ActionBar toolbar interactions", () => {
     expect(selectTabMock).not.toHaveBeenCalled();
     expect(closeActiveTabMock).not.toHaveBeenCalled();
     expect(toggleFilesPanelMock).not.toHaveBeenCalled();
+  });
+
+  test("does not launch agents disabled in platform settings through keyboard shortcuts", () => {
+    currentEnabledAgentPlatforms = ["codex"];
+    render(<ActionBar />);
+
+    fireEvent.keyDown(window, { key: "n", code: "KeyN", metaKey: true });
+    fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true });
+
+    expect(createTabMock).not.toHaveBeenCalledWith("claude");
+    expect(createTabMock).not.toHaveBeenCalledWith("opencode");
   });
 
   test("runs commands and opens the editor from keyboard shortcuts", async () => {

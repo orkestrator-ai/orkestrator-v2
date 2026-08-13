@@ -428,12 +428,10 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     }
 
     // Only `bun run verify:toolchains:live` can prove a digest matches the
-    // release it names. What is checkable offline is that a refresh actually
-    // produced distinct values: every digest in the manifest — companion or
-    // primary, archive or executable — must be unique, so a companion block
-    // pasted twice, or left pointing at another target's bytes, fails here.
+    // release it names. Within the Codex release, every target and companion is
+    // a distinct native asset, so duplicate digests identify a copied block.
     const digests = new Map<string, string>();
-    for (const artifact of PINNED_TOOLCHAIN_ARTIFACTS) {
+    for (const artifact of codexArtifacts) {
       const target = `${artifact.name}:${artifact.platform}:${artifact.architecture}`;
       const claim = (label: string, sha256: string) => {
         const existing = digests.get(sha256);
@@ -550,7 +548,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     const expected = new Set<string>();
     for (const platform of ["darwin", "linux"]) {
       for (const architecture of ["arm64", "x64"]) {
-        for (const name of ["claude", "codex", "opencode"]) {
+        for (const name of Object.keys(PINNED_TOOLCHAIN_VERSIONS)) {
           expected.add(`${name}:${platform}:${architecture}`);
         }
       }
@@ -594,7 +592,12 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
       values: [
         ["archive.url", artifact.archive.url],
         ["archive.sha256", artifact.archive.sha256],
-        ["executable.sha256", artifact.executable.sha256],
+        // Cursor's launcher script is intentionally byte-identical across
+        // targets; its target-specific runtime files and containing archive
+        // are pinned independently.
+        ...(artifact.archive.bundleRoot
+          ? []
+          : [["executable.sha256", artifact.executable.sha256] as const]),
         ...(artifact.executable.installedSha256
           ? [["executable.installedSha256", artifact.executable.installedSha256] as const]
           : []),
@@ -625,7 +628,9 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     for (const platform of ["darwin", "linux"] as const) {
       for (const architecture of ["arm64", "x64"] as const) {
         const selected = pinnedToolchainArtifacts(platform, architecture);
-        expect(selected.map((artifact) => artifact.name).sort()).toEqual(["claude", "codex", "opencode"]);
+        expect(selected.map((artifact) => artifact.name).sort()).toEqual(
+          Object.keys(PINNED_TOOLCHAIN_VERSIONS).sort(),
+        );
         expect(selected.every((artifact) => (
           artifact.platform === platform && artifact.architecture === architecture
         ))).toBe(true);
@@ -640,7 +645,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
 
   test("rejects incomplete or duplicate target manifests", () => {
     const darwinArm64 = pinnedToolchainArtifacts("darwin", "arm64");
-    expect(darwinArm64).toHaveLength(3);
+    expect(darwinArm64).toHaveLength(Object.keys(PINNED_TOOLCHAIN_VERSIONS).length);
 
     expect(() =>
       selectPinnedToolchainArtifacts(

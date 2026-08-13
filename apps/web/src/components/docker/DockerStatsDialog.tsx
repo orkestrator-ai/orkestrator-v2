@@ -289,7 +289,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
                       {pruneResult.imagesDeleted > 0 && <div>{pruneResult.imagesDeleted} image{pruneResult.imagesDeleted > 1 ? "s" : ""} removed</div>}
                       {pruneResult.networksDeleted > 0 && <div>{pruneResult.networksDeleted} network{pruneResult.networksDeleted > 1 ? "s" : ""} removed</div>}
                       {pruneResult.volumesDeleted > 0 && <div>{pruneResult.volumesDeleted} volume{pruneResult.volumesDeleted > 1 ? "s" : ""} removed</div>}
-                      <div className="font-medium mt-1">{pruneResult.spaceReclaimed} reclaimed</div>
+                      <div className="font-medium mt-1">{formatBytes(pruneResult.spaceReclaimed)} reclaimed</div>
                     </div></>
                   )}
                 </div>
@@ -413,7 +413,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
           overlayClassName={Z_FULLSCREEN_DIALOG}
         >
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove Stopped Containers?</AlertDialogTitle>
+            <AlertDialogTitle>Remove Stopped Orkestrator Containers?</AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-3">
                 <p>
@@ -423,9 +423,10 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
                   afterwards rebuilds its container from scratch.
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  Images, networks and volumes are left alone — they are shared
-                  with everything else on your Docker daemon, so they cannot be
-                  cleaned up safely from here.
+                  Containers from other applications and Orkestrator
+                  installations are left untouched. Images, networks and volumes
+                  are also left alone because they cannot be scoped safely to
+                  this installation.
                 </p>
               </div>
             </AlertDialogDescription>

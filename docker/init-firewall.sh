@@ -106,6 +106,18 @@ else
         "api.ollama.com"
         "together.ai"
         "x.ai"
+        "auth.x.ai"
+        "api.x.ai"
+        "cli-chat-proxy.grok.com"
+        "api2.cursor.sh"
+        "api3.cursor.sh"
+        "api4.cursor.sh"
+        "api5.cursor.sh"
+        "repo42.cursor.sh"
+        "authenticator.cursor.sh"
+        "marketplace.cursorapi.com"
+        "cursor-cdn.com"
+        "cursor.com"
         "bedrock.amazonaws.com"
 
         # Cloud providers

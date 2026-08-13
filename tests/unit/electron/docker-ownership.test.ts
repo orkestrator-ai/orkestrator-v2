@@ -5,9 +5,11 @@ import {
   dockerOwnerNamespace,
 } from "../../../apps/backend/src/core/docker-ownership";
 
-const { countPrunedDockerResources, dockerOwnerMatches } = (
-  await import("../../../apps/backend/src/core/commands")
-).__testing;
+const {
+  countPrunedDockerResources,
+  dockerOwnerMatches,
+  parseDockerByteSize,
+} = (await import("../../../apps/backend/src/core/commands")).__testing;
 
 describe("Docker registry ownership", () => {
   test("is stable for one resolved data directory and distinct across registries", () => {
@@ -30,6 +32,13 @@ describe("Docker registry ownership", () => {
     expect(packagedName).toBe("ork-aaaaaaaaaaaaaaaa-feature-environment");
     expect(developmentName).toBe("ork-bbbbbbbbbbbbbbbb-feature-environment");
     expect(packagedName).not.toBe(developmentName);
+  });
+
+  test("keeps same-named project environments distinct through their ids", () => {
+    const first = dockerContainerRuntimeName("aaaaaaaaaaaaaaaa", "environment-project-a");
+    const second = dockerContainerRuntimeName("aaaaaaaaaaaaaaaa", "environment-project-b");
+
+    expect(first).not.toBe(second);
   });
 
   test("strips leading and trailing separators Docker rejects in a name", () => {
@@ -81,6 +90,7 @@ describe("dockerOwnerMatches", () => {
 
   test("does not confuse an empty owner label with an absent one", () => {
     expect(dockerOwnerMatches("orkestrator-owner=", owner)).toBe(false);
+    expect(dockerOwnerMatches("orkestrator-owner", owner)).toBe(false);
   });
 });
 
@@ -102,5 +112,13 @@ describe("countPrunedDockerResources", () => {
     // "Nothing to clean up" branch — it must not read as a parse failure.
     expect(countPrunedDockerResources("Total reclaimed space: 0B\n")).toBe(0);
     expect(countPrunedDockerResources("")).toBe(0);
+  });
+});
+
+describe("parseDockerByteSize", () => {
+  test("converts Docker decimal and binary sizes to byte counts", () => {
+    expect(parseDockerByteSize("1.25GB")).toBe(1_250_000_000);
+    expect(parseDockerByteSize("2 MiB")).toBe(2_097_152);
+    expect(parseDockerByteSize("n/a")).toBe(0);
   });
 });

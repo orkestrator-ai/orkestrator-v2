@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { deepEqualJson } from "@/lib/chat/message-identity";
 import type { AppConfig, EnvironmentType, GlobalConfig, RepositoryConfig } from "@/types";
 import { DEFAULT_TERMINAL_SCROLLBACK, TERMINAL_BACKGROUND_COLOR } from "@/constants/terminal";
+import { LEGACY_ENABLED_AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 
 const DEFAULT_CONFIG: AppConfig = {
   version: "1.0",
@@ -63,6 +64,7 @@ const DEFAULT_CONFIG: AppConfig = {
       "mcp.context7.com",
       "cdn.jsdelivr.net",
     ],
+    enabledAgentPlatforms: [...LEGACY_ENABLED_AGENT_PLATFORMS],
     defaultAgent: "claude",
     opencodeModel: "opencode/claude-sonnet-5",
     claudeModel: "claude-sonnet-5",

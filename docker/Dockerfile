@@ -84,8 +84,8 @@ RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhisto
 ENV DEVCONTAINER=true
 
 # Create workspace and config directories and set permissions
-RUN mkdir -p /workspace /home/node/.claude /home/node/.codex /home/node/.config/opencode /home/node/.local/share/opencode /home/node/.local/state/opencode && \
-  chown -R node:node /workspace /home/node/.claude /home/node/.codex /home/node/.config /home/node/.local
+RUN mkdir -p /workspace /home/node/.claude /home/node/.codex /home/node/.cursor /home/node/.grok /home/node/.config/opencode /home/node/.config/grok /home/node/.local/share/opencode /home/node/.local/state/opencode && \
+  chown -R node:node /workspace /home/node/.claude /home/node/.codex /home/node/.cursor /home/node/.grok /home/node/.config /home/node/.local
 
 WORKDIR /workspace
 
@@ -126,6 +126,8 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
 ARG CLAUDE_CLI_VERSION=2.1.228
 ARG CODEX_CLI_VERSION=0.147.0
 ARG OPENCODE_CLI_VERSION=1.18.16
+ARG CURSOR_AGENT_VERSION=2026.08.11-e8db854
+ARG GROK_BUILD_VERSION=1.0.3
 
 # Install Claude Code from the pinned npm package. The package pulls in the
 # platform-native binary via optional dependencies.
@@ -141,11 +143,35 @@ RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}"
 ENV CODEX_CLI_PATH=/usr/local/share/npm-global/bin/codex
 ENV PATH="/usr/local/share/npm-global/bin:/home/node/.opencode/bin:$PATH"
 
+# Cursor Agent ships as a self-contained bundle; its launcher expects the
+# adjacent Node runtime and JS payload, so retain the bundle intact. Grok Build
+# is a single native executable. Both downloads are pinned and hash verified.
+USER root
+RUN ARCH="$(dpkg --print-architecture)" && \
+  case "$ARCH" in \
+    amd64) CURSOR_ARCH=x64; CURSOR_SHA=bfff4bf6f4e9dd30c1d0ef0a70b6077b074015dd2948e4c50685d53afdcfce5a; GROK_ARCH=x86_64; GROK_SHA=2a7d46dea3fbed067e4072258b835d401e017d6848dc996279f0fb3d668a0961 ;; \
+    arm64) CURSOR_ARCH=arm64; CURSOR_SHA=ea13f92e295f523a99ce8d8f57d6894d21e5d1e2d030ffad718ccd5955ca2eed; GROK_ARCH=aarch64; GROK_SHA=ed44950eab90573b6f475191f5791713a56943939b3b9a62e3f4e95edd14acd9 ;; \
+    *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
+  esac && \
+  curl -fsSL "https://downloads.cursor.com/lab/${CURSOR_AGENT_VERSION}/linux/${CURSOR_ARCH}/agent-cli-package.tar.gz" -o /tmp/cursor-agent.tar.gz && \
+  printf '%s  %s\n' "$CURSOR_SHA" /tmp/cursor-agent.tar.gz | sha256sum -c - && \
+  mkdir -p /opt/cursor-agent && \
+  tar -xzf /tmp/cursor-agent.tar.gz -C /opt/cursor-agent --strip-components=1 --no-same-owner && \
+  ln -s /opt/cursor-agent/cursor-agent /usr/local/bin/cursor && \
+  ln -s /opt/cursor-agent/cursor-agent /usr/local/bin/cursor-agent && \
+  curl -fsSL "https://storage.googleapis.com/grok-build-public-artifacts/cli/grok-${GROK_BUILD_VERSION}-linux-${GROK_ARCH}" -o /usr/local/bin/grok && \
+  printf '%s  %s\n' "$GROK_SHA" /usr/local/bin/grok | sha256sum -c - && \
+  chmod 755 /usr/local/bin/grok /opt/cursor-agent/cursor-agent && \
+  rm -f /tmp/cursor-agent.tar.gz
+USER node
+
 # Fail the image build immediately if an installer completed without leaving a
 # runnable CLI at the path the backend will use.
 RUN "$CLAUDE_CLI_PATH" --version \
  && "$CODEX_CLI_PATH" --version \
- && "$OPENCODE_CLI_PATH" --version
+ && "$OPENCODE_CLI_PATH" --version \
+ && cursor-agent --version \
+ && grok --version
 
 # Codex spawns `codex-code-mode-host` from its own directory for every code-mode
 # turn, and the models that default to code mode are unusable without it. The
@@ -162,8 +188,9 @@ COPY --chown=node:node package.json bun.lock /opt/bridge-build/
 COPY --chown=node:node packages/protocol /opt/bridge-build/packages/protocol
 COPY --chown=node:node bridges/claude-bridge /opt/bridge-build/bridges/claude-bridge
 COPY --chown=node:node bridges/codex-bridge /opt/bridge-build/bridges/codex-bridge
+COPY --chown=node:node bridges/acp-bridge /opt/bridge-build/bridges/acp-bridge
 WORKDIR /opt/bridge-build
-RUN bun install --filter claude-bridge --filter codex-bridge
+RUN bun install --filter claude-bridge --filter codex-bridge --filter acp-bridge
 
 # Build Claude Bridge Server.
 WORKDIR /opt/bridge-build/bridges/claude-bridge
@@ -189,11 +216,17 @@ WORKDIR /opt/bridge-build/bridges/codex-bridge
 RUN bun run build \
  && rm -rf node_modules
 
+# Build the shared ACP HTTP bridge used by Cursor Agent and Grok Build.
+WORKDIR /opt/bridge-build/bridges/acp-bridge
+RUN bun run build \
+ && rm -rf node_modules
+
 # Preserve the runtime paths expected by the backend, then remove the temporary
 # workspace metadata and shared install.
 USER root
 RUN mv /opt/bridge-build/bridges/claude-bridge /opt/claude-bridge \
  && mv /opt/bridge-build/bridges/codex-bridge /opt/codex-bridge \
+ && mv /opt/bridge-build/bridges/acp-bridge /opt/acp-bridge \
  && rm -rf /opt/bridge-build
 USER node
 WORKDIR /workspace

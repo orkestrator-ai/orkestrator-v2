@@ -178,6 +178,30 @@ describe("Electron StorageService", () => {
     }
   });
 
+  test("keeps managed ACP vendor endpoints out of the default allowlist", () => {
+    // The allowlist is the isolation boundary the user sees and edits. Cursor
+    // and Grok endpoints are unioned in at container creation for the
+    // platforms that are actually enabled, so seeding them here would open
+    // them for installs that never use either agent.
+    const config = defaultConfig();
+    const domains = config.global.allowedDomains;
+
+    expect(config.global.enabledAgentPlatforms).toEqual(["claude", "codex", "opencode"]);
+    for (const vendorHost of [
+      "auth.x.ai",
+      "api.x.ai",
+      "cli-chat-proxy.grok.com",
+      "api2.cursor.sh",
+      "authenticator.cursor.sh",
+      "marketplace.cursorapi.com",
+    ]) {
+      expect(domains).not.toContain(vendorHost);
+    }
+    // The endpoints the shipped agents genuinely need are still present.
+    expect(domains).toContain("api.anthropic.com");
+    expect(domains).toContain("registry.npmjs.org");
+  });
+
   test("keeps concurrent unrelated global mutations that a whole-config write would clobber", async () => {
     const dataDir = await createTempDir("ork-storage-agent-model-merge-");
     const first = new StorageService(dataDir);

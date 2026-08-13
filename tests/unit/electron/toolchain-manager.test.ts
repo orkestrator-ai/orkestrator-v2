@@ -262,6 +262,90 @@ function createSpawn(outcomes: SpawnOutcome[]): typeof spawn {
 }
 
 describe("pinned desktop toolchain cache", () => {
+  test("installs a raw executable artifact", async () => {
+    const dataDir = await createDataDir();
+    const body = Buffer.from("#!/bin/sh\nprintf 'grok 1.0.3\\n'\n");
+    const artifact: ToolchainArtifact = { ...artifactWithBody(artifacts[0]!, body, {
+      format: "raw",
+      entryPath: "",
+      url: "https://downloads.example.test/grok",
+    }, {
+      fileName: "grok",
+      size: body.byteLength,
+      sha256: sha256(body),
+    }), name: "grok" };
+    const result = await ensurePinnedToolchains({
+      dataDir,
+      artifacts: [artifact],
+      fetchImpl: async () => new Response(body, {
+        status: 200,
+        headers: { "content-length": String(body.byteLength) },
+      }),
+      skipExecutableProbeForTests: true,
+    });
+
+    const target = await readlink(path.join(result.binDir, "grok"));
+    expect(await readFile(target)).toEqual(body);
+  });
+
+  test("retains an extracted launcher bundle beside its runtime", async () => {
+    const dataDir = await createDataDir();
+    const launcher = Buffer.from("#!/bin/sh\nexec \"$(dirname \"$0\")/node/bin/node\"\n");
+    const runtime = Buffer.from("bundled runtime");
+    const archive = await tarGzip([
+      { name: "dist-package/cursor-agent", body: launcher },
+      { name: "dist-package/node/bin/node", body: runtime },
+      { name: "dist-package/unpinned-runtime.js", body: Buffer.from("not installed") },
+    ]);
+    const artifact: ToolchainArtifact = { ...artifactWithBody(artifacts[1]!, archive, {
+      entryPath: "dist-package/cursor-agent",
+      bundleRoot: "dist-package/",
+      bundleFiles: [
+        { path: "node/bin/node", size: runtime.byteLength, sha256: sha256(runtime) },
+      ],
+      url: "https://downloads.example.test/cursor.tar.gz",
+    }, {
+      fileName: "cursor",
+      size: launcher.byteLength,
+      sha256: sha256(launcher),
+    }), name: "cursor" };
+    const result = await ensurePinnedToolchains({
+      dataDir,
+      artifacts: [artifact],
+      fetchImpl: async () => new Response(archive, {
+        status: 200,
+        headers: { "content-length": String(archive.byteLength) },
+      }),
+      skipExecutableProbeForTests: true,
+    });
+
+    const target = await readlink(path.join(result.binDir, "cursor"));
+    expect(await readFile(target)).toEqual(launcher);
+    expect(await readFile(path.join(path.dirname(target), "node/bin/node"))).toEqual(runtime);
+    await expect(readFile(path.join(path.dirname(target), "unpinned-runtime.js"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    const runtimePath = path.join(path.dirname(target), "node/bin/node");
+    await chmod(runtimePath, 0o600);
+    await writeFile(runtimePath, "corrupt");
+    let downloads = 0;
+    await ensurePinnedToolchains({
+      dataDir,
+      artifacts: [artifact],
+      fetchImpl: async () => {
+        downloads += 1;
+        return new Response(archive, {
+          status: 200,
+          headers: { "content-length": String(archive.byteLength) },
+        });
+      },
+      skipExecutableProbeForTests: true,
+    });
+    expect(downloads).toBe(1);
+    expect(await readFile(path.join(path.dirname(target), "node/bin/node"))).toEqual(runtime);
+  });
+
   test("installs ZIP and tar.gz artifacts once, activates them, and reuses verified files", async () => {
     const dataDir = await createDataDir();
     const fetchImpl = createFetch();

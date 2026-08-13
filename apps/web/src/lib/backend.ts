@@ -896,16 +896,17 @@ export interface SystemPruneResult {
   networksDeleted: number;
   /** Number of volumes deleted. Always 0: this app creates no volumes. */
   volumesDeleted: number;
-  /** Total space reclaimed, pre-formatted by Docker (e.g. "1.25GB") */
-  spaceReclaimed: string;
+  /** Total space reclaimed in bytes */
+  spaceReclaimed: number;
 }
 
 /**
  * Remove this instance's stopped containers.
  *
- * Scoped to containers labelled with this backend registry's owner. Images,
- * networks and volumes are deliberately left alone — they carry no owner label,
- * so pruning them could not be limited to resources this instance created.
+ * Scoped to containers labelled with this backend registry's owner, plus legacy
+ * Orkestrator containers created before owner labels existed. Images, networks
+ * and volumes are deliberately left alone because they cannot be limited safely
+ * to resources this instance created.
  */
 export async function dockerSystemPrune(): Promise<SystemPruneResult> {
   return invoke<SystemPruneResult>("docker_system_prune", {});
@@ -1990,7 +1991,7 @@ export async function deleteLoopedReviewWorkflow(
 
 export async function ensureNativeAgentSession(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode";
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
   logicalSessionKey: string;
   origin?: AgentInteractionOrigin;
   interactionPolicy?: AgentInteractionPolicy;
@@ -2014,7 +2015,7 @@ export async function ensureNativeAgentSession(input: {
 
 export async function adoptNativeAgentSession(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode";
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
   logicalSessionKey: string;
   origin?: AgentInteractionOrigin;
   interactionPolicy?: AgentInteractionPolicy;
@@ -2031,7 +2032,7 @@ export async function adoptNativeAgentSession(input: {
 
 export async function getNativeAgentSession(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode";
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
   logicalSessionKey: string;
 }): Promise<PersistedNativeAgentSession | null> {
   return invoke<PersistedNativeAgentSession | null>(
@@ -2060,7 +2061,7 @@ export async function releaseOpenCodeManualPrompt(input: {
 
 export async function dispatchNativeAgentPrompt(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode";
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
   logicalSessionKey: string;
   origin?: AgentInteractionOrigin;
   interactionPolicy?: AgentInteractionPolicy;

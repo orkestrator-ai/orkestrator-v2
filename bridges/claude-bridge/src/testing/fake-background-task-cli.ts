@@ -6,6 +6,7 @@ import { createInterface } from "node:readline";
 const markerFile = process.env.CLAUDE_SDK_BACKGROUND_MARKER_FILE;
 if (!markerFile) process.exit(2);
 const childMode = process.env.CLAUDE_SDK_BACKGROUND_CHILD_MODE ?? "complete";
+const emitContinuation = process.env.CLAUDE_SDK_BACKGROUND_CONTINUATION === "1";
 
 const taskId = "contract-background-task";
 const toolUseId = "contract-background-tool";
@@ -159,6 +160,43 @@ lines.on("line", (line) => {
       session_id: sessionId,
       uuid: "00000000-0000-4000-8000-000000000015",
     });
+    if (emitContinuation) {
+      write({
+        type: "assistant",
+        message: {
+          id: "contract-background-continuation-assistant",
+          role: "assistant",
+          model: "claude-contract",
+          stop_reason: "end_turn",
+          stop_sequence: null,
+          usage: { input_tokens: 0, output_tokens: 0 },
+          content: [{ type: "text", text: "Contract task completed." }],
+        },
+        parent_tool_use_id: null,
+        session_id: sessionId,
+        uuid: "00000000-0000-4000-8000-000000000016",
+      });
+      write({
+        type: "result",
+        subtype: "success",
+        duration_ms: 1,
+        duration_api_ms: 0,
+        is_error: false,
+        num_turns: 2,
+        result: "background continuation complete",
+        session_id: sessionId,
+        total_cost_usd: 0,
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+        modelUsage: {},
+        permission_denials: [],
+        uuid: "00000000-0000-4000-8000-000000000017",
+      });
+    }
     lines.close();
   });
 });

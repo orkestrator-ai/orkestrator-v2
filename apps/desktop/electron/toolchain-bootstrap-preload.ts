@@ -15,4 +15,17 @@ ipcRenderer.on("orkestrator:toolchain-progress", (_event, progress: ToolchainPro
 
 window.addEventListener("DOMContentLoaded", () => {
   if (latestProgress) applyProgress(latestProgress);
+  const continueButton = document.getElementById("continue");
+  const error = document.getElementById("error");
+  continueButton?.addEventListener("click", () => {
+    const selected = Array.from(
+      document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked'),
+      (input) => input.value,
+    );
+    if (selected.length === 0) {
+      if (error) error.textContent = "Select at least one agent system.";
+      return;
+    }
+    ipcRenderer.send("orkestrator:agent-platform-selection", selected);
+  });
 });

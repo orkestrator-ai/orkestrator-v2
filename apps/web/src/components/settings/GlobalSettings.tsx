@@ -26,7 +26,7 @@ import {
 import { useConfigStore } from "@/stores";
 import * as backend from "@/lib/backend";
 import { Loader2, Eye, EyeOff, Key, Github, CheckCircle2, XCircle, AlertCircle, Code2, Check, Terminal, Bot, FolderOpen, ExternalLink, Globe2, WifiOff, Copy, RefreshCw, RotateCcw } from "lucide-react";
-import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
+import { AgentIcon } from "@/components/agents/AgentRadioGroup";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { getGatewayTokenValidationError } from "@/lib/gateway-token";
@@ -60,6 +60,11 @@ import {
   getPreviewColors,
 } from "@/constants/terminal";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
+import {
+  AGENT_PLATFORMS,
+  AGENT_PLATFORM_LABELS,
+  type AgentPlatform,
+} from "@orkestrator/protocol/agent-platforms";
 
 // Domain validation regex
 const DOMAIN_REGEX = /^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
@@ -103,6 +108,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   );
   const [defaultAgent, setDefaultAgent] = useState<DefaultAgent>(
     global.defaultAgent || "claude"
+  );
+  const [enabledAgentPlatforms, setEnabledAgentPlatforms] = useState<AgentPlatform[]>(
+    global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]
   );
   const [opencodeModel, setOpencodeModel] = useState(
     global.opencodeModel || "opencode/claude-sonnet-5"
@@ -193,6 +201,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setAllowedDomains((global.allowedDomains || []).join("\n"));
     setPreferredEditor(global.preferredEditor || "vscode");
     setDefaultAgent(global.defaultAgent || "claude");
+    setEnabledAgentPlatforms(global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]);
     setOpencodeModel(global.opencodeModel || "opencode/claude-sonnet-5");
     setOpencodeMode(global.opencodeMode || "terminal");
     setClaudeMode(global.claudeMode || "terminal");
@@ -291,6 +300,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       githubCredentialPropagationPending ||
       allowedDomains !== (global.allowedDomains || []).join("\n") ||
       preferredEditor !== (global.preferredEditor || "vscode") ||
+      JSON.stringify(enabledAgentPlatforms) !== JSON.stringify(global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]) ||
       defaultAgent !== (global.defaultAgent || "claude") ||
       opencodeModel !== (global.opencodeModel || "opencode/claude-sonnet-5") ||
       opencodeMode !== (global.opencodeMode || "terminal") ||
@@ -315,7 +325,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     if (changed) {
       setSaveSuccess(false);
     }
-  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, useHostGitHubCredentials, useHostClaudeCredentials, githubToken, clearGithubToken, githubCredentialPropagationPending, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, codexMaxConcurrentThreads, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewInstruction, webClientApplyError, gatewayToken, savedGatewayToken, global]);
+  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, useHostGitHubCredentials, useHostClaudeCredentials, githubToken, clearGithubToken, githubCredentialPropagationPending, allowedDomains, preferredEditor, enabledAgentPlatforms, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, codexMaxConcurrentThreads, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewInstruction, webClientApplyError, gatewayToken, savedGatewayToken, global]);
 
   // Validate domains on change
   const validateDomainsLocally = useCallback((domainsText: string) => {
@@ -397,6 +407,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         useHostGitHubCredentials: boolean;
         useHostClaudeCredentials: boolean;
         preferredEditor?: PreferredEditor;
+        enabledAgentPlatforms: AgentPlatform[];
         defaultAgent: DefaultAgent;
         opencodeModel: string;
         claudeModel: string;
@@ -429,6 +440,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         useHostGitHubCredentials,
         useHostClaudeCredentials,
         preferredEditor,
+        enabledAgentPlatforms,
         defaultAgent,
         opencodeModel,
         claudeModel: global.claudeModel || "claude-sonnet-5",
@@ -580,6 +592,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     pendingGitHubCredentialEditRef.current = null;
     setAllowedDomains((global.allowedDomains || []).join("\n"));
     setPreferredEditor(global.preferredEditor || "vscode");
+    setEnabledAgentPlatforms(global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]);
     setDefaultAgent(global.defaultAgent || "claude");
     setOpencodeModel(global.opencodeModel || "opencode/claude-sonnet-5");
     setOpencodeMode(global.opencodeMode || "terminal");
@@ -777,52 +790,25 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
           </h3>
           <p className="text-xs text-muted-foreground mt-1">Agent to launch in new environments</p>
         </div>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-          <button
-            type="button"
-            onClick={() => setDefaultAgent("claude")}
-            className={cn(
-              "p-3 rounded-lg border-2 text-left transition-colors",
-              defaultAgent === "claude"
-                ? "border-primary bg-primary/5"
-                : "border-transparent bg-zinc-900 hover:border-zinc-600"
-            )}
-          >
-            <div className="flex items-center gap-2 font-medium text-sm">
-              <ClaudeIcon />
-              Claude
-            </div>
-          </button>
-          <button
-            type="button"
-            onClick={() => setDefaultAgent("codex")}
-            className={cn(
-              "p-3 rounded-lg border-2 text-left transition-colors",
-              defaultAgent === "codex"
-                ? "border-primary bg-primary/5"
-                : "border-transparent bg-zinc-900 hover:border-zinc-600"
-            )}
-          >
-            <div className="flex items-center gap-2 font-medium text-sm">
-              <CodexIcon className="text-emerald-400" />
-              Codex
-            </div>
-          </button>
-          <button
-            type="button"
-            onClick={() => setDefaultAgent("opencode")}
-            className={cn(
-              "p-3 rounded-lg border-2 text-left transition-colors",
-              defaultAgent === "opencode"
-                ? "border-primary bg-primary/5"
-                : "border-transparent bg-zinc-900 hover:border-zinc-600"
-            )}
-          >
-            <div className="flex items-center gap-2 font-medium text-sm">
-              <OpenCodeIcon className="h-4.5 w-4.5" />
-              OpenCode
-            </div>
-          </button>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {enabledAgentPlatforms.map((platform) => (
+            <button
+              key={platform}
+              type="button"
+              onClick={() => setDefaultAgent(platform)}
+              className={cn(
+                "rounded-lg border-2 p-3 text-left transition-colors",
+                defaultAgent === platform
+                  ? "border-primary bg-primary/5"
+                  : "border-transparent bg-zinc-900 hover:border-zinc-600"
+              )}
+            >
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <AgentIcon agent={platform} />
+                {AGENT_PLATFORM_LABELS[platform]}
+              </div>
+            </button>
+          ))}
         </div>
       </div>
 
@@ -992,6 +978,66 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
           Files matching these patterns will be copied into containers
         </p>
       </div>
+    </div>
+  );
+
+  const renderPlatforms = () => (
+    <div className="max-w-2xl space-y-5">
+      <div>
+        <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
+          <Bot className="h-4 w-4" />
+          Agent platforms
+        </h3>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          Enabled systems appear in the toolbar, review picker, and build workflow. Newly enabled binaries are downloaded on the next app launch.
+        </p>
+      </div>
+      <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/40">
+        {AGENT_PLATFORMS.map((platform, index) => {
+          const checked = enabledAgentPlatforms.includes(platform);
+          return (
+            <div
+              key={platform}
+              className={cn(
+                "flex items-center justify-between gap-6 px-4 py-3.5",
+                index > 0 && "border-t border-zinc-800/80",
+              )}
+            >
+              <Label htmlFor={`platform-${platform}`} className="flex min-w-0 items-center gap-3 text-sm font-medium">
+                <span className={cn(
+                  "grid size-8 shrink-0 place-items-center rounded-lg border",
+                  checked
+                    ? "border-cyan-400/30 bg-cyan-500/10 text-cyan-300"
+                    : "border-zinc-800 bg-zinc-900 text-zinc-500",
+                )}>
+                  <AgentIcon agent={platform} className="size-4" />
+                </span>
+                <span>{AGENT_PLATFORM_LABELS[platform]}</span>
+              </Label>
+              <Switch
+                id={`platform-${platform}`}
+                checked={checked}
+                onCheckedChange={(next) => {
+                  const selected = next
+                    ? AGENT_PLATFORMS.filter((candidate) =>
+                        candidate === platform || enabledAgentPlatforms.includes(candidate)
+                      )
+                    : enabledAgentPlatforms.filter((candidate) => candidate !== platform);
+                  if (selected.length === 0) {
+                    toast.error("Keep at least one agent platform enabled");
+                    return;
+                  }
+                  setEnabledAgentPlatforms(selected);
+                  if (!selected.includes(defaultAgent)) setDefaultAgent(selected[0]!);
+                }}
+              />
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-xs text-muted-foreground/70">
+        Disabling a platform hides new launch choices; existing sessions and files are kept.
+      </p>
     </div>
   );
 
@@ -1837,6 +1883,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
 
   const sectionContent: Record<string, () => React.ReactNode> = {
     general: renderGeneral,
+    platforms: renderPlatforms,
     review: renderReview,
     claude: renderClaude,
     opencode: renderOpenCode,

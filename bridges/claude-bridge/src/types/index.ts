@@ -332,6 +332,25 @@ export interface SessionState {
    * that races ahead of that evidence from closing the CLI's stdin.
    */
   backgroundTaskCandidates?: Map<string, ClaudeQueryControl>;
+  /**
+   * Controls kept alive across a background-task notification.
+   *
+   * A terminal `task_notification` is injected back into the same root agent
+   * loop, so the query that released its turn may still produce another
+   * assistant/result boundary. `Query.close()` is destructive, so that control
+   * must not be closed there — but it must stay *reachable*, or session
+   * teardown can no longer stop a live CLI writing to the rollout.
+   */
+  retainedQueryControls?: Set<ClaudeQueryControl>;
+  /**
+   * Generation of the most recently started turn.
+   *
+   * A released turn can be superseded by a follow-up while its provider process
+   * is still alive. Only the latest generation may reclaim the foreground; an
+   * older one publishing `running` would take abort ownership away from the
+   * turn the user is actually waiting on.
+   */
+  latestTurnGeneration?: number;
 }
 
 export interface SessionRateLimitWindow {

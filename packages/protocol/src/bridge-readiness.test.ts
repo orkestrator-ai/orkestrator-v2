@@ -7,7 +7,7 @@ import {
 
 describe("isAgentBridgeKind", () => {
   test("accepts exactly the supported bridge kinds", () => {
-    expect(["claude", "codex", "opencode"].every(isAgentBridgeKind)).toBe(true);
+    expect(["claude", "codex", "cursor", "grok", "opencode"].every(isAgentBridgeKind)).toBe(true);
     expect(isAgentBridgeKind("other")).toBe(false);
     expect(isAgentBridgeKind(null)).toBe(false);
   });

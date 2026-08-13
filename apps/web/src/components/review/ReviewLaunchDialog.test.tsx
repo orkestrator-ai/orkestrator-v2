@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, act, fireEvent, render, screen, within } from "@testing-library/react";
 import { createContext, useContext } from "react";
 import * as realDialog from "@/components/ui/dialog";
@@ -79,8 +79,21 @@ import {
   type ReviewModelCatalog,
   type ReviewTabType,
 } from "./ReviewLaunchDialog";
+import { useConfigStore } from "@/stores/configStore";
 
 afterEach(cleanup);
+beforeEach(() => {
+  const config = useConfigStore.getState().config;
+  useConfigStore.setState({
+    config: {
+      ...config,
+      global: {
+        ...config.global,
+        enabledAgentPlatforms: ["claude", "codex", "cursor", "grok", "opencode"],
+      },
+    },
+  });
+});
 afterAll(() => {
   mock.module("@/components/ui/dialog", () => realDialogSnapshot);
   mock.module("@/components/ui/select", () => realSelectSnapshot);
@@ -94,6 +107,8 @@ const catalog: ReviewModelCatalog = {
   codex: [
     { id: "codex-a", name: "Codex A", reasoningEfforts: ["medium", "high"] },
   ],
+  cursor: [{ id: "cursor-a", name: "Cursor A", reasoningEfforts: [] }],
+  grok: [{ id: "grok-a", name: "Grok A", reasoningEfforts: [] }],
   opencode: [
     { id: "provider/model-a", name: "OpenCode A", reasoningEfforts: ["fast", "deep"] },
   ],
@@ -174,7 +189,7 @@ describe("ReviewLaunchDialog", () => {
     expect(
       within(screen.getByRole("radiogroup", { name: "Review provider" }))
         .getAllByRole("radio"),
-    ).toHaveLength(3);
+    ).toHaveLength(5);
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onConfirm).toHaveBeenCalledWith({
       tabType: "claude-native",
@@ -541,8 +556,8 @@ describe("ReviewLaunchDialog step markers", () => {
       return svg!.outerHTML;
     });
 
-    expect(icons).toHaveLength(3);
-    expect(new Set(icons).size).toBe(3);
+    expect(icons).toHaveLength(5);
+    expect(new Set(icons).size).toBe(5);
   });
 });
 
@@ -565,19 +580,19 @@ describe("ReviewLaunchDialog provider keyboard navigation", () => {
     expect(document.activeElement).toBe(radios()[1]!);
 
     expect(fireEvent.keyDown(radios()[1]!, { key: "ArrowDown" })).toBe(false);
-    expect(selectedModelName()).toContain("OpenCode A");
+    expect(selectedModelName()).toContain("Cursor A");
     expect(document.activeElement).toBe(radios()[2]!);
   });
 
   test("moves backward with ArrowLeft and ArrowUp", () => {
     renderDialog({ defaultTabType: "opencode-native" });
 
-    expect(fireEvent.keyDown(radios()[2]!, { key: "ArrowLeft" })).toBe(false);
-    expect(selectedModelName()).toContain("Codex A");
+    expect(fireEvent.keyDown(radios()[4]!, { key: "ArrowLeft" })).toBe(false);
+    expect(selectedModelName()).toContain("Grok A");
 
-    expect(fireEvent.keyDown(radios()[1]!, { key: "ArrowUp" })).toBe(false);
-    expect(selectedModelName()).toContain("Claude A");
-    expect(document.activeElement).toBe(radios()[0]!);
+    expect(fireEvent.keyDown(radios()[3]!, { key: "ArrowUp" })).toBe(false);
+    expect(selectedModelName()).toContain("Cursor A");
+    expect(document.activeElement).toBe(radios()[2]!);
   });
 
   test("wraps around both ends", () => {
@@ -588,7 +603,7 @@ describe("ReviewLaunchDialog provider keyboard navigation", () => {
     expect(selectedModelName()).toContain("OpenCode A");
 
     // Last -> next wraps to first.
-    fireEvent.keyDown(radios()[2]!, { key: "ArrowRight" });
+    fireEvent.keyDown(radios()[4]!, { key: "ArrowRight" });
     expect(selectedModelName()).toContain("Claude A");
   });
 
@@ -597,9 +612,9 @@ describe("ReviewLaunchDialog provider keyboard navigation", () => {
 
     expect(fireEvent.keyDown(radios()[0]!, { key: "End" })).toBe(false);
     expect(selectedModelName()).toContain("OpenCode A");
-    expect(document.activeElement).toBe(radios()[2]!);
+    expect(document.activeElement).toBe(radios()[4]!);
 
-    expect(fireEvent.keyDown(radios()[2]!, { key: "Home" })).toBe(false);
+    expect(fireEvent.keyDown(radios()[4]!, { key: "Home" })).toBe(false);
     expect(selectedModelName()).toContain("Claude A");
     expect(document.activeElement).toBe(radios()[0]!);
   });
@@ -863,9 +878,13 @@ test("review tab mapping is native-only", () => {
     "native",
     "native",
     "native",
+    "native",
+    "native",
   ]);
   expect(getReviewAgent("claude-native")).toBe("claude");
   expect(getReviewAgent("codex-native")).toBe("codex");
   expect(getReviewAgent("opencode-native")).toBe("opencode");
+  expect(getReviewAgent("cursor-native")).toBe("cursor");
+  expect(getReviewAgent("grok-native")).toBe("grok");
   expect(getReviewAgent("unsupported" as ReviewTabType)).toBe("claude");
 });

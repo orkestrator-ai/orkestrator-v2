@@ -134,6 +134,23 @@ For a standalone backend without Electron, run:
 bun run start:web-public
 ```
 
+To install Bun when necessary and run the published backend without cloning the
+repository, use:
+
+```bash
+curl -fsSL https://orkestrator.dev/install.sh | \
+  bash -s -- --tailscale-serve \
+  --allowed-origins https://orkestrator.dev,https://www.orkestrator.dev
+```
+
+If Bun is already installed, the equivalent command is:
+
+```bash
+bunx orkestrator \
+  --tailscale-serve \
+  --allowed-origins https://orkestrator.dev,https://www.orkestrator.dev
+```
+
 On macOS, Orkestrator automatically detects the CLI bundled with `/Applications/Tailscale.app`. If Tailscale is installed somewhere else, provide its executable explicitly:
 
 ```bash

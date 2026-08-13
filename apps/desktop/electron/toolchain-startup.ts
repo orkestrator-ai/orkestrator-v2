@@ -5,6 +5,7 @@ import type {
   PinnedToolchainResult,
   ToolchainProgress,
 } from "./toolchain-manager.js";
+import type { ToolchainArtifact } from "./toolchain-manifest.js";
 
 type ProgressWindow = Pick<BrowserWindow, "close" | "isDestroyed" | "once">;
 
@@ -81,6 +82,7 @@ export async function preparePinnedToolchains(options: {
   }): Promise<{ response: number }>;
   quit(): void;
   logError(error: unknown): void;
+  artifacts?: readonly ToolchainArtifact[];
 }): Promise<string | null> {
   while (true) {
     try {
@@ -88,6 +90,7 @@ export async function preparePinnedToolchains(options: {
         dataDir: options.dataDir,
         fetchImpl: options.fetchImpl,
         onProgress: options.onProgress,
+        artifacts: options.artifacts,
       });
       return result.binDir;
     } catch (error) {

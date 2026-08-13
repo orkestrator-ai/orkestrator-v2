@@ -108,6 +108,15 @@ export interface CodexNativeData {
   isLocal?: boolean;
 }
 
+export interface AcpNativeData {
+  provider: "cursor" | "grok";
+  containerId?: string;
+  environmentId: string;
+  hostPort?: number;
+  sessionId?: string;
+  isLocal?: boolean;
+}
+
 // Data for build pipeline tabs
 export interface BuildTabData {
   /** Environment ID */
@@ -152,6 +161,8 @@ export interface TabInfo {
   claudeTmuxData?: ClaudeTmuxData;
   /** Data for codex-native tabs */
   codexNativeData?: CodexNativeData;
+  /** Data for cursor-native and grok-native ACP tabs. */
+  acpNativeData?: AcpNativeData;
   /** Data for claude-build tabs */
   buildTabData?: BuildTabData;
   /** Data for dedicated structured/looped review tabs. */

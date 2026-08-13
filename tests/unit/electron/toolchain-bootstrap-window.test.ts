@@ -2,11 +2,41 @@ import { describe, expect, mock, test } from "bun:test";
 import type { BrowserWindowConstructorOptions } from "electron";
 import { PRODUCT_NAME } from "../../../apps/desktop/electron/app-constants";
 import {
+  chooseAgentPlatforms,
   createToolchainBootstrapWindow,
   reportToolchainProgress,
 } from "../../../apps/desktop/electron/toolchain-bootstrap-window";
 
 describe("toolchain bootstrap window", () => {
+  test("collects a normalized first-run platform selection before downloads", async () => {
+    let ipcListener: ((_event: unknown, channel: string, values: unknown) => void) | undefined;
+    let destroyed = false;
+    class SelectionWindow {
+      readonly webContents = {
+        on: mock((event: string, listener: (...args: never[]) => void) => {
+          if (event === "ipc-message") ipcListener = listener as typeof ipcListener;
+        }),
+        once: mock(() => undefined),
+        setWindowOpenHandler: mock(() => undefined),
+      };
+      readonly loadURL = mock(async (_url: string) => undefined);
+      readonly once = mock(() => undefined);
+      readonly isDestroyed = mock(() => destroyed);
+      readonly close = mock(() => { destroyed = true; });
+      constructor(readonly options: BrowserWindowConstructorOptions) {}
+    }
+
+    const selecting = chooseAgentPlatforms({
+      BrowserWindowCtor: SelectionWindow as never,
+      dirname: "/app/electron",
+    });
+    await Promise.resolve();
+    ipcListener?.({}, "orkestrator:agent-platform-selection", ["grok", "invalid", "claude"]);
+
+    await expect(selecting).resolves.toEqual(["claude", "grok"]);
+    expect(destroyed).toBe(true);
+  });
+
   test("loads a locked-down local progress page and forwards status over IPC", async () => {
     let destroyed = false;
     let navigationListener: ((event: { preventDefault(): void }) => void) | undefined;

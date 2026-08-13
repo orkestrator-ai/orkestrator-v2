@@ -18,6 +18,7 @@ import type {
   AgentInteractionOrigin,
   AgentInteractionPolicy,
 } from "@orkestrator/protocol/agent-interactions";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 export type { AgentActivityState };
 
@@ -129,6 +130,10 @@ export interface Environment {
   localClaudePort?: number;
   /** Host port for codex-bridge server (local mode) */
   localCodexPort?: number;
+  /** Host port for Cursor's ACP bridge (local mode) */
+  localCursorPort?: number;
+  /** Host port for Grok Build's ACP bridge (local mode) */
+  localGrokPort?: number;
 
   // === Agent settings overrides ===
   /** Per-environment default agent override (undefined = use global config) */
@@ -261,7 +266,7 @@ export interface PersistedNativeAgentSession {
   version: 1;
   key: string;
   environmentId: string;
-  agent: "claude" | "codex" | "opencode";
+  agent: AgentPlatform;
   logicalSessionKey: string;
   providerSessionId: string;
   origin: AgentInteractionOrigin;
@@ -403,7 +408,7 @@ export interface ContainerResources {
 export type PreferredEditor = "vscode" | "cursor";
 
 /** Default agent for new environments */
-export type DefaultAgent = "claude" | "opencode" | "codex";
+export type DefaultAgent = AgentPlatform;
 
 /** OpenCode mode - terminal CLI or native chat interface */
 export type OpenCodeMode = "terminal" | "native";
@@ -443,6 +448,8 @@ export interface TerminalAppearance {
 }
 
 export interface GlobalConfig {
+  /** Agent systems installed and exposed in launch/review surfaces. */
+  enabledAgentPlatforms?: AgentPlatform[];
   containerResources: ContainerResources;
   envFilePatterns: string[];
   anthropicApiKey?: string;

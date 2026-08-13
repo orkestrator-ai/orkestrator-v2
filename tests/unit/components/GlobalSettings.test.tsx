@@ -1037,8 +1037,8 @@ describe("GlobalSettings", () => {
       screen
         .getAllByRole("button")
         .map((button) => button.textContent?.trim())
-        .filter((label) => ["Claude", "Codex", "OpenCode"].includes(label ?? "")),
-    ).toEqual(["Claude", "Codex", "OpenCode"]);
+        .filter((label) => ["Claude Code", "Codex", "OpenCode"].includes(label ?? "")),
+    ).toEqual(["Claude Code", "Codex", "OpenCode"]);
 
     fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
     fireEvent.click(screen.getByRole("button", { name: "Codex" }));
@@ -1046,6 +1046,33 @@ describe("GlobalSettings", () => {
 
     await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
       expect.objectContaining({ preferredEditor: "cursor", defaultAgent: "codex" }),
+    ));
+  });
+
+  test("shows all platforms and persists visibility choices", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          enabledAgentPlatforms: ["claude", "codex", "cursor", "grok", "opencode"],
+        },
+      },
+    }));
+    render(<GlobalSettings activeSection="platforms" />);
+
+    for (const name of ["Claude Code", "Codex", "Cursor Agent", "Grok Build", "OpenCode"]) {
+      expect(screen.getByRole("switch", { name })).toBeTruthy();
+    }
+    fireEvent.click(screen.getByRole("switch", { name: "Claude Code" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        enabledAgentPlatforms: ["codex", "cursor", "grok", "opencode"],
+        defaultAgent: "codex",
+      }),
     ));
   });
 

@@ -2,7 +2,7 @@
 import { createContext, useContext, useCallback, useMemo, useState, ReactNode } from "react";
 
 // Terminal-specific tab types
-export type TerminalTabType = "plain" | "claude" | "opencode" | "codex" | "root";
+export type TerminalTabType = "plain" | "claude" | "opencode" | "codex" | "cursor" | "grok" | "root";
 export type CreatableTabType = TerminalTabType | "browser" | "looped-review";
 export type AgentLaunchModeOverride = "cli" | "native" | "tmux";
 
@@ -15,6 +15,8 @@ export type TabType =
   | "claude-native"
   | "claude-tmux"
   | "codex-native"
+  | "cursor-native"
+  | "grok-native"
   | "claude-build"
   | "looped-review";
 

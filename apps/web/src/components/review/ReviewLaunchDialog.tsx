@@ -23,6 +23,7 @@ import {
   defaultEffortFor,
   effortLabel,
   firstModelFor,
+  modelsForAgent,
   type AgentModelCatalog,
   type AgentModelOption,
   type LaunchAgent,
@@ -33,6 +34,8 @@ import { cn } from "@/lib/utils";
 export type ReviewTabType =
   | "claude-native"
   | "codex-native"
+  | "cursor-native"
+  | "grok-native"
   | "opencode-native";
 
 export type ReviewAgent = LaunchAgent;
@@ -67,6 +70,20 @@ export const REVIEW_TAB_OPTIONS: Array<{
     label: "Codex Native",
     description: "App-server Markdown review",
     agent: "codex",
+    mode: "native",
+  },
+  {
+    value: "cursor-native",
+    label: "Cursor Agent",
+    description: "Cursor ACP review",
+    agent: "cursor",
+    mode: "native",
+  },
+  {
+    value: "grok-native",
+    label: "Grok Build",
+    description: "Grok ACP review",
+    agent: "grok",
     mode: "native",
   },
   {
@@ -194,7 +211,7 @@ export function ReviewLaunchDialog({
   ]);
 
   const agent = getReviewAgent(tabType);
-  const models = catalog[agent];
+  const models = modelsForAgent(catalog, agent);
   const selectedModel = models.find((option) => option.id === model) ?? models[0];
   const reasoningEfforts = selectedModel?.reasoningEfforts ?? [];
   const effortAvailable = reasoningEfforts.length > 0;

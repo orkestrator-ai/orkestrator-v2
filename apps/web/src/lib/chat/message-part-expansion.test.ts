@@ -112,6 +112,61 @@ describe("useMessagePartExpansion", () => {
     expect(keys.has("message-2/part-0")).toBe(true);
   });
 
+  test("protects its key from cap eviction while mounted, and stops once unmounted", () => {
+    const store = useMessagePartExpansionStore.getState();
+    const mounted = renderHook(() => useMessagePartExpansion("mounted-part"));
+
+    act(() => {
+      mounted.result.current[1](true);
+    });
+    act(() => {
+      // Fill the remembered-key set past its cap with off-screen keys.
+      for (let index = 0; index < 500; index++) {
+        store.setExpanded(`off-screen-${index}`, true);
+      }
+    });
+
+    expect(mounted.result.current[0]).toBe(true);
+    expect(
+      useMessagePartExpansionStore.getState().expandedKeys.has("mounted-part"),
+    ).toBe(true);
+
+    mounted.unmount();
+    act(() => {
+      store.setExpanded("later-key", true);
+    });
+
+    // Unmounted, it is the oldest key with nothing holding it on screen.
+    expect(
+      useMessagePartExpansionStore.getState().expandedKeys.has("mounted-part"),
+    ).toBe(false);
+  });
+
+  test("moves its cap protection to the new key when the key changes", () => {
+    const store = useMessagePartExpansionStore.getState();
+    const { rerender } = renderHook(
+      ({ expansionKey }: { expansionKey: string }) =>
+        useMessagePartExpansion(expansionKey),
+      { initialProps: { expansionKey: "first-key" } },
+    );
+
+    act(() => {
+      store.setExpanded("first-key", true);
+      store.setExpanded("second-key", true);
+    });
+    rerender({ expansionKey: "second-key" });
+
+    act(() => {
+      for (let index = 0; index < 500; index++) {
+        store.setExpanded(`off-screen-${index}`, true);
+      }
+    });
+
+    const keys = useMessagePartExpansionStore.getState().expandedKeys;
+    expect(keys.has("second-key")).toBe(true);
+    expect(keys.has("first-key")).toBe(false);
+  });
+
   test("keeps the setter stable while the key is unchanged", () => {
     const { result, rerender } = renderHook(() =>
       useMessagePartExpansion("message-1/part-0")

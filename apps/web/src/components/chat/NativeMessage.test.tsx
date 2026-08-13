@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { TerminalProvider } from "@/contexts";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
@@ -1106,6 +1107,178 @@ describe("NativeMessage task list rendering", () => {
       }).getAttribute("aria-expanded"),
     ).toBe("true");
     expect(screen.getByText("workspace test group failed")).toBeTruthy();
+  });
+
+  test("keeps a command expanded after its part index shifts", () => {
+    const command = {
+      type: "tool-invocation" as const,
+      content: "",
+      toolName: "Bash",
+      toolState: "success" as const,
+      toolUseId: "durable-command",
+      toolArgs: { command: "bun run typecheck" },
+      toolOutput: "no diagnostics",
+    };
+    const triggerName = /Run Command bun run typecheck success/i;
+
+    const first = render(
+      <NativeMessage
+        message={makeMessage(
+          [{ type: "tool-group", content: "", parts: [command] }],
+          { id: "assistant-durable-command" },
+        )}
+        agentExpansionScope="environment-1"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: triggerName }));
+    first.unmount();
+
+    // The same tool call, now the *second* part because text streamed in ahead
+    // of it. Only the durable tool id survives that; a positional key would
+    // have moved to `part-1` and read as a different, still-collapsed row.
+    render(
+      <NativeMessage
+        message={makeMessage(
+          [
+            { type: "text", content: "Checking types first." },
+            { type: "tool-group", content: "", parts: [command] },
+          ],
+          { id: "assistant-durable-command" },
+        )}
+        agentExpansionScope="environment-1"
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: triggerName }).getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(screen.getByText("no diagnostics")).toBeTruthy();
+  });
+
+  test("does not leak expansion to a different tool call at the same position", () => {
+    const makeCommandMessage = (toolUseId: string, command: string) =>
+      makeMessage(
+        [{
+          type: "tool-group",
+          content: "",
+          parts: [{
+            type: "tool-invocation",
+            content: "",
+            toolName: "Bash",
+            toolState: "success",
+            toolUseId,
+            toolArgs: { command },
+            toolOutput: `${command} finished`,
+          }],
+        }],
+        { id: "assistant-shared-position" },
+      );
+
+    const first = render(
+      <NativeMessage
+        message={makeCommandMessage("command-a", "bun run lint")}
+        agentExpansionScope="environment-1"
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /Run Command bun run lint success/i }),
+    );
+    first.unmount();
+
+    // Same message id and same part position, but a different tool call. It
+    // must not inherit the previous row's disclosure.
+    render(
+      <NativeMessage
+        message={makeCommandMessage("command-b", "bun run build")}
+        agentExpansionScope="environment-1"
+      />,
+    );
+
+    expect(
+      screen
+        .getByRole("button", { name: /Run Command bun run build success/i })
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+    expect(screen.queryByText("bun run build finished")).toBeNull();
+  });
+
+  test("keeps an edit diff expanded when its virtualized row remounts", () => {
+    const message = makeMessage([{
+      type: "tool-invocation",
+      content: "",
+      toolName: "Edit",
+      toolState: "success",
+      toolUseId: "durable-edit",
+      toolDiff: {
+        filePath: "/repo/src/index.ts",
+        before: "const a = 1;\n",
+        after: "const a = 2;\n",
+      },
+    }], { id: "assistant-durable-edit" });
+    const triggerName = /Edit index\.ts .*success/i;
+
+    // EditToolPart reads the terminal context for its open-diff-in-tab action.
+    const first = render(
+      <TerminalProvider>
+        <NativeMessage message={message} agentExpansionScope="environment-1" />
+      </TerminalProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: triggerName }));
+    expect(screen.getByText("/repo/src/index.ts")).toBeTruthy();
+    first.unmount();
+
+    render(
+      <TerminalProvider>
+        <NativeMessage message={message} agentExpansionScope="environment-1" />
+      </TerminalProvider>,
+    );
+
+    expect(
+      screen.getByRole("button", { name: triggerName }).getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(screen.getByText("/repo/src/index.ts")).toBeTruthy();
+  });
+
+  test("isolates matching message and tool ids between explicit transcript scopes", () => {
+    const makeCommandMessage = (command: string) =>
+      makeMessage(
+        [{
+          type: "tool-group",
+          content: "",
+          parts: [{
+            type: "tool-invocation",
+            content: "",
+            toolName: "Bash",
+            toolState: "success",
+            // Tool ids come from the provider, so two environments running the
+            // same agent can legitimately collide on one.
+            toolUseId: "shared-scoped-command",
+            toolArgs: { command },
+            toolOutput: "done",
+          }],
+        }],
+        { id: "shared-scoped-message" },
+      );
+
+    render(
+      <>
+        <NativeMessage
+          message={makeCommandMessage("first scoped command")}
+          agentExpansionScope="transcript-a"
+        />
+        <NativeMessage
+          message={makeCommandMessage("second scoped command")}
+          agentExpansionScope="transcript-b"
+        />
+      </>,
+    );
+
+    const first = screen.getByRole("button", { name: /first scoped command/i });
+    const second = screen.getByRole("button", { name: /second scoped command/i });
+    fireEvent.click(first);
+
+    expect(first.getAttribute("aria-expanded")).toBe("true");
+    expect(second.getAttribute("aria-expanded")).toBe("false");
   });
 
   test("uses uniform outer spacing for native part wrapper variants", () => {

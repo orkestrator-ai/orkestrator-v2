@@ -18,8 +18,20 @@ PaneLeafContainer
 - Pane layout stores `NativeAgentTabData`: platform, environment, container,
   and provider-session identity. Provider-specific pane fields remain as a
   compatibility projection for layouts written before this consolidation.
+- The tab type owns the platform. `getNativeAgentData` validates the canonical
+  field and requires it to agree with the tab type, falling back to the legacy
+  record otherwise; a persisted `platform`/`provider` value never selects the
+  controller on its own. `mergePersistedPaneLayouts` applies the same rule when
+  it rewrites both projections after a write conflict.
+- The adapter projects the canonical identity back to the legacy shape before
+  handing it to a controller (`toLegacyNativeAgentData`). Controllers still
+  spread that record into the pane layout when forking a tab, so `platform`
+  must not travel with it — the merge strips it again, and the same tab would
+  otherwise serialize two different ways depending on whether a write conflict
+  occurred.
 - `NativeAgentTab` does not import provider clients or switch over provider
-  message/event payloads.
+  message/event payloads. A platform with no registered adapter renders a
+  notice; it never throws out of the pane.
 - Each adapter publishes capabilities and converts its provider transcript to
   `NativeMessage[]` before shared presentation sees it.
 - Provider controllers retain transport-specific reconciliation. Codex sparse

@@ -211,7 +211,15 @@ function mergeNativeAgentIdentity(
   remote: TabInfo,
   merged: TabInfo,
 ): TabInfo {
-  const spec = NATIVE_AGENT_TAB_SPECS[merged.type];
+  // Own-property lookup only: tab types come from persisted layouts, and
+  // `"constructor"` or `"toString"` would otherwise resolve through
+  // `Object.prototype` to a value that is not a spec at all.
+  const spec = Object.prototype.hasOwnProperty.call(
+    NATIVE_AGENT_TAB_SPECS,
+    merged.type,
+  )
+    ? NATIVE_AGENT_TAB_SPECS[merged.type]
+    : undefined;
   if (!spec) return merged;
 
   const baseIdentity = nativeAgentIdentity(base, spec);

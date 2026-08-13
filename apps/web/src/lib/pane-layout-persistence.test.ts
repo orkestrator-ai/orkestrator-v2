@@ -7,7 +7,7 @@ import {
   usePaneLayoutStore,
 } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
-import type { PaneLeaf, PersistedPaneLayout } from "@/types/paneLayout";
+import type { PaneLeaf, PersistedPaneLayout, TabInfo } from "@/types/paneLayout";
 import {
   adoptPersistedPaneLayout,
   createPersistedPaneLayoutInput,
@@ -924,6 +924,118 @@ describe("pane layout persistence", () => {
     expect(JSON.stringify(persisted)).not.toContain("hostPort");
     expect(state.activePaneId).toBe("right");
     expect(state.root.children[0].activeTabId).toBe("codex");
+  });
+
+  test("writes the canonical identity for a tab restored from a legacy-only record", () => {
+    // The forward-migration write path: an older persisted layout produces an
+    // in-memory tab with only the provider field, and the next write has to
+    // emit both projections or a newer reader never sees the session.
+    const state = {
+      containerId: "container-1",
+      activePaneId: "pane",
+      root: {
+        kind: "leaf" as const,
+        id: "pane",
+        tabs: [
+          {
+            id: "claude",
+            type: "claude-native" as const,
+            claudeNativeData: {
+              environmentId: "env-1",
+              sessionId: "claude-session",
+              hostPort: 4101,
+              isLocal: true,
+            },
+          },
+          {
+            id: "cursor",
+            type: "cursor-native" as const,
+            acpNativeData: {
+              provider: "cursor" as const,
+              environmentId: "env-1",
+              sessionId: "cursor-session",
+              hostPort: 4104,
+            },
+          },
+        ],
+        activeTabId: "claude",
+      },
+    } satisfies EnvironmentPaneState;
+
+    const persisted = createPersistedPaneLayoutInput(state);
+    const [claudeTab, cursorTab] = (persisted.root as { tabs: TabInfo[] }).tabs;
+
+    expect(claudeTab?.nativeAgentData).toEqual({
+      platform: "claude",
+      environmentId: "env-1",
+      sessionId: "claude-session",
+      isLocal: true,
+    });
+    expect(cursorTab?.nativeAgentData).toEqual({
+      platform: "cursor",
+      environmentId: "env-1",
+      sessionId: "cursor-session",
+    });
+    // The renderer-local port is stripped from both projections, not just the
+    // provider one.
+    expect(JSON.stringify(persisted)).not.toContain("hostPort");
+    expect(JSON.stringify(persisted)).not.toContain("4101");
+    expect(JSON.stringify(persisted)).not.toContain("4104");
+  });
+
+  test("never persists a platform key inside a legacy provider record", () => {
+    const state = {
+      containerId: null,
+      activePaneId: "pane",
+      root: {
+        kind: "leaf" as const,
+        id: "pane",
+        tabs: [{
+          id: "codex",
+          type: "codex-native" as const,
+          codexNativeData: { environmentId: "env-1", sessionId: "thread-1" },
+          nativeAgentData: {
+            platform: "codex" as const,
+            environmentId: "env-1",
+            sessionId: "thread-1",
+          },
+        }],
+        activeTabId: "codex",
+      },
+    } satisfies EnvironmentPaneState;
+
+    const [tab] = (
+      createPersistedPaneLayoutInput(state).root as { tabs: TabInfo[] }
+    ).tabs;
+
+    expect(tab?.codexNativeData).toEqual({
+      environmentId: "env-1",
+      sessionId: "thread-1",
+    });
+    expect(tab?.codexNativeData).not.toHaveProperty("platform");
+  });
+
+  test("leaves a non-native tab without a canonical identity", () => {
+    const state = {
+      containerId: null,
+      activePaneId: "pane",
+      root: {
+        kind: "leaf" as const,
+        id: "pane",
+        tabs: [{
+          id: "tmux",
+          type: "claude-tmux" as const,
+          claudeTmuxData: { environmentId: "env-1", isLocal: true },
+        }],
+        activeTabId: "tmux",
+      },
+    } satisfies EnvironmentPaneState;
+
+    const [tab] = (
+      createPersistedPaneLayoutInput(state).root as { tabs: TabInfo[] }
+    ).tabs;
+
+    expect(tab?.nativeAgentData).toBeUndefined();
   });
 
   test("recursively sanitizes durable browser history without changing current URLs", () => {

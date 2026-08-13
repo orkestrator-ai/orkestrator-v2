@@ -1,5 +1,6 @@
 export { NativeAgentTab } from "./NativeAgentTab";
 export {
+  findNativeAgentAdapter,
   getNativeAgentAdapter,
   nativeAgentAdapters,
   type NativeAgentAdapter,

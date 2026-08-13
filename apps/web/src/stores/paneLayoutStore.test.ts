@@ -1563,7 +1563,64 @@ describe("paneLayoutStore environment scoping", () => {
     });
 
     usePaneLayoutStore.getState().updateTabNativeSessionId("claude-a", undefined, "env-a");
-    expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.claudeNativeData?.sessionId).toBeUndefined();
+    const cleared = usePaneLayoutStore.getState().getAllTabs("env-a")[0];
+    expect(cleared?.claudeNativeData?.sessionId).toBeUndefined();
+    // Both projections have to detach together: a stale canonical session id
+    // is the one the pane renderer and the next persisted write would use.
+    expect(cleared?.nativeAgentData?.sessionId).toBeUndefined();
+    expect(cleared?.nativeAgentData?.platform).toBe("claude");
+  });
+
+  test("writes both identity projections for an ACP tab", () => {
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-a", "env-a");
+    store.addTab("default", {
+      id: "cursor-a",
+      type: "cursor-native",
+      acpNativeData: {
+        provider: "cursor",
+        environmentId: "env-a",
+        containerId: "container-a",
+      },
+    }, "env-a");
+
+    const added = usePaneLayoutStore.getState().getAllTabs("env-a")[0];
+    expect(added?.nativeAgentData).toMatchObject({
+      platform: "cursor",
+      environmentId: "env-a",
+      containerId: "container-a",
+    });
+
+    store.updateTabNativeSessionId("cursor-a", "acp-session", "env-a");
+    const updated = usePaneLayoutStore.getState().getAllTabs("env-a")[0];
+    expect(updated?.acpNativeData).toMatchObject({
+      provider: "cursor",
+      sessionId: "acp-session",
+    });
+    expect(updated?.nativeAgentData).toMatchObject({
+      platform: "cursor",
+      sessionId: "acp-session",
+    });
+  });
+
+  test("updates a tab that only carries the canonical identity", () => {
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-a", "env-a");
+    store.addTab("default", {
+      id: "codex-a",
+      type: "codex-native",
+      nativeAgentData: {
+        platform: "codex",
+        environmentId: "env-a",
+        containerId: "container-a",
+      },
+    }, "env-a");
+
+    store.updateTabNativeSessionId("codex-a", "thread-1", "env-a");
+    const updated = usePaneLayoutStore.getState().getAllTabs("env-a")[0];
+
+    expect(updated?.nativeAgentData?.sessionId).toBe("thread-1");
+    expect(updated?.codexNativeData).toBeUndefined();
   });
 
   test("persists browser addresses on the owning environment only", () => {

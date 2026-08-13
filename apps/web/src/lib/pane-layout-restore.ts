@@ -5,7 +5,6 @@ import {
   sanitizeBrowserHistoryForPersistence,
 } from "@/lib/browser-history";
 import {
-  getNativeAgentData,
   isGitFileStatus,
   LEGACY_PANE_LAYOUT_VERSION,
   MAX_SPLIT_DEPTH,
@@ -425,14 +424,21 @@ function preserveRendererLocalTabFields(
       ? { initialCommands: [...current.initialCommands] }
       : {}),
   };
-  const currentNativeAgentData = getNativeAgentData(current);
-  if (
-    authoritative.nativeAgentData
-    && currentNativeAgentData?.hostPort !== undefined
-  ) {
+  // Read every projection, not just the canonical one. Persistence strips
+  // `hostPort` and restore never sets it on `nativeAgentData`, so a renderer's
+  // live port only ever survives in whichever field its writer used; keying
+  // solely off the canonical field would silently drop it on the very path the
+  // pane renderer now reads from.
+  const currentHostPort =
+    current.nativeAgentData?.hostPort
+    ?? current.claudeNativeData?.hostPort
+    ?? current.codexNativeData?.hostPort
+    ?? current.openCodeNativeData?.hostPort
+    ?? current.acpNativeData?.hostPort;
+  if (authoritative.nativeAgentData && currentHostPort !== undefined) {
     preserved.nativeAgentData = {
       ...authoritative.nativeAgentData,
-      hostPort: currentNativeAgentData.hostPort,
+      hostPort: currentHostPort,
     };
   }
   if (

@@ -10,6 +10,17 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `web-public install.sh > runs on both supported platforms` (`tests/unit/install-script.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-13
+- **Original command:** `bun test tests --parallel`
+- **Worker configuration:** Bun's default parallel worker pool for the root group, run on its own (no other test group running concurrently).
+- **Failure:** `(fail) web-public install.sh > runs on both supported platforms [5001.03ms]` — `this test timed out after 5000ms`. The suite reported 2 failures for that run; the other was the deterministic `packages/cli` release-version drift, which is unrelated. The same command was run four times in total on the same commit: three runs reported `3900 pass, 1 skip, 1 fail` (the version drift alone) in 109.9s–111.9s, and one reported `2 fail`, so the observed rate is roughly one in four.
+- **Suite counts:** Failing run: 2 fail across 3902 tests in 148 files. Passing runs: 3900 pass, 1 skip, 1 fail, 16906 expect() calls, 3902 tests across 148 files.
+- **Isolated rerun:** `bun test tests/unit/install-script.test.ts` -> 10 pass, 0 fail, 25 assertions in 2.38 seconds.
+- **Hypothesis:** The test shells out to the real `install.sh` twice in sequence (once per simulated platform) inside a single 5-second Bun timeout, and each invocation spawns a shell plus stubbed `bunx`/`bun` launchers from a temporary PATH. Two spawn round-trips leave little headroom, so the case is sensitive to process-startup latency under a loaded worker pool. Nothing in the test is order- or state-dependent; the isolated rerun completed both platforms in well under the budget. Raising the timeout for this case, or asserting the two platforms in separate tests, would each remove the coupling.
+
 ## `orkestrator CLI package` built-artifact checks (`packages/cli/tests/cli.test.ts`)
 
 - **Status:** open

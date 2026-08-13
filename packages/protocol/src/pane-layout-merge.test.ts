@@ -213,6 +213,192 @@ describe("mergePersistedPaneLayouts", () => {
     }]);
   });
 
+  test("keeps the ACP provider when synchronizing a cursor identity", () => {
+    const makeInput = (tab: TabInfo) => input({
+      kind: "leaf",
+      id: "default",
+      tabs: [tab],
+      activeTabId: tab.id,
+    });
+    const legacyTab = (sessionId: string): TabInfo => ({
+      id: "native",
+      type: "cursor-native",
+      acpNativeData: {
+        provider: "cursor",
+        environmentId: "env-1",
+        sessionId,
+      },
+    });
+    const base = makeInput(legacyTab("session-old"));
+    const local = makeInput(legacyTab("session-new"));
+    const remote = makeInput({
+      ...legacyTab("session-old"),
+      nativeAgentData: {
+        platform: "cursor",
+        environmentId: "env-1",
+        sessionId: "session-old",
+      },
+    });
+
+    const merged = mergePersistedPaneLayouts(base, local, remote);
+
+    // `provider` is re-attached from the tab type: the legacy ACP record is
+    // rebuilt from the identity whitelist, which does not carry it.
+    expect(tabs(merged.root)).toEqual([{
+      id: "native",
+      type: "cursor-native",
+      acpNativeData: {
+        provider: "cursor",
+        environmentId: "env-1",
+        sessionId: "session-new",
+      },
+      nativeAgentData: {
+        platform: "cursor",
+        environmentId: "env-1",
+        sessionId: "session-new",
+      },
+    }]);
+  });
+
+  test("re-derives the ACP provider from the tab type, not the stored record", () => {
+    const makeInput = (tab: TabInfo) => input({
+      kind: "leaf",
+      id: "default",
+      tabs: [tab],
+      activeTabId: tab.id,
+    });
+    // A grok tab whose persisted record claims `cursor` would otherwise load
+    // the wrong provider's client after the merge rewrote the legacy field.
+    const legacyTab = (sessionId: string): TabInfo => ({
+      id: "native",
+      type: "grok-native",
+      acpNativeData: {
+        provider: "cursor",
+        environmentId: "env-1",
+        sessionId,
+      },
+    });
+    const base = makeInput(legacyTab("session-old"));
+    const local = makeInput(legacyTab("session-new"));
+    const remote = makeInput({
+      ...legacyTab("session-old"),
+      displayTitle: "Remote title",
+    });
+
+    const merged = mergePersistedPaneLayouts(base, local, remote);
+
+    expect(tabs(merged.root)).toEqual([{
+      id: "native",
+      type: "grok-native",
+      displayTitle: "Remote title",
+      acpNativeData: {
+        provider: "grok",
+        environmentId: "env-1",
+        sessionId: "session-new",
+      },
+    }]);
+  });
+
+  test("does not resurrect a native identity both writers dropped", () => {
+    const makeInput = (tab: TabInfo) => input({
+      kind: "leaf",
+      id: "default",
+      tabs: [tab],
+      activeTabId: tab.id,
+    });
+    const base = makeInput({
+      id: "native",
+      type: "codex-native",
+      codexNativeData: { environmentId: "env-1", sessionId: "session-old" },
+      nativeAgentData: {
+        platform: "codex",
+        environmentId: "env-1",
+        sessionId: "session-old",
+      },
+    });
+    // Local detached the session; remote only retitled the tab.
+    const local = makeInput({ id: "native", type: "codex-native" });
+    const remote = makeInput({
+      id: "native",
+      type: "codex-native",
+      displayTitle: "Remote title",
+      codexNativeData: { environmentId: "env-1", sessionId: "session-old" },
+      nativeAgentData: {
+        platform: "codex",
+        environmentId: "env-1",
+        sessionId: "session-old",
+      },
+    });
+
+    const merged = mergePersistedPaneLayouts(base, local, remote);
+
+    expect(tabs(merged.root)).toEqual([{
+      id: "native",
+      type: "codex-native",
+      displayTitle: "Remote title",
+    }]);
+  });
+
+  test("leaves a non-native tab's data untouched", () => {
+    const makeInput = (tab: TabInfo) => input({
+      kind: "leaf",
+      id: "default",
+      tabs: [tab],
+      activeTabId: tab.id,
+    });
+    const base = makeInput({
+      id: "shell",
+      type: "plain",
+      terminalData: { cwd: "/repo" },
+    });
+    const local = makeInput({
+      id: "shell",
+      type: "plain",
+      terminalData: { cwd: "/repo/apps" },
+    });
+    const remote = makeInput({
+      id: "shell",
+      type: "plain",
+      terminalData: { cwd: "/repo" },
+      displayTitle: "Remote title",
+    });
+
+    const merged = mergePersistedPaneLayouts(base, local, remote);
+
+    expect(tabs(merged.root)).toEqual([{
+      id: "shell",
+      type: "plain",
+      displayTitle: "Remote title",
+      terminalData: { cwd: "/repo/apps" },
+    }]);
+  });
+
+  test("does not treat a prototype-named tab type as a native tab", () => {
+    const makeInput = (tab: TabInfo) => input({
+      kind: "leaf",
+      id: "default",
+      tabs: [tab],
+      activeTabId: tab.id,
+    });
+    const tab = (sessionId: string): TabInfo => ({
+      id: "odd",
+      type: "toString",
+      nativeAgentData: { environmentId: "env-1", sessionId },
+    });
+    const base = makeInput(tab("session-old"));
+    const local = makeInput(tab("session-new"));
+    const remote = makeInput({ ...tab("session-old"), displayTitle: "Remote" });
+
+    const merged = mergePersistedPaneLayouts(base, local, remote);
+
+    expect(tabs(merged.root)).toEqual([{
+      id: "odd",
+      type: "toString",
+      displayTitle: "Remote",
+      nativeAgentData: { environmentId: "env-1", sessionId: "session-new" },
+    }]);
+  });
+
   test("a remote deletion wins over a local move", () => {
     const base = input(split(leaf("left", ["base", "moving"]), leaf("right", ["stay"])));
     const local = input(split(leaf("left", ["base"]), leaf("right", ["stay", "moving"])));

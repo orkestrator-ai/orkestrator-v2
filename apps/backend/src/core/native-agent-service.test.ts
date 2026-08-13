@@ -5232,7 +5232,7 @@ describe("NativeAgentService", () => {
       });
     });
 
-    test("builds one real provider per environment and agent", async () => {
+    test("reuses a real provider while revalidating its bridge generation", async () => {
       const invoke = mock(async () => ({ port: 4123, authToken: "token" }) as never);
       await withService({
         prefix: "orkestrator-native-bridge-cache-",
@@ -5248,7 +5248,8 @@ describe("NativeAgentService", () => {
           model: "gpt-a",
         });
         // Model and effort are per-call, so a second variant must reuse the
-        // same provider rather than starting another bridge connection.
+        // same provider. The start command is still re-read: a tab can replace
+        // the bridge behind the service's back, changing its port and token.
         const again = await internals(service).provider({
           ...base,
           agent: "codex",
@@ -5257,16 +5258,40 @@ describe("NativeAgentService", () => {
         });
         expect(again).toBe(codex);
         expect(codex.agent).toBe("codex");
-        expect(invoke).toHaveBeenCalledTimes(1);
+        expect(invoke).toHaveBeenCalledTimes(2);
 
         const opencode = await internals(service).provider({
           ...base,
           agent: "opencode",
         });
         expect(opencode.agent).toBe("opencode");
-        expect(invoke).toHaveBeenCalledTimes(2);
+        expect(invoke).toHaveBeenCalledTimes(3);
         expect([...internals(service).providers.keys()].sort())
           .toEqual(["env-1\u0000codex", "env-1\u0000opencode"]);
+      });
+    });
+
+    test("replaces a cached provider when the bridge port or token changes", async () => {
+      let generation = { port: 4123, authToken: "token-a" };
+      const invoke = mock(async () => generation as never);
+      await withService({
+        prefix: "orkestrator-native-bridge-generation-",
+        invoke: invoke as unknown as Invoke,
+      }, async ({ service }) => {
+        const input = {
+          environmentId: "env-1",
+          logicalSessionKey: "env-env-1:tab-1",
+          agent: "cursor" as const,
+        };
+        const first = await internals(service).provider(input);
+
+        generation = { port: 4188, authToken: "token-b" };
+        const replacement = await internals(service).provider(input);
+
+        expect(replacement).not.toBe(first);
+        expect(replacement.agent).toBe("cursor");
+        expect(invoke).toHaveBeenCalledTimes(2);
+        expect(internals(service).providers.get("env-1\0cursor")).toBe(replacement);
       });
     });
 

@@ -189,7 +189,7 @@ const GATEWAY_RECONCILE_REQUIRED_EVENT = "gateway.reconcile-required";
 const GATEWAY_CURSOR_EVENT = "gateway.cursor";
 const CORS_ALLOWED_METHODS = "GET, POST, PUT, DELETE, OPTIONS";
 const CORS_ALLOWED_HEADERS =
-  "Authorization, Content-Type, X-Orkestrator-Codex-Token, X-Orkestrator-Claude-Token, X-Orkestrator-OpenCode-Token";
+  "Authorization, Content-Type, X-Orkestrator-Codex-Token, X-Orkestrator-Claude-Token, X-Orkestrator-OpenCode-Token, X-Orkestrator-Acp-Token";
 const GATEWAY_METRIC_MAP_LIMIT = 128;
 const GATEWAY_METRIC_LABEL_BYTES = 96;
 const GATEWAY_METRIC_TOTAL_LABEL_BYTES = 8 * 1024;

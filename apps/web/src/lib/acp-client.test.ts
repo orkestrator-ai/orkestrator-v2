@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
+  createAcpClient,
+  createAcpSession,
   mergeAcpMessageWindow,
   type AcpMessage,
   type AcpMessageWindow,
 } from "./acp-client";
+
+const nativeFetch = globalThis.fetch;
 
 function message(id: string, text: string): AcpMessage {
   return {
@@ -72,5 +76,30 @@ describe("mergeAcpMessageWindow", () => {
       window(0, [message("a", "first")]),
     );
     expect(merged).toEqual({ messages: [message("a", "first")], baseIndex: 0 });
+  });
+});
+
+describe("ACP bridge authentication", () => {
+  test("carries the bridge credential in its dedicated proxy-safe header", async () => {
+    let request: Request | undefined;
+    globalThis.fetch = (async (input, init) => {
+      request = new Request(input, init);
+      return new Response(JSON.stringify({
+        id: "session-1",
+        provider: "cursor",
+        status: "idle",
+        messages: [],
+        baseIndex: 0,
+        revision: 0,
+      }), { status: 201, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      await createAcpSession(createAcpClient("http://127.0.0.1:4099", "bridge-secret"));
+    } finally {
+      globalThis.fetch = nativeFetch;
+    }
+
+    expect(request?.headers.get("x-orkestrator-acp-token")).toBe("bridge-secret");
+    expect(request?.headers.has("authorization")).toBe(false);
   });
 });

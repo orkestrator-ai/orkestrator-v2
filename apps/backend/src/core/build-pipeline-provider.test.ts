@@ -4667,6 +4667,21 @@ describe("HTTP build pipeline provider (ACP)", () => {
     expect(outcome.result).toBe("applied");
     expect(requests[0]?.url).toBe("http://cursor.test/session/create");
   });
+
+  test("surfaces the bounded ACP session-creation error detail", async () => {
+    const { provider } = httpProvider(
+      () => Response.json(
+        { error: "Authentication required" },
+        { status: 500 },
+      ),
+      cursorConnection,
+    );
+
+    await expect(provider.createSession("build", "Cursor"))
+      .rejects.toThrow(
+        "cursor session creation is temporarily unavailable (HTTP 500): Authentication required",
+      );
+  });
 });
 
 describe("OpenCode build pipeline provider dispatch", () => {

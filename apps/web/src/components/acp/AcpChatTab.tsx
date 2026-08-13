@@ -29,6 +29,21 @@ import { useVirtuosoScrollState } from "@/hooks";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import { getNativeAgentAdapter } from "@/components/native-agent/adapter";
 
+// A reconnect runs the full readiness handshake, which for a container
+// environment performs Docker work in the backend. The first failure recovers
+// immediately — that is the common stale-generation case — but a bridge that
+// keeps failing must not drive one handshake per poll.
+const RECONNECT_BASE_DELAY_MS = 500;
+const RECONNECT_MAX_DELAY_MS = 8_000;
+
+function reconnectDelayMs(attempt: number): number {
+  if (attempt <= 0) return 0;
+  return Math.min(
+    RECONNECT_BASE_DELAY_MS * 2 ** (attempt - 1),
+    RECONNECT_MAX_DELAY_MS,
+  );
+}
+
 interface AcpChatTabProps {
   tabId: string;
   data: AcpNativeData;
@@ -48,6 +63,15 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
   // component stays mounted while hidden, so no later activation re-runs the
   // effect and submit is a no-op without a client and session.
   const [connectNonce, setConnectNonce] = useState(0);
+  // A bridge restart changes its port and/or bearer credential. Direct ACP
+  // polling is intentionally renderer-owned, so a failed request must retire
+  // that client and re-run the authoritative backend readiness handshake.
+  const reconnecting = useRef(false);
+  // Consecutive reconnects since the last poll that actually succeeded. A
+  // successful handshake does not reset it: the failure mode this bounds is a
+  // bridge that hands out working coordinates and then fails every read.
+  const reconnectAttempts = useRef(0);
+  const reconnectTimer = useRef<number | null>(null);
   const sentInitialPrompt = useRef(false);
   const pendingManualRequest = useRef<{ prompt: string; requestId: string } | null>(null);
   const dispatchingPrompt = useRef(false);
@@ -78,6 +102,16 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
   const sessionRef = useRef<AcpSessionSnapshot | null>(null);
   const refreshing = useRef(false);
 
+  // A pending reconnect must not outlive the tab. Unmount is the one case
+  // where dropping the retry is correct: there is no component left to
+  // rehydrate, and the backend keeps the session running regardless.
+  useEffect(() => () => {
+    if (reconnectTimer.current !== null) {
+      window.clearTimeout(reconnectTimer.current);
+      reconnectTimer.current = null;
+    }
+  }, []);
+
   const applySession = useCallback((next: AcpSessionSnapshot | null) => {
     sessionRef.current = next;
     setSession(next);
@@ -88,6 +122,7 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
     let mounted = true;
     void (async () => {
       try {
+        reconnecting.current = true;
         setConnecting(true);
         const ready = await awaitBridgeReady(data.environmentId, data.provider);
         if (ready.status !== "ready") throw new Error(ready.error.message);
@@ -121,7 +156,10 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
       } catch (caught) {
         if (mounted) setError(caught instanceof Error ? caught.message : String(caught));
       } finally {
-        if (mounted) setConnecting(false);
+        if (mounted) {
+          reconnecting.current = false;
+          setConnecting(false);
+        }
       }
     })();
     return () => { mounted = false; };
@@ -152,8 +190,26 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
         approvalsRevision.current = slice.revision;
         setApprovals(await getAcpApprovals(client, current.id));
       }
+      reconnectAttempts.current = 0;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+      if (!reconnecting.current) {
+        reconnecting.current = true;
+        // Removing the stale client also stops the polling effect before the
+        // replacement handshake starts. Keep the last session snapshot in
+        // memory so the successful handshake can replace it atomically.
+        setClient(null);
+        setConnecting(true);
+        const delay = reconnectDelayMs(reconnectAttempts.current);
+        reconnectAttempts.current += 1;
+        if (reconnectTimer.current !== null) {
+          window.clearTimeout(reconnectTimer.current);
+        }
+        reconnectTimer.current = window.setTimeout(() => {
+          reconnectTimer.current = null;
+          setConnectNonce((nonce) => nonce + 1);
+        }, delay);
+      }
     } finally {
       refreshing.current = false;
     }
@@ -225,9 +281,21 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
     [data.provider, session?.messages],
   );
 
+  // An explicit retry is a fresh start: drop any backed-off attempt so the
+  // user's click reconnects now rather than waiting out the current delay,
+  // and do not let that pending timer fire a second handshake behind it.
+  const retry = useCallback(() => {
+    if (reconnectTimer.current !== null) {
+      window.clearTimeout(reconnectTimer.current);
+      reconnectTimer.current = null;
+    }
+    reconnectAttempts.current = 0;
+    setConnectNonce((nonce) => nonce + 1);
+  }, []);
+
   const connectionState = connecting
     ? "connecting" as const
-    : session
+    : client && session
       ? "connected" as const
       : "error" as const;
 
@@ -238,7 +306,7 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
       isActive={isActive}
       connectionState={connectionState}
       errorMessage={error}
-      onRetry={() => setConnectNonce((nonce) => nonce + 1)}
+      onRetry={retry}
       messages={messages}
       isLoading={session?.status === "running"}
       elapsedSeconds={null}

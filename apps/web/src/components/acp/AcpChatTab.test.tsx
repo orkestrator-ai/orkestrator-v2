@@ -476,4 +476,123 @@ describe("AcpChatTab", () => {
     expect(awaitBridgeReady).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
+
+  test("reconnects and rehydrates when the mounted tab's bridge generation changes", async () => {
+    awaitBridgeReady
+      .mockImplementationOnce(async () => ({
+        status: "ready" as const,
+        port: 4099,
+        authToken: "token-a",
+      }))
+      .mockImplementationOnce(async () => ({
+        status: "ready" as const,
+        port: 4188,
+        authToken: "token-b",
+      }));
+    getAcpApprovals.mockImplementationOnce(async () => [{
+      id: "approval-1",
+      title: "Trigger refresh",
+      options: [],
+    }]);
+    getAcpMessageWindow.mockImplementationOnce(async () => {
+      throw new Error("Unauthorized");
+    });
+    getAcpSession
+      .mockImplementationOnce(async () => ({
+        id: "persisted-session",
+        provider: "cursor" as const,
+        status: "idle" as const,
+        messages: [],
+        baseIndex: 0,
+        revision: 1,
+      }))
+      .mockImplementationOnce(async () => ({
+        id: "persisted-session",
+        provider: "cursor" as const,
+        status: "idle" as const,
+        messages: [{
+          id: "message-after-reconnect",
+          role: "assistant" as const,
+          content: "Recovered on the new bridge",
+          parts: [{ type: "text" as const, text: "Recovered on the new bridge" }],
+          createdAt: "2026-08-13T00:00:10.000Z",
+        }],
+        baseIndex: 0,
+        revision: 2,
+      }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive />);
+    fireEvent.click(await screen.findByRole("button", { name: "Deny" }));
+
+    expect(await screen.findByText("Recovered on the new bridge")).toBeTruthy();
+    expect(awaitBridgeReady).toHaveBeenCalledTimes(2);
+    expect(getAcpSession).toHaveBeenLastCalledWith(
+      { baseUrl: "http://127.0.0.1:4188", authToken: "token-b" },
+      "persisted-session",
+    );
+    expect(screen.queryByText("Unauthorized")).toBeNull();
+  });
+
+  test("backs off instead of reconnecting once per poll when every read keeps failing", async () => {
+    // A bridge that hands out working coordinates and then fails every read is
+    // the amplifying case: each reconnect runs the readiness handshake, which
+    // for a container environment does Docker work in the backend. Running
+    // status polls at 350ms, so an unthrottled retry would issue a handshake
+    // roughly three times a second for as long as the tab stays open.
+    getAcpSession.mockImplementation(async () => ({
+      id: "persisted-session",
+      provider: "cursor" as const,
+      status: "running" as const,
+      messages: [],
+      baseIndex: 0,
+      revision: 1,
+    }));
+    getAcpMessageWindow.mockImplementation(async () => {
+      throw new Error("Unauthorized");
+    });
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive />);
+    await waitFor(() => expect(awaitBridgeReady.mock.calls.length).toBeGreaterThan(1));
+
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 3_000));
+
+    // Backed off (0ms, 500ms, 1s, 2s, …) the window fits the mount handshake
+    // plus about three reconnects; unthrottled it fits roughly eight. A slower
+    // machine only lowers the count, so the ceiling stays stable.
+    const handshakes = awaitBridgeReady.mock.calls.length;
+    expect(handshakes).toBeLessThanOrEqual(5);
+    // Still retrying, though: backing off must not become giving up, or a
+    // recoverable bridge would strand the tab until the user clicks Retry.
+    expect(handshakes).toBeGreaterThan(1);
+  });
+
+  test("drops a pending backed-off reconnect when the tab unmounts", async () => {
+    getAcpSession.mockImplementation(async () => ({
+      id: "persisted-session",
+      provider: "cursor" as const,
+      status: "running" as const,
+      messages: [],
+      baseIndex: 0,
+      revision: 1,
+    }));
+    getAcpMessageWindow.mockImplementation(async () => {
+      throw new Error("Unauthorized");
+    });
+
+    const view = render(<AcpChatTab tabId="tab-1" data={data} isActive />);
+    // The first failure reconnects immediately; the second is the one held
+    // behind a 500ms backoff timer, which is what unmount has to cancel. Wait
+    // long enough for the next poll (350ms) to fail and arm that timer, but
+    // not long enough for it to fire.
+    await waitFor(() => expect(awaitBridgeReady.mock.calls.length).toBeGreaterThan(1));
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
+    const beforeUnmount = awaitBridgeReady.mock.calls.length;
+
+    view.unmount();
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_500));
+
+    // Unmount is the one case where abandoning the retry is right: no
+    // component is left to rehydrate, and the backend keeps the session.
+    expect(awaitBridgeReady.mock.calls.length).toBe(beforeUnmount);
+  });
 });

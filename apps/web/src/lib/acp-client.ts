@@ -54,7 +54,10 @@ async function request<T>(
   const response = await fetch(`${client.baseUrl}${pathname}`, {
     ...init,
     headers: {
-      Authorization: `Bearer ${client.authToken}`,
+      // The public gateway owns Authorization. A dedicated header preserves
+      // the per-bridge credential through that authenticated proxy hop and is
+      // also accepted by direct local ACP bridges.
+      "X-Orkestrator-Acp-Token": client.authToken,
       ...(init?.body ? { "content-type": "application/json" } : {}),
       ...init?.headers,
     },

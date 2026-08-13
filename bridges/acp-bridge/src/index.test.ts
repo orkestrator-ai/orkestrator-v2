@@ -96,6 +96,99 @@ async function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void>
 }
 
 describe("ACP bridge", () => {
+  test("allows authenticated renderer requests from trusted local origins", async () => {
+    const { base } = await spawnBridge();
+    const origin = "http://127.0.0.1:1420";
+    const preflight = await nativeFetch(`${base}/session/create`, {
+      method: "OPTIONS",
+      headers: {
+        origin,
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "x-orkestrator-acp-token, content-type",
+      },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get("access-control-allow-origin")).toBe(origin);
+    expect(preflight.headers.get("access-control-allow-headers")?.toLowerCase())
+      .toContain("x-orkestrator-acp-token");
+
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers: {
+        origin,
+        "x-orkestrator-acp-token": "integration-test-token",
+        "content-type": "application/json",
+      },
+    });
+    expect(created.status).toBe(201);
+    expect(created.headers.get("access-control-allow-origin")).toBe(origin);
+    const session = await created.json() as { id: string };
+
+    // Packaged Electron renderers use an opaque origin. They still have to
+    // prove possession of the bridge credential, but must not be rejected by
+    // the browser-origin boundary before authentication runs.
+    const opaqueOrigin = await nativeFetch(`${base}/session/${session.id}`, {
+      headers: {
+        origin: "null",
+        "x-orkestrator-acp-token": "integration-test-token",
+      },
+    });
+    expect(opaqueOrigin.status).toBe(200);
+    expect(opaqueOrigin.headers.get("access-control-allow-origin")).toBe("null");
+
+    const rejected = await nativeFetch(`${base}/global/health`, {
+      headers: { origin: "https://attacker.invalid" },
+    });
+    expect(rejected.status).toBe(403);
+  });
+
+  test("withholds CORS and private-network access from the unauthenticated health route", async () => {
+    const { base } = await spawnBridge();
+
+    // `/global/health` answers before the token check. Any public page can mint
+    // an opaque origin through a sandboxed iframe, so reflecting that origin
+    // here — or granting Private Network Access for it — would hand the open
+    // web a readable loopback probe. The route stays reachable for the
+    // backend's non-browser prober; a browser just cannot read the body.
+    const opaque = await nativeFetch(`${base}/global/health`, {
+      headers: { origin: "null" },
+    });
+    expect(opaque.status).toBe(200);
+    expect(opaque.headers.get("access-control-allow-origin")).toBeNull();
+
+    const loopback = await nativeFetch(`${base}/global/health`, {
+      headers: { origin: "http://127.0.0.1:1420" },
+    });
+    expect(loopback.status).toBe(200);
+    expect(loopback.headers.get("access-control-allow-origin")).toBeNull();
+
+    const preflight = await nativeFetch(`${base}/global/health`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "null",
+        "access-control-request-method": "GET",
+      },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get("access-control-allow-origin")).toBeNull();
+    expect(preflight.headers.get("access-control-allow-private-network")).toBeNull();
+
+    // The backend probes without an Origin header at all, which must keep
+    // working — that is the only client this route exists for.
+    const prober = await nativeFetch(`${base}/global/health`);
+    expect(prober.status).toBe(200);
+    expect(await prober.json()).toMatchObject({ ok: true });
+
+    // Authenticated data routes still get their preflight, including the
+    // private-network opt-in a packaged renderer needs.
+    const dataPreflight = await nativeFetch(`${base}/session/create`, {
+      method: "OPTIONS",
+      headers: { origin: "null", "access-control-request-method": "POST" },
+    });
+    expect(dataPreflight.status).toBe(204);
+    expect(dataPreflight.headers.get("access-control-allow-private-network")).toBe("true");
+  });
+
   test("drives an ACP session and rehydrates a parked permission", async () => {
     const { base, headers } = await spawnBridge();
 

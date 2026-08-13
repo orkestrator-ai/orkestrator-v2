@@ -21,6 +21,14 @@ const mockSetGitHubToken = mock(async (token: string | null) => ({
   },
   repositories: {},
 }));
+const mockSetCursorApiKey = mock(async (apiKey: string | null) => ({
+  version: "1.0",
+  global: {
+    ...useConfigStore.getState().config.global,
+    cursorApiKeyConfigured: apiKey !== null,
+  },
+  repositories: {},
+}));
 const mockGetLogDirectory = mock(async () => null);
 const mockPropagateGithubCredentialsToContainers = mock(
   async (): Promise<{ updated: string[]; failed: [string, string][] }> => ({
@@ -68,6 +76,7 @@ mock.module("@/lib/backend", () => ({
   ...actualBackend,
   updateGlobalConfig: mockUpdateGlobalConfig,
   setGitHubToken: mockSetGitHubToken,
+  setCursorApiKey: mockSetCursorApiKey,
   getLogDirectory: mockGetLogDirectory,
   propagateGithubCredentialsToContainers: mockPropagateGithubCredentialsToContainers,
   getWebClientStatus: mockGetWebClientStatus,
@@ -110,6 +119,7 @@ describe("GlobalSettings", () => {
     cleanup();
     mockUpdateGlobalConfig.mockClear();
     mockSetGitHubToken.mockClear();
+    mockSetCursorApiKey.mockClear();
     mockGetLogDirectory.mockClear();
     mockPropagateGithubCredentialsToContainers.mockClear();
     mockPropagateGithubCredentialsToContainers.mockImplementation(async () => ({
@@ -1148,14 +1158,42 @@ describe("GlobalSettings", () => {
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({
           anthropicApiKey: "test-anthropic-key",
-          cursorApiKey: "test-cursor-key",
         }),
       );
+      expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty(
+        "cursorApiKey",
+      );
+      expect(mockSetCursorApiKey).toHaveBeenCalledWith("test-cursor-key");
       expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty(
         "githubToken",
       );
       expect(mockSetGitHubToken).toHaveBeenCalledWith("test-github-token");
     });
+  });
+
+  test("treats a configured Cursor API key as write-only and clears it explicitly", async () => {
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          cursorApiKeyConfigured: true,
+        },
+      },
+    }));
+    render(<GlobalSettings activeSection="cursor" />);
+
+    const input = screen.getByLabelText("Cursor API key") as HTMLInputElement;
+    expect(input.value).toBe("");
+    expect(input.placeholder).toBe("API key configured — enter a replacement");
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear stored Cursor API key" }));
+    expect(screen.getByText("The stored Cursor API key will be cleared when you save."))
+      .toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockSetCursorApiKey).toHaveBeenCalledWith(null));
+    expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty("cursorApiKey");
   });
 
   test("treats a configured GitHub token as write-only and replaces it explicitly", async () => {

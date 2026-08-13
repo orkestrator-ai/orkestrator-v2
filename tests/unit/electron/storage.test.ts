@@ -233,6 +233,35 @@ describe("Electron StorageService", () => {
     expect(merged.defaultAgent).toBe("claude");
   });
 
+  test("preserves write-only credentials during renderer config writes and mutates Cursor keys explicitly", async () => {
+    const dataDir = await createTempDir("ork-storage-write-only-credentials-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.setGitHubToken("stored-github-token");
+    await storage.setCursorApiKey("stored-cursor-key");
+
+    const rendererGlobal = {
+      ...(await storage.loadConfig()).global,
+      debugLogging: true,
+    };
+    delete rendererGlobal.githubToken;
+    delete rendererGlobal.cursorApiKey;
+    await storage.updateGlobalConfig(rendererGlobal, { preserveCredentials: true });
+
+    let persisted = (await storage.loadConfig()).global;
+    expect(persisted.githubToken).toBe("stored-github-token");
+    expect(persisted.cursorApiKey).toBe("stored-cursor-key");
+    expect(persisted.debugLogging).toBe(true);
+
+    await storage.setCursorApiKey("replacement-cursor-key");
+    expect((await storage.loadConfig()).global.cursorApiKey)
+      .toBe("replacement-cursor-key");
+    await storage.setCursorApiKey(null);
+    persisted = (await storage.loadConfig()).global;
+    expect(persisted.cursorApiKey).toBeUndefined();
+    expect(persisted.githubToken).toBe("stored-github-token");
+  });
+
   test("persists an agent model default for a StorageService instance created later", async () => {
     const dataDir = await createTempDir("ork-storage-agent-model-reload-");
     const writer = new StorageService(dataDir);

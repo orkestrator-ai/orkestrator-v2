@@ -1523,7 +1523,10 @@ describe("Electron backend command registry", () => {
     const revision = "b".repeat(32);
     const rawConfig = {
       version: "1.0.0",
-      global: { githubToken: "configured-token" },
+      global: {
+        githubToken: "configured-token",
+        cursorApiKey: "configured-cursor-key",
+      },
       repositories: {},
     };
     const storage = {
@@ -1560,7 +1563,10 @@ describe("Electron backend command registry", () => {
         args: {},
         snapshot: {
           version: "1.0.0",
-          global: { githubTokenConfigured: true },
+          global: {
+            githubTokenConfigured: true,
+            cursorApiKeyConfigured: true,
+          },
           repositories: {},
         },
       },
@@ -16664,7 +16670,11 @@ describe("storage-backed command delegation", () => {
     const project = { id: "project-1", name: "repo" };
     let config = {
       version: "1.0.0",
-      global: { allowedDomains: [] as string[], githubToken: "github_secret_token" },
+      global: {
+        allowedDomains: [] as string[],
+        githubToken: "github_secret_token",
+        cursorApiKey: "cursor_secret_key",
+      },
       repositories: {} as Record<string, RepositoryConfig>,
     };
     const repositoryConfig = { defaultBranch: "develop", prBaseBranch: "develop" };
@@ -16676,11 +16686,35 @@ describe("storage-backed command delegation", () => {
       updateProject: mock(async (_id: string, updates: Record<string, unknown>) => updates),
       reorderProjects: mock(async (ids: string[]) => ids),
       loadConfig: mock(async () => config),
-      saveConfig: mock(async (value: typeof config) => {
-        config = value;
+      saveConfig: mock(async (
+        value: typeof config,
+        options?: { preserveCredentials?: boolean },
+      ) => {
+        config = options?.preserveCredentials
+          ? {
+              ...value,
+              global: {
+                ...value.global,
+                githubToken: config.global.githubToken,
+                cursorApiKey: config.global.cursorApiKey,
+              },
+            }
+          : value;
       }),
-      updateGlobalConfig: mock(async (value: typeof config.global) => {
-        config = { ...config, global: value };
+      updateGlobalConfig: mock(async (
+        value: typeof config.global,
+        options?: { preserveCredentials?: boolean },
+      ) => {
+        config = {
+          ...config,
+          global: options?.preserveCredentials
+            ? {
+                ...value,
+                githubToken: config.global.githubToken,
+                cursorApiKey: config.global.cursorApiKey,
+              }
+            : value,
+        };
         return config;
       }),
       updateAgentModelDefault: mock(async (
@@ -16695,6 +16729,14 @@ describe("storage-backed command delegation", () => {
         config = {
           ...config,
           global: token === null ? global : { ...global, githubToken: token },
+        };
+        return config;
+      }),
+      setCursorApiKey: mock(async (apiKey: string | null) => {
+        const { cursorApiKey: _removed, ...global } = config.global;
+        config = {
+          ...config,
+          global: apiKey === null ? global : { ...global, cursorApiKey: apiKey },
         };
         return config;
       }),
@@ -16735,12 +16777,17 @@ describe("storage-backed command delegation", () => {
 
     await expect(commands.get("get_config")?.({}, context)).resolves.toEqual({
       version: "1.0.0",
-      global: { allowedDomains: [], githubTokenConfigured: true },
+      global: {
+        allowedDomains: [],
+        githubTokenConfigured: true,
+        cursorApiKeyConfigured: true,
+      },
       repositories: {},
     });
     await expect(commands.get("get_global_config")?.({}, context)).resolves.toEqual({
       allowedDomains: [],
       githubTokenConfigured: true,
+      cursorApiKeyConfigured: true,
     });
 
     await expect(commands.get("save_config")?.({
@@ -16750,6 +16797,8 @@ describe("storage-backed command delegation", () => {
           allowedDomains: ["api.example.com"],
           githubToken: "renderer_attempted_secret",
           githubTokenConfigured: false,
+          cursorApiKey: "renderer_attempted_cursor_secret",
+          cursorApiKeyConfigured: false,
         },
         repositories: {},
       },
@@ -16758,26 +16807,30 @@ describe("storage-backed command delegation", () => {
       version: "1.0.0",
       global: {
         allowedDomains: ["api.example.com"],
-        githubToken: "github_secret_token",
       },
       repositories: {},
-    });
+    }, { preserveCredentials: true });
 
     await expect(commands.get("update_global_config")?.({
       global: {
         allowedDomains: ["github.com"],
         githubToken: "renderer_attempted_secret",
         githubTokenConfigured: false,
+        cursorApiKey: "renderer_attempted_cursor_secret",
+        cursorApiKeyConfigured: false,
       },
     }, context)).resolves.toEqual({
       version: "1.0.0",
-      global: { allowedDomains: ["github.com"], githubTokenConfigured: true },
+      global: {
+        allowedDomains: ["github.com"],
+        githubTokenConfigured: true,
+        cursorApiKeyConfigured: true,
+      },
       repositories: {},
     });
     expect(storage.updateGlobalConfig).toHaveBeenLastCalledWith({
       allowedDomains: ["github.com"],
-      githubToken: "github_secret_token",
-    });
+    }, { preserveCredentials: true });
 
     await expect(commands.get("update_agent_model_default")?.({
       key: "codexModel",
@@ -16831,6 +16884,21 @@ describe("storage-backed command delegation", () => {
     });
     await expect(commands.get("set_github_token")?.({ token: "   " }, context))
       .rejects.toThrow("GitHub token cannot be empty");
+
+    await expect(commands.get("set_cursor_api_key")?.({ apiKey: " replacement_cursor_key " }, context))
+      .resolves.toMatchObject({
+        global: { cursorApiKeyConfigured: true },
+      });
+    expect(storage.setCursorApiKey).toHaveBeenLastCalledWith("replacement_cursor_key");
+    expect(JSON.stringify(await commands.get("get_config")?.({}, context)))
+      .not.toContain("replacement_cursor_key");
+    await expect(commands.get("set_cursor_api_key")?.({ apiKey: null }, context))
+      .resolves.toMatchObject({
+        global: { cursorApiKeyConfigured: false },
+      });
+    expect(storage.setCursorApiKey).toHaveBeenLastCalledWith(null);
+    await expect(commands.get("set_cursor_api_key")?.({ apiKey: "   " }, context))
+      .rejects.toThrow("Cursor API key cannot be empty");
 
     await expect(commands.get("get_repository_config")?.({ projectId: "project-1" }, context))
       .resolves.toEqual(repositoryConfig);

@@ -1114,8 +1114,12 @@ async function requireGitHubProject(
   return { token, repository: resolveGitHubRepository(project.gitUrl) };
 }
 
-type RendererGlobalConfig = Omit<AppConfig["global"], "githubToken"> & {
+type RendererGlobalConfig = Omit<
+  AppConfig["global"],
+  "githubToken" | "cursorApiKey"
+> & {
   githubTokenConfigured: boolean;
+  cursorApiKeyConfigured: boolean;
 };
 
 type RendererAppConfig = Omit<AppConfig, "global"> & {
@@ -1137,10 +1141,11 @@ function asAgentModelConfigKey(value: unknown): AgentModelConfigKey {
 }
 
 function redactGlobalConfig(global: AppConfig["global"]): RendererGlobalConfig {
-  const { githubToken, ...safeGlobal } = global;
+  const { githubToken, cursorApiKey, ...safeGlobal } = global;
   return {
     ...safeGlobal,
     githubTokenConfigured: Boolean(githubToken?.trim()),
+    cursorApiKeyConfigured: Boolean(cursorApiKey?.trim()),
   };
 }
 
@@ -1151,19 +1156,15 @@ function redactAppConfig(config: AppConfig): RendererAppConfig {
   };
 }
 
-function preserveStoredGitHubToken(
-  global: Record<string, unknown>,
-  githubToken: string | undefined,
-): AppConfig["global"] {
+function stripRendererCredentials(global: Record<string, unknown>): AppConfig["global"] {
   const {
     githubToken: _ignoredToken,
     githubTokenConfigured: _ignoredConfigured,
+    cursorApiKey: _ignoredCursorApiKey,
+    cursorApiKeyConfigured: _ignoredCursorConfigured,
     ...safeGlobal
   } = global;
-  return {
-    ...safeGlobal,
-    ...(githubToken ? { githubToken } : {}),
-  } as AppConfig["global"];
+  return safeGlobal as AppConfig["global"];
 }
 
 function asGitHubIssueStatus(value: unknown): GitHubIssueStatus {
@@ -9327,14 +9328,10 @@ export function createCommandRegistry(
   register("save_config", async ({ config }, context) => {
     const { storage } = context;
     const candidate = asRecord(config, "config") as unknown as AppConfig;
-    const stored = await storage.loadConfig();
     await storage.saveConfig({
       ...candidate,
-      global: preserveStoredGitHubToken(
-        asRecord(candidate.global, "config.global"),
-        stored.global.githubToken,
-      ),
-    });
+      global: stripRendererCredentials(asRecord(candidate.global, "config.global")),
+    }, { preserveCredentials: true });
     // A whole-config write can move any repository's baseline; see
     // `update_repository_config`.
     void syncDiffStatsTracking(context).catch(() => undefined);
@@ -9347,12 +9344,9 @@ export function createCommandRegistry(
     redactGlobalConfig((await storage.loadConfig()).global)
   );
   register("update_global_config", async ({ global }, { storage }) => {
-    const stored = await storage.loadConfig();
     const updated = await storage.updateGlobalConfig(
-      preserveStoredGitHubToken(
-        asRecord(global, "global"),
-        stored.global.githubToken,
-      ),
+      stripRendererCredentials(asRecord(global, "global")),
+      { preserveCredentials: true },
     );
     return redactAppConfig(updated);
   });
@@ -9372,6 +9366,13 @@ export function createCommandRegistry(
       throw new Error("GitHub token cannot be empty. Use null to clear it.");
     }
     return redactAppConfig(await storage.setGitHubToken(nextToken));
+  });
+  register("set_cursor_api_key", async ({ apiKey }, { storage }) => {
+    const nextApiKey = apiKey === null ? null : asString(apiKey, "apiKey").trim();
+    if (nextApiKey !== null && !nextApiKey) {
+      throw new Error("Cursor API key cannot be empty. Use null to clear it.");
+    }
+    return redactAppConfig(await storage.setCursorApiKey(nextApiKey));
   });
   register("get_repository_config", ({ projectId }, { storage }) => storage.getRepositoryConfig(asString(projectId, "projectId")));
   register("update_repository_config", async ({ projectId, repoConfig }, context) => {

@@ -477,6 +477,10 @@ export async function setGitHubToken(token: string | null): Promise<AppConfig> {
   return invoke<AppConfig>("set_github_token", { token });
 }
 
+export async function setCursorApiKey(apiKey: string | null): Promise<AppConfig> {
+  return invoke<AppConfig>("set_cursor_api_key", { apiKey });
+}
+
 export async function getWebClientStatus(): Promise<WebClientStatus> {
   if (window.orkestrator?.webClient) {
     return window.orkestrator.webClient.getStatus();

@@ -75,6 +75,7 @@ interface QueryCall {
   push: (msg: unknown) => void;
   finish: () => void;
   fail: (err: Error) => void;
+  isClosed: () => boolean;
 }
 
 function pushSuccessfulContinuationResult(call: QueryCall): void {
@@ -118,6 +119,7 @@ const mockQuery = mock((args: { prompt: unknown; options: QueryCall["options"] }
   const queue: unknown[] = [];
   let pendingResolve: (() => void) | null = null;
   let finished = false;
+  let closed = false;
   let error: Error | null = null;
 
   const wake = () => {
@@ -132,6 +134,9 @@ const mockQuery = mock((args: { prompt: unknown; options: QueryCall["options"] }
     prompt: args.prompt,
     options: args.options,
     push: (msg) => {
+      // Match the SDK contract: close() terminates the process, so no later
+      // assistant/result frame can be observed by the consumer.
+      if (closed) return;
       queue.push(msg);
       wake();
     },
@@ -139,6 +144,7 @@ const mockQuery = mock((args: { prompt: unknown; options: QueryCall["options"] }
       finished = true;
       wake();
     },
+    isClosed: () => closed,
     fail: (err) => {
       error = err;
       finished = true;
@@ -192,6 +198,11 @@ const mockQuery = mock((args: { prompt: unknown; options: QueryCall["options"] }
         supportsAutoMode: true,
       },
     ],
+    close: () => {
+      closed = true;
+      finished = true;
+      wake();
+    },
     ...queryControlOverrides,
   });
 });
@@ -8460,6 +8471,7 @@ describe("background task reducer", () => {
       await waitFor(
         () => getSession(created.id)?.backgroundTasks?.["agent-1"]?.status === "completed",
       );
+      expect(call.isClosed()).toBe(false);
       expect(inputClosed).toBe(false);
       expect(getSession(created.id)?.status).toBe("idle");
 
@@ -8509,6 +8521,100 @@ describe("background task reducer", () => {
     } finally {
       stop();
     }
+  });
+
+  test("can release again when a resumed root turn launches another background task", async () => {
+    const created = createSession("repeated background releases");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "delegate twice");
+    const call = await nextQueryCall();
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    let inputClosed = false;
+    const inputCompletion = input.next().then((result) => {
+      inputClosed = result.done === true;
+      return result;
+    });
+
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "agent-cycle-one",
+      description: "First delegated task",
+    });
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => created.status === "idle");
+
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "agent-cycle-one",
+      status: "completed",
+    });
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-cycle-two",
+        role: "assistant",
+        content: [{
+          type: "tool_use",
+          id: "bash-cycle-two",
+          name: "Bash",
+          input: {
+            command: "bun run build",
+            description: "Second background task",
+            run_in_background: true,
+          },
+        }],
+        stop_reason: "tool_use",
+      },
+      parent_tool_use_id: null,
+    });
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "task-cycle-two",
+      tool_use_id: "bash-cycle-two",
+      description: "Second background task",
+    });
+    await waitFor(() => created.status === "running");
+    call.push({ type: "result", subtype: "success" });
+
+    await waitFor(
+      () =>
+        created.status === "idle"
+        && created.backgroundTasks?.["task-cycle-two"]?.status === "running",
+    );
+    expect(created.abortController).toBeUndefined();
+    expect(inputClosed).toBe(false);
+    expect(call.isClosed()).toBe(false);
+
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "task-cycle-two",
+      tool_use_id: "bash-cycle-two",
+      status: "completed",
+    });
+    expect(call.isClosed()).toBe(false);
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-cycle-final",
+        role: "assistant",
+        content: [{ type: "text", text: "Both tasks are complete." }],
+        stop_reason: "end_turn",
+      },
+      parent_tool_use_id: null,
+    });
+    await waitFor(() => created.status === "running");
+    call.push({ type: "result", subtype: "success" });
+
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    call.finish();
+    await promptPromise;
+    expect(created.status).toBe("idle");
+    expect(created.backgroundTasks?.["task-cycle-two"]?.status).toBe("completed");
   });
 
   test("does not let an aborted result handler reassert a hold or clobber a restart", async () => {

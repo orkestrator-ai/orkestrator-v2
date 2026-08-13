@@ -5027,6 +5027,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       session.turnStartedAt = releasedTurnStartedAt ?? new Date().toISOString();
       session.abortController = abortController;
       session.queryControl = queryIteratorControl;
+      // This query can cross more than one result boundary: the resumed root
+      // loop may launch another background task and need to release ownership
+      // again. Treat each reclaim as the start of a fresh release cycle.
+      turnReleasedToBackgroundTasks = false;
       eventEmitter.emit({
         type: "session.updated",
         sessionId,
@@ -6118,7 +6122,15 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           const owner = session.backgroundTaskControls?.get(task.id)
             ?? correlated.owner;
           session.backgroundTaskControls?.delete(task.id);
-          closeQueryControlIfUnused(session, owner);
+          // The notification is injected into the same root loop and may be
+          // followed by another assistant/result boundary. `Query.close()` is
+          // destructive (it terminates the CLI and suppresses later frames),
+          // so a released query must stay alive until that boundary arrives.
+          // A later result closes held input, while abort/delete still closes
+          // the control explicitly.
+          if (owner !== queryIteratorControl || !turnReleasedToBackgroundTasks) {
+            closeQueryControlIfUnused(session, owner);
+          }
           emitBackgroundTasks();
         } else if (
           taskMessage.subtype === "background_tasks_changed"

@@ -85,7 +85,10 @@ const port = parsePort(process.env.PORT);
 const hostname = process.env.HOSTNAME?.trim() || "127.0.0.1";
 const workingDirectory = resolve(process.env.CWD?.trim() || process.cwd());
 const authToken = process.env.ACP_BRIDGE_TOKEN?.trim() || randomBytes(32).toString("base64url");
-const executable = process.env.ACP_AGENT_PATH?.trim() || (provider === "cursor" ? "cursor" : "grok");
+// `cursor` is the desktop editor's shell command on user machines. Cursor's
+// ACP-capable CLI is `cursor-agent`; never let a missing configuration launch
+// the GUI as an accidental fallback.
+const executable = process.env.ACP_AGENT_PATH?.trim() || (provider === "cursor" ? "cursor-agent" : "grok");
 const stateDirectory = process.env.ACP_STATE_DIR?.trim();
 const stateFile = stateDirectory ? resolve(stateDirectory, "state.json") : null;
 const sessions = new Map<string, SessionState>();

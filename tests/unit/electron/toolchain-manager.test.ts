@@ -12,9 +12,10 @@ import {
   ensurePinnedToolchains,
   type ToolchainProgress,
 } from "../../../apps/desktop/electron/toolchain-manager";
-import type {
-  ToolchainArtifact,
-  ToolchainCompanion,
+import {
+  pinnedToolchainArtifacts,
+  type ToolchainArtifact,
+  type ToolchainCompanion,
 } from "../../../apps/desktop/electron/toolchain-manifest";
 
 const ZIP_FIXTURE = Buffer.from(
@@ -262,6 +263,13 @@ function createSpawn(outcomes: SpawnOutcome[]): typeof spawn {
 }
 
 describe("pinned desktop toolchain cache", () => {
+  test("activates the pinned Cursor bundle under the cursor-agent command", () => {
+    const cursor = pinnedToolchainArtifacts("darwin", "arm64")
+      .find((artifact) => artifact.name === "cursor");
+    expect(cursor?.archive.entryPath).toBe("dist-package/cursor-agent");
+    expect(cursor?.activationAliases).toContain("cursor-agent");
+  });
+
   test("installs a raw executable artifact", async () => {
     const dataDir = await createDataDir();
     const body = Buffer.from("#!/bin/sh\nprintf 'grok 1.0.3\\n'\n");
@@ -308,7 +316,7 @@ describe("pinned desktop toolchain cache", () => {
       fileName: "cursor",
       size: launcher.byteLength,
       sha256: sha256(launcher),
-    }), name: "cursor" };
+    }), name: "cursor", activationAliases: ["cursor-agent"] };
     const result = await ensurePinnedToolchains({
       dataDir,
       artifacts: [artifact],
@@ -320,6 +328,7 @@ describe("pinned desktop toolchain cache", () => {
     });
 
     const target = await readlink(path.join(result.binDir, "cursor"));
+    expect(await readlink(path.join(result.binDir, "cursor-agent"))).toBe(target);
     expect(await readFile(target)).toEqual(launcher);
     expect(await readFile(path.join(path.dirname(target), "node/bin/node"))).toEqual(runtime);
     await expect(readFile(path.join(path.dirname(target), "unpinned-runtime.js"))).rejects.toMatchObject({
@@ -2040,6 +2049,27 @@ describe("pinned desktop toolchain cache", () => {
       skipExecutableProbeForTests: true,
     })).rejects.toThrow("companion shared-host collides with codex in the shared activation directory");
 
+    expect(fetchImpl).toHaveBeenCalledTimes(0);
+  });
+
+  test("rejects unsafe or colliding activation aliases before downloading", async () => {
+    const fetchImpl = createFetch();
+    await expect(ensurePinnedToolchains({
+      dataDir: await createDataDir(),
+      artifacts: [{ ...artifacts[0], activationAliases: ["../cursor-agent"] }],
+      fetchImpl,
+      skipExecutableProbeForTests: true,
+    })).rejects.toThrow("manifest has an unsafe or duplicate activation alias");
+
+    const aliasesClaude = { ...artifacts[0], activationAliases: ["claude"] };
+    for (const set of [[aliasesClaude, artifacts[1]], [artifacts[1], aliasesClaude]]) {
+      await expect(ensurePinnedToolchains({
+        dataDir: await createDataDir(),
+        artifacts: set,
+        fetchImpl,
+        skipExecutableProbeForTests: true,
+      })).rejects.toThrow("codex activation alias claude collides with claude in the shared activation directory");
+    }
     expect(fetchImpl).toHaveBeenCalledTimes(0);
   });
 

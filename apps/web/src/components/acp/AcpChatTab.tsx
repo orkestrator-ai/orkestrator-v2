@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, Send, Square } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowUp, Square } from "lucide-react";
 import {
   adoptNativeAgentSession,
   awaitBridgeReady,
@@ -21,11 +21,12 @@ import {
 import type { AcpNativeData } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { CursorAgentIcon, GrokBuildIcon } from "@/components/icons/AgentIcons";
-import { cn } from "@/lib/utils";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
+import { NativeChatShell } from "@/components/chat/NativeChatShell";
+import { useVirtuosoScrollState } from "@/hooks";
+import type { NativeMessage } from "@/lib/chat/native-message-types";
 
 interface AcpChatTabProps {
   tabId: string;
@@ -49,7 +50,6 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
   const sentInitialPrompt = useRef(false);
   const pendingManualRequest = useRef<{ prompt: string; requestId: string } | null>(null);
   const dispatchingPrompt = useRef(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
   const updateTabNativeSessionId = usePaneLayoutStore((state) => state.updateTabNativeSessionId);
   const clearTabInitialPrompt = usePaneLayoutStore((state) => state.clearTabInitialPrompt);
   const backendOwnsStartupPrompt = useEnvironmentStore((state) => {
@@ -59,7 +59,13 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
       || environment?.startupAgentSession !== undefined;
   });
   const label = data.provider === "cursor" ? "Cursor Agent" : "Grok Build";
-  const Icon = data.provider === "cursor" ? CursorAgentIcon : GrokBuildIcon;
+  const sessionKey = `env-${data.environmentId}:${tabId}`;
+  const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
+    isActive,
+    persistKey: sessionKey,
+    environmentId: data.environmentId,
+    stickToBottomOnActivation: true,
+  });
 
   // Revision of the last snapshot whose approvals were fetched. Every state
   // change on the bridge bumps `revision`, so approvals only need re-reading
@@ -88,7 +94,7 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
         const sessionInput = {
           environmentId: data.environmentId,
           agent: data.provider,
-          logicalSessionKey: `env-${data.environmentId}:${tabId}`,
+          logicalSessionKey: sessionKey,
           origin: "interactive-native" as const,
           interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
         };
@@ -118,7 +124,7 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
       }
     })();
     return () => { mounted = false; };
-  }, [applySession, connectNonce, data.environmentId, data.provider, data.sessionId, tabId, updateTabNativeSessionId]);
+  }, [applySession, connectNonce, data.environmentId, data.provider, data.sessionId, label, sessionKey, tabId, updateTabNativeSessionId]);
 
   const refresh = useCallback(async () => {
     const current = sessionRef.current;
@@ -171,7 +177,7 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
       await dispatchNativeAgentPrompt({
         environmentId: data.environmentId,
         agent: data.provider,
-        logicalSessionKey: `env-${data.environmentId}:${tabId}`,
+        logicalSessionKey: sessionKey,
         origin: "interactive-native",
         interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
         title: label,
@@ -188,7 +194,7 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
     } finally {
       dispatchingPrompt.current = false;
     }
-  }, [client, data.environmentId, data.provider, label, refresh, session, tabId]);
+  }, [client, data.environmentId, data.provider, label, refresh, session, sessionKey]);
 
   useEffect(() => {
     if (backendOwnsStartupPrompt && initialPrompt) {
@@ -213,69 +219,68 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
     tabId,
   ]);
 
-  useEffect(() => {
-    if (isActive) bottomRef.current?.scrollIntoView({ block: "end" });
-  }, [isActive, session?.revision]);
+  const messages = useMemo<NativeMessage[]>(() => (session?.messages ?? []).map((message) => ({
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    createdAt: message.createdAt,
+    parts: message.parts.map((part, index) => ({
+      type: part.type === "reasoning" ? "thinking" as const : "text" as const,
+      content: part.text,
+      sourcePartId: `${message.id}:${index}`,
+      sourceMessageId: message.id,
+    })),
+  })), [session?.messages]);
 
-  if (connecting) {
-    return <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Connecting to {label}…</div>;
-  }
+  const connectionState = connecting
+    ? "connecting" as const
+    : session
+      ? "connected" as const
+      : "error" as const;
 
   return (
-    <div className="flex h-full flex-col bg-background">
-      <div className="flex items-center gap-2 border-b px-4 py-2 text-sm font-medium">
-        <Icon className="h-4 w-4" />
-        {label}
-        <span className={cn("ml-auto text-xs", session?.status === "error" ? "text-destructive" : "text-muted-foreground")}>
-          {session?.status ?? "disconnected"}
-        </span>
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
-        <div className="mx-auto flex max-w-3xl flex-col gap-4">
-          {!session?.messages.length && !error && (
-            <div className="py-20 text-center text-sm text-muted-foreground">Ask {label} to work on this repository.</div>
-          )}
-          {session?.messages.map((message) => (
-            <div key={message.id} className={cn("max-w-[88%] rounded-xl px-4 py-3 text-sm", message.role === "user" ? "ml-auto bg-primary text-primary-foreground" : "mr-auto border bg-card")}>
-              {message.parts.map((part, index) => part.type === "reasoning" ? (
-                <details key={index} className="mb-2 text-muted-foreground"><summary className="cursor-pointer text-xs">Reasoning</summary><pre className="mt-2 whitespace-pre-wrap font-sans">{part.text}</pre></details>
-              ) : <div key={index} className="whitespace-pre-wrap">{part.text}</div>)}
-            </div>
-          ))}
-          {approvals.map((approval) => (
-            <div key={approval.id} className="rounded-xl border border-amber-400/30 bg-amber-400/5 p-4 text-sm">
-              <p className="font-medium text-amber-100">{approval.title}</p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {approval.options.map((option) => (
-                  <Button
-                    key={option.optionId}
-                    size="sm"
-                    variant={option.kind === "reject_once" || option.kind === "reject_always" ? "outline" : "default"}
-                    onClick={() => client && session && void resolveAcpApproval(client, session.id, approval.id, option.optionId).then(refresh)}
-                  >
-                    {option.name}
-                  </Button>
-                ))}
-                <Button size="sm" variant="ghost" onClick={() => client && session && void resolveAcpApproval(client, session.id, approval.id).then(refresh)}>Deny</Button>
-              </div>
-            </div>
-          ))}
-          {session?.status === "running" && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-          {error && (
-            <div className="flex flex-col items-start gap-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
-              <span>{error}</span>
-              {!session && !connecting && (
-                <Button size="sm" variant="outline" onClick={() => setConnectNonce((nonce) => nonce + 1)}>
-                  Retry connection
-                </Button>
-              )}
-            </div>
-          )}
-          <div ref={bottomRef} />
+    <NativeChatShell
+      agentExpansionScope={data.environmentId}
+      agentLabel={label}
+      isActive={isActive}
+      connectionState={connectionState}
+      errorMessage={error}
+      onRetry={() => setConnectNonce((nonce) => nonce + 1)}
+      messages={messages}
+      isLoading={session?.status === "running"}
+      elapsedSeconds={null}
+      finalElapsedSeconds={null}
+      centerCompose={false}
+      emptyStateMessage={`Ask ${label} to work on this repository.`}
+      isAtBottom={isAtBottom}
+      scrollToBottom={scrollToBottom}
+      scrollProps={scrollProps}
+      virtuosoRef={virtuosoRef}
+      blockingCards={approvals.map((approval) => (
+        <div key={approval.id} className="rounded-xl border border-amber-400/30 bg-amber-400/5 p-4 text-sm">
+          <p className="font-medium text-amber-100">{approval.title}</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {approval.options.map((option) => (
+              <Button
+                key={option.optionId}
+                size="sm"
+                variant={option.kind === "reject_once" || option.kind === "reject_always" ? "outline" : "default"}
+                onClick={() => client && session && void resolveAcpApproval(client, session.id, approval.id, option.optionId).then(refresh)}
+              >
+                {option.name}
+              </Button>
+            ))}
+            <Button size="sm" variant="ghost" onClick={() => client && session && void resolveAcpApproval(client, session.id, approval.id).then(refresh)}>Deny</Button>
+          </div>
         </div>
-      </div>
-      <div className="border-t p-3">
-        <div className="mx-auto flex max-w-3xl items-end gap-2">
+      ))}
+      pinnedAccessory={session && error ? (
+        <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          {error}
+        </div>
+      ) : null}
+      composer={
+        <div className="mx-auto mb-4 mt-2 w-[calc(100%_-_0.75rem)] shrink-0 rounded-2xl border border-border/70 bg-zinc-900/90 p-3 shadow-xl shadow-black/20 sm:w-[min(calc(100%_-_2rem),56rem)]">
           <Textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -286,16 +291,18 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
               }
             }}
             placeholder={`Message ${label}`}
-            className="min-h-11 resize-none"
+            className="min-h-14 resize-none border-0 bg-transparent px-1 py-2 shadow-none focus-visible:ring-0"
             disabled={!session}
           />
-          {session?.status === "running" ? (
-            <Button size="icon" variant="outline" aria-label="Stop" onClick={() => client && void cancelAcpPrompt(client, session.id)}><Square className="h-4 w-4" /></Button>
-          ) : (
-            <Button size="icon" aria-label="Send" disabled={!draft.trim() || !session} onClick={() => void submit(draft)}><Send className="h-4 w-4" /></Button>
-          )}
+          <div className="flex items-center justify-end pt-1">
+            {session?.status === "running" ? (
+              <Button size="icon" variant="ghost" className="h-8 w-8 rounded-full bg-destructive/10 text-destructive hover:bg-destructive/20" aria-label="Stop" onClick={() => client && void cancelAcpPrompt(client, session.id)}><Square className="h-4 w-4 fill-current" /></Button>
+            ) : (
+              <Button size="icon" variant="ghost" className="h-8 w-8 rounded-full bg-muted hover:bg-muted/80" aria-label="Send" disabled={!draft.trim() || !session} onClick={() => void submit(draft)}><ArrowUp className="h-4 w-4" /></Button>
+            )}
+          </div>
         </div>
-      </div>
-    </div>
+      }
+    />
   );
 }

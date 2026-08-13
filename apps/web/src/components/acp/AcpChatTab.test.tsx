@@ -4,8 +4,13 @@ import type { AcpApproval, AcpMessageWindow, AcpSessionSnapshot } from "@/lib/ac
 // The merge is pure and is the contract under test in several cases below, so
 // keep the real implementation and stub only the network calls around it.
 import * as realAcpClient from "@/lib/acp-client";
+// The shared shell has its own focused rendering suite. react-virtuoso cannot
+// measure a real viewport in happy-dom, so render the shell's slots directly
+// here and keep these tests concerned with ACP rehydration and dispatch.
+import * as realNativeChatShell from "@/components/chat/NativeChatShell";
 
 const realAcpClientSnapshot = { ...realAcpClient };
+const realNativeChatShellSnapshot = { ...realNativeChatShell };
 
 const awaitBridgeReady = mock(async () => ({ status: "ready" as const, port: 4099, authToken: "token" }));
 const ensureNativeAgentSession = mock(async () => ({ providerSessionId: "new-session" }));
@@ -49,9 +54,38 @@ mock.module("@/lib/acp-client", () => ({
   getAcpMessageWindow,
   resolveAcpApproval,
 }));
+mock.module("@/components/chat/NativeChatShell", () => ({
+  NativeChatShell: (props: any) => {
+    if (props.connectionState === "connecting") return <div>Connecting</div>;
+    if (props.connectionState === "error") {
+      return (
+        <div>
+          <span>{props.errorMessage}</span>
+          <button type="button" onClick={props.onRetry}>Retry</button>
+        </div>
+      );
+    }
+    return (
+      <div>
+        {props.messages.map((message: any) => (
+          <div key={message.id}>
+            {message.parts.map((part: any, index: number) => (
+              <span key={index}>{part.content}</span>
+            ))}
+          </div>
+        ))}
+        {props.messages.length === 0 ? props.emptyStateMessage : null}
+        {props.blockingCards}
+        {props.pinnedAccessory}
+        {props.composer}
+      </div>
+    );
+  },
+}));
 
 afterAll(() => {
   mock.module("@/lib/acp-client", () => realAcpClientSnapshot);
+  mock.module("@/components/chat/NativeChatShell", () => realNativeChatShellSnapshot);
 });
 mock.module("@/stores/paneLayoutStore", () => ({
   usePaneLayoutStore: (selector: (state: {
@@ -346,15 +380,16 @@ describe("AcpChatTab", () => {
     });
     render(<AcpChatTab tabId="tab-1" data={data} isActive />);
 
-    const retry = await screen.findByRole("button", { name: "Retry connection" });
+    const retry = await screen.findByRole("button", { name: "Retry" });
     expect(screen.getByText("bridge is down")).toBeTruthy();
-    // The composer is visible but dead: no client and no session were reached.
-    expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true);
+    // Match the other native tabs: connection errors replace the chat shell
+    // instead of leaving a dead composer and a second status header visible.
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
 
     fireEvent.click(retry);
     // The second attempt uses the healthy default and reaches the composer.
     expect(await screen.findByText("Ask Cursor Agent to work on this repository.")).toBeTruthy();
     expect(awaitBridgeReady).toHaveBeenCalledTimes(2);
-    expect(screen.queryByRole("button", { name: "Retry connection" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 });

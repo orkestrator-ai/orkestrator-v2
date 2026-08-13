@@ -207,7 +207,22 @@ function assertValidArtifactMetadata(artifact: ToolchainArtifact): void {
     );
   }
 
-  const companionNames = new Set<string>([artifact.executable.fileName]);
+  const activationNames = new Set<string>([artifact.name, artifact.executable.fileName]);
+  for (const alias of artifact.activationAliases ?? []) {
+    if (
+      !alias
+      || alias.startsWith(".")
+      || alias.includes("/")
+      || alias.includes("\\")
+      || alias !== path.basename(alias)
+      || activationNames.has(alias)
+    ) {
+      throw new Error(`${artifact.name} manifest has an unsafe or duplicate activation alias`);
+    }
+    activationNames.add(alias);
+  }
+
+  const companionNames = new Set<string>(activationNames);
   for (const companion of artifactCompanions(artifact)) {
     if (companion.archive.format !== "zip" && companion.archive.format !== "tar.gz") {
       throw new Error(`${artifact.name} companion has an unsupported archive format`);
@@ -242,9 +257,9 @@ function archiveExtension(archive: ToolchainArchive): string {
 }
 
 /**
- * Every artifact and every companion is linked into one shared activation
- * directory, so a companion whose name collides with another tool silently
- * replaces that tool's symlink — and the winner depends on iteration order.
+ * Every artifact, activation alias, and companion is linked into one shared
+ * activation directory, so a name collision could silently replace another
+ * tool's symlink — and the winner would depend on iteration order.
  * `assertValidArtifactMetadata` can only see one artifact, so the set-wide
  * check lives here.
  */
@@ -252,11 +267,15 @@ function assertUniqueActivationNames(artifacts: readonly ToolchainArtifact[]): v
   // Owned by tool name rather than by artifact, so the per-platform entries of
   // one tool legitimately claim the same names as each other.
   const owners = new Map<string, ToolchainName>();
-  const claim = (linkName: string, owner: ToolchainName): void => {
+  const claim = (
+    linkName: string,
+    owner: ToolchainName,
+    kind: "activation alias" | "companion" = "companion",
+  ): void => {
     const existing = owners.get(linkName);
     if (existing !== undefined && existing !== owner) {
       throw new Error(
-        `${owner} companion ${linkName} collides with ${existing} in the shared activation directory`,
+        `${owner} ${kind} ${linkName} collides with ${existing} in the shared activation directory`,
       );
     }
     owners.set(linkName, owner);
@@ -269,6 +288,9 @@ function assertUniqueActivationNames(artifacts: readonly ToolchainArtifact[]): v
     owners.set(artifact.executable.fileName, artifact.name);
   }
   for (const artifact of artifacts) {
+    for (const alias of artifact.activationAliases ?? []) {
+      claim(alias, artifact.name, "activation alias");
+    }
     for (const companion of artifactCompanions(artifact)) {
       claim(companion.fileName, artifact.name);
     }
@@ -1394,10 +1416,11 @@ function activationSetId(artifacts: readonly ToolchainArtifact[]): string {
       installedSize: artifact.executable.installedSize,
       installedSha256: artifact.executable.installedSha256,
       repairInvalidMacSignature: artifact.executable.repairInvalidMacSignature ?? false,
+      activationAliases: artifact.activationAliases ?? [],
       bundleFiles: artifact.archive.bundleFiles ?? [],
-      // Companions are part of the activated set: adding or changing one has to
-      // produce a new bin directory, so a running older build keeps the exact
-      // sibling layout its `codex` was launched against.
+      // Aliases and companions are part of the activated set: adding or
+      // changing one has to produce a new bin directory, so a running older
+      // build keeps the exact sibling layout it was launched against.
       companions: artifactCompanions(artifact).map((companion) => ({
         fileName: companion.fileName,
         size: companion.executable.size,
@@ -1461,10 +1484,14 @@ async function activateExecutables(
   };
 
   for (const artifact of artifacts) {
+    const executablePath = artifactExecutablePath(rootDir, artifact);
     executables[artifact.name] = await activate(
       artifact.name,
-      artifactExecutablePath(rootDir, artifact),
+      executablePath,
     );
+    for (const alias of artifact.activationAliases ?? []) {
+      await activate(alias, executablePath);
+    }
     // Codex resolves `codex-code-mode-host` from the directory it was launched
     // from, which is this activation directory rather than the version
     // directory the symlink points into.

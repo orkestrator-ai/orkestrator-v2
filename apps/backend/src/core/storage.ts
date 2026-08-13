@@ -65,7 +65,6 @@ import {
   DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
   isValidCodexMaxConcurrentThreads,
   MAX_CODEX_CONCURRENT_THREADS,
-  REQUIRED_AGENT_NETWORK_DOMAINS,
   resolveCodexMaxConcurrentThreads,
 } from "./constants.js";
 import { NATIVE_AGENT_SESSION_VERSION } from "./models.js";
@@ -444,7 +443,6 @@ const DEFAULT_ALLOWED_DOMAINS = [
   "vscode.blob.core.windows.net",
   "update.code.visualstudio.com",
   "mcp.context7.com",
-  ...REQUIRED_AGENT_NETWORK_DOMAINS,
 ];
 
 function nowIso(): string {

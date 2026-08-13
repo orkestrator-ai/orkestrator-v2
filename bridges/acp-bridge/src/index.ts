@@ -42,6 +42,14 @@ interface SessionState {
   outputTruncated: boolean;
   uncheckedTranscriptBytes: number;
   currentTurnOutput: string | null;
+  /** Messages evicted from the front, so absolute indices stay stable. */
+  droppedMessages: number;
+  /**
+   * A turn that has been accepted but not yet handed to the agent. Transient
+   * and deliberately not persisted: a bridge restart resolves the same question
+   * through the prompt journal, which records an unfinished turn as ambiguous.
+   */
+  dispatching: boolean;
 }
 
 interface ApprovalState {
@@ -137,6 +145,15 @@ class AcpProcess {
     });
     // Agent stderr may contain prompts or file contents. Drain but never log it.
     this.child.stderr.resume();
+    // Bun currently drops writes to a dead child's stdin silently, but an
+    // unhandled stream "error" event is an uncaught exception under Node
+    // semantics — it would take the whole bridge, and every session on it,
+    // down. Own the failure instead of depending on the runtime: any stream
+    // error means this child is gone, so pending requests reject and the
+    // session recovers on its next reattach.
+    for (const stream of [this.child.stdin, this.child.stdout, this.child.stderr]) {
+      stream.on("error", (error: Error) => this.#close(error));
+    }
     this.child.once("error", (error) => this.#close(error));
     this.child.once("exit", (code, signal) => {
       this.#close(new Error(`${provider} ACP process exited (code ${code ?? "null"}, signal ${signal ?? "null"})`));
@@ -216,9 +233,16 @@ class AcpProcess {
   }
 
   #write(value: JsonObject): void {
-    if (!this.child.stdin.write(`${JSON.stringify(value)}\n`)) {
-      // Node bounds writable buffering; a drain listener is unnecessary because
-      // callers never await stdout consumption and request count is bounded.
+    // Writing to a destroyed stdin throws synchronously; writing to one whose
+    // peer has already gone emits EPIPE asynchronously. Both mean this child is
+    // gone, so neither may escape into the HTTP handler that triggered it.
+    try {
+      if (!this.child.stdin.write(`${JSON.stringify(value)}\n`)) {
+        // Node bounds writable buffering; a drain listener is unnecessary because
+        // callers never await stdout consumption and request count is bounded.
+      }
+    } catch (error) {
+      this.#close(error instanceof Error ? error : new Error(String(error)));
     }
   }
 
@@ -355,6 +379,8 @@ async function createSessionReserved(clientSessionKey?: string, signal?: AbortSi
       outputTruncated: false,
       uncheckedTranscriptBytes: 0,
       currentTurnOutput: null,
+      droppedMessages: 0,
+      dispatching: false,
     };
     attachChild(state, child);
     sessions.set(id, state);
@@ -372,8 +398,13 @@ function attachChild(state: SessionState, child: AcpProcess): void {
   child.onUpdate = (params) => applySessionUpdate(state, params);
   child.onPermission = (requestId, params) => parkPermission(state, requestId, params);
   child.onClose = (error) => {
-    clearApprovals(state);
+    // Only the currently attached child owns this session's approvals. A
+    // superseded child can exit long after a replacement attached (close()
+    // gives up waiting after three seconds), and clearing here would drop the
+    // live child's parked approvals along with the timers that would have
+    // denied them — leaving the agent waiting on a permission forever.
     if (state.child !== child || sessions.get(state.id) !== state || shuttingDown) return;
+    clearApprovals(state);
     state.child = null;
     state.status = "error";
     state.error = error.message;
@@ -567,10 +598,14 @@ function truncateUtf8(value: string, maximumBytes: number): string {
 function boundTranscript(state: SessionState): boolean {
   state.uncheckedTranscriptBytes = 0;
   let truncatedCurrentMessage = false;
-  while (state.messages.length > MAX_MESSAGES) state.messages.shift();
+  while (state.messages.length > MAX_MESSAGES) {
+    state.messages.shift();
+    state.droppedMessages += 1;
+  }
   let bytes = Buffer.byteLength(JSON.stringify(state.messages));
   while (bytes > MAX_TRANSCRIPT_BYTES && state.messages.length > 1) {
     state.messages.shift();
+    state.droppedMessages += 1;
     bytes = Buffer.byteLength(JSON.stringify(state.messages));
   }
   const onlyMessage = state.messages[0];
@@ -595,9 +630,39 @@ function publicSession(state: SessionState): JsonObject {
     status: state.status,
     error: state.error,
     messages: state.messages,
+    // Absolute index of `messages[0]`. Clients anchor their incremental reads
+    // to this so evictions from the front of the transcript cannot silently
+    // shift the window they are appending to.
+    baseIndex: state.droppedMessages,
     revision: state.revision,
     sessionId: state.id,
   };
+}
+
+/**
+ * Incremental transcript read. Only the last message mutates (its parts grow as
+ * chunks arrive), so a client re-requests from its own last index and receives
+ * that message plus anything newer — never the whole transcript, which is
+ * bounded at 8 MiB and would otherwise be re-sent on every poll.
+ */
+function messageWindow(state: SessionState, fromIndex: number | null): JsonObject {
+  const start = fromIndex === null
+    ? 0
+    : Math.min(Math.max(fromIndex - state.droppedMessages, 0), state.messages.length);
+  return {
+    messages: state.messages.slice(start),
+    baseIndex: state.droppedMessages + start,
+    totalMessages: state.droppedMessages + state.messages.length,
+    revision: state.revision,
+    status: state.status,
+    error: state.error,
+  };
+}
+
+function parseFromIndex(value: string | null): number | null {
+  if (value === null) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function publicApprovals(state: SessionState): unknown[] {
@@ -662,7 +727,9 @@ async function route(
   }
   const action = match[2];
   if (!action && request.method === "GET") return json(response, 200, publicSession(state));
-  if (action === "messages" && request.method === "GET") return json(response, 200, { messages: state.messages, revision: state.revision });
+  if (action === "messages" && request.method === "GET") {
+    return json(response, 200, messageWindow(state, parseFromIndex(url.searchParams.get("fromIndex"))));
+  }
   if (action === "status" && request.method === "GET") return json(response, 200, { status: state.status, error: state.error, revision: state.revision });
   if (action === "activity" && request.method === "GET") return json(response, 200, { activity: state.status === "running" ? "working" : "idle" });
   if (action === "approvals" && request.method === "GET") return json(response, 200, { approvals: publicApprovals(state), revision: state.revision });
@@ -696,8 +763,30 @@ async function route(
     if (requestId && state.promptJournal.has(requestId)) {
       return json(response, 202, { accepted: true, duplicate: true });
     }
-    if (state.status === "running") return json(response, 409, { error: "Session is already running" });
-    const child = await ensureSessionProcess(state, clientSignal);
+    if (state.status === "running" || state.dispatching) {
+      return json(response, 409, { error: "Session is already running" });
+    }
+    // Claim the turn synchronously. `ensureSessionProcess` yields even on its
+    // attached fast path, so a second request would otherwise pass both the
+    // duplicate check and the busy check and dispatch the same prompt twice.
+    // `dispatching` is separate from `status` because reattaching a detached
+    // thread legitimately sets `status` back to "idle" while we hold the claim.
+    state.dispatching = true;
+    if (requestId) setPromptJournal(state, {
+      requestId,
+      state: "accepted",
+      acceptedAt: Date.now(),
+    });
+    let child: AcpProcess;
+    try {
+      child = await ensureSessionProcess(state, clientSignal);
+    } catch (error) {
+      // The turn definitely did not run, so release the claim and let the
+      // caller retry with the same requestId.
+      state.dispatching = false;
+      if (requestId) state.promptJournal.delete(requestId);
+      throw error;
+    }
     state.messages.push({
       id: randomBytes(12).toString("hex"), role: "user", content: prompt,
       parts: [{ type: "text", text: prompt }], createdAt: new Date().toISOString(),
@@ -708,15 +797,13 @@ async function route(
     state.currentTurnOutput = schema ? "" : null;
     state.revision += 1;
     boundTranscript(state);
-    if (requestId) setPromptJournal(state, {
-      requestId,
-      state: "accepted",
-      acceptedAt: Date.now(),
-    });
     await persistState();
     const acpPrompt = schema
       ? `${prompt}\n\nReturn only one JSON value matching this JSON Schema. Do not use a Markdown fence or add commentary.\n\n${JSON.stringify(schema)}`
       : prompt;
+    // The turn is now dispatched and `status` is "running", so the busy check
+    // is authoritative again and the claim can be released.
+    state.dispatching = false;
     void child.request("session/prompt", {
       sessionId: state.acpSessionId,
       prompt: [{ type: "text", text: acpPrompt }],
@@ -909,6 +996,28 @@ async function writePersistedState(): Promise<void> {
   await fs.rename(temporary, stateFile);
 }
 
+/**
+ * Persisted state is a cache of transcripts, not a source of truth. Refusing to
+ * start on a damaged file would be unrecoverable: only a running bridge ever
+ * rewrites it, so the environment's bridge would fail on every subsequent start
+ * until a human deleted the file. Quarantine it and start clean instead.
+ */
+async function restorePersistedState(): Promise<void> {
+  try {
+    await loadPersistedState();
+  } catch (error) {
+    sessions.clear();
+    clientSessionKeys.clear();
+    console.warn(
+      `[acp-bridge] Discarding unusable persisted state: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    if (!stateFile) return;
+    await fs.rename(stateFile, `${stateFile}.corrupt-${process.pid}`).catch(() =>
+      fs.rm(stateFile, { force: true }).catch(() => undefined)
+    );
+  }
+}
+
 async function loadPersistedState(): Promise<void> {
   if (!stateFile) return;
   let bytes: Buffer;
@@ -962,6 +1071,8 @@ async function loadPersistedState(): Promise<void> {
       outputTruncated: false,
       uncheckedTranscriptBytes: 0,
       currentTurnOutput: null,
+      droppedMessages: 0,
+      dispatching: false,
     };
     if (Array.isArray(candidate.promptJournal)) {
       for (const rawEntry of candidate.promptJournal.slice(-MAX_PROMPT_JOURNAL)) {
@@ -1008,7 +1119,7 @@ function isStringTuple(value: unknown): value is [string, unknown] {
   return Array.isArray(value) && value.length === 2 && typeof value[0] === "string";
 }
 
-await loadPersistedState();
+await restorePersistedState();
 
 const server = createServer((request, response) => {
   const controller = new AbortController();

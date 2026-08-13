@@ -9,22 +9,47 @@ export const DOCKER_LABEL_ENVIRONMENT_NAME = "environment-name";
 export const DOCKER_LABEL_OWNER = "orkestrator-owner";
 export const DOCKER_LABEL_PROJECT_ID = "project-id";
 
-/** Endpoints the managed ACP providers require in restricted containers. */
-export const REQUIRED_AGENT_NETWORK_DOMAINS = Object.freeze([
-  "x.ai",
-  "auth.x.ai",
-  "api.x.ai",
-  "cli-chat-proxy.grok.com",
-  "api2.cursor.sh",
-  "api3.cursor.sh",
-  "api4.cursor.sh",
-  "api5.cursor.sh",
-  "repo42.cursor.sh",
-  "authenticator.cursor.sh",
-  "marketplace.cursorapi.com",
-  "cursor-cdn.com",
-  "cursor.com",
-] as const);
+/** Endpoints each managed ACP provider requires in restricted containers. */
+export const AGENT_NETWORK_DOMAINS_BY_PLATFORM = Object.freeze({
+  cursor: Object.freeze([
+    "api2.cursor.sh",
+    "api3.cursor.sh",
+    "api4.cursor.sh",
+    "api5.cursor.sh",
+    "repo42.cursor.sh",
+    "authenticator.cursor.sh",
+    "marketplace.cursorapi.com",
+    "cursor-cdn.com",
+    "cursor.com",
+  ] as readonly string[]),
+  grok: Object.freeze([
+    "x.ai",
+    "auth.x.ai",
+    "api.x.ai",
+    "cli-chat-proxy.grok.com",
+  ] as readonly string[]),
+} as const);
+
+/**
+ * Hosts that must be reachable for the ACP platforms this install has enabled.
+ *
+ * These are deliberately NOT part of the default allowlist: an explicit
+ * allowlist is the isolation boundary the user configured, and a restricted
+ * container running neither Cursor nor Grok has no reason to reach either
+ * vendor. Container creation unions in only what the enabled platforms need.
+ */
+export function requiredAgentNetworkDomains(
+  enabledPlatforms: readonly string[] | undefined,
+): readonly string[] {
+  if (!enabledPlatforms) return [];
+  const domains: string[] = [];
+  for (const platform of ["cursor", "grok"] as const) {
+    if (enabledPlatforms.includes(platform)) {
+      domains.push(...AGENT_NETWORK_DOMAINS_BY_PLATFORM[platform]);
+    }
+  }
+  return domains;
+}
 
 export const OPENCODE_SERVER_PORT = 4096;
 export const CLAUDE_BRIDGE_PORT = 4097;

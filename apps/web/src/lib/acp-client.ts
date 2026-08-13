@@ -16,7 +16,19 @@ export interface AcpSessionSnapshot {
   status: "idle" | "running" | "error";
   error?: string;
   messages: AcpMessage[];
+  /** Absolute index of `messages[0]`; advances as the bridge evicts history. */
+  baseIndex: number;
   revision: number;
+}
+
+/** An incremental slice of the transcript, anchored to an absolute index. */
+export interface AcpMessageWindow {
+  messages: AcpMessage[];
+  baseIndex: number;
+  totalMessages: number;
+  revision: number;
+  status: "idle" | "running" | "error";
+  error?: string;
 }
 
 export interface AcpApproval {
@@ -58,6 +70,41 @@ export function createAcpSession(client: AcpClient): Promise<AcpSessionSnapshot>
 
 export function getAcpSession(client: AcpClient, sessionId: string): Promise<AcpSessionSnapshot> {
   return request(client, `/session/${encodeURIComponent(sessionId)}`);
+}
+
+/**
+ * Read the transcript from `fromIndex` onward. Only the trailing message
+ * mutates as chunks stream in, so callers re-request their own last index and
+ * receive that message plus anything newer instead of the whole transcript.
+ */
+export function getAcpMessageWindow(
+  client: AcpClient,
+  sessionId: string,
+  fromIndex: number,
+): Promise<AcpMessageWindow> {
+  return request(
+    client,
+    `/session/${encodeURIComponent(sessionId)}/messages?fromIndex=${Math.max(0, Math.trunc(fromIndex))}`,
+  );
+}
+
+/**
+ * Merge an incremental window into the messages a caller already holds. The
+ * window's `baseIndex` is authoritative: if the bridge evicted more history
+ * than the caller knows about, the window replaces the list outright.
+ */
+export function mergeAcpMessageWindow(
+  current: { messages: AcpMessage[]; baseIndex: number },
+  window: AcpMessageWindow,
+): { messages: AcpMessage[]; baseIndex: number } {
+  const keep = window.baseIndex - current.baseIndex;
+  if (keep <= 0 || keep > current.messages.length) {
+    return { messages: window.messages, baseIndex: window.baseIndex };
+  }
+  return {
+    messages: [...current.messages.slice(0, keep), ...window.messages],
+    baseIndex: current.baseIndex,
+  };
 }
 
 export function sendAcpPrompt(client: AcpClient, sessionId: string, prompt: string): Promise<void> {

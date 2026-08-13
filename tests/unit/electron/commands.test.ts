@@ -11066,6 +11066,89 @@ exit 0
     }
   });
 
+  test.each(["cursor", "grok"] as const)(
+    "starts the local %s ACP bridge and refuses until its toolchain exists",
+    async (provider) => {
+      const appRoot = await createTempDir(`ork-electron-acp-${provider}-`);
+      const toolchainBinDir = await createTempDir(`ork-electron-acp-bin-${provider}-`);
+      const worktreePath = await createTempDir(`ork-electron-acp-worktree-${provider}-`);
+      const markerPath = path.join(appRoot, "acp-env.log");
+      const bridgeDist = path.join(appRoot, "bridges", "acp-bridge", "dist");
+      await fs.mkdir(bridgeDist, { recursive: true });
+      await fs.writeFile(
+        path.join(bridgeDist, "index.js"),
+        `
+          const http = require("node:http");
+          require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({
+            provider: process.env.ACP_PROVIDER ?? "",
+            agentPath: process.env.ACP_AGENT_PATH ?? "",
+            stateDir: process.env.ACP_STATE_DIR ?? "",
+            hostname: process.env.HOSTNAME ?? "",
+            hasToken: Boolean(process.env.ACP_BRIDGE_TOKEN),
+          }));
+          http.createServer((req, res) => {
+            res.writeHead(req.url === "/global/health" ? 200 : 404, { "content-type": "application/json" });
+            res.end(JSON.stringify({ ok: true }));
+          }).listen(Number(process.env.PORT), "127.0.0.1");
+        `,
+      );
+
+      const environment = createEnvironment({ id: `env-acp-${provider}`, worktreePath });
+      const { context } = createContext(environment);
+      context.appRoot = appRoot;
+      context.resourceRoot = appRoot;
+      context.toolchainBinDir = toolchainBinDir;
+      const commands = createCommandRegistry();
+
+      // Toolchains download at app startup, so a platform enabled mid-session
+      // has no binary yet. That must be an explanation, not a spawn ENOENT.
+      const previousPath = process.env.PATH;
+      process.env.PATH = "";
+      try {
+        await expect(
+          commands.get(`start_local_${provider}_server_cmd`)?.(
+            { environmentId: environment.id },
+            context,
+          ),
+        ).rejects.toThrow(/enabled but not installed yet/);
+      } finally {
+        if (previousPath === undefined) delete process.env.PATH;
+        else process.env.PATH = previousPath;
+      }
+
+      // Once the managed binary lands, the bridge starts against exactly it.
+      await fs.writeFile(path.join(toolchainBinDir, provider), `managed ${provider}`);
+      const started = await commands.get(`start_local_${provider}_server_cmd`)?.(
+        { environmentId: environment.id },
+        context,
+      ) as { port: number; pid: number; wasRunning: boolean; authToken: string };
+      try {
+        expect(started.wasRunning).toBe(false);
+        expect(started.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as Record<string, unknown>;
+        expect(marker.provider).toBe(provider);
+        expect(marker.agentPath).toBe(path.join(toolchainBinDir, provider));
+        expect(marker.hasToken).toBe(true);
+        // Local bridges bind loopback only, and each environment keeps its own
+        // state directory so two environments cannot share a transcript.
+        expect(marker.hostname).toBe("127.0.0.1");
+        expect(marker.stateDir).toContain(path.join("acp-bridge-state"));
+        expect(marker.stateDir).toContain(path.join(path.sep, provider));
+
+        const status = await commands.get(`get_local_${provider}_server_status`)?.(
+          { environmentId: environment.id },
+          context,
+        ) as { running: boolean; port: number };
+        expect(status).toMatchObject({ running: true, port: started.port });
+      } finally {
+        await commands.get(`stop_local_${provider}_server_cmd`)?.(
+          { environmentId: environment.id },
+          context,
+        );
+      }
+    },
+  );
+
   test("does not report a child that exits while local status awaits storage as running", async () => {
     const appRoot = await createTempDir("ork-electron-app-status-exit-race-");
     const worktreePath = await createTempDir("ork-electron-worktree-status-exit-race-");
@@ -12776,6 +12859,116 @@ exit 0
       else process.env.FAKE_BRIDGE_TOKEN_FILE = previousTokenFile;
     }
   });
+
+  test.each(["cursor", "grok"] as const)(
+    "starts, inspects, and stops the in-container %s ACP bridge",
+    async (provider) => {
+      const hostPort = await reserveFreePort();
+      const pidFile = path.join(await createTempDir(`ork-${provider}-acp-pid-`), "pid");
+      const environment = createEnvironment({
+        id: `env-container-${provider}`,
+        environmentType: "containerized",
+        containerId: `container-${provider}`,
+        status: "running",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+
+      const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
+      const previousPidFile = process.env.FAKE_BRIDGE_PID_FILE;
+      const previousTokenFile = process.env.FAKE_BRIDGE_TOKEN_FILE;
+      const tokenFile = path.join(path.dirname(pidFile), "token");
+      process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+      process.env.FAKE_BRIDGE_PID_FILE = pidFile;
+      process.env.FAKE_BRIDGE_TOKEN_FILE = tokenFile;
+
+      const dockerScript = `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"cat /tmp/${provider}-acp-bridge-token"*)
+        cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
+        exit 0 ;;
+      *"cat /tmp/${provider}-acp-bridge.log"*)
+        printf '${provider} acp log\\n'; exit 0 ;;
+      *pkill*)
+        rm -f "$FAKE_BRIDGE_TOKEN_FILE"
+        pid=$(cat "$FAKE_BRIDGE_PID_FILE" 2>/dev/null || true)
+        if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; fi
+        exit 0 ;;
+    esac
+    token=$(printf '%s' "$*" | sed -n "s/.*ACP_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
+    bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
+    printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
+    exit 0 ;;
+esac
+exit 0
+`;
+
+      try {
+        await withFakeDocker(dockerScript, async (logs) => {
+          // Concurrent starts must be serialized into one bridge process.
+          const [first, second] = await Promise.all([
+            commands.get(`start_${provider}_server`)?.({ containerId: `container-${provider}` }, context),
+            commands.get(`start_${provider}_server`)?.({ containerId: `container-${provider}` }, context),
+          ]) as Array<{ hostPort: number; wasRunning: boolean; authToken: string }>;
+          expect(first).toMatchObject({ hostPort, wasRunning: false });
+          expect(second).toMatchObject({ hostPort, wasRunning: true });
+          expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+          expect(second.authToken).toBe(first.authToken);
+
+          const status = await commands.get(`get_${provider}_server_status`)?.(
+            { containerId: `container-${provider}` },
+            context,
+          ) as { running: boolean; hostPort: number; authToken?: string };
+          expect(status).toEqual({ running: true, hostPort, authToken: first.authToken });
+
+          expect(await commands.get(`get_${provider}_server_log`)?.(
+            { containerId: `container-${provider}` },
+            context,
+          )).toBe(`${provider} acp log\n`);
+
+          const execLog = await fs.readFile(logs.exec, "utf8");
+          expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(1);
+          expect(execLog).toContain(`export ACP_PROVIDER=${provider}`);
+          expect(execLog).toContain("export ACP_BRIDGE_TOKEN=");
+          expect(execLog).toContain(`export ACP_STATE_DIR=/tmp/orkestrator-acp-state/${provider}`);
+          expect(execLog).toContain("export HOSTNAME=0.0.0.0");
+          expect(execLog).toContain(`setsid bun /opt/acp-bridge/dist/index.js --provider=${provider}`);
+          // The token is written under a restrictive umask, never echoed.
+          expect(execLog).toContain("umask 077");
+
+          await commands.get(`stop_${provider}_server`)?.(
+            { containerId: `container-${provider}` },
+            context,
+          );
+          const afterStop = await fs.readFile(logs.exec, "utf8");
+          expect(afterStop).toContain(`pkill -f '[a]cp-bridge/dist/index.js --provider=${provider}'`);
+          expect(afterStop).toContain(`rm -f /tmp/${provider}-acp-bridge-token`);
+        });
+      } finally {
+        const pid = await fs.readFile(pidFile, "utf8").catch(() => "");
+        if (pid) {
+          try {
+            process.kill(Number(pid));
+          } catch {
+            // already gone
+          }
+        }
+        if (previousHostPort === undefined) delete process.env.FAKE_BRIDGE_HOST_PORT;
+        else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
+        if (previousPidFile === undefined) delete process.env.FAKE_BRIDGE_PID_FILE;
+        else process.env.FAKE_BRIDGE_PID_FILE = previousPidFile;
+        if (previousTokenFile === undefined) delete process.env.FAKE_BRIDGE_TOKEN_FILE;
+        else process.env.FAKE_BRIDGE_TOKEN_FILE = previousTokenFile;
+      }
+    },
+  );
 
   test("keeps the in-container Claude bridge on its bun entrypoint", async () => {
     const hostPort = await reserveFreePort();

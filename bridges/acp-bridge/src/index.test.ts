@@ -351,4 +351,395 @@ describe("ACP bridge", () => {
     children.delete(parent);
     children.delete(bridge.child);
   });
+
+  test("keeps serving when writes go to an agent that stopped reading", async () => {
+    // The agent answers, then closes its read end and stays alive, so every
+    // later write lands on a pipe nobody drains while the bridge still has the
+    // child attached. Writing there must never escape into the request handler
+    // or take the bridge down with all of its other sessions.
+    const { base, headers, child } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CLOSESTDIN", requestId: "closed-input-1" }),
+    });
+    await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) => response.json()) as Promise<{ status: string }>,
+      (session) => session.status === "idle",
+    );
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const cancelled = await nativeFetch(`${base}/session/${created.id}/cancel`, { method: "POST", headers });
+      expect(cancelled.status).toBe(202);
+      await Bun.sleep(20);
+    }
+
+    expect(child.exitCode).toBe(null);
+    expect((await nativeFetch(`${base}/global/health`)).ok).toBe(true);
+    expect((await nativeFetch(`${base}/session/${created.id}`, { headers })).status).toBe(200);
+  });
+
+  test("keeps serving other sessions after one agent dies mid-turn", async () => {
+    const { base, headers, child } = await spawnBridge();
+    const [dying, healthy] = await Promise.all([
+      nativeFetch(`${base}/session/create`, { method: "POST", headers })
+        .then((response) => response.json()) as Promise<{ id: string }>,
+      nativeFetch(`${base}/session/create`, { method: "POST", headers })
+        .then((response) => response.json()) as Promise<{ id: string }>,
+    ]);
+
+    // This prompt kills its agent without answering.
+    await nativeFetch(`${base}/session/${dying.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CRASH now", requestId: "crash-1" }),
+    });
+    const failed = await waitFor(
+      async () => nativeFetch(`${base}/session/${dying.id}/status`, { headers }).then((response) => response.json()) as Promise<{ status: string; error?: string }>,
+      (value) => value.status === "error",
+    );
+    expect(failed.error).toContain("exited");
+
+    // Client actions against the dead session must not disturb the bridge.
+    expect((await nativeFetch(`${base}/session/${dying.id}/cancel`, { method: "POST", headers })).status).toBe(202);
+    expect(child.exitCode).toBe(null);
+
+    // The unrelated session is untouched and still usable.
+    await nativeFetch(`${base}/session/${healthy.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "DIRECT:still here", requestId: "healthy-1" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${healthy.id}`, { headers }).then((response) => response.json()) as Promise<{ status: string; messages: Array<{ content: string }> }>,
+      (value) => value.status === "idle",
+    );
+    expect(session.messages.at(-1)?.content).toBe("still here");
+  });
+
+  test("reattaches a detached session through session/load and reports a refusal", async () => {
+    const directory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "reattach-lifecycle.log");
+    const bridge = await spawnBridge({ env: { FAKE_ACP_LIFECYCLE_FILE: lifecycleFile } });
+    const created = await nativeFetch(`${bridge.base}/session/create`, { method: "POST", headers: bridge.headers })
+      .then((response) => response.json()) as { id: string };
+
+    // Kill the agent underneath the bridge; the session must survive as state.
+    const firstPid = Number(/^start:(\d+)$/m.exec(await fs.readFile(lifecycleFile, "utf8"))?.[1]);
+    process.kill(firstPid, "SIGKILL");
+    await waitFor(
+      async () => nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers }).then((response) => response.json()) as Promise<{ status: string }>,
+      (session) => session.status === "error",
+    );
+
+    // The next prompt transparently spawns a replacement and resumes the thread.
+    const resumed = await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "DIRECT:back online", requestId: "reattach-1" }),
+    });
+    expect(resumed.status).toBe(202);
+    const session = await waitFor(
+      async () => nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers }).then((response) => response.json()) as Promise<{ status: string; messages: Array<{ content: string }> }>,
+      (value) => value.status === "idle",
+    );
+    expect(session.messages.map((message) => message.content)).toEqual([
+      "DIRECT:back online",
+      "back online",
+    ]);
+    const lifecycle = await fs.readFile(lifecycleFile, "utf8");
+    expect(lifecycle.match(/^start:/gm)).toHaveLength(2);
+    expect(lifecycle).toContain("load:");
+  });
+
+  test("refuses to reattach when the agent cannot reload sessions", async () => {
+    const directory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "no-load-lifecycle.log");
+    const bridge = await spawnBridge({ env: {
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+      FAKE_ACP_NO_LOAD_SESSION: "1",
+    } });
+    const created = await nativeFetch(`${bridge.base}/session/create`, { method: "POST", headers: bridge.headers })
+      .then((response) => response.json()) as { id: string };
+    process.kill(
+      Number(/^start:(\d+)$/m.exec(await fs.readFile(lifecycleFile, "utf8"))?.[1]),
+      "SIGKILL",
+    );
+    await waitFor(
+      async () => nativeFetch(`${bridge.base}/session/${created.id}/status`, { headers: bridge.headers }).then((response) => response.json()) as Promise<{ status: string }>,
+      (session) => session.status === "error",
+    );
+
+    // Reattaching would silently start a *different* conversation, so the
+    // bridge must refuse rather than resume against an agent with no rollout.
+    const refused = await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "DIRECT:hello", requestId: "no-load-1" }),
+    });
+    expect(refused.status).toBe(410);
+    expect(await refused.json()).toMatchObject({
+      error: "cursor cannot reload persisted ACP sessions",
+    });
+    expect((await fs.readFile(lifecycleFile, "utf8"))).not.toContain("load:");
+    // The refusal released the claim, so the same requestId is not journaled
+    // as an already-dispatched duplicate.
+    const retried = await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "DIRECT:hello", requestId: "no-load-1" }),
+    });
+    expect(retried.status).toBe(410);
+  });
+
+  test("rejects a failed reattach and lets the same requestId be retried", async () => {
+    const directory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "failed-load-lifecycle.log");
+    const bridge = await spawnBridge({ env: {
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+      FAKE_ACP_FAIL_LOAD_SESSION: "1",
+    } });
+    const created = await nativeFetch(`${bridge.base}/session/create`, { method: "POST", headers: bridge.headers })
+      .then((response) => response.json()) as { id: string };
+    process.kill(
+      Number(/^start:(\d+)$/m.exec(await fs.readFile(lifecycleFile, "utf8"))?.[1]),
+      "SIGKILL",
+    );
+    await waitFor(
+      async () => nativeFetch(`${bridge.base}/session/${created.id}/status`, { headers: bridge.headers }).then((response) => response.json()) as Promise<{ status: string }>,
+      (session) => session.status === "error",
+    );
+
+    const send = () => nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "DIRECT:retry", requestId: "retry-me" }),
+    });
+    const first = await send();
+    expect(first.status).toBe(500);
+    expect(await first.json()).toMatchObject({ error: "fake agent cannot load that session" });
+    // The turn provably never ran, so the claim must be released rather than
+    // leaving the requestId permanently journaled as a duplicate.
+    const second = await send();
+    expect(second.status).toBe(500);
+    expect((await nativeFetch(`${bridge.base}/global/health`)).ok).toBe(true);
+  });
+
+  test("dispatches a prompt at most once when concurrent requests race a reattach", async () => {
+    // Reattaching spawns a process and performs two round trips, so it is the
+    // window where a second request can slip between the duplicate check and
+    // the claim. The turn must still reach the agent exactly once, and only
+    // one replacement child may be started.
+    const directory = await temporaryDirectory();
+    const counterFile = resolve(directory, "concurrent-prompts.log");
+    const lifecycleFile = resolve(directory, "concurrent-lifecycle.log");
+    const { base, headers } = await spawnBridge({ env: {
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+    process.kill(
+      Number(/^start:(\d+)$/m.exec(await fs.readFile(lifecycleFile, "utf8"))?.[1]),
+      "SIGKILL",
+    );
+    await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}/status`, { headers }).then((response) => response.json()) as Promise<{ status: string }>,
+      (session) => session.status === "error",
+    );
+
+    const send = () => nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "DIRECT:only once", requestId: "concurrent-1" }),
+    });
+    const responses = await Promise.all([send(), send(), send(), send()]);
+    expect(responses.map((response) => response.status).filter((status) => status === 202).length)
+      .toBeGreaterThan(0);
+    expect(responses.every((response) => response.status === 202 || response.status === 409))
+      .toBe(true);
+    await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) => response.json()) as Promise<{ status: string }>,
+      (session) => session.status === "idle",
+    );
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toEqual(["prompt"]);
+    // One original agent plus exactly one replacement.
+    expect((await fs.readFile(lifecycleFile, "utf8")).match(/^start:/gm)).toHaveLength(2);
+  });
+
+  test("rejects a concurrent second turn that carries a different requestId", async () => {
+    const directory = await temporaryDirectory();
+    const counterFile = resolve(directory, "distinct-prompts.log");
+    const { base, headers } = await spawnBridge({ env: { FAKE_ACP_COUNTER_FILE: counterFile } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    // The first prompt parks on a permission, so the turn is still running.
+    const [first, second] = await Promise.all([
+      nativeFetch(`${base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: "needs permission", requestId: "turn-a" }),
+      }),
+      nativeFetch(`${base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: "needs permission too", requestId: "turn-b" }),
+      }),
+    ]);
+    const statuses = [first.status, second.status].sort();
+    expect(statuses).toEqual([202, 409]);
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toEqual(["prompt"]);
+  });
+
+  test("keeps live approvals when a superseded agent process exits", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "needs permission", requestId: "approval-live-1" }),
+    });
+    const parked = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}/approvals`, { headers }).then((response) => response.json()) as Promise<{ approvals: Array<{ id: string; expiresAt: number; requestedAt: number }> }>,
+      (value) => value.approvals.length === 1,
+    );
+    const approval = parked.approvals[0]!;
+    // Approvals carry a bounded lifetime; nothing may park indefinitely.
+    expect(approval.expiresAt - approval.requestedAt).toBe(5 * 60_000);
+
+    // The approval belongs to the attached child and must outlive unrelated
+    // churn, staying answerable rather than being silently dropped.
+    await Bun.sleep(100);
+    const stillParked = await nativeFetch(`${base}/session/${created.id}/approvals`, { headers })
+      .then((response) => response.json()) as { approvals: unknown[] };
+    expect(stillParked.approvals).toHaveLength(1);
+    const resolved = await nativeFetch(
+      `${base}/session/${created.id}/approvals/${approval.id}`,
+      { method: "POST", headers, body: JSON.stringify({ decision: "deny" }) },
+    );
+    expect(resolved.ok).toBe(true);
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) => response.json()) as Promise<{ status: string; messages: Array<{ content: string }> }>,
+      (value) => value.status === "idle",
+    );
+    expect(session.messages.at(-1)?.content).toBe("approved:deny");
+  });
+
+  test("drops approvals when the agent that parked them dies", async () => {
+    const directory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "approval-death.log");
+    const { base, headers } = await spawnBridge({ env: { FAKE_ACP_LIFECYCLE_FILE: lifecycleFile } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "needs permission", requestId: "approval-death-1" }),
+    });
+    await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}/approvals`, { headers }).then((response) => response.json()) as Promise<{ approvals: unknown[] }>,
+      (value) => value.approvals.length === 1,
+    );
+
+    process.kill(
+      Number(/^start:(\d+)$/m.exec(await fs.readFile(lifecycleFile, "utf8"))?.[1]),
+      "SIGKILL",
+    );
+    const cleared = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}/approvals`, { headers }).then((response) => response.json()) as Promise<{ approvals: unknown[] }>,
+      (value) => value.approvals.length === 0,
+    );
+    expect(cleared.approvals).toEqual([]);
+    const status = await nativeFetch(`${base}/session/${created.id}/status`, { headers })
+      .then((response) => response.json()) as { status: string };
+    expect(status.status).toBe("error");
+  });
+
+  test("serves an incremental transcript window anchored to an absolute index", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+    for (const [index, text] of ["first", "second"].entries()) {
+      await nativeFetch(`${base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: `DIRECT:${text}`, requestId: `window-${index}` }),
+      });
+      await waitFor(
+        async () => nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) => response.json()) as Promise<{ status: string }>,
+        (session) => session.status === "idle",
+      );
+    }
+
+    const full = await nativeFetch(`${base}/session/${created.id}/messages`, { headers })
+      .then((response) => response.json()) as { messages: Array<{ content: string }>; baseIndex: number; totalMessages: number };
+    expect(full.messages.map((message) => message.content))
+      .toEqual(["DIRECT:first", "first", "DIRECT:second", "second"]);
+    expect(full.baseIndex).toBe(0);
+    expect(full.totalMessages).toBe(4);
+
+    const tail = await nativeFetch(`${base}/session/${created.id}/messages?fromIndex=3`, { headers })
+      .then((response) => response.json()) as { messages: Array<{ content: string }>; baseIndex: number };
+    expect(tail.messages.map((message) => message.content)).toEqual(["second"]);
+    expect(tail.baseIndex).toBe(3);
+
+    // Past the end and unparseable cursors clamp instead of throwing.
+    const beyond = await nativeFetch(`${base}/session/${created.id}/messages?fromIndex=99`, { headers })
+      .then((response) => response.json()) as { messages: unknown[]; baseIndex: number };
+    expect(beyond.messages).toEqual([]);
+    expect(beyond.baseIndex).toBe(4);
+    const garbage = await nativeFetch(`${base}/session/${created.id}/messages?fromIndex=not-a-number`, { headers })
+      .then((response) => response.json()) as { messages: unknown[]; baseIndex: number };
+    expect(garbage.baseIndex).toBe(0);
+    expect(garbage.messages).toHaveLength(4);
+  });
+
+  test("quarantines an unusable state file instead of refusing to start", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const stateFile = resolve(stateDirectory, "state.json");
+
+    // Seed a real state file so the restart path is genuine, then corrupt it.
+    const seeded = await spawnBridge({ stateDirectory });
+    await nativeFetch(`${seeded.base}/session/create`, {
+      method: "POST",
+      headers: seeded.headers,
+      body: JSON.stringify({ clientSessionKey: "env-1:tab-1" }),
+    });
+    await waitFor(() => fs.readFile(stateFile, "utf8").catch(() => ""), Boolean);
+    await stopChild(seeded.child);
+    await fs.writeFile(stateFile, "{ this is not json");
+
+    const restarted = await spawnBridge({ stateDirectory });
+    expect((await nativeFetch(`${restarted.base}/global/health`)).ok).toBe(true);
+    // Started clean: the old client key no longer resolves to a session.
+    const created = await nativeFetch(`${restarted.base}/session/create`, {
+      method: "POST",
+      headers: restarted.headers,
+      body: JSON.stringify({ clientSessionKey: "env-1:tab-1" }),
+    });
+    expect(created.status).toBe(201);
+    const quarantined = await fs.readdir(stateDirectory);
+    expect(quarantined.some((entry) => entry.includes("corrupt"))).toBe(true);
+    // The damaged bytes are moved aside, not silently rewritten in place.
+    expect(await fs.readFile(stateFile, "utf8")).not.toBe("{ this is not json");
+  });
+
+  test("starts clean when the state file belongs to another provider", async () => {
+    const stateDirectory = await temporaryDirectory();
+    await fs.writeFile(
+      resolve(stateDirectory, "state.json"),
+      JSON.stringify({ version: 1, provider: "grok", sessions: [] }),
+    );
+    const bridge = await spawnBridge({ stateDirectory });
+    expect((await nativeFetch(`${bridge.base}/global/health`)).ok).toBe(true);
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+    });
+    expect(created.status).toBe(201);
+  });
 });

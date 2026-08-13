@@ -178,7 +178,12 @@ function createContext(initialEnvironment = environment()): {
   updates: Array<Record<string, unknown>>;
   added: Environment[];
   events: Array<{ event: string; payload: unknown }>;
+  /** Mutable so a test can change the enabled platforms before provisioning. */
+  globalConfig: Record<string, unknown>;
+  /** Mutable so a test can change the per-environment allowlist. */
+  environment: Environment;
 } {
+  const globalConfig: Record<string, unknown> = { allowedDomains: [] };
   const updates: Array<Record<string, unknown>> = [];
   const added: Environment[] = [];
   const events: Array<{ event: string; payload: unknown }> = [];
@@ -206,7 +211,7 @@ function createContext(initialEnvironment = environment()): {
       } : null),
       loadConfig: mock(async () => ({
         version: "1.0.0",
-        global: { allowedDomains: [] },
+        global: globalConfig,
         repositories: { "project-1": { defaultBranch: "main", prBaseBranch: "main" } },
       })),
       addEnvironment: mock(async (item: Environment) => {
@@ -215,7 +220,7 @@ function createContext(initialEnvironment = environment()): {
       }),
     },
   } as unknown as CommandContext;
-  return { context, updates, added, events };
+  return { context, updates, added, events, globalConfig, environment: initialEnvironment };
 }
 
 let registry: ReturnType<typeof createCommandRegistry>;
@@ -225,6 +230,12 @@ async function invoke(name: string, args: Record<string, unknown> = {}, context 
   const handler = registry.get(name) as Handler | undefined;
   expect(handler).toBeDefined();
   return handler!(args, context);
+}
+
+/** The command log accumulates, so only the most recent create matters. */
+function lastAllowedDomains(log: string): string[] {
+  const matches = [...log.matchAll(/ALLOWED_DOMAINS=([^\s]+)/g)];
+  return matches.at(-1)?.[1]?.split(",") ?? [];
 }
 
 async function readCommandLog(): Promise<string> {
@@ -472,8 +483,10 @@ describe("process and platform command behavior", () => {
     expect(log).toContain("--label environment-name=feature-environment");
     expect(log).toContain("--label orkestrator-owner=");
     expect(log).toContain("ALLOWED_DOMAINS=");
-    expect(log).toContain("auth.x.ai");
-    expect(log).toContain("api2.cursor.sh");
+    // Neither ACP platform is enabled here, so the user's allowlist is used
+    // verbatim rather than widened with vendor hosts they never asked for.
+    expect(log).not.toContain("auth.x.ai");
+    expect(log).not.toContain("api2.cursor.sh");
     expect(log).toContain("GIT_URL=https://github.com/example/project.git");
     if (process.platform === "linux") {
       expect(log).toContain("--add-host host.docker.internal:host-gateway");
@@ -483,6 +496,32 @@ describe("process and platform command behavior", () => {
     expect(log).toContain("docker start container-a");
     expect(log).toContain("docker stop container-a");
     expect(log).toContain("docker rm -f container-a");
+  });
+
+  test("adds ACP vendor hosts only for the platforms that are enabled", async () => {
+    fixture.environment.allowedDomains = ["github.com"];
+    fixture.globalConfig.enabledAgentPlatforms = ["claude", "cursor"];
+    await invoke("provision_environment", { environmentId: "environment-1" });
+
+    const allowed = lastAllowedDomains(await readCommandLog());
+    expect(allowed).toContain("github.com");
+    // Cursor is enabled, so its endpoints are reachable.
+    expect(allowed).toContain("api2.cursor.sh");
+    expect(allowed).toContain("cursor.com");
+    // Grok is not, so its endpoints stay blocked.
+    expect(allowed).not.toContain("auth.x.ai");
+    expect(allowed).not.toContain("cli-chat-proxy.grok.com");
+    // The user's own entries are preserved and never duplicated.
+    expect(allowed.filter((domain) => domain === "github.com")).toHaveLength(1);
+  });
+
+  test("keeps an explicit per-environment allowlist intact when no ACP platform is enabled", async () => {
+    fixture.environment.allowedDomains = ["github.com", "registry.npmjs.org"];
+    fixture.globalConfig.enabledAgentPlatforms = ["claude", "codex", "opencode"];
+    await invoke("provision_environment", { environmentId: "environment-1" });
+
+    const allowed = lastAllowedDomains(await readCommandLog());
+    expect(allowed).toEqual(["github.com", "registry.npmjs.org"]);
   });
 
   test("parses container status, listings, ports, logs, prune output, and aggregate stats", async () => {

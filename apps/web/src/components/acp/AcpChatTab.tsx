@@ -9,8 +9,10 @@ import {
 import {
   cancelAcpPrompt,
   createAcpClient,
+  getAcpMessageWindow,
   getAcpSession,
   getAcpApprovals,
+  mergeAcpMessageWindow,
   resolveAcpApproval,
   type AcpClient,
   type AcpSessionSnapshot,
@@ -54,6 +56,22 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
   const label = data.provider === "cursor" ? "Cursor Agent" : "Grok Build";
   const Icon = data.provider === "cursor" ? CursorAgentIcon : GrokBuildIcon;
 
+  // Revision of the last snapshot whose approvals were fetched. Every state
+  // change on the bridge bumps `revision`, so approvals only need re-reading
+  // when it moves — which keeps the streaming poll to one small request.
+  const approvalsRevision = useRef<number | null>(null);
+  // The read cursor has to advance synchronously: `refresh` runs on an interval
+  // and awaits, so reading it from render state would let two overlapping polls
+  // request the same window and clobber each other's merge.
+  const sessionRef = useRef<AcpSessionSnapshot | null>(null);
+  const refreshing = useRef(false);
+
+  const applySession = useCallback((next: AcpSessionSnapshot | null) => {
+    sessionRef.current = next;
+    setSession(next);
+    setError(next?.error ?? null);
+  }, []);
+
   useEffect(() => {
     let mounted = true;
     void (async () => {
@@ -81,9 +99,12 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
         ]);
         if (!mounted) return;
         setClient(nextClient);
-        setSession(nextSession);
+        // A full snapshot on mount is the authoritative rehydration: the tab
+        // may have been unmounted for an entire turn, so live polling only ever
+        // resumes from state the bridge just handed us.
+        approvalsRevision.current = nextSession.revision;
+        applySession(nextSession);
         setApprovals(pendingApprovals);
-        setError(nextSession.error ?? null);
         updateTabNativeSessionId(tabId, nextSession.id, data.environmentId);
       } catch (caught) {
         if (mounted) setError(caught instanceof Error ? caught.message : String(caught));
@@ -92,22 +113,39 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
       }
     })();
     return () => { mounted = false; };
-  }, [data.environmentId, data.provider, data.sessionId, tabId, updateTabNativeSessionId]);
+  }, [applySession, data.environmentId, data.provider, data.sessionId, tabId, updateTabNativeSessionId]);
 
   const refresh = useCallback(async () => {
-    if (!client || !session) return;
+    const current = sessionRef.current;
+    if (!client || !current || refreshing.current) return;
+    refreshing.current = true;
     try {
-      const [next, pendingApprovals] = await Promise.all([
-        getAcpSession(client, session.id),
-        getAcpApprovals(client, session.id),
-      ]);
-      setSession(next);
-      setApprovals(pendingApprovals);
-      setError(next.error ?? null);
+      // Re-request our own last message: it is the only one that mutates as
+      // chunks arrive. Everything before it is already final on the client.
+      const slice = await getAcpMessageWindow(
+        client,
+        current.id,
+        current.baseIndex + Math.max(0, current.messages.length - 1),
+      );
+      const latest = sessionRef.current;
+      if (!latest || latest.id !== current.id) return;
+      applySession({
+        ...latest,
+        ...mergeAcpMessageWindow(latest, slice),
+        status: slice.status,
+        error: slice.error,
+        revision: slice.revision,
+      });
+      if (approvalsRevision.current !== slice.revision) {
+        approvalsRevision.current = slice.revision;
+        setApprovals(await getAcpApprovals(client, current.id));
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      refreshing.current = false;
     }
-  }, [client, session?.id]);
+  }, [applySession, client]);
 
   useEffect(() => {
     if (!client || !session) return;

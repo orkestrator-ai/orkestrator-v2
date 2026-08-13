@@ -95,7 +95,7 @@ import {
   GROK_ACP_BRIDGE_PORT,
   OPENCODE_SERVER_PORT,
   ORKESTRATOR_PROJECT_CONFIG,
-  REQUIRED_AGENT_NETWORK_DOMAINS,
+  requiredAgentNetworkDomains,
   resolveCodexMaxConcurrentThreads,
 } from "./constants.js";
 import {
@@ -182,6 +182,7 @@ import {
   isStartBuildPipelineInput,
   type StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
+import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import { isTabTeardownKind } from "@orkestrator/protocol/tab-teardown";
 import {
@@ -6306,6 +6307,15 @@ async function startLocalServerUnlocked(
       createHash("sha256").update(environmentId).digest("hex").slice(0, 32),
       kind,
     );
+    // Toolchains are downloaded once at app startup from the stored platform
+    // selection, so a platform enabled mid-session has no managed binary yet.
+    // Say that plainly instead of failing with a bare spawn ENOENT.
+    if (!await hasPackagedOrPathBinary(context, kind)) {
+      throw new Error(
+        `${AGENT_PLATFORM_LABELS[kind]} is enabled but not installed yet.`
+        + " Restart Orkestrator to finish downloading it.",
+      );
+    }
     env.ACP_AGENT_PATH = kind === "cursor"
       ? resolveCursorBinary(context)
       : resolveGrokBinary(context);
@@ -8176,9 +8186,12 @@ async function createDockerContainer(environment: Environment, context: CommandC
   if (environment.networkAccessMode === "full") {
     args.push("-e", "NETWORK_MODE=full");
   } else {
+    // Only re-add hosts for platforms this install actually enabled. An
+    // environment that runs neither Cursor nor Grok keeps exactly the allowlist
+    // the user configured; widening it would quietly undo their isolation.
     const domains = [...new Set([
       ...(environment.allowedDomains ?? config.global.allowedDomains),
-      ...REQUIRED_AGENT_NETWORK_DOMAINS,
+      ...requiredAgentNetworkDomains(config.global.enabledAgentPlatforms),
     ])];
     args.push("-e", "NETWORK_MODE=restricted", "-e", `ALLOWED_DOMAINS=${domains.join(",")}`);
   }

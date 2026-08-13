@@ -75,6 +75,32 @@ describe("monorepo orchestration scripts", () => {
     );
   });
 
+  test("CLI build cache includes every source tree bundled from outside its workspace", () => {
+    const turbo = JSON.parse(read("packages/cli/turbo.json")) as {
+      tasks?: Record<string, { inputs?: string[] }>;
+    };
+    const inputs = turbo.tasks?.build?.inputs ?? [];
+
+    expect(inputs).toContain("$TURBO_DEFAULT$");
+    for (const externalInput of [
+      "$TURBO_ROOT$/tsconfig.json",
+      "$TURBO_ROOT$/apps/backend/package.json",
+      "$TURBO_ROOT$/apps/backend/tsconfig.json",
+      "$TURBO_ROOT$/apps/backend/src/**",
+      "$TURBO_ROOT$/bridges/claude-bridge/package.json",
+      "$TURBO_ROOT$/bridges/claude-bridge/tsconfig.json",
+      "$TURBO_ROOT$/bridges/claude-bridge/src/**",
+      "$TURBO_ROOT$/bridges/codex-bridge/package.json",
+      "$TURBO_ROOT$/bridges/codex-bridge/tsconfig.json",
+      "$TURBO_ROOT$/bridges/codex-bridge/src/**",
+      "$TURBO_ROOT$/packages/protocol/package.json",
+      "$TURBO_ROOT$/packages/protocol/tsconfig.json",
+      "$TURBO_ROOT$/packages/protocol/src/**",
+    ]) {
+      expect(inputs).toContain(externalInput);
+    }
+  });
+
   test("full tests run workspace, root, bridge, and protocol checks concurrently", () => {
     // The groups are independent, so they run at once rather than in sequence.
     // Behaviour is asserted properly in tests/unit/test-all.test.ts; this only

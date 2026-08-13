@@ -776,6 +776,70 @@ fi
 
 log_progress "Codex configuration ready"
 
+# Set up Cursor Agent configuration. The host directory is mounted read-only at
+# /cursor-config, while ~/.cursor stays writable for ACP sessions and per-project
+# runtime state.
+log_progress "Setting up Cursor Agent configuration..."
+mkdir -p "$HOME/.cursor"
+
+if [ -d /cursor-config ]; then
+    for file in \
+        cli-config.json \
+        agent-cli-state.json \
+        mcp.json \
+        argv.json
+    do
+        copy_agent_file /cursor-config "$HOME/.cursor" "$file" Cursor
+    done
+
+    # Preserve user-authored extensions without importing host sessions,
+    # project state, caches, downloads, or platform-specific binaries.
+    for dir in \
+        skills-cursor
+    do
+        copy_agent_directory_entries /cursor-config "$HOME/.cursor" "$dir" Cursor
+    done
+
+    report_agent_copy_skips Cursor
+fi
+
+log_progress "Cursor Agent configuration ready"
+
+# Set up Grok configuration. Grok writes active_sessions.json, SQLite state and
+# logs below ~/.grok as soon as ACP starts, so the host mount cannot live there.
+log_progress "Setting up Grok configuration..."
+mkdir -p "$HOME/.grok" "$HOME/.config/grok"
+
+if [ -d /grok-home ]; then
+    for file in \
+        auth.json \
+        config.toml \
+        trusted_folders.toml \
+        agent_id
+    do
+        copy_agent_file /grok-home "$HOME/.grok" "$file" Grok
+    done
+
+    for dir in \
+        hooks \
+        skills
+    do
+        copy_agent_directory_entries /grok-home "$HOME/.grok" "$dir" Grok
+    done
+
+    chmod 600 "$HOME/.grok/auth.json" 2>/dev/null || true
+fi
+
+if [ -d /grok-config ]; then
+    # ~/.config/grok is user-authored and normally small. Copy each entry through
+    # the bounded helper so an unexpected cache or symlink cannot escape the
+    # same limits applied to the primary agent homes.
+    copy_agent_directory /grok-config "$HOME/.config/grok" "." Grok
+fi
+
+report_agent_copy_skips Grok
+log_progress "Grok configuration ready"
+
 # Verify the config file exists and is valid
 if [ -f "$HOME/.claude.json" ]; then
     if jq -e '.hasCompletedOnboarding' "$HOME/.claude.json" > /dev/null 2>&1; then

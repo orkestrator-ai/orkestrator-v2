@@ -783,11 +783,7 @@ function isPersistedNativeAgentSession(
     && isNonBlankString(value.key)
     && (expectedKey === undefined || value.key === expectedKey)
     && isNonBlankString(value.environmentId)
-    && (
-      value.agent === "claude"
-      || value.agent === "codex"
-      || value.agent === "opencode"
-    )
+    && isAgentPlatform(value.agent)
     && isNonBlankString(value.logicalSessionKey)
     && isNonBlankString(value.providerSessionId)
     && (

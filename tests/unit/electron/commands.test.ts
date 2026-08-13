@@ -5397,6 +5397,7 @@ exit 0
   test("does not expose configured credentials in Docker argv or container creation errors", async () => {
     const githubToken = "github_secret_token";
     const anthropicApiKey = "anthropic_secret_key";
+    const cursorApiKey = "cursor_secret_key";
     const environment = createEnvironment({
       id: "env-container-secret-failure",
       environmentType: "containerized",
@@ -5409,7 +5410,12 @@ exit 0
     Object.assign(context.storage, {
       loadConfig: mock(async () => ({
         version: "1.0.0",
-        global: { useHostGitHubCredentials: false, githubToken, anthropicApiKey },
+        global: {
+          useHostGitHubCredentials: false,
+          githubToken,
+          anthropicApiKey,
+          cursorApiKey,
+        },
         repositories: {
           "project-1": { defaultBranch: "main", prBaseBranch: "main" },
         },
@@ -5420,7 +5426,7 @@ exit 0
     await withFakeDocker(`#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "create" ]; then
-  printf 'Docker permission denied for %s and %s\\n' "$GITHUB_TOKEN" "$ANTHROPIC_API_KEY" >&2
+  printf 'Docker permission denied for %s, %s and %s\\n' "$GITHUB_TOKEN" "$ANTHROPIC_API_KEY" "$CURSOR_API_KEY" >&2
   exit 42
 fi
 exit 0
@@ -5437,13 +5443,16 @@ exit 0
       expect((failure as Error).message).toContain("[REDACTED]");
       expect((failure as Error).message).not.toContain(githubToken);
       expect((failure as Error).message).not.toContain(anthropicApiKey);
+      expect((failure as Error).message).not.toContain(cursorApiKey);
 
       const dockerCalls = await fs.readFile(logs.all, "utf8");
       expect(dockerCalls).not.toContain("-e GITHUB_TOKEN");
       expect(dockerCalls).not.toContain("-e GH_TOKEN");
       expect(dockerCalls).toContain("-e ANTHROPIC_API_KEY");
+      expect(dockerCalls).toContain("-e CURSOR_API_KEY");
       expect(dockerCalls).not.toContain(githubToken);
       expect(dockerCalls).not.toContain(anthropicApiKey);
+      expect(dockerCalls).not.toContain(cursorApiKey);
     });
   });
 

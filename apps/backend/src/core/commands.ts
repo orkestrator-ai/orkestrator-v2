@@ -8230,6 +8230,16 @@ async function createDockerContainer(environment: Environment, context: CommandC
     redactValues.push(anthropicApiKey);
     args.push("-e", "ANTHROPIC_API_KEY");
   }
+  // Cursor's macOS login lives in Keychain and cannot be represented by the
+  // read-only ~/.cursor import mounted into a Linux container. Cursor Agent's
+  // documented headless authentication path is CURSOR_API_KEY.
+  const cursorApiKey = config.global.cursorApiKey?.trim()
+    || process.env.CURSOR_API_KEY?.trim();
+  if (cursorApiKey) {
+    dockerEnvironment.CURSOR_API_KEY = cursorApiKey;
+    redactValues.push(cursorApiKey);
+    args.push("-e", "CURSOR_API_KEY");
+  }
   if (config.global.opencodeModel) args.push("-e", `OPENCODE_MODEL=${config.global.opencodeModel}`);
   if (environment.networkAccessMode === "full") {
     args.push("-e", "NETWORK_MODE=full");
@@ -8251,9 +8261,13 @@ async function createDockerContainer(environment: Environment, context: CommandC
   await bindIfExists(path.join(home, ".claude"), "/claude-config");
   await bindIfExists(path.join(home, ".claude.json"), "/claude-config.json");
   await bindIfExists(path.join(home, ".codex"), "/codex-home");
-  await bindIfExists(path.join(home, ".cursor"), "/home/node/.cursor");
-  await bindIfExists(path.join(home, ".grok"), "/home/node/.grok");
-  await bindIfExists(path.join(home, ".config", "grok"), "/home/node/.config/grok");
+  // Agent homes must remain writable. Cursor creates project/session state and
+  // Grok creates session databases during ACP startup, so mounting the host
+  // directories directly over their homes makes both bridges fail immediately.
+  // Mount portable inputs separately; entrypoint.sh copies a bounded allowlist.
+  await bindIfExists(path.join(home, ".cursor"), "/cursor-config");
+  await bindIfExists(path.join(home, ".grok"), "/grok-home");
+  await bindIfExists(path.join(home, ".config", "grok"), "/grok-config");
   await bindIfExists(path.join(home, ".config", "opencode"), "/opencode-config");
   await bindIfExists(path.join(home, ".local", "share", "opencode"), "/opencode-data");
   await bindIfExists(path.join(home, ".local", "state", "opencode"), "/opencode-state");

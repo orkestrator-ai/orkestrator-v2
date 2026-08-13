@@ -14,7 +14,7 @@ import {
   Sparkles,
   Boxes,
 } from "lucide-react";
-import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
+import { ClaudeIcon, CodexIcon, CursorAgentIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { GlobalSettings } from "./GlobalSettings";
 import { SkillsSettings } from "./SkillsSettings";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
@@ -25,6 +25,7 @@ const MENU_ITEMS: SettingsMenuItem[] = [
   { id: "review", label: "Review", icon: <Eye className="h-4 w-4" /> },
   { id: "claude", label: "Claude", icon: <ClaudeIcon className="h-4 w-4" /> },
   { id: "codex", label: "Codex", icon: <CodexIcon className="h-4 w-4 text-emerald-400" /> },
+  { id: "cursor", label: "Cursor", icon: <CursorAgentIcon className="h-4 w-4" /> },
   { id: "opencode", label: "OpenCode", icon: <OpenCodeIcon className="h-4 w-4" /> },
   { id: "skills", label: "Skills", icon: <Sparkles className="h-4 w-4" /> },
   { id: "terminal", label: "Terminal", icon: <Terminal className="h-4 w-4" /> },

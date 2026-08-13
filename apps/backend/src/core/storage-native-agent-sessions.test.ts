@@ -155,6 +155,27 @@ describe("StorageService native agent sessions", () => {
     });
   });
 
+  test.each(["cursor", "grok"] as const)(
+    "round-trips versioned %s sessions through the canonical agent allowlist",
+    async (agent) => {
+      await withStorage(async (first, second) => {
+        const providerInput = {
+          ...input,
+          key: `${agent}-native-session-key`,
+          agent,
+          logicalSessionKey: `env-env-1:${agent}-tab`,
+        };
+        const saved = await first.getOrCreateNativeAgentSession(
+          providerInput,
+          async () => `${agent}-provider-session`,
+        );
+
+        expect(await first.getNativeAgentSession(providerInput.key)).toEqual(saved);
+        expect(await second.getNativeAgentSession(providerInput.key)).toEqual(saved);
+      });
+    },
+  );
+
   test("fails closed for malformed versioned metadata", async () => {
     await withStorage(async (first) => {
       const dataDir = (await first.getEnvironment("env-1"))!.worktreePath!;

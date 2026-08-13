@@ -453,6 +453,8 @@ export interface GlobalConfig {
   containerResources: ContainerResources;
   envFilePatterns: string[];
   anthropicApiKey?: string;
+  /** Cursor API key forwarded to containerized Cursor Agent processes. */
+  cursorApiKey?: string;
   /** Whether a write-only GitHub token is stored by the backend. */
   githubTokenConfigured?: boolean;
   /** Reuse the host's active `gh auth login` token for container GitHub access. */

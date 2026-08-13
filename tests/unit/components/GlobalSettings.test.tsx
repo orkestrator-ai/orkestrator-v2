@@ -1128,6 +1128,13 @@ describe("GlobalSettings", () => {
     expect(anthropicInput.type).toBe("text");
     fireEvent.change(anthropicInput, { target: { value: "test-anthropic-key" } });
 
+    rerender(<GlobalSettings activeSection="cursor" />);
+    const cursorInput = screen.getByLabelText("Cursor API key") as HTMLInputElement;
+    expect(cursorInput.type).toBe("password");
+    fireEvent.click(screen.getByRole("button", { name: "Show Cursor API key" }));
+    expect(cursorInput.type).toBe("text");
+    fireEvent.change(cursorInput, { target: { value: "test-cursor-key" } });
+
     rerender(<GlobalSettings activeSection="general" />);
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     const githubInput = screen.getByLabelText("GitHub token") as HTMLInputElement;
@@ -1139,7 +1146,10 @@ describe("GlobalSettings", () => {
 
     await waitFor(() => {
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ anthropicApiKey: "test-anthropic-key" }),
+        expect.objectContaining({
+          anthropicApiKey: "test-anthropic-key",
+          cursorApiKey: "test-cursor-key",
+        }),
       );
       expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty(
         "githubToken",

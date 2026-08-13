@@ -103,6 +103,29 @@ bun <file>               # NOT node <file>
 
 Bun automatically loads `.env` files.
 
+## Application Version Bumps
+
+When bumping the Orkestrator version, keep the top-level `version` field in all
+of these package manifests synchronized:
+
+- `package.json`
+- `apps/backend/package.json`
+- `apps/desktop/package.json`
+- `apps/web/package.json`
+- `apps/web-public/package.json`
+- `bridges/acp-bridge/package.json`
+- `bridges/claude-bridge/package.json`
+- `bridges/codex-bridge/package.json`
+- `packages/cli/package.json`
+- `packages/protocol/package.json`
+
+After a bump, run the following to verify every package manifest was included
+and has the intended version:
+
+```bash
+rg -n '"version"\s*:' --glob 'package.json' --glob '!node_modules/**'
+```
+
 ## OpenCode SDK v2 - CRITICAL
 
 **Always use v2 of the `@opencode-ai/sdk` package.**

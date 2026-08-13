@@ -442,6 +442,7 @@ function createContext(
       emitted.push({ event, payload });
     }),
     storage: {
+      getDataDir: mock(() => process.cwd()),
       withGitHubCompletionCommentLock: mock(async (
         _pipelineId: string,
         operation: () => Promise<unknown>,

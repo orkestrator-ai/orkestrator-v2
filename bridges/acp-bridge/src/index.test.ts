@@ -7,6 +7,10 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
+// The repository-wide test preload installs a browser-like fetch for UI tests.
+// Use Bun's native client for loopback bridge integration requests so browser
+// CORS rules cannot turn these GETs into preflight requests.
+const nativeFetch = Bun.fetch;
 const children = new Set<ChildProcessWithoutNullStreams>();
 const temporaryDirectories = new Set<string>();
 
@@ -68,7 +72,7 @@ async function spawnBridge(options: {
   children.add(child);
   const base = `http://127.0.0.1:${port}`;
   await waitFor(
-    async () => fetch(`${base}/global/health`).then((response) => response.ok).catch(() => false),
+    async () => nativeFetch(`${base}/global/health`).then((response) => response.ok).catch(() => false),
     Boolean,
   );
   return {
@@ -90,20 +94,20 @@ describe("ACP bridge", () => {
   test("drives an ACP session and rehydrates a parked permission", async () => {
     const { base, headers } = await spawnBridge();
 
-    const unauthorized = await fetch(`${base}/session/create`, { method: "POST" });
+    const unauthorized = await nativeFetch(`${base}/session/create`, { method: "POST" });
     expect(unauthorized.status).toBe(401);
-    const createdResponse = await fetch(`${base}/session/create`, { method: "POST", headers });
+    const createdResponse = await nativeFetch(`${base}/session/create`, { method: "POST", headers });
     expect(createdResponse.status).toBe(201);
     const created = await createdResponse.json() as { id: string };
 
-    const promptResponse = await fetch(`${base}/session/${created.id}/prompt`, {
+    const promptResponse = await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
       headers,
       body: JSON.stringify({ prompt: "Do the work" }),
     });
     expect(promptResponse.status).toBe(202);
     const approval = await waitFor(
-      async () => fetch(`${base}/session/${created.id}/approvals`, { headers }).then((response) => response.json()) as Promise<{ approvals: Array<{ id: string; approvalId: string; title: string; kind: string }> }>,
+      async () => nativeFetch(`${base}/session/${created.id}/approvals`, { headers }).then((response) => response.json()) as Promise<{ approvals: Array<{ id: string; approvalId: string; title: string; kind: string }> }>,
       (value) => value.approvals.length === 1,
     );
     expect(approval.approvals[0]?.title).toBe("Run safe command");
@@ -112,13 +116,13 @@ describe("ACP bridge", () => {
       kind: "permissions",
     });
 
-    const resolveResponse = await fetch(
+    const resolveResponse = await nativeFetch(
       `${base}/session/${created.id}/approvals/${approval.approvals[0]!.id}`,
       { method: "POST", headers, body: JSON.stringify({ decision: "approve" }) },
     );
     expect(resolveResponse.ok).toBe(true);
     const session = await waitFor(
-      async () => fetch(`${base}/session/${created.id}`, { headers }).then((response) => response.json()) as Promise<{ status: string; messages: Array<{ content: string; parts: unknown[] }> }>,
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) => response.json()) as Promise<{ status: string; messages: Array<{ content: string; parts: unknown[] }> }>,
       (value) => value.status === "idle",
     );
     expect(session.messages.map((message) => message.content)).toEqual(["Do the work", "approved:once"]);
@@ -132,7 +136,7 @@ describe("ACP bridge", () => {
     const stateDirectory = await temporaryDirectory();
     const counterFile = resolve(stateDirectory, "prompts.log");
     const first = await spawnBridge({ stateDirectory, env: { FAKE_ACP_COUNTER_FILE: counterFile } });
-    const create = () => fetch(`${first.base}/session/create`, {
+    const create = () => nativeFetch(`${first.base}/session/create`, {
       method: "POST",
       headers: first.headers,
       body: JSON.stringify({ clientSessionKey: "env-1:tab-1" }),
@@ -140,14 +144,14 @@ describe("ACP bridge", () => {
     const [created, duplicateCreation] = await Promise.all([create(), create()]);
     expect(duplicateCreation.id).toBe(created.id);
 
-    const send = () => fetch(`${first.base}/session/${created.id}/prompt`, {
+    const send = () => nativeFetch(`${first.base}/session/${created.id}/prompt`, {
       method: "POST",
       headers: first.headers,
       body: JSON.stringify({ prompt: "DIRECT:once", requestId: "request-1" }),
     });
     expect((await send()).status).toBe(202);
     await waitFor(
-      async () => fetch(`${first.base}/session/${created.id}`, { headers: first.headers }).then((response) => response.json()) as Promise<{ status: string }>,
+      async () => nativeFetch(`${first.base}/session/${created.id}`, { headers: first.headers }).then((response) => response.json()) as Promise<{ status: string }>,
       (session) => session.status === "idle",
     );
     expect((await send()).status).toBe(202);
@@ -155,13 +159,13 @@ describe("ACP bridge", () => {
 
     await stopChild(first.child);
     const second = await spawnBridge({ stateDirectory, env: { FAKE_ACP_COUNTER_FILE: counterFile } });
-    const restored = await fetch(`${second.base}/session/create`, {
+    const restored = await nativeFetch(`${second.base}/session/create`, {
       method: "POST",
       headers: second.headers,
       body: JSON.stringify({ clientSessionKey: "env-1:tab-1" }),
     }).then((response) => response.json()) as { id: string };
     expect(restored.id).toBe(created.id);
-    const duplicateAfterRestart = await fetch(`${second.base}/session/${created.id}/prompt`, {
+    const duplicateAfterRestart = await nativeFetch(`${second.base}/session/${created.id}/prompt`, {
       method: "POST",
       headers: second.headers,
       body: JSON.stringify({ prompt: "DIRECT:once", requestId: "request-1" }),
@@ -173,14 +177,14 @@ describe("ACP bridge", () => {
   test("times out hung initialization and rejects malformed agent output", async () => {
     const hung = await spawnBridge({ env: { FAKE_ACP_HANG_INITIALIZE: "1", ACP_RPC_TIMEOUT_MS: "30" } });
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const response = await fetch(`${hung.base}/session/create`, { method: "POST", headers: hung.headers });
+      const response = await nativeFetch(`${hung.base}/session/create`, { method: "POST", headers: hung.headers });
       expect(response.status).toBe(500);
       expect(await response.json()).toMatchObject({ error: "cursor ACP initialize timed out" });
     }
-    expect((await fetch(`${hung.base}/global/health`)).ok).toBe(true);
+    expect((await nativeFetch(`${hung.base}/global/health`)).ok).toBe(true);
 
     const malformed = await spawnBridge({ env: { FAKE_ACP_MALFORMED_INITIALIZE: "1" } });
-    const response = await fetch(`${malformed.base}/session/create`, { method: "POST", headers: malformed.headers });
+    const response = await nativeFetch(`${malformed.base}/session/create`, { method: "POST", headers: malformed.headers });
     expect(response.status).toBe(500);
     expect(await response.json()).toMatchObject({ error: "cursor ACP emitted malformed JSON" });
   });
@@ -196,7 +200,7 @@ describe("ACP bridge", () => {
     } });
     const firstController = new AbortController();
     const secondController = new AbortController();
-    const create = (key: string, signal: AbortSignal) => fetch(`${bridge.base}/session/create`, {
+    const create = (key: string, signal: AbortSignal) => nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
       body: JSON.stringify({ clientSessionKey: key }),
@@ -208,7 +212,7 @@ describe("ACP bridge", () => {
       () => fs.readFile(lifecycleFile, "utf8").catch(() => ""),
       (contents) => (contents.match(/^start:/gm)?.length ?? 0) === 2,
     );
-    const rejected = await fetch(`${bridge.base}/session/create`, {
+    const rejected = await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
       body: JSON.stringify({ clientSessionKey: "third" }),
@@ -229,7 +233,7 @@ describe("ACP bridge", () => {
       ACP_RPC_TIMEOUT_MS: "100",
     } });
     const controller = new AbortController();
-    const request = fetch(`${bridge.base}/session/create`, {
+    const request = nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
       body: "{}",
@@ -253,20 +257,20 @@ describe("ACP bridge", () => {
       }
     }, Boolean);
     expect(lifecycle.match(/^start:/gm)).toHaveLength(1);
-    expect((await fetch(`${bridge.base}/global/health`)).ok).toBe(true);
+    expect((await nativeFetch(`${bridge.base}/global/health`)).ok).toBe(true);
   });
 
   test("bounds one oversized response and marks the turn failed", async () => {
     const { base, headers } = await spawnBridge();
-    const created = await fetch(`${base}/session/create`, { method: "POST", headers })
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
       .then((response) => response.json()) as { id: string };
-    await fetch(`${base}/session/${created.id}/prompt`, {
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
       headers,
       body: JSON.stringify({ prompt: "OVERSIZED", requestId: "oversized-1" }),
     });
     const session = await waitFor(
-      async () => fetch(`${base}/session/${created.id}`, { headers }).then((response) => response.json()) as Promise<{ status: string; error?: string; messages: Array<{ content: string }> }>,
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) => response.json()) as Promise<{ status: string; error?: string; messages: Array<{ content: string }> }>,
       (value) => value.status === "error",
     );
     expect(session.error).toContain("transcript limit");
@@ -275,10 +279,10 @@ describe("ACP bridge", () => {
 
   test("uses only the current turn when parsing structured output", async () => {
     const { base, headers } = await spawnBridge();
-    const created = await fetch(`${base}/session/create`, { method: "POST", headers })
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
       .then((response) => response.json()) as { id: string };
     const prompt = async (text: string, requestId: string) => {
-      await fetch(`${base}/session/${created.id}/prompt`, {
+      await nativeFetch(`${base}/session/${created.id}/prompt`, {
         method: "POST",
         headers,
         body: JSON.stringify({
@@ -288,13 +292,13 @@ describe("ACP bridge", () => {
         }),
       });
       await waitFor(
-        async () => fetch(`${base}/session/${created.id}`, { headers }).then((response) => response.json()) as Promise<{ status: string }>,
+        async () => nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) => response.json()) as Promise<{ status: string }>,
         (session) => session.status === "idle",
       );
     };
     await prompt('{"turn":1}', "turn-1");
     await prompt("not-json", "turn-2");
-    const result = await fetch(
+    const result = await nativeFetch(
       `${base}/session/${created.id}/structured-output?requestId=turn-2`,
       { headers },
     ).then((response) => response.json()) as { structuredOutput: { ok: boolean; error?: { code?: string } } };
@@ -303,19 +307,19 @@ describe("ACP bridge", () => {
 
   test("denies pending permission when cancelled", async () => {
     const { base, headers } = await spawnBridge();
-    const created = await fetch(`${base}/session/create`, { method: "POST", headers })
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
       .then((response) => response.json()) as { id: string };
-    await fetch(`${base}/session/${created.id}/prompt`, {
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
       headers,
       body: JSON.stringify({ prompt: "needs permission", requestId: "cancel-1" }),
     });
     await waitFor(
-      async () => fetch(`${base}/session/${created.id}/approvals`, { headers }).then((response) => response.json()) as Promise<{ approvals: unknown[] }>,
+      async () => nativeFetch(`${base}/session/${created.id}/approvals`, { headers }).then((response) => response.json()) as Promise<{ approvals: unknown[] }>,
       (value) => value.approvals.length === 1,
     );
-    await fetch(`${base}/session/${created.id}/cancel`, { method: "POST", headers });
-    const approvals = await fetch(`${base}/session/${created.id}/approvals`, { headers })
+    await nativeFetch(`${base}/session/${created.id}/cancel`, { method: "POST", headers });
+    const approvals = await nativeFetch(`${base}/session/${created.id}/approvals`, { headers })
       .then((response) => response.json()) as { approvals: unknown[] };
     expect(approvals.approvals).toEqual([]);
   });
@@ -330,7 +334,7 @@ describe("ACP bridge", () => {
       ACP_PARENT_WATCHDOG_INTERVAL_MS: "20",
       FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
     } });
-    const created = await fetch(`${bridge.base}/session/create`, {
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
     });

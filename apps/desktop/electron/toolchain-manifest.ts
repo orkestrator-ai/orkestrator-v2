@@ -1,13 +1,15 @@
 export const PINNED_TOOLCHAIN_VERSIONS = {
   claude: "2.1.228",
   codex: "0.147.0",
+  cursor: "2026.08.11-e8db854",
+  grok: "1.0.3",
   opencode: "1.18.16",
 } as const;
 
 export type ToolchainName = keyof typeof PINNED_TOOLCHAIN_VERSIONS;
 export type ToolchainPlatform = "darwin" | "linux";
 export type ToolchainArchitecture = "arm64" | "x64";
-export type ToolchainArchiveFormat = "tar.gz" | "zip";
+export type ToolchainArchiveFormat = "tar.gz" | "zip" | "raw";
 
 type InstalledExecutableIntegrity =
   | {
@@ -23,6 +25,10 @@ export type ToolchainArchive = {
   format: ToolchainArchiveFormat;
   url: string;
   entryPath: string;
+  /** Extract every regular file below this prefix, stripping the prefix. */
+  bundleRoot?: string;
+  /** Runtime files the launcher needs, pinned for cache revalidation. */
+  bundleFiles?: readonly { path: string; size: number; sha256: string }[];
   size: number;
   sha256: string;
   allowedHosts: readonly string[];
@@ -69,6 +75,8 @@ export type ToolchainArtifact = {
      * See `toolchain-manager.ts`.
      */
     repairInvalidMacSignature?: boolean;
+    /** Script launchers whose signed runtime lives beside them in a bundle. */
+    skipMacSignatureVerification?: boolean;
   } & InstalledExecutableIntegrity;
 };
 
@@ -78,6 +86,12 @@ const GITHUB_RELEASE_HOSTS = [
   "objects.githubusercontent.com",
 ] as const;
 const NPM_REGISTRY_HOSTS = ["registry.npmjs.org"] as const;
+const CURSOR_DOWNLOAD_HOSTS = ["downloads.cursor.com"] as const;
+const GROK_DOWNLOAD_HOSTS = [
+  "x.ai",
+  "storage.googleapis.com",
+  "storage.cloud.google.com",
+] as const;
 
 // Release bases are derived from PINNED_TOOLCHAIN_VERSIONS so a version bump
 // cannot leave a stale version behind in a URL. `scripts/download-codex.sh` and
@@ -371,6 +385,164 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       size: 308_521_992,
       sha256: "d535985e6941a3eb00179ccd7f52ceb0c6623a0305a518ebc4e6514f84a94c99",
     },
+  },
+  {
+    name: "cursor",
+    version: PINNED_TOOLCHAIN_VERSIONS.cursor,
+    platform: "darwin",
+    architecture: "arm64",
+    archive: {
+      format: "tar.gz",
+      url: `https://downloads.cursor.com/lab/${PINNED_TOOLCHAIN_VERSIONS.cursor}/darwin/arm64/agent-cli-package.tar.gz`,
+      entryPath: "dist-package/cursor-agent",
+      bundleRoot: "dist-package/",
+      bundleFiles: [
+        { path: "node", size: 116_870_064, sha256: "336b5b3ebc5deb86df842102b20b6e4761605b7a667823e68dda7761b91a161b" },
+        { path: "index.js", size: 9_386_977, sha256: "6aceb24b7c7ecddb1993946ebb18a7dd4d025842e6efda955eb0c13255b1e5f0" },
+      ],
+      size: 74_746_275,
+      sha256: "46044d6d7bcbd7b49a0cf1cd01aa4ca79aaa2ea5f2c7a32965fc0ebe29841790",
+      allowedHosts: CURSOR_DOWNLOAD_HOSTS,
+    },
+    executable: {
+      fileName: "cursor",
+      size: 1_074,
+      sha256: "eed61c5224668c9236334c4c68936a16aecc37374b592f59e31eb50433817831",
+      skipMacSignatureVerification: true,
+    },
+  },
+  {
+    name: "cursor",
+    version: PINNED_TOOLCHAIN_VERSIONS.cursor,
+    platform: "darwin",
+    architecture: "x64",
+    archive: {
+      format: "tar.gz",
+      url: `https://downloads.cursor.com/lab/${PINNED_TOOLCHAIN_VERSIONS.cursor}/darwin/x64/agent-cli-package.tar.gz`,
+      entryPath: "dist-package/cursor-agent",
+      bundleRoot: "dist-package/",
+      bundleFiles: [
+        { path: "node", size: 119_195_696, sha256: "f1f2f5700285deadd6836f66463687f13275177b92ad744fa2699cfb50dcd0a5" },
+        { path: "index.js", size: 9_378_331, sha256: "2def6db128c49b95f33b8b6f9624a15e65616f074ae505c06ffccf35fe0feb7b" },
+      ],
+      size: 77_650_670,
+      sha256: "d5c1ce96dd36469e0231d818d4ccf390caac52d94e607c56ebeecc247cab2b1b",
+      allowedHosts: CURSOR_DOWNLOAD_HOSTS,
+    },
+    executable: {
+      fileName: "cursor",
+      size: 1_074,
+      sha256: "eed61c5224668c9236334c4c68936a16aecc37374b592f59e31eb50433817831",
+      skipMacSignatureVerification: true,
+    },
+  },
+  {
+    name: "cursor",
+    version: PINNED_TOOLCHAIN_VERSIONS.cursor,
+    platform: "linux",
+    architecture: "arm64",
+    archive: {
+      format: "tar.gz",
+      url: `https://downloads.cursor.com/lab/${PINNED_TOOLCHAIN_VERSIONS.cursor}/linux/arm64/agent-cli-package.tar.gz`,
+      entryPath: "dist-package/cursor-agent",
+      bundleRoot: "dist-package/",
+      bundleFiles: [
+        { path: "node", size: 125_906_320, sha256: "47befb5f57df96771ce343d6293349ecf4d46c91110b626423ec3a49d2fee7c1" },
+        { path: "index.js", size: 8_702_391, sha256: "468106299df5dcebf227e0d478172a7241a202d25c4b2b7060b6723ee19cabac" },
+      ],
+      size: 83_117_637,
+      sha256: "ea13f92e295f523a99ce8d8f57d6894d21e5d1e2d030ffad718ccd5955ca2eed",
+      allowedHosts: CURSOR_DOWNLOAD_HOSTS,
+    },
+    executable: {
+      fileName: "cursor",
+      size: 1_074,
+      sha256: "eed61c5224668c9236334c4c68936a16aecc37374b592f59e31eb50433817831",
+    },
+  },
+  {
+    name: "cursor",
+    version: PINNED_TOOLCHAIN_VERSIONS.cursor,
+    platform: "linux",
+    architecture: "x64",
+    archive: {
+      format: "tar.gz",
+      url: `https://downloads.cursor.com/lab/${PINNED_TOOLCHAIN_VERSIONS.cursor}/linux/x64/agent-cli-package.tar.gz`,
+      entryPath: "dist-package/cursor-agent",
+      bundleRoot: "dist-package/",
+      bundleFiles: [
+        { path: "node", size: 129_074_464, sha256: "e0e46d3a1c0667117303412647cafcbcefb1be7612493015ec8fd6b7440162a4" },
+        { path: "index.js", size: 8_702_383, sha256: "f6fd4e6bf3d6ecbf66cc2dcabcf708b8a7c37b400d10c82a58658b5e331c36d0" },
+      ],
+      size: 84_532_310,
+      sha256: "bfff4bf6f4e9dd30c1d0ef0a70b6077b074015dd2948e4c50685d53afdcfce5a",
+      allowedHosts: CURSOR_DOWNLOAD_HOSTS,
+    },
+    executable: {
+      fileName: "cursor",
+      size: 1_074,
+      sha256: "eed61c5224668c9236334c4c68936a16aecc37374b592f59e31eb50433817831",
+    },
+  },
+  {
+    name: "grok",
+    version: PINNED_TOOLCHAIN_VERSIONS.grok,
+    platform: "darwin",
+    architecture: "arm64",
+    archive: {
+      format: "raw",
+      url: `https://storage.googleapis.com/grok-build-public-artifacts/cli/grok-${PINNED_TOOLCHAIN_VERSIONS.grok}-macos-aarch64`,
+      entryPath: "",
+      size: 133_563_584,
+      sha256: "09deaf06804955ff2d6ccef2042af4031c659c47fd16eb3c72664a8f533832da",
+      allowedHosts: GROK_DOWNLOAD_HOSTS,
+    },
+    executable: { fileName: "grok", size: 133_563_584, sha256: "09deaf06804955ff2d6ccef2042af4031c659c47fd16eb3c72664a8f533832da" },
+  },
+  {
+    name: "grok",
+    version: PINNED_TOOLCHAIN_VERSIONS.grok,
+    platform: "darwin",
+    architecture: "x64",
+    archive: {
+      format: "raw",
+      url: `https://storage.googleapis.com/grok-build-public-artifacts/cli/grok-${PINNED_TOOLCHAIN_VERSIONS.grok}-macos-x86_64`,
+      entryPath: "",
+      size: 149_279_776,
+      sha256: "b5eef73b94fdc72b8c67218f19abe2b2728db38f1f0e66903de8fb931948bd26",
+      allowedHosts: GROK_DOWNLOAD_HOSTS,
+    },
+    executable: { fileName: "grok", size: 149_279_776, sha256: "b5eef73b94fdc72b8c67218f19abe2b2728db38f1f0e66903de8fb931948bd26" },
+  },
+  {
+    name: "grok",
+    version: PINNED_TOOLCHAIN_VERSIONS.grok,
+    platform: "linux",
+    architecture: "arm64",
+    archive: {
+      format: "raw",
+      url: `https://storage.googleapis.com/grok-build-public-artifacts/cli/grok-${PINNED_TOOLCHAIN_VERSIONS.grok}-linux-aarch64`,
+      entryPath: "",
+      size: 135_542_760,
+      sha256: "ed44950eab90573b6f475191f5791713a56943939b3b9a62e3f4e95edd14acd9",
+      allowedHosts: GROK_DOWNLOAD_HOSTS,
+    },
+    executable: { fileName: "grok", size: 135_542_760, sha256: "ed44950eab90573b6f475191f5791713a56943939b3b9a62e3f4e95edd14acd9" },
+  },
+  {
+    name: "grok",
+    version: PINNED_TOOLCHAIN_VERSIONS.grok,
+    platform: "linux",
+    architecture: "x64",
+    archive: {
+      format: "raw",
+      url: `https://storage.googleapis.com/grok-build-public-artifacts/cli/grok-${PINNED_TOOLCHAIN_VERSIONS.grok}-linux-x86_64`,
+      entryPath: "",
+      size: 165_768_512,
+      sha256: "2a7d46dea3fbed067e4072258b835d401e017d6848dc996279f0fb3d668a0961",
+      allowedHosts: GROK_DOWNLOAD_HOSTS,
+    },
+    executable: { fileName: "grok", size: 165_768_512, sha256: "2a7d46dea3fbed067e4072258b835d401e017d6848dc996279f0fb3d668a0961" },
   },
 ] as const;
 

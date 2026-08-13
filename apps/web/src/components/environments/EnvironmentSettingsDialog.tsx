@@ -43,7 +43,7 @@ import {
   Terminal,
   RefreshCw,
 } from "lucide-react";
-import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
+import { ClaudeIcon, CodexIcon, CursorAgentIcon, GrokBuildIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { cn } from "@/lib/utils";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "@/components/settings/FullscreenSettingsLayout";
@@ -61,6 +61,7 @@ import type {
   PortMapping,
   PortProtocol,
 } from "@/types";
+import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 
 // Domain validation regex
 const DOMAIN_REGEX = /^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
@@ -746,11 +747,16 @@ export function EnvironmentSettingsDialog({
               <Label className="text-sm">Default Agent</Label>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 {([
-                  { value: "global", label: `Global (${config.global.defaultAgent === "claude" ? "Claude" : config.global.defaultAgent === "codex" ? "Codex" : "OpenCode"})`, icon: <Bot className="h-4 w-4" /> },
-                  { value: "claude", label: "Claude", icon: <ClaudeIcon className="h-4 w-4" /> },
+                  { value: "global", label: `Global (${AGENT_PLATFORM_LABELS[config.global.defaultAgent ?? "claude"]})`, icon: <Bot className="h-4 w-4" /> },
+                  { value: "claude", label: "Claude Code", icon: <ClaudeIcon className="h-4 w-4" /> },
                   { value: "codex", label: "Codex", icon: <CodexIcon className="h-4 w-4 text-emerald-400" /> },
+                  { value: "cursor", label: "Cursor Agent", icon: <CursorAgentIcon className="h-4 w-4" /> },
+                  { value: "grok", label: "Grok Build", icon: <GrokBuildIcon className="h-4 w-4" /> },
                   { value: "opencode", label: "OpenCode", icon: <OpenCodeIcon className="h-4 w-4" /> },
-                ] as const).map((opt) => (
+                ] as const).filter((opt) =>
+                  opt.value === "global"
+                  || (config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]).includes(opt.value)
+                ).map((opt) => (
                   <button
                     key={opt.value}
                     type="button"

@@ -6,7 +6,7 @@ import {
   resolveBuildPipelineAgent,
 } from "./build-pipeline-agent";
 
-function createConfig(defaultAgent: "claude" | "codex" | "opencode" | undefined, repositoryAgent?: "claude" | "codex" | "opencode") {
+function createConfig(defaultAgent: "claude" | "codex" | "opencode" | "cursor" | "grok" | undefined, repositoryAgent?: "claude" | "codex" | "opencode" | "cursor" | "grok") {
   return {
     version: "1.0",
     global: {
@@ -56,6 +56,12 @@ describe("resolveBuildPipelineAgent", () => {
     const agent = resolveBuildPipelineAgent(createConfig(undefined), "project-1");
 
     expect(agent).toBe("claude");
+  });
+
+  test("falls back to the first enabled platform when a stored override is disabled", () => {
+    const config = createConfig("claude", "codex");
+    config.global.enabledAgentPlatforms = ["cursor", "grok"];
+    expect(resolveBuildPipelineAgent(config, "project-1")).toBe("cursor");
   });
 });
 
@@ -185,9 +191,9 @@ describe("getBuildEnvironmentAgentSettings", () => {
   });
 
   // The durable intent exists so a mobile page eviction cannot lose the launch.
-  // That risk is identical for all three agents, so none of them may opt out.
+  // That risk is identical for every agent, so none of them may opt out.
   test("names a launch agent for every agent type", () => {
-    for (const agentType of ["claude", "codex", "opencode"] as const) {
+    for (const agentType of ["claude", "codex", "cursor", "grok", "opencode"] as const) {
       expect(getBuildEnvironmentAgentSettings(agentType).launchAgent).toBe(agentType);
     }
   });

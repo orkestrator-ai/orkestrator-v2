@@ -88,7 +88,7 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     return { ...common, type: "plain", isSetupTab: true };
   }
 
-  if (type === "plain" || type === "claude" || type === "opencode" || type === "codex" || type === "root") {
+  if (type === "plain" || type === "claude" || type === "opencode" || type === "codex" || type === "cursor" || type === "grok" || type === "root") {
     return { ...common, type };
   }
 
@@ -176,6 +176,22 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
         containerId: context.containerId ?? undefined,
         environmentId: context.environmentId,
         sessionId: nonEmptyString(value.openCodeNativeData.sessionId) ?? undefined,
+        isLocal: context.isLocal,
+      },
+    };
+  }
+
+  if (type === "cursor-native" || type === "grok-native") {
+    if (!isRecord(value.acpNativeData)) return null;
+    const provider = type === "cursor-native" ? "cursor" : "grok";
+    return {
+      ...common,
+      type,
+      acpNativeData: {
+        provider,
+        containerId: context.containerId ?? undefined,
+        environmentId: context.environmentId,
+        sessionId: nonEmptyString(value.acpNativeData.sessionId) ?? undefined,
         isLocal: context.isLocal,
       },
     };

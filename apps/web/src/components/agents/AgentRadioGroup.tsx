@@ -1,7 +1,9 @@
 import { useId, useRef } from "react";
-import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
+import { ClaudeIcon, CodexIcon, CursorAgentIcon, GrokBuildIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { LAUNCH_AGENT_OPTIONS, type LaunchAgent } from "@/lib/agent-launch";
 import { cn } from "@/lib/utils";
+import { useConfigStore } from "@/stores";
+import { LEGACY_ENABLED_AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 
 export function AgentIcon({
   agent,
@@ -12,6 +14,8 @@ export function AgentIcon({
 }) {
   if (agent === "claude") return <ClaudeIcon className={className} />;
   if (agent === "codex") return <CodexIcon className={className} />;
+  if (agent === "cursor") return <CursorAgentIcon className={className} />;
+  if (agent === "grok") return <GrokBuildIcon className={className} />;
   return <OpenCodeIcon className={className} />;
 }
 
@@ -37,11 +41,17 @@ export function AgentRadioGroup({
   label,
   descriptions,
 }: AgentRadioGroupProps) {
+  const enabledPlatforms = useConfigStore(
+    (state) => state.config.global.enabledAgentPlatforms ?? LEGACY_ENABLED_AGENT_PLATFORMS,
+  );
+  const options = LAUNCH_AGENT_OPTIONS.filter((option) =>
+    enabledPlatforms.includes(option.value)
+  );
   const groupId = useId();
   const radioRefs = useRef(new Map<LaunchAgent, HTMLInputElement>());
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    const values = LAUNCH_AGENT_OPTIONS.map((option) => option.value);
+    const values = options.map((option) => option.value);
     const index = Math.max(values.indexOf(value), 0);
     let next: number;
     if (event.key === "ArrowRight" || event.key === "ArrowDown") {
@@ -62,8 +72,8 @@ export function AgentRadioGroup({
   };
 
   return (
-    <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label={label}>
-      {LAUNCH_AGENT_OPTIONS.map((option) => {
+    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5" role="radiogroup" aria-label={label}>
+      {options.map((option) => {
         const selected = value === option.value;
         const id = `${groupId}-${option.value}`;
         const description = descriptions?.[option.value];

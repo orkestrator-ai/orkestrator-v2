@@ -5,7 +5,9 @@
  * Held here rather than in one dialog so the review launcher and the build
  * launcher cannot drift on what a catalog is or how a default is resolved.
  */
-export type LaunchAgent = "claude" | "codex" | "opencode";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+
+export type LaunchAgent = AgentPlatform;
 
 export interface AgentModelOption {
   id: string;
@@ -23,11 +25,22 @@ export interface AgentModelOption {
   resolvedModel?: string;
 }
 
-export type AgentModelCatalog = Record<LaunchAgent, AgentModelOption[]>;
+export type AgentModelCatalog =
+  Record<"claude" | "codex" | "opencode", AgentModelOption[]>
+  & Partial<Record<"cursor" | "grok", AgentModelOption[]>>;
+
+export function modelsForAgent(
+  catalog: AgentModelCatalog,
+  agent: LaunchAgent,
+): AgentModelOption[] {
+  return catalog[agent] ?? [{ id: "default", name: "Default", reasoningEfforts: [] }];
+}
 
 export const LAUNCH_AGENT_OPTIONS: Array<{ value: LaunchAgent; label: string }> = [
   { value: "claude", label: "Claude" },
   { value: "codex", label: "Codex" },
+  { value: "cursor", label: "Cursor Agent" },
+  { value: "grok", label: "Grok Build" },
   { value: "opencode", label: "OpenCode" },
 ];
 
@@ -61,7 +74,7 @@ export function firstModelFor(
   catalog: AgentModelCatalog,
   preferredModels?: Partial<Record<LaunchAgent, string>>,
 ): string {
-  const models = catalog[agent];
+  const models = modelsForAgent(catalog, agent);
   return catalogIdFor(models, preferredModels?.[agent])
     ?? models[0]?.id
     ?? "default";
@@ -74,7 +87,7 @@ export function defaultEffortFor(
   preferredEfforts?: Partial<Record<LaunchAgent, string>>,
 ): string {
   const options =
-    catalog[agent].find((model) => model.id === modelId)?.reasoningEfforts ?? [];
+    modelsForAgent(catalog, agent).find((model) => model.id === modelId)?.reasoningEfforts ?? [];
   const preferred = preferredEfforts?.[agent];
   return preferred && options.includes(preferred) ? preferred : "default";
 }

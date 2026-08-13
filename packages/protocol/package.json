@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./agent-activity": "./src/agent-activity.ts",
+    "./agent-platforms": "./src/agent-platforms.ts",
     "./agent-interactions": "./src/agent-interactions.ts",
     "./browser-preview": "./src/browser-preview.ts",
     "./bridge-readiness": "./src/bridge-readiness.ts",

@@ -43,7 +43,7 @@ const DOCKER_SCRIPT = `#!/bin/sh
 printf 'docker %s\n' "$*" >> "$FAKE_COMMAND_LOG"
 
 if [ "$1" = "container" ] && [ "$2" = "prune" ]; then
-  printf 'Deleted Containers:\\nold-container\\n\\nTotal reclaimed space: 768MB\\n'
+  printf 'Deleted Containers:\\nold-container\\nTotal reclaimed space: 768MB\\n'
   exit 0
 fi
 if [ "$1" = "ps" ] && [ "$2" = "-a" ]; then
@@ -227,11 +227,11 @@ describe("direct backend command registry coverage", () => {
     await expect(
       invoke("docker_system_prune", {}, context),
     ).resolves.toEqual({
-      containersDeleted: 1,
+      containersDeleted: 2,
       imagesDeleted: 0,
       networksDeleted: 0,
       volumesDeleted: 0,
-      spaceReclaimed: "768MB",
+      spaceReclaimed: 768_000_000 * 2,
     });
     await expect(invoke("get_docker_system_stats", {}, context)).resolves.toMatchObject({
       containersRunning: 1,
@@ -270,6 +270,10 @@ describe("direct backend command registry coverage", () => {
     expect(log).toContain(
       `docker container prune -f --filter label=orkestrator-owner=${REGISTRY_DOCKER_OWNER}`,
     );
+    expect(log).toContain(
+      "docker container prune -f --filter label=app=orkestrator-v2 --filter label!=orkestrator-owner",
+    );
+    expect(log).not.toContain("docker system prune");
     expect(log).toContain("docker rm -f orphan-container");
     expect(log).not.toContain("docker rm -f assigned-container");
   });

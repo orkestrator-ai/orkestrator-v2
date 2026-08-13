@@ -1103,7 +1103,7 @@ describe("build pipeline protocol", () => {
       currentSessionIndex: 0,
     });
 
-    for (const agent of ["claude", "codex", "opencode"]) {
+    for (const agent of BUILD_PIPELINE_AGENTS) {
       expect(isBuildPipeline(withAgent(agent))).toBe(true);
     }
     // Absent on every snapshot written before per-step harnesses existed; those
@@ -1578,7 +1578,7 @@ describe("execution mode policy", () => {
 
   test("publishes one agent list that the guard is built from", () => {
     expect([...BUILD_PIPELINE_AGENTS].sort())
-      .toEqual(["claude", "codex", "opencode"]);
+      .toEqual(["claude", "codex", "cursor", "grok", "opencode"]);
     expect(Object.isFrozen(BUILD_PIPELINE_AGENTS)).toBe(true);
     // Every published agent must satisfy the snapshot guard, or the list and
     // the validator would disagree about what an agent is.

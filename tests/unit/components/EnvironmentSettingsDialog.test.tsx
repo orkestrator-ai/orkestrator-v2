@@ -275,8 +275,8 @@ describe("EnvironmentSettingsDialog", () => {
       screen
         .getAllByRole("button")
         .map((button) => button.textContent?.trim())
-        .filter((label) => ["Claude", "Codex", "OpenCode"].includes(label ?? "")),
-    ).toEqual(["Claude", "Codex", "OpenCode"]);
+        .filter((label) => ["Claude Code", "Codex", "OpenCode"].includes(label ?? "")),
+    ).toEqual(["Claude Code", "Codex", "OpenCode"]);
     expect(
       Array.from(document.querySelectorAll("label"))
         .map((label) => label.textContent?.trim())

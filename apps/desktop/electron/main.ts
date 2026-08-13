@@ -10,8 +10,17 @@ import { createMainWindow } from "./window.js";
 import { ConnectionManager } from "./connection-manager.js";
 import { installRemoteGatewayRequestAuth } from "./remote-gateway-request-auth.js";
 import { ensurePinnedToolchains } from "./toolchain-manager.js";
-import { createToolchainBootstrapWindow, reportToolchainProgress } from "./toolchain-bootstrap-window.js";
+import { pinnedToolchainArtifacts } from "./toolchain-manifest.js";
+import {
+  chooseAgentPlatforms,
+  createToolchainBootstrapWindow,
+  reportToolchainProgress,
+} from "./toolchain-bootstrap-window.js";
 import { createToolchainProgressController, preparePinnedToolchains } from "./toolchain-startup.js";
+import {
+  loadAgentPlatformSelection,
+  saveAgentPlatformSelection,
+} from "./agent-platform-selection.js";
 import type { BrowserPreviewManager } from "./browser-preview-manager.js";
 import {
   createBrowserPreviewAddressFocusHandler,
@@ -154,6 +163,17 @@ async function startApplication(): Promise<void> {
     resourcesPath: process.resourcesPath,
   });
   const dataDir = app.getPath("userData");
+  const storedPlatformSelection = await loadAgentPlatformSelection(dataDir);
+  const enabledAgentPlatforms = storedPlatformSelection.needsFirstRunChoice
+    ? await chooseAgentPlatforms({ BrowserWindowCtor: BrowserWindow, dirname: __dirname })
+    : storedPlatformSelection.enabled;
+  if (storedPlatformSelection.needsFirstRunChoice) {
+    await saveAgentPlatformSelection(dataDir, enabledAgentPlatforms);
+  }
+  const selectedPlatformSet = new Set(enabledAgentPlatforms);
+  const artifacts = pinnedToolchainArtifacts().filter((artifact) =>
+    selectedPlatformSet.has(artifact.name)
+  );
   const toolchainBinDir = await preparePinnedToolchains({
     dataDir,
     ensure: ensurePinnedToolchains,
@@ -162,6 +182,7 @@ async function startApplication(): Promise<void> {
     showMessageBox: (options) => dialog.showMessageBox(options),
     quit: () => app.quit(),
     logError: (error) => console.error("[Toolchains] Failed to prepare pinned tools:", error),
+    artifacts,
   });
   if (!toolchainBinDir) return;
   backend = await backendProcess.start({

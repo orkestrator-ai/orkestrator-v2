@@ -3,8 +3,20 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { useState } from "react";
 import { AgentIcon, AgentRadioGroup } from "./AgentRadioGroup";
 import type { LaunchAgent } from "@/lib/agent-launch";
+import { useConfigStore } from "@/stores/configStore";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  useConfigStore.setState((state) => ({
+    config: {
+      ...state.config,
+      global: {
+        ...state.config.global,
+        enabledAgentPlatforms: ["claude", "codex", "opencode"],
+      },
+    },
+  }));
+});
 
 function renderGroup(
   overrides: Partial<Parameters<typeof AgentRadioGroup>[0]> = {},
@@ -56,6 +68,27 @@ describe("AgentRadioGroup", () => {
     expect(options).toHaveLength(3);
     expect(options.map((radio) => cardFor(radio).textContent))
       .toEqual(["Claude", "Codex", "OpenCode"]);
+  });
+
+  test("exposes all five agents when every platform is enabled", () => {
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          enabledAgentPlatforms: ["claude", "codex", "cursor", "grok", "opencode"],
+        },
+      },
+    }));
+    renderGroup();
+
+    expect(radios().map((radio) => cardFor(radio).textContent)).toEqual([
+      "Claude",
+      "Codex",
+      "Cursor Agent",
+      "Grok Build",
+      "OpenCode",
+    ]);
   });
 
   test("reports the selected agent and only that agent as checked", () => {
@@ -258,7 +291,7 @@ describe("AgentRadioGroup descriptions", () => {
 
 describe("AgentIcon", () => {
   test("draws a distinct glyph for every agent", () => {
-    const glyphs = (["claude", "codex", "opencode"] as const).map((agent) => {
+    const glyphs = (["claude", "codex", "cursor", "grok", "opencode"] as const).map((agent) => {
       const { container, unmount } = render(<AgentIcon agent={agent} />);
       const svg = container.querySelector("svg");
       expect(svg).not.toBeNull();
@@ -267,7 +300,7 @@ describe("AgentIcon", () => {
       return html;
     });
 
-    expect(new Set(glyphs).size).toBe(3);
+    expect(new Set(glyphs).size).toBe(5);
   });
 
   test("passes its class through to the glyph", () => {

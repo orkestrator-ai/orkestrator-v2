@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
+import { ClaudeIcon, CodexIcon, CursorAgentIcon, GrokBuildIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import {
   Select,
   SelectContent,
@@ -24,6 +24,7 @@ import { Loader2, Network, Plus, Trash2, FolderOpen, ExternalLink, FileText, Bot
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
 import { open as openDialog } from "@/lib/native/dialog";
 import type { Project, RepositoryConfig, PortMapping, PortProtocol, DefaultAgent, AgentStyle, ClaudeNativeBackend } from "@/types";
+import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 
 interface RepositorySettingsProps {
   project: Project;
@@ -473,8 +474,8 @@ export function RepositorySettings({
     }
   }, [defaultEffort, effectiveAgent, selectedCodexModel]);
 
-  const agentLabel = effectiveAgent === "claude" ? "Claude" : effectiveAgent === "opencode" ? "OpenCode" : "Codex";
-  const appDefaultAgentLabel = globalDefaultAgent === "claude" ? "Claude" : globalDefaultAgent === "opencode" ? "OpenCode" : "Codex";
+  const agentLabel = AGENT_PLATFORM_LABELS[effectiveAgent];
+  const appDefaultAgentLabel = AGENT_PLATFORM_LABELS[globalDefaultAgent];
   const projectAgentOptions = [
     {
       value: APP_DEFAULT,
@@ -483,7 +484,7 @@ export function RepositorySettings({
     },
     {
       value: "claude",
-      label: "Claude",
+      label: "Claude Code",
       icon: <ClaudeIcon className="h-4 w-4" />,
     },
     {
@@ -492,11 +493,24 @@ export function RepositorySettings({
       icon: <CodexIcon className="h-4 w-4 text-emerald-400" />,
     },
     {
+      value: "cursor",
+      label: "Cursor Agent",
+      icon: <CursorAgentIcon className="h-4 w-4" />,
+    },
+    {
+      value: "grok",
+      label: "Grok Build",
+      icon: <GrokBuildIcon className="h-4 w-4" />,
+    },
+    {
       value: "opencode",
       label: "OpenCode",
       icon: <OpenCodeIcon className="h-4 w-4 shrink-0" />,
     },
-  ] as const;
+  ].filter((option) =>
+    option.value === APP_DEFAULT
+    || (config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]).includes(option.value as DefaultAgent)
+  );
 
   const hasErrors = projectNameError !== null || !portValidationResult.valid || !filesValidationResult.valid;
 

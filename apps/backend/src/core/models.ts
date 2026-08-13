@@ -13,6 +13,7 @@ import type {
   AgentInteractionResolutionJournal,
   AgentInteractionWorkflowSummary,
 } from "@orkestrator/protocol/agent-interactions";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 export type {
   AgentActivitySource,
@@ -44,7 +45,7 @@ export interface PortMapping {
   protocol: PortProtocol;
 }
 
-export type DefaultAgent = "claude" | "opencode" | "codex";
+export type DefaultAgent = AgentPlatform;
 export type OpenCodeMode = "terminal" | "native";
 export type ClaudeMode = "terminal" | "native";
 export type ClaudeNativeBackend = "sdk" | "tmux";
@@ -241,9 +242,13 @@ export interface Environment {
   opencodePid?: number;
   claudeBridgePid?: number;
   codexBridgePid?: number;
+  cursorBridgePid?: number;
+  grokBridgePid?: number;
   localOpencodePort?: number;
   localClaudePort?: number;
   localCodexPort?: number;
+  localCursorPort?: number;
+  localGrokPort?: number;
   /** Last backend-owned Claude model catalog for this environment. */
   claudeModelCatalog?: ClaudeModelCatalogSnapshot;
   defaultAgent?: DefaultAgent;
@@ -300,6 +305,8 @@ export type ClientEnvironment = Omit<
   | "opencodePid"
   | "claudeBridgePid"
   | "codexBridgePid"
+  | "cursorBridgePid"
+  | "grokBridgePid"
   | "pendingRenamePrompt"
   | "tabTeardownIntents"
 > & {
@@ -392,7 +399,7 @@ export interface PersistedBuildPipeline {
   revision: number;
 }
 
-export type NativeAgentProvider = "claude" | "codex" | "opencode";
+export type NativeAgentProvider = "claude" | "codex" | "opencode" | "cursor" | "grok";
 export const NATIVE_AGENT_SESSION_VERSION = 1 as const;
 
 export interface OpenCodeIncompleteTurnNotice {
@@ -558,6 +565,8 @@ export interface AppConfig {
   version: string;
   desktopConnections?: import("@orkestrator/protocol/connections").StoredDesktopConnections;
   global: {
+    /** Agent systems installed and exposed in launch/review surfaces. */
+    enabledAgentPlatforms?: AgentPlatform[];
     containerResources: { cpuCores: number; memoryGb: number };
     envFilePatterns: string[];
     anthropicApiKey?: string;

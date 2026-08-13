@@ -4621,6 +4621,54 @@ describe("HTTP build pipeline provider (codex)", () => {
   });
 });
 
+describe("HTTP build pipeline provider (ACP)", () => {
+  const cursorConnection: BridgeConnection = {
+    agent: "cursor",
+    baseUrl: "http://cursor.test",
+    authToken: "cursor-token",
+    requestTimeoutMs: 25,
+  };
+
+  test("uses bearer auth and exposes ACP permissions to the fail-closed monitor", async () => {
+    let pending = true;
+    const { provider, requests } = httpProvider((url, init) => {
+      const headers = new Headers(init.headers);
+      expect(headers.get("Authorization")).toBe("Bearer cursor-token");
+      if (url.endsWith("/approvals/approval-1")) {
+        expect(JSON.parse(String(init.body))).toEqual({ decision: "deny" });
+        pending = false;
+        return Response.json({ resolved: true });
+      }
+      if (url.endsWith("/approvals")) {
+        return Response.json({
+          approvals: pending ? [{
+            approvalId: "approval-1",
+            kind: "permissions",
+            permissions: { fileSystem: true },
+            actionable: true,
+            requestedAt: Date.now(),
+            expiresAt: Date.now() + 60_000,
+          }] : [],
+        });
+      }
+      if (url.endsWith("/interactions")) return Response.json({ interactions: [] });
+      return Response.json({ sessionId: "cursor-1" });
+    }, cursorConnection);
+
+    await provider.createSession("review", "Cursor review");
+    const snapshot = await provider.interactions!.listPendingInteractions("cursor-1");
+    expect(snapshot.requests).toHaveLength(1);
+    expect(snapshot.requests[0]).toMatchObject({ provider: "cursor", kind: "permission" });
+    const outcome = await provider.interactions!.resolveInteraction(
+      "cursor-1",
+      snapshot.requests[0]!.id,
+      declineResolution(snapshot.requests[0]!),
+    );
+    expect(outcome.result).toBe("applied");
+    expect(requests[0]?.url).toBe("http://cursor.test/session/create");
+  });
+});
+
 describe("OpenCode build pipeline provider dispatch", () => {
   test("bounds targeted transcript reads at the SDK boundary", async () => {
     const fake = openCodeFake();

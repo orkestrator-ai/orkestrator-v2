@@ -321,6 +321,16 @@ function cleanupCodexNativeTab(envId: string, tabId: string) {
     .catch((err) => console.debug("[PaneLayout] Codex teardown remains pending:", err));
 }
 
+function cleanupAcpNativeTab(envId: string, tab: TabInfo) {
+  if ((tab.type !== "cursor-native" && tab.type !== "grok-native") || !tab.acpNativeData) return;
+  void backend.teardownTab({
+    environmentId: envId,
+    tabId: tab.id,
+    kind: tab.type,
+    sessionId: tab.acpNativeData.sessionId,
+  }).catch((err) => console.debug("[PaneLayout] ACP teardown remains pending:", err));
+}
+
 function cleanupClaudeTmuxTab(envId: string, tabId: string) {
   const store = useClaudeTmuxStore.getState();
   store.resetTab(createClaudeTmuxStateKey(envId, tabId));
@@ -356,6 +366,11 @@ function cleanupTabResources(envId: string, containerId: string | null, tab: Tab
 
   if (tab.type === "codex-native") {
     cleanupCodexNativeTab(envId, tab.id);
+    return;
+  }
+
+  if (tab.type === "cursor-native" || tab.type === "grok-native") {
+    cleanupAcpNativeTab(envId, tab);
     return;
   }
 
@@ -983,7 +998,8 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const hasNativeSessionData =
       (existingTab.type === "claude-native" && !!existingTab.claudeNativeData)
       || (existingTab.type === "codex-native" && !!existingTab.codexNativeData)
-      || (existingTab.type === "opencode-native" && !!existingTab.openCodeNativeData);
+      || (existingTab.type === "opencode-native" && !!existingTab.openCodeNativeData)
+      || ((existingTab.type === "cursor-native" || existingTab.type === "grok-native") && !!existingTab.acpNativeData);
     if (!hasNativeSessionData) return;
 
     const currentSessionId = existingTab.type === "claude-native"
@@ -992,6 +1008,8 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
         ? existingTab.codexNativeData?.sessionId
         : existingTab.type === "opencode-native"
           ? existingTab.openCodeNativeData?.sessionId
+          : existingTab.type === "cursor-native" || existingTab.type === "grok-native"
+            ? existingTab.acpNativeData?.sessionId
           : undefined;
     if (currentSessionId === sessionId) return;
 
@@ -1015,6 +1033,12 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
           return {
             ...tab,
             openCodeNativeData: { ...tab.openCodeNativeData, sessionId },
+          };
+        }
+        if ((tab.type === "cursor-native" || tab.type === "grok-native") && tab.acpNativeData) {
+          return {
+            ...tab,
+            acpNativeData: { ...tab.acpNativeData, sessionId },
           };
         }
         return tab;

@@ -5,6 +5,7 @@ import type {
   TaskSnapshotImage,
 } from "@orkestrator/protocol/build-pipeline";
 import {
+  BUILD_PIPELINE_AGENTS,
   isActiveBuildPhase,
   isBuildPipeline,
 } from "@orkestrator/protocol/build-pipeline";
@@ -404,7 +405,7 @@ export class NativeAgentService {
     if (
       !nonBlank(input.environmentId)
       || !nonBlank(input.logicalSessionKey)
-      || !["claude", "codex", "opencode"].includes(input.agent)
+      || !BUILD_PIPELINE_AGENTS.includes(input.agent)
       || !isValidInteractionMetadata(input)
     ) {
       throw new Error("Invalid native agent session request");
@@ -464,7 +465,7 @@ export class NativeAgentService {
       !nonBlank(input.environmentId)
       || !nonBlank(input.logicalSessionKey)
       || !nonBlank(input.providerSessionId)
-      || !["claude", "codex", "opencode"].includes(input.agent)
+      || !BUILD_PIPELINE_AGENTS.includes(input.agent)
       || !isValidInteractionMetadata(input)
       || (
         input.expectedProviderSessionId !== undefined
@@ -1995,7 +1996,7 @@ export class NativeAgentService {
         .filter((queue) => {
           const agent = queue.queueKey.split("\0", 1)[0];
           return (
-            (agent === "claude" || agent === "codex" || agent === "opencode")
+            BUILD_PIPELINE_AGENTS.includes(agent as BuildPipelineAgent)
             && (queue.messages.length > 0 || queue.inFlight !== undefined)
             && queue.dispatchError === undefined
             && (this.queueRetryAt.get(queue.queueKey) ?? 0) <= now
@@ -2095,7 +2096,7 @@ export class NativeAgentService {
     const agent = queueKey.slice(0, separator) as BuildPipelineAgent;
     const logicalSessionKey = queueKey.slice(separator + 1);
     if (
-      !["claude", "codex", "opencode"].includes(agent)
+      !BUILD_PIPELINE_AGENTS.includes(agent)
       || !nonBlank(logicalSessionKey)
     ) {
       return;

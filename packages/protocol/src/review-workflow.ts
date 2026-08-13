@@ -9,6 +9,7 @@
  */
 
 import { getReviewInstructionValidationError } from "./review-prompt.js";
+import { isAgentPlatform } from "./agent-platforms.js";
 import type {
   AgentInteractionKind,
   AgentInteractionOutcome,
@@ -79,7 +80,7 @@ export const LOOPED_REVIEW_MAX_ARCHIVED_POOLS = 64;
 export const LOOPED_REVIEW_MAX_REQUEST_IDS = 256;
 export const LOOPED_REVIEW_MAX_TRANSCRIPT_ENTRIES = 64;
 
-export type LoopedReviewAgent = "claude" | "codex" | "opencode";
+export type LoopedReviewAgent = "claude" | "codex" | "opencode" | "cursor" | "grok";
 export type LoopedReviewPhase =
   | "preparing"
   | "discovering"
@@ -448,7 +449,7 @@ export function isStartLoopedReviewInput(value: unknown): value is StartLoopedRe
   const input = value as unknown as Partial<StartLoopedReviewInput>;
   return isBoundedNonEmptyString(input.environmentId, LOOPED_REVIEW_MAX_ID_LENGTH)
     && isBoundedNonEmptyString(input.projectId, LOOPED_REVIEW_MAX_ID_LENGTH)
-    && (input.agent === "claude" || input.agent === "codex" || input.agent === "opencode")
+    && isAgentPlatform(input.agent)
     && isBoundedNonEmptyString(input.model, LOOPED_REVIEW_MAX_MODEL_LENGTH)
     && isSafeLoopedReviewTargetBranch(input.targetBranch)
     && (input.reasoningEffort === undefined || isBoundedNonEmptyString(
@@ -629,7 +630,7 @@ function isInteractionTranscript(value: unknown): value is LoopedReviewInteracti
     && value.length <= LOOPED_REVIEW_MAX_TRANSCRIPT_ENTRIES
     && value.every((entry) => isRecord(entry)
       && isBoundedNonEmptyString(entry.id, LOOPED_REVIEW_MAX_ID_LENGTH)
-      && (entry.provider === "claude" || entry.provider === "codex" || entry.provider === "opencode")
+      && isAgentPlatform(entry.provider)
       && SESSION_PHASES.has(entry.phase)
       && isNonNegativeInteger(entry.requestedAt) && isNonNegativeInteger(entry.resolvedAt)
       && entry.outcome === "auto-declined-headless"
@@ -645,7 +646,7 @@ function isPendingInteractionResolution(
     && isBoundedNonEmptyString(value.sessionKey, LOOPED_REVIEW_MAX_ID_LENGTH)
     && isBoundedNonEmptyString(value.sessionId, LOOPED_REVIEW_MAX_ID_LENGTH)
     && isBoundedNonEmptyString(value.interactionId, LOOPED_REVIEW_MAX_ID_LENGTH)
-    && (value.provider === "claude" || value.provider === "codex" || value.provider === "opencode")
+    && isAgentPlatform(value.provider)
     && typeof value.kind === "string"
     && (AGENT_INTERACTION_KINDS as readonly string[]).includes(value.kind)
     && SESSION_PHASES.has(value.phase)
@@ -703,8 +704,7 @@ function isFailure(value: unknown): value is LoopedReviewFailure {
     && (value.interaction === undefined || (isRecord(value.interaction)
       && isBoundedNonEmptyString(value.interaction.requestId, LOOPED_REVIEW_MAX_ID_LENGTH)
       && isBoundedNonEmptyString(value.interaction.sessionId, LOOPED_REVIEW_MAX_ID_LENGTH)
-      && (value.interaction.provider === "claude" || value.interaction.provider === "codex"
-        || value.interaction.provider === "opencode")
+      && isAgentPlatform(value.interaction.provider)
       && typeof value.interaction.kind === "string"
       && (AGENT_INTERACTION_KINDS as readonly string[]).includes(value.interaction.kind)));
 }
@@ -719,7 +719,7 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
     || !isBoundedNonEmptyString(workflow.id, LOOPED_REVIEW_MAX_ID_LENGTH)
     || !isBoundedNonEmptyString(workflow.environmentId, LOOPED_REVIEW_MAX_ID_LENGTH)
     || !isBoundedNonEmptyString(workflow.projectId, LOOPED_REVIEW_MAX_ID_LENGTH)
-    || (workflow.agent !== "claude" && workflow.agent !== "codex" && workflow.agent !== "opencode")
+    || !isAgentPlatform(workflow.agent)
     || !isBoundedNonEmptyString(workflow.model, LOOPED_REVIEW_MAX_MODEL_LENGTH)
     || (workflow.reasoningEffort !== undefined && !isBoundedNonEmptyString(
       workflow.reasoningEffort,

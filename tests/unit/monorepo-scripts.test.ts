@@ -82,6 +82,7 @@ describe("monorepo orchestration scripts", () => {
     const source = read("scripts/test-all.ts");
     expect(source).toContain("Promise.all(");
     expect(source).toContain('"--filter=@orkestrator/web-public"');
+    expect(source).toContain('"--filter=orkestrator"');
     expect(source).toContain('args: ["run", "codex:protocol:check"]');
     expect(source).toContain('args: ["scripts/test-ios.ts"]');
     expect(source).toContain('dependencies.platform === "darwin"');
@@ -122,6 +123,7 @@ describe("monorepo orchestration scripts", () => {
       "apps/web/package.json",
       "apps/backend/package.json",
       "apps/web-public/package.json",
+      "packages/cli/package.json",
     ]) {
       const scripts = (JSON.parse(read(pkg)) as { scripts?: Record<string, string> }).scripts ?? {};
       expect(scripts.test).toContain("--parallel");

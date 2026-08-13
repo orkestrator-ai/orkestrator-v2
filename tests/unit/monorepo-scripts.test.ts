@@ -101,6 +101,22 @@ describe("monorepo orchestration scripts", () => {
     }
   });
 
+  test("publishing the CLI is gated on the packed-tarball smoke test", () => {
+    // The smoke test installs the real tarball from a registry-style layout, so
+    // it needs the network and stays out of the default suite. Chaining it into
+    // publish is what stops a broken package reaching users unverified.
+    const scripts = (JSON.parse(read("package.json")) as {
+      scripts?: Record<string, string>;
+    }).scripts ?? {};
+
+    expect(scripts["smoke:cli"]).toBe("bun run --cwd packages/cli smoke:pack");
+    expect(scripts["publish:cli"]).toContain("bun run smoke:cli &&");
+    expect(scripts["publish:cli"]).toContain("bun publish --cwd packages/cli");
+    // The smoke script must verify the runtime dependencies actually resolve
+    // from the installed layout, not just that the backend boots.
+    expect(read("packages/cli/scripts/smoke-packed.ts")).toContain("Bun.resolveSync(specifier, directory)");
+  });
+
   test("full tests run workspace, root, bridge, and protocol checks concurrently", () => {
     // The groups are independent, so they run at once rather than in sequence.
     // Behaviour is asserted properly in tests/unit/test-all.test.ts; this only

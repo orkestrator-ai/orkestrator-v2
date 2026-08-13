@@ -27,12 +27,10 @@
     "test:workspace": "bun test tests --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
     "typecheck": "bunx tsc --noEmit -p tsconfig.json"
   },
+  "//dependencies": "Only modules scripts/build.ts leaves unbundled belong here; everything else is inlined into dist/ and resources/. tests/cli.test.ts derives this list from the built artifacts and fails if it drifts.",
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.228",
-    "@anthropic-ai/sdk": "0.116.0",
-    "@modelcontextprotocol/sdk": "1.29.0",
-    "sharp": "0.35.1",
-    "zod": "4.4.3"
+    "sharp": "0.35.1"
   },
   "publishConfig": {
     "access": "public"

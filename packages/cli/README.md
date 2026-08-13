@@ -44,3 +44,22 @@ curl -fsSL https://orkestrator.dev/install.sh | \
 
 macOS and Linux are supported. Docker is required for container environments;
 Tailscale is required only for tailnet access and Tailscale Serve.
+
+## Publishing
+
+`dependencies` here lists only the modules `scripts/build.ts` leaves unbundled;
+everything else is inlined into `dist/` and `resources/`. `tests/cli.test.ts`
+derives that list from the built artifacts, so adding a dependency the bundles do
+not resolve — or bumping one in `apps/backend` or `bridges/` without mirroring it
+here — fails the suite.
+
+Publish from the repository root:
+
+```bash
+bun run publish:cli
+```
+
+That runs `smoke:cli` first, which packs the tarball, installs it into a scratch
+project, checks the unbundled dependencies resolve from the installed layout, and
+starts and stops the backend. It needs network access, which is why it is a
+publish gate rather than part of `bun run test`.

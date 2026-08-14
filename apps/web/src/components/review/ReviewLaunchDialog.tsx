@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Bot, BrainCircuit, Layers3 } from "lucide-react";
+import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,7 +18,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AgentRadioGroup } from "@/components/agents/AgentRadioGroup";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import {
@@ -50,51 +50,18 @@ export interface ReviewLaunchSelection {
 export const REVIEW_TAB_OPTIONS: Array<{
   value: ReviewTabType;
   label: string;
-  description: string;
   agent: ReviewAgent;
   mode: "native";
 }> = [
-  {
-    value: "claude",
-    label: "Claude Native",
-    description: "Agent SDK Markdown review",
-    agent: "claude",
-    mode: "native",
-  },
-  {
-    value: "codex",
-    label: "Codex Native",
-    description: "App-server Markdown review",
-    agent: "codex",
-    mode: "native",
-  },
-  {
-    value: "cursor",
-    label: "Cursor Agent",
-    description: "Cursor ACP review",
-    agent: "cursor",
-    mode: "native",
-  },
-  {
-    value: "grok",
-    label: "Grok Build",
-    description: "Grok ACP review",
-    agent: "grok",
-    mode: "native",
-  },
-  {
-    value: "opencode",
-    label: "OpenCode Native",
-    description: "SDK v2 Markdown review",
-    agent: "opencode",
-    mode: "native",
-  },
+  { value: "claude", label: "Claude Native", agent: "claude", mode: "native" },
+  { value: "codex", label: "Codex Native", agent: "codex", mode: "native" },
+  { value: "cursor", label: "Cursor Agent", agent: "cursor", mode: "native" },
+  { value: "grok", label: "Grok Build", agent: "grok", mode: "native" },
+  { value: "opencode", label: "OpenCode Native", agent: "opencode", mode: "native" },
 ];
 
-const REVIEW_AGENT_DESCRIPTIONS: Partial<Record<ReviewAgent, string>> =
-  Object.fromEntries(
-    REVIEW_TAB_OPTIONS.map((option) => [option.agent, option.description]),
-  );
+/** Every provider the picker's platform rail offers, in tab order. */
+const REVIEW_PLATFORMS: ReviewAgent[] = REVIEW_TAB_OPTIONS.map((option) => option.agent);
 
 export function getReviewAgent(tabType: ReviewTabType): ReviewAgent {
   return REVIEW_TAB_OPTIONS.find((option) => option.value === tabType)?.agent ?? "claude";
@@ -212,6 +179,25 @@ export function ReviewLaunchDialog({
       ? reasoningEffort
       : "default";
 
+  // The picker owns provider, model and reasoning together, so it is fed every
+  // provider's catalog at once rather than the selected provider's slice.
+  const pickerModels = useMemo<AgentModel[]>(
+    () => REVIEW_PLATFORMS.flatMap((platform) =>
+      modelsForAgent(catalog, platform).map((option) => ({
+        platform,
+        id: option.id,
+        label: option.name,
+        description: option.description,
+      }))),
+    [catalog],
+  );
+  const reasoningOptions: AgentReasoningOption[] = effortAvailable
+    ? [
+        { id: "default", label: "Default" },
+        ...reasoningEfforts.map((effort) => ({ id: effort, label: effortLabel(effort) })),
+      ]
+    : [];
+
   const summary = useMemo(() => {
     const label = REVIEW_TAB_OPTIONS.find((option) => option.value === tabType)?.label;
     const effort = effectiveEffort === "default"
@@ -244,14 +230,27 @@ export function ReviewLaunchDialog({
     ));
   };
 
-  const handleModelChange = (nextModel: string) => {
-    setModel(nextModel);
+  /**
+   * Applies a provider and a model in one update.
+   *
+   * The picker lists every provider's models, so a chosen row can belong to a
+   * provider other than the selected one. Setting them separately would resolve
+   * the new model's effort against the previous provider's catalog.
+   */
+  const handleModelSelect = (nextModel: AgentModel) => {
+    const nextAgent = nextModel.platform as ReviewAgent;
+    setTabType(nativeTabType(nextAgent));
+    setModel(nextModel.id);
     setReasoningEffort(defaultEffortFor(
-      agent,
-      nextModel,
+      nextAgent,
+      nextModel.id,
       catalog,
       preferredReasoningEfforts,
     ));
+  };
+
+  const handleModelChange = (nextModel: string) => {
+    handleModelSelect({ platform: agent, id: nextModel, label: nextModel });
   };
 
   const title = kind === "looped"
@@ -314,101 +313,39 @@ export function ReviewLaunchDialog({
               aria-label="Review configuration"
               className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-6"
             >
-              <Step number={1} icon={<Bot className="size-4" />}>
-              <Label className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
-                Native agent
-              </Label>
-              <AgentRadioGroup
-                value={agent}
-                onChange={handleAgentChange}
-                label="Review provider"
-                descriptions={REVIEW_AGENT_DESCRIPTIONS}
-              />
-              </Step>
-
-              <Step number={2} icon={<Bot className="size-4" />}>
-              <Label htmlFor="review-model" className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
-                Model
-              </Label>
-              {agent === "opencode" ? (
-                <AgentModelPicker
-                  id="review-model"
-                  ariaLabel="Model"
-                  models={models.map((option) => ({
-                    platform: "opencode" as const,
-                    id: option.id,
-                    label: option.name,
-                    description: option.description,
-                  }))}
-                  enabledPlatforms={["opencode"]}
-                  selectedPlatform="opencode"
-                  favorites={favorites}
-                  onToggleFavorite={toggleFavorite}
-                  selectedModelId={selectedModel?.id ?? model}
-                  selectedModelLabel={selectedModel?.name ?? "Choose a model"}
-                  onModelChange={handleModelChange}
-                  reasoningOptions={[]}
-                  title="Review model"
-                  className="min-h-11 w-full border border-zinc-700/80 bg-zinc-900 py-2.5"
-                />
-              ) : (
-                <Select value={selectedModel?.id ?? model} onValueChange={handleModelChange}>
-                  <SelectTrigger
-                    id="review-model"
-                    className="min-h-11 w-full border-zinc-700/80 bg-zinc-900 py-2.5 data-[size=default]:h-auto"
-                  >
-                    <span className="flex min-w-0 flex-1 flex-col text-left">
-                      <span className="truncate text-sm">{selectedModel?.name ?? "Choose a model"}</span>
-                      {selectedModel?.description && (
-                        <span className="truncate text-[11px] font-normal text-zinc-500">
-                          {selectedModel.description}
-                        </span>
-                      )}
-                    </span>
-                  </SelectTrigger>
-                  <SelectContent position="popper" className="max-h-72">
-                    {models.map((option) => (
-                      <SelectItem key={option.id} value={option.id} className="py-2">
-                        <span>
-                          <span className="block">{option.name}</span>
-                          {option.description && (
-                            <span className="block max-w-[28rem] truncate text-[11px] text-zinc-500">
-                              {option.description}
-                            </span>
-                          )}
-                        </span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-            </Step>
-
               <Step
-                number={3}
-                icon={<BrainCircuit className="size-4" />}
+                number={1}
+                icon={<Bot className="size-4" />}
                 last={kind !== "looped"}
               >
-              <Label htmlFor="review-effort" className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
-                Reasoning effort
+              {/* The visible label has to read the same as the trigger's
+                  `ariaLabel`, or speech input cannot address the control by
+                  the name a sighted user can see. */}
+              <Label htmlFor="review-model" className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
+                Agent, model and reasoning
               </Label>
-              <Select
-                value={effectiveEffort}
-                onValueChange={setReasoningEffort}
-                disabled={!effortAvailable}
-              >
-                <SelectTrigger id="review-effort" className="h-11 w-full border-zinc-700/80 bg-zinc-900">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="default">Default</SelectItem>
-                  {reasoningEfforts.map((effort) => (
-                    <SelectItem key={effort} value={effort}>
-                      {effortLabel(effort)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <AgentModelPicker
+                id="review-model"
+                ariaLabel="Agent, model and reasoning"
+                models={pickerModels}
+                enabledPlatforms={REVIEW_PLATFORMS}
+                selectedPlatform={agent}
+                favorites={favorites}
+                onToggleFavorite={toggleFavorite}
+                onPlatformChange={handleAgentChange}
+                selectedModelId={selectedModel?.id ?? model}
+                selectedModelLabel={selectedModel?.name ?? "Choose a model"}
+                onModelChange={handleModelChange}
+                onModelSelect={handleModelSelect}
+                reasoningOptions={reasoningOptions}
+                selectedReasoningId={effectiveEffort}
+                selectedReasoningLabel={
+                  reasoningOptions.find((option) => option.id === effectiveEffort)?.label
+                }
+                onReasoningChange={setReasoningEffort}
+                title="Choose the review agent, model and reasoning"
+                className="min-h-11 w-full max-w-none border border-zinc-700/80 bg-zinc-900 py-2.5 text-sm text-foreground md:max-w-none md:flex-1"
+              />
               {!effortAvailable && (
                 <p className="mt-1.5 text-xs text-zinc-500">
                   This model uses its default reasoning setting.
@@ -417,7 +354,7 @@ export function ReviewLaunchDialog({
               </Step>
 
               {kind === "looped" && (
-                <Step number={4} icon={<Layers3 className="size-4" />} last>
+                <Step number={2} icon={<Layers3 className="size-4" />} last>
                 <Label htmlFor="review-pass-allowance" className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
                   Initial review-pass allowance
                 </Label>

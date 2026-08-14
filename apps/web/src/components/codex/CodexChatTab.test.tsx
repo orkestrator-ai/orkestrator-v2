@@ -3569,6 +3569,13 @@ describe("CodexChatTab", () => {
 
   test("updates an active idle tab when another client starts a turn", async () => {
     const externalTurnStarted = deferred<void>();
+    const queuedUserMessage: TestCodexMessage = {
+      id: "queued-user-prompt",
+      role: "user",
+      content: "Address all review findings",
+      parts: [{ type: "text", content: "Address all review findings" }],
+      createdAt: "2026-08-02T09:30:00.000Z",
+    };
     const externalMessage = createMessage(
       "mobile-address-all",
       "Addressing the review findings",
@@ -3584,6 +3591,11 @@ describe("CodexChatTab", () => {
             phase: "running",
             turnStartedAt: "2026-08-02T09:30:00.000Z",
           },
+        };
+        yield {
+          type: "message.updated",
+          sessionId: SESSION_ID,
+          data: { message: queuedUserMessage },
         };
         yield {
           type: "message.updated",
@@ -3605,8 +3617,9 @@ describe("CodexChatTab", () => {
       expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
         isLoading: true,
         loadingStartedAt: Date.parse("2026-08-02T09:30:00.000Z"),
-        messages: [externalMessage],
+        messages: [queuedUserMessage, externalMessage],
       });
+      expect(screen.queryByText("Address all review findings")).not.toBeNull();
       expect(screen.queryByText("Codex is thinking...")).not.toBeNull();
     });
   });
@@ -7180,6 +7193,104 @@ describe("CodexChatTab", () => {
       expect(session?.messages.some((message) => message.content === composeText)).toBe(false);
       expect(session?.error).toBe("Failed to send prompt");
     });
+  });
+
+  test("removes a live user echo when the bridge definitively rejects the prompt", async () => {
+    composeText = "This dispatch was rejected";
+    const sendStarted = deferred<void>();
+    const retractionDelivered = deferred<void>();
+    const authoritativeUser: TestCodexMessage = {
+      id: "rejected-authoritative-user",
+      role: "user",
+      content: composeText,
+      parts: [{ type: "text", content: composeText }],
+      createdAt: "2026-08-14T12:00:00.000Z",
+    };
+    const assistant = createMessage("rejected-assistant", "");
+    mockSubscribeToEvents.mockImplementation(
+      (_client: unknown, signal?: AbortSignal) => (async function* () {
+        await sendStarted.promise;
+        if (signal?.aborted) return;
+        yield {
+          type: "message.updated",
+          sessionId: SESSION_ID,
+          data: { message: authoritativeUser },
+        };
+        yield {
+          type: "message.updated",
+          sessionId: SESSION_ID,
+          data: { message: assistant },
+        };
+        // The bridge retracts the whole exchange, one frame per removed id.
+        yield {
+          type: "message.updated",
+          sessionId: SESSION_ID,
+          data: { removedMessageId: authoritativeUser.id },
+        };
+        yield {
+          type: "message.updated",
+          sessionId: SESSION_ID,
+          data: { removedMessageId: assistant.id },
+        };
+        retractionDelivered.resolve();
+        await waitForAbort(signal);
+      })(),
+    );
+    mockSendPrompt.mockImplementation(async () => {
+      sendStarted.resolve();
+      await retractionDelivered.promise;
+      return { outcome: "rejected", httpStatus: 503 } as const;
+    });
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => {
+      const session = useCodexStore.getState().sessions.get(SESSION_KEY);
+      expect(session?.messages.some((message) => message.content === composeText)).toBe(false);
+      expect(session?.messages.some((message) => message.id === assistant.id)).toBe(false);
+      expect(session?.error).toBe("Failed to send prompt (HTTP 503)");
+    });
+  });
+
+  test("coalesces a multi-frame prompt retraction into a single transcript read", async () => {
+    // A retraction emits one frame per removed id. Awaiting each one inline
+    // stalled the drain behind two full reads, and the second landed on a store
+    // the first had already replaced, so the mutated-during-request bail threw
+    // its result away. Both frames must join the same in-flight read.
+    const startFrames = deferred<void>();
+    const framesDelivered = deferred<void>();
+    mockSubscribeToEvents.mockImplementation(
+      (_client: unknown, signal?: AbortSignal) => (async function* () {
+        await startFrames.promise;
+        if (signal?.aborted) return;
+        yield {
+          type: "message.updated",
+          sessionId: SESSION_ID,
+          data: { removedMessageId: "retracted-user" },
+        };
+        yield {
+          type: "message.updated",
+          sessionId: SESSION_ID,
+          data: { removedMessageId: "retracted-assistant" },
+        };
+        framesDelivered.resolve();
+        await waitForAbort(signal);
+      })(),
+    );
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+    await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+    mockGetSessionMessages.mockClear();
+
+    startFrames.resolve();
+    await framesDelivered.promise;
+    await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalledTimes(1));
+    // Still one once everything queued behind the frames has settled.
+    await Promise.resolve();
+    expect(mockGetSessionMessages).toHaveBeenCalledTimes(1);
   });
 
   test("keeps the turn locked when prompt acceptance is ambiguous and status is unavailable", async () => {

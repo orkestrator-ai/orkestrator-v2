@@ -33,6 +33,18 @@ history rather than two partial ones.
 - **Suite counts:** 5,548 tests across 227 files; 5,546 passed, 1 skipped, and 1 failed in 21.24 seconds.
 - **Isolated rerun:** `bun test src/components/build-pipeline/BuildChatTab.test.tsx` from `apps/web` -> 75 passed, 0 failed, 230 assertions in 3.54 seconds; the affected test passed in 2,718.90 ms.
 - **Hypothesis:** The case holds a mocked backend send promise, waits for the in-flight render, releases it, then waits for the spinner to disappear. It already consumes more than half of Bun's outer budget in isolation, so worker scheduling and React commit latency under the aggregate pool can exhaust that budget even when both controlled transitions occur correctly. A deterministic signal for the two React commits, or a narrowly increased outer budget, should be evaluated before changing product behavior.
+- **Recurrence (Codex user-echo follow-up, 2026-08-14):** `bun run test` ran the web package as `bun test src --parallel=2` alongside the other aggregate groups. The case timed out after 5,000 ms (reported duration 5,085.96 ms); the web package reported 5,644 passed, 1 skipped, and 2 failed across 5,647 tests, while the full aggregate reported 14,072 passed, 13 skipped, and 2 failed across 14,087 tests. The immediate isolated rerun, `bun test ./src/components/build-pipeline/BuildChatTab.test.tsx` from `apps/web`, passed all 75 tests with 230 assertions in 4.25 seconds; the affected case passed in 3,061.64 ms. This is the same timeout shape as the original observation and does not touch the Codex files changed by the follow-up.
+
+## `authoritative resync > converges renderer collections through the real command boundary after a backend restart` (`apps/web/src/lib/store-resource-sync.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Original command:** `bun run test` (web workspace task: `bun test src --parallel=2`).
+- **Worker configuration:** Two Bun web workers while the remaining workspace packages, root, bridge, protocol-lockfile, and iOS groups ran through the aggregate runner.
+- **Failure:** `expect(received).toEqual(expected)` at `store-resource-sync.test.ts:1677`; the expected single-project collection was `[]` after the simulated backend restart (duration: 281.65 ms).
+- **Suite counts:** Web package: 5,647 total, 5,644 passed, 1 skipped, 2 failed. Full aggregate: 14,087 total, 14,072 passed, 13 skipped, 2 failed.
+- **Isolated rerun:** `bun test ./src/lib/store-resource-sync.test.ts` from `apps/web` -> 66 passed, 0 failed, 144 assertions in 7.19 seconds; the affected case passed in 233.76 ms.
+- **Hypothesis:** No root cause is established from one aggregate-only occurrence. The failure was a missing project collection after the test's real backend restart boundary, while the same boundary converged in the immediate isolated run; future recurrence should capture backend process timing and resource-resync generation ordering before changing the product assertion.
 
 ## `web-public install.sh > runs on both supported platforms` (`tests/unit/install-script.test.ts`)
 
@@ -60,6 +72,20 @@ history rather than two partial ones.
 - **Root cause:** Bun treats the bare positional argument `tests` as a substring path filter. The aggregate root command therefore selected both `./tests` and `packages/cli/tests` while Turbo independently ran the CLI workspace task. The CLI build starts by recursively removing `packages/cli/dist` and `packages/cli/resources`, so the duplicate root tests could inspect or execute those paths during restaging.
 - **Fix:** The aggregate runner now passes the explicit relative path `./tests`, which Bun scans as a directory and which excludes package-owned test directories. The CLI package remains covered once by its Turbo workspace task.
 - **Verification:** `bun test packages/cli/tests/cli.test.ts` passed 8 tests with 0 failures and 27 assertions in 2.46 seconds. The corrected `bun run test` aggregate then passed the workspace group (CLI 8/8), root group (3,881 passed, 1 skipped, 0 failed), bridges (2,318 passed, 11 skipped, 0 failed), protocol lockfile, and iOS (40 passed, 0 failed).
+
+## `orkestrator CLI package` packaged-backend lifecycle (`packages/cli/tests/cli.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Original command:** `bun run test` (workspace group, Turbo task `@orkestrator/cli#test:workspace`).
+- **Worker configuration:** Turbo's workspace group running concurrently with the root, bridge, and protocol-lockfile groups. Unlike the resolved built-artifact flake above, the CLI file was selected exactly once — the duplicate-selection root cause fixed there does not apply here.
+- **Failure:** Two cases in the same run.
+  1. `starts and gracefully stops the packaged backend` (4,327.86 ms): `expect(received).toBe(expected)`, `Expected: 0`, `Received: 143`, at `cli.test.ts:267:55`, followed by `killed 1 dangling process`. 143 is SIGTERM, so the packaged backend did not complete its graceful shutdown inside the window the test allows before the harness force-kills it.
+  2. `starts when the caller's environment already sets NODE_ENV` (5,001.07 ms): `this test timed out after 5000ms`, plus an unhandled `error: Packaged backend did not become ready:` (empty stderr payload) from `startPackagedBackend` at `cli.test.ts:145:15`, called from `cli.test.ts:274:45`.
+- **Suite counts:** CLI package 6 passed, 2 failed, 1 error; Turbo reported `Tasks: 5 successful, 7 total` with `Failed: orkestrator#test:workspace`. Concurrent groups were green: root 3,903 passed / 1 skipped / 0 failed; bridges 2,372 passed / 11 skipped / 0 failed; codex protocol lockfile passed. Turbo aborted the workspace group on this failure, so the web, desktop, and web-public workspace tasks did not execute in that run and iOS never started.
+- **Isolated rerun:** `bun run --cwd packages/cli test` (builds, then `bun test tests --parallel`) -> 8 passed, 0 failed, 27 assertions in 2.17 seconds. Both affected cases passed.
+- **Hypothesis:** No root cause is established from one occurrence. Both cases spawn the real packaged backend and wait on a fixed wall-clock budget — readiness in one, graceful exit in the other — while three other test groups saturate the machine. Neither failure mode involves a missing artifact, which is what separates this from the resolved entry above. A recurrence should capture backend startup and shutdown timings before the budgets are changed, since raising them would also hide a genuine shutdown regression.
+- **Collateral note:** Because a workspace-group failure aborts the remaining Turbo tasks, this flake silently drops web/desktop/web-public coverage from an aggregate run. Treat a workspace-group failure as "the rest of that group did not run", not as "the rest of that group passed".
 
 ## `AcpChatTab > keeps a rejected initial prompt available for a remount retry` (`apps/web/src/components/acp/AcpChatTab.test.tsx`)
 

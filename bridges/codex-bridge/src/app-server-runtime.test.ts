@@ -2265,7 +2265,14 @@ describe("session lifecycle", () => {
       (event) => event.type === "message.updated"
         && (event.data?.message as { role?: unknown } | undefined)?.role === "assistant",
     );
+    const initialUserUpdates = h.events.filter(
+      (event) => event.type === "message.updated"
+        && (event.data?.message as { role?: unknown } | undefined)?.role === "user",
+    );
+    expect(initialUserUpdates).toHaveLength(1);
     expect(initialAssistantUpdates).toHaveLength(1);
+    expect(h.events.indexOf(initialUserUpdates[0]!))
+      .toBeLessThan(h.events.indexOf(initialAssistantUpdates[0]!));
     expect(
       (initialAssistantUpdates[0]!.data?.message as { revision?: number }).revision,
     ).toBe(1);
@@ -2955,6 +2962,10 @@ describe("at-most-once dispatch", () => {
     // The server said it did not accept the request, so the id is reusable.
     expect(h.runtime.getJournal().classify("req-1").action).toBe("dispatch");
     expect(h.runtime.getStatus(sessionId)!.phase).toBe("failed");
+    expect(await h.runtime.getMessages(sessionId)).toEqual([]);
+    expect(
+      h.events.filter((event) => typeof event.data?.removedMessageId === "string"),
+    ).toHaveLength(2);
   });
 
   test("an initial prompt retries one definite overload inside the bridge", async () => {
@@ -3231,6 +3242,10 @@ describe("at-most-once dispatch", () => {
     expect(outcome).toMatchObject({ ok: false });
     expect(attempts).toBe(1);
     expect(h.runtime.getStatus(sessionId)?.status).not.toBe("running");
+    expect(await h.runtime.getMessages(sessionId)).toEqual([]);
+    expect(
+      h.events.filter((event) => typeof event.data?.removedMessageId === "string"),
+    ).toHaveLength(2);
   });
 
   test("the default retry delay applies when no override is configured", async () => {
@@ -3505,6 +3520,10 @@ describe("at-most-once dispatch", () => {
     expect(h.child().requests.some((request) => request.method === "turn/start"))
       .toBe(false);
     expect(h.runtime.getJournal().classify("existing").action).toBe("reconcile");
+    expect(await h.runtime.getMessages(sessionId)).toEqual([]);
+    expect(
+      h.events.filter((event) => typeof event.data?.removedMessageId === "string"),
+    ).toHaveLength(2);
   });
 
   test("an oversized persisted journal blocks dispatch before thread creation", async () => {
@@ -3629,6 +3648,22 @@ describe("at-most-once dispatch", () => {
     expect(h.runtime.getStatus(sessionId)!.phase).not.toBe("recovering");
     // Absent means it provably did not run, so the id is reusable.
     expect(h.runtime.getJournal().classify("req-1").action).toBe("dispatch");
+    /*
+     * Absent is as definite as an explicit rejection, so the exchange announced
+     * before the write has to go with it. Leaving it behind strands a prompt
+     * bubble and a blank reply for a turn `thread/read` just proved never
+     * existed, and the renderer cannot clean it up itself: its own rollback
+     * targets the optimistic id, which this turn's authoritative user echo
+     * already retired.
+     */
+    const survivingMessages = (await h.runtime.getMessages(sessionId))!;
+    expect(survivingMessages.map((message) => message.content))
+      .not.toContain("second");
+    expect(survivingMessages.some((message) => message.content === "first"))
+      .toBe(true);
+    expect(
+      h.events.filter((event) => typeof event.data?.removedMessageId === "string"),
+    ).toHaveLength(2);
 
     hangNextTurn = false;
     const next = await h.runtime.prompt(sessionId, {
@@ -3694,6 +3729,19 @@ describe("at-most-once dispatch", () => {
     expect(h.runtime.getStatus(sessionId)?.turnStartedAt)
       .toBe("2026-08-01T12:05:00.000Z");
     expect(h.runtime.getJournal().get("req-1")).toMatchObject({ state: "accepted" });
+    /*
+     * The safety half of retraction. This turn is executing, so withdrawing its
+     * rows would erase a prompt the user really sent and blank the row its
+     * output is about to stream into. Only a *proven* non-dispatch retracts.
+     */
+    expect(
+      (await h.runtime.getMessages(sessionId))!.some(
+        (message) => message.content === "second",
+      ),
+    ).toBe(true);
+    expect(
+      h.events.some((event) => typeof event.data?.removedMessageId === "string"),
+    ).toBe(false);
 
     // The adopted turn is tracked, so its terminal event finalizes normally.
     const adoptedTurnIdle = h.waitForEvent(
@@ -3941,6 +3989,19 @@ describe("at-most-once dispatch", () => {
     await new Promise((resolve) => setTimeout(resolve, 60));
     // Unresolvable, but bounded: `recovering` can never be permanent.
     expect(h.runtime.getStatus(sessionId)!.phase).not.toBe("recovering");
+    /*
+     * Unresolvable is not the same as proven-absent. Nothing here ever showed
+     * the write did not land, so the prompt stays on screen; only `rejected`
+     * and a reconciled `absent` retract.
+     */
+    expect(
+      (await h.runtime.getMessages(sessionId))!.some(
+        (message) => message.content === "second",
+      ),
+    ).toBe(true);
+    expect(
+      h.events.some((event) => typeof event.data?.removedMessageId === "string"),
+    ).toBe(false);
     hangNextTurn = false;
     expect((await h.runtime.prompt(sessionId, {
       prompt: "third",
@@ -6758,7 +6819,14 @@ describe("slash commands", () => {
 
     expect(outcome).toMatchObject({ ok: true });
     expect(h.child().requests.some((r) => r.method === "turn/start")).toBe(false);
-    const assistant = h.events.find((event) => event.type === "message.updated");
+    const messageUpdates = h.events.filter(
+      (event) => event.type === "message.updated"
+        && (event.data?.message as { role?: unknown } | undefined)?.role,
+    );
+    expect(messageUpdates.map(
+      (event) => (event.data?.message as { role?: unknown }).role,
+    )).toEqual(["user", "assistant"]);
+    const assistant = messageUpdates[1];
     expect(
       (assistant?.data?.message as { content: string } | undefined)?.content,
     ).toContain("Available Codex slash commands");

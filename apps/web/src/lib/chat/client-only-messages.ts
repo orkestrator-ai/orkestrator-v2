@@ -101,12 +101,28 @@ function getPartFingerprint(part: NativeMessagePart): string {
  * Sorting cannot merge two genuinely different messages: the aggregate
  * `content` is part of the same fingerprint and is order-sensitive, so a
  * message whose text parts are reordered still differs here.
+ *
+ * Empty text parts are dropped before fingerprinting because the agents
+ * disagree about whether an attachment-only prompt carries one. The Codex
+ * bridge omits it (`appendUserMessage` guards on `prompt.length > 0`), while
+ * the OpenCode client always sends `{ type: "text", text: message }` and the
+ * server echoes whatever it was given. This helper is shared, so matching on
+ * the presence of a zero-length text part would leave one of the two agents
+ * duplicating every attachment-only prompt beside its echo. An empty text part
+ * carries no identity — the aggregate `content` already covers the prompt
+ * text — so ignoring it cannot merge two genuinely different messages.
  */
 function getMessageFingerprint(message: Pick<NativeMessage, "role" | "content" | "parts">): string {
   return JSON.stringify({
     role: message.role,
     content: normalizeMessageContent(message.content),
-    parts: message.parts.map(getPartFingerprint).sort(),
+    parts: message.parts
+      .filter(
+        (part) =>
+          part.type !== "text" || normalizeMessageContent(part.content).length > 0,
+      )
+      .map(getPartFingerprint)
+      .sort(),
   });
 }
 
@@ -162,14 +178,18 @@ export function createOptimisticNativeMessage(
   attachments: OptimisticNativeAttachment[] = [],
   createdAt: string = new Date().toISOString(),
 ): NativeMessage {
-  const parts: NativeMessagePart[] = [
-    { type: "text", content: text },
-    ...attachments.map((attachment) => ({
-      type: "file" as const,
-      content: attachment.name || attachment.path,
-      fileUrl: toOptimisticFileUrl(attachment.path, attachment.previewUrl),
-    })),
-  ];
+  const parts: NativeMessagePart[] = [];
+  // Match the Codex bridge projection: an attachment-only prompt has no empty
+  // text part, so the optimistic row renders the same shape its echo will.
+  // Retirement no longer depends on this — {@link getMessageFingerprint}
+  // ignores empty text parts precisely because OpenCode does send one — but an
+  // empty text bubble is still not something to render.
+  if (text.length > 0) parts.push({ type: "text", content: text });
+  parts.push(...attachments.map((attachment) => ({
+    type: "file" as const,
+    content: attachment.name || attachment.path,
+    fileUrl: toOptimisticFileUrl(attachment.path, attachment.previewUrl),
+  })));
 
   return {
     id: messageId,

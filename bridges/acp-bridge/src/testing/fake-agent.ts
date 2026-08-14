@@ -7,6 +7,10 @@ type JsonObject = Record<string, unknown>;
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 let promptRequestId: number | null = null;
 
+if (process.env.FAKE_ACP_ARGS_FILE) {
+  appendFileSync(process.env.FAKE_ACP_ARGS_FILE, `${JSON.stringify(process.argv.slice(2))}\n`);
+}
+
 if (process.env.FAKE_ACP_LIFECYCLE_FILE) {
   appendFileSync(process.env.FAKE_ACP_LIFECYCLE_FILE, `start:${process.pid}\n`);
   process.once("SIGTERM", () => {

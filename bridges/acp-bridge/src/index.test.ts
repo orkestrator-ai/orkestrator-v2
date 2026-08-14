@@ -189,6 +189,49 @@ describe("ACP bridge", () => {
     expect(dataPreflight.headers.get("access-control-allow-private-network")).toBe("true");
   });
 
+  test("starts Cursor ACP with permissive command and MCP defaults", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const argsFile = resolve(stateDirectory, "args.log");
+    const { base, headers } = await spawnBridge({
+      env: { FAKE_ACP_ARGS_FILE: argsFile },
+    });
+
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+    });
+    expect(created.status).toBe(201);
+
+    const args = await waitFor(
+      async () => fs.readFile(argsFile, "utf8").catch(() => ""),
+      (value) => value.length > 0,
+    );
+    expect(JSON.parse(args.trim())).toEqual(["--force", "--approve-mcps", "acp"]);
+  });
+
+  test("starts Grok ACP with automatic tool approval", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const argsFile = resolve(stateDirectory, "args.log");
+    const { base, headers } = await spawnBridge({
+      env: {
+        ACP_PROVIDER: "grok",
+        FAKE_ACP_ARGS_FILE: argsFile,
+      },
+    });
+
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+    });
+    expect(created.status).toBe(201);
+
+    const args = await waitFor(
+      async () => fs.readFile(argsFile, "utf8").catch(() => ""),
+      (value) => value.length > 0,
+    );
+    expect(JSON.parse(args.trim())).toEqual(["--always-approve", "agent", "stdio"]);
+  });
+
   test("drives an ACP session and rehydrates a parked permission", async () => {
     const { base, headers } = await spawnBridge();
 

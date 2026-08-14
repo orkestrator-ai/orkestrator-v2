@@ -143,7 +143,16 @@ class AcpProcess {
   onClose: (error: Error) => void = () => undefined;
 
   constructor() {
-    const args = provider === "cursor" ? ["acp"] : ["agent", "stdio"];
+    // Both agents expose their permissive setting as a global flag, so keep
+    // it before the ACP subcommand. Interactive Orkestrator sessions are
+    // intentionally permissive by default, matching Claude's
+    // bypassPermissions default. Cursor additionally has a distinct MCP
+    // approval flag. Explicit deny rules still win; any permission request an
+    // agent emits despite these defaults continues through the bridge's
+    // fail-closed approval flow below.
+    const args = provider === "cursor"
+      ? ["--force", "--approve-mcps", "acp"]
+      : ["--always-approve", "agent", "stdio"];
     this.child = spawn(executable, args, {
       cwd: workingDirectory,
       env: process.env,

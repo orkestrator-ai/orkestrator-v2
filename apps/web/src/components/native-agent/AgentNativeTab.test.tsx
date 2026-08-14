@@ -300,7 +300,7 @@ function seedUnassignedPane(tabId: string) {
 
 describe("AgentNativeTab", () => {
   test.each(AGENT_PLATFORMS.map((platform) => [platform] as const))(
-    "keeps the context-window control in the %s compose bar before usage arrives",
+    "does not render a context-window control in the %s compose bar before usage arrives",
     async (platform) => {
       render(
         <AgentNativeTab
@@ -310,12 +310,11 @@ describe("AgentNativeTab", () => {
         />,
       );
 
-      const contextButton = await screen.findByRole("button", {
-        name: "Context window usage unavailable",
-      });
+      await screen.findByTestId("shared-native-compose-bar");
       const sendButton = screen.getByTitle("Send");
 
-      expect(contextButton.nextElementSibling).toBe(sendButton);
+      expect(screen.queryByRole("button", { name: /Context window/ })).toBeNull();
+      expect(sendButton).toBeTruthy();
     },
   );
 

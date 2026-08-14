@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, RefreshCw, Star, Zap } from "lucide-react";
 import {
   DropdownMenu,
@@ -27,6 +27,16 @@ interface AgentModelPickerProps {
   favorites?: AgentModelRef[];
   onPlatformChange?: (platform: AgentPlatform) => void;
   onToggleFavorite?: (model: AgentModel) => void;
+  /**
+   * Applies a chosen model and its platform in one update.
+   *
+   * A consumer whose model list is derived from the selected platform cannot
+   * use `onPlatformChange` + `onModelChange`: the platform handler runs first
+   * and the model handler then validates the new id against the *previous*
+   * platform's catalog. Supplying this instead replaces both calls with a
+   * single atomic one.
+   */
+  onModelSelect?: (model: AgentModel) => void;
   selectedModelId?: string;
   selectedModelLabel: string;
   onModelChange: (modelId: string) => void;
@@ -44,6 +54,13 @@ interface AgentModelPickerProps {
 
 const MODEL_ROW_HEIGHT_CLASS = "h-14";
 const VISIBLE_MODEL_ROWS = 5;
+/**
+ * Radix leaves the radio indicator at its static position, which on a two-line
+ * row lands between the two lines instead of on the name. Anchor it to the
+ * first line box (row padding + one `text-sm` line) so the bullet reads as
+ * belonging to the model name.
+ */
+const RADIO_ROW_CLASS = "items-start py-2 [&>span:first-child]:top-2 [&>span:first-child]:h-5";
 type MobileSubmenu = "reasoning" | "speed";
 
 const PLATFORM_LABELS: Record<AgentPlatform, string> = {
@@ -63,15 +80,14 @@ function ModelItems({
   selectedModelId,
   selectedPlatform,
   disabled,
-  onModelChange,
-  onPlatformChange,
+  onSelect,
   emptyLabel = "No models available",
   favorites = [],
   onToggleFavorite,
 }: Pick<
   AgentModelPickerProps,
-  "models" | "selectedModelId" | "selectedPlatform" | "disabled" | "onModelChange" | "onPlatformChange" | "favorites" | "onToggleFavorite"
-> & { emptyLabel?: string }) {
+  "models" | "selectedModelId" | "selectedPlatform" | "disabled" | "favorites" | "onToggleFavorite"
+> & { emptyLabel?: string; onSelect: (model: AgentModel) => void }) {
   const favoriteKeys = new Set(favorites.map((favorite) => `${favorite.platform}:${favorite.modelId}`));
   const selectedModelKey = selectedModelId
     ? `${selectedPlatform ?? models.find((model) => model.id === selectedModelId)?.platform}:${selectedModelId}`
@@ -88,8 +104,7 @@ function ModelItems({
           (candidate) => `${candidate.platform}:${candidate.id}` === modelKey,
         );
         if (!model) return;
-        onPlatformChange?.(model.platform);
-        onModelChange(model.id);
+        onSelect(model);
       }}
     >
       {models.map((model) => {
@@ -100,7 +115,7 @@ function ModelItems({
             <DropdownMenuRadioItem
               value={modelKey}
               disabled={disabled || model.description === "Unavailable in the current catalog"}
-              className={cn(MODEL_ROW_HEIGHT_CLASS, "items-start py-2", onToggleFavorite && "pr-9")}
+              className={cn(MODEL_ROW_HEIGHT_CLASS, RADIO_ROW_CLASS, onToggleFavorite && "pr-9")}
             >
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <span className="flex min-w-0 items-center gap-1.5">
@@ -156,7 +171,7 @@ function ReasoningItems({
           key={option.id}
           value={option.id}
           disabled={disabled || !onReasoningChange}
-          className="items-start py-2"
+          className={RADIO_ROW_CLASS}
         >
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
             <span className="truncate text-sm font-medium">{option.label}</span>
@@ -186,6 +201,7 @@ function SpeedItems({
       <DropdownMenuRadioItem
         value="normal"
         disabled={!canChange}
+        className={RADIO_ROW_CLASS}
       >
         <span className="flex min-w-0 flex-col">
           <span>Normal</span>
@@ -195,6 +211,7 @@ function SpeedItems({
       <DropdownMenuRadioItem
         value="fast"
         disabled={!canChange}
+        className={RADIO_ROW_CLASS}
       >
         <span className="flex min-w-0 flex-col">
           <span className="flex items-center gap-1">
@@ -220,6 +237,7 @@ export function AgentModelPicker({
   favorites = [],
   onPlatformChange,
   onToggleFavorite,
+  onModelSelect,
   selectedModelId,
   selectedModelLabel,
   onModelChange,
@@ -254,6 +272,19 @@ export function AgentModelPicker({
   useEffect(() => {
     if (selectedPlatform) setCatalogView(selectedPlatform);
   }, [selectedPlatform]);
+  // The one place that decides how a model choice reaches the consumer, so the
+  // rendered lists cannot disagree about it.
+  const commitModelSelection = useCallback(
+    (model: AgentModel) => {
+      if (onModelSelect) {
+        onModelSelect(model);
+        return;
+      }
+      onPlatformChange?.(model.platform);
+      onModelChange(model.id);
+    },
+    [onModelChange, onModelSelect, onPlatformChange],
+  );
   const visibleModels = useMemo(() => {
     const byKey = new Map(models.map((model) => [`${model.platform}:${model.id}`, model]));
     const ordered = catalogView === "favorites"
@@ -549,8 +580,7 @@ export function AgentModelPicker({
                 selectedModelId={selectedModelId}
                 selectedPlatform={selectedPlatform}
                 disabled={disabled}
-                onModelChange={onModelChange}
-                onPlatformChange={onPlatformChange}
+                onSelect={commitModelSelection}
                 emptyLabel={normalizedSearch ? "No matches" : "No models available"}
                 favorites={favorites}
                 onToggleFavorite={onToggleFavorite}
@@ -694,8 +724,7 @@ export function AgentModelPicker({
                   selectedModelId={selectedModelId}
                   selectedPlatform={selectedPlatform}
                   disabled={disabled}
-                  onModelChange={onModelChange}
-                  onPlatformChange={onPlatformChange}
+                  onSelect={commitModelSelection}
                   emptyLabel={models.length > 0 ? "No matches" : "No models available"}
                   favorites={favorites}
                   onToggleFavorite={onToggleFavorite}

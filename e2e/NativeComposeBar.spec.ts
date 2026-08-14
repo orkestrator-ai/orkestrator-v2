@@ -1,24 +1,27 @@
 import { expect, test } from "@playwright/test";
 
-test("Codex Fast and secondary actions stay reachable in a narrow viewport", async ({
+test("compose controls stay reachable in a narrow viewport", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile layout only");
-  await page.goto("/codex-compose");
+  await page.goto("/native-compose");
 
   const primary = page.locator('[data-native-compose-controls="primary"]');
   const secondary = page.locator('[data-native-compose-controls="secondary"]');
-  const reasoning = page.getByTitle("Choose reasoning effort");
-  const fast = page.getByRole("button", { name: "Fast" });
+  // Model, reasoning and speed are one control now, so the picker trigger is
+  // what has to survive the narrow layout — there is no separate reasoning or
+  // Fast button left to crowd it.
+  const picker = primary.getByTitle("Choose model, reasoning, and speed");
 
   await expect(primary).toBeVisible();
   await expect(secondary).toBeVisible();
-  await expect(fast).toBeVisible();
-  await expect(fast).toHaveAttribute("aria-pressed", "false");
+  await expect(picker).toBeVisible();
 
-  const geometry = await fast.evaluate((element) => {
+  const geometry = await picker.evaluate((element) => {
     const rect = element.getBoundingClientRect();
-    const primaryRect = element.parentElement!.getBoundingClientRect();
+    const primaryRect = element
+      .closest('[data-native-compose-controls="primary"]')!
+      .getBoundingClientRect();
     return {
       fullyInsidePrimary:
         rect.left >= primaryRect.left
@@ -36,12 +39,12 @@ test("Codex Fast and secondary actions stay reachable in a narrow viewport", asy
     fullyInsidePrimary: true,
     fullyInsideViewport: true,
   });
-  await expect
-    .poll(() => reasoning.evaluate((element) => element.nextElementSibling?.textContent?.trim()))
-    .toBe("Fast");
+  await expect(picker).toHaveAccessibleName(/\(High\)$/);
 
-  await fast.click();
-  await expect(fast).toHaveAttribute("aria-pressed", "true");
+  await picker.click();
+  await page.locator("[data-native-mobile-speed-trigger]").click();
+  await page.getByRole("menuitemradio", { name: /^Fast/ }).click();
+  await expect(picker).toHaveAccessibleName(/High ⚡/);
 
   await page.getByRole("button", { name: "+123 queued" }).click();
   await expect(page.getByRole("dialog", { name: "Queued Prompts" })).toBeVisible();
@@ -49,5 +52,5 @@ test("Codex Fast and secondary actions stay reachable in a narrow viewport", asy
   await expect(page.getByRole("dialog", { name: "Queued Prompts" })).toBeHidden();
 
   await page.getByRole("button", { name: "Address all" }).click();
-  await expect(page.getByTestId("codex-send-count")).toHaveText("1");
+  await expect(page.getByTestId("native-send-count")).toHaveText("1");
 });

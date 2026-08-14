@@ -3,6 +3,7 @@ import {
   memo,
   useCallback,
   useContext,
+  useRef,
   useState,
   useMemo,
   useEffect,
@@ -70,6 +71,12 @@ import {
   messageHasVisibleContent,
   normalizeNativeMessage,
 } from "@/lib/chat/native-message-adapters";
+import { parseLocalFilePathFromUrl } from "@/lib/chat/file-url";
+import {
+  imagePreviewCacheKey,
+  readImagePreviewCache,
+  writeImagePreviewCache,
+} from "@/lib/chat/image-preview-cache";
 import { writeText } from "@/lib/native/clipboard";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 
@@ -949,6 +956,9 @@ function ImagePreviewOverlay({
     <div
       className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-8"
       onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Image preview: ${filename}`}
     >
       <div
         className="relative max-w-full max-h-full"
@@ -957,6 +967,8 @@ function ImagePreviewOverlay({
         <button
           onClick={onClose}
           className="absolute -top-10 right-0 p-2 text-white/70 hover:text-white transition-colors"
+          aria-label="Close image preview"
+          autoFocus
         >
           <X className="w-6 h-6" />
         </button>
@@ -1012,27 +1024,8 @@ function isImageReference(pathOrUrl?: string): boolean {
   ].some((ext) => lower.includes(ext));
 }
 
-function parseLocalFilePathFromUrl(fileUrl: string): string | null {
-  if (!fileUrl.startsWith("file://")) return null;
-
-  try {
-    const parsed = new URL(fileUrl);
-    const pathname = decodeURIComponent(parsed.pathname);
-
-    // UNC paths (e.g. file://server/share/path)
-    if (parsed.host) {
-      return `//${parsed.host}${pathname}`;
-    }
-
-    // Windows absolute paths are represented as /C:/path in file URLs.
-    if (/^\/[a-z]:\//i.test(pathname)) {
-      return pathname.slice(1);
-    }
-
-    return pathname;
-  } catch {
-    return null;
-  }
+function isRemoteImageUrl(fileUrl?: string): boolean {
+  return typeof fileUrl === "string" && /^https?:\/\//i.test(fileUrl);
 }
 
 function getSafeContainerRelativePath(path: string): string | null {
@@ -1066,106 +1059,175 @@ function getSafeContainerRelativePath(path: string): string | null {
 function FilePart({
   path,
   fileUrl,
+  filename,
   containerId,
+  eagerPreview = false,
 }: {
   path: string;
   fileUrl?: string;
+  filename?: string;
   containerId?: string;
+  eagerPreview?: boolean;
 }) {
+  const cacheKey = imagePreviewCacheKey(containerId, path, fileUrl);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [imageSrc, setImageSrc] = useState<string | null>(null);
+  const [imageSrc, setImageSrc] = useState<string | null>(
+    () => readImagePreviewCache(cacheKey),
+  );
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  const imageLoadRef = useRef<Promise<string | null> | null>(null);
 
-  const displayName = path.split("/").pop() || path || "file";
+  const displayName = filename || path.split(/[\\/]/).pop() || path || "file";
   const isImage = isImageReference(fileUrl) || isImageReference(path);
+  // Only the thumbnail-bearing surface gets the tile chrome. A part that is
+  // never eagerly loaded would otherwise sit as an empty card until clicked.
+  const showThumbnailTile = isImage && eagerPreview;
+
+  const loadImage = useCallback((): Promise<string | null> => {
+    if (!isImage) return Promise.resolve(null);
+    if (imageLoadRef.current) return imageLoadRef.current;
+
+    const cached = readImagePreviewCache(cacheKey);
+    if (cached) return Promise.resolve(cached);
+
+    setLoading(true);
+    setLoadError(false);
+    const request = (async () => {
+      try {
+        if (fileUrl?.startsWith("data:image/")) {
+          return fileUrl;
+        }
+
+        if (isRemoteImageUrl(fileUrl)) {
+          return fileUrl ?? null;
+        }
+
+        const localFilePath = fileUrl?.startsWith("file://")
+          ? parseLocalFilePathFromUrl(fileUrl)
+          : null;
+
+        if (containerId) {
+          const containerPath = localFilePath ?? path;
+          const relativePath = getSafeContainerRelativePath(containerPath);
+          if (!relativePath) {
+            throw new Error("Unsafe container image path");
+          }
+
+          const base64 = await readContainerFileBase64(containerId, relativePath);
+          const mimeType = getMimeType(containerPath);
+          const dataUrl = `data:${mimeType};base64,${base64}`;
+          writeImagePreviewCache(cacheKey, dataUrl);
+          return dataUrl;
+        }
+
+        const filePath = localFilePath ?? (path.startsWith("/") ? path : null);
+
+        if (!filePath) {
+          throw new Error("No readable local image path available");
+        }
+
+        const base64 = await readFileBase64(filePath);
+        const mimeType = getMimeType(filePath);
+        const dataUrl = `data:${mimeType};base64,${base64}`;
+        writeImagePreviewCache(cacheKey, dataUrl);
+        return dataUrl;
+      } catch (err) {
+        console.error("[NativeMessage] Failed to load image preview:", err, {
+          path,
+          fileUrl,
+        });
+        setLoadError(true);
+        return null;
+      }
+    })();
+    imageLoadRef.current = request;
+    void request.finally(() => {
+      if (imageLoadRef.current === request) {
+        imageLoadRef.current = null;
+        setLoading(false);
+      }
+    });
+    return request;
+  }, [cacheKey, isImage, path, fileUrl, containerId]);
+
+  useEffect(() => {
+    if (!eagerPreview || !isImage || imageSrc || isRemoteImageUrl(fileUrl)) return;
+    let cancelled = false;
+
+    void loadImage().then((source) => {
+      if (!cancelled && source) setImageSrc(source);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [eagerPreview, fileUrl, imageSrc, isImage, loadImage]);
 
   const handleClick = useCallback(async () => {
     if (!isImage) return;
-
     if (imageSrc) {
       setPreviewOpen(true);
       return;
     }
 
-    setLoading(true);
-    setLoadError(false);
-    try {
-      if (fileUrl?.startsWith("data:image/")) {
-        setImageSrc(fileUrl);
-        setPreviewOpen(true);
-        return;
-      }
-
-      if (fileUrl?.startsWith("http://") || fileUrl?.startsWith("https://")) {
-        setImageSrc(fileUrl);
-        setPreviewOpen(true);
-        return;
-      }
-
-      const localFilePath = fileUrl?.startsWith("file://")
-        ? parseLocalFilePathFromUrl(fileUrl)
-        : null;
-
-      if (containerId) {
-        const containerPath = localFilePath ?? path;
-        const relativePath = getSafeContainerRelativePath(containerPath);
-        if (!relativePath) {
-          throw new Error("Unsafe container image path");
-        }
-
-        const base64 = await readContainerFileBase64(containerId, relativePath);
-        const mimeType = getMimeType(containerPath);
-        setImageSrc(`data:${mimeType};base64,${base64}`);
-        setPreviewOpen(true);
-        return;
-      }
-
-      const filePath = localFilePath ?? (path.startsWith("/") ? path : null);
-
-      if (!filePath) {
-        throw new Error("No readable local image path available");
-      }
-
-      const base64 = await readFileBase64(filePath);
-      const mimeType = getMimeType(filePath);
-      setImageSrc(`data:${mimeType};base64,${base64}`);
-      setPreviewOpen(true);
-    } catch (err) {
-      console.error("[NativeMessage] Failed to load image preview:", err, {
-        path,
-        fileUrl,
-      });
-      setLoadError(true);
-    } finally {
-      setLoading(false);
-    }
-  }, [isImage, imageSrc, path, fileUrl, containerId]);
+    const source = await loadImage();
+    if (!source) return;
+    setImageSrc(source);
+    setPreviewOpen(true);
+  }, [imageSrc, isImage, loadImage]);
 
   return (
     <>
       <button
         onClick={handleClick}
-        disabled={!isImage || loading}
+        disabled={!isImage}
+        aria-label={isImage ? `Open full image: ${displayName}` : undefined}
+        aria-busy={isImage ? loading : undefined}
         className={cn(
-          "inline-flex items-center gap-1.5 text-xs my-0 py-1.5 px-2.5 rounded-md border transition-colors",
+          "text-xs my-0 rounded-md border transition-colors",
+          showThumbnailTile
+            ? "group relative block w-40 overflow-hidden bg-muted/50 border-border hover:border-foreground/25 cursor-zoom-in"
+            : "inline-flex items-center gap-1.5 py-1.5 px-2.5",
+          !showThumbnailTile && (isImage
+            ? "bg-muted/50 border-border hover:bg-muted hover:border-border/80 cursor-zoom-in"
+            : "bg-muted/30 border-border/50 cursor-default"),
           isImage
-            ? "bg-muted/50 border-border hover:bg-muted hover:border-border/80 cursor-pointer"
-            : "bg-muted/30 border-border/50 cursor-default",
+            && "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           loading && "opacity-50",
         )}
       >
-        {isImage ? (
+        {showThumbnailTile && imageSrc ? (
+          <img
+            src={imageSrc}
+            alt={`Thumbnail: ${displayName}`}
+            className="h-24 w-full bg-black/10 object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+          />
+        ) : showThumbnailTile ? (
+          <span className="flex h-24 w-full items-center justify-center bg-muted/40">
+            <ImageIcon className="size-5 text-muted-foreground" />
+          </span>
+        ) : isImage ? (
           <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" />
         ) : (
           <FileText className="w-3.5 h-3.5 text-muted-foreground" />
         )}
-        <span className="font-mono truncate max-w-[240px] text-muted-foreground">
+        <span className={cn(
+          "font-mono truncate text-muted-foreground",
+          showThumbnailTile
+            ? "block border-t border-border/60 px-2 py-1.5 text-left"
+            : "max-w-[240px]",
+        )}>
           {displayName}
         </span>
-        {loading && <span className="text-muted-foreground">(loading...)</span>}
+        {loading && !isImage && <span className="text-muted-foreground">(loading...)</span>}
         {loadError && (
-          <span className="text-destructive text-[10px]">(error)</span>
+          <span className={cn(
+            "text-destructive text-[10px]",
+            showThumbnailTile && "absolute right-1.5 top-1.5 rounded bg-background/90 px-1.5 py-0.5",
+          )}>
+            preview unavailable
+          </span>
         )}
       </button>
 
@@ -1721,6 +1783,7 @@ function MessagePart({
   truncateUserPrompt = false,
   renderJsonPayload = true,
   containerId,
+  eagerImagePreview = false,
   partKey,
 }: {
   part: NativeMessagePart;
@@ -1728,6 +1791,7 @@ function MessagePart({
   truncateUserPrompt?: boolean;
   renderJsonPayload?: boolean;
   containerId?: string;
+  eagerImagePreview?: boolean;
   /** Stable identity for this part's position, used to persist expansion state. */
   partKey: string;
 }) {
@@ -1798,7 +1862,15 @@ function MessagePart({
       // Tool results are typically shown inline with tool invocations
       return null;
     case "file":
-      return <FilePart path={part.content} fileUrl={part.fileUrl} containerId={containerId} />;
+      return (
+        <FilePart
+          path={part.content}
+          fileUrl={part.fileUrl}
+          filename={part.filename}
+          containerId={containerId}
+          eagerPreview={eagerImagePreview}
+        />
+      );
     case "subagent":
       return (
         <SubagentPart part={part} containerId={containerId} partKey={partKey} />
@@ -2034,6 +2106,7 @@ function renderMessageParts(
         truncateUserPrompt={message.role === "user"}
         renderJsonPayload={message.role !== "user"}
         containerId={options.containerId}
+        eagerImagePreview={message.role === "user"}
         partKey={`${message.id}-part-${index}`}
       />
   ));

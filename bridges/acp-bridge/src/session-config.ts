@@ -127,7 +127,7 @@ export function normalizeAcpSessionConfig(
   };
 
   const composer = usesSetModel
-    ? composerFromGrokModels(provider, grokModels, availableModeIds, modes.currentId)
+    ? composerFromGrokModels(provider, grokModels, availableModeIds, modes.currentId, configOptions)
     : composerFromConfigOptions(provider, configOptions, availableModeIds, modes.currentId);
 
   return { composer: withModes(composer, availableModeIds, modes.currentId), wire };
@@ -164,6 +164,7 @@ export function applyConfigOptionUpdate(
                 ? current.composer.selectedReasoningId
                 : model.defaultReasoningId,
               reasoningEfforts: model.reasoning?.map((option) => ({ value: option.id })),
+              totalContextTokens: model.contextWindow,
             },
           })),
         }
@@ -210,6 +211,9 @@ export function applyGrokModelChange(
       : model
   ));
   const selected = models.find((model) => model.id === modelId) ?? models[0];
+  // When the agent exposes an explicit fast toggle, that option is the state —
+  // a model id switch says nothing about it.
+  const fastOption = selectFastOption(current.wire.configOptions);
   return {
     wire: { ...current.wire, currentModelId: selected?.id },
     composer: {
@@ -220,9 +224,11 @@ export function applyGrokModelChange(
         ? effort
         : selected?.defaultReasoningId,
       fastModeAvailable: selected?.supportsSpeed === true,
-      fastModeEnabled: selected?.supportsSpeed === true
-        ? isFastModelId(selected.id)
-        : null,
+      fastModeEnabled: selected?.supportsSpeed !== true
+        ? null
+        : fastOption
+          ? fastModeFromOption(fastOption)
+          : isFastModelId(selected.id),
     },
   };
 }
@@ -253,6 +259,10 @@ export function applyGrokCatalogUpdate(
     current.composer.selectedModelId,
   );
   const normalized = normalizeAcpSessionConfig(provider, {
+    // A catalogue-only update says nothing about effort or fast mode, so the
+    // known config options have to be carried forward; dropping them would
+    // strip Cursor's reasoning and speed controls on every model refresh.
+    configOptions: current.wire.configOptions,
     models: { currentModelId, availableModels },
     modes: persistedModes(current),
   });
@@ -307,24 +317,35 @@ export function planComposerApply(
     });
   }
 
-  if (modelOption && patch.modelId && patch.modelId !== optionCurrentString(modelOption)) {
+  // Whether the config-option surface will carry the change. Catalogue updates
+  // can move the active model without refreshing an option's `currentValue`, so
+  // the composer snapshot — not that retained value — decides whether a change
+  // is still required. A stale option list that lacks the requested id must
+  // still fall through to `session/set_model` rather than drop the change.
+  let modelSentAsOption = false;
+  let reasoningSentAsOption = false;
+
+  if (modelOption && patch.modelId
+    && patch.modelId !== current.composer.selectedModelId) {
     const value = resolveSelectValue(modelOption, patch.modelId);
     if (value !== undefined) {
       calls.push({
         method: "session/set_config_option",
         params: { sessionId, configId: modelOption.configId, value },
       });
+      modelSentAsOption = true;
     }
   }
 
   if (thoughtOption && patch.reasoningId
-    && patch.reasoningId !== optionCurrentString(thoughtOption)) {
+    && patch.reasoningId !== current.composer.selectedReasoningId) {
     const value = resolveSelectValue(thoughtOption, patch.reasoningId);
     if (value !== undefined) {
       calls.push({
         method: "session/set_config_option",
         params: { sessionId, configId: thoughtOption.configId, value },
       });
+      reasoningSentAsOption = true;
     }
   }
 
@@ -350,9 +371,21 @@ export function planComposerApply(
     }
   }
 
+  // An agent that offers both surfaces (Cursor) is already served by the
+  // config-option calls above; repeating the change as `session/set_model`
+  // would re-send effort in a `_meta` field Cursor does not read, and race the
+  // `session/update` the config option is about to produce.
   const needsSetModel = current.wire.usesSetModel && (
-    (patch.modelId !== undefined && patch.modelId !== current.composer.selectedModelId)
-    || (patch.reasoningId !== undefined && patch.reasoningId !== current.composer.selectedReasoningId)
+    (
+      !modelSentAsOption
+      && patch.modelId !== undefined
+      && patch.modelId !== current.composer.selectedModelId
+    )
+    || (
+      !reasoningSentAsOption
+      && patch.reasoningId !== undefined
+      && patch.reasoningId !== current.composer.selectedReasoningId
+    )
     || (
       patch.fastMode !== undefined
       && current.composer.fastModeAvailable
@@ -365,7 +398,11 @@ export function planComposerApply(
       ? siblingFastModelId(nextModelId, current.composer.models, nextFast) ?? nextModelId
       : nextModelId;
     const selected = current.composer.models.find((model) => model.id === modelId);
-    const carry = nextReasoningId
+    // Effort rides along only for agents whose model catalogue owns it. Where a
+    // `thought_level` option exists it is the effort surface, and its values are
+    // not the `_meta.reasoningEffort` vocabulary this field carries.
+    const carry = !thoughtOption
+      && nextReasoningId
       && selected?.reasoning?.some((option) => option.id === nextReasoningId)
       ? nextReasoningId
       : undefined;
@@ -417,13 +454,8 @@ function composerFromConfigOptions(
   const modelOption = selectOption(configOptions, "model");
   const thoughtOption = selectOption(configOptions, "thought_level");
   const fastOption = selectFastOption(configOptions);
-  const reasoning = thoughtOption
-    ? (thoughtOption.options ?? [])
-      .slice(0, MAX_REASONING_OPTIONS)
-      .map((option) => reasoningOption(option.value, option.name))
-    : [];
-  const selectedReasoningId = optionCurrentString(thoughtOption)
-    ?? reasoning[0]?.id;
+  const { options: reasoning, selectedId } = reasoningFromOptions(thoughtOption);
+  const selectedReasoningId = selectedId ?? reasoning[0]?.id;
   const models = (modelOption?.options ?? []).map((option): AgentModel => {
     const fastSibling = hasFastSibling(option.value, modelOption?.options ?? []);
     return {
@@ -443,9 +475,7 @@ function composerFromConfigOptions(
   const selected = models.find((model) => model.id === selectedModelId) ?? models[0];
   const fastModeAvailable = Boolean(fastOption) || selected?.supportsSpeed === true;
   const fastModeEnabled = fastOption
-    ? fastOption.type === "boolean"
-      ? fastOption.currentValue === true
-      : isFastValue(optionCurrentString(fastOption) ?? "")
+    ? fastModeFromOption(fastOption)
     : selected
       ? isFastModelId(selected.id)
       : null;
@@ -462,14 +492,30 @@ function composerFromConfigOptions(
   };
 }
 
+/**
+ * Cursor advertises `models.availableModels` *and* `configOptions`, but its
+ * catalogue entries carry no `_meta.reasoningEfforts` — effort and fast mode
+ * live in the `thought_level` / `model_config` config options instead. So the
+ * catalogue path has to fall back to those options, otherwise selecting a model
+ * by id silently costs the user the reasoning and speed controls the agent
+ * really does support. Grok, which sends no config options, is unaffected.
+ */
 function composerFromGrokModels(
   provider: AcpProvider,
   catalog: GrokModelCatalog,
   availableModeIds: AcpConfigWire["availableModeIds"],
   currentModeId: string | undefined,
+  configOptions: AcpConfigOption[] = [],
 ): NativeAgentComposerState {
+  const shared = reasoningFromOptions(selectOption(configOptions, "thought_level"));
+  const fastOption = selectFastOption(configOptions);
   const models = catalog.models.map((entry): AgentModel => {
-    const reasoning = entry.reasoningEfforts.map((id) => reasoningOption(id));
+    const own = entry.reasoningEfforts.map((id) => reasoningOption(id));
+    // A live config option is Cursor's authoritative reasoning surface. The
+    // catalogue metadata may have been reconstructed from an older composer
+    // snapshot by `applyConfigOptionUpdate`, so allowing it to win here would
+    // freeze obsolete values and discard the option's vendor-provided labels.
+    const reasoning = shared.options.length > 0 ? shared.options : own;
     const fastSibling = catalog.models.some((candidate) => (
       candidate.modelId !== entry.modelId
       && sameModelFamily(candidate.modelId, entry.modelId)
@@ -482,19 +528,28 @@ function composerFromGrokModels(
       description: entry.description,
       providerLabel: PLATFORM_LABEL[provider],
       reasoning: reasoning.length > 0 ? reasoning : undefined,
-      defaultReasoningId: entry.reasoningEffort ?? reasoning[0]?.id,
-      supportsSpeed: fastSibling,
+      defaultReasoningId: shared.options.length > 0
+        ? shared.selectedId ?? reasoning[0]?.id
+        : entry.reasoningEffort ?? reasoning[0]?.id,
+      supportsSpeed: fastSibling || Boolean(fastOption),
       supportsMode: Object.keys(availableModeIds).length > 0,
+      ...(entry.contextWindow === undefined ? {} : { contextWindow: entry.contextWindow }),
     };
   });
   const selected = models.find((model) => model.id === catalog.currentModelId) ?? models[0];
   const selectedReasoning = catalog.models.find((entry) => entry.modelId === selected?.id);
+  const fastState = fastModeFromOption(fastOption);
   return {
     models,
     selectedModelId: selected?.id,
-    selectedReasoningId: selectedReasoning?.reasoningEffort
+    // The config option is the agent's live effort state, so it outranks a
+    // per-model default carried over from the previous snapshot.
+    selectedReasoningId: shared.selectedId
+      ?? selectedReasoning?.reasoningEffort
       ?? selected?.defaultReasoningId,
-    fastModeEnabled: selected?.supportsSpeed ? isFastModelId(selected.id) : null,
+    fastModeEnabled: fastOption
+      ? fastState
+      : selected?.supportsSpeed ? isFastModelId(selected.id) : null,
     fastModeAvailable: selected?.supportsSpeed === true,
     selectedModeId: mapModeId(currentModeId),
     modes: Object.keys(availableModeIds).length > 0
@@ -639,6 +694,8 @@ interface GrokModelEntry {
   description?: string;
   reasoningEffort?: string;
   reasoningEfforts: string[];
+  /** `_meta.totalContextTokens`; the only context-window size Grok advertises. */
+  contextWindow?: number;
 }
 
 interface GrokModelCatalog {
@@ -676,12 +733,14 @@ function parseGrokModelCatalog(value: unknown): GrokModelCatalog {
           return [effort];
         })
       : [];
+    const contextWindow = positiveInteger(meta.totalContextTokens);
     return [{
       modelId,
       name: typeof candidate.name === "string" ? candidate.name : modelId,
       ...(typeof candidate.description === "string" ? { description: candidate.description } : {}),
       ...(typeof meta.reasoningEffort === "string" ? { reasoningEffort: meta.reasoningEffort } : {}),
       reasoningEfforts,
+      ...(contextWindow === undefined ? {} : { contextWindow }),
     }];
   });
   return {
@@ -742,6 +801,8 @@ function parsePersistedComposer(
       candidate.supportsSpeed !== undefined && typeof candidate.supportsSpeed !== "boolean"
       || candidate.supportsMode !== undefined && typeof candidate.supportsMode !== "boolean"
     ) return null;
+    const contextWindow = positiveInteger(candidate.contextWindow);
+    if (candidate.contextWindow !== undefined && contextWindow === undefined) return null;
     models.push({
       platform: provider,
       id,
@@ -752,6 +813,7 @@ function parsePersistedComposer(
       ...(defaultReasoningId ? { defaultReasoningId } : {}),
       ...(typeof candidate.supportsSpeed === "boolean" ? { supportsSpeed: candidate.supportsSpeed } : {}),
       ...(typeof candidate.supportsMode === "boolean" ? { supportsMode: candidate.supportsMode } : {}),
+      ...(contextWindow === undefined ? {} : { contextWindow }),
     });
   }
 
@@ -840,6 +902,24 @@ function resolveSelectValue(option: AcpConfigOption, requested: string): string 
   return byName?.value;
 }
 
+function reasoningFromOptions(
+  thoughtOption: AcpConfigOption | undefined,
+): { options: AgentReasoningOption[]; selectedId?: string } {
+  if (!thoughtOption) return { options: [] };
+  const options = (thoughtOption.options ?? [])
+    .slice(0, MAX_REASONING_OPTIONS)
+    .map((option) => reasoningOption(option.value, option.name));
+  const current = optionCurrentString(thoughtOption);
+  return { options, ...(current ? { selectedId: current } : {}) };
+}
+
+function fastModeFromOption(fastOption: AcpConfigOption | undefined): boolean {
+  if (!fastOption) return false;
+  return fastOption.type === "boolean"
+    ? fastOption.currentValue === true
+    : isFastValue(optionCurrentString(fastOption) ?? "");
+}
+
 function reasoningOption(id: string, label?: string): AgentReasoningOption {
   return { id, label: label && label !== id ? label : effortLabel(id) };
 }
@@ -898,6 +978,15 @@ function firstString(...values: unknown[]): string | undefined {
 
 function boundedString(value: unknown, maximumBytes: number): string | undefined {
   return typeof value === "string" && value.length > 0 && Buffer.byteLength(value) <= maximumBytes
+    ? value
+    : undefined;
+}
+
+/** Vendor token counts, kept sane enough that a garbage value cannot render. */
+function positiveInteger(value: unknown): number | undefined {
+  return typeof value === "number"
+    && Number.isSafeInteger(value)
+    && value > 0
     ? value
     : undefined;
 }

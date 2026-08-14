@@ -275,7 +275,10 @@ test("MultiReviewService keeps a provider alive while a transcript read overlaps
 
     releaseStatus();
     await waitUntil(async () => (await snapshot(started.id))?.phase === "completed");
-    expect(provider.disposeCalls).toBe(disposalsAfterReady + 1);
+    // The terminal snapshot is persisted before release() disposes the final
+    // provider lease, so observe that cleanup boundary directly instead of
+    // racing it immediately after the phase becomes visible.
+    await waitUntil(() => provider.disposeCalls === disposalsAfterReady + 1);
   });
 });
 

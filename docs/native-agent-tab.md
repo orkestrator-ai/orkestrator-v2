@@ -79,7 +79,7 @@ controller.
 | Send/stop, model, reasoning, speed/mode when reported | Yes | Yes | Yes | Yes |
 | Durable compose drafts and first-prompt provider lock | Yes | Yes | Yes | Yes |
 | Queue, resume and per-message fork | Yes | Yes | Yes | No |
-| Attach or mention a workspace file; model-gated images | Yes | Yes | Yes | No |
+| Attach or mention a workspace file; model-gated images | Yes | Images only | Yes | Images only |
 | Slash commands | Built-ins plus plugins | Provider commands | Built-ins plus configured commands | No |
 | Typed questions/approvals | Yes | Yes | Yes | Yes |
 | Provider controls | agents, local settings, suggestions | plan review, steer | execution profiles | reported ACP controls |

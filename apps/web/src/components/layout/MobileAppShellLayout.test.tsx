@@ -312,8 +312,7 @@ describe("MobileAppShellLayout", () => {
   });
 
   test("opens the project drawer on initial mobile entry and keeps workspace content mounted", async () => {
-    const { container } = renderLayout({}, { keepInitialDrawerOpen: true });
-    const menuButton = getTitleBarSidebarTrigger(container);
+    renderLayout({}, { keepInitialDrawerOpen: true });
     expect(screen.getByText("Workspace")).toBeTruthy();
     const dialog = screen.getByRole("dialog", { name: "Projects and environments" });
     expect(dialog).toBeTruthy();
@@ -321,6 +320,15 @@ describe("MobileAppShellLayout", () => {
     const drawerCloseButton = dialog.querySelector<HTMLButtonElement>("button.absolute.right-2");
     expect(drawerCloseButton).toBeTruthy();
     await waitFor(() => expect(document.activeElement).toBe(drawerCloseButton!));
+  });
+
+  test("closes the initial project drawer from its close button and restores trigger focus", async () => {
+    const { container } = renderLayout({}, { keepInitialDrawerOpen: true });
+    const menuButton = getTitleBarSidebarTrigger(container);
+    const dialog = screen.getByRole("dialog", { name: "Projects and environments" });
+    const drawerCloseButton = dialog.querySelector<HTMLButtonElement>("button.absolute.right-2");
+    expect(drawerCloseButton).toBeTruthy();
+
     fireEvent.click(drawerCloseButton!);
     expect(screen.queryByRole("dialog", { name: "Projects and environments" })).toBeNull();
     expect(screen.getByText("Workspace")).toBeTruthy();

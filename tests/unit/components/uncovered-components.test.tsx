@@ -13,9 +13,11 @@ afterEach(() => {
 });
 
 describe("previously indirect component contracts", () => {
-  test("ContextUsageWheel clamps usage and omits missing snapshots", () => {
+  test("ContextUsageWheel clamps usage and labels missing snapshots unavailable", () => {
     const { rerender } = render(<ContextUsageWheel usage={null} />);
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.getByRole("button", {
+      name: "Context window usage unavailable",
+    })).toBeTruthy();
     rerender(<ContextUsageWheel usage={{ percentUsed: 150, usedTokens: 2000, totalTokens: 1000, modelId: "model" }} />);
     expect(screen.getByRole("button", { name: "Context window 100% used" })).toBeTruthy();
   });

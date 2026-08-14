@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  applyConfigOptionUpdate,
   applyCurrentModeUpdate,
   applyGrokCatalogUpdate,
   applyGrokModelChange,
@@ -23,10 +24,67 @@ function grokConfig() {
       availableModels: [{
         modelId: "grok-build",
         name: "Grok Build",
-        _meta: { reasoningEffort: "high", reasoningEfforts: [{ value: "low" }, { value: "high" }] },
+        _meta: {
+          reasoningEffort: "high",
+          reasoningEfforts: [{ value: "low" }, { value: "high" }],
+          totalContextTokens: 500_000,
+        },
       }],
     },
   });
+}
+
+/** The shape cursor-agent's `session/new` actually returns: both surfaces. */
+function cursorSessionResult() {
+  return {
+    sessionId: "sess",
+    modes: {
+      currentModeId: "agent",
+      availableModes: [
+        { id: "agent", name: "Agent" },
+        { id: "plan", name: "Plan" },
+        { id: "ask", name: "Ask" },
+      ],
+    },
+    models: {
+      currentModelId: "grok-4.6",
+      availableModels: [
+        { modelId: "grok-4.6", name: "Cursor Grok 4.6" },
+        { modelId: "composer-2.5", name: "Composer 2.5" },
+      ],
+    },
+    configOptions: [
+      {
+        id: "model",
+        category: "model",
+        type: "select",
+        currentValue: "grok-4.6",
+        options: [
+          { value: "grok-4.6", name: "Cursor Grok 4.6" },
+          { value: "composer-2.5", name: "Composer 2.5" },
+        ],
+      },
+      {
+        id: "effort",
+        category: "thought_level",
+        type: "select",
+        currentValue: "high",
+        options: [
+          { value: "low", name: "Low" },
+          { value: "medium", name: "Medium" },
+          { value: "high", name: "High" },
+          { value: "xhigh", name: "Extra High" },
+        ],
+      },
+      {
+        id: "fast",
+        category: "model_config",
+        type: "select",
+        currentValue: "false",
+        options: [{ value: "false", name: "Off" }, { value: "true", name: "Fast" }],
+      },
+    ],
+  };
 }
 
 describe("normalizeAcpSessionConfig", () => {
@@ -105,6 +163,23 @@ describe("normalizeAcpSessionConfig", () => {
     expect(composer.modes).toHaveLength(2);
   });
 
+  test("keeps Cursor's effort and fast options when it also sends a model catalogue", () => {
+    // cursor-agent 2026.08.11 returns `models.availableModels` *and*
+    // `configOptions`, but its catalogue entries carry no reasoning metadata.
+    const { composer, wire } = normalizeAcpSessionConfig("cursor", cursorSessionResult());
+
+    expect(wire.usesSetModel).toBe(true);
+    expect(composer.selectedModelId).toBe("grok-4.6");
+    expect(composer.selectedReasoningId).toBe("high");
+    expect(composer.models[0]?.reasoning?.map((option) => option.id))
+      .toEqual(["low", "medium", "high", "xhigh"]);
+    expect(composer.models[0]?.reasoning?.find((option) => option.id === "xhigh")?.label)
+      .toBe("Extra High");
+    expect(composer.fastModeAvailable).toBe(true);
+    expect(composer.fastModeEnabled).toBe(false);
+    expect(composer.selectedModeId).toBe("build");
+  });
+
   test("reads Grok availableModels and per-model reasoning from _meta", () => {
     const { composer, wire } = normalizeAcpSessionConfig("grok", {
       models: {
@@ -134,6 +209,25 @@ describe("normalizeAcpSessionConfig", () => {
     expect(composer.models[0]?.reasoning?.map((option) => option.id)).toEqual(["low", "high", "xhigh"]);
     expect(composer.models[0]?.reasoning?.find((option) => option.id === "xhigh")?.label).toBe("Extra high");
     expect(composer.models[1]?.id).toBe("grok-composer-2.5-fast");
+  });
+
+  test("reads the Grok context window so the usage meter has a denominator", () => {
+    const { composer } = normalizeAcpSessionConfig("grok", {
+      models: {
+        currentModelId: "grok-4.6",
+        availableModels: [
+          { modelId: "grok-4.6", name: "Grok 4.6", _meta: { totalContextTokens: 500_000 } },
+          { modelId: "grok-4.5", name: "Grok 4.5", _meta: { totalContextTokens: "500000" } },
+          { modelId: "grok-4.4", name: "Grok 4.4" },
+        ],
+      },
+    });
+
+    expect(composer.models[0]?.contextWindow).toBe(500_000);
+    // A string is not a token count. Cursor advertises no window at all, and
+    // both cases must leave the meter unbounded rather than guess one.
+    expect(composer.models[1]?.contextWindow).toBeUndefined();
+    expect(composer.models[2]?.contextWindow).toBeUndefined();
   });
 });
 
@@ -179,6 +273,59 @@ describe("planComposerApply", () => {
     ]);
   });
 
+  test("does not duplicate a Cursor config option as session/set_model", () => {
+    const normalized = normalizeAcpSessionConfig("cursor", cursorSessionResult());
+
+    expect(planComposerApply("sess", normalized, {
+      modelId: "composer-2.5",
+      reasoningId: "low",
+      fastMode: true,
+    })).toEqual([
+      { method: "session/set_config_option", params: { sessionId: "sess", configId: "model", value: "composer-2.5" } },
+      { method: "session/set_config_option", params: { sessionId: "sess", configId: "effort", value: "low" } },
+      { method: "session/set_config_option", params: { sessionId: "sess", configId: "fast", value: "true" } },
+    ]);
+  });
+
+  test("falls back to session/set_model when a stale option list lacks the model", () => {
+    const stale = normalizeAcpSessionConfig("cursor", cursorSessionResult());
+    const refreshed = applyGrokCatalogUpdate("cursor", stale, {
+      currentModelId: "grok-4.6",
+      models: [
+        { modelId: "grok-4.6", name: "Cursor Grok 4.6" },
+        { modelId: "opus-5", name: "Opus 5" },
+      ],
+    });
+
+    expect(refreshed.composer.models.map((model) => model.id)).toEqual(["grok-4.6", "opus-5"]);
+    // The carried-forward config options still describe effort and fast mode.
+    expect(refreshed.composer.selectedReasoningId).toBe("high");
+    expect(refreshed.composer.fastModeAvailable).toBe(true);
+    expect(planComposerApply("sess", refreshed, { modelId: "opus-5" })).toEqual([
+      { method: "session/set_model", params: { sessionId: "sess", modelId: "opus-5" } },
+    ]);
+  });
+
+  test("re-sends a retained model option when the catalogue changed the active model", () => {
+    const initial = normalizeAcpSessionConfig("cursor", cursorSessionResult());
+    const refreshed = applyGrokCatalogUpdate("cursor", initial, {
+      currentModelId: "composer-2.5",
+      models: [
+        { modelId: "grok-4.6", name: "Cursor Grok 4.6" },
+        { modelId: "composer-2.5", name: "Composer 2.5" },
+      ],
+    });
+
+    expect(refreshed.composer.selectedModelId).toBe("composer-2.5");
+    expect(refreshed.wire.configOptions[0]?.currentValue).toBe("grok-4.6");
+    expect(planComposerApply("sess", refreshed, { modelId: "grok-4.6" })).toEqual([
+      {
+        method: "session/set_config_option",
+        params: { sessionId: "sess", configId: "model", value: "grok-4.6" },
+      },
+    ]);
+  });
+
   test("uses session/set_model with reasoningEffort for Grok", () => {
     const normalized = normalizeAcpSessionConfig("grok", {
       models: {
@@ -216,6 +363,53 @@ describe("planComposerApply", () => {
 });
 
 describe("session config updates", () => {
+  test("replaces reconstructed reasoning choices with a live Cursor option update", () => {
+    const initial = normalizeAcpSessionConfig("cursor", cursorSessionResult());
+    const next = applyConfigOptionUpdate("cursor", initial, {
+      configOptions: [
+        {
+          id: "model",
+          category: "model",
+          type: "select",
+          currentValue: "grok-4.6",
+          options: [
+            { value: "grok-4.6", name: "Cursor Grok 4.6" },
+            { value: "composer-2.5", name: "Composer 2.5" },
+          ],
+        },
+        {
+          id: "effort",
+          category: "thought_level",
+          type: "select",
+          currentValue: "low",
+          options: [
+            { value: "low", name: "Minimum" },
+            { value: "high", name: "Maximum" },
+          ],
+        },
+        {
+          id: "fast",
+          category: "model_config",
+          type: "select",
+          currentValue: "false",
+          options: [{ value: "false", name: "Off" }, { value: "true", name: "Fast" }],
+        },
+      ],
+    });
+
+    expect(next.composer.selectedReasoningId).toBe("low");
+    expect(next.composer.models[0]?.reasoning).toEqual([
+      { id: "low", label: "Minimum" },
+      { id: "high", label: "Maximum" },
+    ]);
+    expect(planComposerApply("sess", next, { reasoningId: "high" })).toEqual([
+      {
+        method: "session/set_config_option",
+        params: { sessionId: "sess", configId: "effort", value: "high" },
+      },
+    ]);
+  });
+
   test("maps a current_mode_update onto Build/Plan", () => {
     const normalized = normalizeAcpSessionConfig("cursor", {
       modes: {

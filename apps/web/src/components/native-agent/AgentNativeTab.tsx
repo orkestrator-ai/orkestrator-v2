@@ -742,12 +742,8 @@ function SharedNativeAgentController({
     [projection?.messages],
   );
   const handoff = useAgentHandoff(
-    platform === "claude" || platform === "codex" || platform === "opencode"
-      ? agentHandoffId
-      : undefined,
-    platform === "claude" || platform === "codex" || platform === "opencode"
-      ? platform
-      : "claude",
+    agentHandoffId,
+    platform,
     data.environmentId,
     normalizedMessages,
     consumedAgentHandoffId,
@@ -1480,6 +1476,19 @@ function SharedNativeAgentController({
   const errorMessage = sendError ?? runtimeError ?? projection?.turn.error ?? null;
   const connectionState = projection?.connection
     ?? (isRefreshing ? "connecting" as const : "error" as const);
+  const contextUsage = projection?.contextUsage;
+  const maximumTokens = contextUsage?.maximumTokens;
+  const composeContextUsage = contextUsage
+    && maximumTokens !== undefined
+    && Number.isFinite(maximumTokens)
+    && maximumTokens > 0
+    ? {
+        usedTokens: contextUsage.usedTokens,
+        totalTokens: maximumTokens,
+        percentUsed: contextUsage.percentage
+          ?? Math.min(100, contextUsage.usedTokens / maximumTokens * 100),
+      }
+    : null;
 
   if (setupPending) {
     return (
@@ -1845,44 +1854,6 @@ function SharedNativeAgentController({
                   </DropdownMenuContent>
                 </DropdownMenu>
               ) : null}
-              {(composer.executionProfiles?.length ?? 0) > 0 ? (
-                <select
-                  aria-label="Execution profile"
-                  className="h-8 max-w-44 rounded-md border border-input bg-background px-2 text-xs"
-                  value={composer.selectedExecutionProfileId ?? ""}
-                  disabled={settingsLocked}
-                  onChange={(event) => {
-                    void updateControlsSafely({ executionProfileId: event.target.value || null });
-                  }}
-                >
-                  <option value="">Provider default</option>
-                  {composer.executionProfiles!.map((profile) => (
-                    <option key={profile.id} value={profile.id}>{profile.label}</option>
-                  ))}
-                </select>
-              ) : null}
-              {typeof composer.includeLocalSettings === "boolean" ? (
-                <label className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground" title="Include .claude/settings.local.json">
-                  <input
-                    type="checkbox"
-                    checked={composer.includeLocalSettings}
-                    disabled={settingsLocked}
-                    onChange={(event) => { void updateControlsSafely({ includeLocalSettings: event.target.checked }); }}
-                  />
-                  Local settings
-                </label>
-              ) : null}
-              {typeof composer.promptSuggestionsEnabled === "boolean" ? (
-                <label className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    checked={composer.promptSuggestionsEnabled}
-                    disabled={settingsLocked}
-                    onChange={(event) => { void updateControlsSafely({ promptSuggestions: event.target.checked }); }}
-                  />
-                  Suggestions
-                </label>
-              ) : null}
             </>
           ) : null}
           onStop={stopSafely}
@@ -1890,16 +1861,7 @@ function SharedNativeAgentController({
             isReviewTab && projection && !isTurnActive && messages.length > 0,
           )}
           onAddressAll={async () => { await submit(ADDRESS_ALL_REVIEW_PROMPT); }}
-          contextUsage={projection?.contextUsage ? {
-            usedTokens: projection.contextUsage.usedTokens,
-            totalTokens: projection.contextUsage.maximumTokens
-              ?? projection.contextUsage.usedTokens,
-            percentUsed: projection.contextUsage.percentage
-              ?? (projection.contextUsage.maximumTokens
-                ? Math.min(100, projection.contextUsage.usedTokens
-                  / projection.contextUsage.maximumTokens * 100)
-                : 0),
-          } : null}
+          contextUsage={composeContextUsage}
           queue={projection?.queue ? {
             length: queuedMessages.length,
             error: projection.queue.blocked

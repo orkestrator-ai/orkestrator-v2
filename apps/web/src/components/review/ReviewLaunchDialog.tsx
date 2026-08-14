@@ -299,10 +299,16 @@ export function ReviewLaunchDialog({
             });
           }}
         >
-          <fieldset
-            disabled={busy}
-            className="flex min-h-0 flex-1 flex-col border-0 p-0"
-          >
+          {/*
+            `display: contents` rather than a flex column: a rendered fieldset
+            wraps its children in an anonymous content box that sizes to
+            content, so a `flex-1 min-h-0` child resolves against that box
+            instead of the fieldset's own constrained height and the scroll
+            region grows until it pushes the footer out of the dialog. Removing
+            the box makes the region and footer direct children of the form.
+            `disabled` still propagates — that is a DOM rule, not a layout one.
+          */}
+          <fieldset disabled={busy} className="contents">
             <div
               role="region"
               aria-label="Review configuration"

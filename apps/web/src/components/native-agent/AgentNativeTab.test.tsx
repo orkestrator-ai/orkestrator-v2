@@ -4,7 +4,7 @@
  * Every provider exercises the shared authoritative-projection path.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import type { NativeAgentSessionProjection, NativeAgentTabData } from "@orkestrator/protocol/native-agent";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
@@ -53,6 +53,9 @@ const ensureNativeAgentSessionMock = mock(async (input: {
   agent: input.agent,
 }));
 const listNativeAgentResumableSessionsMock = mock(async () => []);
+const getAgentHandoffMock = mock(
+  async (_handoffId: string): Promise<unknown> => null,
+);
 const performNativeAgentSessionActionMock = mock(async (_input: {
   agent: string;
   action: { kind: string; text?: string };
@@ -139,6 +142,7 @@ mock.module("@/lib/backend", () => ({
   adoptNativeAgentSession: adoptNativeAgentSessionMock,
   ensureNativeAgentSession: ensureNativeAgentSessionMock,
   listNativeAgentResumableSessions: listNativeAgentResumableSessionsMock,
+  getAgentHandoff: getAgentHandoffMock,
   dispatchNativeAgentIntent: dispatchNativeAgentIntentMock,
   retryNativeAgentDispatch: retryNativeAgentDispatchMock,
   renameEnvironmentFromPrompt: renameEnvironmentFromPromptMock,
@@ -188,6 +192,7 @@ afterEach(() => {
   adoptNativeAgentSessionMock.mockClear();
   ensureNativeAgentSessionMock.mockClear();
   listNativeAgentResumableSessionsMock.mockClear();
+  getAgentHandoffMock.mockClear();
   dispatchNativeAgentIntentMock.mockClear();
   retryNativeAgentDispatchMock.mockClear();
   renameEnvironmentFromPromptMock.mockReset();
@@ -290,6 +295,26 @@ function seedUnassignedPane(tabId: string) {
 }
 
 describe("AgentNativeTab", () => {
+  test.each(AGENT_PLATFORMS.map((platform) => [platform] as const))(
+    "keeps the context-window control in the %s compose bar before usage arrives",
+    async (platform) => {
+      render(
+        <AgentNativeTab
+          tabId={`tab-context-${platform}`}
+          data={identity(platform)}
+          isActive
+        />,
+      );
+
+      const contextButton = await screen.findByRole("button", {
+        name: "Context window usage unavailable",
+      });
+      const sendButton = screen.getByTitle("Send");
+
+      expect(contextButton.nextElementSibling).toBe(sendButton);
+    },
+  );
+
   test("keeps an unassigned tab composer-only without loading a bridge controller", () => {
     const { container } = render(
       <AgentNativeTab
@@ -544,11 +569,20 @@ describe("AgentNativeTab", () => {
     expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text)
       .toBe("review these");
 
-    // Cursor accepts neither, so the image goes too.
+    // Cursor reads inline images over ACP but takes no files, so the same
+    // reconcile applies: back to a provider that accepts both, then across.
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      platform: "claude",
+      attachments: [file, image],
+    });
+    await waitFor(() => expect(
+      useNativeComposeStore.getState().drafts.get(sessionKey)?.attachments,
+    ).toEqual([file, image]));
+
     useNativeComposeStore.getState().updateDraft(sessionKey, { platform: "cursor" });
     await waitFor(() => expect(
       useNativeComposeStore.getState().drafts.get(sessionKey)?.attachments,
-    ).toEqual([]));
+    ).toEqual([image]));
   });
 
   test("carries first-prompt mentions and pasted images through the provider lock", async () => {
@@ -758,6 +792,24 @@ describe("AgentNativeTab", () => {
     }));
     expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
     await waitFor(() => expect(adoptNativeAgentSessionMock).toHaveBeenCalledTimes(1));
+  });
+
+  test.each([...AGENT_PLATFORMS])("loads a transferred conversation for a %s tab", async (platform) => {
+    // The destination side used to gate on the three legacy providers, so a
+    // Cursor or Grok tab silently dropped the transfer it was opened to carry
+    // and never even asked for it.
+    render(
+      <AgentNativeTab
+        tabId={`tab-handoff-${platform}`}
+        data={identity(platform)}
+        isActive
+        agentHandoffId={`handoff-into-${platform}`}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(getAgentHandoffMock).toHaveBeenCalledWith(`handoff-into-${platform}`),
+    );
   });
 
   test("renders a mismatch notice instead of throwing on an unknown platform", async () => {
@@ -985,6 +1037,7 @@ describe("AgentNativeTab", () => {
       messages?: NativeMessage[];
       recoverableDispatch?: NativeAgentSessionProjection["recoverableDispatch"];
       composer?: Partial<NonNullable<NativeAgentSessionProjection["composer"]>>;
+      contextUsage?: NativeAgentSessionProjection["contextUsage"];
     } = {}) {
       getNativeAgentProjectionMock.mockImplementation(async (input) => ({
         platform: input.agent,
@@ -1007,6 +1060,7 @@ describe("AgentNativeTab", () => {
         ...(overrides.suggestedPrompt
           ? { suggestedPrompt: overrides.suggestedPrompt }
           : {}),
+        ...(overrides.contextUsage ? { contextUsage: overrides.contextUsage } : {}),
         interactions: [],
         composerControls: [],
         composer: {
@@ -1052,6 +1106,52 @@ describe("AgentNativeTab", () => {
         generation: "test-generation",
       }));
     }
+
+    test("does not render a context wheel when the provider reports no maximum", async () => {
+      seedProjection({
+        contextUsage: {
+          usedTokens: 222,
+          inputTokens: 200,
+          outputTokens: 22,
+          source: "provider",
+        },
+      });
+      render(<AgentNativeTab tabId="tab-unbounded-usage" data={identity("grok")} isActive />);
+
+      expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /Context window/ })).toBeNull();
+    });
+
+    test("renders the context wheel from the percentage the provider reported", async () => {
+      seedProjection({
+        contextUsage: {
+          usedTokens: 15_675,
+          maximumTokens: 500_000,
+          // Deliberately not 3%: the provider's own figure must win over the
+          // ratio this component could derive from the two token counts.
+          percentage: 42,
+          source: "provider",
+        },
+      });
+      render(<AgentNativeTab tabId="tab-bounded-usage" data={identity("grok")} isActive />);
+
+      expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Context window 42% used" })).toBeTruthy();
+    });
+
+    test("derives the context wheel percentage when the provider reports only a maximum", async () => {
+      seedProjection({
+        contextUsage: {
+          usedTokens: 15_675,
+          maximumTokens: 500_000,
+          source: "provider",
+        },
+      });
+      render(<AgentNativeTab tabId="tab-derived-usage" data={identity("grok")} isActive />);
+
+      expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Context window 3% used" })).toBeTruthy();
+    });
 
     test("routes a running-turn /steer to the session action instead of the queue", async () => {
       seedProjection({ phase: "running", actions: { steer: true } });
@@ -1142,6 +1242,61 @@ describe("AgentNativeTab", () => {
       await waitFor(() => expect(updateNativeAgentControlsMock).toHaveBeenCalled());
       expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
         update: { mode: "plan" },
+      });
+    });
+
+    test("keeps advanced session settings out of the input bar", async () => {
+      seedProjection({
+        composer: {
+          executionProfiles: [{ id: "reviewer", label: "Reviewer" }],
+          includeLocalSettings: true,
+          promptSuggestionsEnabled: true,
+        },
+      });
+      render(<AgentNativeTab tabId="tab-settings" data={identity("claude")} isActive />);
+
+      await screen.findByRole("textbox");
+      expect(screen.queryByRole("combobox", { name: "Execution profile" })).toBeNull();
+      expect(screen.queryByText("Provider default")).toBeNull();
+      expect(screen.queryByText("Local settings")).toBeNull();
+      expect(screen.queryByText("Suggestions")).toBeNull();
+    });
+
+    test("uses a projection updated by the separate settings surface for the next prompt", async () => {
+      seedProjection({
+        composer: {
+          executionProfiles: [{ id: "reviewer", label: "Reviewer" }],
+          includeLocalSettings: false,
+          promptSuggestionsEnabled: false,
+        },
+      });
+      const tabId = "tab-external-settings";
+      const sessionKey = createSessionKey("env-1", tabId);
+      render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+      const input = await screen.findByRole("textbox");
+      const initial = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+
+      act(() => {
+        useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+          ...initial,
+          revision: initial.revision + 1,
+          composer: {
+            ...initial.composer!,
+            selectedExecutionProfileId: "reviewer",
+            includeLocalSettings: true,
+            promptSuggestionsEnabled: true,
+          },
+        });
+      });
+      fireEvent.input(input, { target: { textContent: "use the new settings" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalled());
+      expect(dispatchNativeAgentIntentMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        prompt: "use the new settings",
+        subAgent: "reviewer",
+        includeLocalSettings: true,
+        promptSuggestions: true,
       });
     });
 

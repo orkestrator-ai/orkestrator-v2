@@ -5,6 +5,7 @@ import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { useConfigStore } from "@/stores/configStore";
 import type { TabInfo } from "@/types/paneLayout";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
@@ -1627,6 +1628,51 @@ describe("AgentInfoButton Codex runtime panel", () => {
 });
 
 describe("AgentInfoButton Claude session options", () => {
+  function neutralClaudeProjection(
+    composer: Partial<NonNullable<NativeAgentSessionProjection["composer"]>> = {},
+  ): NativeAgentSessionProjection {
+    return {
+      platform: "claude",
+      environmentId: ENVIRONMENT_ID,
+      sessionId: "claude-session-1",
+      connection: "connected",
+      turn: { phase: "idle" },
+      messages: [],
+      interactions: [],
+      composerControls: [],
+      composer: {
+        models: [],
+        fastModeEnabled: false,
+        fastModeAvailable: false,
+        modes: [],
+        executionProfiles: [{ id: "reviewer", label: "Reviewer" }],
+        includeLocalSettings: false,
+        promptSuggestionsEnabled: false,
+        ...composer,
+      },
+      capabilities: {
+        attachments: { files: true, images: true },
+        queue: true,
+        resume: true,
+        fork: true,
+        slashCommands: true,
+        backgroundTasks: false,
+        composer: {
+          provider: true,
+          model: true,
+          reasoning: true,
+          speed: false,
+          mode: true,
+          executionProfile: true,
+          localSettings: true,
+          promptSuggestions: true,
+        },
+      },
+      revision: 1,
+      generation: "test-generation",
+    };
+  }
+
   function seedClaude(extra: Record<string, unknown> = {}) {
     useClaudeStore.setState({
       clients: new Map([[ENVIRONMENT_ID, CLAUDE_CLIENT]]),
@@ -1680,6 +1726,146 @@ describe("AgentInfoButton Claude session options", () => {
     expect(useClaudeStore.getState().includeLocalSettings.get(CLAUDE_KEY)).toBe(true);
     expect(useClaudeStore.getState().promptSuggestionOptIn.get(CLAUDE_KEY)).toBe(true);
     expect((screen.getAllByRole("checkbox")[0] as HTMLInputElement).checked).toBe(true);
+  });
+
+  test("applies a provider-neutral execution profile and locks controls while pending", async () => {
+    const initial = neutralClaudeProjection();
+    const updated = neutralClaudeProjection({ selectedExecutionProfileId: "reviewer" });
+    let releaseUpdate!: (projection: NativeAgentSessionProjection) => void;
+    const pendingUpdate = new Promise<NativeAgentSessionProjection>((resolve) => {
+      releaseUpdate = resolve;
+    });
+    nativeInvokeMock.mockImplementation(async (command: string) =>
+      command === "update_native_agent_controls" ? pendingUpdate : undefined);
+    useNativeAgentProjectionStore.getState().setProjection(CLAUDE_KEY, initial);
+
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+    const select = screen.getByLabelText("Execution profile") as HTMLSelectElement;
+    const checkboxes = screen.getAllByRole("checkbox") as HTMLInputElement[];
+
+    fireEvent.change(select, { target: { value: "reviewer" } });
+
+    expect(select.disabled).toBe(true);
+    expect(checkboxes.every((checkbox) => checkbox.disabled)).toBe(true);
+    expect(nativeInvokeMock).toHaveBeenCalledWith(
+      "update_native_agent_controls",
+      {
+        environmentId: ENVIRONMENT_ID,
+        agent: "claude",
+        logicalSessionKey: CLAUDE_KEY,
+        update: { executionProfileId: "reviewer" },
+      },
+    );
+
+    releaseUpdate(updated);
+    await waitFor(() => expect(
+      useNativeAgentProjectionStore.getState().projections.get(CLAUDE_KEY),
+    ).toBe(updated));
+    expect(select.value).toBe("reviewer");
+    expect(select.disabled).toBe(false);
+    expect(checkboxes.every((checkbox) => !checkbox.disabled)).toBe(true);
+  });
+
+  test("does not replace a newer projection with a stale control response", async () => {
+    const initial = neutralClaudeProjection();
+    const staleResponse = {
+      ...neutralClaudeProjection({ selectedExecutionProfileId: "reviewer" }),
+      revision: 2,
+    };
+    const newerProjection = {
+      ...neutralClaudeProjection({
+        includeLocalSettings: true,
+        promptSuggestionsEnabled: true,
+      }),
+      revision: 3,
+    };
+    let releaseUpdate!: (projection: NativeAgentSessionProjection) => void;
+    const pendingUpdate = new Promise<NativeAgentSessionProjection>((resolve) => {
+      releaseUpdate = resolve;
+    });
+    nativeInvokeMock.mockImplementation(async (command: string) =>
+      command === "update_native_agent_controls" ? pendingUpdate : undefined);
+    useNativeAgentProjectionStore.getState().setProjection(CLAUDE_KEY, initial);
+
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+    const select = screen.getByLabelText("Execution profile") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "reviewer" } });
+
+    act(() => {
+      useNativeAgentProjectionStore.getState().setProjection(CLAUDE_KEY, newerProjection);
+    });
+    releaseUpdate(staleResponse);
+
+    await waitFor(() => expect(select.disabled).toBe(false));
+    expect(useNativeAgentProjectionStore.getState().projections.get(CLAUDE_KEY))
+      .toBe(newerProjection);
+  });
+
+  test("applies both provider-neutral Claude session toggles", async () => {
+    const initial = neutralClaudeProjection();
+    useNativeAgentProjectionStore.getState().setProjection(CLAUDE_KEY, initial);
+    nativeInvokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command !== "update_native_agent_controls") return undefined;
+      const current = useNativeAgentProjectionStore.getState().projections.get(CLAUDE_KEY)!;
+      const update = args?.update as {
+        includeLocalSettings?: boolean;
+        promptSuggestions?: boolean;
+      };
+      return {
+        ...current,
+        revision: current.revision + 1,
+        composer: {
+          ...current.composer!,
+          ...(update.includeLocalSettings === undefined
+            ? {} : { includeLocalSettings: update.includeLocalSettings }),
+          ...(update.promptSuggestions === undefined
+            ? {} : { promptSuggestionsEnabled: update.promptSuggestions }),
+        },
+      };
+    });
+
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+    const [localSettings, suggestions] = screen.getAllByRole("checkbox") as HTMLInputElement[];
+
+    fireEvent.click(localSettings!);
+    await waitFor(() => expect(localSettings!.checked).toBe(true));
+    fireEvent.click(suggestions!);
+    await waitFor(() => expect(suggestions!.checked).toBe(true));
+
+    expect(nativeInvokeMock).toHaveBeenNthCalledWith(
+      1,
+      "update_native_agent_controls",
+      expect.objectContaining({ update: { includeLocalSettings: true } }),
+    );
+    expect(nativeInvokeMock).toHaveBeenNthCalledWith(
+      2,
+      "update_native_agent_controls",
+      expect.objectContaining({ update: { promptSuggestions: true } }),
+    );
+  });
+
+  test("reports a provider-neutral control failure and keeps canonical state", async () => {
+    const initial = neutralClaudeProjection();
+    useNativeAgentProjectionStore.getState().setProjection(CLAUDE_KEY, initial);
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "update_native_agent_controls") {
+        throw new Error("settings unavailable");
+      }
+      return undefined;
+    });
+
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+    const localSettings = screen.getAllByRole("checkbox")[0] as HTMLInputElement;
+    fireEvent.click(localSettings);
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith("settings unavailable"));
+    expect(useNativeAgentProjectionStore.getState().projections.get(CLAUDE_KEY)).toBe(initial);
+    expect(localSettings.checked).toBe(false);
+    expect(localSettings.disabled).toBe(false);
   });
 
   test("neither checkbox is offered for a non-Claude provider", () => {
@@ -3848,5 +4034,320 @@ describe("AgentInfoButton runtime inventory", () => {
     open();
 
     expect(metricValue("Todos")).toBe("1");
+  });
+});
+
+describe("AgentInfoButton ACP agents", () => {
+  const ACP_KEY = createSessionKey(ENVIRONMENT_ID, TAB_ID);
+
+  // The config store is module-global. Restore the shipped default so a test
+  // that enables Cursor and Grok cannot change what a later file expects the
+  // transfer list to contain.
+  const enabledPlatformsBeforeSuite =
+    useConfigStore.getState().config.global.enabledAgentPlatforms;
+  afterEach(() => {
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: enabledPlatformsBeforeSuite,
+    });
+  });
+
+  function acpTab(platform: "cursor" | "grok"): TabInfo {
+    return {
+      id: TAB_ID,
+      type: "agent-native",
+      nativeAgentData: {
+        platform,
+        environmentId: ENVIRONMENT_ID,
+        containerId: "container-1",
+        isLocal: false,
+      },
+    } as TabInfo;
+  }
+
+  function acpProjection(
+    platform: "cursor" | "grok",
+    overrides: Partial<NativeAgentSessionProjection> = {},
+  ): NativeAgentSessionProjection {
+    return {
+      platform,
+      environmentId: ENVIRONMENT_ID,
+      sessionId: `${platform}-session-1`,
+      connection: "connected",
+      turn: { phase: "idle" },
+      messages: [],
+      interactions: [],
+      composerControls: [],
+      // The backend's own capability set for ACP agents: no fork, no compact,
+      // no provider-side session actions of any kind.
+      capabilities: {
+        attachments: { files: false, images: false },
+        queue: false,
+        resume: false,
+        fork: false,
+        slashCommands: false,
+        backgroundTasks: false,
+        composer: {
+          provider: true,
+          model: true,
+          reasoning: true,
+          speed: true,
+          mode: true,
+        },
+        actions: {},
+      },
+      revision: 1,
+      generation: "test",
+      ...overrides,
+    } as NativeAgentSessionProjection;
+  }
+
+  test("names a Grok session and renders the usage its bridge reported", () => {
+    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("grok", {
+      composer: {
+        models: [],
+        fastModeEnabled: null,
+        fastModeAvailable: false,
+        modes: [],
+        selectedModelId: "grok-4.6",
+      },
+      contextUsage: {
+        usedTokens: 15_675,
+        maximumTokens: 500_000,
+        percentage: 3.135,
+        inputTokens: 15_639,
+        outputTokens: 36,
+        cacheReadTokens: 5_888,
+        reasoningTokens: 31,
+        durationMs: 3_200,
+        source: "provider",
+      },
+      runtime: { mcpServers: 2, commands: 3, version: "1.0.3", state: "idle" },
+    }));
+
+    render(<AgentInfoButton activeTab={acpTab("grok")} />);
+    open();
+
+    expect(screen.getByRole("heading", { name: "Grok Build" })).toBeTruthy();
+    // The bridge reports no window of its own; the backend joins the selected
+    // model's `contextWindow` onto the snapshot, so a Grok session that has one
+    // must render the same meter the first-party providers do.
+    expect(screen.getByText("Context")).toBeTruthy();
+    expect(screen.getByText("3.1%")).toBeTruthy();
+    expect(
+      screen.getByText((_content, element) => element?.textContent === "16k / 500k"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText((_content, element) => element?.textContent === "484k available"),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("progressbar", { name: "3 percent of context used" }),
+    ).toBeTruthy();
+    expect(metricValue("Input")).toBe("16k");
+    expect(metricValue("Output")).toBe("36");
+    expect(metricValue("Cache read")).toBe("5.9k");
+    expect(metricValue("Reasoning")).toBe("31");
+    expect(metricValue("MCP")).toBe("2");
+    expect(metricValue("Commands")).toBe("3");
+    expect(popover().textContent).toContain("Grok Build 1.0.3");
+  });
+
+  test("shows Cursor's runtime and says nothing about tokens it never reports", () => {
+    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor", {
+      runtime: { commands: 7, state: "idle" },
+    }));
+
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+
+    expect(screen.getByRole("heading", { name: "Cursor Agent" })).toBeTruthy();
+    expect(metricValue("Commands")).toBe("7");
+    // No context meter, rather than one reading zero out of zero.
+    expect(popover().textContent).toContain(
+      "Usage will appear after this session reports its first token snapshot.",
+    );
+    expect(screen.queryByText("Context")).toBeNull();
+    // Cursor advertises no MCP inventory, so the panel must not claim it has none.
+    expect(screen.queryByText("MCP")).toBeNull();
+  });
+
+  test("shows token metrics without inventing a context window", () => {
+    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("grok", {
+      composer: {
+        models: [],
+        fastModeEnabled: null,
+        fastModeAvailable: false,
+        modes: [],
+        selectedModelId: "grok-4.6",
+      },
+      contextUsage: {
+        usedTokens: 222,
+        inputTokens: 200,
+        outputTokens: 22,
+        source: "provider",
+      },
+    }));
+
+    render(<AgentInfoButton activeTab={acpTab("grok")} />);
+    open();
+
+    expect(metricValue("Input")).toBe("200");
+    expect(metricValue("Output")).toBe("22");
+    // Assert the meter's own elements rather than the word "available": the
+    // runtime panel below renders "state unavailable"/"version unavailable" for
+    // an agent that reports neither, so a substring match there would pass or
+    // fail for reasons that have nothing to do with the context window.
+    expect(screen.queryByText("Context")).toBeNull();
+    expect(
+      screen.queryByRole("progressbar", { name: /percent of context used/ }),
+    ).toBeNull();
+    expect(
+      screen.queryAllByText((_content, element) => /^\S+ available$/.test(element?.textContent ?? "")),
+    ).toHaveLength(0);
+    expect(popover().textContent).toContain("Provider reported");
+  });
+
+  test("hides the provider actions an ACP agent cannot perform, but offers the transfer", () => {
+    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+
+    expect(screen.queryByRole("button", { name: /Fork session/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Compact/ })).toBeNull();
+    // A transfer needs nothing from the provider beyond reading its own
+    // transcript, so it survives a capability set that refuses everything else.
+    expect(screen.getByRole("button", { name: /Continue in/ })).toBeTruthy();
+    expect(screen.getByText("Session actions")).toBeTruthy();
+  });
+
+  test("offers every enabled agent except the source as a transfer destination", () => {
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "cursor", "grok", "opencode"],
+    });
+    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
+
+    for (const label of ["Claude", "Codex", "Grok", "OpenCode"]) {
+      expect(screen.getByRole("button", { name: label })).toBeTruthy();
+    }
+    // The source is named as the origin chip, never offered as a destination.
+    expect(screen.queryByRole("button", { name: "Cursor" })).toBeNull();
+  });
+
+  test("hides the transfer when no other agent is enabled", () => {
+    useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["cursor"] });
+    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+
+    expect(screen.queryByRole("button", { name: /Continue in/ })).toBeNull();
+    // Nothing else is available for an ACP session, so the heading goes too.
+    expect(screen.queryByText("Session actions")).toBeNull();
+  });
+
+  test("transfers an ACP conversation read from its authoritative projection", async () => {
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "cursor", "grok", "opencode"],
+    });
+    const projection = acpProjection("cursor", {
+      title: "Cursor investigated the flake",
+      messages: [{
+        id: "cursor-message-1",
+        role: "user",
+        content: "why is this test flaky",
+        parts: [{ type: "text", content: "why is this test flaky" }],
+        createdAt: "2026-08-14T10:00:00.000Z",
+      }],
+    });
+    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, projection);
+    const saved: Array<Record<string, unknown>> = [];
+    // An ACP session has no legacy client, so the transfer reads the backend
+    // projection twice and refuses unless both reads agree. Both answer the
+    // same snapshot; the revision guard is exercised by its own test below.
+    nativeInvokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+      if (command === "get_native_agent_projection") return projection;
+      if (command === "save_agent_handoff") {
+        saved.push(args.snapshot as Record<string, unknown>);
+        // Handoffs are immutable server-side, so the caller verifies the stored
+        // record matches what it wrote before caching it.
+        return {
+          id: args.handoffId,
+          environmentId: args.environmentId,
+          version: args.version,
+          snapshot: args.snapshot,
+          createdAt: "2026-08-14T10:00:00.000Z",
+        };
+      }
+      return undefined;
+    });
+
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Claude" }));
+
+    await waitFor(() =>
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
+    );
+    expect(saved.at(-1)).toMatchObject({
+      sourceProvider: "cursor",
+      destinationProvider: "claude",
+      sourceTitle: "Cursor investigated the flake",
+    });
+    const destinationTab = usePaneLayoutStore
+      .getState()
+      .getAllTabs(ENVIRONMENT_ID)
+      .find((tab) => tab.id !== TAB_ID)!;
+    expect(destinationTab.nativeAgentData?.platform).toBe("claude");
+    expect(destinationTab.displayTitle).toBe("Claude · from Cursor");
+    expect(destinationTab.agentHandoffId).toBeTruthy();
+  });
+
+  test("refuses an ACP transfer when the conversation moves between reads", async () => {
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "cursor", "grok", "opencode"],
+    });
+    const projection = acpProjection("grok", {
+      messages: [{
+        id: "grok-message-1",
+        role: "user",
+        content: "keep going",
+        parts: [{ type: "text", content: "keep going" }],
+        createdAt: "2026-08-14T10:00:00.000Z",
+      }],
+    });
+    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, projection);
+    let reads = 0;
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command !== "get_native_agent_projection") return undefined;
+      reads += 1;
+      // The second read lands after the agent advanced a revision.
+      return reads === 1 ? projection : { ...projection, revision: projection.revision + 1 };
+    });
+
+    render(<AgentInfoButton activeTab={acpTab("grok")} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Claude" }));
+
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Grok Build conversation changed while it was being transferred",
+      ),
+    );
+    expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
+  });
+
+  test("reports an agent that volunteers no runtime facts as unknown", () => {
+    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+
+    expect(popover().textContent).toContain("Cursor Agent does not report runtime details.");
   });
 });

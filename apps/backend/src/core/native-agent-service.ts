@@ -306,7 +306,8 @@ const RICH_NATIVE_CAPABILITIES: NativeAgentCapabilities = Object.freeze({
 function nativeCapabilities(agent: BuildPipelineAgent): NativeAgentCapabilities {
   if (agent === "cursor" || agent === "grok") {
     return {
-      attachments: { files: false, images: false },
+      // Both ACP agents read inline image content blocks; neither takes files.
+      attachments: { files: false, images: true },
       queue: false,
       resume: false,
       fork: false,
@@ -1326,26 +1327,26 @@ export class NativeAgentService {
         executionProfiles: providerComposer.executionProfiles,
       } : {}),
       ...(providerControls?.executionProfileId
-        ?? providerComposer?.selectedExecutionProfileId
         ?? session.controls?.executionProfileId
+        ?? providerComposer?.selectedExecutionProfileId
         ?? undefined
         ? {
             selectedExecutionProfileId: providerControls?.executionProfileId
-              ?? providerComposer?.selectedExecutionProfileId
               ?? session.controls?.executionProfileId
+              ?? providerComposer?.selectedExecutionProfileId
               ?? undefined,
           }
         : {}),
       ...(capabilities.composer.localSettings ? {
         includeLocalSettings: providerControls?.includeLocalSettings
-          ?? providerComposer?.includeLocalSettings
           ?? session.controls?.includeLocalSettings
+          ?? providerComposer?.includeLocalSettings
           ?? false,
       } : {}),
       ...(capabilities.composer.promptSuggestions ? {
         promptSuggestionsEnabled: providerControls?.promptSuggestions
-          ?? providerComposer?.promptSuggestionsEnabled
           ?? session.controls?.promptSuggestions
+          ?? providerComposer?.promptSuggestionsEnabled
           ?? false,
       } : {}),
     };

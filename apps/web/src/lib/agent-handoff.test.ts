@@ -7,6 +7,7 @@ import {
   test,
 } from "bun:test";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
+import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import * as realBackend from "@/lib/backend";
 
 const realBackendSnapshot = { ...realBackend };
@@ -165,11 +166,17 @@ beforeEach(() => {
 describe("agent handoff serialization", () => {
   test("exports the stable provider and version contract", () => {
     expect(AGENT_HANDOFF_VERSION).toBe(1);
+    // Every platform is transferable, and the three original labels are frozen:
+    // they are written into persisted snapshots and into the bootstrap prompt,
+    // so renaming one would change how older records read back.
     expect(AGENT_PROVIDER_LABELS).toEqual({
       claude: "Claude",
       codex: "Codex",
+      cursor: "Cursor",
+      grok: "Grok",
       opencode: "OpenCode",
     });
+    expect(Object.keys(AGENT_PROVIDER_LABELS).sort()).toEqual([...AGENT_PLATFORMS].sort());
   });
 
   test("serializes completed tool evidence as safe JSON without thinking", () => {
@@ -795,6 +802,7 @@ describe("agent handoff validation and tool counting", () => {
       { type: "tool-invocation", content: "c", toolDiff: "not-an-object" },
       { type: "tool-invocation", content: "c", toolName: 7 },
       { type: "file", content: "c", fileUrl: [] },
+      { type: "file", content: "c", filename: 9 },
       { type: "subagent", content: "c", subagentName: 1 },
     ]) {
       const candidate = {

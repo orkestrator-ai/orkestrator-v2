@@ -4,6 +4,10 @@ import type {
 } from "@/lib/chat/native-message-types";
 import { isClientOnlyNativeMessage } from "@/lib/chat/client-only-messages";
 import * as backend from "@/lib/backend";
+import {
+  AGENT_PLATFORMS,
+  type AgentPlatform,
+} from "@orkestrator/protocol/agent-platforms";
 
 export const AGENT_HANDOFF_VERSION = 1;
 export const AGENT_HANDOFF_PROMPT_BUDGET = 180_000;
@@ -35,11 +39,27 @@ const HANDOFF_CURRENT_USER_MESSAGE =
   "The handoff above is prior conversation history. Respond to the user's new "
   + "message below as the latest message in that continued conversation:";
 
-export type AgentProvider = "claude" | "codex" | "opencode";
+/**
+ * Every agent platform can both originate and receive a transfer.
+ *
+ * A handoff is a transcript plus a bootstrap prompt, so it needs nothing from a
+ * provider beyond the ability to read its own conversation and be sent text.
+ * This is an alias rather than its own union so a platform added to the shared
+ * table cannot be silently left out of transfers.
+ */
+export type AgentProvider = AgentPlatform;
 
+/**
+ * Short names, used in the transfer chips and inside the bootstrap prompt the
+ * destination model reads. Deliberately not `AGENT_PLATFORM_LABELS`, whose
+ * longer product names ("Claude Code", "Grok Build") read as noise in a
+ * sentence and would change prompts the existing three providers already send.
+ */
 export const AGENT_PROVIDER_LABELS: Record<AgentProvider, string> = {
   claude: "Claude",
   codex: "Codex",
+  cursor: "Cursor",
+  grok: "Grok",
   opencode: "OpenCode",
 };
 
@@ -102,7 +122,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isProvider(value: unknown): value is AgentProvider {
-  return value === "claude" || value === "codex" || value === "opencode";
+  return typeof value === "string"
+    && (AGENT_PLATFORMS as readonly string[]).includes(value);
 }
 
 function isNonBlankString(value: unknown): value is string {
@@ -121,6 +142,7 @@ function isValidTimestamp(value: unknown): value is string {
  */
 const OPTIONAL_PART_STRING_FIELDS = [
   "fileUrl",
+  "filename",
   "toolName",
   "toolTitle",
   "toolOutput",

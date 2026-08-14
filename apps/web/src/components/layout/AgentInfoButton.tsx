@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -88,7 +89,15 @@ import {
   normalizeNativeMessages,
 } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
-import type { NativeAgentRuntimeSummary } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentControlUpdate,
+  NativeAgentRuntimeSummary,
+} from "@orkestrator/protocol/native-agent";
+import {
+  AGENT_PLATFORMS,
+  AGENT_PLATFORM_LABELS,
+  type AgentPlatform,
+} from "@orkestrator/protocol/agent-platforms";
 
 interface AgentInfoButtonProps {
   activeTab: TabInfo | null;
@@ -106,6 +115,11 @@ interface SessionValueState<T> {
   value: T;
 }
 
+interface ControlUpdateState {
+  actionId: number;
+  sessionIdentity: string;
+}
+
 interface CodexSteerRetry {
   sessionIdentity: string;
   text: string;
@@ -115,7 +129,7 @@ interface CodexSteerRetry {
 const EMPTY_CLAUDE_TASKS: Record<string, never> = {};
 
 interface ActiveNativeSession {
-  provider: "claude" | "opencode" | "codex";
+  provider: AgentPlatform;
   providerLabel: string;
   environmentId: string;
   sessionKey: string;
@@ -125,10 +139,17 @@ interface ActiveNativeSession {
 function resolveActiveNativeSession(tab: TabInfo | null): ActiveNativeSession | null {
   if (!tab) return null;
   const data = getNativeAgentData(tab);
-  if (data?.platform !== "claude" && data?.platform !== "opencode" && data?.platform !== "codex") return null;
+  if (!data?.platform || !AGENT_PLATFORMS.includes(data.platform)) return null;
   return {
     provider: data.platform,
-    providerLabel: data.platform === "opencode" ? "OpenCode" : `${AGENT_PROVIDER_LABELS[data.platform]} Native`,
+    // Claude, Codex and OpenCode keep the headings they have always had. An
+    // agent added since takes its name from the shared platform table rather
+    // than growing a second one here.
+    providerLabel: data.platform === "opencode"
+      ? "OpenCode"
+      : data.platform === "claude" || data.platform === "codex"
+        ? `${AGENT_PROVIDER_LABELS[data.platform]} Native`
+        : AGENT_PLATFORM_LABELS[data.platform],
     environmentId: data.environmentId,
     sessionKey: createSessionKey(data.environmentId, tab.id),
     providerSessionId: data.sessionId,
@@ -466,12 +487,73 @@ function CodexRuntimePanel({
   );
 }
 
+/**
+ * Runtime facts for an agent with no bespoke panel of its own.
+ *
+ * Every count is optional because the neutral summary is assembled from
+ * whatever the provider volunteered: Grok advertises its MCP servers, its
+ * commands and its version, Cursor only its commands. Rendering a missing count
+ * as "0" would report an absence of servers rather than an absence of an
+ * answer, so unknown fields are omitted instead.
+ */
+function AgentRuntimePanel({
+  runtime,
+  providerLabel,
+}: {
+  runtime: NativeAgentRuntimeSummary | undefined;
+  providerLabel: string;
+}) {
+  const metrics = (
+    [
+      ["MCP", runtime?.mcpServers],
+      ["Commands", runtime?.commands],
+      ["Skills", runtime?.skills],
+      ["Hooks", runtime?.hooks],
+    ] as const
+  ).flatMap(([label, value]) =>
+    value === undefined ? [] : [{ label, value: String(value) }],
+  );
+
+  if (metrics.length === 0 && !runtime?.state && !runtime?.version) {
+    return (
+      <div className="text-xs text-muted-foreground">
+        {providerLabel} does not report runtime details.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {metrics.length > 0 ? (
+        <div className="grid grid-cols-3 gap-2">
+          {metrics.map((metric) => (
+            <Metric key={metric.label} label={metric.label} value={metric.value} />
+          ))}
+        </div>
+      ) : null}
+      {runtime?.state || runtime?.version ? (
+        <div className="flex items-center justify-between gap-3 text-[10px] text-muted-foreground">
+          <span>{runtime.state ?? "state unavailable"}</span>
+          <span>
+            {runtime.version ? `${providerLabel} ${runtime.version}` : "version unavailable"}
+          </span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+type AgentInfoUsageSnapshot = Omit<ContextUsageSnapshot, "totalTokens" | "percentUsed"> & {
+  totalTokens?: number;
+  percentUsed?: number;
+};
+
 function UsagePanel({
   usage,
   modelId,
   rateLimits,
 }: {
-  usage: ContextUsageSnapshot | undefined;
+  usage: AgentInfoUsageSnapshot | undefined;
   modelId: string | undefined;
   /** Claude reports these independently of context occupancy. */
   rateLimits?: AgentRateLimitWindow[];
@@ -498,32 +580,40 @@ function UsagePanel({
   }
 
   const used = Math.max(0, usage.usedTokens);
-  const total = Math.max(0, usage.totalTokens);
-  const remaining = Math.max(0, total - used);
+  const contextWindow = usage.totalTokens !== undefined
+    && Number.isFinite(usage.totalTokens)
+    && usage.percentUsed !== undefined
+    && Number.isFinite(usage.percentUsed)
+    ? {
+        total: Math.max(0, usage.totalTokens),
+        percentUsed: usage.percentUsed,
+        remaining: Math.max(0, Math.max(0, usage.totalTokens) - used),
+      }
+    : null;
 
   return (
     <div className="space-y-4">
-      <div>
+      {contextWindow ? <div>
         <div className="mb-2 flex items-end justify-between gap-3">
           <div>
             <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
               Context
             </div>
             <div className="mt-1 font-mono text-xl tabular-nums text-foreground">
-              {usage.percentUsed.toFixed(usage.percentUsed >= 10 ? 0 : 1)}%
+              {contextWindow.percentUsed.toFixed(contextWindow.percentUsed >= 10 ? 0 : 1)}%
             </div>
           </div>
           <div className="text-right font-mono text-xs tabular-nums text-muted-foreground">
-            <div>{formatTokenCount(used)} / {formatTokenCount(total)}</div>
-            <div>{formatTokenCount(remaining)} available</div>
+            <div>{formatTokenCount(used)} / {formatTokenCount(contextWindow.total)}</div>
+            <div>{formatTokenCount(contextWindow.remaining)} available</div>
           </div>
         </div>
         <Progress
-          value={usage.percentUsed}
-          aria-label={`${usage.percentUsed.toFixed(0)} percent of context used`}
+          value={contextWindow.percentUsed}
+          aria-label={`${contextWindow.percentUsed.toFixed(0)} percent of context used`}
           className="h-1.5"
         />
-      </div>
+      </div> : null}
 
       <div className="grid grid-cols-2 gap-x-3 gap-y-4">
         {usage.inputTokens !== undefined ? (
@@ -664,9 +754,14 @@ export function AgentInfoButton({
     sessionIdentity: null,
     value: false,
   });
+  const [controlUpdateState, setControlUpdateState] = useState<ControlUpdateState | null>(
+    null,
+  );
   const triggerRef = useRef<HTMLButtonElement>(null);
   const restoreFocusRef = useRef(false);
   const actionIdRef = useRef(0);
+  const controlUpdateIdRef = useRef(0);
+  const controlUpdateInFlightRef = useRef<ControlUpdateState | null>(null);
   const shareVersionRef = useRef(0);
   const codexSteerRetryRef = useRef<CodexSteerRetry | null>(null);
   const activeSession = useMemo(
@@ -676,9 +771,76 @@ export function AgentInfoButton({
   const enabledAgentPlatforms = useConfigStore(
     (state) => state.config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
   );
+  /*
+   * Every platform can send and receive a transfer, so the only thing that can
+   * make one impossible is having nowhere to send it: an agent the user has
+   * disabled is not a destination, and neither is the source itself.
+   */
+  const handoffDestinations = activeSession
+    ? (Object.keys(AGENT_PROVIDER_LABELS) as AgentProvider[]).filter(
+        (provider) => provider !== activeSession.provider
+          && enabledAgentPlatforms.includes(provider),
+      )
+    : [];
+  const canHandoff = handoffDestinations.length > 0;
   const neutralProjection = useNativeAgentProjectionStore((state) =>
     activeSession ? state.projections.get(activeSession.sessionKey) : undefined,
   );
+  const neutralControlUpdatePending = controlUpdateState?.sessionIdentity
+    === activeSession?.sessionKey;
+  const updateNeutralControls = useCallback(async (update: NativeAgentControlUpdate) => {
+    const session = activeSession;
+    if (!session) return;
+    if (controlUpdateInFlightRef.current?.sessionIdentity === session.sessionKey) return;
+
+    const pending = {
+      actionId: ++controlUpdateIdRef.current,
+      sessionIdentity: session.sessionKey,
+    };
+    controlUpdateInFlightRef.current = pending;
+    setControlUpdateState(pending);
+    const startingProjection = useNativeAgentProjectionStore
+      .getState().projections.get(session.sessionKey);
+    try {
+      const next = await updateNativeAgentControls({
+        environmentId: session.environmentId,
+        agent: session.provider,
+        logicalSessionKey: session.sessionKey,
+        update,
+      });
+      if (!next) throw new Error(`${session.providerLabel} session is unavailable`);
+      const projectionState = useNativeAgentProjectionStore.getState();
+      const current = projectionState.projections.get(session.sessionKey);
+      const currentReplacedSession = current?.sessionId && next.sessionId
+        && current.sessionId !== next.sessionId;
+      const currentSupersededGeneration = startingProjection
+        && current
+        && current.generation !== startingProjection.generation
+        && next.generation === startingProjection.generation;
+      const currentHasNewerRevision = current
+        && current.generation === next.generation
+        && current.revision > next.revision;
+      if (
+        !currentReplacedSession
+        && !currentSupersededGeneration
+        && !currentHasNewerRevision
+      ) {
+        projectionState.setProjection(session.sessionKey, next);
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : `Failed to update ${session.providerLabel} settings`,
+      );
+    } finally {
+      if (controlUpdateInFlightRef.current?.actionId === pending.actionId) {
+        controlUpdateInFlightRef.current = null;
+      }
+      setControlUpdateState((current) =>
+        current?.actionId === pending.actionId ? null : current);
+    }
+  }, [activeSession]);
   const neutralMessages = useMemo(
     () => normalizeNativeMessages(
       (neutralProjection?.messages ?? []) as NativeMessage[],
@@ -806,7 +968,20 @@ export function AgentInfoButton({
       : undefined,
   );
 
-  const usage = (
+  const neutralContextUsage = neutralProjection?.contextUsage;
+  const neutralMaximumTokens = neutralContextUsage?.maximumTokens;
+  const neutralUsage: AgentInfoUsageSnapshot | undefined = neutralContextUsage ? {
+    ...neutralContextUsage,
+    usedTokens: neutralContextUsage.usedTokens,
+    ...(neutralMaximumTokens !== undefined
+      && Number.isFinite(neutralMaximumTokens)
+      && neutralMaximumTokens > 0 ? {
+      totalTokens: neutralMaximumTokens,
+      percentUsed: neutralContextUsage.percentage
+        ?? neutralContextUsage.usedTokens / neutralMaximumTokens * 100,
+    } : {}),
+  } : undefined;
+  const usage: AgentInfoUsageSnapshot | undefined = (
     activeSession?.provider === "claude"
       ? claudeUsage
       : activeSession?.provider === "opencode"
@@ -814,17 +989,7 @@ export function AgentInfoButton({
         : activeSession?.provider === "codex"
           ? codexUsage
           : undefined
-  ) ?? (neutralProjection?.contextUsage ? {
-      ...neutralProjection.contextUsage,
-      usedTokens: neutralProjection.contextUsage.usedTokens,
-      totalTokens: neutralProjection.contextUsage.maximumTokens
-        ?? neutralProjection.contextUsage.usedTokens,
-      percentUsed: neutralProjection.contextUsage.percentage
-        ?? (neutralProjection.contextUsage.maximumTokens
-          ? neutralProjection.contextUsage.usedTokens
-            / neutralProjection.contextUsage.maximumTokens * 100
-          : 0),
-    } : undefined);
+  ) ?? neutralUsage;
   const neutralRateLimits = neutralProjection?.rateLimits
     ?? neutralProjection?.contextUsage?.rateLimits;
   const liveClaudeTasks = neutralProjection?.backgroundTasks
@@ -950,6 +1115,7 @@ export function AgentInfoButton({
   };
 
   const openHandoffTab = (
+    source: AgentProvider,
     destination: AgentProvider,
     handoffId: string,
   ) => {
@@ -966,7 +1132,7 @@ export function AgentInfoButton({
     const tab: TabInfo = {
       id,
       type: "agent-native",
-      displayTitle: `${destinationLabel} · from ${AGENT_PROVIDER_LABELS[activeSession.provider]}`,
+      displayTitle: `${destinationLabel} · from ${AGENT_PROVIDER_LABELS[source]}`,
       agentHandoffId: handoffId,
       nativeAgentData: { ...nativeData, platform: destination },
     };
@@ -1240,12 +1406,18 @@ export function AgentInfoButton({
         sourceProvider: sourceSession.provider,
         destinationProvider: destination,
         sourceSessionId,
-        sourceTitle:
+        // The legacy stores answer for the three providers that have one; every
+        // other agent's title lives only on the projection, which is also the
+        // fallback while a legacy store has not loaded its session yet.
+        sourceTitle: (
           sourceSession.provider === "claude"
             ? claudeSession?.title
             : sourceSession.provider === "opencode"
               ? openCodeSession?.title
-              : codexSession?.title,
+              : sourceSession.provider === "codex"
+                ? codexSession?.title
+                : undefined
+        ) ?? neutralProjection?.title,
         sourceModel: modelId,
         sourceAgent:
           sourceSession.provider === "claude"
@@ -1264,7 +1436,7 @@ export function AgentInfoButton({
         await deleteAgentHandoff(handoff.id, handoff.environmentId);
         return;
       }
-      openHandoffTab(destination, handoff.id);
+      openHandoffTab(sourceSession.provider, destination, handoff.id);
       toast.success(
         `Continuing in ${AGENT_PROVIDER_LABELS[destination]} with `
         + `${formatCount(handoff.stats.messageCount, "message")} and `
@@ -1469,18 +1641,14 @@ export function AgentInfoButton({
                       Execution profile
                     </div>
                     <select
+                      disabled={neutralControlUpdatePending}
                       value={neutralProjection?.composer?.selectedExecutionProfileId
                         ?? (activeSession.provider === "claude" ? claudeAgent : openCodeAgent)
                         ?? ""}
                       onChange={(event) => {
                         const value = event.target.value || undefined;
                         if (neutralProjection) {
-                          void updateNativeAgentControls({
-                            environmentId: activeSession.environmentId,
-                            agent: activeSession.provider,
-                            logicalSessionKey: activeSession.sessionKey,
-                            update: { executionProfileId: value ?? null },
-                          });
+                          void updateNeutralControls({ executionProfileId: value ?? null });
                           return;
                         }
                         if (activeSession.provider === "claude") {
@@ -1539,15 +1707,11 @@ export function AgentInfoButton({
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
                     <input
                       type="checkbox"
+                      disabled={neutralControlUpdatePending}
                       checked={neutralProjection?.composer?.includeLocalSettings ?? includeLocalSettings}
                       onChange={(event) => {
                         if (neutralProjection) {
-                          void updateNativeAgentControls({
-                            environmentId: activeSession.environmentId,
-                            agent: activeSession.provider,
-                            logicalSessionKey: activeSession.sessionKey,
-                            update: { includeLocalSettings: event.target.checked },
-                          });
+                          void updateNeutralControls({ includeLocalSettings: event.target.checked });
                         } else useClaudeStore.getState().setIncludeLocalSettings(
                           activeSession.sessionKey,
                           event.target.checked,
@@ -1559,15 +1723,11 @@ export function AgentInfoButton({
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
                     <input
                       type="checkbox"
+                      disabled={neutralControlUpdatePending}
                       checked={neutralProjection?.composer?.promptSuggestionsEnabled ?? promptSuggestionOptIn}
                       onChange={(event) => {
                         if (neutralProjection) {
-                          void updateNativeAgentControls({
-                            environmentId: activeSession.environmentId,
-                            agent: activeSession.provider,
-                            logicalSessionKey: activeSession.sessionKey,
-                            update: { promptSuggestions: event.target.checked },
-                          });
+                          void updateNeutralControls({ promptSuggestions: event.target.checked });
                         } else useClaudeStore.getState().setPromptSuggestionOptIn(
                           activeSession.sessionKey,
                           event.target.checked,
@@ -1579,69 +1739,67 @@ export function AgentInfoButton({
                 </div>
               ) : null}
 
-              <div className="space-y-2 border-t border-border/60 pt-4">
-                <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
-                  Session actions
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  {canFork ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={!currentSessionId || busyAction !== null}
-                      onClick={() => void forkCurrent()}
-                      className="justify-start gap-2"
-                    >
-                      <Copy className="h-3.5 w-3.5" />
-                      Fork session
-                    </Button>
-                  ) : null}
-                  {canCompact ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={!currentSessionId || busyAction !== null}
-                      onClick={() => void compactCurrent()}
-                      className="justify-start gap-2"
-                    >
-                      <Scissors className="h-3.5 w-3.5" />
-                      Compact
-                    </Button>
-                  ) : null}
+              {canFork || canCompact || canHandoff ? (
+                <div className="space-y-2 border-t border-border/60 pt-4">
+                  <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+                    Session actions
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {canFork ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!currentSessionId || busyAction !== null}
+                        onClick={() => void forkCurrent()}
+                        className="justify-start gap-2"
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                        Fork session
+                      </Button>
+                    ) : null}
+                    {canCompact ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!currentSessionId || busyAction !== null}
+                        onClick={() => void compactCurrent()}
+                        className="justify-start gap-2"
+                      >
+                        <Scissors className="h-3.5 w-3.5" />
+                        Compact
+                      </Button>
+                    ) : null}
 
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={
-                      !currentSessionId
-                      || currentSessionLoading
-                      || busyAction !== null
-                    }
-                    aria-expanded={handoffOpen}
-                    onClick={() => setHandoffOpen((value) => !value)}
-                    className={cn(
-                      "col-span-2 justify-start gap-2",
-                      handoffOpen && "border-primary/40 bg-primary/5",
-                    )}
-                  >
-                    <ArrowRightLeft className="h-3.5 w-3.5" />
-                    Continue in…
-                  </Button>
+                    {canHandoff ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={
+                          !currentSessionId
+                          || currentSessionLoading
+                          || busyAction !== null
+                        }
+                        aria-expanded={handoffOpen}
+                        onClick={() => setHandoffOpen((value) => !value)}
+                        className={cn(
+                          "col-span-2 justify-start gap-2",
+                          handoffOpen && "border-primary/40 bg-primary/5",
+                        )}
+                      >
+                        <ArrowRightLeft className="h-3.5 w-3.5" />
+                        Continue in…
+                      </Button>
+                    ) : null}
 
-                  {handoffOpen && currentSessionId ? (
-                    <div className="col-span-2 rounded-lg border border-border/70 bg-muted/20 p-2.5">
-                      <div className="mb-2 flex items-center gap-2">
-                        <span className="rounded-md border border-border/70 bg-background px-2 py-1 text-[11px] font-medium">
-                          {AGENT_PROVIDER_LABELS[activeSession.provider]}
-                        </span>
-                        <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                        <div className="grid min-w-0 flex-1 grid-cols-2 gap-1.5">
-                          {(Object.keys(AGENT_PROVIDER_LABELS) as AgentProvider[])
-                            .filter((provider) =>
-                              provider !== activeSession.provider
-                              && enabledAgentPlatforms.includes(provider)
-                            )
-                            .map((provider) => (
+                    {canHandoff && handoffOpen && currentSessionId ? (
+                      <div className="col-span-2 rounded-lg border border-border/70 bg-muted/20 p-2.5">
+                        <div className="mb-2 flex items-center gap-2">
+                          <span className="rounded-md border border-border/70 bg-background px-2 py-1 text-[11px] font-medium">
+                            {AGENT_PROVIDER_LABELS[activeSession.provider]}
+                          </span>
+                          <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          <div className="grid min-w-0 flex-1 grid-cols-2 gap-1.5">
+                            {handoffDestinations.map((provider) => (
                               <Button
                                 key={provider}
                                 variant="secondary"
@@ -1660,256 +1818,257 @@ export function AgentInfoButton({
                                   : AGENT_PROVIDER_LABELS[provider]}
                               </Button>
                             ))}
+                          </div>
                         </div>
+                        <p className="text-[10px] leading-relaxed text-muted-foreground">
+                          Copies the completed transcript and tool history into a new
+                          agent. This source session stays intact; live tasks and
+                          approvals do not transfer.
+                        </p>
                       </div>
-                      <p className="text-[10px] leading-relaxed text-muted-foreground">
-                        Copies the completed transcript and tool history into a new
-                        agent. This source session stays intact; live tasks and
-                        approvals do not transfer.
-                      </p>
-                    </div>
-                  ) : null}
+                    ) : null}
 
-                  {activeSession.provider === "claude" && currentSessionId ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={busyAction !== null}
-                      className="justify-start gap-2"
-                      onClick={() => void runAction("rewind", async () => {
-                        const target = claudeSession?.messages
-                          .filter((message) => message.role === "user")
-                          .at(-1) ?? neutralMessages
-                            .filter((message) => message.role === "user")
-                            .at(-1);
-                        if (!target?.id) throw new Error("No file checkpoint is available");
-                        const preview = claudeClient
-                          ? await rewindClaudeFiles(claudeClient, currentSessionId, target.id, true)
-                          : (await performNativeAgentSessionAction({
-                              environmentId: activeSession.environmentId,
-                              agent: activeSession.provider,
-                              logicalSessionKey: activeSession.sessionKey,
-                              action: { kind: "rewind-files", messageId: target.id, dryRun: true },
-                            })).preview;
-                        /*
-                         * This mutates the worktree, so the confirmation names
-                         * the message it is anchored to and lists the files it
-                         * will touch. It used to paste a truncated
-                         * `JSON.stringify` of the dry run into the dialog.
-                         */
-                        const { files, fileCount } = summarizeRewindPreview(preview);
-                        const shown = files.slice(0, 10);
-                        const body = fileCount === 0
-                          ? "Claude reported no file changes for this checkpoint."
-                          : [
-                              `${fileCount} ${fileCount === 1 ? "file" : "files"} will be restored:`,
-                              ...shown.map((file) => `  • ${file}`),
-                              ...(files.length > shown.length
-                                ? [`  • …and ${files.length - shown.length} more`]
-                                : []),
-                            ].join("\n");
-                        if (!window.confirm(
-                          [
-                            `Rewind your files to the state before ${describeRewindTarget(target.content)}?`,
-                            body,
-                            "This overwrites the working tree and cannot be undone.",
-                          ].join("\n\n"),
-                        )) return;
-                        if (claudeClient) {
-                          await rewindClaudeFiles(claudeClient, currentSessionId, target.id);
-                        } else {
-                          await performNativeAgentSessionAction({
-                            environmentId: activeSession.environmentId,
-                            agent: activeSession.provider,
-                            logicalSessionKey: activeSession.sessionKey,
-                            action: { kind: "rewind-files", messageId: target.id },
-                          });
-                        }
-                        toast.success(
-                          fileCount === 0
-                            ? "Claude files rewound"
-                            : `Claude restored ${fileCount} ${fileCount === 1 ? "file" : "files"}`,
-                        );
-                      })}
-                    >
-                      <RotateCcw className="h-3.5 w-3.5" />
-                      Rewind files
-                    </Button>
-                  ) : null}
-
-                  {activeSession.provider === "opencode" && currentSessionId ? (
-                    <>
+                    {activeSession.provider === "claude" && currentSessionId ? (
                       <Button
                         variant="outline"
                         size="sm"
                         disabled={busyAction !== null}
                         className="justify-start gap-2"
-                        onClick={() => void runAction("undo", async () => {
-                          const messageId = openCodeSession?.messages
+                        onClick={() => void runAction("rewind", async () => {
+                          const target = claudeSession?.messages
                             .filter((message) => message.role === "user")
-                            .at(-1)?.id ?? neutralMessages
+                            .at(-1) ?? neutralMessages
                               .filter((message) => message.role === "user")
-                              .at(-1)?.id;
-                          if (openCodeClient) {
-                            await revertOpenCodeSession(openCodeClient, currentSessionId, messageId);
+                              .at(-1);
+                          if (!target?.id) throw new Error("No file checkpoint is available");
+                          const preview = claudeClient
+                            ? await rewindClaudeFiles(claudeClient, currentSessionId, target.id, true)
+                            : (await performNativeAgentSessionAction({
+                                environmentId: activeSession.environmentId,
+                                agent: activeSession.provider,
+                                logicalSessionKey: activeSession.sessionKey,
+                                action: { kind: "rewind-files", messageId: target.id, dryRun: true },
+                              })).preview;
+                          /*
+                           * This mutates the worktree, so the confirmation names
+                           * the message it is anchored to and lists the files it
+                           * will touch. It used to paste a truncated
+                           * `JSON.stringify` of the dry run into the dialog.
+                           */
+                          const { files, fileCount } = summarizeRewindPreview(preview);
+                          const shown = files.slice(0, 10);
+                          const body = fileCount === 0
+                            ? "Claude reported no file changes for this checkpoint."
+                            : [
+                                `${fileCount} ${fileCount === 1 ? "file" : "files"} will be restored:`,
+                                ...shown.map((file) => `  • ${file}`),
+                                ...(files.length > shown.length
+                                  ? [`  • …and ${files.length - shown.length} more`]
+                                  : []),
+                              ].join("\n");
+                          if (!window.confirm(
+                            [
+                              `Rewind your files to the state before ${describeRewindTarget(target.content)}?`,
+                              body,
+                              "This overwrites the working tree and cannot be undone.",
+                            ].join("\n\n"),
+                          )) return;
+                          if (claudeClient) {
+                            await rewindClaudeFiles(claudeClient, currentSessionId, target.id);
                           } else {
                             await performNativeAgentSessionAction({
                               environmentId: activeSession.environmentId,
                               agent: activeSession.provider,
                               logicalSessionKey: activeSession.sessionKey,
-                              action: { kind: "undo", messageId },
+                              action: { kind: "rewind-files", messageId: target.id },
                             });
                           }
-                          toast.success("OpenCode session reverted");
+                          toast.success(
+                            fileCount === 0
+                              ? "Claude files rewound"
+                              : `Claude restored ${fileCount} ${fileCount === 1 ? "file" : "files"}`,
+                          );
                         })}
                       >
                         <RotateCcw className="h-3.5 w-3.5" />
-                        Undo turn
+                        Rewind files
                       </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={busyAction !== null}
-                        className="justify-start gap-2"
-                        onClick={() => void runAction(
-                          "share",
-                          async ({ isCurrent, sessionIdentity: actionIdentity }) => {
-                            if (!window.confirm(
-                              "Create an OpenCode share link? The conversation will leave this machine and be accessible to anyone with the link.",
-                            )) return;
-                            shareVersionRef.current += 1;
-                            const url = openCodeClient
-                              ? await shareOpenCodeSession(openCodeClient, currentSessionId)
-                              : (await performNativeAgentSessionAction({
-                                  environmentId: activeSession.environmentId,
-                                  agent: activeSession.provider,
-                                  logicalSessionKey: activeSession.sessionKey,
-                                  action: { kind: "share" },
-                                })).shareUrl;
-                            /*
-                             * The conversation is published the moment `share()`
-                             * resolves. Latch that first: every failure after this
-                             * point (a missing URL, a clipboard rejection on focus
-                             * or permission grounds) used to skip the flag, so the
-                             * user saw an error while the link was live and
-                             * "Stop sharing" never rendered.
-                             */
-                            if (isCurrent()) {
-                              setShareState({
-                                sessionIdentity: actionIdentity,
-                                value: true,
+                    ) : null}
+
+                    {activeSession.provider === "opencode" && currentSessionId ? (
+                      <>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={busyAction !== null}
+                          className="justify-start gap-2"
+                          onClick={() => void runAction("undo", async () => {
+                            const messageId = openCodeSession?.messages
+                              .filter((message) => message.role === "user")
+                              .at(-1)?.id ?? neutralMessages
+                                .filter((message) => message.role === "user")
+                                .at(-1)?.id;
+                            if (openCodeClient) {
+                              await revertOpenCodeSession(openCodeClient, currentSessionId, messageId);
+                            } else {
+                              await performNativeAgentSessionAction({
+                                environmentId: activeSession.environmentId,
+                                agent: activeSession.provider,
+                                logicalSessionKey: activeSession.sessionKey,
+                                action: { kind: "undo", messageId },
                               });
                             }
-                            // The originating session is now shared, but a
-                            // different active session must not receive its URL,
-                            // clipboard side effect, or notification.
-                            if (!isCurrent()) return;
-                            if (!url) {
-                              toast.warning(
-                                "Session shared, but OpenCode did not return the link. Use Stop sharing to revoke it.",
-                              );
-                              return;
-                            }
-                            try {
-                              await navigator.clipboard.writeText(url);
-                              if (isCurrent()) toast.success("Share link copied");
-                            } catch {
-                              if (isCurrent()) toast.warning(
-                                `Session shared, but the link could not be copied: ${url}`,
-                              );
-                            }
-                          },
-                        )}
-                      >
-                        <Share2 className="h-3.5 w-3.5" />
-                        Share…
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={busyAction !== null}
-                        className="justify-start gap-2"
-                        onClick={() => void runAction("redo", async () => {
-                          if (openCodeClient) {
-                            await unrevertOpenCodeSession(openCodeClient, currentSessionId);
-                          } else {
-                            await performNativeAgentSessionAction({
-                              environmentId: activeSession.environmentId,
-                              agent: activeSession.provider,
-                              logicalSessionKey: activeSession.sessionKey,
-                              action: { kind: "redo" },
-                            });
-                          }
-                          toast.success("OpenCode revert undone");
-                        })}
-                      >
-                        <RotateCcw className="h-3.5 w-3.5 scale-x-[-1]" />
-                        Redo turn
-                      </Button>
-                      {openCodeShared ? (
+                            toast.success("OpenCode session reverted");
+                          })}
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                          Undo turn
+                        </Button>
                         <Button
                           variant="outline"
                           size="sm"
                           disabled={busyAction !== null}
                           className="justify-start gap-2"
                           onClick={() => void runAction(
-                            "unshare",
+                            "share",
                             async ({ isCurrent, sessionIdentity: actionIdentity }) => {
+                              if (!window.confirm(
+                                "Create an OpenCode share link? The conversation will leave this machine and be accessible to anyone with the link.",
+                              )) return;
                               shareVersionRef.current += 1;
-                              if (openCodeClient) {
-                                await unshareOpenCodeSession(openCodeClient, currentSessionId);
-                              } else {
-                                await performNativeAgentSessionAction({
-                                  environmentId: activeSession.environmentId,
-                                  agent: activeSession.provider,
-                                  logicalSessionKey: activeSession.sessionKey,
-                                  action: { kind: "unshare" },
-                                });
-                              }
+                              const url = openCodeClient
+                                ? await shareOpenCodeSession(openCodeClient, currentSessionId)
+                                : (await performNativeAgentSessionAction({
+                                    environmentId: activeSession.environmentId,
+                                    agent: activeSession.provider,
+                                    logicalSessionKey: activeSession.sessionKey,
+                                    action: { kind: "share" },
+                                  })).shareUrl;
+                              /*
+                               * The conversation is published the moment `share()`
+                               * resolves. Latch that first: every failure after this
+                               * point (a missing URL, a clipboard rejection on focus
+                               * or permission grounds) used to skip the flag, so the
+                               * user saw an error while the link was live and
+                               * "Stop sharing" never rendered.
+                               */
                               if (isCurrent()) {
                                 setShareState({
                                   sessionIdentity: actionIdentity,
-                                  value: false,
+                                  value: true,
                                 });
-                                toast.success("OpenCode share link disabled");
+                              }
+                              // The originating session is now shared, but a
+                              // different active session must not receive its URL,
+                              // clipboard side effect, or notification.
+                              if (!isCurrent()) return;
+                              if (!url) {
+                                toast.warning(
+                                  "Session shared, but OpenCode did not return the link. Use Stop sharing to revoke it.",
+                                );
+                                return;
+                              }
+                              try {
+                                await navigator.clipboard.writeText(url);
+                                if (isCurrent()) toast.success("Share link copied");
+                              } catch {
+                                if (isCurrent()) toast.warning(
+                                  `Session shared, but the link could not be copied: ${url}`,
+                                );
                               }
                             },
                           )}
                         >
-                          <X className="h-3.5 w-3.5" />
-                          Stop sharing
+                          <Share2 className="h-3.5 w-3.5" />
+                          Share…
                         </Button>
-                      ) : null}
-                    </>
-                  ) : null}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={busyAction !== null}
+                          className="justify-start gap-2"
+                          onClick={() => void runAction("redo", async () => {
+                            if (openCodeClient) {
+                              await unrevertOpenCodeSession(openCodeClient, currentSessionId);
+                            } else {
+                              await performNativeAgentSessionAction({
+                                environmentId: activeSession.environmentId,
+                                agent: activeSession.provider,
+                                logicalSessionKey: activeSession.sessionKey,
+                                action: { kind: "redo" },
+                              });
+                            }
+                            toast.success("OpenCode revert undone");
+                          })}
+                        >
+                          <RotateCcw className="h-3.5 w-3.5 scale-x-[-1]" />
+                          Redo turn
+                        </Button>
+                        {openCodeShared ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={busyAction !== null}
+                            className="justify-start gap-2"
+                            onClick={() => void runAction(
+                              "unshare",
+                              async ({ isCurrent, sessionIdentity: actionIdentity }) => {
+                                shareVersionRef.current += 1;
+                                if (openCodeClient) {
+                                  await unshareOpenCodeSession(openCodeClient, currentSessionId);
+                                } else {
+                                  await performNativeAgentSessionAction({
+                                    environmentId: activeSession.environmentId,
+                                    agent: activeSession.provider,
+                                    logicalSessionKey: activeSession.sessionKey,
+                                    action: { kind: "unshare" },
+                                  });
+                                }
+                                if (isCurrent()) {
+                                  setShareState({
+                                    sessionIdentity: actionIdentity,
+                                    value: false,
+                                  });
+                                  toast.success("OpenCode share link disabled");
+                                }
+                              },
+                            )}
+                          >
+                            <X className="h-3.5 w-3.5" />
+                            Stop sharing
+                          </Button>
+                        ) : null}
+                      </>
+                    ) : null}
 
-                  {activeSession.provider === "codex" && currentSessionId ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={busyAction !== null || codexSession?.isLoading}
-                      className="justify-start gap-2"
-                      onClick={() => void runAction("review", async () => {
-                        if (codexClient) {
-                          const started = await startCodexNativeReview(codexClient, currentSessionId);
-                          if (!started) throw new Error("Codex native review could not start");
-                        } else {
-                          await performNativeAgentSessionAction({
-                            environmentId: activeSession.environmentId,
-                            agent: activeSession.provider,
-                            logicalSessionKey: activeSession.sessionKey,
-                            action: { kind: "review" },
-                          });
-                        }
-                        toast.success("Reviewing uncommitted changes");
-                      })}
-                    >
-                      <Info className="h-3.5 w-3.5" />
-                      Review changes
-                    </Button>
-                  ) : null}
+                    {activeSession.provider === "codex" && currentSessionId ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busyAction !== null || codexSession?.isLoading}
+                        className="justify-start gap-2"
+                        onClick={() => void runAction("review", async () => {
+                          if (codexClient) {
+                            const started = await startCodexNativeReview(codexClient, currentSessionId);
+                            if (!started) throw new Error("Codex native review could not start");
+                          } else {
+                            await performNativeAgentSessionAction({
+                              environmentId: activeSession.environmentId,
+                              agent: activeSession.provider,
+                              logicalSessionKey: activeSession.sessionKey,
+                              action: { kind: "review" },
+                            });
+                          }
+                          toast.success("Reviewing uncommitted changes");
+                        })}
+                      >
+                        <Info className="h-3.5 w-3.5" />
+                        Review changes
+                      </Button>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
+              ) : null}
 
               {activeSession.provider === "codex"
                 && currentSessionId
@@ -2099,10 +2258,15 @@ export function AgentInfoButton({
                       )}
                     />
                   </div>
-                ) : (
+                ) : activeSession.provider === "codex" ? (
                   <CodexRuntimePanel
                     health={codexHealth}
                     runtime={neutralProjection?.runtime}
+                  />
+                ) : (
+                  <AgentRuntimePanel
+                    runtime={neutralProjection?.runtime}
+                    providerLabel={activeSession.providerLabel}
                   />
                 )}
               </div>
@@ -2111,7 +2275,7 @@ export function AgentInfoButton({
             <div className="rounded-lg border border-dashed border-border/70 px-4 py-5">
               <p className="text-sm text-foreground">Select a native agent tab.</p>
               <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                Context, tokens, cost, limits, and runtime details are scoped to the active Claude, Codex, or OpenCode session.
+                Context, tokens, cost, limits, and runtime details are scoped to the active agent session.
               </p>
             </div>
           )}

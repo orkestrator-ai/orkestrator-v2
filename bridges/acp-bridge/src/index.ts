@@ -3,12 +3,21 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   PARENT_PID_ENV,
   parseParentPid,
   startParentWatchdog,
 } from "@orkestrator/protocol/parent-watchdog";
-import type { NativeAgentComposerState } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentComposerState,
+  NativeAgentRuntimeSummary,
+} from "@orkestrator/protocol/native-agent";
+import {
+  acpContextUsage,
+  parseAcpTurnUsage,
+  type AcpTurnUsage,
+} from "./usage.js";
 import {
   applyConfigOptionUpdate,
   applyCurrentModeUpdate,
@@ -23,6 +32,12 @@ import {
   type AcpComposerPatch,
   type AcpNormalizedSessionConfig,
 } from "./session-config.js";
+import {
+  parsePromptAttachments,
+  PromptAttachmentError,
+  readPromptImages,
+  type AcpPromptImage,
+} from "./prompt-attachments.js";
 
 type Provider = "cursor" | "grok";
 type JsonObject = Record<string, unknown>;
@@ -39,6 +54,20 @@ interface BridgeMessage {
 interface BridgeTextPart {
   type: "text" | "thinking";
   content: string;
+  sourcePartId: string;
+  sourceMessageId: string;
+}
+
+/**
+ * A prompt attachment as the transcript records it. The bytes are sent to the
+ * agent but never kept here: the renderer resolves `fileUrl` for its own
+ * preview, and inlining a data URL would spend the whole 8MiB transcript budget
+ * on one screenshot.
+ */
+interface BridgeFilePart {
+  type: "file";
+  content: string;
+  fileUrl?: string;
   sourcePartId: string;
   sourceMessageId: string;
 }
@@ -87,7 +116,7 @@ interface AcpToolSourceState {
   chargedBytes?: number;
 }
 
-type BridgeMessagePart = BridgeTextPart | BridgeToolPart;
+type BridgeMessagePart = BridgeTextPart | BridgeFilePart | BridgeToolPart;
 
 interface PromptJournalEntry {
   requestId: string;
@@ -123,6 +152,25 @@ interface SessionState {
    * through the prompt journal, which records an unfinished turn as ambiguous.
    */
   dispatching: boolean;
+  /**
+   * Token accounting for the most recently completed turn, or undefined while
+   * the agent has never reported any. Persisted so the agent info panel still
+   * has something authoritative to show after a bridge restart.
+   */
+  usage?: PersistedUsage;
+  /** Usage carriers collected for the in-flight turn. Never persisted. */
+  currentTurnUsage?: AcpTurnUsage;
+  /** Wall clock of the in-flight turn, used for the elapsed metric. */
+  turnStartedAt?: number;
+  /** `available_commands_update` size; both agents advertise their commands. */
+  commandCount?: number;
+}
+
+interface PersistedUsage {
+  turn: AcpTurnUsage;
+  modelId?: string;
+  durationMs?: number;
+  updatedAt: string;
 }
 
 interface ApprovalState {
@@ -147,6 +195,8 @@ interface PersistedSession {
   promptJournal: PromptJournalEntry[];
   composer?: NativeAgentComposerState;
   sessionConfig?: AcpNormalizedSessionConfig;
+  usage?: PersistedUsage;
+  commandCount?: number;
 }
 
 interface PersistedState {
@@ -177,6 +227,12 @@ let persistenceScheduled = false;
 let shuttingDown = false;
 let catalogCache: NativeAgentComposerState | null = null;
 let catalogProbe: Promise<NativeAgentComposerState> | null = null;
+/**
+ * Runtime facts that describe the agent binary rather than one session: every
+ * child of this bridge is the same executable with the same configuration, so
+ * whichever handshake observed them speaks for all of them.
+ */
+const agentRuntime: { version?: string; mcpServers?: number } = {};
 
 interface AcpSpawnOptions {
   model?: string;
@@ -305,7 +361,9 @@ class AcpProcess {
       },
       clientInfo: { name: "orkestrator", title: "Orkestrator", version: "1.0.0" },
     }, RPC_TIMEOUT_MS, signal);
-    return isObject(result) ? result : {};
+    const initialized = isObject(result) ? result : {};
+    rememberAgentRuntime(initialized);
+    return initialized;
   }
 
   request(
@@ -453,7 +511,16 @@ class AcpProcess {
     }
     if (typeof message.method === "string") {
       const params = isObject(message.params) ? message.params : {};
-      if (isVendorModelUpdate(message.method, params)) this.onVendor(message.method, params);
+      // Process-scoped facts are recorded here rather than in the session
+      // handler because an agent announces them during `session/new`, before
+      // this child is attached to a session at all.
+      rememberVendorRuntime(message.method, params);
+      // Every vendor *notification* is then offered to the session handler,
+      // which ignores the ones it does not model. Notifications expect no reply,
+      // so forwarding one this bridge cannot act on costs nothing — unlike a
+      // vendor request, which must still be refused above rather than silently
+      // acknowledged.
+      this.onVendor(message.method, params);
     }
   }
 
@@ -714,6 +781,14 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     rememberCatalog(state.sessionConfig.composer);
     state.revision += 1;
     schedulePersist();
+    return;
+  }
+  if (kind === "available_commands_update") {
+    if (Array.isArray(update.availableCommands)) {
+      state.commandCount = update.availableCommands.length;
+      state.revision += 1;
+      schedulePersist();
+    }
     return;
   }
   if (kind === "current_mode_update") {
@@ -1307,6 +1382,7 @@ function boundTranscript(state: SessionState): boolean {
 }
 
 function publicSession(state: SessionState): JsonObject {
+  const contextUsage = publicContextUsage(state);
   return {
     id: state.id,
     provider,
@@ -1320,7 +1396,24 @@ function publicSession(state: SessionState): JsonObject {
     revision: state.revision,
     sessionId: state.id,
     composer: state.sessionConfig.composer,
+    ...(contextUsage ? { contextUsage } : {}),
+    runtime: publicRuntime(state),
   };
+}
+
+/**
+ * The neutral usage snapshot, or nothing at all. Cursor reports no token counts
+ * whatsoever, and an empty meter reading "0 tokens" would claim a measurement
+ * the agent never made; the panel's own "no snapshot yet" copy is the truth.
+ */
+function publicContextUsage(state: SessionState) {
+  return state.usage
+    ? acpContextUsage(state.usage.turn, {
+        ...(state.usage.modelId ? { modelId: state.usage.modelId } : {}),
+        ...(state.usage.durationMs === undefined ? {} : { durationMs: state.usage.durationMs }),
+        updatedAt: state.usage.updatedAt,
+      })
+    : null;
 }
 
 /**
@@ -1481,7 +1574,18 @@ async function route(
     const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
     const requestId = typeof body.requestId === "string" ? body.requestId.trim() : "";
     const schema = isObject(body.outputSchema) ? body.outputSchema : undefined;
-    if (!prompt) return json(response, 400, { error: "prompt is required" });
+    // Shape validation happens before the turn is claimed: a malformed
+    // attachment list is a caller error, not a turn that half-started.
+    let attachments;
+    try {
+      attachments = parsePromptAttachments(body.attachments);
+    } catch (error) {
+      if (!(error instanceof PromptAttachmentError)) throw error;
+      return json(response, 400, { error: error.message });
+    }
+    if (!prompt && attachments.length === 0) {
+      return json(response, 400, { error: "prompt or image attachment is required" });
+    }
     if (Buffer.byteLength(requestId) > 512) return json(response, 400, { error: "requestId is too long" });
     if (requestId && state.promptJournal.has(requestId)) {
       const journaled = state.promptJournal.get(requestId)!;
@@ -1512,7 +1616,11 @@ async function route(
       acceptedAt: Date.now(),
     });
     let child: AcpProcess;
+    let images: AcpPromptImage[];
     try {
+      // Read the attachments first: an unreadable image must fail before a
+      // detached thread is reattached, and it is far cheaper than a spawn.
+      images = await readPromptImages(attachments, workingDirectory);
       child = await ensureSessionProcess(state, clientSignal);
       const promptPatch = parseComposerPatch(body);
       if (promptPatch) await applyComposerPatch(state, promptPatch, clientSignal);
@@ -1521,21 +1629,35 @@ async function route(
       // caller retry with the same requestId.
       state.dispatching = false;
       if (requestId) state.promptJournal.delete(requestId);
+      if (error instanceof PromptAttachmentError) {
+        return json(response, 400, { error: error.message });
+      }
       throw error;
     }
     const userMessageId = randomBytes(12).toString("hex");
     state.messages.push({
       id: userMessageId, role: "user", content: prompt,
-      parts: [{
-        type: "text",
-        content: prompt,
-        sourcePartId: `${userMessageId}:0`,
-        sourceMessageId: userMessageId,
-      }], createdAt: new Date().toISOString(),
+      parts: [
+        ...(prompt ? [{
+          type: "text" as const,
+          content: prompt,
+          sourcePartId: `${userMessageId}:0`,
+          sourceMessageId: userMessageId,
+        }] : []),
+        ...images.map((image, index): BridgeFilePart => ({
+          type: "file",
+          content: image.filename || image.path,
+          fileUrl: pathToFileURL(image.absolutePath).href,
+          sourcePartId: `${userMessageId}:${index + 1}`,
+          sourceMessageId: userMessageId,
+        })),
+      ], createdAt: new Date().toISOString(),
     });
     state.status = "running";
     state.error = undefined;
     state.outputTruncated = false;
+    state.turnStartedAt = Date.now();
+    state.currentTurnUsage = {};
     state.currentTurnOutput = schema ? "" : null;
     state.revision += 1;
     boundTranscript(state);
@@ -1548,9 +1670,24 @@ async function route(
     state.dispatching = false;
     void child.request("session/prompt", {
       sessionId: state.acpSessionId,
-      prompt: [{ type: "text", text: acpPrompt }],
-    }, PROMPT_TIMEOUT_MS).then(() => {
+      prompt: [
+        ...(acpPrompt ? [{ type: "text", text: acpPrompt }] : []),
+        // Inline base64 is the only image form both agents read. Cursor
+        // advertises it; Grok understates its own capability but accepts the
+        // same block, and neither supports ACP embedded resources.
+        ...images.map((image) => ({
+          type: "image",
+          mimeType: image.mimeType,
+          data: image.data,
+        })),
+      ],
+    }, PROMPT_TIMEOUT_MS).then((result) => {
       if (!state.outputTruncated) state.status = "idle";
+      // The result `_meta` is the last and most complete usage carrier, so it is
+      // read before `turnStartedAt` is cleared and the elapsed time is lost.
+      recordTurnUsage(state, isObject(result) ? result._meta : undefined);
+      state.turnStartedAt = undefined;
+      state.currentTurnUsage = undefined;
       if (schema && requestId) {
         const output = state.currentTurnOutput?.trim() ?? "";
         if (Buffer.byteLength(output) > MAX_STRUCTURED_RESULT_BYTES) {
@@ -1585,6 +1722,8 @@ async function route(
     }, (error: unknown) => {
       state.status = "error";
       state.error = error instanceof Error ? error.message : String(error);
+      state.turnStartedAt = undefined;
+      state.currentTurnUsage = undefined;
       reconcileStaleToolParts(state);
       if (requestId) setPromptJournal(state, {
         requestId,
@@ -1840,12 +1979,93 @@ function applyVendorUpdate(state: SessionState, method: string, params: JsonObje
     rememberCatalog(state.sessionConfig.composer);
     state.revision += 1;
     schedulePersist();
-  } else if (kind === "model_changed") {
+    return;
+  }
+  if (kind === "model_changed") {
     state.sessionConfig = applyGrokModelChange(provider, state.sessionConfig, update);
     rememberCatalog(state.sessionConfig.composer);
     state.revision += 1;
     schedulePersist();
+    return;
   }
+  if (kind !== "turn_completed" && kind !== "response_completed") return;
+  // Unlike a model update, this is scoped to one conversation, so a superseded
+  // or unrelated child must not write another session's token counts.
+  if (params.sessionId !== undefined && params.sessionId !== state.acpSessionId) return;
+  recordTurnUsage(state, update);
+}
+
+/**
+ * Latch the usage an agent reports for the turn that just ended.
+ *
+ * Grok announces the same numbers up to three times (`response_completed`,
+ * `turn_completed`, and the prompt result), each with a different subset of the
+ * fields, so later reports merge into earlier ones instead of replacing them —
+ * otherwise the panel would lose the reasoning or cache breakdown the moment a
+ * sparser carrier arrived for the same turn.
+ */
+function recordTurnUsage(state: SessionState, payload: unknown): void {
+  const turn = parseAcpTurnUsage(payload);
+  if (!turn) return;
+  const accumulatedTurn = state.turnStartedAt === undefined
+    ? { ...(state.usage?.turn ?? {}), ...turn }
+    : { ...(state.currentTurnUsage ?? {}), ...turn };
+  if (state.turnStartedAt !== undefined) state.currentTurnUsage = accumulatedTurn;
+  const durationMs = state.turnStartedAt === undefined
+    ? state.usage?.durationMs
+    : Math.max(0, Date.now() - state.turnStartedAt);
+  const modelId = state.sessionConfig.composer.selectedModelId;
+  state.usage = {
+    turn: accumulatedTurn,
+    ...(modelId ? { modelId } : {}),
+    ...(durationMs === undefined ? {} : { durationMs }),
+    updatedAt: new Date().toISOString(),
+  };
+  state.revision += 1;
+  schedulePersist();
+}
+
+/**
+ * Record what the ACP handshake says about the agent binary. ACP standardizes
+ * `agentInfo`; Grok predates that and answers with `_meta.agentVersion`, so both
+ * are read and neither is required.
+ *
+ * The handshake's `_meta.mcpServers` is deliberately ignored: it reflects the
+ * servers configured at that instant, which is none, and the agent announces
+ * the real inventory moments later. Reporting the handshake value would state
+ * that an agent has no MCP servers when it is about to load several.
+ */
+function rememberAgentRuntime(initialized: JsonObject): void {
+  const meta = isObject(initialized._meta) ? initialized._meta : {};
+  const agentInfo = isObject(initialized.agentInfo) ? initialized.agentInfo : {};
+  const version = typeof agentInfo.version === "string"
+    ? agentInfo.version
+    : typeof meta.agentVersion === "string"
+      ? meta.agentVersion
+      : undefined;
+  if (version) agentRuntime.version = version.slice(0, 64);
+}
+
+/** Vendor notifications that describe the agent process rather than a session. */
+function rememberVendorRuntime(method: string, params: JsonObject): void {
+  // The count only. These entries carry launch commands and arguments, which is
+  // where an MCP server's API key lives.
+  if (!method.endsWith("/mcp/servers_updated") || !Array.isArray(params.mcpServers)) return;
+  if (agentRuntime.mcpServers === params.mcpServers.length) return;
+  agentRuntime.mcpServers = params.mcpServers.length;
+  // Every session reports this count, so every session's snapshot just changed.
+  // Without the bump a mounted tab would keep serving the previous inventory
+  // until something else happened to move its revision.
+  for (const state of sessions.values()) state.revision += 1;
+}
+
+function publicRuntime(state: SessionState): NativeAgentRuntimeSummary {
+  return {
+    ...(agentRuntime.mcpServers === undefined ? {} : { mcpServers: agentRuntime.mcpServers }),
+    ...(state.commandCount === undefined ? {} : { commands: state.commandCount }),
+    ...(agentRuntime.version ? { version: agentRuntime.version } : {}),
+    state: state.status,
+  };
 }
 
 async function listNormalizedModels(signal?: AbortSignal): Promise<NativeAgentComposerState["models"]> {
@@ -1912,6 +2132,27 @@ function restoreSessionConfig(candidate: JsonObject): AcpNormalizedSessionConfig
   return emptySessionConfig();
 }
 
+/**
+ * Re-validate persisted usage through the same parser that accepted it live, so
+ * a hand-edited or truncated state file cannot put arbitrary numbers into the
+ * panel. Anything unrecognised restores as "no usage reported yet".
+ */
+function restorePersistedUsage(value: unknown): PersistedUsage | null {
+  if (!isObject(value)) return null;
+  const turn = parseAcpTurnUsage(value.turn);
+  if (!turn || typeof value.updatedAt !== "string" || !Number.isFinite(Date.parse(value.updatedAt))) {
+    return null;
+  }
+  return {
+    turn,
+    ...(typeof value.modelId === "string" ? { modelId: value.modelId.slice(0, 1_024) } : {}),
+    ...(Number.isSafeInteger(value.durationMs) && Number(value.durationMs) >= 0
+      ? { durationMs: Number(value.durationMs) }
+      : {}),
+    updatedAt: value.updatedAt,
+  };
+}
+
 function emptySessionConfig(): AcpNormalizedSessionConfig {
   // `emptyComposerState()` rather than a spread of the shared constant: a
   // shallow copy would alias its `models` and `modes` arrays across sessions.
@@ -1941,6 +2182,8 @@ function persistedSnapshot(): PersistedState {
       ),
       sessionConfig: state.sessionConfig,
       composer: state.sessionConfig.composer,
+      ...(state.usage ? { usage: state.usage } : {}),
+      ...(state.commandCount === undefined ? {} : { commandCount: state.commandCount }),
     })),
   };
 }
@@ -2036,6 +2279,7 @@ async function loadPersistedState(): Promise<void> {
         return normalized ? [normalized] : [];
       })
       .slice(-MAX_MESSAGES);
+    const usage = restorePersistedUsage(candidate.usage);
     const state: SessionState = {
       id: candidate.id.slice(0, 128),
       ...(typeof candidate.clientSessionKey === "string"
@@ -2061,6 +2305,10 @@ async function loadPersistedState(): Promise<void> {
       droppedMessages: 0,
       sessionConfig: restoreSessionConfig(candidate),
       dispatching: false,
+      ...(usage ? { usage } : {}),
+      ...(Number.isSafeInteger(candidate.commandCount) && Number(candidate.commandCount) >= 0
+        ? { commandCount: Number(candidate.commandCount) }
+        : {}),
     };
     if (Array.isArray(candidate.promptJournal)) {
       for (const rawEntry of candidate.promptJournal.slice(-MAX_PROMPT_JOURNAL)) {
@@ -2155,6 +2403,19 @@ function normalizeBridgePart(
     return {
       type: value.type === "reasoning" ? "thinking" : value.type,
       content: truncateUtf8(content, MAX_MESSAGE_TEXT_BYTES),
+      sourcePartId,
+      sourceMessageId,
+    };
+  }
+
+  if (value.type === "file") {
+    const content = boundedString(value.content, MAX_TOOL_PATH_BYTES);
+    if (!content) return null;
+    const fileUrl = boundedString(value.fileUrl, MAX_TOOL_PATH_BYTES);
+    return {
+      type: "file",
+      content,
+      ...(fileUrl ? { fileUrl } : {}),
       sourcePartId,
       sourceMessageId,
     };

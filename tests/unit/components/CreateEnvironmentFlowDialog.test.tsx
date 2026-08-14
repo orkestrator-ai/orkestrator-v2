@@ -590,11 +590,18 @@ describe("CreateEnvironmentFlowDialog", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("radio", { name: "Codex" }));
-    fireEvent.click(screen.getByRole("combobox", { name: "Model" }));
-    fireEvent.click(await screen.findByRole("option", { name: "GPT-5.4-Mini" }));
-    fireEvent.click(screen.getByRole("combobox", { name: "Reasoning effort" }));
-    fireEvent.click(await screen.findByRole("option", { name: "High" }));
+    const picker = screen.getByRole("combobox", { name: "Agent, model and reasoning" });
+    fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByRole("button", { name: "codex models" }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await waitFor(() => expect(picker.getAttribute("aria-expanded")).toBe("false"));
+
+    fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
+    fireEvent.click(
+      await screen.findByRole("menuitemradio", { name: /GPT-5\.4-Mini/ }),
+    );
+    fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalled());

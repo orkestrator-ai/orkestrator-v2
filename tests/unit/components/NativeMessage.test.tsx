@@ -20,6 +20,7 @@ mock.module("@/lib/backend", () => ({
 }));
 
 import { NativeMessage } from "../../../apps/web/src/components/chat/NativeMessage";
+import { clearImagePreviewCache } from "../../../apps/web/src/lib/chat/image-preview-cache";
 import { normalizeClaudeMessagesForDisplay } from "../../../apps/web/src/lib/chat/native-message-adapters";
 import { useMessagePartExpansionStore } from "../../../apps/web/src/stores/messagePartExpansionStore";
 
@@ -62,6 +63,9 @@ describe("NativeMessage", () => {
     cleanup();
     // Thinking expansion outlives unmount by design, so clear it between tests.
     useMessagePartExpansionStore.getState().reset();
+    // So does the preview cache; a cached image would otherwise suppress the
+    // backend read a later case asserts on.
+    clearImagePreviewCache();
     mockOpenInBrowser.mockReset();
     mockOpenInBrowser.mockImplementation(async () => {});
     mockReadFileBase64.mockReset();
@@ -737,7 +741,7 @@ describe("NativeMessage", () => {
       render(<NativeMessage message={message} containerId="container-1" />);
       fireEvent.click(screen.getByRole("button", { name: /safe-looking\.png/i }));
 
-      await waitFor(() => expect(screen.getByText("(error)")).toBeTruthy());
+      await waitFor(() => expect(screen.getByText("preview unavailable")).toBeTruthy());
       expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
       expect(mockReadFileBase64).not.toHaveBeenCalled();
     } finally {
@@ -760,7 +764,7 @@ describe("NativeMessage", () => {
       render(<NativeMessage message={message} containerId="container-1" />);
       fireEvent.click(screen.getByRole("button", { name: /workspace/i }));
 
-      await waitFor(() => expect(screen.getByText("(error)")).toBeTruthy());
+      await waitFor(() => expect(screen.getByText("preview unavailable")).toBeTruthy());
       expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
       expect(mockReadFileBase64).not.toHaveBeenCalled();
     } finally {
@@ -791,7 +795,7 @@ describe("NativeMessage", () => {
       fireEvent.click(screen.getByRole("button", { name: /passwd\.png/i }));
 
       await waitFor(() => {
-        expect(screen.getByText("(error)")).toBeTruthy();
+        expect(screen.getByText("preview unavailable")).toBeTruthy();
       });
       expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
       expect(mockReadFileBase64).not.toHaveBeenCalled();
@@ -834,7 +838,7 @@ describe("NativeMessage", () => {
 
         fireEvent.click(container.querySelector("button") as HTMLButtonElement);
         await waitFor(() => {
-          expect(container.textContent).toContain("(error)");
+          expect(container.textContent).toContain("preview unavailable");
         });
         unmount();
       }
@@ -916,6 +920,32 @@ describe("NativeMessage", () => {
     expect(image.getAttribute("src")).toBe(remoteUrl);
     expect(mockReadFileBase64).not.toHaveBeenCalled();
     expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
+  });
+
+  test("does not load a remote user image until the user opens it", async () => {
+    const remoteUrl = "https://attacker.example/tracker.png";
+    const message: NativeMessageType = {
+      id: "msg-remote-user-preview",
+      role: "user",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "file", content: "tracker.png", fileUrl: remoteUrl }],
+    };
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(container.querySelector(`img[src="${remoteUrl}"]`)).toBeNull();
+    expect(mockReadFileBase64).not.toHaveBeenCalled();
+    expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Open full image: tracker.png",
+    }));
+
+    expect(await screen.findByRole("dialog", {
+      name: "Image preview: tracker.png",
+    })).toBeTruthy();
+    expect(document.querySelectorAll(`img[src="${remoteUrl}"]`)).toHaveLength(2);
   });
 
   test("decodes percent-encoded Unix paths from file URLs", async () => {
@@ -1039,7 +1069,7 @@ describe("NativeMessage", () => {
       render(<NativeMessage message={message} />);
       fireEvent.click(screen.getByRole("button", { name: /relative\.png/i }));
 
-      await waitFor(() => expect(screen.getByText("(error)")).toBeTruthy());
+      await waitFor(() => expect(screen.getByText("preview unavailable")).toBeTruthy());
       expect(mockReadFileBase64).not.toHaveBeenCalled();
       expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
     } finally {
@@ -1072,7 +1102,7 @@ describe("NativeMessage", () => {
       fireEvent.click(screen.getByRole("button", { name: /missing\.png/i }));
 
       await waitFor(() => {
-        expect(screen.getByText("(error)")).toBeTruthy();
+        expect(screen.getByText("preview unavailable")).toBeTruthy();
       });
       expect(mockReadFileBase64).toHaveBeenCalledWith("/tmp/missing.png");
       expect(screen.queryByAltText("missing.png")).toBeNull();
@@ -1102,12 +1132,12 @@ describe("NativeMessage", () => {
       const trigger = screen.getByRole("button", { name: /retry\.png/i });
 
       fireEvent.click(trigger);
-      await waitFor(() => expect(screen.getByText("(error)")).toBeTruthy());
+      await waitFor(() => expect(screen.getByText("preview unavailable")).toBeTruthy());
 
       fireEvent.click(trigger);
       const image = await screen.findByAltText("retry.png");
       expect(image.getAttribute("src")).toBe("data:image/png;base64,retry-base64");
-      expect(screen.queryByText("(error)")).toBeNull();
+      expect(screen.queryByText("preview unavailable")).toBeNull();
       expect(mockReadFileBase64).toHaveBeenCalledTimes(2);
     } finally {
       console.error = consoleError;
@@ -2618,7 +2648,9 @@ describe("NativeMessage", () => {
     };
 
     render(<NativeMessage message={message} containerId="container-1" />);
-    fireEvent.click(screen.getByRole("button", { name: filename }));
+    fireEvent.click(screen.getByRole("button", {
+      name: `Open full image: ${filename}`,
+    }));
 
     const image = await screen.findByAltText(filename);
     expect(image.getAttribute("src")).toBe(
@@ -2689,15 +2721,124 @@ describe("NativeMessage", () => {
     fireEvent.click(screen.getByRole("button", { name: /slow\.png/i }));
 
     const attachment = screen.getByRole("button", { name: /slow\.png/i });
-    expect(screen.getByText("(loading...)")).toBeTruthy();
     expect(attachment.className).toContain("opacity-50");
-    expect((attachment as HTMLButtonElement).disabled).toBe(true);
+    expect(attachment.getAttribute("aria-busy")).toBe("true");
+    expect((attachment as HTMLButtonElement).disabled).toBe(false);
 
     resolveRead?.("slow-base64");
 
     const image = await screen.findByAltText("slow.png");
     expect(image.getAttribute("src")).toBe("data:image/png;base64,slow-base64");
-    await waitFor(() => expect(screen.queryByText("(loading...)")).toBeNull());
+    await waitFor(() => expect(attachment.getAttribute("aria-busy")).toBe("false"));
+  });
+
+  test("shares an eager user-image read with clicks while loading", async () => {
+    let resolveRead: ((value: string) => void) | undefined;
+    const pendingRead = new Promise<string>((resolve) => {
+      resolveRead = resolve;
+    });
+    mockReadFileBase64.mockImplementationOnce(() => pendingRead);
+    const message: NativeMessageType = {
+      id: "msg-eager-single-flight",
+      role: "user",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "file", content: "/tmp/eager.png" }],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    await waitFor(() => expect(mockReadFileBase64).toHaveBeenCalledTimes(1));
+    const attachment = screen.getByRole("button", {
+      name: "Open full image: eager.png",
+    });
+    fireEvent.click(attachment);
+    fireEvent.click(attachment);
+    expect(mockReadFileBase64).toHaveBeenCalledTimes(1);
+
+    resolveRead?.("eager-base64");
+
+    expect(await screen.findByRole("dialog", {
+      name: "Image preview: eager.png",
+    })).toBeTruthy();
+    expect(mockReadFileBase64).toHaveBeenCalledTimes(1);
+    expect(screen.getByAltText("Thumbnail: eager.png").getAttribute("src"))
+      .toBe("data:image/png;base64,eager-base64");
+  });
+
+  test("leaves an assistant image part as a compact chip and does not read it", async () => {
+    const message: NativeMessageType = {
+      id: "msg-assistant-image-chip",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "file", content: "/tmp/assistant-shot.png" }],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    const attachment = screen.getByRole("button", {
+      name: "Open full image: assistant-shot.png",
+    });
+    // Only surfaces that eagerly load get the thumbnail tile; without this the
+    // chip becomes a large card that never fills in.
+    expect(getClassTokens(attachment)).toContain("inline-flex");
+    expect(getClassTokens(attachment)).not.toContain("w-40");
+    expect(screen.queryByAltText("Thumbnail: assistant-shot.png")).toBeNull();
+    // The eager effect runs during render, so a missing call here is decisive.
+    expect(mockReadFileBase64).not.toHaveBeenCalled();
+
+    fireEvent.click(attachment);
+    expect(await screen.findByAltText("assistant-shot.png")).toBeTruthy();
+    expect(mockReadFileBase64).toHaveBeenCalledTimes(1);
+  });
+
+  test("reuses a decoded preview when a virtualized row remounts", async () => {
+    const message: NativeMessageType = {
+      id: "msg-preview-cache-remount",
+      role: "user",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "file", content: "/tmp/remounted.png" }],
+    };
+
+    const first = render(<NativeMessage message={message} />);
+    expect(await screen.findByAltText("Thumbnail: remounted.png")).toBeTruthy();
+    expect(mockReadFileBase64).toHaveBeenCalledTimes(1);
+
+    first.unmount();
+    render(<NativeMessage message={message} />);
+
+    // Painted from the cache on the first render, with no second backend read.
+    expect(screen.getByAltText("Thumbnail: remounted.png").getAttribute("src"))
+      .toBe("data:image/png;base64,image-base64");
+    expect(mockReadFileBase64).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps preview caches for the same path in different containers apart", async () => {
+    const message: NativeMessageType = {
+      id: "msg-preview-cache-container",
+      role: "user",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "file", content: "workspace/shared.png" }],
+    };
+
+    const first = render(
+      <NativeMessage message={message} containerId="container-1" />,
+    );
+    expect(await screen.findByAltText("Thumbnail: shared.png")).toBeTruthy();
+    expect(mockReadContainerFileBase64).toHaveBeenCalledTimes(1);
+
+    first.unmount();
+    mockReadContainerFileBase64.mockImplementation(async () => "second-container-base64");
+    render(<NativeMessage message={message} containerId="container-2" />);
+
+    await waitFor(() =>
+      expect(screen.getByAltText("Thumbnail: shared.png").getAttribute("src"))
+        .toBe("data:image/png;base64,second-container-base64"),
+    );
+    expect(mockReadContainerFileBase64).toHaveBeenCalledTimes(2);
   });
 
   test("shows the error state when an image read rejects with a non-Error value", async () => {
@@ -2719,9 +2860,10 @@ describe("NativeMessage", () => {
 
       fireEvent.click(screen.getByRole("button", { name: /broken\.png/i }));
 
-      await waitFor(() => expect(screen.getByText("(error)")).toBeTruthy());
+      await waitFor(() => expect(screen.getByText("preview unavailable")).toBeTruthy());
       expect(screen.queryByAltText("broken.png")).toBeNull();
-      expect(screen.queryByText("(loading...)")).toBeNull();
+      expect(screen.getByRole("button", { name: /broken\.png/i }).getAttribute("aria-busy"))
+        .toBe("false");
     } finally {
       console.error = consoleError;
     }

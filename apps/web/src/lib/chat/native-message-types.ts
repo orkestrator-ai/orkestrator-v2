@@ -46,6 +46,8 @@ export type { TaskListSnapshot, TaskSnapshotItem } from "@orkestrator/protocol/t
 
 export interface NativeBasePart {
   content: string;
+  /** Original attachment name when the readable path uses a staged/generated name. */
+  filename?: string;
   /** Provider timestamp for when this individual message part first arrived. */
   createdAt?: string;
   sourcePartId?: string;

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { TerminalProvider } from "@/contexts";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
+import { clearImagePreviewCache } from "@/lib/chat/image-preview-cache";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
 import {
@@ -362,6 +363,8 @@ describe("NativeMessage task list rendering", () => {
     cleanup();
     // Thinking expansion outlives unmount by design, so clear it between tests.
     useMessagePartExpansionStore.getState().reset();
+    // The decoded-preview cache outlives unmount too, by design.
+    clearImagePreviewCache();
     toastErrorMock.mockClear();
     toastSuccessMock.mockClear();
   });
@@ -2014,6 +2017,32 @@ describe("NativeMessage task list rendering", () => {
     fireEvent.click(previewButton!);
 
     expect(await screen.findByAltText("relative-preview.png")).toBeTruthy();
+  });
+
+  test("renders initial-prompt XML as an image thumbnail that opens full size", async () => {
+    const rawContent = [
+      "Use this screenshot",
+      '<attached-files><attachment type="image" path="/tmp/initial-shot.png" filename="initial-shot.png" /></attached-files>',
+    ].join("\n");
+    const message = makeMessage(
+      [{ type: "text", content: rawContent }],
+      { id: "initial-prompt-image", role: "user", content: rawContent },
+    );
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByText("Use this screenshot")).toBeTruthy();
+    expect(screen.queryByText(/attached-files/)).toBeNull();
+    expect(await screen.findByAltText("Thumbnail: initial-shot.png")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Open full image: initial-shot.png",
+    }));
+
+    expect(screen.getByRole("dialog", {
+      name: "Image preview: initial-shot.png",
+    })).toBeTruthy();
+    expect(screen.getByAltText("initial-shot.png")).toBeTruthy();
   });
 
   test("can render Claude tmux agent usage as tokens only", () => {

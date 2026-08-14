@@ -179,13 +179,14 @@ export function buildConcurrentGroups(cores: number): TestGroup[] {
   const workers = planWorkers(cores);
   return [
     {
-      name: "workspace (web, backend, web-public, cli, protocol)",
+      name: "workspace (web, backend, desktop, web-public, cli, protocol)",
       command: "turbo",
       args: [
         "run", "test:workspace",
         "--cwd", ".",
         "--filter=@orkestrator/web",
         "--filter=@orkestrator/backend",
+        "--filter=@orkestrator/desktop",
         "--filter=@orkestrator/web-public",
         "--filter=orkestrator",
         "--filter=@orkestrator/protocol",
@@ -195,12 +196,18 @@ export function buildConcurrentGroups(cores: number): TestGroup[] {
       env: { [WORKSPACE_WORKERS_ENV]: String(workers.workspace) },
     },
     {
-      name: "root (tests/)",
+      name: "root and agent-support tests",
       command: "bun",
       // A bare `tests` is a Bun substring filter and also matches
       // packages/*/tests. An explicit relative path confines discovery to the
       // repository's root tests and prevents package build/test races.
-      args: ["test", "./tests", `--parallel=${workers.root}`],
+      args: [
+        "test",
+        "./tests",
+        "./e2e/agent-testing/artifact-sanitizer.test.ts",
+        "./test-fixtures/agent-project/server.test.ts",
+        `--parallel=${workers.root}`,
+      ],
     },
     {
       // The bridge packages have no `test` script of their own, so they are not

@@ -11,6 +11,8 @@
     "dev:stop": "bun scripts/dev-stop.ts",
     "dev:reset": "bun scripts/dev-reset.ts",
     "docker:build:dev": "bun scripts/dev-build-image.ts",
+    "test": "bun test ./electron/runtime-profile.test.ts ./scripts/dev --parallel",
+    "test:workspace": "bun test ./electron/runtime-profile.test.ts ./scripts/dev --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
     "typecheck": "bunx tsc --noEmit -p tsconfig.electron.json && bunx tsc --noEmit -p tsconfig.scripts.json"
   },
   "dependencies": {

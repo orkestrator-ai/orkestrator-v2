@@ -7,6 +7,7 @@ import {
   resolveRuntimeProfile,
   statusManifestPath,
   type RuntimeProfile,
+  type RuntimeProcessName,
   type RuntimeStatusManifest,
 } from "../../electron/runtime-profile.js";
 import type { DevArguments } from "./arguments.js";
@@ -29,6 +30,7 @@ const webRoot = path.join(repositoryRoot, "apps", "web");
 const fixtureTemplateRoot = path.join(repositoryRoot, "test-fixtures", "agent-project");
 const electronExecutable = path.join(packageRoot, "node_modules", ".bin", "electron");
 const MAX_LOG_BYTES = 4 * 1024 * 1024;
+const RUNTIME_PROCESS_NAMES: readonly RuntimeProcessName[] = ["launcher", "vite", "electron", "backend"];
 
 type ElectronReady = {
   type: "orkestrator-electron-ready";
@@ -102,14 +104,126 @@ function killOwnedChild(child: ChildProcess | null, signal: NodeJS.Signals): voi
   }
 }
 
+type RuntimeProcessControl = {
+  matches: typeof processMatches;
+  signal: (pid: number, signal: NodeJS.Signals, processGroup: boolean) => void;
+  sleep: (milliseconds: number) => Promise<void>;
+};
+
+const defaultRuntimeProcessControl: RuntimeProcessControl = {
+  matches: processMatches,
+  signal: (pid, signal, processGroup) => {
+    if (processGroup) {
+      try {
+        process.kill(-pid, signal);
+        return;
+      } catch {
+        // Fall through to the exact PID when the process is not a group leader.
+      }
+    }
+    process.kill(pid, signal);
+  },
+  sleep: (milliseconds) => Bun.sleep(milliseconds),
+};
+
+function controlledLiveness(
+  status: RuntimeStatusManifest,
+  control: Pick<RuntimeProcessControl, "matches">,
+): Record<RuntimeProcessName, boolean> {
+  return Object.fromEntries(RUNTIME_PROCESS_NAMES.map((name) => [
+    name,
+    control.matches(status.pids[name], status.processStartTimes[name]),
+  ])) as Record<RuntimeProcessName, boolean>;
+}
+
+function signalTrackedRuntimeProcess(
+  status: RuntimeStatusManifest,
+  name: RuntimeProcessName,
+  signal: NodeJS.Signals,
+  control: RuntimeProcessControl,
+): void {
+  const pid = status.pids[name];
+  const startedAt = status.processStartTimes[name];
+  if (!pid || !control.matches(pid, startedAt)) return;
+  try {
+    control.signal(pid, signal, name === "vite" || name === "electron");
+  } catch {
+    // A process can exit between the identity check and signal delivery.
+  }
+}
+
+async function waitForTrackedRuntimeExit(
+  status: RuntimeStatusManifest,
+  timeoutMs: number,
+  control: RuntimeProcessControl,
+): Promise<RuntimeProcessName[]> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const live = controlledLiveness(status, control);
+    const survivors = RUNTIME_PROCESS_NAMES.filter((name) => live[name]);
+    if (survivors.length === 0) return [];
+    await control.sleep(100);
+  }
+  const live = controlledLiveness(status, control);
+  return RUNTIME_PROCESS_NAMES.filter((name) => live[name]);
+}
+
+export async function stopTrackedRuntimeProcesses(
+  status: RuntimeStatusManifest,
+  control: RuntimeProcessControl = defaultRuntimeProcessControl,
+): Promise<RuntimeProcessName[]> {
+  if (control.matches(status.pids.launcher, status.processStartTimes.launcher)) {
+    signalTrackedRuntimeProcess(status, "launcher", "SIGTERM", control);
+    const survivors = await waitForTrackedRuntimeExit(status, 5_000, control);
+    if (survivors.length === 0) return [];
+  }
+
+  for (const name of RUNTIME_PROCESS_NAMES) {
+    signalTrackedRuntimeProcess(status, name, "SIGTERM", control);
+  }
+  let survivors = await waitForTrackedRuntimeExit(status, 5_000, control);
+  if (survivors.length === 0) return [];
+
+  for (const name of survivors) {
+    signalTrackedRuntimeProcess(status, name, "SIGKILL", control);
+  }
+  survivors = await waitForTrackedRuntimeExit(status, 2_000, control);
+  return survivors;
+}
+
+export function stoppedRuntimeStatusIfUnchanged(
+  original: RuntimeStatusManifest,
+  latest: RuntimeStatusManifest | null,
+  updatedAt = new Date().toISOString(),
+): RuntimeStatusManifest | null {
+  if (
+    !latest
+    || latest.profile !== original.profile
+    || RUNTIME_PROCESS_NAMES.some((name) => (
+      latest.pids[name] !== original.pids[name]
+      || latest.processStartTimes[name] !== original.processStartTimes[name]
+    ))
+  ) return null;
+  return { ...latest, status: "stopped", updatedAt };
+}
+
 export async function startDevelopment(args: DevArguments, flavor: "development" | "agent-test"): Promise<void> {
   const existingProfile = await resolveStoredProfile(args, flavor);
   const existingStatusPath = statusManifestPath(existingProfile);
   const existingStatus = await readStatus(existingStatusPath);
-  if (processMatches(existingStatus?.pids.launcher, existingStatus?.processStartTimes.launcher)) {
+  const existingLive = existingStatus ? liveness(existingStatus) : null;
+  if (existingStatus && existingLive?.launcher) {
     console.log(`Profile ${existingProfile.id} is already running.`);
-    printHumanStatus(existingStatus!, liveness(existingStatus));
+    printHumanStatus(existingStatus, existingLive);
     return;
+  }
+  const orphaned = existingLive
+    ? Object.entries(existingLive).filter(([, live]) => live).map(([name]) => name)
+    : [];
+  if (orphaned.length > 0) {
+    throw new Error(
+      `Profile ${existingProfile.id} has surviving processes without its launcher: ${orphaned.join(", ")}. Run bun run dev:stop before restarting.`,
+    );
   }
 
   const [rendererPort, gatewayPort] = await reserveLoopbackPorts(2) as [number, number];
@@ -328,21 +442,20 @@ export async function showStatus(args: DevArguments): Promise<number> {
 
 export async function stopProfile(args: DevArguments): Promise<number> {
   const profile = await resolveStoredProfile(args, "agent-test");
-  const status = await readStatus(statusManifestPath(profile));
-  if (!status || !processMatches(status.pids.launcher, status.processStartTimes.launcher)) {
+  const statusPath = statusManifestPath(profile);
+  const status = await readStatus(statusPath);
+  if (!status || !Object.values(liveness(status)).some(Boolean)) {
     console.log(`Profile ${profile.id} is not running.`);
     return 0;
   }
-  process.kill(status.pids.launcher!, "SIGTERM");
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    if (!processMatches(status.pids.launcher, status.processStartTimes.launcher)) {
-      console.log(`Stopped profile ${profile.id}.`);
-      return 0;
-    }
-    await Bun.sleep(100);
+  const survivors = await stopTrackedRuntimeProcesses(status);
+  if (survivors.length === 0) {
+    const latest = await readStatus(statusPath);
+    const stoppedStatus = stoppedRuntimeStatusIfUnchanged(status, latest);
+    if (stoppedStatus) await atomicWriteJson(statusPath, stoppedStatus);
+    console.log(`Stopped profile ${profile.id}.`);
+    return 0;
   }
-  const survivors = Object.entries(liveness(status)).filter(([, alive]) => alive).map(([name]) => name);
   console.error(`Profile ${profile.id} did not stop cleanly. Surviving owned processes: ${survivors.join(", ")}`);
   return 1;
 }
@@ -350,7 +463,7 @@ export async function stopProfile(args: DevArguments): Promise<number> {
 export async function resetProfile(args: DevArguments): Promise<number> {
   const profile = await resolveStoredProfile(args, "agent-test");
   const status = await readStatus(statusManifestPath(profile));
-  if (processMatches(status?.pids.launcher, status?.processStartTimes.launcher)) {
+  if (status && Object.values(liveness(status)).some(Boolean)) {
     if (!args.stopFirst) throw new Error("Profile is running; stop it first or pass --stop-first");
     const stopped = await stopProfile(args);
     if (stopped !== 0) return stopped;

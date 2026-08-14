@@ -48,6 +48,7 @@
     "test": "bun scripts/test-all.ts",
     "test:browser": "bunx tsc --noEmit -p e2e/tsconfig.json && playwright test --config e2e/playwright.config.ts",
     "test:agent:browser": "playwright test --config e2e/agent-testing/playwright.browser.config.ts",
+    "test:agent:docker": "ORKESTRATOR_AGENT_TEST_DOCKER=1 playwright test --config e2e/agent-testing/playwright.browser.config.ts --grep 'Docker fixture'",
     "test:agent:electron": "playwright test --config e2e/agent-testing/playwright.electron.config.ts",
     "test:ios": "bun scripts/test-ios.ts",
     "test:unit": "bun test tests/unit",

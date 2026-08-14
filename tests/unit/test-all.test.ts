@@ -86,8 +86,8 @@ function createDependencies(
   };
 }
 
-const WORKSPACE = "workspace (web, backend, web-public, cli, protocol)";
-const ROOT = "root (tests/)";
+const WORKSPACE = "workspace (web, backend, desktop, web-public, cli, protocol)";
+const ROOT = "root and agent-support tests";
 const BRIDGES = "bridges";
 const PROTOCOL = "codex protocol lockfile";
 
@@ -145,6 +145,9 @@ describe("scripts/test-all.ts", () => {
     expect(workspaceGroup.env).toEqual({ [WORKSPACE_WORKERS_ENV]: "2" });
     expect(rootGroup.args).toContain("--parallel=4");
     expect(rootGroup.args.slice(0, 2)).toEqual(["test", "./tests"]);
+    expect(rootGroup.args).toContain("./e2e/agent-testing/artifact-sanitizer.test.ts");
+    expect(rootGroup.args).toContain("./test-fixtures/agent-project/server.test.ts");
+    expect(workspaceGroup.args).toContain("--filter=@orkestrator/desktop");
     expect(bridgeGroup.args).toContain("--parallel=2");
   });
 

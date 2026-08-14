@@ -16494,6 +16494,52 @@ exit 1
     expect(updates).toHaveLength(0);
   });
 
+  test("strict reconciliation confirms an owned container missing from a stale snapshot", async () => {
+    const environment = createEnvironment({
+      id: "env-strict-stale",
+      environmentType: "containerized",
+      containerId: "container-before-create",
+      status: "error",
+      lifecycleError: ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.runtimeUnavailable,
+    });
+    const { context, updates } = createContext(environment);
+    context.strictDockerOwner = true;
+    const owner = dockerOwnerNamespace(context.storage.getDataDir());
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "ps" ]; then
+  exit 0
+fi
+if [ "$1" = "inspect" ]; then
+  printf '${owner}\\trunning\\n'
+  exit 0
+fi
+exit 1
+`, async ({ all }) => {
+      await withFixedDate("2026-08-14T12:00:00.000Z", async () => {
+        await commands.get("get_environments")?.({ projectId: environment.projectId }, context);
+        environment.containerId = "container-created-after-snapshot";
+        environment.status = "running";
+        environment.lifecycleError = undefined;
+
+        await expect(commands.get("sync_environment_status")?.(
+          { environmentId: environment.id },
+          context,
+        )).resolves.toEqual(toClientEnvironment(environment));
+      });
+
+      const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
+      expect(log.filter((line) => line.startsWith("ps -a"))).toHaveLength(1);
+      expect(log.filter((line) => line.startsWith("inspect -f"))).toEqual([
+        `inspect -f {{ index .Config.Labels "orkestrator-owner" }}\t{{.State.Status}} container-created-after-snapshot`,
+      ]);
+    });
+    expect(updates).toHaveLength(0);
+    expect(environment.containerId).toBe("container-created-after-snapshot");
+  });
+
   test("refreshes the docker ps snapshot after its cache expires", async () => {
     const environment = createEnvironment({
       id: "env-cache-expiry",
@@ -16646,6 +16692,41 @@ exit 0
     expect(container.initialAgentModel).toBeUndefined();
     expect(container.initialReasoningEffort).toBeUndefined();
     await expect(commands.get("recreate_environment")?.({ environmentId: local.id }, context)).resolves.toBeUndefined();
+  });
+
+  test("strict lifecycle commands never stop, recreate, or delete a foreign container", async () => {
+    const environment = createEnvironment({
+      id: "env-foreign-container",
+      environmentType: "containerized",
+      containerId: "foreign-container",
+      status: "running",
+    });
+    const { context, updates } = createContext(environment);
+    context.strictDockerOwner = true;
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "inspect" ]; then
+  printf 'another-owner\\trunning\\n'
+  exit 0
+fi
+exit 0
+`, async ({ all }) => {
+      for (const command of ["stop_environment", "recreate_environment", "delete_environment"] as const) {
+        await expect(commands.get(command)?.(
+          { environmentId: environment.id },
+          context,
+        )).rejects.toThrow("not owned by this development profile");
+      }
+
+      const log = await fs.readFile(all, "utf8");
+      expect(log.match(/inspect -f/g)).toHaveLength(3);
+      expect(log).not.toContain("stop foreign-container");
+      expect(log).not.toContain("rm -f foreign-container");
+    });
+    expect(updates).toHaveLength(0);
+    expect(environment.containerId).toBe("foreign-container");
   });
 
   test("stopping a local environment also stops its bridge processes", async () => {

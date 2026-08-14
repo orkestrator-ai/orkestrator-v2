@@ -121,11 +121,17 @@ describe("Electron backend process supervisor", () => {
 
   test("agent-test child environments suppress ambient credentials by default", () => {
     const isolated = createBackendProcessEnvironment({
+      HOME: "/Users/tester",
       ANTHROPIC_API_KEY: "anthropic-secret",
       OPENAI_API_KEY: "openai-secret",
       OPENCODE_API_KEY: "opencode-secret",
       GH_TOKEN: "github-secret",
       CURSOR_API_KEY: "cursor-secret",
+      AWS_ACCESS_KEY_ID: "aws-secret",
+      NPM_TOKEN: "npm-secret",
+      DATABASE_URL: "postgres://secret",
+      SSH_AUTH_SOCK: "/tmp/private-agent.sock",
+      CUSTOM_SERVICE_LOGIN: "unexpected-credential-name",
     }, true, "/resources", "2.8.2", {
       flavor: "agent-test",
       credentialSources: [],
@@ -137,9 +143,35 @@ describe("Electron backend process supervisor", () => {
     expect(isolated.OPENCODE_API_KEY).toBeUndefined();
     expect(isolated.GH_TOKEN).toBeUndefined();
     expect(isolated.CURSOR_API_KEY).toBeUndefined();
+    expect(isolated.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(isolated.NPM_TOKEN).toBeUndefined();
+    expect(isolated.DATABASE_URL).toBeUndefined();
+    expect(isolated.SSH_AUTH_SOCK).toBeUndefined();
+    expect(isolated.CUSTOM_SERVICE_LOGIN).toBeUndefined();
+    expect(isolated.HOME).toBe("/profiles/qa/credentials/home");
+    expect(isolated.ORKESTRATOR_AGENT_TEST_HOST_HOME).toBe("/Users/tester");
     expect(isolated.CODEX_HOME).toBe("/profiles/qa/credentials/codex");
     expect(isolated.CLAUDE_CONFIG_DIR).toBe("/profiles/qa/credentials/claude");
     expect(isolated.GIT_CONFIG_GLOBAL).toBe(process.platform === "win32" ? "NUL" : "/dev/null");
+  });
+
+  test("agent-test environments restore only explicitly allowed provider credentials", () => {
+    const isolated = createBackendProcessEnvironment({
+      HOME: "/Users/tester",
+      OPENAI_API_KEY: "allowed-openai",
+      ANTHROPIC_API_KEY: "blocked-anthropic",
+      NPM_TOKEN: "blocked-npm",
+    }, true, "/resources", "2.8.2", {
+      flavor: "agent-test",
+      credentialSources: ["codex"],
+      isolatedCredentialRoot: "/profiles/qa/credentials",
+    });
+
+    expect(isolated.OPENAI_API_KEY).toBe("allowed-openai");
+    expect(isolated.CODEX_HOME).toBe("/Users/tester/.codex");
+    expect(isolated.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(isolated.NPM_TOKEN).toBeUndefined();
+    expect(isolated.CLAUDE_CONFIG_DIR).toBe("/profiles/qa/credentials/claude");
   });
 
   test("start threads the Electron application version into the spawned child", async () => {

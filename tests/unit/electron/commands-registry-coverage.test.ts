@@ -66,6 +66,18 @@ if [ "$1" = "images" ] && [ "$2" = "-q" ]; then
   printf 'image-a\\nimage-a\\nimage-b\\n'
   exit 0
 fi
+if [ "$1" = "inspect" ]; then
+  case "$*" in
+    *orkestrator-owner*)
+      case "$*" in
+        *foreign-container*) printf 'foreign-owner\trunning\n' ;;
+        *) printf '${REGISTRY_DOCKER_OWNER}\trunning\n' ;;
+      esac
+      ;;
+    *) printf 'running\n' ;;
+  esac
+  exit 0
+fi
 if [ "$1" = "port" ]; then
   [ "\${FAKE_DOCKER_PORT_MISSING:-}" = "1" ] && exit 1
   printf '0.0.0.0:%s\\n' "\${FAKE_DOCKER_PORT:-43123}"
@@ -291,6 +303,34 @@ describe("direct backend command registry coverage", () => {
       `docker container prune -f --filter label=orkestrator-owner=${REGISTRY_DOCKER_OWNER}`,
     );
     expect(log).not.toContain("label!=orkestrator-owner");
+  });
+
+  test("agent-test container commands reject foreign ownership before reads or execution", async () => {
+    const context = contextWithStorage({});
+    context.strictDockerOwner = true;
+
+    for (const [command, args] of [
+      ["get_container_logs", { containerId: "foreign-container" }],
+      ["start_codex_server", { containerId: "foreign-container" }],
+      ["create_terminal_session", { containerId: "foreign-container", cols: 80, rows: 24 }],
+      ["read_container_file", { containerId: "foreign-container", filePath: "README.md" }],
+    ] as const) {
+      await expect(invoke(command, args, context)).rejects.toThrow(
+        "not owned by this development profile",
+      );
+    }
+
+    const log = await commandLogContents();
+    expect(log.match(/docker inspect/g)).toHaveLength(4);
+    expect(log).not.toContain("docker logs");
+    expect(log).not.toContain("docker exec");
+
+    await expect(invoke(
+      "get_container_logs",
+      { containerId: "assigned-container" },
+      context,
+    )).resolves.toBe("");
+    expect(await commandLogContents()).toContain("docker logs --tail 200 assigned-container");
   });
 
   test("stops each bridge, reports authenticated OpenCode health, and delegates model caching", async () => {

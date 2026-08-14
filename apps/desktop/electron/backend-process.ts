@@ -18,6 +18,40 @@ export type GatewayStartInfo = {
   browserError?: string;
 };
 
+const AGENT_TEST_SAFE_ENV_NAMES = new Set([
+  "BUN_INSTALL",
+  "CI",
+  "COLORTERM",
+  "FORCE_COLOR",
+  "LANG",
+  "LOGNAME",
+  "NODE_ENV",
+  "NODE_EXTRA_CA_CERTS",
+  "NODE_PATH",
+  "NO_COLOR",
+  "ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH",
+  "ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY",
+  "ORKESTRATOR_GATEWAY_DISABLED",
+  "ORKESTRATOR_VERSION",
+  "PATH",
+  "PWD",
+  "SHELL",
+  "SSL_CERT_DIR",
+  "SSL_CERT_FILE",
+  "TEMP",
+  "TERM",
+  "TMP",
+  "TMPDIR",
+  "TZ",
+  "USER",
+]);
+
+function retainSafeAgentTestEnvironment(env: NodeJS.ProcessEnv): void {
+  for (const name of Object.keys(env)) {
+    if (!AGENT_TEST_SAFE_ENV_NAMES.has(name) && !name.startsWith("LC_")) delete env[name];
+  }
+}
+
 export function getBrowserGatewayStatus(info: GatewayStartInfo | null) {
   return {
     enabled: true,
@@ -68,33 +102,60 @@ export function createBackendProcessEnvironment(
   delete env.ORKESTRATOR_WORKTREE_DIR;
   delete env.ORKESTRATOR_DOCKER_IMAGE;
   delete env.ORKESTRATOR_CREDENTIAL_SOURCE;
+  delete env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
   if (runtime?.flavor === "agent-test") {
     const allowed = new Set(runtime.credentialSources ?? []);
+    const inherited = { ...parentEnv };
+    const inheritedHome = inherited.HOME?.trim();
+    retainSafeAgentTestEnvironment(env);
     env.ORKESTRATOR_AGENT_TEST_ISOLATED = "1";
     if (runtime.isolatedCredentialRoot) {
+      const isolatedHome = path.join(runtime.isolatedCredentialRoot, "home");
+      env.HOME = isolatedHome;
+      if (inheritedHome) env.ORKESTRATOR_AGENT_TEST_HOST_HOME = inheritedHome;
       env.GH_CONFIG_DIR = path.join(runtime.isolatedCredentialRoot, "github-disabled");
       env.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : "/dev/null";
+      env.NPM_CONFIG_USERCONFIG = path.join(runtime.isolatedCredentialRoot, "npmrc-disabled");
+      env.DOCKER_CONFIG = path.join(runtime.isolatedCredentialRoot, "docker-disabled");
+      env.AWS_CONFIG_FILE = path.join(runtime.isolatedCredentialRoot, "aws", "config");
+      env.AWS_SHARED_CREDENTIALS_FILE = path.join(runtime.isolatedCredentialRoot, "aws", "credentials");
+      env.AWS_EC2_METADATA_DISABLED = "true";
+      env.KUBECONFIG = path.join(runtime.isolatedCredentialRoot, "kube", "config");
+      env.AZURE_CONFIG_DIR = path.join(runtime.isolatedCredentialRoot, "azure");
+      env.CLOUDSDK_CONFIG = path.join(runtime.isolatedCredentialRoot, "google");
     }
-    if (!allowed.has("claude")) {
-      delete env.ANTHROPIC_API_KEY;
-      if (runtime.isolatedCredentialRoot) env.CLAUDE_CONFIG_DIR = path.join(runtime.isolatedCredentialRoot, "claude");
+    if (allowed.has("claude")) {
+      if (inherited.ANTHROPIC_API_KEY) env.ANTHROPIC_API_KEY = inherited.ANTHROPIC_API_KEY;
+      const claudeConfigDir = inherited.CLAUDE_CONFIG_DIR?.trim()
+        || (inheritedHome ? path.join(inheritedHome, ".claude") : undefined);
+      if (claudeConfigDir) env.CLAUDE_CONFIG_DIR = claudeConfigDir;
+    } else if (runtime.isolatedCredentialRoot) {
+      env.CLAUDE_CONFIG_DIR = path.join(runtime.isolatedCredentialRoot, "claude");
     }
-    if (!allowed.has("codex")) {
-      delete env.OPENAI_API_KEY;
-      if (runtime.isolatedCredentialRoot) env.CODEX_HOME = path.join(runtime.isolatedCredentialRoot, "codex");
+    if (allowed.has("codex")) {
+      if (inherited.OPENAI_API_KEY) env.OPENAI_API_KEY = inherited.OPENAI_API_KEY;
+      const codexHome = inherited.CODEX_HOME?.trim()
+        || (inheritedHome ? path.join(inheritedHome, ".codex") : undefined);
+      if (codexHome) env.CODEX_HOME = codexHome;
+    } else if (runtime.isolatedCredentialRoot) {
+      env.CODEX_HOME = path.join(runtime.isolatedCredentialRoot, "codex");
     }
-    if (!allowed.has("opencode")) {
-      delete env.OPENCODE_API_KEY;
-      if (runtime.isolatedCredentialRoot) {
-        env.XDG_CONFIG_HOME = path.join(runtime.isolatedCredentialRoot, "xdg-config");
-        env.XDG_DATA_HOME = path.join(runtime.isolatedCredentialRoot, "xdg-data");
-        env.XDG_STATE_HOME = path.join(runtime.isolatedCredentialRoot, "xdg-state");
-      }
+    if (allowed.has("opencode")) {
+      if (inherited.OPENCODE_API_KEY) env.OPENCODE_API_KEY = inherited.OPENCODE_API_KEY;
+      const configHome = inherited.XDG_CONFIG_HOME?.trim()
+        || (inheritedHome ? path.join(inheritedHome, ".config") : undefined);
+      const dataHome = inherited.XDG_DATA_HOME?.trim()
+        || (inheritedHome ? path.join(inheritedHome, ".local", "share") : undefined);
+      const stateHome = inherited.XDG_STATE_HOME?.trim()
+        || (inheritedHome ? path.join(inheritedHome, ".local", "state") : undefined);
+      if (configHome) env.XDG_CONFIG_HOME = configHome;
+      if (dataHome) env.XDG_DATA_HOME = dataHome;
+      if (stateHome) env.XDG_STATE_HOME = stateHome;
+    } else if (runtime.isolatedCredentialRoot) {
+      env.XDG_CONFIG_HOME = path.join(runtime.isolatedCredentialRoot, "xdg-config");
+      env.XDG_DATA_HOME = path.join(runtime.isolatedCredentialRoot, "xdg-data");
+      env.XDG_STATE_HOME = path.join(runtime.isolatedCredentialRoot, "xdg-state");
     }
-    delete env.CURSOR_API_KEY;
-    delete env.GROK_API_KEY;
-    delete env.GH_TOKEN;
-    delete env.GITHUB_TOKEN;
   }
   return env;
 }

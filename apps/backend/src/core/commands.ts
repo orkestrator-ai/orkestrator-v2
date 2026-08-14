@@ -4192,18 +4192,32 @@ async function getDockerStatus(containerId: string): Promise<EnvironmentStatus> 
   return parseDockerStatus(stdout);
 }
 
+async function inspectDockerContainerIdentity(containerId: string): Promise<{
+  owner: string;
+  status: EnvironmentStatus;
+}> {
+  const { stdout } = await runCommand(
+    "docker",
+    [
+      "inspect",
+      "-f",
+      `{{ index .Config.Labels "${DOCKER_LABEL_OWNER}" }}\t{{.State.Status}}`,
+      containerId,
+    ],
+    { timeoutMs: 10_000 },
+  );
+  const [owner = "", status = ""] = stdout.trim().split("\t", 2);
+  return { owner: owner.trim(), status: parseDockerStatus(status) };
+}
+
 async function assertDockerContainerOwned(
   containerId: string,
   context: Pick<CommandContext, "storage" | "strictDockerOwner">,
 ): Promise<void> {
   if (!context.strictDockerOwner) return;
   const owner = dockerOwnerNamespace(context.storage.getDataDir());
-  const { stdout } = await runCommand(
-    "docker",
-    ["inspect", "-f", `{{ index .Config.Labels "${DOCKER_LABEL_OWNER}" }}`, containerId],
-    { timeoutMs: 10_000 },
-  );
-  if (stdout.trim() !== owner) {
+  const identity = await inspectDockerContainerIdentity(containerId);
+  if (identity.owner !== owner) {
     throw new Error("Refusing Docker operation on a container not owned by this development profile");
   }
 }
@@ -4340,7 +4354,27 @@ async function syncStoredEnvironmentStatus(
     return environment;
   }
   if (strictKnownContainerStates && knownContainerStates && knownState === undefined) {
-    return storage.updateEnvironment(environment.id, { status: "stopped", containerId: null });
+    try {
+      const identity = await inspectDockerContainerIdentity(environment.containerId);
+      const expectedOwner = dockerOwnerNamespace(storage.getDataDir());
+      if (identity.owner !== expectedOwner) {
+        return storage.updateEnvironment(environment.id, { status: "stopped", containerId: null });
+      }
+      if (identity.status !== environment.status) {
+        return storage.updateEnvironment(environment.id, { status: identity.status });
+      }
+      return environment;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/no such (object|container)/i.test(message)) {
+        return storage.updateEnvironment(environment.id, { status: "stopped", containerId: null });
+      }
+      console.warn("[environment-status] Preserving container state after strict ownership probe failed", {
+        environmentId: environment.id,
+        message,
+      });
+      return environment;
+    }
   }
 
   try {
@@ -5187,6 +5221,7 @@ async function stopEnvironmentOnce(
   // A stopped environment cannot honour a post-setup agent launch, and the
   // renderer cannot clear the intent for an environment it no longer mounts.
   if (environment.containerId) {
+    await assertDockerContainerOwned(environment.containerId, context);
     await runCommand("docker", ["stop", environment.containerId], { timeoutMs: 60_000 });
     await storage.updateEnvironment(environment.id, {
       status: "stopped",
@@ -5242,6 +5277,7 @@ async function recreateEnvironmentOnce(
 ): Promise<EnvironmentSetupStartResult | undefined> {
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment?.containerId) return;
+  await assertDockerContainerOwned(environment.containerId, context);
   invalidateDiscovery(environment.id);
   // Recreate is the user's repair action for a container that is already
   // broken, so a failing `rm -f` must not be the thing that makes it
@@ -6696,6 +6732,9 @@ async function deleteEnvironment(
     await enqueueLocalServerEnvironmentOperation(environmentId, async () => {
       const { storage } = context;
       const environment = await storage.getEnvironment(environmentId);
+      if (environment?.containerId) {
+        await assertDockerContainerOwned(environment.containerId, context);
+      }
       // Persist the deletion intent before any durable child-state cleanup.
       // Queue/pipeline saves consult this marker while holding their own locks:
       // a write that began earlier is swept by cleanup, and a later write is
@@ -8430,15 +8469,25 @@ async function createDockerContainer(environment: Environment, context: CommandC
   }
 
   const home = os.homedir();
+  const agentTestHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME?.trim();
   const bindIfExists = async (source: string, target: string, readonly = true) => {
     if (await pathExists(source)) args.push("-v", `${source}:${target}${readonly ? ":ro" : ""}`);
   };
   if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("claude")) {
-    await bindIfExists(path.join(home, ".claude"), "/claude-config");
-    await bindIfExists(path.join(home, ".claude.json"), "/claude-config.json");
+    const claudeConfigDir = context.runtimeFlavor === "agent-test"
+      ? process.env.CLAUDE_CONFIG_DIR?.trim()
+      : path.join(home, ".claude");
+    const claudeConfigFile = context.runtimeFlavor === "agent-test" && agentTestHostHome
+      ? path.join(agentTestHostHome, ".claude.json")
+      : path.join(home, ".claude.json");
+    if (claudeConfigDir) await bindIfExists(claudeConfigDir, "/claude-config");
+    await bindIfExists(claudeConfigFile, "/claude-config.json");
   }
   if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("codex")) {
-    await bindIfExists(path.join(home, ".codex"), "/codex-home");
+    const codexHome = context.runtimeFlavor === "agent-test"
+      ? process.env.CODEX_HOME?.trim()
+      : path.join(home, ".codex");
+    if (codexHome) await bindIfExists(codexHome, "/codex-home");
   }
   // Agent homes must remain writable. Cursor creates project/session state and
   // Grok creates session databases during ACP startup, so mounting the host
@@ -8450,9 +8499,18 @@ async function createDockerContainer(environment: Environment, context: CommandC
     await bindIfExists(path.join(home, ".config", "grok"), "/grok-config");
   }
   if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("opencode")) {
-    await bindIfExists(path.join(home, ".config", "opencode"), "/opencode-config");
-    await bindIfExists(path.join(home, ".local", "share", "opencode"), "/opencode-data");
-    await bindIfExists(path.join(home, ".local", "state", "opencode"), "/opencode-state");
+    const configHome = context.runtimeFlavor === "agent-test"
+      ? process.env.XDG_CONFIG_HOME?.trim()
+      : path.join(home, ".config");
+    const dataHome = context.runtimeFlavor === "agent-test"
+      ? process.env.XDG_DATA_HOME?.trim()
+      : path.join(home, ".local", "share");
+    const stateHome = context.runtimeFlavor === "agent-test"
+      ? process.env.XDG_STATE_HOME?.trim()
+      : path.join(home, ".local", "state");
+    if (configHome) await bindIfExists(path.join(configHome, "opencode"), "/opencode-config");
+    if (dataHome) await bindIfExists(path.join(dataHome, "opencode"), "/opencode-data");
+    if (stateHome) await bindIfExists(path.join(stateHome, "opencode"), "/opencode-state");
   }
   if (context.runtimeFlavor !== "agent-test") {
     await bindIfExists(path.join(home, ".gitconfig"), "/tmp/gitconfig");
@@ -8481,6 +8539,7 @@ async function createDockerContainer(environment: Environment, context: CommandC
     redactValues,
   });
   const containerId = stdout.trim();
+  dockerContainerStateCache = null;
   try {
     if (project.localPath) {
       await stageConfiguredProjectFilesForContainer(containerId, project.localPath, configuredFilesToCopy);
@@ -9362,7 +9421,21 @@ export function createCommandRegistry(
   } = {},
 ): Map<string, CommandHandler> {
   const commands = new Map<string, CommandHandler>();
-  const register = (name: string, handler: CommandHandler) => commands.set(name, handler);
+  const register = (name: string, handler: CommandHandler) => commands.set(
+    name,
+    (args, context) => {
+      const containerId = args.containerId;
+      if (
+        context.strictDockerOwner
+        && typeof containerId === "string"
+        && containerId.trim()
+      ) {
+        return assertDockerContainerOwned(containerId, context)
+          .then(() => handler(args, context));
+      }
+      return handler(args, context);
+    },
+  );
   const pendingEnvironmentRenameTasks = new Map<string, Promise<void>>();
   const claudeModelCatalogRefreshes = new Map<string, Promise<ClaudeModelCatalogSnapshot>>();
   const bridgeReadinessWaits = new Map<string, {
@@ -10389,7 +10462,6 @@ export function createCommandRegistry(
   register("docker_start_container", async ({ containerId }, context) => {
     const { storage } = context;
     const id = asString(containerId, "containerId");
-    await assertDockerContainerOwned(id, context);
     await runCommand("docker", ["start", id], { timeoutMs: 60_000 });
     await ensureContainerProjectFilesAccess(id);
     const config = await storage.loadConfig();
@@ -10403,19 +10475,16 @@ export function createCommandRegistry(
       await syncContainerClaudeCredentialBestEffort(id, config.global);
     }
   });
-  register("docker_stop_container", async ({ containerId }, context) => {
+  register("docker_stop_container", async ({ containerId }) => {
     const id = asString(containerId, "containerId");
-    await assertDockerContainerOwned(id, context);
     await runCommand("docker", ["stop", id], { timeoutMs: 60_000 });
   });
-  register("docker_remove_container", async ({ containerId }, context) => {
+  register("docker_remove_container", async ({ containerId }) => {
     const id = asString(containerId, "containerId");
-    await assertDockerContainerOwned(id, context);
     await runCommand("docker", ["rm", "-f", id], { timeoutMs: 60_000 });
   });
-  register("docker_container_status", async ({ containerId }, context) => {
+  register("docker_container_status", async ({ containerId }) => {
     const id = asString(containerId, "containerId");
-    await assertDockerContainerOwned(id, context);
     return getDockerStatus(id);
   });
   register("list_docker_containers", async (_args, context) => {
@@ -10537,7 +10606,6 @@ export function createCommandRegistry(
   });
   register("reattach_container", async ({ projectId, containerId, name }, context) => {
     const { storage } = context;
-    await assertDockerContainerOwned(asString(containerId, "containerId"), context);
     const env = createEnvironment(asString(projectId, "projectId"), { name: asOptionalString(name) ?? `reattached-${String(containerId).slice(0, 8)}` });
     env.containerId = asString(containerId, "containerId");
     env.status = await getDockerStatus(env.containerId).catch(() => "stopped");

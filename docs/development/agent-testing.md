@@ -60,6 +60,8 @@ Then exercise the real stack:
 ```bash
 ORKESTRATOR_AGENT_TEST_PROFILE=codex-qa bun run test:agent:browser
 bun run test:agent:electron
+# Against a profile started with --fixture-environments local,container:
+ORKESTRATOR_AGENT_TEST_PROFILE=container-qa bun run test:agent:docker
 ```
 
 The browser suite uses the auth file outside Playwright to mint a 60-second,
@@ -69,6 +71,9 @@ drives a backend-owned terminal operation, reloads while it is progressing,
 verifies the rehydrated output and diff state, and cleans up. The Electron suite
 launches the real main process and preload, then checks the profile title,
 `userData`, IPC invocation, clipboard bridge, and supervised backend shutdown.
+The opt-in Docker suite verifies the seeded container and proves that a direct
+container command is rejected for an otherwise valid Orkestrator container
+owned by another profile.
 
 Artifacts are written below `output/agent-testing/<profile-or-run-id>/`, with
 traces and screenshots retained on failure and a JSON result summary. Browser

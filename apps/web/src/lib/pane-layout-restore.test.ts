@@ -555,7 +555,9 @@ describe("reconcilePersistedLayout", () => {
         {
           id: "multi",
           type: "multi-review",
-          multiReviewTabData: { environmentId: "old", workflowId: "multi-1" },
+          multiReviewTabData: {
+            environmentId: "old", workflowId: "multi-1", reviewerId: "reviewer-1",
+          },
         },
       ],
       activeTabId: "file",
@@ -570,7 +572,9 @@ describe("reconcilePersistedLayout", () => {
         { id: "tmux", claudeTmuxData: { environmentId: "env-1", isLocal: true } },
         { id: "build", buildTabData: { environmentId: "env-1", pipelineId: "pipeline-1", taskId: "task-1", isLocal: true } },
         { id: "looped", loopedReviewTabData: { environmentId: "env-1", workflowId: "workflow-1", isLocal: true } },
-        { id: "multi", multiReviewTabData: { environmentId: "env-1", workflowId: "multi-1", isLocal: true } },
+        { id: "multi", multiReviewTabData: {
+          environmentId: "env-1", workflowId: "multi-1", reviewerId: "reviewer-1", isLocal: true,
+        } },
       ],
     });
     expect(JSON.stringify(restored)).not.toContain("stale");

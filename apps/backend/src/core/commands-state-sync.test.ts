@@ -2814,6 +2814,26 @@ describe("multi review commands", () => {
       expect(lifecycle).not.toHaveBeenCalled();
     }, { multiReviews: supervisor });
   });
+
+  test("delegates authoritative reviewer transcript reads", async () => {
+    const reviewerTranscript = mock(async (workflowId: string, reviewerId: string) => ({
+      workflowId, reviewerId, agent: "codex", model: "gpt-5.6",
+      status: "running", messages: [{ id: "progress" }],
+    }));
+    const supervisor = { reviewerTranscript } as unknown as NonNullable<CommandContext["multiReviews"]>;
+
+    await withCommands(async (invoke) => {
+      await expect(invoke("get_multi_review_reviewer_transcript", {
+        workflowId: "multi-1", reviewerId: "reviewer-1",
+      })).resolves.toMatchObject({
+        workflowId: "multi-1", reviewerId: "reviewer-1", messages: [{ id: "progress" }],
+      });
+      expect(reviewerTranscript).toHaveBeenCalledWith("multi-1", "reviewer-1");
+      await expect(invoke("get_multi_review_reviewer_transcript", {
+        workflowId: "multi-1", reviewerId: " ",
+      })).rejects.toThrow("non-blank string");
+    }, { multiReviews: supervisor });
+  });
 });
 
 describe("build pipeline commands", () => {

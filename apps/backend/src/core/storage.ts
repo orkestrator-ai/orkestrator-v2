@@ -3350,7 +3350,9 @@ export class StorageService {
       throw new Error("occurredAt must not be more than 5 minutes in the future");
     }
     if (!isOneOf(source, AGENT_ACTIVITY_SOURCES)) {
-      throw new Error("source must be frontend, claude-terminal, claude-tmux, or native-agent");
+      throw new Error(
+        "source must be frontend, claude-terminal, claude-tmux, native-agent, or multi-review",
+      );
     }
     if (
       observerId !== undefined

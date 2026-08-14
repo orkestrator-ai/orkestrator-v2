@@ -16,6 +16,7 @@ describe("agent activity vocabulary", () => {
       "claude-terminal",
       "claude-tmux",
       "native-agent",
+      "multi-review",
     ]);
   });
 });

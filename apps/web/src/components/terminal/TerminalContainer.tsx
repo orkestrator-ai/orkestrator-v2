@@ -1679,6 +1679,9 @@ export function TerminalContainer({
           multiReviewTabData: {
             environmentId,
             workflowId: options.multiReviewId,
+            ...(options.multiReviewReviewerId
+              ? { reviewerId: options.multiReviewReviewerId }
+              : {}),
             isLocal: isLocalEnvironment,
           },
         };

@@ -16,7 +16,8 @@ export type AgentActivitySource =
   | "frontend"
   | "claude-terminal"
   | "claude-tmux"
-  | "native-agent";
+  | "native-agent"
+  | "multi-review";
 
 export interface AgentActivitySourceSnapshot {
   state: AgentActivityState;
@@ -48,6 +49,7 @@ export const AGENT_ACTIVITY_SOURCES: readonly AgentActivitySource[] = [
   "claude-terminal",
   "claude-tmux",
   "native-agent",
+  "multi-review",
 ];
 
 /**

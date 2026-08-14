@@ -30,7 +30,25 @@ export interface MultiReviewReviewer extends MultiReviewModelSelection {
   providerSessionId?: string;
   requestId?: string;
   dispatchState?: "prepared" | "dispatching" | "sent";
+  /** Durable correction turn for a rejected structured report. */
+  schemaRepairAttempts?: number;
+  schemaRepairPrompt?: string;
   idleResultPolls?: number;
+  report?: StructuredReviewReport;
+  error?: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+/** Authoritative read model for one reviewer's provider transcript. */
+export interface MultiReviewReviewerTranscript {
+  workflowId: string;
+  reviewerId: string;
+  agent: AgentPlatform;
+  model: string;
+  reasoningEffort?: string;
+  status: MultiReviewReviewerStatus;
+  messages: unknown[];
   report?: StructuredReviewReport;
   error?: string;
   startedAt?: string;
@@ -85,6 +103,9 @@ export interface MultiReviewWorkflow {
     requestId: string;
     state: "prepared" | "dispatching" | "sent";
     createdAt: string;
+    /** Durable correction turn for a rejected consolidated report. */
+    schemaRepairAttempts?: number;
+    schemaRepairPrompt?: string;
     idleResultPolls?: number;
   };
   cancellingSince?: string;
@@ -167,6 +188,11 @@ function optionalPollCount(value: unknown): boolean {
   return value === undefined || (Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= 5);
 }
 
+function optionalRepairAttempts(value: unknown): boolean {
+  return value === undefined
+    || (Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= 3);
+}
+
 function isFixSession(value: unknown): boolean {
   return record(value)
     && hasOnlyKeys(value, [
@@ -190,12 +216,17 @@ function isActiveRequest(
   value: unknown,
 ): value is NonNullable<MultiReviewWorkflow["activeRequest"]> {
   return record(value)
-    && hasOnlyKeys(value, ["kind", "requestId", "state", "createdAt", "idleResultPolls"])
+    && hasOnlyKeys(value, [
+      "kind", "requestId", "state", "createdAt", "schemaRepairAttempts",
+      "schemaRepairPrompt", "idleResultPolls",
+    ])
     && (value.kind === "consolidate" || value.kind === "fix")
     && nonBlank(value.requestId)
     && (value.state === "prepared" || value.state === "dispatching" || value.state === "sent")
     && typeof value.createdAt === "string"
     && Number.isFinite(Date.parse(value.createdAt))
+    && optionalRepairAttempts(value.schemaRepairAttempts)
+    && optionalString(value.schemaRepairPrompt, 100_000)
     && optionalPollCount(value.idleResultPolls);
 }
 
@@ -263,7 +294,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     && hasOnlyKeys(entry, [
       "agent", "model", "reasoningEffort", "id", "status", "sessionKey",
       "providerSessionId", "requestId", "dispatchState", "idleResultPolls", "report",
-      "error", "startedAt", "completedAt",
+      "schemaRepairAttempts", "schemaRepairPrompt", "error", "startedAt", "completedAt",
     ])
     && isMultiReviewModelSelectionFields(entry)
     && nonBlank(entry.id)
@@ -272,6 +303,8 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     && (entry.providerSessionId === undefined || nonBlank(entry.providerSessionId))
     && (entry.requestId === undefined || nonBlank(entry.requestId))
     && (entry.dispatchState === undefined || ["prepared", "dispatching", "sent"].includes(entry.dispatchState as string))
+    && optionalRepairAttempts(entry.schemaRepairAttempts)
+    && optionalString(entry.schemaRepairPrompt, 100_000)
     && optionalPollCount(entry.idleResultPolls)
     && optionalString(entry.error, 4_096)
     && optionalDate(entry.startedAt)

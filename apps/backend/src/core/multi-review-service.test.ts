@@ -2,7 +2,10 @@ import { expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import {
+  STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+  type StructuredReviewReport,
+} from "@orkestrator/protocol/structured-review";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type {
   MultiReviewModelSelection,
@@ -15,6 +18,7 @@ import type {
   ProviderStatus,
 } from "./build-pipeline-provider.js";
 import { AmbiguousPromptDispatchError } from "./build-pipeline-provider.js";
+import { REVIEW_FIX_RESULT_JSON_SCHEMA } from "./looped-review-prompts.js";
 import { StorageService } from "./storage.js";
 import { MultiReviewService } from "./multi-review-service.js";
 
@@ -53,6 +57,11 @@ class Provider implements BuildPipelineProvider {
   ambiguousFixOnce = false;
   fixSends = 0;
   fixComplete = true;
+  invalidReviewerReports = 0;
+  invalidConsolidatedReports = 0;
+  schemaFailureReports = 0;
+  invalidFixResults = 0;
+  messagesValue: unknown[] = [];
   /** Throws from `createSession` once this many sessions already exist. */
   failCreateSessionAfter: number | null = null;
   private statusGate: Promise<void> | null = null;
@@ -80,10 +89,61 @@ class Provider implements BuildPipelineProvider {
     if (this.statusGate) await this.statusGate;
     return this.statusOverrides.get(sessionId) ?? this.statusValue;
   }
-  async messages(): Promise<unknown[]> { return []; }
-  async structured<T>(_sessionId: string, requestId: string): Promise<StructuredOutputResult<T> | null> {
+  async messages(): Promise<unknown[]> { return this.messagesValue; }
+  async structured<T>(sessionId: string, requestId: string): Promise<StructuredOutputResult<T> | null> {
     if (!this.returnStructured) return null;
     const sent = this.sends.get(requestId)!;
+    const isConsolidation = sent.prompt.includes("<multi-review-reports-json>");
+    if (sent.options.schema === REVIEW_FIX_RESULT_JSON_SCHEMA) {
+      if (this.invalidFixResults > 0) {
+        this.invalidFixResults -= 1;
+        return { ok: true, provider: "claude", requestId, value: {
+          complete: true,
+          summary: "Addressed every finding",
+          filesChanged: ["src/a.ts"],
+          commandsRun: [],
+          notes: [],
+          limitations: ["A blocker remains"],
+        } as T };
+      }
+      return { ok: true, provider: "claude", requestId, value: {
+        complete: this.fixComplete,
+        summary: this.fixComplete
+          ? "Addressed every finding"
+          : "Two findings remain unresolved",
+        filesChanged: ["src/a.ts", "src/a.test.ts"],
+        commandsRun: [],
+        notes: [],
+        limitations: this.fixComplete ? [] : ["Two findings need product input"],
+      } as T };
+    }
+    if (sent.options.schema === STRUCTURED_REVIEW_REPORT_JSON_SCHEMA) {
+      if (this.schemaFailureReports > 0) {
+        this.schemaFailureReports -= 1;
+        return {
+          ok: false,
+          provider: "claude",
+          requestId,
+          error: {
+            code: "schema_retry_exhausted",
+            message: "Output did not satisfy the provider schema.",
+            provider: "claude",
+            retryable: true,
+            details: { path: "$.verdict.ready", reason: "Expected an enum value." },
+          },
+        };
+      }
+      if (isConsolidation && this.invalidConsolidatedReports > 0) {
+        this.invalidConsolidatedReports -= 1;
+        return { ok: true, provider: "claude", requestId,
+          value: { ...consolidatedReport, ready: true } as T };
+      }
+      if (sessionId === "session-1" && this.invalidReviewerReports > 0) {
+        this.invalidReviewerReports -= 1;
+        return { ok: true, provider: "claude", requestId,
+          value: { ...cleanReport, ready: true } as T };
+      }
+    }
     const value = sent.prompt.includes("<multi-review-reports-json>")
       ? consolidatedReport
       : sent.prompt.includes("<structured-review-findings-json>")
@@ -113,6 +173,34 @@ class Provider implements BuildPipelineProvider {
     };
   }
 }
+
+test("MultiReviewService exposes an authoritative reviewer transcript read model", async () => {
+  const provider = new Provider(false);
+  provider.statusValue = "running";
+  provider.messagesValue = [{
+    id: "assistant-1",
+    role: "assistant",
+    content: "Inspecting the changed files",
+    parts: [{ type: "tool-invocation", toolName: "Read", content: "Read" }],
+  }];
+
+  await withService("env-transcript", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => Boolean(
+      (await snapshot(started.id))?.reviewers[0]?.providerSessionId,
+    ));
+    const reviewer = (await snapshot(started.id))!.reviewers[0]!;
+
+    await expect(service.reviewerTranscript(started.id, reviewer.id)).resolves.toMatchObject({
+      workflowId: started.id,
+      reviewerId: reviewer.id,
+      agent: "claude",
+      model: "opus",
+      status: "running",
+      messages: provider.messagesValue,
+    });
+  });
+});
 
 async function withService(
   environmentId: string,
@@ -161,6 +249,239 @@ async function waitUntil(predicate: () => boolean | Promise<boolean>, timeoutMs 
     await Bun.sleep(10);
   }
 }
+
+test("MultiReviewService keeps environment activity working until its agents settle", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  await withService("env-activity", provider, async ({ service, storage, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(() => provider.statusCalls > 0);
+
+    expect(await storage.getEnvironment("env-activity")).toMatchObject({
+      agentActivityState: "working",
+      agentActivitySources: {
+        "multi-review": { state: "working" },
+      },
+    });
+
+    provider.statusValue = "idle";
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+    expect(await storage.getEnvironment("env-activity")).toMatchObject({
+      agentActivityState: "idle",
+      agentActivitySources: {
+        "multi-review": { state: "idle" },
+      },
+    });
+  });
+});
+
+test("MultiReviewService asks a reviewer to correct an invalid structured report", async () => {
+  const provider = new Provider();
+  provider.invalidReviewerReports = 1;
+  await withService("env-review-repair", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+
+    const repaired = await snapshot(started.id);
+    expect(repaired?.reviewers[0]).toMatchObject({
+      status: "completed",
+      schemaRepairAttempts: 1,
+    });
+    const repair = [...provider.sends.values()].find((sent) =>
+      sent.prompt.includes("repair attempt 1 of 3"));
+    expect(repair).toBeDefined();
+    expect(repair?.options.schema).toBe(STRUCTURED_REVIEW_REPORT_JSON_SCHEMA);
+    expect(repair?.prompt).toContain("<structured-review-expected-schema-json>");
+    expect(repair?.prompt).toContain('"required"');
+    expect(repair?.prompt).toContain("$.ready");
+    expect(repair?.prompt).toContain('Unknown field \\"ready\\".');
+  });
+});
+
+test("MultiReviewService asks the fix model to correct an invalid consolidated report", async () => {
+  const provider = new Provider();
+  provider.invalidConsolidatedReports = 1;
+  await withService("env-consolidation-repair", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+
+    const repaired = await snapshot(started.id);
+    expect(repaired?.consolidatedReport).toMatchObject({
+      verdict: { ready: "yes" },
+    });
+    expect(repaired?.fixSession?.requestIds).toHaveLength(2);
+    const repair = [...provider.sends.values()].find((sent) =>
+      sent.prompt.includes("repair attempt 1 of 3"));
+    expect(repair?.prompt).toContain("$.ready");
+    expect(repair?.prompt).toContain("<structured-review-expected-schema-json>");
+  });
+});
+
+test("MultiReviewService repairs provider-level schema failures with their details", async () => {
+  const provider = new Provider();
+  provider.schemaFailureReports = 1;
+  await withService("env-provider-schema-repair", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+
+    const repair = [...provider.sends.values()].find((sent) =>
+      sent.prompt.includes("repair attempt 1 of 3"));
+    expect(repair?.prompt).toContain("$.verdict.ready");
+    expect(repair?.prompt).toContain("Output did not satisfy the provider schema.");
+    expect(repair?.prompt).toContain("Expected an enum value.");
+    expect(repair?.prompt).toContain("<structured-review-expected-schema-json>");
+  });
+});
+
+test("MultiReviewService asks the fix model to correct an invalid fix result", async () => {
+  const provider = new Provider();
+  await withService("env-fix-result-repair", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+
+    provider.invalidFixResults = 1;
+    await service.address(started.id);
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "completed";
+    });
+
+    const completed = await snapshot(started.id);
+    expect(completed?.fixResult).toMatchObject({ complete: true });
+    expect(completed?.fixSession?.requestIds).toHaveLength(3);
+    const repair = [...provider.sends.values()].find((sent) =>
+      sent.options.schema === REVIEW_FIX_RESULT_JSON_SCHEMA
+      && sent.prompt.includes("repair attempt 1 of 3"));
+    expect(repair?.prompt).toContain("fix result");
+    expect(repair?.prompt).toContain("Fix result cannot be complete");
+    expect(repair?.prompt).toContain('"complete"');
+    expect(repair?.prompt).toContain("<structured-review-expected-schema-json>");
+  });
+});
+
+test("MultiReviewService bounds repeated reviewer schema corrections", async () => {
+  const provider = new Provider();
+  provider.invalidReviewerReports = 4;
+  await withService("env-review-repair-bound", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "failed";
+    });
+
+    const failed = await snapshot(started.id);
+    expect(failed?.reviewers[0]).toMatchObject({
+      status: "failed",
+      schemaRepairAttempts: 3,
+      error: expect.stringContaining("3 repair attempts"),
+    });
+    expect([...provider.sends.values()].filter((sent) =>
+      sent.prompt.includes("<structured-review-contract-errors-json>"))).toHaveLength(3);
+  });
+});
+
+test("MultiReviewService clears stale review activity when it rehydrates", async () => {
+  const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-multi-review-activity-rehydrate-"));
+  const storage = new StorageService(dataDir);
+  await storage.init();
+  await storage.addEnvironment({
+    id: "env-rehydrate", projectId: "project-1", name: "review", branch: "change",
+    containerId: null, status: "running", prUrl: null, prState: null,
+    hasMergeConflicts: null, createdAt: new Date(0).toISOString(), networkAccessMode: "full",
+    order: 0, environmentType: "local", worktreePath: "/tmp/review", setupScriptsComplete: true,
+  });
+  await storage.setEnvironmentAgentActivity(
+    "env-rehydrate",
+    "working",
+    new Date().toISOString(),
+    "multi-review",
+  );
+  const service = new MultiReviewService(
+    storage,
+    async () => { throw new Error("unexpected command"); },
+    { autoAdvance: false },
+  );
+  try {
+    await service.init();
+    expect(await storage.getEnvironment("env-rehydrate")).toMatchObject({
+      agentActivityState: "idle",
+      agentActivitySources: {
+        "multi-review": { state: "idle" },
+      },
+    });
+  } finally {
+    await service.shutdown();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("MultiReviewService rehydrates active review activity without a renderer", async () => {
+  const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-multi-review-activity-active-"));
+  const storage = new StorageService(dataDir);
+  await storage.init();
+  await storage.addEnvironment({
+    id: "env-active", projectId: "project-1", name: "review", branch: "change",
+    containerId: null, status: "running", prUrl: null, prState: null,
+    hasMergeConflicts: null, createdAt: new Date(0).toISOString(), networkAccessMode: "full",
+    order: 0, environmentType: "local", worktreePath: "/tmp/review", setupScriptsComplete: true,
+  });
+  const provider = new Provider();
+  provider.statusValue = "running";
+  const first = new MultiReviewService(
+    storage,
+    async () => { throw new Error("unexpected command"); },
+    { autoAdvance: false, provider: async () => provider },
+  );
+  const started = await first.start({
+    environmentId: "env-active", projectId: "project-1", targetBranch: "main",
+    reviewers: [{ agent: "claude", model: "opus" }],
+    fixModel: { agent: "claude", model: "opus" },
+  });
+  await waitUntil(() => provider.statusCalls > 0);
+  await first.shutdown();
+
+  // Simulate a stale snapshot from a process that missed the workflow event.
+  await storage.setEnvironmentAgentActivity(
+    "env-active",
+    "idle",
+    new Date().toISOString(),
+    "multi-review",
+  );
+  const restored = new MultiReviewService(
+    storage,
+    async () => { throw new Error("unexpected command"); },
+    { autoAdvance: false, provider: async () => provider },
+  );
+  try {
+    await restored.init();
+    expect((await storage.getMultiReviewWorkflow(started.id))?.snapshot)
+      .toMatchObject({ phase: "reviewing" });
+    expect(await storage.getEnvironment("env-active")).toMatchObject({
+      agentActivityState: "working",
+      agentActivitySources: {
+        "multi-review": { state: "working" },
+      },
+    });
+  } finally {
+    await restored.shutdown();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
 
 test("MultiReviewService owns fan-out, consolidation, and the explicit fix turn", async () => {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-multi-review-"));
@@ -440,12 +761,12 @@ test("MultiReviewService atomically admits only one active workflow per environm
   await fs.rm(dataDir, { recursive: true, force: true });
 });
 
-test("MultiReviewService fails the reviewer that raised the error, not one already running", async () => {
+test("MultiReviewService keeps reviewing and consolidates when another reviewer fails", async () => {
   const provider = new Provider();
   provider.statusValue = "running";
   // Reviewer 1 gets its session; reviewer 2 cannot open one.
   provider.failCreateSessionAfter = 1;
-  await withService("env-attribution", provider, async ({ service, start, snapshot }) => {
+  await withService("env-attribution", provider, async ({ service, storage, start, snapshot }) => {
     const started = await start([
       { agent: "claude", model: "opus" },
       { agent: "claude", model: "sonnet" },
@@ -453,7 +774,7 @@ test("MultiReviewService fails the reviewer that raised the error, not one alrea
     await service.advanceNow(started.id);
 
     const current = await snapshot(started.id);
-    expect(current?.phase).toBe("failed");
+    expect(current?.phase).toBe("reviewing");
     expect(current?.reviewers[0]).toMatchObject({ model: "opus", status: "running" });
     expect(current?.reviewers[0]?.error).toBeUndefined();
     expect(current?.reviewers[1]).toMatchObject({
@@ -461,6 +782,54 @@ test("MultiReviewService fails the reviewer that raised the error, not one alrea
       status: "failed",
       error: expect.stringContaining("bridge authentication is unavailable"),
     });
+    expect(await storage.getEnvironment("env-attribution")).toMatchObject({
+      agentActivityState: "working",
+      agentActivitySources: {
+        "multi-review": { state: "working" },
+      },
+    });
+
+    // Let the healthy reviewer finish and allow the consolidation session to
+    // open. The failed review must not appear in the consolidation input.
+    provider.failCreateSessionAfter = null;
+    provider.statusValue = "idle";
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+
+    const ready = await snapshot(started.id);
+    expect(ready?.phase).toBe("ready");
+    expect(ready?.reviewers.map((reviewer) => reviewer.status)).toEqual([
+      "completed",
+      "failed",
+    ]);
+    expect(ready?.consolidatedReport).toBeDefined();
+    const consolidation = [...provider.sends.values()].find((sent) =>
+      sent.prompt.includes("<multi-review-reports-json>"));
+    expect(consolidation?.prompt).toContain(ready?.reviewers[0]?.id ?? "missing-reviewer");
+    expect(consolidation?.prompt).not.toContain(ready?.reviewers[1]?.id ?? "missing-reviewer");
+  });
+});
+
+test("MultiReviewService fails overall when no reviewer produces a valid report", async () => {
+  const provider = new Provider();
+  provider.statusOverrides.set("session-1", "error");
+  provider.statusOverrides.set("session-2", "missing");
+  await withService("env-all-reviewers-failed", provider, async ({ service, start, snapshot }) => {
+    const started = await start([
+      { agent: "claude", model: "opus" },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await service.advanceNow(started.id);
+
+    const failed = await snapshot(started.id);
+    expect(failed?.phase).toBe("failed");
+    expect(failed?.error).toBe("No reviewer produced a valid report");
+    expect(failed?.reviewers).toMatchObject([
+      { status: "failed", error: "The reviewer session failed" },
+      { status: "failed", error: "The reviewer session no longer exists" },
+    ]);
   });
 });
 
@@ -477,7 +846,7 @@ test("MultiReviewService fails a reviewer whose provider session errors or disap
 
       const current = await snapshot(started.id);
       expect(current?.phase).toBe("failed");
-      expect(current?.error).toBe(message);
+      expect(current?.error).toBe("No reviewer produced a valid report");
       expect(current?.reviewers[0]).toMatchObject({ status: "failed", error: message });
     });
   }

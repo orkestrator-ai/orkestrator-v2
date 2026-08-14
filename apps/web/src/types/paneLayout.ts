@@ -101,6 +101,8 @@ export interface LoopedReviewTabData {
 export interface MultiReviewTabData {
   environmentId: string;
   workflowId: string;
+  /** Opens the read-only provider transcript for one reviewer when present. */
+  reviewerId?: string;
   isLocal?: boolean;
 }
 

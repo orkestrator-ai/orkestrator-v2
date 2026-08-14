@@ -21,6 +21,7 @@ import type {
 } from "@orkestrator/protocol/review-workflow";
 import type {
   MultiReviewWorkflow as BackendMultiReviewWorkflow,
+  MultiReviewReviewerTranscript,
   StartMultiReviewInput,
 } from "@orkestrator/protocol/multi-review";
 import type {
@@ -2042,6 +2043,15 @@ export async function listMultiReviewWorkflows<T = unknown>(
 ): Promise<Array<PersistedLoopedReviewWorkflow<T>>> {
   return invoke<Array<PersistedLoopedReviewWorkflow<T>>>(
     "list_multi_review_workflows", { environmentId },
+  );
+}
+
+export async function getMultiReviewReviewerTranscript(
+  workflowId: string,
+  reviewerId: string,
+): Promise<MultiReviewReviewerTranscript> {
+  return invoke<MultiReviewReviewerTranscript>(
+    "get_multi_review_reviewer_transcript", { workflowId, reviewerId },
   );
 }
 

@@ -4,6 +4,10 @@ import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { MultiReviewTab } from "./MultiReviewTab";
+import {
+  MultiReviewReviewerTab,
+  toMultiReviewReviewerMessages,
+} from "./MultiReviewReviewerTab";
 
 const report: StructuredReviewReport = {
   reviewScope: {
@@ -34,8 +38,10 @@ function readyWorkflow(): MultiReviewWorkflow {
     version: 1, controller: "backend", id: "multi-1", environmentId: "env-1",
     projectId: "project-1", targetBranch: "main", phase: "ready",
     reviewers: [
-      { id: "reviewer-1", agent: "claude", model: "opus", status: "completed", report },
-      { id: "reviewer-2", agent: "codex", model: "gpt-5.6", status: "completed", report },
+      { id: "reviewer-1", agent: "claude", model: "opus", status: "completed",
+        providerSessionId: "provider-reviewer-1", report },
+      { id: "reviewer-2", agent: "codex", model: "gpt-5.6", status: "completed",
+        providerSessionId: "provider-reviewer-2", report },
     ],
     fixModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
     fixSession: {
@@ -51,6 +57,22 @@ beforeEach(() => useMultiReviewStore.setState({ workflows: new Map() }));
 afterEach(cleanup);
 
 describe("MultiReviewTab backend snapshot viewer", () => {
+  test("opens a reviewer transcript in a separate tab intent", () => {
+    const ready = readyWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+    const openReviewer = mock((_reviewerId: string, _index: number) => undefined);
+
+    render(<MultiReviewTab
+      data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+      isActive
+      hydrateWorkflow={mock(async () => ready)}
+      openReviewer={openReviewer}
+    />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Reviewer 1 transcript" }));
+    expect(openReviewer).toHaveBeenCalledWith("reviewer-1", 0);
+  });
+
   test("renders the consolidated report and delegates the fix intent to the backend", async () => {
     const ready = readyWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(ready);
@@ -144,5 +166,76 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     await waitFor(() =>
       expect(useMultiReviewStore.getState().workflows.get(ready.id)?.phase).toBe("reviewing"));
     expect(screen.queryByRole("button", { name: "Retry failed stage" })).toBeNull();
+  });
+});
+
+describe("MultiReviewReviewerTab", () => {
+  test("shows progress and tool calls read-only, replacing final JSON with the report", async () => {
+    const finalJson = JSON.stringify(report);
+    const loadTranscript = mock(async () => ({
+      workflowId: "multi-1",
+      reviewerId: "reviewer-1",
+      agent: "codex" as const,
+      model: "gpt-5.6",
+      reasoningEffort: "high",
+      status: "completed" as const,
+      startedAt: "2026-08-14T00:00:00.000Z",
+      completedAt: "2026-08-14T00:01:00.000Z",
+      report,
+      messages: [{
+        id: "generated-review-prompt",
+        role: "user",
+        content: "Generated reviewer workflow instructions",
+        createdAt: "2026-08-14T00:00:00.000Z",
+        parts: [{ type: "text", content: "Generated reviewer workflow instructions" }],
+      }, {
+        id: "progress",
+        role: "assistant",
+        content: "Inspecting the changed files",
+        createdAt: "2026-08-14T00:00:10.000Z",
+        parts: [
+          { type: "text", content: "Inspecting the changed files" },
+          {
+            type: "tool-invocation", content: "shell", toolName: "shell",
+            toolArgs: { command: "git diff" }, toolState: "success", toolOutput: "diff output",
+          },
+        ],
+      }, {
+        id: "generated-schema-repair",
+        role: "user",
+        content: "Expected schema and $.ready validation failure",
+        createdAt: "2026-08-14T00:00:30.000Z",
+        parts: [{ type: "text", content: "Expected schema and $.ready validation failure" }],
+      }, {
+        id: "final-json",
+        role: "assistant",
+        content: finalJson,
+        createdAt: "2026-08-14T00:01:00.000Z",
+        parts: [{ type: "text", content: finalJson }],
+      }],
+    }));
+
+    render(<MultiReviewReviewerTab
+      data={{
+        environmentId: "env-1", workflowId: "multi-1", reviewerId: "reviewer-1", isLocal: true,
+      }}
+      isActive
+      loadTranscript={loadTranscript}
+    />);
+
+    await waitFor(() => expect(loadTranscript).toHaveBeenCalledWith("multi-1", "reviewer-1"));
+    expect(await screen.findByRole("article", { name: "Reviewer report" })).toBeTruthy();
+    expect(screen.getByText(/Ready: with-fixes · 1 issue · 1 coverage gap/)).toBeTruthy();
+    expect(document.body.textContent).not.toContain(finalJson);
+    expect(screen.queryByRole("textbox")).toBeNull();
+
+    const normalized = toMultiReviewReviewerMessages(await loadTranscript());
+    expect(normalized.map((message) => message.id)).toEqual(["progress"]);
+    expect(normalized[0]?.parts).toContainEqual(expect.objectContaining({
+      type: "tool-invocation",
+      toolName: "shell",
+      toolArgs: { command: "git diff" },
+      toolOutput: "diff output",
+    }));
   });
 });

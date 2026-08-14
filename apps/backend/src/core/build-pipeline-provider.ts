@@ -1454,9 +1454,6 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       this.codexModes.set(sessionId, options.mode);
     }
     const attachments = await resolvePromptAttachments(options, this.stageImages);
-    if ((this.agent === "cursor" || this.agent === "grok") && attachments?.length) {
-      throw new PromptRejectedError(`${this.agent} ACP image attachments are not supported yet`);
-    }
     let response: Response;
     try {
       response = await bridgeFetch(

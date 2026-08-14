@@ -23,6 +23,12 @@ import {
   type AcpComposerPatch,
   type AcpNormalizedSessionConfig,
 } from "./session-config.js";
+import {
+  parsePromptAttachments,
+  PromptAttachmentError,
+  readPromptImages,
+  type AcpPromptImage,
+} from "./prompt-attachments.js";
 
 type Provider = "cursor" | "grok";
 type JsonObject = Record<string, unknown>;
@@ -39,6 +45,20 @@ interface BridgeMessage {
 interface BridgeTextPart {
   type: "text" | "thinking";
   content: string;
+  sourcePartId: string;
+  sourceMessageId: string;
+}
+
+/**
+ * A prompt attachment as the transcript records it. The bytes are sent to the
+ * agent but never kept here: the renderer resolves `fileUrl` for its own
+ * preview, and inlining a data URL would spend the whole 8MiB transcript budget
+ * on one screenshot.
+ */
+interface BridgeFilePart {
+  type: "file";
+  content: string;
+  fileUrl?: string;
   sourcePartId: string;
   sourceMessageId: string;
 }
@@ -87,7 +107,7 @@ interface AcpToolSourceState {
   chargedBytes?: number;
 }
 
-type BridgeMessagePart = BridgeTextPart | BridgeToolPart;
+type BridgeMessagePart = BridgeTextPart | BridgeFilePart | BridgeToolPart;
 
 interface PromptJournalEntry {
   requestId: string;
@@ -1481,7 +1501,18 @@ async function route(
     const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
     const requestId = typeof body.requestId === "string" ? body.requestId.trim() : "";
     const schema = isObject(body.outputSchema) ? body.outputSchema : undefined;
-    if (!prompt) return json(response, 400, { error: "prompt is required" });
+    // Shape validation happens before the turn is claimed: a malformed
+    // attachment list is a caller error, not a turn that half-started.
+    let attachments;
+    try {
+      attachments = parsePromptAttachments(body.attachments);
+    } catch (error) {
+      if (!(error instanceof PromptAttachmentError)) throw error;
+      return json(response, 400, { error: error.message });
+    }
+    if (!prompt && attachments.length === 0) {
+      return json(response, 400, { error: "prompt or image attachment is required" });
+    }
     if (Buffer.byteLength(requestId) > 512) return json(response, 400, { error: "requestId is too long" });
     if (requestId && state.promptJournal.has(requestId)) {
       const journaled = state.promptJournal.get(requestId)!;
@@ -1512,7 +1543,11 @@ async function route(
       acceptedAt: Date.now(),
     });
     let child: AcpProcess;
+    let images: AcpPromptImage[];
     try {
+      // Read the attachments first: an unreadable image must fail before a
+      // detached thread is reattached, and it is far cheaper than a spawn.
+      images = await readPromptImages(attachments, workingDirectory);
       child = await ensureSessionProcess(state, clientSignal);
       const promptPatch = parseComposerPatch(body);
       if (promptPatch) await applyComposerPatch(state, promptPatch, clientSignal);
@@ -1521,17 +1556,29 @@ async function route(
       // caller retry with the same requestId.
       state.dispatching = false;
       if (requestId) state.promptJournal.delete(requestId);
+      if (error instanceof PromptAttachmentError) {
+        return json(response, 400, { error: error.message });
+      }
       throw error;
     }
     const userMessageId = randomBytes(12).toString("hex");
     state.messages.push({
       id: userMessageId, role: "user", content: prompt,
-      parts: [{
-        type: "text",
-        content: prompt,
-        sourcePartId: `${userMessageId}:0`,
-        sourceMessageId: userMessageId,
-      }], createdAt: new Date().toISOString(),
+      parts: [
+        ...(prompt ? [{
+          type: "text" as const,
+          content: prompt,
+          sourcePartId: `${userMessageId}:0`,
+          sourceMessageId: userMessageId,
+        }] : []),
+        ...images.map((image, index): BridgeFilePart => ({
+          type: "file",
+          content: image.filename || image.path,
+          fileUrl: `file://${image.absolutePath}`,
+          sourcePartId: `${userMessageId}:${index + 1}`,
+          sourceMessageId: userMessageId,
+        })),
+      ], createdAt: new Date().toISOString(),
     });
     state.status = "running";
     state.error = undefined;
@@ -1548,7 +1595,17 @@ async function route(
     state.dispatching = false;
     void child.request("session/prompt", {
       sessionId: state.acpSessionId,
-      prompt: [{ type: "text", text: acpPrompt }],
+      prompt: [
+        ...(acpPrompt ? [{ type: "text", text: acpPrompt }] : []),
+        // Inline base64 is the only image form both agents read. Cursor
+        // advertises it; Grok understates its own capability but accepts the
+        // same block, and neither supports ACP embedded resources.
+        ...images.map((image) => ({
+          type: "image",
+          mimeType: image.mimeType,
+          data: image.data,
+        })),
+      ],
     }, PROMPT_TIMEOUT_MS).then(() => {
       if (!state.outputTruncated) state.status = "idle";
       if (schema && requestId) {
@@ -2155,6 +2212,19 @@ function normalizeBridgePart(
     return {
       type: value.type === "reasoning" ? "thinking" : value.type,
       content: truncateUtf8(content, MAX_MESSAGE_TEXT_BYTES),
+      sourcePartId,
+      sourceMessageId,
+    };
+  }
+
+  if (value.type === "file") {
+    const content = boundedString(value.content, MAX_TOOL_PATH_BYTES);
+    if (!content) return null;
+    const fileUrl = boundedString(value.fileUrl, MAX_TOOL_PATH_BYTES);
+    return {
+      type: "file",
+      content,
+      ...(fileUrl ? { fileUrl } : {}),
       sourcePartId,
       sourceMessageId,
     };

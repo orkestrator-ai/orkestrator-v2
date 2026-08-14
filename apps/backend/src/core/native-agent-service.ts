@@ -306,7 +306,8 @@ const RICH_NATIVE_CAPABILITIES: NativeAgentCapabilities = Object.freeze({
 function nativeCapabilities(agent: BuildPipelineAgent): NativeAgentCapabilities {
   if (agent === "cursor" || agent === "grok") {
     return {
-      attachments: { files: false, images: false },
+      // Both ACP agents read inline image content blocks; neither takes files.
+      attachments: { files: false, images: true },
       queue: false,
       resume: false,
       fork: false,

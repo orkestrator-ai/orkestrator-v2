@@ -544,11 +544,20 @@ describe("AgentNativeTab", () => {
     expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text)
       .toBe("review these");
 
-    // Cursor accepts neither, so the image goes too.
+    // Cursor reads inline images over ACP but takes no files, so the same
+    // reconcile applies: back to a provider that accepts both, then across.
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      platform: "claude",
+      attachments: [file, image],
+    });
+    await waitFor(() => expect(
+      useNativeComposeStore.getState().drafts.get(sessionKey)?.attachments,
+    ).toEqual([file, image]));
+
     useNativeComposeStore.getState().updateDraft(sessionKey, { platform: "cursor" });
     await waitFor(() => expect(
       useNativeComposeStore.getState().drafts.get(sessionKey)?.attachments,
-    ).toEqual([]));
+    ).toEqual([image]));
   });
 
   test("carries first-prompt mentions and pasted images through the provider lock", async () => {

@@ -5001,6 +5001,33 @@ describe("HTTP build pipeline provider (ACP)", () => {
     });
   });
 
+  test("stages and forwards image attachments to the ACP prompt route", async () => {
+    const { provider, requests } = httpProvider((url) =>
+      url.endsWith("/session/create")
+        ? Response.json({ sessionId: "cursor-1" })
+        : Response.json({ accepted: true }, { status: 202 }), cursorConnection);
+
+    await provider.createSession("build", "Cursor");
+    // Both ACP agents read inline image content blocks, so an attachment is
+    // dispatched like any other provider's rather than refused here.
+    await provider.send("cursor-1", "Look at this", {
+      requestId: "request-1",
+      attachments: [{ type: "image", path: "/workspace/shot.png", filename: "shot.png" }],
+      images: [{ filename: "pasted.png", data: "AA==" }],
+    });
+
+    expect(JSON.parse(String(requests[1]?.init.body))).toMatchObject({
+      attachments: [
+        { type: "image", path: "/workspace/shot.png", filename: "shot.png" },
+        {
+          type: "image",
+          path: "/workspace/.orkestrator/initial-prompt/pasted.png",
+          filename: "pasted.png",
+        },
+      ],
+    });
+  });
+
   test("surfaces the bounded ACP session-creation error detail", async () => {
     const { provider } = httpProvider(
       () => Response.json(

@@ -235,6 +235,12 @@ lines.on("line", (line) => {
     if (process.env.FAKE_ACP_COUNTER_FILE) {
       appendFileSync(process.env.FAKE_ACP_COUNTER_FILE, "prompt\n");
     }
+    if (process.env.FAKE_ACP_PROMPT_BLOCKS_FILE) {
+      appendFileSync(
+        process.env.FAKE_ACP_PROMPT_BLOCKS_FILE,
+        `${JSON.stringify(params?.prompt ?? [])}\n`,
+      );
+    }
     if (prompt.startsWith("DIRECT:")) {
       write({
         jsonrpc: "2.0",

@@ -743,15 +743,11 @@ function EditToolPart({
 
   // Parse diff lines for display - try unified diff first, then output, then generate from before/after
   const diffLines = useMemo(() => {
-    // First try the unified diff from metadata (most accurate)
-    if (toolDiff?.diff) {
-      const diffLines = parseDiffLines(toolDiff.diff);
-      const hasActualDiffContent = diffLines.some(
-        (line) => line.type === "add" || line.type === "remove",
-      );
-      if (hasActualDiffContent) {
-        return diffLines;
-      }
+    // A provider-supplied diff is authoritative even when it contains no
+    // additions or removals. Falling through to before/after in that case would
+    // turn an unchanged whole-file state into a synthetic full replacement.
+    if (toolDiff?.diff !== undefined) {
+      return parseDiffLines(toolDiff.diff);
     }
 
     // Then try parsing from output (if it's in diff format)
@@ -1741,8 +1737,13 @@ function MessagePart({
         />
       );
     case "tool-invocation":
-      // Use specialized EditToolPart for edit/write tools
-      if (isEditTool(part.toolName)) {
+      // ACP identifies file mutations through diff content as well as tool kind.
+      // Render any part carrying an actual diff with the edit treatment, while a
+      // location-only hint on read/search tools remains a generic tool row.
+      const hasDisplayableDiff = part.toolDiff?.diff !== undefined
+        || part.toolDiff?.before !== undefined
+        || part.toolDiff?.after !== undefined;
+      if (isEditTool(part.toolName) || hasDisplayableDiff) {
         return (
           <EditToolPart
             expansionKey={toolExpansionKey}

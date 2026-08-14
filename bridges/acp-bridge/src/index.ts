@@ -52,6 +52,19 @@ interface BridgeToolPart {
   toolDiff?: BridgeToolDiff;
 }
 
+interface AcpToolSourceState {
+  title?: string;
+  explicitName?: string;
+  inputName?: string;
+  kind?: string;
+  toolArgs?: JsonObject;
+  toolState?: BridgeToolPart["toolState"];
+  contentOutput?: string;
+  rawOutput?: string;
+  contentDiffs: BridgeToolDiff[];
+  locationPath?: string;
+}
+
 type BridgeMessagePart = BridgeTextPart | BridgeToolPart;
 
 interface PromptJournalEntry {
@@ -126,6 +139,7 @@ const approveProjectMcps = process.env.ACP_APPROVE_PROJECT_MCPS === "1";
 const stateDirectory = process.env.ACP_STATE_DIR?.trim();
 const stateFile = stateDirectory ? resolve(stateDirectory, "state.json") : null;
 const sessions = new Map<string, SessionState>();
+const acpToolSourceStates = new WeakMap<BridgeToolPart, AcpToolSourceState>();
 const clientSessionKeys = new Map<string, string>();
 const sessionCreations = new Map<string, Promise<SessionState>>();
 let anonymousSessionCreations = 0;
@@ -671,47 +685,31 @@ function applyToolCallUpdate(
       failTranscriptLimit(state);
       return;
     }
-    const title = boundedString(update.title, MAX_TOOL_TITLE_BYTES);
-    const toolName = acpToolName(update);
     part = {
       type: "tool-invocation",
-      content: title ?? toolName ?? "Tool call",
+      content: "Tool call",
       sourcePartId: `tool:${toolCallId}`,
       sourceMessageId: owner.id,
       toolUseId: toolCallId,
       toolState: "pending",
-      ...(toolName ? { toolName } : {}),
-      ...(title ? { toolTitle: title } : {}),
     };
     owner.parts.push(part);
   }
 
-  const title = boundedString(update.title, MAX_TOOL_TITLE_BYTES);
-  if (title !== undefined) part.toolTitle = title;
-  const toolName = acpToolName(update);
-  if (toolName !== undefined) part.toolName = toolName;
-  part.content = part.toolTitle ?? part.toolName ?? part.content;
-
-  if (isObject(update.rawInput)) {
-    part.toolArgs = boundedToolArguments(update.rawInput);
+  let source = acpToolSourceStates.get(part);
+  if (!source) {
+    source = {
+      title: part.toolTitle,
+      explicitName: part.toolName,
+      toolArgs: part.toolArgs,
+      toolState: part.toolState ?? (isInitial ? "pending" : undefined),
+      rawOutput: part.toolOutput,
+      contentDiffs: part.toolDiff ? [part.toolDiff] : [],
+    };
+    acpToolSourceStates.set(part, source);
   }
-
-  const mappedState = mapAcpToolState(update.status, isInitial);
-  if (mappedState !== undefined) part.toolState = mappedState;
-  if (mappedState !== undefined && mappedState !== "failure") part.toolError = undefined;
-
-  if ("rawOutput" in update || "content" in update) {
-    const output = toolCallContentText(update.content)
-      ?? stringifyToolPayload(update.rawOutput);
-    part.toolOutput = output;
-    if (part.toolState === "failure") part.toolError = output ?? "Tool call failed";
-    else part.toolError = undefined;
-  } else if (part.toolState === "failure" && !part.toolError) {
-    part.toolError = "Tool call failed";
-  }
-
-  const diff = acpToolDiff(update, part.toolArgs, part.toolDiff);
-  if (diff !== undefined) part.toolDiff = diff;
+  applyAcpToolSourcePatch(source, update);
+  renderAcpToolSource(part, source);
 
   state.revision += 1;
   state.uncheckedTranscriptBytes += Buffer.byteLength(JSON.stringify(part));
@@ -724,6 +722,74 @@ function applyToolCallUpdate(
     return;
   }
   schedulePersist();
+}
+
+function applyAcpToolSourcePatch(source: AcpToolSourceState, update: JsonObject): void {
+  if ("title" in update) {
+    source.title = boundedNullableString(update.title, MAX_TOOL_TITLE_BYTES);
+  }
+  if ("name" in update) {
+    source.explicitName = boundedNullableString(update.name, MAX_TOOL_NAME_BYTES);
+  }
+  if ("kind" in update) {
+    source.kind = boundedNullableString(update.kind, MAX_TOOL_NAME_BYTES);
+  }
+  if ("rawInput" in update) {
+    if (isObject(update.rawInput)) {
+      source.inputName = boundedString(update.rawInput._toolName, MAX_TOOL_NAME_BYTES);
+      source.toolArgs = boundedToolArguments(update.rawInput);
+    } else {
+      source.inputName = undefined;
+      source.toolArgs = undefined;
+    }
+  }
+  if ("status" in update) {
+    source.toolState = mapAcpToolState(update.status);
+  }
+  if ("content" in update) {
+    source.contentOutput = toolCallContentText(update.content);
+    source.contentDiffs = toolCallContentDiffs(update.content);
+  }
+  if ("locations" in update) {
+    source.locationPath = toolCallLocationPath(update.locations);
+  }
+  if ("rawOutput" in update) {
+    source.rawOutput = update.rawOutput === null
+      ? undefined
+      : stringifyToolPayload(update.rawOutput);
+  }
+}
+
+function renderAcpToolSource(part: BridgeToolPart, source: AcpToolSourceState): void {
+  const toolName = source.explicitName ?? source.inputName ?? source.kind;
+  setOptionalPartField(part, "toolTitle", source.title);
+  setOptionalPartField(part, "toolName", toolName);
+  setOptionalPartField(part, "toolArgs", source.toolArgs);
+  setOptionalPartField(part, "toolState", source.toolState);
+  part.content = source.title ?? toolName ?? "Tool call";
+
+  const output = source.contentOutput ?? source.rawOutput;
+  setOptionalPartField(part, "toolOutput", output);
+  setOptionalPartField(
+    part,
+    "toolError",
+    source.toolState === "failure" ? output ?? "Tool call failed" : undefined,
+  );
+
+  const diff = aggregateAcpToolDiffs(
+    source.contentDiffs,
+    source.locationPath ?? toolArgumentPath(source.toolArgs),
+  );
+  setOptionalPartField(part, "toolDiff", diff);
+}
+
+function setOptionalPartField<TKey extends keyof BridgeToolPart>(
+  part: BridgeToolPart,
+  key: TKey,
+  value: BridgeToolPart[TKey] | undefined,
+): void {
+  if (value === undefined) delete part[key];
+  else part[key] = value;
 }
 
 function currentAssistantMessage(state: SessionState): BridgeMessage {
@@ -755,16 +821,8 @@ function boundedString(value: unknown, maximumBytes: number): string | undefined
   return truncateUtf8(value, maximumBytes);
 }
 
-function acpToolName(update: JsonObject): string | undefined {
-  const rawInput = isObject(update.rawInput) ? update.rawInput : undefined;
-  const candidate = typeof update.name === "string"
-    ? update.name
-    : typeof rawInput?._toolName === "string"
-      ? rawInput._toolName
-      : typeof update.kind === "string"
-        ? update.kind
-        : undefined;
-  return boundedString(candidate, MAX_TOOL_NAME_BYTES);
+function boundedNullableString(value: unknown, maximumBytes: number): string | undefined {
+  return value === null ? undefined : boundedString(value, maximumBytes);
 }
 
 function boundedToolArguments(value: JsonObject): JsonObject {
@@ -775,14 +833,11 @@ function boundedToolArguments(value: JsonObject): JsonObject {
   return { _orkestrator: "Tool input omitted because it exceeded the 512 KiB display limit" };
 }
 
-function mapAcpToolState(
-  status: unknown,
-  isInitial: boolean,
-): BridgeToolPart["toolState"] | undefined {
+function mapAcpToolState(status: unknown): BridgeToolPart["toolState"] | undefined {
   if (status === "completed") return "success";
   if (status === "failed") return "failure";
   if (status === "pending" || status === "in_progress") return "pending";
-  return isInitial ? "pending" : undefined;
+  return undefined;
 }
 
 function stringifyToolPayload(value: unknown): string | undefined {
@@ -817,47 +872,217 @@ function toolCallContentText(value: unknown): string | undefined {
   return truncateDisplayText(pieces.join("\n"), MAX_TOOL_OUTPUT_BYTES, "\n… tool output truncated");
 }
 
-function acpToolDiff(
-  update: JsonObject,
-  toolArgs: JsonObject | undefined,
-  existing: BridgeToolDiff | undefined,
-): BridgeToolDiff | undefined {
-  const content = Array.isArray(update.content) ? update.content : undefined;
-  const diffItem = content?.find((item): item is JsonObject => isObject(item) && item.type === "diff");
-  const locations = Array.isArray(update.locations) ? update.locations : undefined;
-  const firstLocation = locations?.find((location): location is JsonObject => isObject(location));
-  const filePath = boundedString(diffItem?.path, MAX_TOOL_PATH_BYTES)
-    ?? boundedString(firstLocation?.path, MAX_TOOL_PATH_BYTES)
-    ?? boundedString(toolArgs?.path, MAX_TOOL_PATH_BYTES)
-    ?? boundedString(toolArgs?.filePath, MAX_TOOL_PATH_BYTES)
-    ?? boundedString(toolArgs?.file_path, MAX_TOOL_PATH_BYTES)
-    ?? existing?.filePath;
+function toolCallContentDiffs(value: unknown): BridgeToolDiff[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!isObject(item) || item.type !== "diff") return [];
+    const normalized = normalizeAcpContentDiff(item);
+    return normalized ? [normalized] : [];
+  });
+}
 
-  if (!diffItem) {
-    if (!filePath) return existing;
-    return { ...existing, filePath };
-  }
-
-  const rawBefore = typeof diffItem.oldText === "string" ? diffItem.oldText : undefined;
-  const rawAfter = typeof diffItem.newText === "string" ? diffItem.newText : undefined;
-  const additions = rawAfter === undefined ? existing?.additions : lineCount(rawAfter);
-  const deletions = rawBefore === undefined ? existing?.deletions : lineCount(rawBefore);
+function normalizeAcpContentDiff(value: JsonObject): BridgeToolDiff | undefined {
+  const filePath = boundedString(value.path, MAX_TOOL_PATH_BYTES);
+  const rawBefore = typeof value.oldText === "string" ? value.oldText : undefined;
+  const rawAfter = typeof value.newText === "string" ? value.newText : undefined;
   const keepInline = Buffer.byteLength(rawBefore ?? "") <= MAX_TOOL_INLINE_FILE_BYTES
     && Buffer.byteLength(rawAfter ?? "") <= MAX_TOOL_INLINE_FILE_BYTES;
-  const rawDiff = boundedString(diffItem.diff, MAX_TOOL_DIFF_BYTES);
-
+  const rawSuppliedDiff = typeof value.diff === "string" ? value.diff : undefined;
+  const suppliedDiff = boundedString(rawSuppliedDiff, MAX_TOOL_DIFF_BYTES);
+  const generated = keepInline && rawAfter !== undefined
+    ? createDisplayDiff(filePath, rawBefore, rawAfter)
+    : undefined;
+  const diff = suppliedDiff ?? generated?.diff ?? (filePath
+    ? `--- ${safeDiffPath(filePath)}\n+++ ${safeDiffPath(filePath)}\n@@ diff omitted: file state exceeded display limit @@`
+    : undefined);
+  const stats = rawSuppliedDiff
+    ? countUnifiedDiffLines(rawSuppliedDiff)
+    : generated;
+  if (!filePath && rawBefore === undefined && rawAfter === undefined && diff === undefined) {
+    return undefined;
+  }
   return {
     ...(filePath ? { filePath } : {}),
-    ...(additions !== undefined ? { additions } : {}),
-    ...(deletions !== undefined ? { deletions } : {}),
+    ...(stats ? { additions: stats.additions, deletions: stats.deletions } : {}),
     ...(keepInline && rawBefore !== undefined ? { before: rawBefore } : {}),
     ...(keepInline && rawAfter !== undefined ? { after: rawAfter } : {}),
-    ...(rawDiff !== undefined ? { diff: rawDiff } : {}),
+    ...(diff !== undefined ? { diff } : {}),
   };
 }
 
-function lineCount(value: string): number {
-  return value.length === 0 ? 0 : value.split("\n").length;
+function aggregateAcpToolDiffs(
+  diffs: BridgeToolDiff[],
+  fallbackPath: string | undefined,
+): BridgeToolDiff | undefined {
+  if (diffs.length === 0) return fallbackPath ? { filePath: fallbackPath } : undefined;
+  if (diffs.length === 1) {
+    const [diff] = diffs;
+    return diff?.filePath || !fallbackPath ? diff : { ...diff, filePath: fallbackPath };
+  }
+  const rendered = diffs.flatMap((diff) => diff.diff ? [diff.diff] : []);
+  const hasCompleteStats = diffs.every(
+    (diff) => diff.additions !== undefined && diff.deletions !== undefined,
+  );
+  return {
+    ...(hasCompleteStats ? {
+      additions: diffs.reduce((total, diff) => total + (diff.additions ?? 0), 0),
+      deletions: diffs.reduce((total, diff) => total + (diff.deletions ?? 0), 0),
+    } : {}),
+    ...(rendered.length > 0 ? {
+      diff: truncateDisplayText(
+        rendered.join("\n"),
+        MAX_TOOL_DIFF_BYTES,
+        "\n… additional file diffs truncated",
+      ),
+    } : {}),
+  };
+}
+
+function toolCallLocationPath(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const first = value.find((location): location is JsonObject => isObject(location));
+  return boundedString(first?.path, MAX_TOOL_PATH_BYTES);
+}
+
+function toolArgumentPath(toolArgs: JsonObject | undefined): string | undefined {
+  return boundedString(toolArgs?.path, MAX_TOOL_PATH_BYTES)
+    ?? boundedString(toolArgs?.filePath, MAX_TOOL_PATH_BYTES)
+    ?? boundedString(toolArgs?.file_path, MAX_TOOL_PATH_BYTES);
+}
+
+interface DisplayDiffLine {
+  type: "context" | "add" | "remove";
+  content: string;
+}
+
+function createDisplayDiff(
+  filePath: string | undefined,
+  before: string | undefined,
+  after: string,
+): { diff: string; additions: number; deletions: number } {
+  const lines = diffFileLines(fileLines(before ?? ""), fileLines(after));
+  let additions = 0;
+  let deletions = 0;
+  const rendered = lines.map((line) => {
+    if (line.type === "add") additions += 1;
+    if (line.type === "remove") deletions += 1;
+    return `${line.type === "add" ? "+" : line.type === "remove" ? "-" : " "}${line.content}`;
+  });
+  const path = safeDiffPath(filePath ?? "unknown-file");
+  return {
+    diff: truncateDisplayText(
+      [`--- ${before === undefined ? "/dev/null" : path}`, `+++ ${path}`, "@@", ...rendered].join("\n"),
+      MAX_TOOL_DIFF_BYTES,
+      "\n… file diff truncated",
+    ),
+    additions,
+    deletions,
+  };
+}
+
+function fileLines(value: string): string[] {
+  return value.length === 0 ? [] : value.split("\n");
+}
+
+function diffFileLines(before: string[], after: string[]): DisplayDiffLine[] {
+  const maximumSteps = before.length + after.length;
+  let frontier = new Map<number, number>([[1, 0]]);
+  const trace: Array<Map<number, number>> = [];
+  let work = 0;
+
+  for (let distance = 0; distance <= maximumSteps; distance += 1) {
+    trace.push(new Map(frontier));
+    const next = new Map(frontier);
+    for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
+      const down = frontier.get(diagonal + 1) ?? Number.NEGATIVE_INFINITY;
+      const right = frontier.get(diagonal - 1) ?? Number.NEGATIVE_INFINITY;
+      let x = diagonal === -distance || (diagonal !== distance && right < down)
+        ? Math.max(0, down)
+        : Math.max(0, right + 1);
+      let y = x - diagonal;
+      while (x < before.length && y < after.length && before[x] === after[y]) {
+        x += 1;
+        y += 1;
+        work += 1;
+      }
+      next.set(diagonal, x);
+      work += 1;
+      if (x >= before.length && y >= after.length) {
+        return backtrackFileDiff(trace, before, after);
+      }
+      if (work > 2_000_000) return boundedFallbackDiff(before, after);
+    }
+    frontier = next;
+  }
+  return boundedFallbackDiff(before, after);
+}
+
+function backtrackFileDiff(
+  trace: Array<Map<number, number>>,
+  before: string[],
+  after: string[],
+): DisplayDiffLine[] {
+  let x = before.length;
+  let y = after.length;
+  const result: DisplayDiffLine[] = [];
+  for (let distance = trace.length - 1; distance >= 0; distance -= 1) {
+    const frontier = trace[distance]!;
+    const diagonal = x - y;
+    const down = frontier.get(diagonal + 1) ?? Number.NEGATIVE_INFINITY;
+    const right = frontier.get(diagonal - 1) ?? Number.NEGATIVE_INFINITY;
+    const previousDiagonal = diagonal === -distance || (diagonal !== distance && right < down)
+      ? diagonal + 1
+      : diagonal - 1;
+    const previousX = Math.max(0, frontier.get(previousDiagonal) ?? 0);
+    const previousY = previousX - previousDiagonal;
+    while (x > previousX && y > previousY) {
+      result.push({ type: "context", content: before[x - 1]! });
+      x -= 1;
+      y -= 1;
+    }
+    if (distance === 0) break;
+    if (x === previousX) {
+      result.push({ type: "add", content: after[y - 1]! });
+      y -= 1;
+    } else {
+      result.push({ type: "remove", content: before[x - 1]! });
+      x -= 1;
+    }
+  }
+  return result.reverse();
+}
+
+function boundedFallbackDiff(before: string[], after: string[]): DisplayDiffLine[] {
+  let prefix = 0;
+  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  while (suffix < before.length - prefix
+    && suffix < after.length - prefix
+    && before[before.length - suffix - 1] === after[after.length - suffix - 1]) {
+    suffix += 1;
+  }
+  return [
+    ...before.slice(0, prefix).map((content) => ({ type: "context" as const, content })),
+    ...before.slice(prefix, before.length - suffix).map((content) => ({ type: "remove" as const, content })),
+    ...after.slice(prefix, after.length - suffix).map((content) => ({ type: "add" as const, content })),
+    ...before.slice(before.length - suffix).map((content) => ({ type: "context" as const, content })),
+  ];
+}
+
+function countUnifiedDiffLines(diff: string): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+") && !line.startsWith("+++")) additions += 1;
+    else if (line.startsWith("-") && !line.startsWith("---")) deletions += 1;
+  }
+  return { additions, deletions };
+}
+
+function safeDiffPath(value: string): string {
+  return value.replace(/[\r\n]/g, " ");
 }
 
 function truncateDisplayText(value: string, maximumBytes: number, notice: string): string {
@@ -1477,8 +1702,19 @@ async function loadPersistedState(): Promise<void> {
       }
     }
     boundTranscript(state);
+    reconcileStaleToolParts(state);
     sessions.set(state.id, state);
     if (state.clientSessionKey) clientSessionKeys.set(state.clientSessionKey, state.id);
+  }
+}
+
+function reconcileStaleToolParts(state: SessionState): void {
+  for (const message of state.messages) {
+    for (const part of message.parts) {
+      if (part.type !== "tool-invocation" || part.toolState !== "pending") continue;
+      part.toolState = "failure";
+      part.toolError = part.toolError ?? "Tool call ended without a result";
+    }
   }
 }
 

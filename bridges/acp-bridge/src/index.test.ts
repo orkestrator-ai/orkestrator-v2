@@ -351,7 +351,7 @@ describe("ACP bridge", () => {
       "text",
     ]);
     expect(assistantParts?.filter((part) => part.toolUseId === "edit-1")).toHaveLength(1);
-    expect(assistantParts?.[1]).toEqual({
+    expect(assistantParts?.[1]).toMatchObject({
       type: "tool-invocation",
       content: "Edit `src/example.ts`",
       sourcePartId: "tool:edit-1",
@@ -370,6 +370,9 @@ describe("ACP bridge", () => {
         after: "const value = 2;\nconst ready = true;",
       },
     });
+    expect((assistantParts?.[1]?.toolDiff as { diff?: string } | undefined)?.diff).toContain(
+      "-const value = 1;\n+const value = 2;\n+const ready = true;",
+    );
     expect(assistantParts?.[2]).toMatchObject({
       type: "tool-invocation",
       content: "Search for references",
@@ -402,6 +405,461 @@ describe("ACP bridge", () => {
       messages: Array<{ parts: Array<Record<string, unknown>> }>;
     };
     expect(restored.messages[1]?.parts).toEqual(assistantParts);
+  });
+
+  test("normalizes failing tool calls into failed parts with an error message", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-fail" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "FAILTOOL: break things" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    const parts = session.messages[1]?.parts;
+    expect(parts?.map((part) => part.type)).toEqual([
+      "tool-invocation",
+      "tool-invocation",
+      "text",
+    ]);
+    const failWithPayload = parts?.find((part) => part.toolUseId === "fail-1");
+    expect(failWithPayload).toMatchObject({
+      toolState: "failure",
+      toolOutput: JSON.stringify({ error: "boom" }, null, 2),
+      toolError: JSON.stringify({ error: "boom" }, null, 2),
+    });
+    const failWithoutPayload = parts?.find((part) => part.toolUseId === "fail-2");
+    expect(failWithoutPayload).toMatchObject({
+      toolState: "failure",
+      toolError: "Tool call failed",
+    });
+    expect(failWithoutPayload?.toolOutput).toBeUndefined();
+  });
+
+  test("preserves content output when a later patch updates only raw output", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-stream" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "STREAMTOOL: find references" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    const stream = session.messages[1]?.parts.find((part) => part.toolUseId === "stream-1");
+    expect(stream).toMatchObject({
+      toolState: "success",
+      toolOutput: "Searching for references...",
+    });
+    expect(stream?.toolDiff).toBeUndefined();
+  });
+
+  test("applies nullable and replacement tool update fields without stale metadata", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-patch" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "PATCHTOOLS: clear stale fields" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    const cleared = session.messages[1]?.parts.find((part) => part.toolUseId === "clear-1");
+    expect(cleared).toEqual({
+      type: "tool-invocation",
+      content: "Tool call",
+      sourcePartId: "tool:clear-1",
+      sourceMessageId: expect.any(String),
+      toolUseId: "clear-1",
+    });
+  });
+
+  test("combines every ACP file diff and counts only actual changed lines", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-multi" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "MULTIDIFF: edit two files" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    const tool = session.messages[1]?.parts.find((part) => part.toolUseId === "multi-1");
+    const diff = tool?.toolDiff as Record<string, unknown> | undefined;
+    expect(diff).toMatchObject({ additions: 2, deletions: 2 });
+    expect(diff?.filePath).toBeUndefined();
+    expect(diff?.before).toBeUndefined();
+    expect(diff?.after).toBeUndefined();
+    expect(diff?.diff).toEqual(expect.any(String));
+    const rendered = diff?.diff as string;
+    expect(rendered).toContain("--- src/first.ts");
+    expect(rendered).toContain("+++ src/second.ts");
+    expect(rendered).toContain(" const shared = true;");
+    expect(rendered).toContain("-const value = 1;");
+    expect(rendered).toContain("+const value = 2;");
+    expect(rendered).toContain("-before");
+    expect(rendered).toContain("+after");
+  });
+
+  test("normalizes terminal and text tool content in protocol order", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-terminal" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "TERMINALTOOL: run checks" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    expect(session.messages[1]?.parts[0]).toMatchObject({
+      toolUseId: "terminal-1",
+      toolState: "success",
+      toolOutput: "[Terminal terminal-42]\nChecks passed",
+    });
+  });
+
+  test("starts a tool call on a fresh assistant message when it leads the turn", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-lead" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "TOOLSFIRST: start with a tool" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ id: string; role: string; parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    expect(session.messages).toHaveLength(2);
+    expect(session.messages[0]?.role).toBe("user");
+    expect(session.messages[1]?.role).toBe("assistant");
+    expect(session.messages[1]?.parts.map((part) => part.type)).toEqual([
+      "tool-invocation",
+      "text",
+    ]);
+    expect(session.messages[1]?.parts[0]).toMatchObject({
+      toolUseId: "lead-1",
+      toolState: "pending",
+      toolName: "plan",
+      toolArgs: { goal: "ship it" },
+    });
+  });
+
+  test("bounds tool arguments, outputs, and diffs to their display limits", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-big" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "BIGTOOL: edit a huge file" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    const big = session.messages[1]?.parts.find((part) => part.toolUseId === "big-1");
+    expect(big).toBeDefined();
+    expect(big?.toolArgs).toEqual({
+      _orkestrator: "Tool input omitted because it exceeded the 512 KiB display limit",
+    });
+    expect(big?.toolOutput).toEqual(expect.any(String));
+    expect(Buffer.byteLength(big?.toolOutput as string)).toBe(512 * 1024);
+    expect((big?.toolOutput as string).endsWith("\n… tool output truncated")).toBe(true);
+    const toolDiff = big?.toolDiff as Record<string, unknown> | undefined;
+    expect(toolDiff).toMatchObject({ filePath: "huge.ts", additions: 1, deletions: 1 });
+    expect(Buffer.byteLength(toolDiff?.diff as string)).toBe(1024 * 1024);
+    expect(toolDiff?.diff).toEqual(expect.stringContaining("-old\n+new"));
+    expect(toolDiff?.before).toBeUndefined();
+    expect(toolDiff?.after).toBeUndefined();
+  });
+
+  test("fails the session when tool parts exhaust the per-message limit", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-many" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "MANYTOOLS: flood the turn" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "error",
+    );
+
+    expect(session.error).toContain("exceeded the transcript limit");
+    expect(session.messages[1]?.parts).toHaveLength(512);
+    expect(session.messages[1]?.parts.every((part) => part.type === "tool-invocation")).toBe(true);
+  });
+
+  test("reconciles stale pending tool parts after a restart", async () => {
+    const stateDirectory = await temporaryDirectory();
+    await fs.writeFile(
+      resolve(stateDirectory, "state.json"),
+      JSON.stringify({
+        version: 3,
+        provider: "cursor",
+        sessions: [
+          {
+            id: "session-idle-pending",
+            clientSessionKey: "env-1:tab-pending",
+            acpSessionId: "acp-session-pending",
+            status: "idle",
+            revision: 3,
+            structured: [],
+            promptJournal: [],
+            messages: [{
+              id: "message-1",
+              role: "assistant",
+              content: "",
+              parts: [
+                {
+                  type: "tool-invocation",
+                  content: "Run tests",
+                  sourcePartId: "tool:run-1",
+                  sourceMessageId: "message-1",
+                  toolUseId: "run-1",
+                  toolName: "run",
+                  toolState: "pending",
+                },
+                {
+                  type: "tool-invocation",
+                  content: "Edit file",
+                  sourcePartId: "tool:edit-1",
+                  sourceMessageId: "message-1",
+                  toolUseId: "edit-1",
+                  toolName: "edit",
+                  toolState: "pending",
+                  toolError: "already noted",
+                },
+                {
+                  type: "tool-invocation",
+                  content: "Search",
+                  sourcePartId: "tool:search-1",
+                  sourceMessageId: "message-1",
+                  toolUseId: "search-1",
+                  toolName: "search",
+                  toolState: "success",
+                },
+              ],
+              createdAt: "2026-08-01T00:00:00.000Z",
+            }],
+          },
+          {
+            id: "session-error-pending",
+            clientSessionKey: "env-1:tab-error",
+            acpSessionId: "acp-session-error",
+            status: "error",
+            revision: 1,
+            structured: [],
+            promptJournal: [],
+            messages: [{
+              id: "message-2",
+              role: "assistant",
+              content: "",
+              parts: [{
+                type: "tool-invocation",
+                content: "Write file",
+                sourcePartId: "tool:write-1",
+                sourceMessageId: "message-2",
+                toolUseId: "write-1",
+                toolName: "write",
+                toolState: "pending",
+              }],
+              createdAt: "2026-08-01T00:00:01.000Z",
+            }],
+          },
+        ],
+      }),
+    );
+
+    const bridge = await spawnBridge({ stateDirectory });
+    const idle = await nativeFetch(`${bridge.base}/session/session-idle-pending`, {
+      headers: bridge.headers,
+    }).then((response) => response.json()) as {
+      status: string;
+      messages: Array<{ parts: Array<Record<string, unknown>> }>;
+    };
+    expect(idle.messages[0]?.parts).toEqual([
+      {
+        type: "tool-invocation",
+        content: "Run tests",
+        sourcePartId: "tool:run-1",
+        sourceMessageId: "message-1",
+        toolUseId: "run-1",
+        toolName: "run",
+        toolState: "failure",
+        toolError: "Tool call ended without a result",
+      },
+      {
+        type: "tool-invocation",
+        content: "Edit file",
+        sourcePartId: "tool:edit-1",
+        sourceMessageId: "message-1",
+        toolUseId: "edit-1",
+        toolName: "edit",
+        toolState: "failure",
+        toolError: "already noted",
+      },
+      {
+        type: "tool-invocation",
+        content: "Search",
+        sourcePartId: "tool:search-1",
+        sourceMessageId: "message-1",
+        toolUseId: "search-1",
+        toolName: "search",
+        toolState: "success",
+      },
+    ]);
+
+    const errored = await nativeFetch(`${bridge.base}/session/session-error-pending`, {
+      headers: bridge.headers,
+    }).then((response) => response.json()) as {
+      status: string;
+      messages: Array<{ parts: Array<Record<string, unknown>> }>;
+    };
+    expect(errored.messages[0]?.parts[0]).toMatchObject({
+      toolUseId: "write-1",
+      toolState: "failure",
+      toolError: "Tool call ended without a result",
+    });
+  });
+
+  test("drops malformed persisted tool parts on load", async () => {
+    const stateDirectory = await temporaryDirectory();
+    await fs.writeFile(
+      resolve(stateDirectory, "state.json"),
+      JSON.stringify({
+        version: 3,
+        provider: "cursor",
+        sessions: [{
+          id: "session-malformed",
+          clientSessionKey: "env-1:tab-malformed",
+          acpSessionId: "acp-session-malformed",
+          status: "idle",
+          revision: 2,
+          structured: [],
+          promptJournal: [],
+          messages: [{
+            id: "message-1",
+            role: "assistant",
+            content: "",
+            parts: [
+              { type: "tool-invocation", content: "No id", sourcePartId: "x", sourceMessageId: "message-1", toolState: "success" },
+              { type: "tool-invocation", content: "Numeric id", sourcePartId: "y", sourceMessageId: "message-1", toolUseId: 42, toolState: "success" },
+              { type: "tool-invocation", content: "Valid", sourcePartId: "z", sourceMessageId: "message-1", toolUseId: "ok-1", toolState: "success" },
+              { type: "bogus", content: "Unknown type" },
+            ],
+            createdAt: "2026-08-01T00:00:00.000Z",
+          }],
+        }],
+      }),
+    );
+
+    const bridge = await spawnBridge({ stateDirectory });
+    const session = await nativeFetch(`${bridge.base}/session/session-malformed`, {
+      headers: bridge.headers,
+    }).then((response) => response.json()) as {
+      messages: Array<{ parts: Array<Record<string, unknown>> }>;
+    };
+    expect(session.messages[0]?.parts).toEqual([{
+      type: "tool-invocation",
+      content: "Valid",
+      sourcePartId: "z",
+      sourceMessageId: "message-1",
+      toolUseId: "ok-1",
+      toolState: "success",
+    }]);
   });
 
   test("deduplicates session creation and prompt dispatch by durable keys", async () => {

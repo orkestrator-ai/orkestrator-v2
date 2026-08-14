@@ -1439,7 +1439,7 @@ describe("NativeMessage", () => {
     expect(screen.queryByText("-")).toBeNull();
   });
 
-  test("falls back from diff metadata without change markers to before and after", () => {
+  test("keeps provider diff metadata without change markers authoritative", () => {
     const message: NativeMessageType = {
       id: "msg-edit-metadata-fallback",
       role: "assistant",
@@ -1468,11 +1468,9 @@ describe("NativeMessage", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /edit fallback\.ts/i }));
 
-    expect(screen.getByText("-old fallback")).toBeTruthy();
-    expect(screen.getByText("+new fallback")).toBeTruthy();
-    expect(
-      screen.queryByText("diff metadata without plus or minus markers"),
-    ).toBeNull();
+    expect(screen.getByText("diff metadata without plus or minus markers")).toBeTruthy();
+    expect(screen.queryByText("-old fallback")).toBeNull();
+    expect(screen.queryByText("+new fallback")).toBeNull();
   });
 
   test("keeps edit diffs in step with toolDiff's values, not its identity", () => {

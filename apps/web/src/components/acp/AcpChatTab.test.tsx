@@ -233,6 +233,40 @@ describe("AcpChatTab", () => {
     expect(composeBar.querySelector("[data-native-compose-toolbar]")).toBeTruthy();
   });
 
+  test("renders normalized ACP tool calls from the bridge snapshot", async () => {
+    getAcpSession.mockImplementation(async () => ({
+      id: "persisted-session",
+      provider: "cursor" as const,
+      status: "idle" as const,
+      messages: [{
+        id: "message-tools",
+        role: "assistant" as const,
+        content: "",
+        parts: [{
+          type: "tool-invocation" as const,
+          content: "Search for references",
+          sourcePartId: "tool:search-1",
+          sourceMessageId: "message-tools",
+          toolUseId: "search-1",
+          toolName: "search",
+          toolArgs: { pattern: "value" },
+          toolState: "success" as const,
+          toolTitle: "Search for references",
+          toolOutput: "3 matches",
+        }],
+        createdAt: "2026-08-13T00:00:00.000Z",
+      }],
+      baseIndex: 0,
+      revision: 4,
+    }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive />);
+
+    expect(await screen.findByText("Search")).toBeTruthy();
+    expect(screen.getByText("value")).toBeTruthy();
+    expect(screen.getByText("success")).toBeTruthy();
+  });
+
   test("renders reasoning as a collapsed thinking disclosure, not as assistant prose", async () => {
     getAcpSession.mockImplementation(async () => ({
       id: "persisted-session",

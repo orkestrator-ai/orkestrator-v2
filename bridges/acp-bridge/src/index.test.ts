@@ -299,12 +299,109 @@ describe("ACP bridge", () => {
         sourceMessageId: expect.any(String),
       },
       {
+        type: "tool-invocation",
+        content: "Run safe command",
+        sourcePartId: "tool:tool-1",
+        sourceMessageId: expect.any(String),
+        toolUseId: "tool-1",
+        toolName: "execute",
+        toolArgs: { command: "printf ok" },
+        toolState: "success",
+        toolTitle: "Run safe command",
+        toolOutput: JSON.stringify({ exitCode: 0, stdout: "ok" }, null, 2),
+      },
+      {
         type: "text",
         content: "approved:once",
         sourcePartId: expect.any(String),
         sourceMessageId: expect.any(String),
       },
     ]);
+  });
+
+  test("normalizes ACP tool calls, upserts updates, and rehydrates them after restart", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const first = await spawnBridge({ stateDirectory });
+    const created = await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    const promptResponse = await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ prompt: "TOOLS: edit the file" }),
+    });
+    expect(promptResponse.status).toBe(202);
+
+    const session = await waitFor(
+      async () => nativeFetch(`${first.base}/session/${created.id}`, { headers: first.headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    const assistantParts = session.messages[1]?.parts;
+    expect(assistantParts?.map((part) => part.type)).toEqual([
+      "thinking",
+      "tool-invocation",
+      "tool-invocation",
+      "text",
+    ]);
+    expect(assistantParts?.filter((part) => part.toolUseId === "edit-1")).toHaveLength(1);
+    expect(assistantParts?.[1]).toEqual({
+      type: "tool-invocation",
+      content: "Edit `src/example.ts`",
+      sourcePartId: "tool:edit-1",
+      sourceMessageId: expect.any(String),
+      toolUseId: "edit-1",
+      toolName: "edit",
+      toolArgs: { path: "src/example.ts" },
+      toolState: "success",
+      toolTitle: "Edit `src/example.ts`",
+      toolOutput: JSON.stringify({ success: true }, null, 2),
+      toolDiff: {
+        filePath: "src/example.ts",
+        additions: 2,
+        deletions: 1,
+        before: "const value = 1;",
+        after: "const value = 2;\nconst ready = true;",
+      },
+    });
+    expect(assistantParts?.[2]).toMatchObject({
+      type: "tool-invocation",
+      content: "Search for references",
+      toolUseId: "search-1",
+      toolName: "search",
+      toolArgs: { pattern: "value" },
+      toolState: "success",
+      toolTitle: "Search for references",
+      toolOutput: JSON.stringify({ totalMatches: 3 }, null, 2),
+    });
+
+    await waitFor(
+      async () => JSON.parse(
+        await fs.readFile(resolve(stateDirectory, "state.json"), "utf8"),
+      ) as {
+        version: number;
+        sessions: Array<{ messages: Array<{ parts: Array<{ toolUseId?: string }> }> }>;
+      },
+      (value) => value.version === 3
+        && value.sessions[0]?.messages.some((message) =>
+          message.parts.some((part) => part.toolUseId === "edit-1")
+        ) === true,
+    );
+    await stopChild(first.child);
+
+    const restarted = await spawnBridge({ stateDirectory });
+    const restored = await nativeFetch(`${restarted.base}/session/${created.id}`, {
+      headers: restarted.headers,
+    }).then((response) => response.json()) as {
+      messages: Array<{ parts: Array<Record<string, unknown>> }>;
+    };
+    expect(restored.messages[1]?.parts).toEqual(assistantParts);
   });
 
   test("deduplicates session creation and prompt dispatch by durable keys", async () => {
@@ -1054,7 +1151,7 @@ describe("ACP bridge", () => {
     ]);
 
     // Loading alone does not rewrite the file; the next persist does, and it
-    // must write v2 with the upgraded parts so this migration runs only once.
+    // must write the current shape with upgraded parts so this migration runs only once.
     const createdAfterLoad = await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
@@ -1069,7 +1166,7 @@ describe("ACP bridge", () => {
         version: number;
         sessions: Array<{ id: string; messages: Array<{ parts: Array<{ type: string }> }> }>;
       },
-      (value) => value.version === 2,
+      (value) => value.version === 3,
     );
     expect(
       rewritten.sessions

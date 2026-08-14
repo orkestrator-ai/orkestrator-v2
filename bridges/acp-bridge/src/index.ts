@@ -17,14 +17,42 @@ interface BridgeMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
-  parts: Array<{
-    type: "text" | "thinking";
-    content: string;
-    sourcePartId: string;
-    sourceMessageId: string;
-  }>;
+  parts: BridgeMessagePart[];
   createdAt: string;
 }
+
+interface BridgeTextPart {
+  type: "text" | "thinking";
+  content: string;
+  sourcePartId: string;
+  sourceMessageId: string;
+}
+
+interface BridgeToolDiff {
+  filePath?: string;
+  additions?: number;
+  deletions?: number;
+  before?: string;
+  after?: string;
+  diff?: string;
+}
+
+interface BridgeToolPart {
+  type: "tool-invocation";
+  content: string;
+  sourcePartId: string;
+  sourceMessageId: string;
+  toolUseId: string;
+  toolName?: string;
+  toolArgs?: JsonObject;
+  toolState?: "success" | "failure" | "pending";
+  toolTitle?: string;
+  toolOutput?: string;
+  toolError?: string;
+  toolDiff?: BridgeToolDiff;
+}
+
+type BridgeMessagePart = BridgeTextPart | BridgeToolPart;
 
 interface PromptJournalEntry {
   requestId: string;
@@ -80,7 +108,7 @@ interface PersistedSession {
 }
 
 interface PersistedState {
-  version: 2;
+  version: 3;
   provider: Provider;
   sessions: PersistedSession[];
 }
@@ -111,6 +139,14 @@ const MAX_MESSAGES = 500;
 const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
 const MAX_MESSAGE_TEXT_BYTES = 2 * 1024 * 1024;
 const MAX_PARTS_PER_MESSAGE = 512;
+const MAX_TOOL_ARGUMENT_BYTES = 512 * 1024;
+const MAX_TOOL_OUTPUT_BYTES = 512 * 1024;
+const MAX_TOOL_INLINE_FILE_BYTES = 256 * 1024;
+const MAX_TOOL_DIFF_BYTES = 1024 * 1024;
+const MAX_TOOL_ID_BYTES = 512;
+const MAX_TOOL_NAME_BYTES = 256;
+const MAX_TOOL_TITLE_BYTES = 4 * 1024;
+const MAX_TOOL_PATH_BYTES = 16 * 1024;
 const MAX_SESSIONS = parseBoundedInteger(process.env.ACP_MAX_SESSIONS, 256, 1, 256);
 const MAX_APPROVALS_PER_SESSION = 64;
 const MAX_STRUCTURED_RESULTS = 4;
@@ -547,6 +583,10 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     : typeof update.type === "string"
       ? update.type
       : "";
+  if (kind === "tool_call" || kind === "tool_call_update") {
+    applyToolCallUpdate(state, update, kind === "tool_call");
+    return;
+  }
   if (kind !== "agent_message_chunk" && kind !== "agent_thought_chunk") return;
   const text = contentText(update.content);
   if (!text) return;
@@ -603,6 +643,227 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
   }
   schedulePersist();
+}
+
+function applyToolCallUpdate(
+  state: SessionState,
+  update: JsonObject,
+  isInitial: boolean,
+): void {
+  if (typeof update.toolCallId !== "string") return;
+  const toolCallId = truncateUtf8(update.toolCallId, MAX_TOOL_ID_BYTES);
+  if (!toolCallId) return;
+
+  // Incremental transcript reads intentionally re-fetch only the trailing
+  // message. Tool updates therefore upsert there as well; mutating an older
+  // message would be authoritative in the bridge but invisible to a mounted tab.
+  let owner = state.messages.at(-1);
+  let part = owner?.role === "assistant"
+    ? owner.parts.find(
+      (messagePart): messagePart is BridgeToolPart =>
+        messagePart.type === "tool-invocation" && messagePart.toolUseId === toolCallId,
+    )
+    : undefined;
+
+  if (!part) {
+    owner = currentAssistantMessage(state);
+    if (owner.parts.length >= MAX_PARTS_PER_MESSAGE) {
+      failTranscriptLimit(state);
+      return;
+    }
+    const title = boundedString(update.title, MAX_TOOL_TITLE_BYTES);
+    const toolName = acpToolName(update);
+    part = {
+      type: "tool-invocation",
+      content: title ?? toolName ?? "Tool call",
+      sourcePartId: `tool:${toolCallId}`,
+      sourceMessageId: owner.id,
+      toolUseId: toolCallId,
+      toolState: "pending",
+      ...(toolName ? { toolName } : {}),
+      ...(title ? { toolTitle: title } : {}),
+    };
+    owner.parts.push(part);
+  }
+
+  const title = boundedString(update.title, MAX_TOOL_TITLE_BYTES);
+  if (title !== undefined) part.toolTitle = title;
+  const toolName = acpToolName(update);
+  if (toolName !== undefined) part.toolName = toolName;
+  part.content = part.toolTitle ?? part.toolName ?? part.content;
+
+  if (isObject(update.rawInput)) {
+    part.toolArgs = boundedToolArguments(update.rawInput);
+  }
+
+  const mappedState = mapAcpToolState(update.status, isInitial);
+  if (mappedState !== undefined) part.toolState = mappedState;
+  if (mappedState !== undefined && mappedState !== "failure") part.toolError = undefined;
+
+  if ("rawOutput" in update || "content" in update) {
+    const output = toolCallContentText(update.content)
+      ?? stringifyToolPayload(update.rawOutput);
+    part.toolOutput = output;
+    if (part.toolState === "failure") part.toolError = output ?? "Tool call failed";
+    else part.toolError = undefined;
+  } else if (part.toolState === "failure" && !part.toolError) {
+    part.toolError = "Tool call failed";
+  }
+
+  const diff = acpToolDiff(update, part.toolArgs, part.toolDiff);
+  if (diff !== undefined) part.toolDiff = diff;
+
+  state.revision += 1;
+  state.uncheckedTranscriptBytes += Buffer.byteLength(JSON.stringify(part));
+  const transcriptTruncated = state.messages.length > MAX_MESSAGES
+    || state.uncheckedTranscriptBytes >= TRANSCRIPT_CHECK_INTERVAL_BYTES
+    ? boundTranscript(state)
+    : false;
+  if (transcriptTruncated) {
+    failTranscriptLimit(state);
+    return;
+  }
+  schedulePersist();
+}
+
+function currentAssistantMessage(state: SessionState): BridgeMessage {
+  let message = state.messages.at(-1);
+  if (!message || message.role !== "assistant" || state.status !== "running") {
+    message = {
+      id: randomBytes(12).toString("hex"),
+      role: "assistant",
+      content: "",
+      parts: [],
+      createdAt: new Date().toISOString(),
+    };
+    state.messages.push(message);
+  }
+  return message;
+}
+
+function failTranscriptLimit(state: SessionState): void {
+  state.outputTruncated = true;
+  state.status = "error";
+  state.error = `${provider} output exceeded the transcript limit`;
+  state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
+  state.revision += 1;
+  schedulePersist();
+}
+
+function boundedString(value: unknown, maximumBytes: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  return truncateUtf8(value, maximumBytes);
+}
+
+function acpToolName(update: JsonObject): string | undefined {
+  const rawInput = isObject(update.rawInput) ? update.rawInput : undefined;
+  const candidate = typeof update.name === "string"
+    ? update.name
+    : typeof rawInput?._toolName === "string"
+      ? rawInput._toolName
+      : typeof update.kind === "string"
+        ? update.kind
+        : undefined;
+  return boundedString(candidate, MAX_TOOL_NAME_BYTES);
+}
+
+function boundedToolArguments(value: JsonObject): JsonObject {
+  const { _toolName: _ignoredToolName, ...argumentsWithoutHint } = value;
+  if (Buffer.byteLength(JSON.stringify(argumentsWithoutHint)) <= MAX_TOOL_ARGUMENT_BYTES) {
+    return argumentsWithoutHint;
+  }
+  return { _orkestrator: "Tool input omitted because it exceeded the 512 KiB display limit" };
+}
+
+function mapAcpToolState(
+  status: unknown,
+  isInitial: boolean,
+): BridgeToolPart["toolState"] | undefined {
+  if (status === "completed") return "success";
+  if (status === "failed") return "failure";
+  if (status === "pending" || status === "in_progress") return "pending";
+  return isInitial ? "pending" : undefined;
+}
+
+function stringifyToolPayload(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  let serialized: string;
+  if (typeof value === "string") serialized = value;
+  else {
+    try {
+      serialized = JSON.stringify(value, null, 2);
+    } catch {
+      serialized = String(value);
+    }
+  }
+  return truncateDisplayText(serialized, MAX_TOOL_OUTPUT_BYTES, "\n… tool output truncated");
+}
+
+function toolCallContentText(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const pieces = value.flatMap((item) => {
+    if (!isObject(item) || item.type === "diff") return [];
+    if (item.type === "content") {
+      const text = contentText(item.content);
+      return text ? [text] : [];
+    }
+    if (item.type === "terminal") {
+      const terminalId = boundedString(item.terminalId, MAX_TOOL_ID_BYTES);
+      return [terminalId ? `[Terminal ${terminalId}]` : "[Terminal]"];
+    }
+    return [];
+  });
+  if (pieces.length === 0) return undefined;
+  return truncateDisplayText(pieces.join("\n"), MAX_TOOL_OUTPUT_BYTES, "\n… tool output truncated");
+}
+
+function acpToolDiff(
+  update: JsonObject,
+  toolArgs: JsonObject | undefined,
+  existing: BridgeToolDiff | undefined,
+): BridgeToolDiff | undefined {
+  const content = Array.isArray(update.content) ? update.content : undefined;
+  const diffItem = content?.find((item): item is JsonObject => isObject(item) && item.type === "diff");
+  const locations = Array.isArray(update.locations) ? update.locations : undefined;
+  const firstLocation = locations?.find((location): location is JsonObject => isObject(location));
+  const filePath = boundedString(diffItem?.path, MAX_TOOL_PATH_BYTES)
+    ?? boundedString(firstLocation?.path, MAX_TOOL_PATH_BYTES)
+    ?? boundedString(toolArgs?.path, MAX_TOOL_PATH_BYTES)
+    ?? boundedString(toolArgs?.filePath, MAX_TOOL_PATH_BYTES)
+    ?? boundedString(toolArgs?.file_path, MAX_TOOL_PATH_BYTES)
+    ?? existing?.filePath;
+
+  if (!diffItem) {
+    if (!filePath) return existing;
+    return { ...existing, filePath };
+  }
+
+  const rawBefore = typeof diffItem.oldText === "string" ? diffItem.oldText : undefined;
+  const rawAfter = typeof diffItem.newText === "string" ? diffItem.newText : undefined;
+  const additions = rawAfter === undefined ? existing?.additions : lineCount(rawAfter);
+  const deletions = rawBefore === undefined ? existing?.deletions : lineCount(rawBefore);
+  const keepInline = Buffer.byteLength(rawBefore ?? "") <= MAX_TOOL_INLINE_FILE_BYTES
+    && Buffer.byteLength(rawAfter ?? "") <= MAX_TOOL_INLINE_FILE_BYTES;
+  const rawDiff = boundedString(diffItem.diff, MAX_TOOL_DIFF_BYTES);
+
+  return {
+    ...(filePath ? { filePath } : {}),
+    ...(additions !== undefined ? { additions } : {}),
+    ...(deletions !== undefined ? { deletions } : {}),
+    ...(keepInline && rawBefore !== undefined ? { before: rawBefore } : {}),
+    ...(keepInline && rawAfter !== undefined ? { after: rawAfter } : {}),
+    ...(rawDiff !== undefined ? { diff: rawDiff } : {}),
+  };
+}
+
+function lineCount(value: string): number {
+  return value.length === 0 ? 0 : value.split("\n").length;
+}
+
+function truncateDisplayText(value: string, maximumBytes: number, notice: string): string {
+  if (Buffer.byteLength(value) <= maximumBytes) return value;
+  const noticeBytes = Buffer.byteLength(notice);
+  return truncateUtf8(value, Math.max(0, maximumBytes - noticeBytes)) + notice;
 }
 
 function contentText(value: unknown): string {
@@ -1066,7 +1327,7 @@ class HttpError extends Error {
 
 function persistedSnapshot(): PersistedState {
   return {
-    version: 2,
+    version: 3,
     provider,
     sessions: [...sessions.values()].map((state) => ({
       id: state.id,
@@ -1160,7 +1421,10 @@ async function loadPersistedState(): Promise<void> {
   } catch {
     throw new Error("ACP persisted state is malformed");
   }
-  if (!isObject(parsed) || (parsed.version !== 1 && parsed.version !== 2) || parsed.provider !== provider || !Array.isArray(parsed.sessions)) {
+  if (!isObject(parsed)
+    || (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3)
+    || parsed.provider !== provider
+    || !Array.isArray(parsed.sessions)) {
     throw new Error("ACP persisted state is incompatible");
   }
   for (const candidate of parsed.sessions.slice(0, MAX_SESSIONS)) {
@@ -1224,24 +1488,104 @@ function normalizeBridgeMessage(value: unknown): BridgeMessage | null {
     && (value.role === "user" || value.role === "assistant")
     && typeof value.content === "string"
     && Array.isArray(value.parts)
-    && value.parts.every((part) => isObject(part)
-      && (part.type === "text" || part.type === "reasoning" || part.type === "thinking")
-      && (typeof part.text === "string" || typeof part.content === "string"))
     && typeof value.createdAt === "string")) return null;
+  const messageId = value.id.slice(0, 256);
   return {
-    id: value.id.slice(0, 256),
+    id: messageId,
     role: value.role,
     content: truncateUtf8(value.content, MAX_MESSAGE_TEXT_BYTES),
-    parts: value.parts.slice(-MAX_PARTS_PER_MESSAGE).map((part, index) => ({
-      type: part.type === "reasoning" ? "thinking" as const : part.type as "text" | "thinking",
-      content: truncateUtf8(
-        typeof part.content === "string" ? part.content : part.text as string,
-        MAX_MESSAGE_TEXT_BYTES,
-      ),
-      sourcePartId: typeof part.sourcePartId === "string" ? part.sourcePartId : `${value.id}:${index}`,
-      sourceMessageId: typeof part.sourceMessageId === "string" ? part.sourceMessageId : value.id,
-    })),
+    parts: value.parts
+      .slice(-MAX_PARTS_PER_MESSAGE)
+      .flatMap((part, index) => {
+        const normalized = normalizeBridgePart(part, index, messageId);
+        return normalized ? [normalized] : [];
+      }),
     createdAt: value.createdAt.slice(0, 64),
+  };
+}
+
+function normalizeBridgePart(
+  value: unknown,
+  index: number,
+  messageId: string,
+): BridgeMessagePart | null {
+  if (!isObject(value)) return null;
+  const sourcePartId = typeof value.sourcePartId === "string"
+    ? value.sourcePartId.slice(0, 1024)
+    : `${messageId}:${index}`;
+  const sourceMessageId = typeof value.sourceMessageId === "string"
+    ? value.sourceMessageId.slice(0, 256)
+    : messageId;
+
+  if (value.type === "text" || value.type === "reasoning" || value.type === "thinking") {
+    const content = typeof value.content === "string"
+      ? value.content
+      : typeof value.text === "string"
+        ? value.text
+        : undefined;
+    if (content === undefined) return null;
+    return {
+      type: value.type === "reasoning" ? "thinking" : value.type,
+      content: truncateUtf8(content, MAX_MESSAGE_TEXT_BYTES),
+      sourcePartId,
+      sourceMessageId,
+    };
+  }
+
+  if (value.type !== "tool-invocation" || typeof value.toolUseId !== "string") return null;
+  const toolUseId = truncateUtf8(value.toolUseId, MAX_TOOL_ID_BYTES);
+  if (!toolUseId) return null;
+  const toolState = value.toolState === "success"
+    || value.toolState === "failure"
+    || value.toolState === "pending"
+    ? value.toolState
+    : undefined;
+  const toolOutput = boundedString(value.toolOutput, MAX_TOOL_OUTPUT_BYTES);
+  const toolError = boundedString(value.toolError, MAX_TOOL_OUTPUT_BYTES);
+  const toolDiff = normalizeBridgeToolDiff(value.toolDiff);
+  const toolName = boundedString(value.toolName, MAX_TOOL_NAME_BYTES);
+  const toolTitle = boundedString(value.toolTitle, MAX_TOOL_TITLE_BYTES);
+  return {
+    type: "tool-invocation",
+    content: boundedString(value.content, MAX_TOOL_TITLE_BYTES) ?? "Tool call",
+    sourcePartId,
+    sourceMessageId,
+    toolUseId,
+    ...(toolName ? { toolName } : {}),
+    ...(isObject(value.toolArgs) ? { toolArgs: boundedToolArguments(value.toolArgs) } : {}),
+    ...(toolState ? { toolState } : {}),
+    ...(toolTitle ? { toolTitle } : {}),
+    ...(toolOutput !== undefined ? { toolOutput } : {}),
+    ...(toolError !== undefined ? { toolError } : {}),
+    ...(toolDiff ? { toolDiff } : {}),
+  };
+}
+
+function normalizeBridgeToolDiff(value: unknown): BridgeToolDiff | undefined {
+  if (!isObject(value)) return undefined;
+  const filePath = boundedString(value.filePath, MAX_TOOL_PATH_BYTES);
+  const rawBefore = typeof value.before === "string" ? value.before : undefined;
+  const rawAfter = typeof value.after === "string" ? value.after : undefined;
+  const keepInline = Buffer.byteLength(rawBefore ?? "") <= MAX_TOOL_INLINE_FILE_BYTES
+    && Buffer.byteLength(rawAfter ?? "") <= MAX_TOOL_INLINE_FILE_BYTES;
+  const before = keepInline ? rawBefore : undefined;
+  const after = keepInline ? rawAfter : undefined;
+  const additions = Number.isSafeInteger(value.additions) && Number(value.additions) >= 0
+    ? Number(value.additions)
+    : undefined;
+  const deletions = Number.isSafeInteger(value.deletions) && Number(value.deletions) >= 0
+    ? Number(value.deletions)
+    : undefined;
+  const diff = boundedString(value.diff, MAX_TOOL_DIFF_BYTES);
+  if (!filePath && additions === undefined && deletions === undefined
+    && before === undefined && after === undefined && diff === undefined) return undefined;
+  return {
+    ...(filePath ? { filePath } : {}),
+    ...(additions !== undefined ? { additions } : {}),
+    ...(deletions !== undefined ? { deletions } : {}),
+    ...(keepInline && before !== undefined ? { before } : {}),
+    ...(keepInline && after !== undefined ? { after } : {}),
+    ...(diff !== undefined ? { diff } : {}),
   };
 }
 

@@ -108,6 +108,98 @@ lines.on("line", (line) => {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }
+    if (prompt.startsWith("TOOLS")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            content: { type: "text", text: "Editing the file. " },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "edit-1",
+            title: "Edit `src/example.ts`",
+            kind: "edit",
+            status: "pending",
+            rawInput: { path: "src/example.ts" },
+            locations: [{ path: "src/example.ts", line: 1 }],
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "edit-1",
+            status: "in_progress",
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "edit-1",
+            status: "completed",
+            content: [{
+              type: "diff",
+              path: "src/example.ts",
+              oldText: "const value = 1;",
+              newText: "const value = 2;\nconst ready = true;",
+            }],
+            rawOutput: { success: true },
+            locations: [{ path: "src/example.ts" }],
+          },
+        },
+      });
+      // ACP tool updates are upserts. A client must retain an update even when
+      // an initial `tool_call` frame was missed or the agent did not send one.
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "search-1",
+            title: "Search for references",
+            kind: "search",
+            status: "completed",
+            rawInput: { pattern: "value" },
+            rawOutput: { totalMatches: 3 },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Finished editing." },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
     promptRequestId = message.id;
     write({
       jsonrpc: "2.0",
@@ -130,6 +222,21 @@ lines.on("line", (line) => {
         ],
       },
     });
+    write({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "fake-session",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "tool-1",
+          title: "Run safe command",
+          kind: "execute",
+          status: "pending",
+          rawInput: { command: "printf ok" },
+        },
+      },
+    });
     return;
   }
   if (message.method === "session/cancel" && promptRequestId !== null) {
@@ -139,6 +246,19 @@ lines.on("line", (line) => {
   }
   if (message.id === 900 && typeof message.result === "object" && promptRequestId !== null) {
     const result = message.result as { outcome?: { optionId?: unknown } };
+    write({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "fake-session",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "tool-1",
+          status: "completed",
+          rawOutput: { exitCode: 0, stdout: "ok" },
+        },
+      },
+    });
     write({
       jsonrpc: "2.0",
       method: "session/update",

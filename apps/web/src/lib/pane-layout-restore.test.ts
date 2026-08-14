@@ -519,6 +519,7 @@ describe("reconcilePersistedLayout", () => {
       worktreePath: "/worktrees/current",
       hasBuildPipeline: (pipelineId: string) => pipelineId === "pipeline-1",
       hasLoopedReview: (workflowId: string) => workflowId === "workflow-1",
+      hasMultiReview: (workflowId: string) => workflowId === "multi-1",
     };
     const restored = reconcilePersistedLayout(saved({
       kind: "leaf",
@@ -551,6 +552,11 @@ describe("reconcilePersistedLayout", () => {
           type: "looped-review",
           loopedReviewTabData: { environmentId: "old", workflowId: "workflow-1" },
         },
+        {
+          id: "multi",
+          type: "multi-review",
+          multiReviewTabData: { environmentId: "old", workflowId: "multi-1" },
+        },
       ],
       activeTabId: "file",
     }, { containerId: null }), localContext);
@@ -564,6 +570,7 @@ describe("reconcilePersistedLayout", () => {
         { id: "tmux", claudeTmuxData: { environmentId: "env-1", isLocal: true } },
         { id: "build", buildTabData: { environmentId: "env-1", pipelineId: "pipeline-1", taskId: "task-1", isLocal: true } },
         { id: "looped", loopedReviewTabData: { environmentId: "env-1", workflowId: "workflow-1", isLocal: true } },
+        { id: "multi", multiReviewTabData: { environmentId: "env-1", workflowId: "multi-1", isLocal: true } },
       ],
     });
     expect(JSON.stringify(restored)).not.toContain("stale");
@@ -588,6 +595,32 @@ describe("reconcilePersistedLayout", () => {
     }), {
       ...context,
       hasLoopedReview: () => false,
+    });
+
+    expect(restored?.root).toEqual({
+      kind: "leaf",
+      id: "pane",
+      tabs: [{ id: "plain", type: "plain" }],
+      activeTabId: "plain",
+    });
+  });
+
+  test("drops Multi Review tabs whose authoritative workflow no longer exists", () => {
+    const restored = reconcilePersistedLayout(saved({
+      kind: "leaf",
+      id: "pane",
+      tabs: [
+        { id: "plain", type: "plain" },
+        {
+          id: "missing-multi",
+          type: "multi-review",
+          multiReviewTabData: { environmentId: "env-1", workflowId: "missing" },
+        },
+      ],
+      activeTabId: "missing-multi",
+    }), {
+      ...context,
+      hasMultiReview: () => false,
     });
 
     expect(restored?.root).toEqual({

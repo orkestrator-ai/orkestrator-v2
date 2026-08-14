@@ -21,6 +21,8 @@ import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { createSessionKey } from "@/lib/utils";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
+import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { StackedEyes } from "@/components/review/MultiReviewLaunchDialog";
 import { useFileDirtyStore } from "@/stores";
 import type { TabType } from "@/contexts";
 
@@ -145,6 +147,10 @@ export function DraggableTab({
     if (tab.type !== "looped-review" || !tab.loopedReviewTabData) return undefined;
     return state.workflows.get(tab.loopedReviewTabData.workflowId)?.phase;
   });
+  const multiReviewPhase = useMultiReviewStore((state) => {
+    if (tab.type !== "multi-review" || !tab.multiReviewTabData) return undefined;
+    return state.workflows.get(tab.multiReviewTabData.workflowId)?.phase;
+  });
 
   // Check if file tab has unsaved changes
   const isDirty = useFileDirtyStore((state) =>
@@ -220,6 +226,11 @@ export function DraggableTab({
         ? `Looped Review ✓`
         : `Looped Review ${tabNumber}`;
     }
+    if (tab.type === "multi-review") {
+      return multiReviewPhase === "completed"
+        ? "Multi Review ✓"
+        : `Multi Review ${tabNumber}`;
+    }
     if (tab.type === "browser") return `Browser ${tabNumber}`;
     if (tab.type === "root") return `ROOT ${tabNumber}`;
     return `Tab ${tabNumber}`;
@@ -261,6 +272,9 @@ export function DraggableTab({
     }
     if (tab.type === "looped-review") {
       return <Repeat2 className="h-3 w-3 shrink-0 text-cyan-400" />;
+    }
+    if (tab.type === "multi-review") {
+      return <StackedEyes className="size-3.5 shrink-0 text-cyan-400" />;
     }
     return <TerminalIcon className="h-3 w-3 shrink-0" />;
   };

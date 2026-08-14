@@ -789,6 +789,49 @@ describe("direct backend command registry coverage", () => {
     expect(deleteLoopedReviewWorkflow).toHaveBeenCalledTimes(2);
   });
 
+  test("deleting a multi review is gated on the stored phase being terminal", async () => {
+    const deleteMultiReviewWorkflow = mock(async () => undefined);
+    const record = (snapshot: unknown) => ({
+      version: 1, id: "multi-1", environmentId: "env-1", revision: 4,
+      updatedAt: "2026-08-14T00:00:00.000Z", snapshot,
+    });
+    const workflow = (phase: string) => ({
+      version: 1, controller: "backend", id: "multi-1", environmentId: "env-1",
+      projectId: "project-1", targetBranch: "main", phase,
+      ...(phase === "cancelling" ? { cancellingSince: "2026-08-14T00:00:00.000Z" } : {}),
+      reviewers: [{ id: "reviewer-1", agent: "claude", model: "opus", status: "cancelled" }],
+      fixModel: { agent: "claude", model: "opus" },
+      createdAt: "2026-08-14T00:00:00.000Z", updatedAt: "2026-08-14T00:00:00.000Z",
+      backendRevision: 4,
+    });
+    const withRecord = (value: unknown) => contextWithStorage({
+      getMultiReviewWorkflow: mock(async () => value),
+      deleteMultiReviewWorkflow,
+    });
+
+    // A live supervisor may still be driving anything non-terminal, including
+    // a cancellation that has been requested but has not finished aborting its
+    // provider sessions yet. This is the case the launch rollback depends on.
+    for (const phase of ["reviewing", "consolidating", "cancelling", "failed"]) {
+      await expect(invoke("delete_multi_review_workflow", { workflowId: "multi-1" }, withRecord(record(workflow(phase)))))
+        .rejects.toThrow("must be cancelled before deletion");
+    }
+    // A snapshot that does not parse is the one most likely to still be owned,
+    // so it fails closed rather than being deleted out from under the backend.
+    await expect(invoke("delete_multi_review_workflow", { workflowId: "multi-1" }, withRecord(record({ phase: "cancelled" }))))
+      .rejects.toThrow("must be cancelled before deletion");
+    expect(deleteMultiReviewWorkflow).not.toHaveBeenCalled();
+
+    await expect(invoke("delete_multi_review_workflow", { workflowId: "multi-1" }, withRecord(record(workflow("cancelled")))))
+      .resolves.toBeUndefined();
+    // So does a record that no longer exists at all.
+    await expect(invoke("delete_multi_review_workflow", { workflowId: "multi-1" }, withRecord(null)))
+      .resolves.toBeUndefined();
+    expect(deleteMultiReviewWorkflow).toHaveBeenCalledTimes(2);
+    await expect(invoke("delete_multi_review_workflow", { workflowId: " " }, withRecord(null)))
+      .rejects.toThrow("non-blank string");
+  });
+
   test("admits stable container terminal sessions without starting a PTY", async () => {
     const assigned = environment();
     const loadEnvironments = mock(async () => [assigned]);

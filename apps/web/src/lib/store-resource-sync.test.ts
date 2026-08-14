@@ -10,12 +10,14 @@ import { loopedReviewFixture } from "@/test/looped-review-fixture";
 // does not leave those suites testing these fakes (AGENTS.md, Bun mock rules).
 import * as realLoopedReview from "@/lib/looped-review-persistence";
 import * as realBuildPipeline from "@/lib/build-pipeline-persistence";
+import * as realMultiReview from "@/lib/multi-review-persistence";
 import * as realPromptQueue from "@/lib/prompt-queue-persistence";
 import * as realPromptQueueSources from "@/lib/prompt-queue-sources";
 
 const realModules = {
   "@/lib/looped-review-persistence": { ...realLoopedReview },
   "@/lib/build-pipeline-persistence": { ...realBuildPipeline },
+  "@/lib/multi-review-persistence": { ...realMultiReview },
   "@/lib/prompt-queue-persistence": { ...realPromptQueue },
   "@/lib/prompt-queue-sources": { ...realPromptQueueSources },
 };
@@ -41,6 +43,8 @@ const resolveLoopedReviewWorkflow = mock(
 const hydrateLoopedReviewWorkflowsForEnvironment = mock(async (_id: string) => []);
 const hydrateBuildPipeline = mock(async (_id: string) => null as unknown);
 const hydrateBuildPipelinesForProject = mock(async (_id: string) => []);
+const hydrateMultiReviewWorkflow = mock(async (_id: string) => null as unknown);
+const hydrateMultiReviewWorkflowsForEnvironment = mock(async (_id: string) => []);
 const hydratePromptQueuesForEnvironment = mock(async (_id: string, _sources: unknown) => undefined);
 const createPromptQueueSources = mock(() => []);
 
@@ -52,6 +56,10 @@ mock.module("@/lib/looped-review-persistence", () => ({
 mock.module("@/lib/build-pipeline-persistence", () => ({
   hydrateBuildPipeline,
   hydrateBuildPipelinesForProject,
+}));
+mock.module("@/lib/multi-review-persistence", () => ({
+  hydrateMultiReviewWorkflow,
+  hydrateMultiReviewWorkflowsForEnvironment,
 }));
 mock.module("@/lib/prompt-queue-persistence", () => ({ hydratePromptQueuesForEnvironment }));
 mock.module("@/lib/prompt-queue-sources", () => ({ createPromptQueueSources }));
@@ -69,6 +77,7 @@ const { useEnvironmentStore } = await import("@/stores/environmentStore");
 const { useFeaturePlanStore } = await import("@/stores/featurePlanStore");
 const { useKanbanStore } = await import("@/stores/kanbanStore");
 const { useLoopedReviewStore } = await import("@/stores/loopedReviewStore");
+const { useMultiReviewStore } = await import("@/stores/multiReviewStore");
 const { usePaneLayoutStore } = await import("@/stores/paneLayoutStore");
 const {
   invalidateProjectSnapshots,
@@ -134,6 +143,10 @@ beforeEach(() => {
   hydrateBuildPipelinesForProject.mockImplementation(async () => []);
   hydrateLoopedReviewWorkflowsForEnvironment.mockClear();
   hydrateLoopedReviewWorkflowsForEnvironment.mockImplementation(async () => []);
+  hydrateMultiReviewWorkflow.mockClear();
+  hydrateMultiReviewWorkflow.mockImplementation(async () => null);
+  hydrateMultiReviewWorkflowsForEnvironment.mockClear();
+  hydrateMultiReviewWorkflowsForEnvironment.mockImplementation(async () => []);
   hydratePromptQueuesForEnvironment.mockClear();
   useEnvironmentStore.setState({ environments: [] });
   useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
@@ -141,6 +154,7 @@ beforeEach(() => {
   useFeaturePlanStore.setState({ currentProjectId: null });
   useProjectStore.setState({ projects: [] });
   useLoopedReviewStore.setState({ workflows: new Map() });
+  useMultiReviewStore.setState({ workflows: new Map() });
   usePaneLayoutStore.setState({
     environments: new Map(),
     hydration: new Map(),
@@ -391,6 +405,25 @@ describe("looped-review binding", () => {
     await tick();
 
     expect(useLoopedReviewStore.getState().workflows.has(workflow.id)).toBe(true);
+  });
+});
+
+describe("multi-review binding", () => {
+  test("rehydrates the backend-owned workflow projection", async () => {
+    dispatchResourceChange({ resource: "multi-review", id: "multi-1", revision: 1 });
+    await tick();
+
+    expect(hydrateMultiReviewWorkflow).toHaveBeenCalledWith("multi-1");
+  });
+
+  test("contains a backend refresh failure", async () => {
+    hydrateMultiReviewWorkflow.mockImplementationOnce(async () => {
+      throw new Error("backend down");
+    });
+    dispatchResourceChange({ resource: "multi-review", id: "multi-offline", revision: 1 });
+    await tick();
+
+    expect(hydrateMultiReviewWorkflow).toHaveBeenCalledTimes(1);
   });
 });
 

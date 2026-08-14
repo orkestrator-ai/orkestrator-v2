@@ -64,7 +64,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { ClaudeIcon, CodexIcon, CursorAgentIcon, GrokBuildIcon, OpenCodeIcon, DockerIcon } from "@/components/icons/AgentIcons";
-import { useUIStore, useEnvironmentStore, useProjectStore, useConfigStore, useFilesPanelStore, useLoopedReviewStore, type ProjectBoardTab } from "@/stores";
+import { useUIStore, useEnvironmentStore, useProjectStore, useConfigStore, useFilesPanelStore, useLoopedReviewStore, useMultiReviewStore, type ProjectBoardTab } from "@/stores";
 import { useShallow } from "zustand/react/shallow";
 import { useTerminalContext, MAX_TABS, type AgentLaunchModeOverride } from "@/contexts";
 import type { DefaultAgent } from "@/types";
@@ -88,6 +88,11 @@ import {
   getReviewAgent,
   type ReviewLaunchSelection,
 } from "@/components/review/ReviewLaunchDialog";
+import {
+  MultiReviewLaunchDialog,
+  StackedEyes,
+  type MultiReviewLaunchSelection,
+} from "@/components/review/MultiReviewLaunchDialog";
 import {
   resolveDefaultReviewTabType,
 } from "@/lib/review-launch-options";
@@ -279,6 +284,9 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   selectedEnvironmentIdRef.current = selectedEnvironmentId;
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
   const [loopedReviewDialogOpen, setLoopedReviewDialogOpen] = useState(false);
+  const [multiReviewDialogOpen, setMultiReviewDialogOpen] = useState(false);
+  const [multiReviewLaunchPending, setMultiReviewLaunchPending] = useState(false);
+  const multiReviewLaunchInFlightRef = useRef(false);
   const [loopedReviewLaunchPending, setLoopedReviewLaunchPending] = useState(false);
   const loopedReviewLaunchInFlightRef = useRef(false);
   const reviewLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -286,7 +294,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const reviewLongPressOriginRef = useRef<{ x: number; y: number } | null>(null);
   const suppressReviewClickRef = useRef(false);
 
-  const anyReviewDialogOpen = reviewDialogOpen || loopedReviewDialogOpen;
+  const anyReviewDialogOpen = reviewDialogOpen || loopedReviewDialogOpen || multiReviewDialogOpen;
   const reviewModelCatalog = useReviewModelCatalog(
     selectedProjectId ?? "",
     anyReviewDialogOpen,
@@ -646,6 +654,66 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     });
     setReviewDialogOpen(false);
   }, [handleReview]);
+
+  const handleMultiReview = useCallback(async (selection: MultiReviewLaunchSelection) => {
+    if (multiReviewLaunchInFlightRef.current
+      || !createTab || !selectedEnvironmentId || !selectedProjectId
+      || !selectedEnvironment || !canCreateTab || !isRunning
+      || !workspaceReady || setupRunning) return;
+    multiReviewLaunchInFlightRef.current = true;
+    setMultiReviewLaunchPending(true);
+    let workflowId: string | undefined;
+    let cancelRequested = false;
+    try {
+      const workflow = await backend.startMultiReview({
+        environmentId: selectedEnvironmentId,
+        projectId: selectedProjectId,
+        targetBranch: config.repositories[selectedProjectId]?.prBaseBranch || "main",
+        reviewInstruction: config.global.reviewInstruction,
+        reviewers: selection.reviewers,
+        fixModel: selection.fixModel,
+      });
+      workflowId = workflow.id;
+      useMultiReviewStore.getState().replaceWorkflow(workflow);
+      const created = createTab("multi-review", {
+        multiReviewId: workflow.id,
+        displayTitle: "Multi Review",
+      });
+      if (!created) {
+        const launchError = "The environment is not ready or the maximum tab count was reached.";
+        const cancelled = await backend.cancelMultiReview(workflow.id);
+        cancelRequested = true;
+        useMultiReviewStore.getState().replaceWorkflow(cancelled);
+        // Cancellation is asynchronous, and only a terminal workflow may be
+        // deleted. Deleting a still-cancelling one is rejected by the backend,
+        // which would replace this message with a confusing storage error and
+        // strand the record. Keep it installed for recovery instead.
+        if (cancelled.phase !== "cancelled") {
+          throw new Error(
+            `${launchError} Cancellation is still in progress; the saved Multi Review remains available for recovery.`,
+          );
+        }
+        await backend.deleteMultiReviewWorkflow(workflow.id);
+        useMultiReviewStore.getState().removeWorkflow(workflow.id);
+        throw new Error(launchError);
+      }
+      setMultiReviewDialogOpen(false);
+    } catch (error) {
+      toast.error("Could not open Multi Review", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+      if (workflowId && !cancelRequested) {
+        void backend.cancelMultiReview(workflowId).catch(() => undefined);
+      }
+    } finally {
+      multiReviewLaunchInFlightRef.current = false;
+      setMultiReviewLaunchPending(false);
+    }
+  }, [
+    canCreateTab, config.global.reviewInstruction, config.repositories, createTab,
+    isRunning, selectedEnvironment, selectedEnvironmentId, selectedProjectId,
+    setupRunning, workspaceReady,
+  ]);
 
   const handleLoopedReview = useCallback(async (selection: ReviewLaunchSelection) => {
     if (
@@ -1582,6 +1650,27 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
               <ToolbarTooltipTrigger
                 tooltip={
                   <>
+                    <p>Multi Review</p>
+                    <p className="text-xs text-muted-foreground">Compare independent model reviews and consolidate every finding</p>
+                  </>
+                }
+              >
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => setMultiReviewDialogOpen(true)}
+                  disabled={!selectedEnvironment || !canCreateTab || !isRunning || !workspaceReady || setupRunning || multiReviewLaunchPending}
+                  aria-label="Multi Review"
+                >
+                  <StackedEyes className="size-4" />
+                  {isGrid && <span className="truncate text-xs">Multi Review</span>}
+                </Button>
+              </ToolbarTooltipTrigger>
+
+              <ToolbarTooltipTrigger
+                tooltip={
+                  <>
                     <p>Looped Code Review</p>
                     <p className="text-xs text-muted-foreground">
                       Discover, reconcile, fix, repeat, and create a PR
@@ -2217,6 +2306,22 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         }}
         busy={loopedReviewLaunchPending}
         onConfirm={handleLoopedReview}
+      />
+      <MultiReviewLaunchDialog
+        open={multiReviewDialogOpen}
+        onOpenChange={(open) => {
+          if (!multiReviewLaunchInFlightRef.current) setMultiReviewDialogOpen(open);
+        }}
+        defaultAgent={defaultAgent}
+        catalog={reviewModelCatalog}
+        preferredModels={{
+          claude: config.global.claudeModel,
+          codex: config.global.codexModel,
+          opencode: config.global.opencodeModel,
+        }}
+        preferredReasoningEfforts={{ codex: config.global.codexReasoningEffort }}
+        busy={multiReviewLaunchPending}
+        onConfirm={handleMultiReview}
       />
 
       {/* Settings Dialogs */}

@@ -67,7 +67,8 @@ const RESOURCE_MANIFEST_FILES: Record<ResourceManifestKind, string> = {
   "project-notes": "project-notes.json",
   "feature-plan": "feature-plans.json",
   "pane-layout": "pane-layouts.json",
-  "looped-review": "looped-reviews.json",
+      "looped-review": "looped-reviews.json",
+      "multi-review": "multi-reviews.json",
   "build-pipeline": "build-pipelines.json",
   "prompt-queue": "prompt-queues.json",
 };
@@ -625,7 +626,7 @@ describe("StorageService resource change announcements", () => {
     });
   });
 
-  test("announces pane layout and looped review writes and deletes", async () => {
+  test("announces pane layout, looped review, and multi review writes and deletes", async () => {
     await withStorage(async (storage, changes) => {
       await storage.addProject(project("p1"));
       await storage.addEnvironment(environment("e1", "p1"));
@@ -652,6 +653,11 @@ describe("StorageService resource change announcements", () => {
       expect(new Set(changes.map((change) => change.id)))
         .toEqual(new Set(["w2", "w3"]));
       expect(changes.every((change) => change.resource === "looped-review")).toBe(true);
+
+      await storage.saveMultiReviewWorkflow("m1", "e1", 1, { id: "m1" });
+      expect(changes.at(-1)).toMatchObject({ resource: "multi-review", id: "m1" });
+      await storage.deleteMultiReviewWorkflow("m1");
+      expect(changes.at(-1)).toMatchObject({ resource: "multi-review", id: "m1" });
 
       await storage.deletePaneLayout("e1");
       expect(changes.at(-1)).toMatchObject({ resource: "pane-layout", id: "e1" });

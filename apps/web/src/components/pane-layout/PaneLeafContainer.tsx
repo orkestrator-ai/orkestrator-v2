@@ -29,6 +29,9 @@ const LazyBuildChatTab = lazy(async () => ({
 const LazyLoopedReviewTab = lazy(async () => ({
   default: (await import("@/components/review/LoopedReviewTab")).LoopedReviewTab,
 }));
+const LazyMultiReviewTab = lazy(async () => ({
+  default: (await import("@/components/review/MultiReviewTab")).MultiReviewTab,
+}));
 const LazyBrowserTab = lazy(async () => ({
   default: (await import("@/components/browser/BrowserTab")).BrowserTab,
 }));
@@ -329,6 +332,28 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                 >
                   <LazyLoopedReviewTab
                     data={tab.loopedReviewTabData}
+                    isActive={isTabActive && isActive}
+                  />
+                </LazyLoadBoundary>
+              </div>
+            );
+          }
+
+          if (tab.type === "multi-review" && tab.multiReviewTabData) {
+            return (
+              <div
+                key={tab.id}
+                className={cn(
+                  "absolute inset-0",
+                  isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden",
+                )}
+              >
+                <LazyLoadBoundary
+                  loadingFallback={renderTabFallback(isTabActive && isActive)}
+                  renderError={renderTabError(isTabActive && isActive)}
+                >
+                  <LazyMultiReviewTab
+                    data={tab.multiReviewTabData}
                     isActive={isTabActive && isActive}
                   />
                 </LazyLoadBoundary>

@@ -19,6 +19,7 @@ export const RESOURCE_KINDS = [
   "feature-plan",
   "pane-layout",
   "looped-review",
+  "multi-review",
   "build-pipeline",
   "native-agent-session",
   "prompt-queue",
@@ -45,6 +46,7 @@ export const RESOURCE_MANIFEST_KINDS = [
   "feature-plan",
   "pane-layout",
   "looped-review",
+  "multi-review",
   "build-pipeline",
   "prompt-queue",
 ] as const satisfies readonly ResourceKind[];

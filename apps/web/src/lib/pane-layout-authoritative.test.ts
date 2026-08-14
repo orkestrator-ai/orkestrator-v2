@@ -1,14 +1,16 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { Environment } from "@/types";
 
-// Both hydrators have their own test files. Snapshot and restore per the Bun
+// These hydrators have their own test files. Snapshot and restore per the Bun
 // mock rules in AGENTS.md so a non-isolated run does not leave them faked.
 import * as realBuildPipeline from "@/lib/build-pipeline-persistence";
 import * as realLoopedReview from "@/lib/looped-review-persistence";
+import * as realMultiReview from "@/lib/multi-review-persistence";
 
 const realModules = {
   "@/lib/build-pipeline-persistence": { ...realBuildPipeline },
   "@/lib/looped-review-persistence": { ...realLoopedReview },
+  "@/lib/multi-review-persistence": { ...realMultiReview },
 };
 
 afterAll(() => {
@@ -19,9 +21,11 @@ afterAll(() => {
 
 const hydrateBuildPipeline = mock(async (_id: string) => null as unknown);
 const hydrateLoopedReviewWorkflow = mock(async (_id: string) => undefined);
+const hydrateMultiReviewWorkflow = mock(async (_id: string) => undefined);
 
 mock.module("@/lib/build-pipeline-persistence", () => ({ hydrateBuildPipeline }));
 mock.module("@/lib/looped-review-persistence", () => ({ hydrateLoopedReviewWorkflow }));
+mock.module("@/lib/multi-review-persistence", () => ({ hydrateMultiReviewWorkflow }));
 
 const {
   collectPaneDependencyIds,
@@ -31,6 +35,7 @@ const {
 const { useBuildPipelineStore } = await import("@/stores/buildPipelineStore");
 const { useEnvironmentStore } = await import("@/stores/environmentStore");
 const { useLoopedReviewStore } = await import("@/stores/loopedReviewStore");
+const { useMultiReviewStore } = await import("@/stores/multiReviewStore");
 const { LEGACY_PANE_LAYOUT_VERSION, PANE_LAYOUT_VERSION } = await import("@/types/paneLayout");
 
 type PaneNode = import("@/types/paneLayout").PaneNode;
@@ -93,12 +98,14 @@ function paneState(
 beforeEach(() => {
   hydrateBuildPipeline.mockClear();
   hydrateLoopedReviewWorkflow.mockClear();
+  hydrateMultiReviewWorkflow.mockClear();
   useEnvironmentStore.setState({ environments: [environment()] });
   useBuildPipelineStore.setState({
     pipelines: new Map(),
     buildEnvironmentIds: new Set(),
   });
   useLoopedReviewStore.setState({ workflows: new Map() });
+  useMultiReviewStore.setState({ workflows: new Map() });
 });
 
 describe("collectPaneDependencyIds", () => {
@@ -190,6 +197,7 @@ describe("hydratePaneLayoutDependencies", () => {
       ]),
       leaf("b", [
         { id: "r1", type: "looped-review", loopedReviewTabData: { workflowId: "missing-workflow" } },
+        { id: "m1", type: "multi-review", multiReviewTabData: { workflowId: "missing-multi" } },
       ]),
     );
 
@@ -197,6 +205,7 @@ describe("hydratePaneLayoutDependencies", () => {
 
     expect(hydrateBuildPipeline.mock.calls.map(([id]) => id)).toEqual(["missing-pipeline"]);
     expect(hydrateLoopedReviewWorkflow.mock.calls.map(([id]) => id)).toEqual(["missing-workflow"]);
+    expect(hydrateMultiReviewWorkflow.mock.calls.map(([id]) => id)).toEqual(["missing-multi"]);
   });
 
   test("does no work when the snapshot references nothing", async () => {
@@ -204,6 +213,7 @@ describe("hydratePaneLayoutDependencies", () => {
 
     expect(hydrateBuildPipeline).not.toHaveBeenCalled();
     expect(hydrateLoopedReviewWorkflow).not.toHaveBeenCalled();
+    expect(hydrateMultiReviewWorkflow).not.toHaveBeenCalled();
   });
 
   test("propagates a hydration failure so callers can skip the install", async () => {
@@ -300,6 +310,29 @@ describe("reconcileAuthoritativePaneLayout", () => {
 
     expect(restored).not.toBeNull();
     expect((restored!.root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id))
+      .toEqual(["plain"]);
+  });
+
+  test("restores a Multi Review tab only while its authoritative workflow exists", () => {
+    const root = leaf("default", [
+      { id: "plain", type: "plain" },
+      { id: "multi", type: "multi-review", multiReviewTabData: { workflowId: "multi-1" } },
+    ]);
+    useMultiReviewStore.setState({ workflows: new Map([["multi-1", {
+      id: "multi-1",
+    } as never]]) });
+
+    const restored = reconcileAuthoritativePaneLayout(
+      "env-1", persisted(root), paneState(root),
+    );
+    expect((restored!.root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id))
+      .toEqual(["plain", "multi"]);
+
+    useMultiReviewStore.setState({ workflows: new Map() });
+    const dropped = reconcileAuthoritativePaneLayout(
+      "env-1", persisted(root), paneState(root),
+    );
+    expect((dropped!.root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id))
       .toEqual(["plain"]);
   });
 

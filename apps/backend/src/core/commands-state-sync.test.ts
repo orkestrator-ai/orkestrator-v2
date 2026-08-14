@@ -44,6 +44,7 @@ async function withCommands<T>(
     environment?: Record<string, unknown>;
     buildPipelines?: CommandContext["buildPipelines"];
     loopedReviews?: CommandContext["loopedReviews"];
+    multiReviews?: CommandContext["multiReviews"];
     nativeAgents?: CommandContext["nativeAgents"];
     nativeAgentsFactory?: (storage: StorageService) => CommandContext["nativeAgents"];
     tabTeardown?: NonNullable<Parameters<typeof createCommandRegistry>[0]>["tabTeardown"];
@@ -71,6 +72,7 @@ async function withCommands<T>(
     storage,
     buildPipelines: options.buildPipelines,
     loopedReviews: options.loopedReviews,
+    multiReviews: options.multiReviews,
     nativeAgents: options.nativeAgents ?? options.nativeAgentsFactory?.(storage),
   } as unknown as CommandContext;
 
@@ -2755,6 +2757,62 @@ describe("looped review commands", () => {
           .rejects.toThrow("Looped review supervisor is unavailable");
       }
     });
+  });
+});
+
+describe("multi review commands", () => {
+  const startInput = {
+    environmentId: "e1", projectId: "proj-1", targetBranch: "main",
+    reviewers: [
+      { agent: "claude", model: "opus" },
+      { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+    ],
+    fixModel: { agent: "codex", model: "gpt-5.6" },
+  } as const;
+
+  test("delegates lifecycle intents and strips the backend controller fence", async () => {
+    const workflow = (operation: string) => ({
+      operation, id: "multi-1", phase: "reviewing", controllerFence: "secret-fence",
+    });
+    const start = mock(async (_input: unknown) => workflow("start"));
+    const address = mock(async (id: string) => ({ ...workflow("address"), id }));
+    const retry = mock(async (id: string) => ({ ...workflow("retry"), id }));
+    const cancel = mock(async (id: string) => ({ ...workflow("cancel"), id }));
+    const supervisor = { start, address, retry, cancel } as unknown as NonNullable<CommandContext["multiReviews"]>;
+
+    await withCommands(async (invoke) => {
+      const calls: Array<[string, Record<string, unknown>]> = [
+        ["start_multi_review", startInput as unknown as Record<string, unknown>],
+        ["address_multi_review", { workflowId: "multi-1" }],
+        ["retry_multi_review", { workflowId: "multi-1" }],
+        ["cancel_multi_review", { workflowId: "multi-1" }],
+      ];
+      for (const [command, args] of calls) {
+        const result = await invoke(command, args) as Record<string, unknown>;
+        expect(result).not.toHaveProperty("controllerFence");
+        expect(result.id).toBe("multi-1");
+      }
+      expect(start).toHaveBeenCalledWith(startInput);
+      expect(address).toHaveBeenCalledWith("multi-1");
+      expect(retry).toHaveBeenCalledWith("multi-1");
+      expect(cancel).toHaveBeenCalledWith("multi-1");
+    }, { multiReviews: supervisor });
+  });
+
+  test("rejects malformed start and lifecycle requests before supervision", async () => {
+    const start = mock(async () => undefined);
+    const lifecycle = mock(async () => undefined);
+    const supervisor = { start, address: lifecycle, retry: lifecycle, cancel: lifecycle } as unknown as NonNullable<CommandContext["multiReviews"]>;
+    await withCommands(async (invoke) => {
+      await expect(invoke("start_multi_review", {
+        ...startInput,
+        reviewers: [{ ...startInput.reviewers[0], id: "renderer-injected" }],
+      })).rejects.toThrow("Invalid multi review start request");
+      await expect(invoke("address_multi_review", { workflowId: " " }))
+        .rejects.toThrow("non-blank string");
+      expect(start).not.toHaveBeenCalled();
+      expect(lifecycle).not.toHaveBeenCalled();
+    }, { multiReviews: supervisor });
   });
 });
 

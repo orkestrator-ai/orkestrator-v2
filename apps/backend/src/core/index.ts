@@ -22,6 +22,7 @@ import {
   NativeAgentService,
 } from "./native-agent-service.js";
 import { LoopedReviewService } from "./looped-review-service.js";
+import { MultiReviewService } from "./multi-review-service.js";
 import { FeaturePlanningService } from "./feature-planning.js";
 import { PromptQueueDrainer } from "./prompt-queue-drainer.js";
 import {
@@ -36,6 +37,7 @@ export class OrkestratorBackend {
   private readonly buildPipelines: BuildPipelineService;
   private readonly nativeAgents: NativeAgentService;
   private readonly loopedReviews: LoopedReviewService;
+  private readonly multiReviews: MultiReviewService;
   private readonly featurePlanning: FeaturePlanningService;
   private readonly promptQueues: PromptQueueDrainer;
   private readonly environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
@@ -178,6 +180,15 @@ export class OrkestratorBackend {
       },
     );
     context.loopedReviews = this.loopedReviews;
+    this.multiReviews = new MultiReviewService(
+      storage,
+      async <T>(command: string, args: Record<string, unknown> = {}) => {
+        const handler = this.commands.get(command);
+        if (!handler) throw new Error(`Unknown backend command: ${command}`);
+        return await handler(args, context) as T;
+      },
+    );
+    context.multiReviews = this.multiReviews;
     this.featurePlanning = new FeaturePlanningService(
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
@@ -304,6 +315,9 @@ export class OrkestratorBackend {
     });
     await this.loopedReviews.init().catch((error) => {
       console.warn("[backend] Failed to restore looped reviews:", error);
+    });
+    await this.multiReviews.init().catch((error) => {
+      console.warn("[backend] Failed to restore multi reviews:", error);
     });
     await this.nativeAgents.init().catch((error) => {
       console.warn("[backend] Failed to restore native agent launches:", error);
@@ -492,6 +506,11 @@ export class OrkestratorBackend {
           await this.loopedReviews.shutdown();
         } catch (error) {
           console.warn("[backend] Failed to drain looped reviews:", error);
+        }
+        try {
+          await this.multiReviews.shutdown();
+        } catch (error) {
+          console.warn("[backend] Failed to drain multi reviews:", error);
         }
         try {
           await this.featurePlanning.shutdown();

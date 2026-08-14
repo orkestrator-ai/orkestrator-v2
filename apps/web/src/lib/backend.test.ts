@@ -1550,6 +1550,45 @@ describe("backend native agent and looped review wrappers", () => {
     }
   });
 
+  test("maps every multi review command and spreads the launch intent", async () => {
+    const input = {
+      environmentId: "env-1",
+      projectId: "project-1",
+      targetBranch: "main",
+      reviewInstruction: "Focus on correctness",
+      reviewers: [
+        { agent: "claude" as const, model: "opus" },
+        { agent: "codex" as const, model: "gpt-5.6", reasoningEffort: "high" },
+      ],
+      fixModel: { agent: "codex" as const, model: "gpt-5.6" },
+    };
+    const workflow = { id: "multi-1" } as unknown as Awaited<
+      ReturnType<typeof backendWrappers.startMultiReview>
+    >;
+    invokeMock.mockResolvedValue(workflow);
+
+    await expect(backendWrappers.startMultiReview(input)).resolves.toBe(workflow);
+    // Spread, not nested: the backend validates the launch intent at the top
+    // level and rejects any key it does not recognise.
+    expect(invokeMock).toHaveBeenLastCalledWith("start_multi_review", { ...input });
+
+    for (const [method, command] of [
+      [backendWrappers.addressMultiReview, "address_multi_review"],
+      [backendWrappers.retryMultiReview, "retry_multi_review"],
+      [backendWrappers.cancelMultiReview, "cancel_multi_review"],
+    ] as const) {
+      await expect(method("multi-1")).resolves.toBe(workflow);
+      expect(invokeMock).toHaveBeenLastCalledWith(command, { workflowId: "multi-1" });
+    }
+
+    await backendWrappers.getMultiReviewWorkflow("multi-1");
+    expect(invokeMock).toHaveBeenLastCalledWith("get_multi_review_workflow", { workflowId: "multi-1" });
+    await backendWrappers.listMultiReviewWorkflows("env-1");
+    expect(invokeMock).toHaveBeenLastCalledWith("list_multi_review_workflows", { environmentId: "env-1" });
+    await backendWrappers.deleteMultiReviewWorkflow("multi-1");
+    expect(invokeMock).toHaveBeenLastCalledWith("delete_multi_review_workflow", { workflowId: "multi-1" });
+  });
+
   test("omits an absent provider session id and maps workflow reads and deletion", async () => {
     invokeMock.mockResolvedValueOnce({ providerSessionId: "provider-1" });
     await backendWrappers.getLoopedReviewProviderSession("workflow-1");

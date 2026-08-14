@@ -20,6 +20,10 @@ import type {
   StartLoopedReviewInput,
 } from "@orkestrator/protocol/review-workflow";
 import type {
+  MultiReviewWorkflow as BackendMultiReviewWorkflow,
+  StartMultiReviewInput,
+} from "@orkestrator/protocol/multi-review";
+import type {
   Project,
   Environment,
   EnvironmentType,
@@ -2005,8 +2009,48 @@ export async function deleteLoopedReviewWorkflow(
   return invoke("delete_looped_review_workflow", { workflowId });
 }
 
+// --- Multi Review Workflow Commands ---
+
+export async function startMultiReview(
+  input: StartMultiReviewInput,
+): Promise<BackendMultiReviewWorkflow> {
+  return invoke<BackendMultiReviewWorkflow>("start_multi_review", { ...input });
+}
+
+export async function addressMultiReview(workflowId: string): Promise<BackendMultiReviewWorkflow> {
+  return invoke<BackendMultiReviewWorkflow>("address_multi_review", { workflowId });
+}
+
+export async function retryMultiReview(workflowId: string): Promise<BackendMultiReviewWorkflow> {
+  return invoke<BackendMultiReviewWorkflow>("retry_multi_review", { workflowId });
+}
+
+export async function cancelMultiReview(workflowId: string): Promise<BackendMultiReviewWorkflow> {
+  return invoke<BackendMultiReviewWorkflow>("cancel_multi_review", { workflowId });
+}
+
+export async function getMultiReviewWorkflow<T = unknown>(
+  workflowId: string,
+): Promise<PersistedLoopedReviewWorkflow<T> | null> {
+  return invoke<PersistedLoopedReviewWorkflow<T> | null>(
+    "get_multi_review_workflow", { workflowId },
+  );
+}
+
+export async function listMultiReviewWorkflows<T = unknown>(
+  environmentId: string,
+): Promise<Array<PersistedLoopedReviewWorkflow<T>>> {
+  return invoke<Array<PersistedLoopedReviewWorkflow<T>>>(
+    "list_multi_review_workflows", { environmentId },
+  );
+}
+
+export async function deleteMultiReviewWorkflow(workflowId: string): Promise<void> {
+  return invoke("delete_multi_review_workflow", { workflowId });
+}
+
 // Controller leases are backend-only. The renderer has no caller for
-// claim/validate/release, and the commands reject version-2 records anyway, so
+// claim/validate/release, and backend-owned records reject renderer writes, so
 // keeping wrappers here would only advertise an API the renderer must not use.
 
 export async function ensureNativeAgentSession(input: {

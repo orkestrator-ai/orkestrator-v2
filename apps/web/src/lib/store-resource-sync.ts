@@ -23,6 +23,10 @@ import {
   resolveLoopedReviewWorkflow,
 } from "@/lib/looped-review-persistence";
 import {
+  hydrateMultiReviewWorkflow,
+  hydrateMultiReviewWorkflowsForEnvironment,
+} from "@/lib/multi-review-persistence";
+import {
   hydrateBuildPipeline,
   hydrateBuildPipelinesForProject,
 } from "@/lib/build-pipeline-persistence";
@@ -402,6 +406,9 @@ export function startStoreResourceSync(
       if (includes("looped-review")) {
         tasks.push(refreshLoopedReviewsForEnvironment(environmentId));
       }
+      if (includes("multi-review")) {
+        tasks.push(hydrateMultiReviewWorkflowsForEnvironment(environmentId));
+      }
       if (includes("pane-layout")) paneEnvironmentIds.push(environmentId);
     }
     if (includes("build-pipeline")) {
@@ -569,6 +576,15 @@ export function startStoreResourceSync(
           error,
         );
       });
+  }));
+
+  unsubscribes.push(onResourceChanged("multi-review", ({ id: workflowId }) => {
+    void hydrateMultiReviewWorkflow(workflowId).catch((error) => {
+      console.warn(
+        `[store-resource-sync] Failed to refresh multi review ${workflowId}:`,
+        error,
+      );
+    });
   }));
 
   return () => {

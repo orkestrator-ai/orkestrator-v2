@@ -46,6 +46,10 @@ import {
   paneLayoutRevisionConflictMessage,
 } from "@orkestrator/protocol/pane-layout";
 import {
+  isMultiReviewTerminalPhase,
+  isMultiReviewWorkflow,
+} from "@orkestrator/protocol/multi-review";
+import {
   mergePersistedPaneLayouts,
   type PaneLayoutMergeInput,
   type PaneLayoutSelectionIntent,
@@ -89,6 +93,7 @@ import type {
   Project,
   PersistedPaneLayout,
   PersistedLoopedReviewWorkflow,
+  PersistedMultiReviewWorkflow,
   PersistedBuildPipeline,
   PersistedNativeAgentSession,
   PersistedComposeDraft,
@@ -675,6 +680,28 @@ function isPersistedLoopedReviewWorkflow(
         && Number.isFinite(Date.parse(value.controllerLease.expiresAt))
       )
     );
+}
+
+function isPersistedMultiReviewWorkflow(
+  value: unknown,
+  expectedId?: string,
+): value is PersistedMultiReviewWorkflow {
+  return isRecord(value)
+    && isPositiveInteger(value.version)
+    && isNonBlankString(value.id)
+    && (expectedId === undefined || value.id === expectedId)
+    && isNonBlankString(value.environmentId)
+    && isRecord(value.snapshot)
+    && typeof value.updatedAt === "string"
+    && Number.isFinite(Date.parse(value.updatedAt))
+    && isPositiveInteger(value.revision)
+    && (value.controllerLease === undefined || (
+      isRecord(value.controllerLease)
+      && isNonBlankString(value.controllerLease.ownerId)
+      && isNonBlankString(value.controllerLease.token)
+      && typeof value.controllerLease.expiresAt === "string"
+      && Number.isFinite(Date.parse(value.controllerLease.expiresAt))
+    ));
 }
 
 function isPersistedPromptQueueClaim(
@@ -1867,6 +1894,7 @@ export class StorageService {
   private featurePlanMutation: Promise<unknown> = Promise.resolve();
   private paneLayoutMutation: Promise<unknown> = Promise.resolve();
   private loopedReviewMutation: Promise<unknown> = Promise.resolve();
+  private multiReviewMutation: Promise<unknown> = Promise.resolve();
   private buildPipelineMutation: Promise<unknown> = Promise.resolve();
   private nativeAgentSessionMutation: Promise<unknown> = Promise.resolve();
   private agentInteractionJournalMutation: Promise<unknown> = Promise.resolve();
@@ -1982,6 +2010,10 @@ export class StorageService {
     return this.file("looped-reviews.json");
   }
 
+  private multiReviewsFile(): string {
+    return this.file("multi-reviews.json");
+  }
+
   private buildPipelinesFile(): string {
     return this.file("build-pipelines.json");
   }
@@ -2033,6 +2065,7 @@ export class StorageService {
       case "feature-plan": return this.featurePlansFile();
       case "pane-layout": return this.paneLayoutsFile();
       case "looped-review": return this.loopedReviewsFile();
+      case "multi-review": return this.multiReviewsFile();
       case "build-pipeline": return this.buildPipelinesFile();
       case "prompt-queue": return this.promptQueuesFile();
     }
@@ -2352,6 +2385,23 @@ export class StorageService {
     };
     const next = this.loopedReviewMutation.then(run, run);
     this.loopedReviewMutation = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  private enqueueMultiReviewMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.multiReviewsFile(),
+        "multi review workflow storage",
+      );
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.multiReviewMutation.then(run, run);
+    this.multiReviewMutation = next.then(() => undefined, () => undefined);
     return next;
   }
 
@@ -4561,6 +4611,254 @@ export class StorageService {
         this.loopedReviewsFile(),
         (storedId, workflow) =>
           isPersistedLoopedReviewWorkflow(workflow, storedId)
+          && workflow.environmentId !== environmentId,
+      );
+    });
+  }
+
+  async getMultiReviewWorkflow(
+    workflowId: string,
+  ): Promise<PersistedMultiReviewWorkflow | null> {
+    if (!isNonBlankString(workflowId)) throw new Error("Multi review workflow ID must not be blank");
+    const workflows = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
+      this.multiReviewsFile(), () => ({}),
+    );
+    const workflow = workflows[workflowId];
+    return isPersistedMultiReviewWorkflow(workflow, workflowId) ? workflow : null;
+  }
+
+  async listMultiReviewWorkflows(
+    environmentId: string,
+  ): Promise<PersistedMultiReviewWorkflow[]> {
+    if (!isNonBlankString(environmentId)) throw new Error("Multi review environment ID must not be blank");
+    const workflows = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
+      this.multiReviewsFile(), () => ({}),
+    );
+    return Object.entries(workflows)
+      .filter(([id, workflow]) => isPersistedMultiReviewWorkflow(workflow, id)
+        && workflow.environmentId === environmentId)
+      .map(([, workflow]) => workflow)
+      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+  }
+
+  async listAllMultiReviewWorkflows(): Promise<PersistedMultiReviewWorkflow[]> {
+    const workflows = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
+      this.multiReviewsFile(), () => ({}),
+    );
+    return Object.entries(workflows)
+      .filter(([id, workflow]) => isPersistedMultiReviewWorkflow(workflow, id))
+      .map(([, workflow]) => workflow)
+      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+  }
+
+  async saveMultiReviewWorkflow(
+    workflowId: string,
+    environmentId: string,
+    version: number,
+    snapshot: unknown,
+    expectedRevision?: number,
+    controllerFence?: { ownerId: string; token: string },
+  ): Promise<PersistedMultiReviewWorkflow> {
+    if (!isNonBlankString(workflowId) || !isNonBlankString(environmentId)) {
+      throw new Error("Multi review workflow identity must not be blank");
+    }
+    if (!isPositiveInteger(version) || !isRecord(snapshot)) {
+      throw new Error("Multi review workflow is invalid");
+    }
+    if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
+      throw new Error("Multi review expected revision must be a non-negative integer");
+    }
+    const serialized = JSON.stringify(snapshot);
+    if (Buffer.byteLength(serialized, "utf8") > 32 * 1024 * 1024) {
+      throw new Error("Multi review snapshot exceeds the 32 MB limit");
+    }
+    return this.enqueueMultiReviewMutation(async () => {
+      if (!await this.getEnvironment(environmentId)) throw new Error(`Environment not found: ${environmentId}`);
+      const stored = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
+        this.multiReviewsFile(), () => ({}),
+      );
+      const workflows = Object.fromEntries(Object.entries(stored).filter(([id, value]) =>
+        isPersistedMultiReviewWorkflow(value, id))) as Record<string, PersistedMultiReviewWorkflow>;
+      const previous = workflows[workflowId];
+      if (previous && previous.environmentId !== environmentId) {
+        throw new Error("Multi review workflow belongs to another environment");
+      }
+      if (controllerFence) {
+        const lease = previous?.controllerLease;
+        if (lease?.ownerId !== controllerFence.ownerId
+          || lease.token !== controllerFence.token
+          || Date.parse(lease.expiresAt) <= Date.now()) {
+          throw new Error("Multi review controller lease conflict");
+        }
+      }
+      if (expectedRevision !== undefined && (previous?.revision ?? 0) !== expectedRevision) {
+        throw new Error("Multi review workflow revision conflict");
+      }
+      const saved: PersistedMultiReviewWorkflow = {
+        version, id: workflowId, environmentId, snapshot, updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+        ...(previous?.controllerLease ? { controllerLease: previous.controllerLease } : {}),
+      };
+      workflows[workflowId] = saved;
+      await this.saveSensitiveJson(this.multiReviewsFile(), workflows);
+      this.announce("multi-review", workflowId);
+      return saved;
+    });
+  }
+
+  /**
+   * Creates the sole active Multi Review for an environment in the same
+   * cross-process critical section that writes the record. A separate
+   * list-then-save sequence would let two renderer clients launch competing
+   * fix workflows against the same worktree.
+   */
+  async createMultiReviewWorkflowIfNoActive(
+    workflowId: string,
+    environmentId: string,
+    version: number,
+    snapshot: unknown,
+  ): Promise<PersistedMultiReviewWorkflow | null> {
+    if (!isNonBlankString(workflowId) || !isNonBlankString(environmentId)) {
+      throw new Error("Multi review workflow identity must not be blank");
+    }
+    if (!isPositiveInteger(version) || !isRecord(snapshot)) {
+      throw new Error("Multi review workflow is invalid");
+    }
+    const serialized = JSON.stringify(snapshot);
+    if (Buffer.byteLength(serialized, "utf8") > 32 * 1024 * 1024) {
+      throw new Error("Multi review snapshot exceeds the 32 MB limit");
+    }
+    return this.enqueueMultiReviewMutation(async () => {
+      if (!await this.getEnvironment(environmentId)) {
+        throw new Error(`Environment not found: ${environmentId}`);
+      }
+      const stored = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
+        this.multiReviewsFile(), () => ({}),
+      );
+      const workflows = Object.fromEntries(Object.entries(stored).filter(([id, value]) =>
+        isPersistedMultiReviewWorkflow(value, id))) as Record<string, PersistedMultiReviewWorkflow>;
+      if (workflows[workflowId]) throw new Error(`Multi review workflow already exists: ${workflowId}`);
+      const hasActive = Object.values(workflows).some((workflow) =>
+        workflow.environmentId === environmentId
+        && isMultiReviewWorkflow(workflow.snapshot)
+        && !isMultiReviewTerminalPhase(workflow.snapshot.phase));
+      if (hasActive) return null;
+      const saved: PersistedMultiReviewWorkflow = {
+        version, id: workflowId, environmentId, snapshot, updatedAt: nowIso(), revision: 1,
+      };
+      workflows[workflowId] = saved;
+      await this.saveSensitiveJson(this.multiReviewsFile(), workflows);
+      this.announce("multi-review", workflowId);
+      return saved;
+    });
+  }
+
+  async claimMultiReviewController(
+    workflowId: string,
+    ownerId: string,
+    leaseMs: number,
+  ): Promise<{ granted: boolean; token: string; expiresAt: string }> {
+    if (!isNonBlankString(workflowId) || !isNonBlankString(ownerId)
+      || !Number.isSafeInteger(leaseMs) || leaseMs < 2_000 || leaseMs > 60_000) {
+      throw new Error("Multi review controller lease is invalid");
+    }
+    return this.enqueueMultiReviewMutation(async () => {
+      const workflows = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
+        this.multiReviewsFile(), () => ({}),
+      );
+      const workflow = workflows[workflowId];
+      if (!isPersistedMultiReviewWorkflow(workflow, workflowId)) {
+        throw new Error(`Multi review workflow not found: ${workflowId}`);
+      }
+      const now = Date.now();
+      const expiry = workflow.controllerLease ? Date.parse(workflow.controllerLease.expiresAt) : 0;
+      if (workflow.controllerLease && workflow.controllerLease.ownerId !== ownerId && expiry > now) {
+        return { granted: false, token: "", expiresAt: workflow.controllerLease.expiresAt };
+      }
+      const held = workflow.controllerLease?.ownerId === ownerId && expiry > now
+        ? workflow.controllerLease : undefined;
+      if (held && expiry - now >= leaseMs / 2) {
+        return { granted: true, token: held.token, expiresAt: held.expiresAt };
+      }
+      const token = held?.token ?? randomUUID();
+      const expiresAt = new Date(now + leaseMs).toISOString();
+      workflows[workflowId] = {
+        ...workflow, controllerLease: { ownerId, token, expiresAt },
+      };
+      await this.saveSensitiveJson(this.multiReviewsFile(), workflows);
+      return { granted: true, token, expiresAt };
+    });
+  }
+
+  async validateMultiReviewController(
+    workflowId: string,
+    ownerId: string,
+    token: string,
+  ): Promise<boolean> {
+    if (!isNonBlankString(workflowId) || !isNonBlankString(ownerId)
+      || !isNonBlankString(token)) return false;
+    return this.enqueueMultiReviewMutation(async () => {
+      const workflows = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
+        this.multiReviewsFile(), () => ({}),
+      );
+      const workflow = workflows[workflowId];
+      if (!isPersistedMultiReviewWorkflow(workflow, workflowId)) return false;
+      const lease = workflow.controllerLease;
+      return lease?.ownerId === ownerId
+        && lease.token === token
+        && Date.parse(lease.expiresAt) > Date.now();
+    });
+  }
+
+  async releaseMultiReviewController(
+    workflowId: string,
+    ownerId: string,
+    token: string,
+  ): Promise<void> {
+    await this.enqueueMultiReviewMutation(async () => {
+      const workflows = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
+        this.multiReviewsFile(), () => ({}),
+      );
+      const workflow = workflows[workflowId];
+      if (!isPersistedMultiReviewWorkflow(workflow, workflowId)
+        || workflow.controllerLease?.ownerId !== ownerId
+        || workflow.controllerLease.token !== token) return;
+      const { controllerLease: _lease, ...released } = workflow;
+      workflows[workflowId] = released;
+      await this.saveSensitiveJson(this.multiReviewsFile(), workflows);
+    });
+  }
+
+  async deleteMultiReviewWorkflow(workflowId: string): Promise<void> {
+    await this.enqueueMultiReviewMutation(async () => {
+      const workflows = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
+        this.multiReviewsFile(), () => ({}),
+      );
+      if (!(workflowId in workflows)) return;
+      delete workflows[workflowId];
+      await this.saveSensitiveJson(this.multiReviewsFile(), workflows);
+      this.announce("multi-review", workflowId);
+    });
+  }
+
+  async deleteMultiReviewWorkflowsByEnvironment(environmentId: string): Promise<void> {
+    await this.enqueueMultiReviewMutation(async () => {
+      const stored = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
+        this.multiReviewsFile(), () => ({}),
+      );
+      const removed = Object.entries(stored)
+        .filter(([id, workflow]) => isPersistedMultiReviewWorkflow(workflow, id)
+          && workflow.environmentId === environmentId)
+        .map(([id]) => id);
+      if (removed.length === 0) return;
+      const workflows = Object.fromEntries(Object.entries(stored).filter(([id, workflow]) =>
+        isPersistedMultiReviewWorkflow(workflow, id)
+        && workflow.environmentId !== environmentId));
+      await this.saveSensitiveJson(this.multiReviewsFile(), workflows);
+      for (const id of removed) this.announce("multi-review", id);
+      await this.scrubSensitiveJsonBackups(
+        this.multiReviewsFile(),
+        (id, workflow) => isPersistedMultiReviewWorkflow(workflow, id)
           && workflow.environmentId !== environmentId,
       );
     });

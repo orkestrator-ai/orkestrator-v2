@@ -6,6 +6,18 @@ This file provides specific guidance for AI agents working on this codebase.
 
 Orkestrator AI is an Electron desktop application for managing isolated Docker-based and local-worktree development environments for Claude Code, Codex, and OpenCode.
 
+## Main Branch and Pull Request Policy
+
+All changes to `main` must be integrated through a pull request. Agents must
+never commit or push directly to `main`, and must not merge, squash, or rebase a
+pull request into `main` themselves. Agents may prepare a feature branch, push
+that branch explicitly, and open a pull request for review; the final merge into
+`main` must be left to a human maintainer.
+
+Before pushing, verify both the current branch and its configured upstream. If
+either operation would update `main` directly, stop and correct the branch or
+upstream configuration instead of pushing.
+
 ## Background Environment Reliability
 
 Environments can keep doing work while another environment is active in the UI. Do not assume the active React tree is mounted, subscribed to events, or able to receive every Electron IPC/SSE/tmux update.

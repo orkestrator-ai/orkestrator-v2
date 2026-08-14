@@ -261,6 +261,96 @@ describe("ACP bridge", () => {
       .toEqual(["--always-approve", "agent", "stdio"]);
   });
 
+  for (const acpProvider of ["cursor", "grok"] as const) {
+    test(`lists and resumes provider-owned ${acpProvider} sessions`, async () => {
+      const directory = await temporaryDirectory();
+      const lifecycleFile = resolve(directory, `${acpProvider}-resume-lifecycle.log`);
+      const bridge = await spawnBridge({ env: {
+        ACP_PROVIDER: acpProvider,
+        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+      } });
+      const created = await nativeFetch(`${bridge.base}/session/create`, {
+        method: "POST",
+        headers: bridge.headers,
+      }).then((response) => response.json()) as { id: string };
+
+      const firstListResponse = await nativeFetch(`${bridge.base}/session/list`, {
+        headers: bridge.headers,
+      });
+      expect(firstListResponse.status).toBe(200);
+      const firstList = await firstListResponse.json() as {
+        sessions: Array<{
+          id: string;
+          title?: string;
+          updatedAt?: string;
+          messageCount?: number;
+        }>;
+      };
+      expect(firstList.sessions).toHaveLength(2);
+      // Sessions already represented by bridge state retain that stable ID, so
+      // the shared picker can exclude the session the current tab already owns.
+      expect(firstList.sessions.find((session) => session.title === "Current ACP work"))
+        .toMatchObject({ id: created.id, messageCount: 4 });
+      const external = firstList.sessions.find((session) => session.title === "Previous ACP work");
+      expect(external).toMatchObject({
+        updatedAt: "2026-08-13T20:00:00.000Z",
+        messageCount: 12,
+      });
+      expect(external?.id).not.toBe("external-session");
+
+      const tampered = `${external!.id.slice(0, -1)}${external!.id.endsWith("A") ? "B" : "A"}`;
+      const rejected = await nativeFetch(`${bridge.base}/session/resume`, {
+        method: "POST",
+        headers: bridge.headers,
+        body: JSON.stringify({ sessionId: tampered }),
+      });
+      expect(rejected.status).toBe(404);
+
+      const resumedResponse = await nativeFetch(`${bridge.base}/session/resume`, {
+        method: "POST",
+        headers: bridge.headers,
+        body: JSON.stringify({
+          sessionId: external!.id,
+          mode: "plan",
+          reasoningId: "high",
+        }),
+      });
+      expect(resumedResponse.status).toBe(201);
+      const resumed = await resumedResponse.json() as {
+        id: string;
+        sessionId: string;
+        status: string;
+      };
+      expect(resumed.id).toBe(resumed.sessionId);
+      expect(resumed.id).not.toBe(external!.id);
+      expect(resumed.status).toBe("idle");
+      expect(await fs.readFile(lifecycleFile, "utf8")).toContain("load:");
+
+      // Once adopted, the same provider conversation resolves to the stable
+      // bridge id instead of producing another wrapper around one ACP session.
+      const secondList = await nativeFetch(`${bridge.base}/session/list`, {
+        headers: bridge.headers,
+      }).then((response) => response.json()) as { sessions: Array<{ id: string; title?: string }> };
+      expect(secondList.sessions.find((session) => session.title === "Previous ACP work")?.id)
+        .toBe(resumed.id);
+      const duplicate = await nativeFetch(`${bridge.base}/session/resume`, {
+        method: "POST",
+        headers: bridge.headers,
+        body: JSON.stringify({ sessionId: resumed.id }),
+      }).then((response) => response.json()) as { id: string };
+      expect(duplicate.id).toBe(resumed.id);
+    });
+  }
+
+  test("reports an ACP agent without session listing instead of showing an empty history", async () => {
+    const bridge = await spawnBridge({ env: { FAKE_ACP_NO_LIST_SESSION: "1" } });
+    const response = await nativeFetch(`${bridge.base}/session/list`, { headers: bridge.headers });
+    expect(response.status).toBe(410);
+    expect(await response.json()).toMatchObject({
+      error: "cursor cannot list persisted ACP sessions",
+    });
+  });
+
   test("drives an ACP session and rehydrates a parked permission", async () => {
     const { base, headers } = await spawnBridge();
 

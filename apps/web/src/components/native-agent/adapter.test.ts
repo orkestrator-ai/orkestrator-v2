@@ -38,6 +38,8 @@ describe("native agent adapter registry", () => {
     expect(getNativeAgentAdapter("cursor").capabilities.composer.model).toBe(true);
     expect(getNativeAgentAdapter("grok").capabilities.composer.reasoning).toBe(true);
     expect(getNativeAgentAdapter("cursor").capabilities.attachments.files).toBe(false);
+    expect(getNativeAgentAdapter("cursor").capabilities.resume).toBe(true);
+    expect(getNativeAgentAdapter("grok").capabilities.resume).toBe(true);
   });
 
   test("resolves an unnarrowed platform only when it is registered", () => {

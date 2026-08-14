@@ -76,8 +76,11 @@ const grokConfig = {
   },
 };
 
-function sessionPayload(): JsonObject {
-  return (provider === "grok" ? grokConfig : cursorConfig) as JsonObject;
+function sessionPayload(sessionId = "fake-session"): JsonObject {
+  return {
+    ...(provider === "grok" ? grokConfig : cursorConfig),
+    sessionId,
+  } as JsonObject;
 }
 
 function isObject(value: unknown): value is JsonObject {
@@ -117,6 +120,9 @@ lines.on("line", (line) => {
         // silently reattached to a session they have never heard of.
         agentCapabilities: {
           loadSession: process.env.FAKE_ACP_NO_LOAD_SESSION !== "1",
+          sessionCapabilities: {
+            ...(process.env.FAKE_ACP_NO_LIST_SESSION === "1" ? {} : { list: {} }),
+          },
           ...(process.env.FAKE_ACP_IMAGE_CAPABILITY
             ? { promptCapabilities: { image: process.env.FAKE_ACP_IMAGE_CAPABILITY === "true" } }
             : {}),
@@ -137,6 +143,33 @@ lines.on("line", (line) => {
         params: { sessionId: "fake-session", question: "Continue?" },
       });
     }
+    return;
+  }
+  if (message.method === "session/list" && typeof message.id === "number") {
+    const params = isObject(message.params) ? message.params : {};
+    const cwd = typeof params.cwd === "string" ? params.cwd : process.cwd();
+    write({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        sessions: [
+          {
+            sessionId: "fake-session",
+            cwd,
+            title: "Current ACP work",
+            updatedAt: "2026-08-14T20:00:00.000Z",
+            _meta: { messageCount: 4 },
+          },
+          {
+            sessionId: "external-session",
+            cwd,
+            title: "Previous ACP work",
+            updatedAt: "2026-08-13T20:00:00.000Z",
+            _meta: { messageCount: 12 },
+          },
+        ],
+      },
+    });
     return;
   }
   if (message.method === "session/set_config_option" && typeof message.id === "number") {
@@ -193,7 +226,12 @@ lines.on("line", (line) => {
       });
       return;
     }
-    write({ jsonrpc: "2.0", id: message.id, result: {} });
+    const params = isObject(message.params) ? message.params : {};
+    write({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: sessionPayload(typeof params.sessionId === "string" ? params.sessionId : "fake-session"),
+    });
     return;
   }
   if (message.method === "session/prompt" && typeof message.params === "object") {

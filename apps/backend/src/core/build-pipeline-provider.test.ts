@@ -48,6 +48,20 @@ const codexConnection: BridgeConnection = {
   requestTimeoutMs: 25,
 };
 
+const cursorConnection: BridgeConnection = {
+  agent: "cursor",
+  baseUrl: "http://cursor.test",
+  authToken: "cursor-token",
+  requestTimeoutMs: 25,
+};
+
+const grokConnection: BridgeConnection = {
+  agent: "grok",
+  baseUrl: "http://grok.test",
+  authToken: "grok-token",
+  requestTimeoutMs: 25,
+};
+
 function httpProvider(
   handler: (url: string, init: RequestInit) => Promise<Response> | Response,
   connection: BridgeConnection = claudeConnection,
@@ -191,6 +205,52 @@ describe("HTTP build pipeline provider", () => {
       "X-Orkestrator-Claude-Token",
     )).toBe("test-token");
     expect(JSON.parse(String(request.init.body))).toEqual({ title: "Build task" });
+  });
+
+  test.each([
+    ["cursor" as const, cursorConnection],
+    ["grok" as const, grokConnection],
+  ])("lists and resumes %s ACP sessions through the bridge", async (_agent, connection) => {
+    const { provider, requests } = httpProvider((url) => {
+      if (url.endsWith("/session/list")) {
+        return Response.json({ sessions: [{
+          id: "opaque-session",
+          title: "Previous work",
+          updatedAt: "2026-08-14T20:00:00.000Z",
+          messageCount: 7,
+        }] });
+      }
+      if (url.endsWith("/session/resume")) {
+        return Response.json({ sessionId: "bridge-session" }, { status: 201 });
+      }
+      return new Response(null, { status: 404 });
+    }, connection);
+
+    await expect(provider.listResumableSessions?.()).resolves.toEqual([{
+      sessionId: "opaque-session",
+      title: "Previous work",
+      updatedAt: "2026-08-14T20:00:00.000Z",
+      detail: "7 messages",
+    }]);
+    await expect(provider.resumeSession?.("opaque-session", {
+      modelId: "model-a",
+      reasoningId: "high",
+      mode: "plan",
+      fastMode: true,
+    })).resolves.toBe("bridge-session");
+
+    expect(requests.map((request) => [request.url, request.init.method ?? "GET"]))
+      .toEqual([
+        [`${connection.baseUrl}/session/list`, "GET"],
+        [`${connection.baseUrl}/session/resume`, "POST"],
+      ]);
+    expect(JSON.parse(String(requests[1]!.init.body))).toEqual({
+      sessionId: "opaque-session",
+      modelId: "model-a",
+      reasoningId: "high",
+      mode: "plan",
+      fastMode: true,
+    });
   });
 
   test("treats a successful empty structured result as pending", async () => {

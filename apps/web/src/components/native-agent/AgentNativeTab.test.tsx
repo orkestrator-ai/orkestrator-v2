@@ -10,6 +10,7 @@ import type { NativeAgentSessionProjection, NativeAgentTabData } from "@orkestra
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as realBackend from "@/lib/backend";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
+import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
@@ -208,6 +209,9 @@ afterEach(() => {
   getNativeAgentProjectionMock.mockClear();
   getNativeAgentProjectionMock.mockImplementation(defaultProjection);
   useEnvironmentStore.setState({ environments: [] });
+  useConfigStore.getState().updateGlobalConfig({
+    enabledAgentPlatforms: ["claude", "codex", "opencode"],
+  });
   usePaneLayoutStore.setState({
     environments: new Map(),
     hydration: new Map(),
@@ -336,6 +340,9 @@ describe("AgentNativeTab", () => {
   });
 
   test("asks for a platform before opening that provider's normal resume flow", async () => {
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: [...AGENT_PLATFORMS],
+    });
     usePaneLayoutStore.setState({
       environments: new Map([
         ["env-1", {
@@ -364,9 +371,16 @@ describe("AgentNativeTab", () => {
     expect(within(dialog).getByText("Resume a session")).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: /Claude/ })).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: /Codex/ })).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: /Cursor Agent/ })).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: /Grok Build/ })).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: /OpenCode/ })).toBeTruthy();
 
-    fireEvent.click(within(dialog).getByRole("button", { name: /Codex/ }));
+    expect((within(dialog).getByRole("button", { name: /Cursor Agent/ }) as HTMLButtonElement).disabled)
+      .toBe(false);
+    expect((within(dialog).getByRole("button", { name: /Grok Build/ }) as HTMLButtonElement).disabled)
+      .toBe(false);
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /Cursor Agent/ }));
 
     expect(await screen.findByRole("dialog", { name: "Resume Session" })).toBeTruthy();
     await waitFor(() => expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(1));

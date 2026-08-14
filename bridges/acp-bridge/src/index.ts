@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, resolve } from "node:path";
@@ -221,7 +221,9 @@ const sessions = new Map<string, SessionState>();
 const acpToolSourceStates = new WeakMap<BridgeToolPart, AcpToolSourceState>();
 const clientSessionKeys = new Map<string, string>();
 const sessionCreations = new Map<string, Promise<SessionState>>();
+const sessionResumes = new Map<string, Promise<SessionState>>();
 let anonymousSessionCreations = 0;
+let sessionListProbe: Promise<JsonObject[]> | null = null;
 let persistenceTail = Promise.resolve();
 let persistenceScheduled = false;
 let shuttingDown = false;
@@ -262,6 +264,8 @@ const MAX_STRUCTURED_RESULT_BYTES = 1024 * 1024;
 const TRANSCRIPT_CHECK_INTERVAL_BYTES = 64 * 1024;
 const MAX_PROMPT_JOURNAL = 512;
 const MAX_STATE_FILE_BYTES = 16 * 1024 * 1024;
+const MAX_RESUMABLE_SESSIONS = 512;
+const MAX_SESSION_LIST_PAGES = 64;
 const RPC_TIMEOUT_MS = parseDuration(process.env.ACP_RPC_TIMEOUT_MS, 30_000);
 const PROMPT_TIMEOUT_MS = parseDuration(process.env.ACP_PROMPT_TIMEOUT_MS, 30 * 60_000);
 const PARENT_WATCHDOG_INTERVAL_MS = parseDuration(
@@ -538,7 +542,232 @@ class AcpProcess {
 }
 
 function activeSessionReservations(): number {
-  return sessions.size + sessionCreations.size + anonymousSessionCreations;
+  return sessions.size + sessionCreations.size + sessionResumes.size + anonymousSessionCreations;
+}
+
+const EXTERNAL_SESSION_PREFIX = "acp-session:";
+
+function externalSessionToken(acpSessionId: string): string {
+  const encoded = Buffer.from(acpSessionId).toString("base64url");
+  const signature = createHmac("sha256", authToken).update(encoded).digest("base64url");
+  return `${EXTERNAL_SESSION_PREFIX}${encoded}.${signature}`;
+}
+
+function parseExternalSessionToken(value: string): string | null {
+  if (!value.startsWith(EXTERNAL_SESSION_PREFIX)) return null;
+  const token = value.slice(EXTERNAL_SESSION_PREFIX.length);
+  const separator = token.lastIndexOf(".");
+  if (separator <= 0) return null;
+  const encoded = token.slice(0, separator);
+  const signature = token.slice(separator + 1);
+  if (!encoded || encoded.length > 1_024 || !signature) return null;
+  const expected = createHmac("sha256", authToken).update(encoded).digest();
+  let supplied: Buffer;
+  try {
+    supplied = Buffer.from(signature, "base64url");
+  } catch {
+    return null;
+  }
+  if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return null;
+  let decoded: Buffer;
+  try {
+    decoded = Buffer.from(encoded, "base64url");
+  } catch {
+    return null;
+  }
+  const sessionId = decoded.toString("utf8");
+  if (!sessionId.trim() || Buffer.byteLength(sessionId) > 512) return null;
+  return decoded.toString("base64url") === encoded ? sessionId : null;
+}
+
+function supportsSessionCapability(initialized: JsonObject, capability: string): boolean {
+  const agentCapabilities = isObject(initialized.agentCapabilities)
+    ? initialized.agentCapabilities
+    : undefined;
+  const sessionCapabilities = isObject(agentCapabilities?.sessionCapabilities)
+    ? agentCapabilities.sessionCapabilities
+    : undefined;
+  return sessionCapabilities?.[capability] === true
+    || isObject(sessionCapabilities?.[capability]);
+}
+
+/**
+ * Query the agent's own durable history through ACP. One shared probe prevents
+ * several simultaneously-open pickers from spawning an unbounded process fanout.
+ */
+async function listResumableSessions(): Promise<JsonObject[]> {
+  if (sessionListProbe) return sessionListProbe;
+  const operation = listResumableSessionsReserved();
+  sessionListProbe = operation;
+  try {
+    return await operation;
+  } finally {
+    if (sessionListProbe === operation) sessionListProbe = null;
+  }
+}
+
+async function listResumableSessionsReserved(): Promise<JsonObject[]> {
+  const child = new AcpProcess();
+  try {
+    const initialized = await child.initialize();
+    if (!supportsSessionCapability(initialized, "list")) {
+      throw new HttpError(410, `${provider} cannot list persisted ACP sessions`);
+    }
+    const knownSessions = new Map(
+      [...sessions.values()].map((state) => [state.acpSessionId, state.id]),
+    );
+    const listed: JsonObject[] = [];
+    const seenSessionIds = new Set<string>();
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    for (let page = 0; page < MAX_SESSION_LIST_PAGES && listed.length < MAX_RESUMABLE_SESSIONS; page += 1) {
+      const result = await child.request("session/list", {
+        cwd: workingDirectory,
+        ...(cursor ? { cursor } : {}),
+      });
+      if (!isObject(result) || !Array.isArray(result.sessions)) {
+        throw new Error(`${provider} returned an invalid ACP session list`);
+      }
+      for (const candidate of result.sessions) {
+        if (!isObject(candidate)) continue;
+        const acpSessionId = boundedString(candidate.sessionId, 512)?.trim();
+        if (!acpSessionId || seenSessionIds.has(acpSessionId)) continue;
+        const cwd = boundedString(candidate.cwd, MAX_TOOL_PATH_BYTES);
+        if (cwd && resolve(cwd) !== workingDirectory) continue;
+        seenSessionIds.add(acpSessionId);
+        const meta = isObject(candidate._meta) ? candidate._meta : undefined;
+        const messageCount = Number.isSafeInteger(meta?.messageCount)
+          && Number(meta?.messageCount) >= 0
+          ? Number(meta!.messageCount)
+          : undefined;
+        const createdAt = boundedString(candidate.createdAt, 64);
+        const updatedAt = boundedString(candidate.updatedAt, 64);
+        listed.push({
+          id: knownSessions.get(acpSessionId) ?? externalSessionToken(acpSessionId),
+          ...(boundedString(candidate.title, MAX_TOOL_TITLE_BYTES)
+            ? { title: boundedString(candidate.title, MAX_TOOL_TITLE_BYTES) }
+            : {}),
+          ...(createdAt ? { createdAt } : {}),
+          ...(updatedAt ? { updatedAt } : {}),
+          ...(messageCount === undefined ? {} : { messageCount }),
+        });
+        if (listed.length >= MAX_RESUMABLE_SESSIONS) break;
+      }
+      const nextCursor = boundedString(result.nextCursor, 4_096)?.trim();
+      if (!nextCursor || seenCursors.has(nextCursor)) break;
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
+    }
+    return listed;
+  } finally {
+    await child.close();
+  }
+}
+
+async function resumeSession(
+  selectedSessionId: string,
+  signal?: AbortSignal,
+  patch?: AcpComposerPatch,
+): Promise<SessionState> {
+  const existing = sessions.get(selectedSessionId);
+  if (existing) return resumeExistingSession(existing, signal, patch);
+  const acpSessionId = parseExternalSessionToken(selectedSessionId);
+  if (!acpSessionId) throw new HttpError(404, "ACP session was not found");
+  const alreadyLoaded = [...sessions.values()].find((state) => state.acpSessionId === acpSessionId);
+  if (alreadyLoaded) return resumeExistingSession(alreadyLoaded, signal, patch);
+  const pending = sessionResumes.get(acpSessionId);
+  if (pending) return pending;
+  if (activeSessionReservations() >= MAX_SESSIONS) throw new HttpError(429, "ACP session limit reached");
+  const operation = resumeSessionReserved(acpSessionId, signal, patch);
+  sessionResumes.set(acpSessionId, operation);
+  try {
+    return await operation;
+  } finally {
+    if (sessionResumes.get(acpSessionId) === operation) sessionResumes.delete(acpSessionId);
+  }
+}
+
+async function resumeExistingSession(
+  state: SessionState,
+  signal?: AbortSignal,
+  patch?: AcpComposerPatch,
+): Promise<SessionState> {
+  if (!patch) return state;
+  if (state.status === "running" || state.dispatching) {
+    throw new HttpError(409, "Session is already running");
+  }
+  state.dispatching = true;
+  try {
+    await applyComposerPatch(state, patch, signal);
+    return state;
+  } finally {
+    state.dispatching = false;
+  }
+}
+
+async function resumeSessionReserved(
+  acpSessionId: string,
+  signal?: AbortSignal,
+  patch?: AcpComposerPatch,
+): Promise<SessionState> {
+  const child = new AcpProcess();
+  let state: SessionState | undefined;
+  try {
+    const initialized = await child.initialize(signal);
+    const capabilities = isObject(initialized.agentCapabilities)
+      ? initialized.agentCapabilities
+      : undefined;
+    if (capabilities?.loadSession !== true) {
+      throw new HttpError(410, `${provider} cannot reload persisted ACP sessions`);
+    }
+    state = {
+      id: randomBytes(16).toString("hex"),
+      acpSessionId,
+      status: "idle",
+      messages: [],
+      child,
+      revision: 0,
+      structured: new Map(),
+      promptJournal: new Map(),
+      approvals: new Map(),
+      outputTruncated: false,
+      uncheckedTranscriptBytes: 0,
+      currentTurnOutput: null,
+      droppedMessages: 0,
+      sessionConfig: emptySessionConfig(),
+      dispatching: true,
+    };
+    attachChild(state, child);
+    sessions.set(state.id, state);
+    const loaded = await child.request("session/load", {
+      cwd: workingDirectory,
+      additionalDirectories: [],
+      mcpServers: [],
+      sessionId: acpSessionId,
+    }, RPC_TIMEOUT_MS, signal);
+    if (isObject(loaded)) {
+      const sessionConfig = normalizeAcpSessionConfig(provider, {
+        ...loaded,
+        sessionId: acpSessionId,
+      });
+      if (sessionConfig.composer.models.length > 0 || sessionConfig.composer.modes.length > 0) {
+        state.sessionConfig = sessionConfig;
+        rememberCatalog(sessionConfig.composer);
+      }
+    }
+    state.status = "idle";
+    state.error = undefined;
+    if (patch) await applyComposerPatch(state, patch, signal);
+    state.dispatching = false;
+    await persistState();
+    return state;
+  } catch (error) {
+    if (state && sessions.get(state.id) === state) sessions.delete(state.id);
+    if (state) clearApprovals(state);
+    await child.close();
+    await persistState().catch(() => undefined);
+    throw error;
+  }
 }
 
 async function createSession(
@@ -1489,6 +1718,23 @@ async function route(
   if (url.pathname === "/global/models" && request.method === "GET") {
     const models = await listNormalizedModels(clientSignal);
     return json(response, 200, { models });
+  }
+  if (url.pathname === "/session/list" && request.method === "GET") {
+    return json(response, 200, { sessions: await listResumableSessions() });
+  }
+  if (url.pathname === "/session/resume" && request.method === "POST") {
+    const body = await readJson(request);
+    const selectedSessionId = typeof body.sessionId === "string" ? body.sessionId.trim() : "";
+    if (!selectedSessionId) return json(response, 400, { error: "sessionId is required" });
+    if (Buffer.byteLength(selectedSessionId) > 1_024) {
+      return json(response, 400, { error: "sessionId is too long" });
+    }
+    const state = await resumeSession(
+      selectedSessionId,
+      clientSignal,
+      parseComposerPatch(body),
+    );
+    return json(response, 201, publicSession(state));
   }
   if (url.pathname === "/session/create" && request.method === "POST") {
     const body = await readJson(request);

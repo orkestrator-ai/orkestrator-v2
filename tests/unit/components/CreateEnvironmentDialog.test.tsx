@@ -758,6 +758,122 @@ describe("resolveAgentDefaults", () => {
     });
   });
 
+  test("keeps a still-supported effort when switching models within one agent", async () => {
+    // The cross-agent branch re-derives the effort from the target agent's
+    // defaults. The same-agent branch must instead keep what the user chose,
+    // which only shows up when the new model still supports it.
+    useCodexStore.setState({
+      models: [
+        {
+          id: "codex-a",
+          name: "Codex A",
+          description: "First",
+          reasoningEfforts: ["medium", "high"],
+        },
+        {
+          id: "codex-b",
+          name: "Codex B",
+          description: "Second",
+          reasoningEfforts: ["medium", "high"],
+        },
+      ],
+    });
+    const config = structuredClone(defaultConfig);
+    config.global.defaultAgent = "codex";
+    config.global.codexModel = "codex-a";
+    // Deliberately different from the effort the user picks below, so falling
+    // back to the agent's configured default is distinguishable from keeping
+    // the user's choice.
+    config.global.codexReasoningEffort = "medium";
+    useConfigStore.setState({ config });
+    const onCreate = mock(async () => {});
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+      />,
+    );
+
+    expect(getAgentModelPicker().textContent).toContain("Codex A");
+    expect(getAgentModelPicker().textContent).toContain("Medium");
+
+    await selectReasoning("High");
+    await waitFor(() =>
+      expect(getAgentModelPicker().textContent).toContain("High")
+    );
+
+    await selectAgentModel(/Codex B/);
+
+    await waitFor(() => {
+      expect(getAgentModelPicker().textContent).toContain("Codex B");
+      expect(getAgentModelPicker().textContent).toContain("High");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentType: "codex",
+          model: "codex-b",
+          reasoningEffort: "high",
+        }),
+      );
+    });
+  });
+
+  test("keeps the chosen model when the already-selected agent is picked again", async () => {
+    // Selecting a platform resets that agent's model to its configured default.
+    // Re-selecting the agent already in use is not a change and must not throw
+    // away a model the user picked after opening the dialog.
+    useCodexStore.setState({
+      models: [
+        {
+          id: "codex-a",
+          name: "Codex A",
+          description: "First",
+          reasoningEfforts: [],
+        },
+        {
+          id: "codex-b",
+          name: "Codex B",
+          description: "Second",
+          reasoningEfforts: [],
+        },
+      ],
+    });
+    const config = structuredClone(defaultConfig);
+    config.global.defaultAgent = "codex";
+    config.global.codexModel = "codex-a";
+    useConfigStore.setState({ config });
+    const onCreate = mock(async () => {});
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+      />,
+    );
+
+    await selectAgentModel(/Codex B/);
+    await waitFor(() =>
+      expect(getAgentModelPicker().textContent).toContain("Codex B")
+    );
+
+    await selectAgentPlatform("Codex");
+
+    expect(getAgentModelPicker().textContent).toContain("Codex B");
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ agentType: "codex", model: "codex-b" }),
+      );
+    });
+  });
+
   test("submits the synthetic OpenCode default as no explicit model", async () => {
     // With no cached OpenCode catalog the model select only offers the
     // synthetic `{ id: "default" }` placeholder. Submitting that id would pin a

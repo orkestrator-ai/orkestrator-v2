@@ -694,21 +694,6 @@ export function CreateEnvironmentDialog({
     [agentType],
   );
 
-  const selectModel = useCallback(
-    (nextModel: string) => {
-      setModel(nextModel);
-      const supportedEfforts =
-        availableModels.find((candidate) => candidate.id === nextModel)?.reasoningEfforts ?? [];
-      if (
-        reasoningEffort !== "default" &&
-        !supportedEfforts.includes(reasoningEffort)
-      ) {
-        setReasoningEffort("default");
-      }
-    },
-    [availableModels, reasoningEffort],
-  );
-
   const selectAgentModel = useCallback(
     (nextModel: AgentModel) => {
       const targetModels = modelsForAgent(modelCatalog, nextModel.platform);
@@ -727,6 +712,16 @@ export function CreateEnvironmentDialog({
       );
     },
     [agentType, getInitialAgentSelection, modelCatalog, reasoningEffort],
+  );
+
+  // The picker resolves a model to `selectAgentModel`; this id-only form is the
+  // fallback shape it uses without that handler. It delegates rather than
+  // repeating the effort-compatibility rule so the two cannot drift.
+  const selectModel = useCallback(
+    (nextModel: string) => {
+      selectAgentModel({ platform: agentType, id: nextModel, label: nextModel });
+    },
+    [agentType, selectAgentModel],
   );
 
   const selectMobileSection = useCallback(

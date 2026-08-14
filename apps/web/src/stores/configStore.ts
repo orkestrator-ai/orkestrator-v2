@@ -65,6 +65,7 @@ const DEFAULT_CONFIG: AppConfig = {
       "cdn.jsdelivr.net",
     ],
     enabledAgentPlatforms: [...LEGACY_ENABLED_AGENT_PLATFORMS],
+    favoriteModels: [],
     defaultAgent: "claude",
     opencodeModel: "opencode/claude-sonnet-5",
     claudeModel: "claude-sonnet-5",

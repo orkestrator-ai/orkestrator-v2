@@ -357,7 +357,6 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
   const {
     catalog: launchCatalog,
     defaults: launchDefaults,
-    favoriteOpenCodeModelIds,
   } = useBuildLaunchOptions(projectId, selectedIssueId !== null);
 
   const loadConnection = useCallback(async () => {
@@ -845,7 +844,6 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
           open={buildDialogOpen}
           onOpenChange={setBuildDialogOpen}
           catalog={launchCatalog}
-          favoriteOpenCodeModelIds={favoriteOpenCodeModelIds}
           busy={isBuildStarting || hasActiveBuild}
           localEnvironmentAvailable={localEnvironmentAvailable}
           commentContext={detail && detail.comments.length > 0

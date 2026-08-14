@@ -413,9 +413,9 @@ describe("paneLayoutStore tab cleanup", () => {
 
   test("closing native agent tabs delegates provider cleanup to the backend", () => {
     const tabs = [
-      { id: "claude-tab", type: "claude-native" },
-      { id: "codex-tab", type: "codex-native" },
-      { id: "opencode-tab", type: "opencode-native" },
+      { id: "claude-tab", type: "agent-native", nativeAgentData: { platform: "claude", environmentId: "env-native" } },
+      { id: "codex-tab", type: "agent-native", nativeAgentData: { platform: "codex", environmentId: "env-native" } },
+      { id: "opencode-tab", type: "agent-native", nativeAgentData: { platform: "opencode", environmentId: "env-native" } },
     ];
     usePaneLayoutStore.setState({
       activeEnvironmentId: "env-native",
@@ -495,7 +495,7 @@ describe("paneLayoutStore tab cleanup", () => {
               tabs: [
                 { id: "terminal-tab", type: "plain" },
                 { id: "tmux-tab", type: "claude-tmux" },
-                { id: "codex-tab", type: "codex-native" },
+                { id: "codex-tab", type: "agent-native", nativeAgentData: { platform: "codex", environmentId: "env-reset" } },
                 { id: "browser-tab", type: "browser" },
               ] as any,
               activeTabId: "terminal-tab",
@@ -610,9 +610,9 @@ describe("paneLayoutStore tab cleanup", () => {
     const tabs = [
       { id: "terminal-tab", type: "plain" },
       { id: "tmux-tab", type: "claude-tmux" },
-      { id: "claude-tab", type: "claude-native" },
-      { id: "codex-tab", type: "codex-native" },
-      { id: "opencode-tab", type: "opencode-native" },
+      { id: "claude-tab", type: "agent-native", nativeAgentData: { platform: "claude", environmentId: "env-cleanup-errors" } },
+      { id: "codex-tab", type: "agent-native", nativeAgentData: { platform: "codex", environmentId: "env-cleanup-errors" } },
+      { id: "opencode-tab", type: "agent-native", nativeAgentData: { platform: "opencode", environmentId: "env-cleanup-errors" } },
     ];
     seedPaneTree({
       kind: "leaf",
@@ -674,9 +674,9 @@ describe("paneLayoutStore tab cleanup", () => {
      * were never reclaimed for the life of the process.
      */
     const tabs = [
-      { id: "claude-tab", type: "claude-native" },
-      { id: "codex-tab", type: "codex-native" },
-      { id: "opencode-tab", type: "opencode-native" },
+      { id: "claude-tab", type: "agent-native", nativeAgentData: { platform: "claude", environmentId: "env-leak" } },
+      { id: "codex-tab", type: "agent-native", nativeAgentData: { platform: "codex", environmentId: "env-leak" } },
+      { id: "opencode-tab", type: "agent-native", nativeAgentData: { platform: "opencode", environmentId: "env-leak" } },
     ];
     seedPaneTree(
       { kind: "leaf", id: "default", tabs, activeTabId: "claude-tab" },
@@ -961,9 +961,9 @@ describe("paneLayoutStore authoritative cleanup", () => {
       { id: "removed-terminal", type: "plain", isSetupTab: true },
       { id: "removed-browser", type: "browser", browserData: { url: "http://localhost:3000" } },
       { id: "removed-tmux", type: "claude-tmux" },
-      { id: "removed-claude", type: "claude-native" },
-      { id: "removed-codex", type: "codex-native" },
-      { id: "removed-opencode", type: "opencode-native" },
+      { id: "removed-claude", type: "agent-native", nativeAgentData: { platform: "claude", environmentId } },
+      { id: "removed-codex", type: "agent-native", nativeAgentData: { platform: "codex", environmentId } },
+      { id: "removed-opencode", type: "agent-native", nativeAgentData: { platform: "opencode", environmentId } },
       { id: "retained-terminal", type: "plain" },
     ] as TabInfo[];
     seedPaneTree({
@@ -1547,8 +1547,9 @@ describe("paneLayoutStore environment scoping", () => {
     store.initialize("container-a", "env-a");
     store.addTab("default", {
       id: "claude-a",
-      type: "claude-native",
-      claudeNativeData: {
+      type: "agent-native",
+      nativeAgentData: {
+        platform: "claude",
         environmentId: "env-a",
         containerId: "container-a",
       },
@@ -1556,7 +1557,7 @@ describe("paneLayoutStore environment scoping", () => {
 
     store.updateTabNativeSessionId("claude-a", "session-1", "env-a");
     const updated = usePaneLayoutStore.getState().getAllTabs("env-a")[0];
-    expect(updated?.claudeNativeData?.sessionId).toBe("session-1");
+    expect(updated?.nativeAgentData?.sessionId).toBe("session-1");
     expect(updated?.nativeAgentData).toMatchObject({
       platform: "claude",
       sessionId: "session-1",
@@ -1564,7 +1565,7 @@ describe("paneLayoutStore environment scoping", () => {
 
     usePaneLayoutStore.getState().updateTabNativeSessionId("claude-a", undefined, "env-a");
     const cleared = usePaneLayoutStore.getState().getAllTabs("env-a")[0];
-    expect(cleared?.claudeNativeData?.sessionId).toBeUndefined();
+    expect(cleared?.nativeAgentData?.sessionId).toBeUndefined();
     // Both projections have to detach together: a stale canonical session id
     // is the one the pane renderer and the next persisted write would use.
     expect(cleared?.nativeAgentData?.sessionId).toBeUndefined();
@@ -1576,9 +1577,9 @@ describe("paneLayoutStore environment scoping", () => {
     store.initialize("container-a", "env-a");
     store.addTab("default", {
       id: "cursor-a",
-      type: "cursor-native",
-      acpNativeData: {
-        provider: "cursor",
+      type: "agent-native",
+      nativeAgentData: {
+        platform: "cursor",
         environmentId: "env-a",
         containerId: "container-a",
       },
@@ -1593,8 +1594,8 @@ describe("paneLayoutStore environment scoping", () => {
 
     store.updateTabNativeSessionId("cursor-a", "acp-session", "env-a");
     const updated = usePaneLayoutStore.getState().getAllTabs("env-a")[0];
-    expect(updated?.acpNativeData).toMatchObject({
-      provider: "cursor",
+    expect(updated?.nativeAgentData).toMatchObject({
+      platform: "cursor",
       sessionId: "acp-session",
     });
     expect(updated?.nativeAgentData).toMatchObject({
@@ -1608,7 +1609,7 @@ describe("paneLayoutStore environment scoping", () => {
     store.initialize("container-a", "env-a");
     store.addTab("default", {
       id: "codex-a",
-      type: "codex-native",
+      type: "agent-native",
       nativeAgentData: {
         platform: "codex",
         environmentId: "env-a",
@@ -1620,7 +1621,10 @@ describe("paneLayoutStore environment scoping", () => {
     const updated = usePaneLayoutStore.getState().getAllTabs("env-a")[0];
 
     expect(updated?.nativeAgentData?.sessionId).toBe("thread-1");
-    expect(updated?.codexNativeData).toBeUndefined();
+    expect(updated?.nativeAgentData).toMatchObject({
+      platform: "codex",
+      sessionId: "thread-1",
+    });
   });
 
   test("persists browser addresses on the owning environment only", () => {
@@ -1936,21 +1940,21 @@ describe("paneLayoutStore environment scoping", () => {
     store.initialize("container-a", "env-a");
     store.addTab("default", {
       id: "codex",
-      type: "codex-native",
-      codexNativeData: { environmentId: "env-a" },
+      type: "agent-native",
+      nativeAgentData: { environmentId: "env-a" },
     }, "env-a");
     store.addTab("default", {
       id: "opencode",
-      type: "opencode-native",
-      openCodeNativeData: { environmentId: "env-a" },
+      type: "agent-native",
+      nativeAgentData: { environmentId: "env-a" },
     }, "env-a");
     store.addTab("default", { id: "plain", type: "plain" }, "env-a");
 
     store.updateTabNativeSessionId("codex", "codex-1", "env-a");
     usePaneLayoutStore.getState().updateTabNativeSessionId("opencode", "open-1", "env-a");
     expect(usePaneLayoutStore.getState().getAllTabs("env-a")).toMatchObject([
-      { codexNativeData: { sessionId: "codex-1" } },
-      { openCodeNativeData: { sessionId: "open-1" } },
+      { nativeAgentData: { sessionId: "codex-1" } },
+      { nativeAgentData: { sessionId: "open-1" } },
       { id: "plain" },
     ]);
 
@@ -2714,10 +2718,10 @@ describe("paneLayoutStore pane and tab actions", () => {
       id: "default",
       tabs: [{
         id: "handoff-tab",
-        type: "codex-native",
+        type: "agent-native",
         agentHandoffId: "handoff-1",
         displayTitle: "Codex · from Claude",
-        codexNativeData: { environmentId: "env-handoff" },
+        nativeAgentData: { environmentId: "env-handoff" },
       }],
       activeTabId: "handoff-tab",
     }, "default", "env-handoff");
@@ -2733,7 +2737,7 @@ describe("paneLayoutStore pane and tab actions", () => {
       // first message and would otherwise render as a raw JSON frame.
       consumedAgentHandoffId: "handoff-1",
       displayTitle: "Codex · from Claude",
-      codexNativeData: { environmentId: "env-handoff" },
+      nativeAgentData: { environmentId: "env-handoff" },
     });
     expect(deleteAgentHandoff).toHaveBeenCalledWith("handoff-1", "env-handoff");
     await expect(loadAgentHandoff("handoff-1")).resolves.toBeNull();
@@ -2746,7 +2750,7 @@ describe("paneLayoutStore pane and tab actions", () => {
       id: "default",
       tabs: [{
         id: "handoff-tab",
-        type: "codex-native",
+        type: "agent-native",
         consumedAgentHandoffId: "handoff-1",
       }],
       activeTabId: "handoff-tab",
@@ -2773,8 +2777,8 @@ describe("paneLayoutStore pane and tab actions", () => {
         kind: "leaf",
         id: "default",
         tabs: [
-          { id: "live", type: "codex-native", agentHandoffId: "handoff-live" },
-          { id: "consumed", type: "claude-native", consumedAgentHandoffId: "handoff-old" },
+          { id: "live", type: "agent-native", agentHandoffId: "handoff-live" },
+          { id: "consumed", type: "agent-native", consumedAgentHandoffId: "handoff-old" },
           { id: "plain", type: "plain" },
         ],
         activeTabId: "live",
@@ -2833,7 +2837,7 @@ describe("paneLayoutStore pane and tab actions", () => {
       id: "default",
       tabs: [{
         id: "review-tab",
-        type: "codex-native",
+        type: "agent-native",
         initialPrompt: "Review the diff",
         initialAgentModel: "gpt-5.6-sol",
         initialReasoningEffort: "xhigh",
@@ -2845,7 +2849,7 @@ describe("paneLayoutStore pane and tab actions", () => {
 
     expect(usePaneLayoutStore.getState().getAllTabs("env-review")).toEqual([{
       id: "review-tab",
-      type: "codex-native",
+      type: "agent-native",
       initialPrompt: "Review the diff",
       initialAgentModel: undefined,
       initialReasoningEffort: undefined,
@@ -3193,7 +3197,7 @@ describe("paneLayoutStore guard branches", () => {
       id: "default",
       tabs: [{
         id: "review-tab",
-        type: "codex-native",
+        type: "agent-native",
         initialAgentModel: "gpt-5.6-sol",
         initialReasoningEffort: "xhigh",
       }],
@@ -3329,7 +3333,7 @@ describe("paneLayoutStore remaining branch coverage", () => {
   test("clears initial agent options without changing sibling tabs", () => {
     const sibling = {
       id: "sibling",
-      type: "codex-native" as const,
+      type: "agent-native" as const,
       initialAgentModel: "keep-model",
       initialReasoningEffort: "high" as const,
     };
@@ -3339,7 +3343,7 @@ describe("paneLayoutStore remaining branch coverage", () => {
       tabs: [
         {
           id: "target",
-          type: "codex-native",
+          type: "agent-native",
           initialAgentModel: "clear-model",
           initialReasoningEffort: "xhigh",
         },

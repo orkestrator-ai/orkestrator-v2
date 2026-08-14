@@ -17,7 +17,12 @@ interface BridgeMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
-  parts: Array<{ type: "text" | "reasoning"; text: string }>;
+  parts: Array<{
+    type: "text" | "thinking";
+    content: string;
+    sourcePartId: string;
+    sourceMessageId: string;
+  }>;
   createdAt: string;
 }
 
@@ -75,7 +80,7 @@ interface PersistedSession {
 }
 
 interface PersistedState {
-  version: 1;
+  version: 2;
   provider: Provider;
   sessions: PersistedSession[];
 }
@@ -531,7 +536,7 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     };
     state.messages.push(message);
   }
-  const partType = kind === "agent_thought_chunk" ? "reasoning" : "text";
+  const partType = kind === "agent_thought_chunk" ? "thinking" : "text";
   const previous = message.parts.at(-1);
   if (previous?.type !== partType && message.parts.length >= MAX_PARTS_PER_MESSAGE) {
     state.outputTruncated = true;
@@ -542,10 +547,15 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     schedulePersist();
     return;
   }
-  const currentPartText = previous?.type === partType ? previous.text : "";
+  const currentPartText = previous?.type === partType ? previous.content : "";
   const nextPartText = appendBounded(currentPartText, text, MAX_MESSAGE_TEXT_BYTES);
-  if (previous?.type === partType) previous.text = nextPartText.value;
-  else message.parts.push({ type: partType, text: nextPartText.value });
+  if (previous?.type === partType) previous.content = nextPartText.value;
+  else message.parts.push({
+    type: partType,
+    content: nextPartText.value,
+    sourcePartId: `${message.id}:${message.parts.length}`,
+    sourceMessageId: message.id,
+  });
   const nextContent = partType === "text"
     ? appendBounded(message.content, text, MAX_MESSAGE_TEXT_BYTES)
     : { value: message.content, truncated: false };
@@ -802,9 +812,15 @@ async function route(
       if (requestId) state.promptJournal.delete(requestId);
       throw error;
     }
+    const userMessageId = randomBytes(12).toString("hex");
     state.messages.push({
-      id: randomBytes(12).toString("hex"), role: "user", content: prompt,
-      parts: [{ type: "text", text: prompt }], createdAt: new Date().toISOString(),
+      id: userMessageId, role: "user", content: prompt,
+      parts: [{
+        type: "text",
+        content: prompt,
+        sourcePartId: `${userMessageId}:0`,
+        sourceMessageId: userMessageId,
+      }], createdAt: new Date().toISOString(),
     });
     state.status = "running";
     state.error = undefined;
@@ -1025,7 +1041,7 @@ class HttpError extends Error {
 
 function persistedSnapshot(): PersistedState {
   return {
-    version: 1,
+    version: 2,
     provider,
     sessions: [...sessions.values()].map((state) => ({
       id: state.id,
@@ -1119,7 +1135,7 @@ async function loadPersistedState(): Promise<void> {
   } catch {
     throw new Error("ACP persisted state is malformed");
   }
-  if (!isObject(parsed) || parsed.version !== 1 || parsed.provider !== provider || !Array.isArray(parsed.sessions)) {
+  if (!isObject(parsed) || (parsed.version !== 1 && parsed.version !== 2) || parsed.provider !== provider || !Array.isArray(parsed.sessions)) {
     throw new Error("ACP persisted state is incompatible");
   }
   for (const candidate of parsed.sessions.slice(0, MAX_SESSIONS)) {
@@ -1184,16 +1200,21 @@ function normalizeBridgeMessage(value: unknown): BridgeMessage | null {
     && typeof value.content === "string"
     && Array.isArray(value.parts)
     && value.parts.every((part) => isObject(part)
-      && (part.type === "text" || part.type === "reasoning")
-      && typeof part.text === "string")
+      && (part.type === "text" || part.type === "reasoning" || part.type === "thinking")
+      && (typeof part.text === "string" || typeof part.content === "string"))
     && typeof value.createdAt === "string")) return null;
   return {
     id: value.id.slice(0, 256),
     role: value.role,
     content: truncateUtf8(value.content, MAX_MESSAGE_TEXT_BYTES),
-    parts: value.parts.slice(-MAX_PARTS_PER_MESSAGE).map((part) => ({
-      type: part.type as "text" | "reasoning",
-      text: truncateUtf8(part.text as string, MAX_MESSAGE_TEXT_BYTES),
+    parts: value.parts.slice(-MAX_PARTS_PER_MESSAGE).map((part, index) => ({
+      type: part.type === "reasoning" ? "thinking" as const : part.type as "text" | "thinking",
+      content: truncateUtf8(
+        typeof part.content === "string" ? part.content : part.text as string,
+        MAX_MESSAGE_TEXT_BYTES,
+      ),
+      sourcePartId: typeof part.sourcePartId === "string" ? part.sourcePartId : `${value.id}:${index}`,
+      sourceMessageId: typeof part.sourceMessageId === "string" ? part.sourceMessageId : value.id,
     })),
     createdAt: value.createdAt.slice(0, 64),
   };

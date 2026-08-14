@@ -264,12 +264,12 @@ describe("NativeMessage", () => {
         id: "claude-delayed-blocks",
         role: "assistant",
         content: "FirstSecond",
-        timestamp: "2026-03-07T12:00:00.000Z",
+        createdAt: "2026-03-07T12:00:00.000Z",
         parts: [
           {
             type: "text",
             content: "First",
-            timestamp: "2026-03-07T12:00:00.000Z",
+            createdAt: "2026-03-07T12:00:00.000Z",
           },
           {
             type: "tool-invocation",
@@ -279,7 +279,7 @@ describe("NativeMessage", () => {
           {
             type: "text",
             content: "Second",
-            timestamp: "2026-03-07T12:02:01.000Z",
+            createdAt: "2026-03-07T12:02:01.000Z",
           },
         ],
       },

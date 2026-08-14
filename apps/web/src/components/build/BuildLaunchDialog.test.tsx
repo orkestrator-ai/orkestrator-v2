@@ -72,6 +72,7 @@ mock.module("@/components/ui/select", () => ({
 import { BuildLaunchDialog, type BuildLaunchSelection } from "./BuildLaunchDialog";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
+import { useConfigStore } from "@/stores/configStore";
 
 afterEach(cleanup);
 afterAll(() => {
@@ -423,6 +424,16 @@ describe("BuildLaunchDialog", () => {
   });
 
   test("uses the searchable favorite-aware model picker for OpenCode", () => {
+    const config = useConfigStore.getState().config;
+    useConfigStore.setState({
+      config: {
+        ...config,
+        global: {
+          ...config.global,
+          favoriteModels: [{ platform: "opencode", modelId: "provider/model-b" }],
+        },
+      },
+    });
     const openCodeCatalog: AgentModelCatalog = {
       ...catalog,
       opencode: [
@@ -443,14 +454,14 @@ describe("BuildLaunchDialog", () => {
     const { onConfirm } = renderDialog({
       catalog: openCodeCatalog,
       defaultAgent: "opencode",
-      favoriteOpenCodeModelIds: ["provider/model-b"],
     });
 
     const trigger = screen.getByRole("combobox", { name: "All steps model" });
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
-    const search = screen.getByRole("searchbox", { name: "Search OpenCode models" });
-    const options = screen.getAllByRole("menuitemradio");
-    expect(options[0]?.textContent).toContain("OpenCode B");
+    const search = screen.getByPlaceholderText("Search models...");
+    fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
+    expect(screen.getByRole("menuitemradio", { name: /OpenCode B/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "opencode models" }));
 
     fireEvent.change(search, { target: { value: "model-a" } });
     fireEvent.click(screen.getByRole("menuitemradio", { name: /OpenCode A/ }));

@@ -177,7 +177,7 @@ mock.module("@/hooks/useFileMentions", () => ({
   }),
 }));
 
-// CodexComposeBar imports these hooks through the barrel. Snapshotting and
+// CodexNativeComposerHarness imports these hooks through the barrel. Snapshotting and
 // restoring the barrel keeps this suite isolated from later hook tests.
 mock.module("@/hooks", () => ({
   ...realHooksSnapshot,
@@ -201,7 +201,11 @@ mock.module("@/hooks", () => ({
   }),
 }));
 
-import { CodexComposeBar } from "../../../apps/web/src/components/codex/CodexComposeBar";
+import { useCodexNativeComposer, type CodexNativeComposerOptions } from "../../../apps/web/src/components/codex/useCodexNativeComposer";
+
+function CodexNativeComposerHarness(props: CodexNativeComposerOptions) {
+  return useCodexNativeComposer(props);
+}
 import { useCodexStore } from "../../../apps/web/src/stores/codexStore";
 import type { CodexModel } from "../../../apps/web/src/lib/codex-client";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "../../../apps/web/src/lib/review-actions";
@@ -269,7 +273,7 @@ const defaultModels: CodexModel[] = [
 ];
 
 function renderComposeBar(
-  overrides: Partial<Parameters<typeof CodexComposeBar>[0]> = {},
+  overrides: Partial<Parameters<typeof CodexNativeComposerHarness>[0]> = {},
 ) {
   const onSend = mock(async () => {});
   const onStop = mock(async () => {});
@@ -280,7 +284,7 @@ function renderComposeBar(
   const onFastModeChange = mock(() => {});
 
   const result = render(
-    <CodexComposeBar
+    <CodexNativeComposerHarness
       environmentId={ENV_ID}
       sessionKey={SESSION_KEY}
       models={defaultModels}
@@ -311,7 +315,7 @@ function renderComposeBar(
   };
 }
 
-describe("CodexComposeBar", () => {
+describe("CodexNativeComposerHarness", () => {
   beforeEach(() => {
     setMobileViewport(false);
     mockReadImage.mockReset();
@@ -508,7 +512,7 @@ describe("CodexComposeBar", () => {
     expect(screen.getByText("High")).toBeTruthy();
   });
 
-  test("uses custom reasoning option labels and descriptions", async () => {
+  test("uses custom reasoning option labels without descriptions", async () => {
     const models: CodexModel[] = [{
       id: "custom-model",
       name: "Custom model",
@@ -526,8 +530,9 @@ describe("CodexComposeBar", () => {
 
     expect(screen.getByText("Quick")).toBeTruthy();
     fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
-    expect(await screen.findByText("Short analysis")).toBeTruthy();
-    expect(screen.getByText("Deep analysis")).toBeTruthy();
+    expect(await screen.findByRole("menuitemradio", { name: /^Quick/ })).toBeTruthy();
+    expect(screen.queryByText("Short analysis")).toBeNull();
+    expect(screen.queryByText("Deep analysis")).toBeNull();
     fireEvent.click(screen.getByText("Thorough"));
     expect(onReasoningEffortChange).toHaveBeenCalledWith("high");
   });
@@ -547,8 +552,8 @@ describe("CodexComposeBar", () => {
 
     expect(screen.getByText("Medium")).toBeTruthy();
     fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
-    expect(await screen.findByText("Balances speed and reasoning depth for everyday tasks")).toBeTruthy();
-    expect(screen.getByText("Greater reasoning depth for complex problems")).toBeTruthy();
+    expect(await screen.findByRole("menuitemradio", { name: /^Medium/ })).toBeTruthy();
+    expect(screen.getByRole("menuitemradio", { name: /^High/ })).toBeTruthy();
   });
 
   test("uses the standard effort label when custom options omit the effective effort", () => {
@@ -697,7 +702,7 @@ describe("CodexComposeBar", () => {
     await screen.findByRole("menuitemradio", { name: /gpt-5\.4/ });
 
     controls.rerender(
-      <CodexComposeBar
+      <CodexNativeComposerHarness
         environmentId={ENV_ID}
         sessionKey={SESSION_KEY}
         models={defaultModels}
@@ -750,7 +755,7 @@ describe("CodexComposeBar", () => {
 
     mockFileMentionMenuOpen = true;
     rerender(
-      <CodexComposeBar
+      <CodexNativeComposerHarness
         environmentId={ENV_ID}
         sessionKey={SESSION_KEY}
         models={defaultModels}
@@ -769,7 +774,7 @@ describe("CodexComposeBar", () => {
     await waitFor(() => expect(mockRefreshFileTree).toHaveBeenCalledTimes(1));
 
     rerender(
-      <CodexComposeBar
+      <CodexNativeComposerHarness
         environmentId={ENV_ID}
         sessionKey={SESSION_KEY}
         models={defaultModels}

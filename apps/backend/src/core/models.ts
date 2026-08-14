@@ -567,6 +567,7 @@ export interface AppConfig {
   global: {
     /** Agent systems installed and exposed in launch/review surfaces. */
     enabledAgentPlatforms?: AgentPlatform[];
+    favoriteModels?: Array<{ platform: AgentPlatform; modelId: string }>;
     containerResources: { cpuCores: number; memoryGb: number };
     envFilePatterns: string[];
     anthropicApiKey?: string;

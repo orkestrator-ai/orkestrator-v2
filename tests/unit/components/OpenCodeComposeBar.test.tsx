@@ -110,7 +110,6 @@ const mockUseFileSearch = () => ({
   refresh: mockRefreshFileTree,
   isAvailable: true,
 });
-
 const mockUseFileMentions = () => ({
   isMenuOpen: mockFileMentionMenuOpen,
   selectedIndex: 0,
@@ -248,7 +247,11 @@ mock.module("@/hooks", () => ({
   useFileMentions: mockUseFileMentions,
 }));
 
-import { OpenCodeComposeBar } from "../../../apps/web/src/components/opencode/OpenCodeComposeBar";
+import { useOpenCodeNativeComposer, type OpenCodeNativeComposerOptions } from "../../../apps/web/src/components/opencode/useOpenCodeNativeComposer";
+
+function OpenCodeNativeComposerHarness(props: OpenCodeNativeComposerOptions) {
+  return useOpenCodeNativeComposer(props);
+}
 import { useOpenCodeStore } from "../../../apps/web/src/stores/openCodeStore";
 import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
 import { useConfigStore } from "../../../apps/web/src/stores/configStore";
@@ -362,14 +365,14 @@ function createLocalEnvironment(): Environment {
 }
 
 function renderComposeBar(
-  overrides: Partial<Parameters<typeof OpenCodeComposeBar>[0]> = {},
+  overrides: Partial<Parameters<typeof OpenCodeNativeComposerHarness>[0]> = {},
 ) {
   const onSend = mock(() => {});
   const onStop = mock(() => {});
   const onQueue = mock(() => {});
 
   const result = render(
-    <OpenCodeComposeBar
+    <OpenCodeNativeComposerHarness
       environmentId={ENV_ID}
       tabId={TAB_ID}
       models={defaultModels}
@@ -383,7 +386,7 @@ function renderComposeBar(
   return { ...result, onSend, onStop, onQueue };
 }
 
-describe("OpenCodeComposeBar", () => {
+describe("OpenCodeNativeComposerHarness", () => {
   beforeEach(() => {
     setMobileViewport(false);
     mockReadImage.mockReset();
@@ -650,7 +653,7 @@ describe("OpenCodeComposeBar", () => {
     render(
       <>
         <div data-testid="compose-tab-a">
-          <OpenCodeComposeBar
+          <OpenCodeNativeComposerHarness
             environmentId={ENV_ID}
             tabId="tab-a"
             models={defaultModels}
@@ -659,7 +662,7 @@ describe("OpenCodeComposeBar", () => {
           />
         </div>
         <div data-testid="compose-tab-b">
-          <OpenCodeComposeBar
+          <OpenCodeNativeComposerHarness
             environmentId={ENV_ID}
             tabId="tab-b"
             models={defaultModels}
@@ -1723,7 +1726,7 @@ describe("OpenCodeComposeBar", () => {
           <button type="button" onClick={() => setDisabled(true)}>
             Disable compose
           </button>
-          <OpenCodeComposeBar
+          <OpenCodeNativeComposerHarness
             environmentId={ENV_ID}
             tabId={TAB_ID}
             containerId="container-1"
@@ -2401,34 +2404,6 @@ describe("OpenCodeComposeBar", () => {
       expect(screen.queryByText(/openai/)).toBeNull();
     });
     expect(screen.getByText("Claude Sonnet")).toBeTruthy();
-  });
-
-  test("marks favorites and orders them first", () => {
-    renderComposeBar({ favoriteModelIds: ["claude-sonnet", "gpt-5"] });
-    fireEvent.pointerDown(screen.getByRole("button", { name: /Select model/i }));
-    expect(screen.getAllByText("Favorite")).toHaveLength(2);
-    expect(screen.getByText("Claude Sonnet").closest("[role=menuitemradio]")).toBeTruthy();
-  });
-
-  test("ignores unknown and duplicate favorite model IDs", () => {
-    renderComposeBar({
-      favoriteModelIds: ["missing-model", "claude-sonnet", "claude-sonnet"],
-    });
-    fireEvent.pointerDown(screen.getByRole("button", { name: /Select model/i }));
-
-    expect(screen.getAllByText("Favorite")).toHaveLength(1);
-    expect(screen.getAllByText("Claude Sonnet")).toHaveLength(1);
-  });
-
-  test("keeps a matching favorite marked while searching", async () => {
-    renderComposeBar({ favoriteModelIds: ["claude-sonnet", "gpt-5"] });
-    fireEvent.pointerDown(screen.getByRole("button", { name: /Select model/i }));
-    expect(screen.getAllByText("Favorite")).toHaveLength(2);
-    const input = screen.getByPlaceholderText("Search models...") as HTMLInputElement;
-    fireEvent.change(input, { target: { value: "GPT" } });
-    await waitFor(() => {
-      expect(screen.getAllByText("Favorite")).toHaveLength(1);
-    });
   });
 
   test("shows no matches when search yields no results", async () => {

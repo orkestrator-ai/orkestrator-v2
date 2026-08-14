@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { createSessionKey } from "@/lib/utils";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -8,12 +9,12 @@ import type { ClaudeEvent } from "@/lib/claude-client";
 import * as realHooks from "@/hooks";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import * as realClaudeClient from "@/lib/claude-client";
-import * as realClaudeComposeBar from "./ClaudeComposeBar";
+import * as realClaudeNativeComposer from "./useClaudeNativeComposer";
 
 const realHooksSnapshot = { ...realHooks };
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
 const realClaudeClientSnapshot = { ...realClaudeClient };
-const realClaudeComposeBarSnapshot = { ...realClaudeComposeBar };
+const realClaudeNativeComposerSnapshot = { ...realClaudeNativeComposer };
 
 /**
  * Claude's `subscribeToEvents` is synchronous — it hands back an async iterable
@@ -58,8 +59,11 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
   VirtualizedMessageList: () => <div data-testid="messages" />,
 }));
 
-mock.module("./ClaudeComposeBar", () => ({
-  ClaudeComposeBar: () => <div data-testid="compose" />,
+mock.module("./useClaudeNativeComposer", () => ({
+  useClaudeNativeComposer: () => {
+    useState(null);
+    return <div data-testid="compose" />;
+  },
 }));
 
 import { ClaudeChatTab } from "./ClaudeChatTab";
@@ -207,8 +211,8 @@ function seedStores() {
             tabs: [
               {
                 id: TAB_ID,
-                type: "claude-native",
-                claudeNativeData: {
+                type: "agent-native",
+                nativeAgentData: {
                   environmentId: ENVIRONMENT_ID,
                   containerId: "container-claude-reconnect",
                   isLocal: false,
@@ -278,7 +282,7 @@ afterAll(() => {
     "@/components/chat/VirtualizedMessageList",
     () => realVirtualizedMessageListSnapshot,
   );
-  mock.module("./ClaudeComposeBar", () => realClaudeComposeBarSnapshot);
+  mock.module("./useClaudeNativeComposer", () => realClaudeNativeComposerSnapshot);
 });
 
 describe("ClaudeChatTab SSE reconnect", () => {
@@ -315,6 +319,22 @@ describe("ClaudeChatTab SSE reconnect", () => {
     console.log = ORIGINAL_CONSOLE_LOG;
     cleanup();
     mock.restore();
+  });
+
+  test("mounts the hook-owning composer after setup becomes ready", async () => {
+    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+      setupPhase: "running",
+    });
+    renderChat();
+
+    await waitFor(() => expect(document.querySelector('[data-testid="compose"]')).toBeNull());
+    act(() => {
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        setupPhase: "ready",
+      });
+    });
+
+    await waitFor(() => expect(document.querySelector('[data-testid="compose"]')).toBeTruthy());
   });
 
   test("reconnects after the base delay when the stream ends unexpectedly", async () => {

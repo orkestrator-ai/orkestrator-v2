@@ -25,7 +25,7 @@ import { cn } from "@/lib/utils";
 import { useMediaQuery, useVirtuosoScrollState } from "@/hooks";
 import { Button } from "@/components/ui/button";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
-import { NativeModelPicker } from "@/components/chat/NativeModelPicker";
+import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
 import { BlockingPromptCard } from "@/components/chat/BlockingPromptCard";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
@@ -2884,9 +2884,10 @@ function TmuxComposeBar({
 
         {/* The combined picker is selectable before launch and sends the same
             model/effort commands to the running tmux pane after launch. */}
-        <NativeModelPicker
+        <AgentModelPicker
           models={models.map((model) => ({
             id: model.id,
+            platform: "claude",
             label: model.name,
             description: model.description,
           }))}

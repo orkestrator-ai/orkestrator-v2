@@ -88,10 +88,10 @@ describe("mergePersistedPaneLayouts", () => {
   test("merges independent concurrent fields on the same native tab", () => {
     const baseTab: TabInfo = {
       id: "native",
-      type: "codex-native",
+      type: "agent-native",
       initialAgentModel: "gpt-5.6-sol",
       displayTitle: "Original",
-      codexNativeData: {
+      nativeAgentData: {
         environmentId: "env-1",
         containerId: "container-1",
         sessionId: "session-old",
@@ -107,8 +107,8 @@ describe("mergePersistedPaneLayouts", () => {
     const remoteTab: TabInfo = {
       ...baseTab,
       displayTitle: "Remote title",
-      codexNativeData: {
-        ...baseTab.codexNativeData!,
+      nativeAgentData: {
+        ...baseTab.nativeAgentData!,
         sessionId: "session-new",
       },
     };
@@ -121,9 +121,9 @@ describe("mergePersistedPaneLayouts", () => {
 
     expect(tabs(merged.root)).toEqual([{
       id: "native",
-      type: "codex-native",
+      type: "agent-native",
       displayTitle: "Remote title",
-      codexNativeData: {
+      nativeAgentData: {
         environmentId: "env-1",
         containerId: "container-1",
         sessionId: "session-new",
@@ -248,9 +248,9 @@ describe("mergePersistedPaneLayouts", () => {
   test("the retrying renderer wins a genuinely conflicting scalar edit", () => {
     const baseTab: TabInfo = {
       id: "native",
-      type: "claude-native",
+      type: "agent-native",
       displayTitle: "Original",
-      claudeNativeData: {
+      nativeAgentData: {
         environmentId: "env-1",
         containerId: "container-1",
         sessionId: "session-base",

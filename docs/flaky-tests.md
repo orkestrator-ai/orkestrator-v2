@@ -10,6 +10,17 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `BuildChatTab agent messaging > disables the send button and shows progress while a send is in flight` (`apps/web/src/components/build-pipeline/BuildChatTab.test.tsx`)
+
+- **Status:** open
+- **Date observed:** 2026-08-13
+- **Original command:** `bun test src --parallel` from `apps/web`.
+- **Worker configuration:** Bun's default parallel worker pool for the complete web package, run alongside the root suite during native-agent consolidation verification.
+- **Failure:** `(fail) BuildChatTab agent messaging > disables the send button and shows progress while a send is in flight [6090.90ms]`. The filtered aggregate log did not retain a narrower assertion message; the duration exceeded Bun's five-second default test budget.
+- **Suite counts:** 5,548 tests across 227 files; 5,546 passed, 1 skipped, and 1 failed in 21.24 seconds.
+- **Isolated rerun:** `bun test src/components/build-pipeline/BuildChatTab.test.tsx` from `apps/web` -> 75 passed, 0 failed, 230 assertions in 3.54 seconds; the affected test passed in 2,718.90 ms.
+- **Hypothesis:** The case holds a mocked backend send promise, waits for the in-flight render, releases it, then waits for the spinner to disappear. It already consumes more than half of Bun's outer budget in isolation, so worker scheduling and React commit latency under the aggregate pool can exhaust that budget even when both controlled transitions occur correctly. A deterministic signal for the two React commits, or a narrowly increased outer budget, should be evaluated before changing product behavior.
+
 ## `web-public install.sh > runs on both supported platforms` (`tests/unit/install-script.test.ts`)
 
 - **Status:** open

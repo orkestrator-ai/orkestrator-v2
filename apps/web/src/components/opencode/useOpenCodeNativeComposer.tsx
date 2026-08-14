@@ -6,46 +6,35 @@ import {
   useMemo,
   KeyboardEvent,
 } from "react";
-import {
-  AlertCircle,
-  X,
-  FileText,
-  ChevronDown,
-  ArrowUp,
-  Square,
-} from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Button } from "@/components/ui/button";
-import {cn, createSessionKey} from "@/lib/utils";
+import { createSessionKey } from "@/lib/utils";
 import { toast } from "sonner";
 import { readContainerFileBase64, readFileBase64 } from "@/lib/backend";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import {useOpenCodeStore, type OpenCodeAttachment, type OpenCodeQueuedMessage} from "@/stores/openCodeStore";
-import { ContextUsageWheel } from "@/components/chat/ContextUsageWheel";
 import { persistAgentModelDefault } from "@/lib/chat/agent-model-preferences";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
-import { MentionableInput, type MentionableInputRef } from "@/components/chat/MentionableInput";
+import type { MentionableInputRef } from "@/components/chat/MentionableInput";
+import { NativeComposeBar } from "@/components/chat/NativeComposeBar";
 import {
   createWorkspaceAttachment,
   NativeAttachmentMenu,
 } from "@/components/chat/NativeAttachmentMenu";
-import { NativeModelPicker } from "@/components/chat/NativeModelPicker";
+import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
+import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import { useFileMentions, useFileSearch, useMediaQuery, useNativeComposeBarPaste } from "@/hooks";
 import { useSlashCommandMenu } from "@/hooks/useSlashCommandMenu";
 import { useNativeComposeSubmit } from "@/hooks/useNativeComposeSubmit";
 import { SlashCommandMenu } from "@/components/chat/SlashCommandMenu";
 import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
 import { usePromptQueueDispatchRecovery } from "@/hooks/usePromptQueueDispatchRecovery";
-import {
-  COMPOSE_MAX_INPUT_HEIGHT,
-  COMPOSE_MIN_INPUT_HEIGHT,
-} from "@/components/chat/compose-metrics";
 import type {
   OpenCodeModel,
   OpenCodeConversationMode,
@@ -59,7 +48,7 @@ import {
 } from "@/lib/prompt-queue-sources";
 import { composerOccupiedError } from "@/lib/prompt-queue-errors";
 
-interface OpenCodeComposeBarProps {
+export interface OpenCodeNativeComposerOptions {
   environmentId: string;
   /** Tab ID for multi-tab attachment isolation */
   tabId: string;
@@ -67,7 +56,6 @@ interface OpenCodeComposeBarProps {
   containerId?: string;
   models: OpenCodeModel[];
   slashCommands?: OpenCodeSlashCommand[];
-  favoriteModelIds?: string[];
   onSend: (text: string, attachments: OpenCodeAttachment[]) => void | Promise<void>;
   disabled?: boolean;
   /** Whether OpenCode is currently processing a query */
@@ -168,13 +156,12 @@ function showImageUnsupportedToast(): void {
   });
 }
 
-export function OpenCodeComposeBar({
+export function useOpenCodeNativeComposer({
   environmentId,
   tabId,
   containerId,
   models,
   slashCommands = [],
-  favoriteModelIds = [],
   onSend,
   disabled = false,
   isLoading = false,
@@ -184,7 +171,8 @@ export function OpenCodeComposeBar({
   onRefreshModels,
   showAddressAll = false,
   layout = "bottom",
-}: OpenCodeComposeBarProps) {
+}: OpenCodeNativeComposerOptions) {
+  const { favorites, enabledPlatforms, toggleFavorite } = useAgentModelFavorites();
   const [pendingAttachmentSnapshots, setPendingAttachmentSnapshots] = useState(0);
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
   const inputRef = useRef<MentionableInputRef>(null);
@@ -195,7 +183,7 @@ export function OpenCodeComposeBar({
   const pendingAttachmentSnapshotsRef = useRef(0);
   const mountedRef = useRef(true);
 
-  // Narrow store subscriptions (mirrors CodexComposeBar): actions are stable
+  // Narrow store subscriptions: actions are stable
   // references, and per-key value selectors keep unrelated store writes (other
   // sessions' drafts, transcripts, event bookkeeping) from re-rendering the bar.
   const addAttachment = useOpenCodeStore((state) => state.addAttachment);
@@ -431,7 +419,7 @@ export function OpenCodeComposeBar({
           previewUrl: `data:${attachmentMimeType(attachment)};base64,${base64}`,
         });
       } catch (error) {
-        console.error("[OpenCodeComposeBar] Failed to snapshot attachment:", error);
+        console.error("[useOpenCodeNativeComposer] Failed to snapshot attachment:", error);
         toast.error("Cannot attach file", {
           description: error instanceof Error ? error.message : "Failed to read selected file",
         });
@@ -474,7 +462,7 @@ export function OpenCodeComposeBar({
       (attachment) => addAttachment(sessionKey, attachment),
       [addAttachment, sessionKey],
     ),
-    logLabel: "OpenCodeComposeBar",
+    logLabel: "useOpenCodeNativeComposer",
   });
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -499,12 +487,6 @@ export function OpenCodeComposeBar({
   };
 
   const handleAddressAll = () => submitPrompt(ADDRESS_ALL_REVIEW_PROMPT);
-
-  const handleStop = () => {
-    if (onStop) {
-      onStop();
-    }
-  };
 
   const handleRemoveAttachment = (id: string) => {
     removeAttachment(sessionKey, id);
@@ -603,7 +585,6 @@ export function OpenCodeComposeBar({
     [selectedModelObj?.id, selectedModelObj?.variants]
   );
   const selectedVariantName = selectedVariant ? formatVariantLabel(selectedVariant) : "Default";
-  const favoriteModelIdSet = useMemo(() => new Set(favoriteModelIds), [favoriteModelIds]);
 
   const modelNameById = useMemo(
     () => new Map(models.map((model) => [model.id, model.name])),
@@ -620,123 +601,62 @@ export function OpenCodeComposeBar({
   const showSendButton = !isLoading || !sendDisabled;
 
   return (
-    <>
-      <div
-        className={cn(
-          "mx-auto w-[calc(100%_-_0.75rem)] shrink-0 rounded-2xl border border-border/70 bg-zinc-900/90 p-3 shadow-xl shadow-black/20 sm:w-[min(calc(100%_-_2rem),56rem)]",
-          layout === "bottom" ? "mb-4 mt-2" : "my-0",
-        )}
-      >
-        {/* Attachments preview */}
-        {attachments.length > 0 && (
-          <div className="flex flex-wrap gap-2 mb-2">
-            {attachments.map((att) => (
-              <div
-                key={att.id}
-                className="relative group flex items-center gap-1.5 px-2 py-1 rounded bg-muted/50 border border-border text-xs"
-              >
-                {att.type === "image" && att.previewUrl ? (
-                  <img
-                    src={att.previewUrl}
-                    alt={att.name}
-                    className="w-6 h-6 object-cover rounded"
-                  />
-                ) : (
-                  <FileText className="w-4 h-4 text-muted-foreground" />
-                )}
-                <span className="max-w-[120px] truncate">{att.name}</span>
-                <button
-                  onClick={() => handleRemoveAttachment(att.id)}
-                  disabled={disabled || isSending}
-                  className="ml-1 p-0.5 rounded-full hover:bg-muted"
-                  aria-label={`Remove ${att.name}`}
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Text input area - on top */}
-        <div className="relative" data-mentionable-input ref={inputContainerRef}>
-          {slashMenuOpen && filteredSlashCommands.length > 0 && (
+    <NativeComposeBar
+      layout={layout}
+      attachments={attachments}
+      onRemoveAttachment={handleRemoveAttachment}
+      inputRef={inputRef}
+      inputContainerRef={inputContainerRef}
+      text={text}
+      mentions={mentions}
+      onTextAndMentionsChange={handleTextAndMentionsChange}
+      onCursorPositionChange={handleCursorPositionChange}
+      onKeyDown={handleKeyDown}
+      placeholder="Ask anything (⌘L), @ to mention, / for workflows"
+      disabled={disabled || pendingAttachmentSnapshots > 0}
+      isSending={isSending}
+      isLoading={isLoading}
+      menus={
+        <>
+          {slashMenuOpen && filteredSlashCommands.length > 0 ? (
             <SlashCommandMenu
               commands={filteredSlashCommands}
               selectedIndex={slashSelectedIndex}
               onSelect={handleSlashCommandSelect}
               onClose={closeSlashMenu}
             />
-          )}
-
-          {fileMentionMenuOpen && (
+          ) : null}
+          {fileMentionMenuOpen ? (
             <FileMentionMenu
               files={filteredFiles}
               selectedIndex={fileMentionSelectedIndex}
               onSelect={handleFileMentionSelect}
               onClose={closeFileMentionMenu}
             />
-          )}
-
-          <MentionableInput
-            ref={inputRef}
-            value={text}
-            mentions={mentions}
-            onChange={handleTextAndMentionsChange}
-            onCursorChange={handleCursorPositionChange}
-            onKeyDown={handleKeyDown}
-            placeholder="Ask anything (⌘L), @ to mention, / for workflows"
-            disabled={disabled || isSending}
-            minHeight={COMPOSE_MIN_INPUT_HEIGHT}
-            maxHeight={COMPOSE_MAX_INPUT_HEIGHT}
+          ) : null}
+        </>
+      }
+      primaryControls={
+        <>
+          <NativeAttachmentMenu
+            key={isSending || pendingAttachmentSnapshots > 0 ? "blocked" : "idle"}
+            disabled={disabled || isSending || pendingAttachmentSnapshots > 0}
+            fileSearch={fileSearch}
+            onSelectFile={handleWorkspaceFileSelect}
+            onCloseAutoFocus={() => inputRef.current?.focus()}
           />
-        </div>
-
-        {/* Bottom toolbar */}
-        <div
-          data-native-compose-toolbar
-          className="flex min-w-0 items-center gap-1 overflow-x-auto pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-        >
-          <div
-            data-native-compose-controls="primary"
-            className="flex min-w-0 flex-1 items-center gap-1"
-          >
-            <NativeAttachmentMenu
-              key={isSending || pendingAttachmentSnapshots > 0 ? "blocked" : "idle"}
-              disabled={disabled || isSending || pendingAttachmentSnapshots > 0}
-              fileSearch={fileSearch}
-              onSelectFile={handleWorkspaceFileSelect}
-              onCloseAutoFocus={() => inputRef.current?.focus()}
-            />
-
-          {/* Mode dropdown - minimal style */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-                title={`${modeDisplayName} mode (Shift+Tab to cycle)`}
-              >
-                <ChevronDown className="w-3 h-3" />
-                <span>{modeDisplayName}</span>
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              <DropdownMenuItem onClick={() => handleModeChange("plan")}>
-                Planning
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleModeChange("build")}>
-                Build
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          <NativeModelPicker
+          <AgentModelPicker
+            favorites={favorites}
+            enabledPlatforms={enabledPlatforms}
+            selectedPlatform="opencode"
+            platformSelectionLocked
+            onToggleFavorite={toggleFavorite}
             models={models.map((model) => ({
               id: model.id,
+              platform: "opencode",
               label: model.name,
+              providerLabel: model.provider ? `OpenCode/${model.provider}` : "Other",
               description: model.provider || "Other",
-              searchText: model.provider,
-              favorite: favoriteModelIdSet.has(model.id),
             }))}
             selectedModelId={selectedModel}
             selectedModelLabel={selectedModelName}
@@ -765,125 +685,68 @@ export function OpenCodeComposeBar({
             disabled={disabled}
             onRefreshModels={onRefreshModels}
           />
-
-          </div>
-
-          <div
-            data-native-compose-controls="secondary"
-            className="flex shrink-0 items-center gap-1"
-          >
-          <ContextUsageWheel usage={contextUsage} className="ml-1" />
-
-          {/* Queue indicator. A parked queue stops draining until a human
-              retries, so the failure has to be legible without opening the
-              dialog. */}
-          {queueLength > 0 && (
-            <button
-              type="button"
-              onClick={() => setQueueDialogOpen(true)}
-              className={cn(
-                "flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors",
-                queueRecovery.dispatchError
-                  ? "bg-destructive/10 text-destructive hover:bg-destructive/20"
-                  : "text-muted-foreground bg-muted/50 hover:bg-muted",
-              )}
-              aria-label={
-                queueRecovery.dispatchError
-                  ? `${queueLength} queued prompts blocked: ${queueRecovery.dispatchError.message}`
-                  : undefined
-              }
-              title={
-                queueRecovery.dispatchError
-                  ? `Queued prompt was not sent: ${queueRecovery.dispatchError.message}`
-                  : "View queued prompts"
-              }
-            >
-              {queueRecovery.dispatchError && (
-                <AlertCircle className="h-3 w-3 shrink-0" aria-hidden="true" />
-              )}
-              <span>+{queueLength} queued</span>
-            </button>
-          )}
-
-          {/* Stop button stays available while loading */}
-          {isLoading && (
-            <button
-              onClick={handleStop}
-              disabled={disabled || !onStop}
-              className={cn(
-                "w-8 h-8 rounded-full flex items-center justify-center transition-colors",
-                "bg-destructive/10 hover:bg-destructive/20 text-destructive",
-                "disabled:opacity-50 disabled:cursor-not-allowed",
-              )}
-              title="Stop current query"
-            >
-              <Square className="w-4 h-4 fill-current" />
-            </button>
-          )}
-
-          {showAddressAll && !isLoading && (
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              onClick={() => {
-                void handleAddressAll();
-              }}
-              disabled={disabled || isSending}
-              className="h-8 rounded-full px-3 text-xs"
-              title="Send the review follow-up prompt"
-            >
-              Address all
-            </Button>
-          )}
-
-          {showSendButton && (
-            <button
-              onClick={handleSend}
-              disabled={sendDisabled}
-              className={cn(
-                "w-8 h-8 rounded-full flex items-center justify-center transition-colors",
-                isLoading
-                  ? "bg-primary/20 hover:bg-primary/30 text-primary"
-                  : "bg-muted hover:bg-muted/80",
-                "disabled:opacity-50 disabled:cursor-not-allowed",
-              )}
-              title={isLoading ? "Add to queue" : "Send message"}
-            >
-              <ArrowUp className="w-4 h-4" />
-            </button>
-          )}
-          </div>
-        </div>
-      </div>
-
-      <QueuedPromptsDialog
-        open={queueDialogOpen}
-        onOpenChange={setQueueDialogOpen}
-        messages={queuedMessages}
-        onEdit={handleQueuedMessageClick}
-        onMove={handleMoveQueuedMessage}
-        onRemove={handleRemoveQueuedMessage}
-        dispatchError={queueRecovery.dispatchError}
-        onRetryDispatch={queueRecovery.retry}
-        renderMeta={(message) => (
-          <>
-            <span>{message.mode === "plan" ? "Planning" : "Build"}</span>
-            <span>
-              {message.model
-                ? modelNameById.get(message.model) || message.model
-                : "Default model"}
-            </span>
-            {message.variant && <span>{message.variant}</span>}
-            {message.attachments.length > 0 && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+                title={`${modeDisplayName} mode (Shift+Tab to cycle)`}
+              >
+                <ChevronDown className="h-3 w-3" />
+                <span>{modeDisplayName}</span>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuItem onClick={() => handleModeChange("plan")}>
+                Planning
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleModeChange("build")}>
+                Build
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </>
+      }
+      contextUsage={contextUsage}
+      queue={{
+        length: queueLength,
+        error: queueRecovery.dispatchError,
+        onOpen: () => setQueueDialogOpen(true),
+      }}
+      onStop={onStop}
+      showAddressAll={showAddressAll}
+      onAddressAll={handleAddressAll}
+      showSendButton={showSendButton}
+      sendDisabled={sendDisabled}
+      onSend={handleSend}
+      footer={
+        <QueuedPromptsDialog
+          open={queueDialogOpen}
+          onOpenChange={setQueueDialogOpen}
+          messages={queuedMessages}
+          onEdit={handleQueuedMessageClick}
+          onMove={handleMoveQueuedMessage}
+          onRemove={handleRemoveQueuedMessage}
+          dispatchError={queueRecovery.dispatchError}
+          onRetryDispatch={queueRecovery.retry}
+          renderMeta={(message) => (
+            <>
+              <span>{message.mode === "plan" ? "Planning" : "Build"}</span>
               <span>
-                {message.attachments.length} attachment
-                {message.attachments.length === 1 ? "" : "s"}
+                {message.model
+                  ? modelNameById.get(message.model) || message.model
+                  : "Default model"}
               </span>
-            )}
-          </>
-        )}
-      />
-    </>
+              {message.variant ? <span>{message.variant}</span> : null}
+              {message.attachments.length > 0 ? (
+                <span>
+                  {message.attachments.length} attachment
+                  {message.attachments.length === 1 ? "" : "s"}
+                </span>
+              ) : null}
+            </>
+          )}
+        />
+      }
+    />
   );
 }

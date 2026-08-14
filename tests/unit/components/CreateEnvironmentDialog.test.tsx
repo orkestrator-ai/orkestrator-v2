@@ -1113,10 +1113,14 @@ describe("resolveAgentDefaults", () => {
     });
   });
 
-  test("deduplicates mixed-format OpenCode favorites and propagates their order to the picker", async () => {
+  test("shows Orkestrator-owned OpenCode favorites in their configured order", async () => {
     useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.opencodeModel = undefined;
+    config.global.favoriteModels = [
+      { platform: "opencode", modelId: "provider/model-b" },
+      { platform: "opencode", modelId: "provider/model-a" },
+    ];
     useConfigStore.setState({ config });
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_catalog_cache") {
@@ -1130,18 +1134,6 @@ describe("resolveAgentDefaults", () => {
             { id: "provider/model-b", name: "Model B", provider: "Provider" },
             { id: "provider/model-c", name: "Model C", provider: "Provider" },
           ],
-        });
-      }
-      if (command === "get_opencode_model_preferences") {
-        return Promise.resolve({
-          recent: [],
-          favorite: [
-            "provider/model-b",
-            { providerID: "provider", modelID: "model-b" },
-            { providerID: "provider", modelID: "model-a" },
-            "invalid",
-          ],
-          variant: {},
         });
       }
       return Promise.resolve(undefined);
@@ -1164,13 +1156,12 @@ describe("resolveAgentDefaults", () => {
       button: 0,
       ctrlKey: false,
     });
+    fireEvent.click(await screen.findByRole("button", { name: "Favorite models" }));
 
     const options = await screen.findAllByRole("menuitemradio");
-    expect(options.map((option) => option.textContent)).toEqual([
-      "Model Bprovider/model-b",
-      "Model Aprovider/model-a",
-      "Model Cprovider/model-c",
-    ]);
+    expect(options).toHaveLength(2);
+    expect(options[0]?.textContent).toContain("Model B");
+    expect(options[1]?.textContent).toContain("Model A");
   });
 
   test("prefers a live OpenCode catalog over the durable project cache", async () => {
@@ -1244,11 +1235,7 @@ describe("resolveAgentDefaults", () => {
       />,
     );
     fireEvent.click(screen.getByRole("radio", { name: "OpenCode" }));
-    await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith(
-        "get_opencode_model_preferences",
-      )
-    );
+    expect(invokeMock).not.toHaveBeenCalledWith("get_opencode_model_preferences");
     expect(invokeMock).not.toHaveBeenCalledWith(
       "get_opencode_model_catalog_cache",
       expect.anything(),

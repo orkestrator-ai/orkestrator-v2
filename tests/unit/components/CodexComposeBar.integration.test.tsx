@@ -19,8 +19,11 @@ mock.module("@/lib/backend", () => ({
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
 });
+import { useCodexNativeComposer, type CodexNativeComposerOptions } from "@/components/codex/useCodexNativeComposer";
 
-import { CodexComposeBar } from "@/components/codex/CodexComposeBar";
+function CodexNativeComposerHarness(props: CodexNativeComposerOptions) {
+  return useCodexNativeComposer(props);
+}
 import { useCodexStore } from "@/stores/codexStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import type { CodexModel } from "@/lib/codex-client";
@@ -34,7 +37,7 @@ const MODELS: CodexModel[] = [{
   defaultReasoningEffort: "high",
 }];
 
-describe("CodexComposeBar real workspace picker integration", () => {
+describe("CodexNativeComposerHarness real workspace picker integration", () => {
   beforeEach(() => {
     mockGetLocalFileTree.mockReset();
     mockGetLocalFileTree.mockResolvedValue([{
@@ -76,7 +79,7 @@ describe("CodexComposeBar real workspace picker integration", () => {
 
   test("inserts the selected file at the saved caret and rehydrates the controlled editor", async () => {
     render(
-      <CodexComposeBar
+      <CodexNativeComposerHarness
         environmentId={ENVIRONMENT_ID}
         sessionKey={SESSION_KEY}
         models={MODELS}

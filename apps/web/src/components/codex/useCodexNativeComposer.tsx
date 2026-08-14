@@ -1,27 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, ArrowUp, ChevronDown, FileText, Square, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { ChevronDown } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { cn } from "@/lib/utils";
 import { useCodexStore } from "@/stores";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
-import { ContextUsageWheel } from "@/components/chat/ContextUsageWheel";
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
-import { MentionableInput, type MentionableInputRef } from "@/components/chat/MentionableInput";
+import type { MentionableInputRef } from "@/components/chat/MentionableInput";
+import { NativeComposeBar } from "@/components/chat/NativeComposeBar";
 import { NativeAttachmentMenu } from "@/components/chat/NativeAttachmentMenu";
-import { NativeModelPicker } from "@/components/chat/NativeModelPicker";
+import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
+import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import { SlashCommandMenu } from "@/components/chat/SlashCommandMenu";
 import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
 import { usePromptQueueDispatchRecovery } from "@/hooks/usePromptQueueDispatchRecovery";
-import {
-  COMPOSE_MAX_INPUT_HEIGHT,
-  COMPOSE_MIN_INPUT_HEIGHT,
-} from "@/components/chat/compose-metrics";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useFileMentions, useFileSearch, useMediaQuery, useNativeComposeBarPaste } from "@/hooks";
 import { toast } from "sonner";
@@ -67,7 +62,7 @@ const REASONING_DESCRIPTIONS: Record<CodexReasoningEffort, string> = {
   ultra: "Maximum reasoning with automatic task delegation",
 };
 
-interface CodexComposeBarProps {
+export interface CodexNativeComposerOptions {
   environmentId: string;
   containerId?: string;
   sessionKey: string;
@@ -99,7 +94,7 @@ interface CodexComposeBarProps {
   layout?: "bottom" | "centered";
 }
 
-export function CodexComposeBar({
+export function useCodexNativeComposer({
   environmentId,
   containerId,
   sessionKey,
@@ -122,7 +117,8 @@ export function CodexComposeBar({
   onFastModeChange,
   showAddressAll = false,
   layout = "bottom",
-}: CodexComposeBarProps) {
+}: CodexNativeComposerOptions) {
+  const { favorites, enabledPlatforms, toggleFavorite } = useAgentModelFavorites();
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const prevFileMentionMenuOpen = useRef(false);
@@ -327,7 +323,7 @@ export function CodexComposeBar({
       (attachment) => addAttachment(sessionKey, attachment),
       [addAttachment, sessionKey],
     ),
-    logLabel: "CodexComposeBar",
+    logLabel: "useCodexNativeComposer",
   });
 
   const handleQueuedMessageClick = useCallback(
@@ -401,105 +397,58 @@ export function CodexComposeBar({
   const needsSteerInstructions = isLoading && steerCommand.matched && !steerCommand.input;
 
   return (
-    <div
-      className={cn(
-        "mx-auto w-[calc(100%_-_0.75rem)] shrink-0 rounded-2xl border border-border/70 bg-zinc-900/90 p-3 shadow-xl shadow-black/20 sm:w-[min(calc(100%_-_2rem),56rem)]",
-        layout === "bottom" ? "mb-4 mt-2" : "my-0",
-      )}
-    >
-      {attachments.length > 0 ? (
-        <div className="mb-2 flex flex-wrap gap-2">
-          {attachments.map((attachment) => (
-            <div
-              key={attachment.id}
-              className="relative flex items-center gap-1.5 rounded border border-border bg-muted/50 px-2 py-1 text-xs"
-            >
-              {attachment.previewUrl ? (
-                <img
-                  src={attachment.previewUrl}
-                  alt={attachment.name}
-                  className="h-6 w-6 rounded object-cover"
-                />
-              ) : (
-                <FileText className="h-4 w-4 text-muted-foreground" />
-              )}
-              <span className="max-w-[120px] truncate">{attachment.name}</span>
-              <button
-                type="button"
-                onClick={() => removeAttachment(sessionKey, attachment.id)}
-                disabled={disabled || isSending}
-                className="ml-1 rounded-full p-0.5 hover:bg-muted"
-                aria-label={`Remove ${attachment.name}`}
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      <div className="relative" data-mentionable-input ref={inputContainerRef}>
-        {slashMenuOpen && filteredSlashCommands.length > 0 ? (
-          <SlashCommandMenu
-            commands={filteredSlashCommands}
-            selectedIndex={slashSelectedIndex}
-            onSelect={handleSlashCommandSelect}
-            onClose={closeSlashMenu}
-          />
-        ) : null}
-
-        {fileMentionMenuOpen ? (
-          <FileMentionMenu
-            files={filteredFiles}
-            selectedIndex={fileMentionSelectedIndex}
-            onSelect={handleFileMentionSelect}
-            onClose={closeFileMentionMenu}
-          />
-        ) : null}
-
-        <MentionableInput
-          ref={inputRef}
-          value={text}
-          mentions={mentions}
-          onChange={handleTextAndMentionsChange}
-          onCursorChange={handleCursorPositionChange}
-          onKeyDown={(event) => {
-            if (fileMentionMenuOpen) {
-              const handled = handleFileMentionKeyDown(event, handleFileMentionSelect);
-              if (handled) {
-                return;
-              }
-            }
-
-            if (handleSlashKeyDown(event)) return;
-
-            if (event.key === "Tab" && event.shiftKey) {
-              event.preventDefault();
-              void onModeChange(selectedMode === "plan" ? "build" : "plan");
-              return;
-            }
-
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              void handleSubmit();
-            }
-          }}
-          placeholder="Ask Codex anything..."
-          disabled={disabled || isSending}
-          minHeight={COMPOSE_MIN_INPUT_HEIGHT}
-          maxHeight={COMPOSE_MAX_INPUT_HEIGHT}
-          className={cn((disabled || isSending) && "opacity-60")}
-        />
-      </div>
-
-      <div
-        data-native-compose-toolbar
-        className="flex min-w-0 items-center gap-1 overflow-x-auto pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-      >
-        <div
-          data-native-compose-controls="primary"
-          className="flex min-w-0 flex-1 items-center gap-1"
-        >
+    <NativeComposeBar
+      layout={layout}
+      attachments={attachments}
+      onRemoveAttachment={(attachmentId) => removeAttachment(sessionKey, attachmentId)}
+      inputRef={inputRef}
+      inputContainerRef={inputContainerRef}
+      text={text}
+      mentions={mentions}
+      onTextAndMentionsChange={handleTextAndMentionsChange}
+      onCursorPositionChange={handleCursorPositionChange}
+      onKeyDown={(event) => {
+        if (fileMentionMenuOpen) {
+          const handled = handleFileMentionKeyDown(event, handleFileMentionSelect);
+          if (handled) return;
+        }
+        if (handleSlashKeyDown(event)) return;
+        if (event.key === "Tab" && event.shiftKey) {
+          event.preventDefault();
+          void onModeChange(selectedMode === "plan" ? "build" : "plan");
+          return;
+        }
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          void handleSubmit();
+        }
+      }}
+      placeholder="Ask Codex anything..."
+      disabled={disabled}
+      isSending={isSending}
+      isLoading={isLoading}
+      menus={
+        <>
+          {slashMenuOpen && filteredSlashCommands.length > 0 ? (
+            <SlashCommandMenu
+              commands={filteredSlashCommands}
+              selectedIndex={slashSelectedIndex}
+              onSelect={handleSlashCommandSelect}
+              onClose={closeSlashMenu}
+            />
+          ) : null}
+          {fileMentionMenuOpen ? (
+            <FileMentionMenu
+              files={filteredFiles}
+              selectedIndex={fileMentionSelectedIndex}
+              onSelect={handleFileMentionSelect}
+              onClose={closeFileMentionMenu}
+            />
+          ) : null}
+        </>
+      }
+      primaryControls={
+        <>
           <NativeAttachmentMenu
             key={isSending ? "sending" : "idle"}
             disabled={disabled || isSending}
@@ -510,189 +459,116 @@ export function CodexComposeBar({
             filePickerTitle="Mention workspace file"
             filePickerDescription="Search this environment and mention a file in the current prompt."
           />
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              disabled={disabled || settingsLocked}
-              className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-              title={settingsLocked ? "Wait for Codex to finish before changing the mode" : "Choose mode"}
-            >
-              <ChevronDown className="h-3 w-3" />
-              <span>{modeDisplayLabel}</span>
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            <DropdownMenuItem onClick={() => void onModeChange("build")} disabled={settingsLocked}>
-              Build
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => void onModeChange("plan")} disabled={settingsLocked}>
-              Plan
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        <NativeModelPicker
-          models={models.map((model) => ({
-            id: model.id,
-            label: model.name,
-            description: model.description,
-          }))}
-          selectedModelId={selectedModel}
-          selectedModelLabel={selectedModelName}
-          onModelChange={(modelId) => { void onModelChange(modelId); }}
-          reasoningOptions={availableReasoningOptions.map((option) => ({
-            id: option.effort,
-            label: option.label,
-            description: option.description,
-            annotation: selectedModelObj?.defaultReasoningEffort === option.effort
-              ? "default"
-              : effectiveReasoningEffort === option.effort
-                ? "current"
-                : undefined,
-          }))}
-          selectedReasoningId={effectiveReasoningEffort}
-          selectedReasoningLabel={reasoningDisplayLabel}
-          onReasoningChange={(effort) => {
-            void onReasoningEffortChange(effort as CodexReasoningEffort);
-          }}
-          fastModeEnabled={fastModeEnabled}
-          fastModeAvailable
-          onFastModeChange={onFastModeChange}
-          disabled={disabled || settingsLocked}
-          title={
-            settingsLocked
+          <AgentModelPicker
+            favorites={favorites}
+            enabledPlatforms={enabledPlatforms}
+            selectedPlatform="codex"
+            platformSelectionLocked
+            onToggleFavorite={toggleFavorite}
+            models={models.map((model) => ({
+              id: model.id,
+              platform: "codex",
+              label: model.name,
+              description: model.description,
+            }))}
+            selectedModelId={selectedModel}
+            selectedModelLabel={selectedModelName}
+            onModelChange={(modelId) => void onModelChange(modelId)}
+            reasoningOptions={availableReasoningOptions.map((option) => ({
+              id: option.effort,
+              label: option.label,
+              description: option.description,
+              annotation: selectedModelObj?.defaultReasoningEffort === option.effort
+                ? "default"
+                : effectiveReasoningEffort === option.effort
+                  ? "current"
+                  : undefined,
+            }))}
+            selectedReasoningId={effectiveReasoningEffort}
+            selectedReasoningLabel={reasoningDisplayLabel}
+            onReasoningChange={(effort) => {
+              void onReasoningEffortChange(effort as CodexReasoningEffort);
+            }}
+            fastModeEnabled={fastModeEnabled}
+            fastModeAvailable
+            onFastModeChange={onFastModeChange}
+            disabled={disabled || settingsLocked}
+            title={settingsLocked
               ? "Wait for Codex to finish before changing model settings"
-              : "Choose model, reasoning, and speed"
-          }
+              : "Choose model, reasoning, and speed"}
+          />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                disabled={disabled || settingsLocked}
+                className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                title={settingsLocked
+                  ? "Wait for Codex to finish before changing the mode"
+                  : "Choose mode"}
+              >
+                <ChevronDown className="h-3 w-3" />
+                <span>{modeDisplayLabel}</span>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuItem onClick={() => void onModeChange("build")} disabled={settingsLocked}>
+                Build
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => void onModeChange("plan")} disabled={settingsLocked}>
+                Plan
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </>
+      }
+      contextUsage={contextUsage}
+      queue={{
+        length: queueLength,
+        error: queueRecovery.dispatchError,
+        onOpen: () => setQueueDialogOpen(true),
+      }}
+      onStop={onStop}
+      showAddressAll={showAddressAll}
+      onAddressAll={handleAddressAll}
+      showSendButton={showSendButton}
+      sendDisabled={sendDisabled}
+      sendTitle={isSteering
+        ? "Send to current turn"
+        : needsSteerInstructions
+          ? "Add instructions after /steer"
+          : isLoading
+            ? "Add to queue"
+            : "Send message"}
+      onSend={handleSubmit}
+      footer={
+        <QueuedPromptsDialog
+          open={queueDialogOpen}
+          onOpenChange={setQueueDialogOpen}
+          messages={queuedMessages}
+          onEdit={handleQueuedMessageClick}
+          onMove={handleMoveQueuedMessage}
+          onRemove={handleRemoveQueuedMessage}
+          dispatchError={queueRecovery.dispatchError}
+          onRetryDispatch={queueRecovery.retry}
+          renderMeta={(message) => (
+            <>
+              <span>{message.mode === "plan" ? "Plan" : "Build"}</span>
+              <span>{message.model}</span>
+              <span>{REASONING_LABELS[message.reasoningEffort]}</span>
+              {message.fastMode ? <span>Fast mode</span> : null}
+              {message.attachments.length > 0 ? (
+                <span>
+                  {message.attachments.length} attachment
+                  {message.attachments.length === 1 ? "" : "s"}
+                </span>
+              ) : null}
+            </>
+          )}
         />
-
-        </div>
-
-        <div
-          data-native-compose-controls="secondary"
-          className="flex shrink-0 items-center gap-1"
-        >
-        <ContextUsageWheel usage={contextUsage} className="ml-1" />
-
-        {/* A parked queue stops draining until a human retries, so the failure
-            has to be legible without opening the dialog. */}
-        {queueLength > 0 && (
-          <button
-            type="button"
-            onClick={() => setQueueDialogOpen(true)}
-            className={cn(
-              "flex items-center gap-1 rounded px-2 py-1 text-xs transition-colors",
-              queueRecovery.dispatchError
-                ? "bg-destructive/10 text-destructive hover:bg-destructive/20"
-                : "bg-muted/50 text-muted-foreground hover:bg-muted",
-            )}
-            aria-label={
-              queueRecovery.dispatchError
-                ? `${queueLength} queued prompts blocked: ${queueRecovery.dispatchError.message}`
-                : undefined
-            }
-            title={
-              queueRecovery.dispatchError
-                ? `Queued prompt was not sent: ${queueRecovery.dispatchError.message}`
-                : "View queued prompts"
-            }
-          >
-            {queueRecovery.dispatchError && (
-              <AlertCircle className="h-3 w-3 shrink-0" aria-hidden="true" />
-            )}
-            <span>+{queueLength} queued</span>
-          </button>
-        )}
-
-        {isLoading ? (
-          <button
-            type="button"
-            onClick={() => {
-              void onStop?.();
-            }}
-            disabled={disabled || !onStop}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-full bg-destructive/10 text-destructive transition-colors hover:bg-destructive/20",
-              "disabled:cursor-not-allowed disabled:opacity-50",
-            )}
-            title="Stop current query"
-          >
-            <Square className="h-4 w-4 fill-current" />
-          </button>
-        ) : null}
-
-        {showAddressAll && !isLoading ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            onClick={() => {
-              void handleAddressAll();
-            }}
-            disabled={disabled || isSending}
-            className="h-8 rounded-full px-3 text-xs"
-            title="Send the review follow-up prompt"
-          >
-            Address all
-          </Button>
-        ) : null}
-
-        {showSendButton ? (
-          <Button
-            type="button"
-            size="icon"
-            className={cn(
-              "h-8 w-8 rounded-full text-foreground transition-colors",
-              isLoading
-                ? "bg-primary/20 text-primary hover:bg-primary/30"
-                : "bg-muted hover:bg-muted/80",
-            )}
-            disabled={sendDisabled}
-            onClick={() => {
-              void handleSubmit();
-            }}
-            title={
-              isSteering
-                ? "Send to current turn"
-                : needsSteerInstructions
-                  ? "Add instructions after /steer"
-                  : isLoading
-                    ? "Add to queue"
-                    : "Send message"
-            }
-          >
-            <ArrowUp className="h-4 w-4" />
-          </Button>
-        ) : null}
-        </div>
-      </div>
-
-      <QueuedPromptsDialog
-        open={queueDialogOpen}
-        onOpenChange={setQueueDialogOpen}
-        messages={queuedMessages}
-        onEdit={handleQueuedMessageClick}
-        onMove={handleMoveQueuedMessage}
-        onRemove={handleRemoveQueuedMessage}
-        dispatchError={queueRecovery.dispatchError}
-        onRetryDispatch={queueRecovery.retry}
-        renderMeta={(message) => (
-          <>
-            <span>{message.mode === "plan" ? "Plan" : "Build"}</span>
-            <span>{message.model}</span>
-            <span>{REASONING_LABELS[message.reasoningEffort]}</span>
-            {message.fastMode && <span>Fast mode</span>}
-            {message.attachments.length > 0 && (
-              <span>
-                {message.attachments.length} attachment
-                {message.attachments.length === 1 ? "" : "s"}
-              </span>
-            )}
-          </>
-        )}
-      />
-    </div>
+      }
+    />
   );
 }
+
+

@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import type { PaneLeaf } from "@/types/paneLayout";
 import * as realClaudeChatTab from "@/components/claude/ClaudeChatTab";
 import * as realClaudeTmuxChatTab from "@/components/claude/ClaudeTmuxChatTab";
 import * as realCodexChatTab from "@/components/codex/CodexChatTab";
@@ -225,7 +226,7 @@ mock.module("@/components/acp/AcpChatTab", () => ({
   }: {
     tabId: string;
     data: {
-      provider: "cursor" | "grok";
+      platform: "cursor" | "grok";
       environmentId: string;
       sessionId?: string;
     };
@@ -233,7 +234,7 @@ mock.module("@/components/acp/AcpChatTab", () => ({
     initialPrompt?: string;
   }) => (
     <div
-      data-testid={`${data.provider}-tab`}
+      data-testid={`${data.platform}-tab`}
       data-tab-id={tabId}
       data-environment-id={data.environmentId}
       data-session-id={data.sessionId}
@@ -558,14 +559,14 @@ describe("PaneLeafContainer", () => {
   });
 
   test("grants global shortcut ownership only to the focused pane", async () => {
-    const chatPane = {
+    const chatPane: PaneLeaf = {
       kind: "leaf" as const,
       id: "pane-chat",
       tabs: [
         {
           id: "tab-codex",
-          type: "codex-native" as const,
-          codexNativeData: { environmentId: "env-visible" },
+          type: "agent-native" as const,
+          nativeAgentData: { platform: "codex", environmentId: "env-visible" },
         },
       ],
       activeTabId: "tab-codex",
@@ -600,19 +601,19 @@ describe("PaneLeafContainer", () => {
   });
 
   test("forwards review-tab state to native chat tabs", async () => {
-    const reviewPane = {
+    const reviewPane: PaneLeaf = {
       kind: "leaf" as const,
       id: "pane-review",
       tabs: [
         {
           id: "tab-claude",
-          type: "claude-native" as const,
+          type: "agent-native" as const,
           isReviewTab: true,
           agentHandoffId: "handoff-claude",
           consumedAgentHandoffId: "consumed-claude",
           initialAgentModel: "claude-review",
           initialReasoningEffort: "high",
-          claudeNativeData: { environmentId: "env-visible" },
+          nativeAgentData: { platform: "claude", environmentId: "env-visible" },
         },
         {
           id: "tab-tmux",
@@ -624,23 +625,23 @@ describe("PaneLeafContainer", () => {
         },
         {
           id: "tab-codex",
-          type: "codex-native" as const,
+          type: "agent-native" as const,
           isReviewTab: true,
           agentHandoffId: "handoff-codex",
           consumedAgentHandoffId: "consumed-codex",
           initialAgentModel: "codex-review",
           initialReasoningEffort: "medium",
-          codexNativeData: { environmentId: "env-visible" },
+          nativeAgentData: { platform: "codex", environmentId: "env-visible" },
         },
         {
           id: "tab-opencode",
-          type: "opencode-native" as const,
+          type: "agent-native" as const,
           isReviewTab: true,
           agentHandoffId: "handoff-opencode",
           consumedAgentHandoffId: "consumed-opencode",
           initialAgentModel: "provider/opencode-review",
           initialReasoningEffort: "deep",
-          openCodeNativeData: { environmentId: "env-visible" },
+          nativeAgentData: { platform: "opencode", environmentId: "env-visible" },
         },
       ],
       activeTabId: "tab-claude",
@@ -691,17 +692,17 @@ describe("PaneLeafContainer", () => {
       tabs: [
         {
           id: "tab-cursor",
-          type: "cursor-native" as const,
+          type: "agent-native" as const,
           initialPrompt: "Inspect this",
-          acpNativeData: {
-            provider: "cursor" as const,
+          nativeAgentData: {
+            platform: "cursor" as const,
             environmentId: "env-visible",
             sessionId: "cursor-session",
           },
         },
         {
           id: "tab-grok",
-          type: "grok-native" as const,
+          type: "agent-native" as const,
           nativeAgentData: {
             platform: "grok" as const,
             environmentId: "env-visible",
@@ -939,14 +940,14 @@ describe("PaneLeafContainer", () => {
   });
 
   test("forwards independent repeated refresh requests to every refreshable tab", async () => {
-    const agentPane = {
+    const agentPane: PaneLeaf = {
       kind: "leaf" as const,
       id: "pane-agents",
       tabs: [
         {
           id: "tab-claude",
-          type: "claude-native" as const,
-          claudeNativeData: { environmentId: "env-visible" },
+          type: "agent-native" as const,
+          nativeAgentData: { platform: "claude", environmentId: "env-visible" },
         },
         {
           id: "tab-tmux",
@@ -955,13 +956,13 @@ describe("PaneLeafContainer", () => {
         },
         {
           id: "tab-codex",
-          type: "codex-native" as const,
-          codexNativeData: { environmentId: "env-visible" },
+          type: "agent-native" as const,
+          nativeAgentData: { platform: "codex", environmentId: "env-visible" },
         },
         {
           id: "tab-opencode",
-          type: "opencode-native" as const,
-          openCodeNativeData: { environmentId: "env-visible" },
+          type: "agent-native" as const,
+          nativeAgentData: { platform: "opencode", environmentId: "env-visible" },
         },
         {
           id: "tab-browser",

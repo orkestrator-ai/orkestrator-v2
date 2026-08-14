@@ -23,6 +23,7 @@ import { useClaudeStore } from "./claudeStore";
 import { createClaudeTmuxStateKey, useClaudeTmuxStore } from "./claudeTmuxStore";
 import { useCodexStore } from "./codexStore";
 import { useOpenCodeStore } from "./openCodeStore";
+import { useNativeComposeStore } from "./nativeComposeStore";
 import * as backend from "@/lib/backend";
 import {
   boundBrowserHistory,
@@ -31,6 +32,7 @@ import {
 import { createUuid } from "@/lib/uuid";
 import { destroyBrowserPreview } from "@/lib/native/browser-preview";
 import { forgetAgentHandoff } from "@/lib/agent-handoff";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 /**
  * Per-environment state for pane layout
@@ -41,6 +43,12 @@ export interface EnvironmentPaneState {
   containerId: string | null;
   /** Last backend revision incorporated into this renderer's pane tree. */
   backendRevision?: number;
+}
+
+interface NativePlatformLockOptions {
+  initialPrompt?: string;
+  initialAgentModel?: string;
+  initialReasoningEffort?: string;
 }
 
 export type PaneLayoutHydrationStatus = "pending" | "done";
@@ -212,6 +220,12 @@ interface PaneLayoutState {
   clearTabInitialAgentOptions: (tabId: string, environmentId?: string) => void;
   clearTabAgentHandoff: (tabId: string, environmentId?: string) => void;
   updateTabNativeSessionId: (tabId: string, sessionId: string | undefined, environmentId?: string) => void;
+  lockTabNativePlatform: (
+    tabId: string,
+    platform: AgentPlatform,
+    environmentId?: string,
+    initial?: string | NativePlatformLockOptions,
+  ) => AgentPlatform | null;
   updateTabBrowserUrl: (
     tabId: string,
     url: string,
@@ -323,12 +337,13 @@ function cleanupCodexNativeTab(envId: string, tabId: string) {
 }
 
 function cleanupAcpNativeTab(envId: string, tab: TabInfo) {
-  if ((tab.type !== "cursor-native" && tab.type !== "grok-native") || !tab.acpNativeData) return;
+  const data = getNativeAgentData(tab);
+  if (data?.platform !== "cursor" && data?.platform !== "grok") return;
   void backend.teardownTab({
     environmentId: envId,
     tabId: tab.id,
-    kind: tab.type,
-    sessionId: tab.acpNativeData.sessionId,
+    kind: `${data.platform}-native`,
+    sessionId: data.sessionId,
   }).catch((err) => console.debug("[PaneLayout] ACP teardown remains pending:", err));
 }
 
@@ -355,23 +370,13 @@ function cleanupTabResources(envId: string, containerId: string | null, tab: Tab
     return;
   }
 
-  if (tab.type === "claude-native") {
-    cleanupClaudeNativeTab(envId, tab.id);
-    return;
-  }
-
-  if (tab.type === "opencode-native") {
-    cleanupOpenCodeNativeTab(envId, tab.id);
-    return;
-  }
-
-  if (tab.type === "codex-native") {
-    cleanupCodexNativeTab(envId, tab.id);
-    return;
-  }
-
-  if (tab.type === "cursor-native" || tab.type === "grok-native") {
-    cleanupAcpNativeTab(envId, tab);
+  if (tab.type === "agent-native") {
+    useNativeComposeStore.getState().clearDraft(createSessionKey(envId, tab.id));
+    const platform = getNativeAgentData(tab)?.platform;
+    if (platform === "claude") cleanupClaudeNativeTab(envId, tab.id);
+    else if (platform === "opencode") cleanupOpenCodeNativeTab(envId, tab.id);
+    else if (platform === "codex") cleanupCodexNativeTab(envId, tab.id);
+    else if (platform === "cursor" || platform === "grok") cleanupAcpNativeTab(envId, tab);
     return;
   }
 
@@ -408,16 +413,11 @@ function cleanupLocalTabResources(
   }
 
   const sessionKey = createSessionKey(envId, tab.id);
-  if (tab.type === "claude-native") {
-    useClaudeStore.getState().clearSession(sessionKey);
-    return;
-  }
-  if (tab.type === "opencode-native") {
-    useOpenCodeStore.getState().clearSession(sessionKey);
-    return;
-  }
-  if (tab.type === "codex-native") {
-    useCodexStore.getState().clearSession(sessionKey);
+  if (tab.type === "agent-native") {
+    const platform = getNativeAgentData(tab)?.platform;
+    if (platform === "claude") useClaudeStore.getState().clearSession(sessionKey);
+    else if (platform === "opencode") useOpenCodeStore.getState().clearSession(sessionKey);
+    else if (platform === "codex") useCodexStore.getState().clearSession(sessionKey);
     return;
   }
   if (tab.type === "claude-tmux") {
@@ -1015,43 +1015,54 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
       tabs: leaf.tabs.map((tab) => {
         if (tab.id !== tabId) return tab;
         const nextNativeAgentData = getNativeAgentData(tab);
-        const withCanonicalData = nextNativeAgentData
-          ? {
-              ...tab,
-              nativeAgentData: { ...nextNativeAgentData, sessionId },
-            }
+        return nextNativeAgentData
+          ? { ...tab, nativeAgentData: { ...nextNativeAgentData, sessionId } }
           : tab;
-        if (tab.type === "claude-native" && tab.claudeNativeData) {
-          return {
-            ...withCanonicalData,
-            claudeNativeData: { ...tab.claudeNativeData, sessionId },
-          };
-        }
-        if (tab.type === "codex-native" && tab.codexNativeData) {
-          return {
-            ...withCanonicalData,
-            codexNativeData: { ...tab.codexNativeData, sessionId },
-          };
-        }
-        if (tab.type === "opencode-native" && tab.openCodeNativeData) {
-          return {
-            ...withCanonicalData,
-            openCodeNativeData: { ...tab.openCodeNativeData, sessionId },
-          };
-        }
-        if ((tab.type === "cursor-native" || tab.type === "grok-native") && tab.acpNativeData) {
-          return {
-            ...withCanonicalData,
-            acpNativeData: { ...tab.acpNativeData, sessionId },
-          };
-        }
-        return withCanonicalData;
       }),
     }));
 
     const environments = new Map(state.environments);
     environments.set(envId, { ...envState, root: newRoot });
     set({ environments });
+  },
+
+  lockTabNativePlatform: (tabId, platform, environmentId, initial) => {
+    const state = get();
+    const envId = environmentId ?? state.activeEnvironmentId;
+    if (!envId) return null;
+    const envState = state.environments.get(envId);
+    if (!envState) return null;
+    const pane = findPaneWithTab(envState.root, tabId);
+    const tab = pane?.tabs.find((candidate) => candidate.id === tabId);
+    const data = tab ? getNativeAgentData(tab) : null;
+    if (!pane || !data) return null;
+    if (data.platform) return data.platform;
+    const initialOptions = typeof initial === "string"
+      ? { initialPrompt: initial }
+      : initial ?? {};
+
+    const root = updateLeaf(envState.root, pane.id, (leaf) => ({
+      ...leaf,
+      tabs: leaf.tabs.map((candidate) => candidate.id === tabId
+        ? {
+            ...candidate,
+            nativeAgentData: { ...data, platform },
+            ...(initialOptions.initialPrompt !== undefined
+              ? { initialPrompt: initialOptions.initialPrompt }
+              : {}),
+            ...(initialOptions.initialAgentModel !== undefined
+              ? { initialAgentModel: initialOptions.initialAgentModel }
+              : {}),
+            ...(initialOptions.initialReasoningEffort !== undefined
+              ? { initialReasoningEffort: initialOptions.initialReasoningEffort }
+              : {}),
+          }
+        : candidate),
+    }));
+    const environments = new Map(state.environments);
+    environments.set(envId, { ...envState, root });
+    set({ environments });
+    return platform;
   },
 
   updateTabBrowserUrl: (tabId, url, environmentId, history, historyIndex) => {

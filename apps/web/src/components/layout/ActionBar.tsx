@@ -57,6 +57,7 @@ import {
   Shield,
   SlidersHorizontal,
   StickyNote,
+  Terminal as TerminalIcon,
   Trash2,
   Upload,
   Workflow,
@@ -91,7 +92,6 @@ import {
   resolveDefaultReviewTabType,
 } from "@/lib/review-launch-options";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
-import { normalizeOpenCodeModelReferences } from "@/lib/opencode-model-preferences";
 import { promptQueueKey } from "@/lib/prompt-queue-persistence";
 import { createSessionKey } from "@/lib/utils";
 import { createUuid } from "@/lib/uuid";
@@ -245,7 +245,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const getProjectById = useProjectStore((state) => state.getProjectById);
   const { updateProject } = useProjects();
   const config = useConfigStore((state) => state.config);
-  const { createTab, selectTab, closeActiveTab, tabCount } = useTerminalContext();
+  const { createTab, selectTab, tabCount } = useTerminalContext();
   const filesPanelOpen = useFilesPanelStore((state) => state.isOpen);
   const toggleFilesPanel = useFilesPanelStore((state) => state.togglePanel);
   const changes = useFilesPanelStore((state) => state.changes);
@@ -281,42 +281,16 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const [loopedReviewDialogOpen, setLoopedReviewDialogOpen] = useState(false);
   const [loopedReviewLaunchPending, setLoopedReviewLaunchPending] = useState(false);
   const loopedReviewLaunchInFlightRef = useRef(false);
-  const [opencodeFavoriteModelIds, setOpencodeFavoriteModelIds] = useState<string[]>([]);
   const reviewLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reviewClickSuppressionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reviewLongPressOriginRef = useRef<{ x: number; y: number } | null>(null);
   const suppressReviewClickRef = useRef(false);
 
-  // OpenCode model preferences live in the TUI's global state file, which the
-  // user can edit while Orkestrator is running. Re-read it every time a review
-  // dialog opens rather than once on mount, so a model favorited in the TUI
-  // reaches the picker without an app restart. The file is untrusted, so the
-  // favorite list goes through the shared normalizer, which drops unparseable
-  // entries and duplicates and yields plain `provider/model` ids. Those ids
-  // drive the favorites-first ordering in the searchable OpenCode picker.
   const anyReviewDialogOpen = reviewDialogOpen || loopedReviewDialogOpen;
   const reviewModelCatalog = useReviewModelCatalog(
     selectedProjectId ?? "",
     anyReviewDialogOpen,
   );
-  useEffect(() => {
-    if (!anyReviewDialogOpen) return;
-    let cancelled = false;
-    void backend.getOpencodeModelPreferences()
-      .then((rawPreferences) => {
-        if (cancelled) return;
-        setOpencodeFavoriteModelIds(
-          normalizeOpenCodeModelReferences(rawPreferences?.favorite),
-        );
-      })
-      .catch((error) => {
-        console.warn("[ActionBar] Failed to load OpenCode model preferences:", error);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [anyReviewDialogOpen]);
-
   // Drag-to-scroll state for toolbar
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -903,6 +877,11 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     createTab(agent, agentLaunchMode ? { agentLaunchMode } : undefined);
   }, [createTab, canCreateTab]);
 
+  const handleCreateNativeTab = useCallback(() => {
+    if (!createTab || !canCreateTab) return;
+    createTab("agent-native");
+  }, [canCreateTab, createTab]);
+
   const handleCreateBrowserTab = useCallback(() => {
     if (!createTab || !canCreateTab) return;
     createTab("browser", { initialUrl: environmentBrowserUrl ?? undefined });
@@ -1036,16 +1015,9 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           break;
         case "n":
           if (reportTabLimit()) break;
-          if (canCreateTab && enabledAgents.has("claude")) {
+          if (canCreateTab) {
             e.preventDefault();
-            createTab?.("claude");
-          }
-          break;
-        case "m":
-          if (reportTabLimit()) break;
-          if (canCreateTab && enabledAgents.has("opencode")) {
-            e.preventDefault();
-            createTab?.("opencode");
+            createTab?.("agent-native");
           }
           break;
         case "r":
@@ -1068,13 +1040,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             handleOpenInEditor();
           }
           break;
-        case "w":
-          // Close active tab - always prevent default to avoid closing window
-          if (closeActiveTab && tabCount > 0) {
-            e.preventDefault();
-            closeActiveTab();
-          }
-          break;
         case "e":
           // Toggle files panel
           if (selectedEnvironment) {
@@ -1090,7 +1055,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   }, [
     createTab,
     selectTab,
-    closeActiveTab,
     tabCount,
     canCreateTab,
     canOpenEditor,
@@ -1413,18 +1377,57 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             </ToolbarTooltipTrigger>
           )}
 
-          {/* Terminal tab buttons */}
+          {/* Primary native-agent and terminal tab controls */}
           {(isGrid || selectedEnvironment) && (
             <>
               <div className={cn("mx-2 h-4 w-px bg-border", isGrid && "hidden")} />
-              <ToolbarTooltipTrigger
-                tooltip={
-                  <>
-                    <p>New Terminal Tab</p>
-                    <p className="text-xs text-muted-foreground">⌘T</p>
-                  </>
-                }
-              >
+              <ContextMenu>
+                <ToolbarContextMenuTrigger
+                  tooltip={
+                    <>
+                      <p>New Native Agent Tab</p>
+                      <p className="text-xs text-muted-foreground">⌘N · Right-click for options</p>
+                    </>
+                  }
+                >
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={handleCreateNativeTab}
+                    disabled={!selectedEnvironment || !canCreateTab}
+                    aria-label="New native agent tab"
+                  >
+                    <Plus className="h-4 w-4" />
+                    {isGrid && <span className="truncate text-xs">New agent</span>}
+                  </Button>
+                </ToolbarContextMenuTrigger>
+                <ContextMenuContent>
+                  <ContextMenuItem onClick={handleCreateNativeTab} disabled={!canCreateTab}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    Native Tab
+                  </ContextMenuItem>
+                  {enabledAgents.has("claude") && (
+                    <ContextMenuItem
+                      onClick={() => handleCreateAgentTab("claude", "tmux")}
+                      disabled={!canCreateTab}
+                    >
+                      <ClaudeIcon className="mr-2 h-4 w-4" />
+                      Claude Tmux Tab
+                    </ContextMenuItem>
+                  )}
+                </ContextMenuContent>
+              </ContextMenu>
+
+              <ContextMenu>
+                <ToolbarContextMenuTrigger
+                  tooltip={
+                    <>
+                      <p>New Terminal Tab</p>
+                      <p className="text-xs text-muted-foreground">⌘T · Right-click for agent CLIs</p>
+                    </>
+                  }
+                >
                   <Button
                     variant="ghost"
                     size="icon"
@@ -1433,10 +1436,58 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     disabled={!selectedEnvironment || !canCreateTab}
                     aria-label="New terminal tab"
                   >
-                    <Plus className="h-4 w-4" />
+                    <TerminalIcon className="h-4 w-4" />
                     {isGrid && <span className="truncate text-xs">New terminal</span>}
                   </Button>
-              </ToolbarTooltipTrigger>
+                </ToolbarContextMenuTrigger>
+                <ContextMenuContent>
+                  {enabledAgents.has("claude") && (
+                    <ContextMenuItem
+                      onClick={() => handleCreateAgentTab("claude", "cli")}
+                      disabled={!canCreateTab}
+                    >
+                      <ClaudeIcon className="mr-2 h-4 w-4" />
+                      Claude CLI
+                    </ContextMenuItem>
+                  )}
+                  {enabledAgents.has("codex") && (
+                    <ContextMenuItem
+                      onClick={() => handleCreateAgentTab("codex", "cli")}
+                      disabled={!canCreateTab}
+                    >
+                      <CodexIcon className="mr-2 h-4 w-4" />
+                      Codex CLI
+                    </ContextMenuItem>
+                  )}
+                  {enabledAgents.has("opencode") && (
+                    <ContextMenuItem
+                      onClick={() => handleCreateAgentTab("opencode", "cli")}
+                      disabled={!canCreateTab}
+                    >
+                      <OpenCodeIcon className="mr-2 h-4 w-4" />
+                      OpenCode CLI
+                    </ContextMenuItem>
+                  )}
+                  {enabledAgents.has("cursor") && (
+                    <ContextMenuItem
+                      onClick={() => handleCreateAgentTab("cursor", "cli")}
+                      disabled={!canCreateTab}
+                    >
+                      <CursorAgentIcon className="mr-2 h-4 w-4" />
+                      Cursor CLI
+                    </ContextMenuItem>
+                  )}
+                  {enabledAgents.has("grok") && (
+                    <ContextMenuItem
+                      onClick={() => handleCreateAgentTab("grok", "cli")}
+                      disabled={!canCreateTab}
+                    >
+                      <GrokBuildIcon className="mr-2 h-4 w-4" />
+                      Grok CLI
+                    </ContextMenuItem>
+                  )}
+                </ContextMenuContent>
+              </ContextMenu>
 
               <ToolbarTooltipTrigger
                 tooltip={
@@ -1483,141 +1534,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     {isGrid && <span className="truncate text-xs">New browser</span>}
                   </Button>
               </ToolbarTooltipTrigger>
-
-              {enabledAgents.has("claude") && <ContextMenu>
-                <ToolbarContextMenuTrigger
-                  tooltip={
-                    <>
-                      <p>New Tab with Claude</p>
-                      <p className="text-xs text-muted-foreground">⌘N · Right-click for mode</p>
-                    </>
-                  }
-                >
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={() => handleCreateAgentTab("claude")}
-                    disabled={!selectedEnvironment || !canCreateTab}
-                    aria-label="New tab with Claude"
-                  >
-                    <ClaudeIcon className="h-4 w-4" />
-                    {isGrid && <span className="truncate text-xs">New Claude tab</span>}
-                  </Button>
-                </ToolbarContextMenuTrigger>
-                <ContextMenuContent>
-                  <ContextMenuItem onClick={() => handleCreateAgentTab("claude", "cli")} disabled={!canCreateTab}>
-                    <ClaudeIcon className="mr-2 h-4 w-4" />
-                    Claude CLI
-                  </ContextMenuItem>
-                  <ContextMenuItem onClick={() => handleCreateAgentTab("claude", "native")} disabled={!canCreateTab}>
-                    <ClaudeIcon className="mr-2 h-4 w-4" />
-                    Claude Native
-                  </ContextMenuItem>
-                  <ContextMenuItem onClick={() => handleCreateAgentTab("claude", "tmux")} disabled={!canCreateTab}>
-                    <ClaudeIcon className="mr-2 h-4 w-4" />
-                    Claude Tmux
-                  </ContextMenuItem>
-                </ContextMenuContent>
-              </ContextMenu>}
-
-              {enabledAgents.has("codex") && <ContextMenu>
-                <ToolbarContextMenuTrigger
-                  tooltip={
-                    <>
-                      <p>New Tab with Codex</p>
-                      <p className="text-xs text-muted-foreground">Right-click for mode</p>
-                    </>
-                  }
-                >
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={() => handleCreateAgentTab("codex")}
-                    disabled={!selectedEnvironment || !canCreateTab}
-                    aria-label="New tab with Codex"
-                  >
-                    <CodexIcon className="h-4 w-4" />
-                    {isGrid && <span className="truncate text-xs">New Codex tab</span>}
-                  </Button>
-                </ToolbarContextMenuTrigger>
-                <ContextMenuContent>
-                  <ContextMenuItem onClick={() => handleCreateAgentTab("codex", "cli")} disabled={!canCreateTab}>
-                    <CodexIcon className="mr-2 h-4 w-4" />
-                    Codex CLI
-                  </ContextMenuItem>
-                  <ContextMenuItem onClick={() => handleCreateAgentTab("codex", "native")} disabled={!canCreateTab}>
-                    <CodexIcon className="mr-2 h-4 w-4" />
-                    Codex Native
-                  </ContextMenuItem>
-                </ContextMenuContent>
-              </ContextMenu>}
-
-              {enabledAgents.has("opencode") && <ContextMenu>
-                <ToolbarContextMenuTrigger
-                  tooltip={
-                    <>
-                      <p>New Tab with OpenCode</p>
-                      <p className="text-xs text-muted-foreground">⌘M · Right-click for mode</p>
-                    </>
-                  }
-                >
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={() => handleCreateAgentTab("opencode")}
-                    disabled={!selectedEnvironment || !canCreateTab}
-                    aria-label="New tab with OpenCode"
-                  >
-                    <OpenCodeIcon className="h-4 w-4" />
-                    {isGrid && <span className="truncate text-xs">New OpenCode tab</span>}
-                  </Button>
-                </ToolbarContextMenuTrigger>
-                <ContextMenuContent>
-                  <ContextMenuItem onClick={() => handleCreateAgentTab("opencode", "cli")} disabled={!canCreateTab}>
-                    <OpenCodeIcon className="mr-2 h-4 w-4" />
-                    OpenCode CLI
-                  </ContextMenuItem>
-                  <ContextMenuItem onClick={() => handleCreateAgentTab("opencode", "native")} disabled={!canCreateTab}>
-                    <OpenCodeIcon className="mr-2 h-4 w-4" />
-                    OpenCode Native
-                  </ContextMenuItem>
-                </ContextMenuContent>
-              </ContextMenu>}
-
-              {enabledAgents.has("cursor") && (
-                <ToolbarTooltipTrigger tooltip="New native Cursor Agent tab">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={() => handleCreateAgentTab("cursor", "native")}
-                    disabled={!selectedEnvironment || !canCreateTab}
-                    aria-label="New tab with Cursor Agent"
-                  >
-                    <CursorAgentIcon className="h-4 w-4" />
-                    {isGrid && <span className="truncate text-xs">New Cursor tab</span>}
-                  </Button>
-                </ToolbarTooltipTrigger>
-              )}
-
-              {enabledAgents.has("grok") && (
-                <ToolbarTooltipTrigger tooltip="New native Grok Build tab">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={() => handleCreateAgentTab("grok", "native")}
-                    disabled={!selectedEnvironment || !canCreateTab}
-                    aria-label="New tab with Grok Build"
-                  >
-                    <GrokBuildIcon className="h-4 w-4" />
-                    {isGrid && <span className="truncate text-xs">New Grok tab</span>}
-                  </Button>
-                </ToolbarTooltipTrigger>
-              )}
 
               <ToolbarTooltipTrigger
                 tooltip={
@@ -2272,7 +2188,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         preferredReasoningEfforts={{
           codex: config.global.codexReasoningEffort,
         }}
-        opencodeFavoriteModelIds={opencodeFavoriteModelIds}
         onConfirm={handleConfiguredReview}
       />
       <ReviewLaunchDialog
@@ -2301,7 +2216,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           codex: config.global.codexReasoningEffort,
         }}
         busy={loopedReviewLaunchPending}
-        opencodeFavoriteModelIds={opencodeFavoriteModelIds}
         onConfirm={handleLoopedReview}
       />
 

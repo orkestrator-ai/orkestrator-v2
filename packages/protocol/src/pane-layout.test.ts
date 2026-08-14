@@ -11,7 +11,7 @@ import {
 
 test("owns the pane layout schema versions shared by web and backend", () => {
   expect(LEGACY_PANE_LAYOUT_VERSION).toBe(1);
-  expect(PANE_LAYOUT_VERSION).toBe(2);
+  expect(PANE_LAYOUT_VERSION).toBe(3);
 });
 
 test("recognizes unsupported-version errors through transport prefixes", () => {

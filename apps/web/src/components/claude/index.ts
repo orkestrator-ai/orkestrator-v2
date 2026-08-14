@@ -1,5 +1,5 @@
 export { ClaudeChatTab } from "./ClaudeChatTab";
-export { ClaudeComposeBar } from "./ClaudeComposeBar";
+export { useClaudeNativeComposer } from "./useClaudeNativeComposer";
 export { ClaudeQuestionCard } from "./ClaudeQuestionCard";
 export { ClaudePlanApprovalCard } from "./ClaudePlanApprovalCard";
 export { ClaudeTmuxChatTab } from "./ClaudeTmuxChatTab";

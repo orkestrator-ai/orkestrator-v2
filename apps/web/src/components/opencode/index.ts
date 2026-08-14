@@ -1,3 +1,3 @@
 export { OpenCodeChatTab } from "./OpenCodeChatTab";
-export { OpenCodeComposeBar } from "./OpenCodeComposeBar";
+export { useOpenCodeNativeComposer } from "./useOpenCodeNativeComposer";
 export { OpenCodeQuestionCard } from "./OpenCodeQuestionCard";

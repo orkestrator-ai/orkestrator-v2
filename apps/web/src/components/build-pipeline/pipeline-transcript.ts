@@ -301,8 +301,8 @@ function toClaudeParts(value: unknown): ClaudeMessagePart[] {
       // The Claude adapter falls back to the tool name for a part that carries
       // no content of its own; the validator's `""` would suppress that.
       ...(content ? { content } : {}),
-      ...(createdAt ? { timestamp: createdAt } : {}),
-      ...(sourcePartId ? { _messageUuid: sourcePartId } : {}),
+      ...(createdAt ? { createdAt } : {}),
+      ...(sourcePartId ? { sourcePartId } : {}),
     }) as unknown as ClaudeMessagePart);
 }
 
@@ -487,7 +487,7 @@ export function toPipelineTranscript(
         role,
         content,
         parts: toClaudeParts(raw.parts),
-        timestamp: createdAt,
+        createdAt,
         ...(modelId ? { modelId } : {}),
       };
       transcript.push(

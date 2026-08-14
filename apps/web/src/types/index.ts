@@ -450,6 +450,7 @@ export interface TerminalAppearance {
 export interface GlobalConfig {
   /** Agent systems installed and exposed in launch/review surfaces. */
   enabledAgentPlatforms?: AgentPlatform[];
+  favoriteModels?: Array<{ platform: AgentPlatform; modelId: string }>;
   containerResources: ContainerResources;
   envFilePatterns: string[];
   anthropicApiKey?: string;
@@ -563,17 +564,17 @@ export * from "./paneLayout.js";
 export interface FileMention {
   /** Unique ID for React keys */
   id: string;
-  /** Display name (e.g., "ClaudeComposeBar.tsx") */
+  /** Display name (e.g., "NativeComposeBar.tsx") */
   filename: string;
-  /** Full relative path (e.g., "src/components/claude/ClaudeComposeBar.tsx") */
+  /** Full relative path (e.g., "src/components/chat/NativeComposeBar.tsx") */
   relativePath: string;
 }
 
 /** A file candidate for the @ mention dropdown */
 export interface FileCandidate {
-  /** Filename only (e.g., "ClaudeComposeBar.tsx") */
+  /** Filename only (e.g., "NativeComposeBar.tsx") */
   filename: string;
-  /** Full relative path (e.g., "src/components/claude/ClaudeComposeBar.tsx") */
+  /** Full relative path (e.g., "src/components/chat/NativeComposeBar.tsx") */
   relativePath: string;
   /** File extension (e.g., ".tsx") */
   extension?: string;

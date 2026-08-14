@@ -17,7 +17,15 @@ import {
 
 // Terminal tab types that need PersistentTerminal instances.
 // Using an allowlist ensures new non-terminal TabType variants don't accidentally spawn PTY sessions.
-const TERMINAL_TAB_TYPES: ReadonlySet<string> = new Set<TerminalTabType>(["plain", "claude", "opencode", "codex", "root"]);
+const TERMINAL_TAB_TYPES: ReadonlySet<string> = new Set<TerminalTabType>([
+  "plain",
+  "claude",
+  "opencode",
+  "codex",
+  "cursor",
+  "grok",
+  "root",
+]);
 
 // Default fallback for environments not yet in the store
 const DEFAULT_ROOT: PaneLeaf = { kind: "leaf", id: "default", tabs: [], activeTabId: null };

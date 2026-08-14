@@ -108,7 +108,6 @@ afterAll(() => {
   mock.module("@/hooks/useFileSearch", () => realUseFileSearchSnapshot);
   restoreMatchMedia();
 });
-
 // --- Module mocks (must be before component import) ---
 
 mock.module("@/lib/backend", () => ({
@@ -190,7 +189,11 @@ mock.module("@/components/chat/ContextUsageWheel", () => ({
   ContextUsageWheel: () => null,
 }));
 
-import { ClaudeComposeBar } from "../../../apps/web/src/components/claude/ClaudeComposeBar";
+import { useClaudeNativeComposer, type ClaudeNativeComposerOptions } from "../../../apps/web/src/components/claude/useClaudeNativeComposer";
+
+function ClaudeNativeComposerHarness(props: ClaudeNativeComposerOptions) {
+  return useClaudeNativeComposer(props);
+}
 import {
   hydratePromptQueue,
   promptQueueKey,
@@ -308,13 +311,13 @@ function createLocalEnvironment(): Environment {
   };
 }
 
-function renderComposeBar(overrides: Partial<Parameters<typeof ClaudeComposeBar>[0]> = {}) {
+function renderComposeBar(overrides: Partial<Parameters<typeof ClaudeNativeComposerHarness>[0]> = {}) {
   const onSend = mock(() => {});
   const onStop = mock(() => {});
   const onQueue = mock(() => {});
 
   const result = render(
-    <ClaudeComposeBar
+    <ClaudeNativeComposerHarness
       environmentId={ENV_ID}
       tabId={TAB_ID}
       models={defaultModels as any}
@@ -328,7 +331,7 @@ function renderComposeBar(overrides: Partial<Parameters<typeof ClaudeComposeBar>
   return { ...result, onSend, onStop, onQueue };
 }
 
-describe("ClaudeComposeBar", () => {
+describe("ClaudeNativeComposerHarness", () => {
   beforeEach(() => {
     setMobileViewport(false);
     mockReadImage.mockReset();

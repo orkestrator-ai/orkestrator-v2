@@ -16,8 +16,8 @@ import {
   type StructuredOutputResult,
   StructuredOutputReadUnavailableError,
 } from "@orkestrator/protocol/structured-output";
-import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
+import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
 
 export type { ClaudeModelCatalogSnapshot };
 export type {
@@ -50,60 +50,8 @@ export interface ToolDiffMetadata {
   diff?: string;
 }
 
-/** Part types for Claude messages */
-export interface ClaudeMessagePart {
-  type: "text" | "thinking" | "tool-invocation" | "tool-result" | "file";
-  content?: string;
-  /** When this content block first arrived from the Claude bridge. */
-  timestamp?: string;
-  toolName?: string;
-  toolArgs?: Record<string, unknown>;
-  toolState?: "success" | "failure" | "pending";
-  /** Agent lifecycle, distinct from whether the Task/Agent tool call succeeded. */
-  agentState?: "active" | "finished" | "failed";
-  toolTitle?: string;
-  toolOutput?: string;
-  toolError?: string;
-  toolDiff?: ToolDiffMetadata;
-  /** Count surfaced by provider UI/transcript metadata when child tool records are unavailable. */
-  toolUseCount?: number;
-  /** Numeric token count surfaced by provider UI/transcript metadata. */
-  tokenCount?: number;
-  /** Display text for compact provider token counts, e.g. "20.4k tokens". */
-  tokenCountText?: string;
-  /** Renderer hint for agent rows when provider metadata is token-only. */
-  agentUsageDisplay?: "token-only";
-  /** Tool use ID for this tool invocation */
-  toolUseId?: string;
-  /** Parent Task tool use ID - used to group child tools under their parent Task */
-  parentTaskUseId?: string;
-  /** Internal: Message UUID for tracking thinking parts (can be ignored by renderers) */
-  _messageUuid?: string;
-  /** Whether this tool is from an MCP server */
-  isMcpTool?: boolean;
-  /** The MCP server name if this is an MCP tool */
-  mcpServerName?: string;
-  /**
-   * Background-task identity joined onto launch/action rows for display.
-   *
-   * This is client-derived decoration, not part of the bridge wire contract.
-   * `status` is absent when a persisted transcript can recover the task name
-   * and id from tool results but no authoritative lifecycle snapshot exists.
-   */
-  backgroundTask?: {
-    id: string;
-    description?: string;
-    status?: ClaudeBackgroundTask["status"];
-  };
-  /**
-   * State of the whole task list immediately after this tool call, for task
-   * tools. Always supplied by a backend that saw the call — the bridge in
-   * Native Mode, the tmux session's transcript reader in tmux mode — never
-   * derived here. Absent for TodoWrite, for output the registry could not
-   * parse, and for messages recorded before this was tracked.
-   */
-  taskSnapshot?: TaskListSnapshot;
-}
+/** Claude bridge parts use the provider-neutral renderer wire shape. */
+export type ClaudeMessagePart = NativeMessagePart;
 
 /** MCP server runtime status from session init */
 export interface McpServerRuntimeStatus {
@@ -408,14 +356,7 @@ export function parseClaudeBackgroundTasks(
   return parsed;
 }
 
-export interface ClaudeMessage {
-  id: string;
-  role: "user" | "assistant" | "system";
-  content: string;
-  parts: ClaudeMessagePart[];
-  timestamp: string;
-  /** Model reported by the Claude backend response, never the UI selection. */
-  modelId?: string;
+export type ClaudeMessage = NativeMessage & {
   /**
    * Frames the bridge has published for this message, starting at 1. Present
    * only on assistant messages from a streaming turn — both over SSE and in
@@ -423,7 +364,9 @@ export interface ClaudeMessage {
    * refetching rejoin the patch stream. See `applyClaudeMessagePatch`.
    */
   revision?: number;
-}
+  /** Provider transcript identity used for fork and rewind operations. */
+  sdkUuid?: string;
+};
 
 /**
  * Payload of a `message.patched` event: the parts of an assistant message that
@@ -442,7 +385,7 @@ export interface ClaudeMessagePatch {
   /** Final length of the parts array after applying this patch. */
   partCount: number;
   changedParts: { index: number; part: ClaudeMessagePart }[];
-  timestamp: string;
+  createdAt: string;
   /** Revision this patch produces; valid only against a copy at `revision - 1`. */
   revision: number;
 }
@@ -524,7 +467,7 @@ export function applyClaudeMessagePatch(
     ...message,
     parts,
     content: contentFromParts(parts),
-    timestamp: patch.timestamp || message.timestamp,
+    createdAt: patch.createdAt || message.createdAt,
     revision: patch.revision,
   };
 }

@@ -164,8 +164,8 @@ function seedPaneLayout(tabs: TabInfo[], activeTabId: string | null, activePaneI
 
 const CLAUDE_TAB = {
   id: "claude-tab",
-  type: "claude-native",
-  claudeNativeData: { environmentId: "environment-1", sessionId: "session-1" },
+  type: "agent-native",
+  nativeAgentData: { environmentId: "environment-1", sessionId: "session-1" },
 } as TabInfo;
 
 beforeEach(() => {
@@ -265,7 +265,7 @@ describe("AppShell", () => {
       "claude-tab",
     );
     expect(screen.getByTestId("agent-info-button").getAttribute("data-active-tab-type")).toBe(
-      "claude-native",
+      "agent-native",
     );
 
     act(() => {

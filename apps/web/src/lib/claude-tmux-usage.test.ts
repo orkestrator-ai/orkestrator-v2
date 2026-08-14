@@ -114,10 +114,10 @@ Running 2 Explore agents...
       id: "assistant-1",
       role: "assistant",
       content: "",
-      timestamp: "2026-06-25T18:20:00.000Z",
+      createdAt: "2026-06-25T18:20:00.000Z",
       parts: [
         {
-          type: "tool-invocation",
+          type: "tool-invocation", content: "",
           toolName: "Agent",
           toolTitle: "Agent",
           toolState: "pending",
@@ -128,7 +128,7 @@ Running 2 Explore agents...
           toolUseId: "agent-1",
         },
         {
-          type: "tool-invocation",
+          type: "tool-invocation", content: "",
           toolName: "Read",
           toolTitle: "Read",
           toolState: "success",
@@ -211,10 +211,10 @@ Running 3 Worker agents...
       id: "assistant-1",
       role: "assistant",
       content: "",
-      timestamp: "2026-06-25T18:20:00.000Z",
+      createdAt: "2026-06-25T18:20:00.000Z",
       parts: [
         {
-          type: "tool-invocation",
+          type: "tool-invocation", content: "",
           toolName: "Agent",
           toolTitle: "Agent",
           toolState: "pending",
@@ -246,10 +246,10 @@ Running 3 Worker agents...
       id: "assistant-1",
       role: "assistant",
       content: "",
-      timestamp: "2026-06-25T18:20:00.000Z",
+      createdAt: "2026-06-25T18:20:00.000Z",
       parts: [
         {
-          type: "tool-invocation",
+          type: "tool-invocation", content: "",
           toolName: "Agent",
           toolTitle: "Agent",
           toolState: "success",
@@ -262,10 +262,10 @@ Running 3 Worker agents...
       id: "assistant-2",
       role: "assistant",
       content: "",
-      timestamp: "2026-06-25T18:21:00.000Z",
+      createdAt: "2026-06-25T18:21:00.000Z",
       parts: [
         {
-          type: "tool-invocation",
+          type: "tool-invocation", content: "",
           toolName: "Agent",
           toolTitle: "Agent",
           toolState: "pending",
@@ -304,10 +304,10 @@ Running 3 Worker agents...
       id: "assistant-1",
       role: "assistant",
       content: "",
-      timestamp: "2026-06-25T18:20:00.000Z",
+      createdAt: "2026-06-25T18:20:00.000Z",
       parts: [
         {
-          type: "tool-invocation",
+          type: "tool-invocation", content: "",
           toolName: "Agent",
           toolTitle: "Agent",
           toolState: "success",
@@ -343,7 +343,7 @@ Running 3 Worker agents...
 
   test("preserves message and part identity when a matching live summary is already applied", () => {
     const part: ClaudeMessagePart = {
-      type: "tool-invocation",
+      type: "tool-invocation", content: "",
       toolName: "Agent",
       toolTitle: "Agent",
       toolState: "success",
@@ -359,7 +359,7 @@ Running 3 Worker agents...
       id: "assistant-idempotent",
       role: "assistant",
       content: "",
-      timestamp: "2026-06-25T18:20:00.000Z",
+      createdAt: "2026-06-25T18:20:00.000Z",
       parts: [part],
     };
     const messages = [message];
@@ -386,10 +386,10 @@ Running 3 Worker agents...
       id: "assistant-1",
       role: "assistant",
       content: "",
-      timestamp: "2026-06-25T18:20:00.000Z",
+      createdAt: "2026-06-25T18:20:00.000Z",
       parts: [
         {
-          type: "tool-invocation",
+          type: "tool-invocation", content: "",
           toolName: "Agent",
           toolTitle: "Agent",
           toolState: "success",

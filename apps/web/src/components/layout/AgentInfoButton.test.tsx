@@ -59,7 +59,7 @@ const mockGetClaudeSessionMessages = mock(async () => [{
   role: "user" as const,
   content: "continue this",
   parts: [{ type: "text" as const, content: "continue this" }],
-  timestamp: "2026-07-27T10:00:00.000Z",
+  createdAt: "2026-07-27T10:00:00.000Z",
 }]);
 const mockRewindClaudeFiles = mock<
   (
@@ -208,8 +208,8 @@ let openCodeClient: unknown;
 function claudeTab(overrides: Partial<TabInfo> = {}): TabInfo {
   return {
     id: TAB_ID,
-    type: "claude-native",
-    claudeNativeData: { environmentId: ENVIRONMENT_ID, sessionId: "claude-session-1" },
+    type: "agent-native",
+    nativeAgentData: { platform: "claude", environmentId: ENVIRONMENT_ID, sessionId: "claude-session-1" },
     ...overrides,
   } as TabInfo;
 }
@@ -217,8 +217,9 @@ function claudeTab(overrides: Partial<TabInfo> = {}): TabInfo {
 function codexTab(overrides: Partial<TabInfo> = {}): TabInfo {
   return {
     id: TAB_ID,
-    type: "codex-native",
-    codexNativeData: {
+    type: "agent-native",
+    nativeAgentData: {
+      platform: "codex",
       environmentId: ENVIRONMENT_ID,
       containerId: "container-1",
       isLocal: false,
@@ -230,8 +231,9 @@ function codexTab(overrides: Partial<TabInfo> = {}): TabInfo {
 function openCodeTab(overrides: Partial<TabInfo> = {}): TabInfo {
   return {
     id: TAB_ID,
-    type: "opencode-native",
-    openCodeNativeData: {
+    type: "agent-native",
+    nativeAgentData: {
+      platform: "opencode",
       environmentId: ENVIRONMENT_ID,
       containerId: "container-1",
       isLocal: false,
@@ -381,7 +383,7 @@ beforeEach(() => {
     role: "user",
     content: "continue this",
     parts: [{ type: "text", content: "continue this" }],
-    timestamp: "2026-07-27T10:00:00.000Z",
+    createdAt: "2026-07-27T10:00:00.000Z",
   }]);
   mockRewindClaudeFiles.mockImplementation(async () => ({ files: [] }));
   mockStopClaudeBackgroundTask.mockImplementation(async () => true);
@@ -651,7 +653,7 @@ describe("AgentInfoButton provider resolution", () => {
   });
 
   test("a tab whose native data is missing is treated as no session", () => {
-    render(<AgentInfoButton activeTab={{ id: TAB_ID, type: "claude-native" } as TabInfo} />);
+    render(<AgentInfoButton activeTab={{ id: TAB_ID, type: "agent-native" } as TabInfo} />);
     open();
     expect(screen.getByText("No native agent")).toBeTruthy();
   });
@@ -1861,9 +1863,9 @@ describe("AgentInfoButton session actions", () => {
       .getState()
       .getAllTabs(ENVIRONMENT_ID)
       .find((tab) => tab.id !== TAB_ID)!;
-    expect(handoffTab.type).toBe("codex-native");
+    expect(handoffTab.type).toBe("agent-native");
     expect(handoffTab.agentHandoffId).toBeTruthy();
-    expect(handoffTab.codexNativeData).toMatchObject({
+    expect(handoffTab.nativeAgentData).toMatchObject({
       environmentId: ENVIRONMENT_ID,
     });
     expect(handoffTab.initialPrompt).toBeUndefined();
@@ -1936,8 +1938,8 @@ describe("AgentInfoButton session actions", () => {
       .getState()
       .getAllTabs(ENVIRONMENT_ID)
       .find((tab) => tab.id !== TAB_ID)!;
-    expect(handoffTab.type).toBe("claude-native");
-    expect(handoffTab.claudeNativeData?.environmentId).toBe(ENVIRONMENT_ID);
+    expect(handoffTab.type).toBe("agent-native");
+    expect(handoffTab.nativeAgentData?.environmentId).toBe(ENVIRONMENT_ID);
   });
 
   test("reads and revalidates an authoritative Codex handoff before opening OpenCode", async () => {
@@ -1960,8 +1962,8 @@ describe("AgentInfoButton session actions", () => {
       .getState()
       .getAllTabs(ENVIRONMENT_ID)
       .find((tab) => tab.id !== TAB_ID)!;
-    expect(handoffTab.type).toBe("opencode-native");
-    expect(handoffTab.openCodeNativeData?.environmentId).toBe(ENVIRONMENT_ID);
+    expect(handoffTab.type).toBe("agent-native");
+    expect(handoffTab.nativeAgentData?.environmentId).toBe(ENVIRONMENT_ID);
   });
 
   test.each([
@@ -2313,7 +2315,7 @@ describe("AgentInfoButton session actions", () => {
   test("does not open a destination tab when the source tab carries no native data", async () => {
     seedCodexSession();
 
-    render(<AgentInfoButton activeTab={{ id: TAB_ID, type: "codex-native" } as TabInfo} />);
+    render(<AgentInfoButton activeTab={{ id: TAB_ID, type: "agent-native" } as TabInfo} />);
     open();
 
     // Without native data there is no container or locality to copy onto the
@@ -2505,8 +2507,7 @@ describe("AgentInfoButton session actions", () => {
       expect(forked.initialReasoningEffort).toBeUndefined();
       expect(forked.type).toBe(tab.type);
       expect(forked.displayTitle).toMatch(/fork title$/);
-      const nativeData =
-        forked.claudeNativeData ?? forked.openCodeNativeData ?? forked.codexNativeData;
+      const nativeData = forked.nativeAgentData;
       expect(nativeData?.sessionId).toBe(expectedSessionId);
       expect(nativeData?.environmentId).toBe(ENVIRONMENT_ID);
       // A successful action closes the panel.

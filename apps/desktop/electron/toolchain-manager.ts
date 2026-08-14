@@ -602,16 +602,31 @@ async function acquireInstallLock(
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
 
+    const observedOwner = await readInstallLockOwner(lockPath);
+    if (observedOwner && !ownerProcessExists(observedOwner.pid)) {
+      // A process can exit immediately after creating the lock (for example,
+      // when a dev server is restarted during first-run downloads). Waiting
+      // for the age threshold in that case strands the next launch even though
+      // the recorded owner is conclusively gone.
+      const currentOwner = await readInstallLockOwner(lockPath);
+      if (currentOwner?.token === observedOwner.token) {
+        await rm(lockPath, { force: true });
+        continue;
+      }
+    }
+
     const lockStat = await stat(lockPath).catch(() => null);
-    if (lockStat && Date.now() - lockStat.mtimeMs > timings.lockStaleAfterMs) {
-      const observedOwner = await readInstallLockOwner(lockPath);
-      const ownerIsAlive = observedOwner ? ownerProcessExists(observedOwner.pid) : false;
-      if (!ownerIsAlive) {
-        const currentOwner = await readInstallLockOwner(lockPath);
-        if (currentOwner?.token === observedOwner?.token || (!currentOwner && !observedOwner)) {
-          await rm(lockPath, { force: true });
-          continue;
-        }
+    if (
+      !observedOwner
+      && lockStat
+      && Date.now() - lockStat.mtimeMs > timings.lockStaleAfterMs
+    ) {
+      // A newly-created lock can briefly be empty while its owner metadata is
+      // written. Only malformed locks need the age safeguard.
+      const currentOwner = await readInstallLockOwner(lockPath);
+      if (!currentOwner) {
+        await rm(lockPath, { force: true });
+        continue;
       }
     }
     if (!announcedWait) {

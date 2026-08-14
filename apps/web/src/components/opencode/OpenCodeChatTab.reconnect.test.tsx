@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { createSessionKey } from "@/lib/utils";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
@@ -8,12 +9,12 @@ import type { OpenCodeEvent } from "@/lib/opencode-client";
 import * as realHooks from "@/hooks";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import * as realOpenCodeClient from "@/lib/opencode-client";
-import * as realOpenCodeComposeBar from "./OpenCodeComposeBar";
+import * as realOpenCodeNativeComposer from "./useOpenCodeNativeComposer";
 
 const realHooksSnapshot = { ...realHooks };
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
 const realOpenCodeClientSnapshot = { ...realOpenCodeClient };
-const realOpenCodeComposeBarSnapshot = { ...realOpenCodeComposeBar };
+const realOpenCodeNativeComposerSnapshot = { ...realOpenCodeNativeComposer };
 
 const mockSubscribeToEvents = mock<
   (_client: unknown) => Promise<AsyncIterable<OpenCodeEvent>>
@@ -66,8 +67,11 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
   VirtualizedMessageList: () => <div data-testid="messages" />,
 }));
 
-mock.module("./OpenCodeComposeBar", () => ({
-  OpenCodeComposeBar: () => <div data-testid="compose" />,
+mock.module("./useOpenCodeNativeComposer", () => ({
+  useOpenCodeNativeComposer: () => {
+    useState(null);
+    return <div data-testid="compose" />;
+  },
 }));
 
 import { OpenCodeChatTab } from "./OpenCodeChatTab";
@@ -217,8 +221,8 @@ function seedStores() {
             tabs: [
               {
                 id: TAB_ID,
-                type: "opencode-native",
-                openCodeNativeData: {
+                type: "agent-native",
+                nativeAgentData: {
                   environmentId: ENVIRONMENT_ID,
                   containerId: "container-reconnect",
                 },
@@ -263,7 +267,7 @@ afterAll(() => {
     "@/components/chat/VirtualizedMessageList",
     () => realVirtualizedMessageListSnapshot,
   );
-  mock.module("./OpenCodeComposeBar", () => realOpenCodeComposeBarSnapshot);
+  mock.module("./useOpenCodeNativeComposer", () => realOpenCodeNativeComposerSnapshot);
 });
 
 describe("OpenCodeChatTab SSE reconnect", () => {
@@ -311,6 +315,22 @@ describe("OpenCodeChatTab SSE reconnect", () => {
     console.log = ORIGINAL_CONSOLE_LOG;
     cleanup();
     mock.restore();
+  });
+
+  test("mounts the hook-owning composer after setup becomes ready", async () => {
+    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+      setupPhase: "running",
+    });
+    renderChat();
+
+    await waitFor(() => expect(document.querySelector('[data-testid="compose"]')).toBeNull());
+    act(() => {
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        setupPhase: "ready",
+      });
+    });
+
+    await waitFor(() => expect(document.querySelector('[data-testid="compose"]')).toBeTruthy());
   });
 
   test("logs a rejected subscription and reconnects after the base delay", async () => {

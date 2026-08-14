@@ -4,7 +4,7 @@ import { PANE_LAYOUT_VERSION as SHARED_PANE_LAYOUT_VERSION } from "@orkestrator/
 
 describe("backend pane layout model", () => {
   test("exports the supported persisted schema version at runtime", () => {
-    expect(PANE_LAYOUT_VERSION).toBe(2);
+    expect(PANE_LAYOUT_VERSION).toBe(3);
     expect(PANE_LAYOUT_VERSION).toBe(SHARED_PANE_LAYOUT_VERSION);
   });
 });

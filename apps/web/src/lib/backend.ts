@@ -443,6 +443,13 @@ export async function getAgentModelCatalogCache(): Promise<AgentModelCatalogCach
   return invoke<AgentModelCatalogCache>("get_agent_model_catalog_cache");
 }
 
+/** Backend-normalized model catalogue consumed by the provider-neutral composer. */
+export async function getNativeAgentModelCatalog(
+  environmentId: string,
+): Promise<import("@orkestrator/protocol/native-agent").AgentModel[]> {
+  return invoke("get_native_agent_model_catalog", { environmentId });
+}
+
 /** Persist an authoritative catalogue for the next application launch. */
 export async function cacheAgentModelCatalog(
   agent: "claude" | "codex",

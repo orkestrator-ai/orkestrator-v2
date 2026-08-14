@@ -2282,8 +2282,8 @@ function buildMessageParts(
       result.push({
         type: "thinking",
         content: entry.value,
-        timestamp: entry.timestamp,
-        _messageUuid: entry.messageUuid,
+        createdAt: entry.timestamp,
+        sourcePartId: entry.messageUuid,
         parentTaskUseId: entry.parentTaskUseId,
       });
     } else if (entry.type === "tool-ref") {
@@ -2295,8 +2295,8 @@ function buildMessageParts(
       result.push({
         type: "text",
         content: entry.value,
-        timestamp: entry.timestamp,
-        _messageUuid: entry.messageUuid,
+        createdAt: entry.timestamp,
+        sourcePartId: entry.messageUuid,
         parentTaskUseId: entry.parentTaskUseId,
       });
     }
@@ -2968,7 +2968,7 @@ function normalizePersistedSessionMessages(
       role: entry.raw.type,
       content: entry.content,
       parts,
-      timestamp,
+      createdAt: timestamp,
       ...(modelId ? { modelId } : {}),
       // Recorded explicitly rather than inferred from `id`: a record with no
       // uuid falls back to a generated id, which must never be mistaken for a
@@ -4905,7 +4905,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     role: messageRole,
     content: displayPrompt,
     parts: [{ type: "text", content: displayPrompt }],
-    timestamp: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
   };
   session.messages.push(userMessage);
 
@@ -5750,7 +5750,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           messageId: currentAssistantMessage.id,
           partCount: parts.length,
           changedParts,
-          timestamp: currentAssistantMessage.timestamp,
+          createdAt: currentAssistantMessage.createdAt,
           revision: currentAssistantMessage.revision,
         } satisfies MessagePatchEventData,
       });
@@ -5782,7 +5782,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           role: "assistant",
           content,
           parts: finalParts,
-          timestamp: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
           ...(lastStreamModelId ? { modelId: lastStreamModelId } : {}),
         };
         session.messages.push(currentAssistantMessage);
@@ -6445,7 +6445,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             role: "assistant",
             content: accumulatedContent,
             parts: finalParts,
-            timestamp: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
             ...(modelId ? { modelId } : {}),
             ...(typeof sdkMessageUuid === "string" ? { sdkUuid: sdkMessageUuid } : {}),
           };

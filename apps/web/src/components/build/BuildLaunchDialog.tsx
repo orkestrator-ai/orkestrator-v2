@@ -30,7 +30,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { AgentRadioGroup } from "@/components/agents/AgentRadioGroup";
-import { OpenCodeModelSelect } from "@/components/opencode/OpenCodeModelSelect";
+import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
+import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import {
   defaultEffortFor,
   effortLabel,
@@ -173,7 +174,6 @@ interface BuildLaunchDialogProps {
   defaultEnvironmentType: EnvironmentType;
   preferredModels?: Partial<Record<LaunchAgent, string>>;
   preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
-  favoriteOpenCodeModelIds?: string[];
   /** Offers source-ticket comments as optional build context. */
   commentContext?: BuildLaunchCommentContextOption;
   /** Disables the submit button while a start request is in flight. */
@@ -241,12 +241,12 @@ export function BuildLaunchDialog({
   defaultEnvironmentType,
   preferredModels,
   preferredReasoningEfforts,
-  favoriteOpenCodeModelIds = [],
   commentContext,
   busy = false,
   localEnvironmentAvailable = true,
   onConfirm,
 }: BuildLaunchDialogProps) {
+  const { favorites, toggleFavorite } = useAgentModelFavorites();
   const dockerAvailable = useDockerAvailability();
   const [environmentType, setEnvironmentType] = useState(defaultEnvironmentType);
   const [steps, setSteps] = useState(() =>
@@ -562,15 +562,25 @@ export function BuildLaunchDialog({
                         {stepLabel} model
                       </Label>
                       {steps[key].agent === "opencode" ? (
-                        <OpenCodeModelSelect
+                        <AgentModelPicker
                           id={`build-${key}-model`}
-                          value={step.model?.id ?? steps[key].model}
-                          options={step.models}
-                          favoriteModelIds={favoriteOpenCodeModelIds}
-                          onValueChange={(model) => handleModelChange(key, model)}
-                          className="min-h-11 border-zinc-700/80 bg-zinc-900 py-2.5"
-                          showDescriptionInTrigger
-                          emptyLabel="No OpenCode models cached"
+                          ariaLabel={`${stepLabel} model`}
+                          models={step.models.map((model) => ({
+                            platform: "opencode" as const,
+                            id: model.id,
+                            label: model.name,
+                            description: model.description,
+                          }))}
+                          enabledPlatforms={["opencode"]}
+                          selectedPlatform="opencode"
+                          favorites={favorites}
+                          onToggleFavorite={toggleFavorite}
+                          selectedModelId={step.model?.id ?? steps[key].model}
+                          selectedModelLabel={step.model?.name ?? "Choose a model"}
+                          onModelChange={(model) => handleModelChange(key, model)}
+                          reasoningOptions={[]}
+                          title={`${stepLabel} model`}
+                          className="min-h-11 border border-zinc-700/80 bg-zinc-900 py-2.5"
                         />
                       ) : (
                         <Select

@@ -16,6 +16,7 @@ import {
   usePromptDraftStore,
 } from "@/stores/promptDraftStore";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
+import { useNativeAgentSession } from "@/hooks/useNativeAgentSession";
 import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useCodexStore, useConfigStore } from "@/stores";
@@ -80,9 +81,9 @@ import {
   forkAttachmentNotice,
   type MessageForkKind,
 } from "@/components/chat/message-fork";
-import { getNativeAgentAdapter } from "@/components/native-agent/adapter";
+import { normalizeNativeMessages } from "@/lib/chat/native-message-adapters";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
-import { CodexComposeBar } from "./CodexComposeBar";
+import { useCodexNativeComposer } from "./useCodexNativeComposer";
 import { parseCodexSteerCommand } from "./codex-steer-command";
 import { CodexApprovalCard } from "./CodexApprovalCard";
 import { CodexInteractionCard } from "./CodexInteractionCard";
@@ -105,7 +106,7 @@ import {
   transferAgentPromptToComposeDraft,
 } from "@/lib/prompt-queue-sources";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
-import type { CodexNativeData } from "@/types/paneLayout";
+import type { NativeAgentData as CodexNativeData } from "@/types/paneLayout";
 import {
   CODEX_UNCONFIRMED_DISPATCH_ERROR,
   type CodexAttachment,
@@ -125,6 +126,7 @@ interface CodexChatTabProps {
   agentHandoffId?: string;
   consumedAgentHandoffId?: string;
   refreshRequestId?: number;
+  initialResumeOpen?: boolean;
 }
 type ConnectionState = "connecting" | "connected" | "error";
 
@@ -232,6 +234,7 @@ export function CodexChatTab({
   agentHandoffId,
   consumedAgentHandoffId,
   refreshRequestId = 0,
+  initialResumeOpen = false,
 }: CodexChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
   const projectedSessionId = data.sessionId;
@@ -245,7 +248,7 @@ export function CodexChatTab({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [serverLog, setServerLog] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
-  const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
+  const [resumeDialogOpen, setResumeDialogOpen] = useState(initialResumeOpen);
   const [initialPromptSent, setInitialPromptSent] = useState(false);
   const [dismissedPlanReviewMessageId, setDismissedPlanReviewMessageId] = useState<string | null>(null);
   const [isPlanTransitionPending, setIsPlanTransitionPending] = useState(false);
@@ -267,8 +270,6 @@ export function CodexChatTab({
     sessionId: string;
     promise: Promise<void>;
   } | null>(null);
-  const lastInitTimeRef = useRef(0);
-  const isInitializedRef = useRef(false);
   /** Set when an interrupt is accepted; cleared when the turn actually ends. */
   const awaitingStopMarkerRef = useRef(false);
   /**
@@ -289,7 +290,6 @@ export function CodexChatTab({
   const approvalActivitySequenceRef = useRef(0);
   const interactionSnapshotSequenceRef = useRef(0);
   const interactionActivitySequenceRef = useRef(0);
-  const forkInFlightRef = useRef(false);
   const resumeInFlightRef = useRef(false);
   const [forkInFlight, setForkInFlight] = useState(false);
 
@@ -319,24 +319,24 @@ export function CodexChatTab({
    * must never trigger a render or be captured stale by the loop's closure.
    */
   const eventCursorRef = useRef<number | null>(null);
-  const sessionKey = useMemo(
-    () => createSessionKey(environmentId, tabId),
-    [environmentId, tabId],
-  );
+  const {
+    sessionKey,
+    initialLaunchOptionsRef,
+    acknowledgeInitialLaunchOptions,
+    isInitializedRef,
+    lastInitTimeRef,
+    forkInFlightRef,
+  } = useNativeAgentSession({
+    platform: "codex",
+    environmentId,
+    tabId,
+    initialAgentModel,
+    initialReasoningEffort,
+  });
   const initialPromptRequestId = `initial-prompt:${environmentId}:${tabId}`;
   useNativeComposeDraftPersistence("codex", environmentId, sessionKey, useCodexStore);
-  const initialLaunchOptionsRef = useRef({
-    model: initialAgentModel,
-    reasoningEffort: initialReasoningEffort,
-  });
-  const initialLaunchOptionsPendingRef = useRef(
-    Boolean(initialAgentModel || initialReasoningEffort),
-  );
   const initialLaunchModel = initialLaunchOptionsRef.current.model;
   const initialLaunchReasoningEffort = initialLaunchOptionsRef.current.reasoningEffort;
-  const clearTabInitialAgentOptions = usePaneLayoutStore(
-    (state) => state.clearTabInitialAgentOptions,
-  );
 
   useEffect(() => {
     const store = useCodexStore.getState();
@@ -366,11 +366,6 @@ export function CodexChatTab({
     initialLaunchReasoningEffort,
     sessionKey,
   ]);
-  const acknowledgeInitialLaunchOptions = useCallback(() => {
-    if (!initialLaunchOptionsPendingRef.current) return;
-    initialLaunchOptionsPendingRef.current = false;
-    clearTabInitialAgentOptions(tabId, environmentId);
-  }, [clearTabInitialAgentOptions, environmentId, tabId]);
   /**
    * Claim a session this tab restored rather than created.
    *
@@ -641,7 +636,7 @@ export function CodexChatTab({
   );
   const providerDisplayMessages = useMemo(
     () => pinActiveNativeAgentParts(
-      getNativeAgentAdapter("codex").normalizeMessages(sessionMessages),
+      normalizeNativeMessages(sessionMessages),
     ),
     [sessionMessages],
   );
@@ -1681,9 +1676,9 @@ export function CodexChatTab({
         paneStore.getActivePaneId(environmentId),
         {
           id: forkTabId,
-          type: "codex-native",
+          type: "agent-native",
           displayTitle: fork.title ?? "Codex fork",
-          codexNativeData: { ...data, sessionId: fork.sessionId },
+          nativeAgentData: { ...data, platform: "codex", sessionId: fork.sessionId },
         },
         environmentId,
       );
@@ -3303,21 +3298,20 @@ export function CodexChatTab({
           />
         ) : null
       }
-      composer={
-        <CodexComposeBar
-          environmentId={environmentId}
-          containerId={containerId}
-          sessionKey={sessionKey}
-          models={models}
-          selectedMode={selectedMode}
-          selectedModel={selectedModel}
-          selectedReasoningEffort={selectedReasoningEffort}
-          slashCommands={slashCommands}
-          settingsLocked={session?.isLoading ?? false}
-          disabled={!handoff.ready || !session?.sessionId || !sessionDispatchReady}
-          isLoading={session?.isLoading ?? false}
-          queueLength={queueLength}
-          onSend={async (text, attachments) => {
+      composer={<CodexNativeComposer composerProps={{
+          environmentId,
+          containerId,
+          sessionKey,
+          models,
+          selectedMode,
+          selectedModel,
+          selectedReasoningEffort,
+          slashCommands,
+          settingsLocked: session?.isLoading ?? false,
+          disabled: !handoff.ready || !session?.sessionId || !sessionDispatchReady,
+          isLoading: session?.isLoading ?? false,
+          queueLength,
+          onSend: async (text, attachments) => {
             const submittedSessionId = useCodexStore
               .getState()
               .sessions.get(sessionKey)?.sessionId;
@@ -3329,18 +3323,17 @@ export function CodexChatTab({
             }
             return useCodexStore.getState().sessions.get(sessionKey)?.sessionId
               === submittedSessionId;
-          }}
-          onQueue={handleQueue}
-          onStop={handleStop}
-          onModeChange={handleModeChange}
-          onModelChange={handleModelChange}
-          onReasoningEffortChange={handleReasoningEffortChange}
-          fastModeEnabled={fastModeEnabled}
-          onFastModeChange={handleFastModeChange}
-          showAddressAll={showAddressAll}
-          layout={centerCompose ? "centered" : "bottom"}
-        />
-      }
+          },
+          onQueue: handleQueue,
+          onStop: handleStop,
+          onModeChange: handleModeChange,
+          onModelChange: handleModelChange,
+          onReasoningEffortChange: handleReasoningEffortChange,
+          fastModeEnabled,
+          onFastModeChange: handleFastModeChange,
+          showAddressAll,
+          layout: centerCompose ? "centered" : "bottom",
+        }} />}
       resumeDialog={
         client ? (
           <CodexResumeSessionDialog
@@ -3354,4 +3347,11 @@ export function CodexChatTab({
       }
     />
   );
+}
+function CodexNativeComposer({
+  composerProps,
+}: {
+  composerProps: Parameters<typeof useCodexNativeComposer>[0];
+}) {
+  return useCodexNativeComposer(composerProps);
 }

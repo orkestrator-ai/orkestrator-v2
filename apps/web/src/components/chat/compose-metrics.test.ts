@@ -9,9 +9,7 @@ import {
 } from "./compose-metrics";
 
 const COMPOSE_BARS = [
-  "claude/ClaudeComposeBar.tsx",
-  "codex/CodexComposeBar.tsx",
-  "opencode/OpenCodeComposeBar.tsx",
+  "chat/NativeComposeBar.tsx",
 ];
 
 describe("compose metrics", () => {

@@ -30,6 +30,7 @@ import {
 } from "./browser-preview-startup.js";
 import { createBrowserPreviewMainAdapters } from "./browser-preview-main-adapters.js";
 import { claimSingleInstanceLock, registerSecondInstanceFocus } from "./single-instance.js";
+import { createApplicationMenuTemplate } from "./application-menu.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -62,41 +63,11 @@ function emitToRenderers(event: string, payload: unknown): void {
 }
 
 function createMenu(): void {
-  const template: Electron.MenuItemConstructorOptions[] = [
-    {
-      label: PRODUCT_NAME,
-      submenu: [
-        { role: "about" },
-        { type: "separator" },
-        { role: "hide" },
-        { role: "hideOthers" },
-        { role: "unhide" },
-        { type: "separator" },
-        { role: "quit" },
-      ],
-    },
-    {
-      label: "Edit",
-      submenu: [
-        { role: "undo" },
-        { role: "redo" },
-        { type: "separator" },
-        { role: "cut" },
-        { role: "copy" },
-        { role: "paste" },
-        { role: "selectAll" },
-      ],
-    },
-    {
-      label: "View",
-      submenu: [
-        { label: "Zoom In", accelerator: "CmdOrCtrl+=", click: () => emitToRenderers("menu-zoom", "in") },
-        { label: "Zoom Out", accelerator: "CmdOrCtrl+-", click: () => emitToRenderers("menu-zoom", "out") },
-        { type: "separator" },
-        { label: "Actual Size", accelerator: "CmdOrCtrl+0", click: () => emitToRenderers("menu-zoom", "reset") },
-      ],
-    },
-  ];
+  const template = createApplicationMenuTemplate({
+    productName: PRODUCT_NAME,
+    closeTab: () => emitToRenderers("menu-close-tab", undefined),
+    zoom: (direction) => emitToRenderers("menu-zoom", direction),
+  });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 

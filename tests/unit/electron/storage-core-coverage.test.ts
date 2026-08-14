@@ -67,9 +67,13 @@ describe("StorageService core coverage", () => {
       opencodePid: 101,
       claudeBridgePid: 102,
       codexBridgePid: 103,
+      cursorBridgePid: 104,
+      grokBridgePid: 105,
       localOpencodePort: 4101,
       localClaudePort: 4102,
       localCodexPort: 4103,
+      localCursorPort: 4104,
+      localGrokPort: 4105,
       entryPort: 3000,
       hostEntryPort: 43000,
       setupScriptsComplete: true,
@@ -98,9 +102,13 @@ describe("StorageService core coverage", () => {
       opencodePid: 101,
       claudeBridgePid: 102,
       codexBridgePid: 103,
+      cursorBridgePid: 104,
+      grokBridgePid: 105,
       localOpencodePort: 4101,
       localClaudePort: 4102,
       localCodexPort: 4103,
+      localCursorPort: 4104,
+      localGrokPort: 4105,
       entryPort: 3000,
       hostEntryPort: 43000,
       setupScriptsComplete: true,
@@ -150,9 +158,13 @@ describe("StorageService core coverage", () => {
       opencodePid: "101",
       claudeBridgePid: Number.NaN,
       codexBridgePid: Number.POSITIVE_INFINITY,
+      cursorBridgePid: 0,
+      grokBridgePid: -1,
       localOpencodePort: 0,
       localClaudePort: "4102",
       localCodexPort: 65_536,
+      localCursorPort: Number.NaN,
+      localGrokPort: -1,
       entryPort: "3000",
       hostEntryPort: Number.NEGATIVE_INFINITY,
       setupScriptsComplete: "false",
@@ -179,9 +191,13 @@ describe("StorageService core coverage", () => {
       opencodePid: null,
       claudeBridgePid: undefined,
       codexBridgePid: null,
+      cursorBridgePid: undefined,
+      grokBridgePid: null,
       localOpencodePort: null,
       localClaudePort: undefined,
       localCodexPort: null,
+      localCursorPort: undefined,
+      localGrokPort: null,
       entryPort: undefined,
       hostEntryPort: null,
       setupScriptsComplete: false,
@@ -205,9 +221,13 @@ describe("StorageService core coverage", () => {
     expect(reset.opencodePid).toBeUndefined();
     expect(reset.claudeBridgePid).toBeUndefined();
     expect(reset.codexBridgePid).toBeUndefined();
+    expect(reset.cursorBridgePid).toBeUndefined();
+    expect(reset.grokBridgePid).toBeUndefined();
     expect(reset.localOpencodePort).toBeUndefined();
     expect(reset.localClaudePort).toBeUndefined();
     expect(reset.localCodexPort).toBeUndefined();
+    expect(reset.localCursorPort).toBeUndefined();
+    expect(reset.localGrokPort).toBeUndefined();
     expect(reset.entryPort).toBeUndefined();
     expect(reset.hostEntryPort).toBeUndefined();
     expect(reset.setupScriptsComplete).toBe(false);

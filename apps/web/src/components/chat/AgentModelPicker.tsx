@@ -1,5 +1,5 @@
 import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight, RefreshCw, Zap } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, RefreshCw, Star, Zap } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -12,28 +12,25 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { AgentModel, AgentModelRef, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
+import { ClaudeIcon, CodexIcon, CursorAgentIcon, GrokBuildIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 
-export interface NativeModelPickerModel {
-  id: string;
-  label: string;
-  description?: string;
-  searchText?: string;
-  favorite?: boolean;
-}
-
-export interface NativeModelPickerReasoningOption {
-  id: string;
-  label: string;
-  description?: string;
-  annotation?: string;
-}
-
-interface NativeModelPickerProps {
-  models: NativeModelPickerModel[];
+interface AgentModelPickerProps {
+  id?: string;
+  className?: string;
+  ariaLabel?: string;
+  models: AgentModel[];
+  enabledPlatforms?: AgentPlatform[];
+  selectedPlatform?: AgentPlatform;
+  platformSelectionLocked?: boolean;
+  favorites?: AgentModelRef[];
+  onPlatformChange?: (platform: AgentPlatform) => void;
+  onToggleFavorite?: (model: AgentModel) => void;
   selectedModelId?: string;
   selectedModelLabel: string;
   onModelChange: (modelId: string) => void;
-  reasoningOptions: NativeModelPickerReasoningOption[];
+  reasoningOptions: AgentReasoningOption[];
   selectedReasoningId?: string;
   selectedReasoningLabel?: string;
   onReasoningChange?: (reasoningId: string) => void;
@@ -49,49 +46,98 @@ const MODEL_ROW_HEIGHT_CLASS = "h-14";
 const VISIBLE_MODEL_ROWS = 5;
 type MobileSubmenu = "reasoning" | "speed";
 
+const PLATFORM_LABELS: Record<AgentPlatform, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  opencode: "OpenCode",
+  cursor: "Cursor",
+  grok: "Grok",
+};
+
+function PlatformIcon({ platform }: { platform: AgentPlatform }) {
+  const className = "size-4";
+  if (platform === "claude") return <ClaudeIcon className={className} />;
+  if (platform === "codex") return <CodexIcon className={className} />;
+  if (platform === "opencode") return <OpenCodeIcon className={className} />;
+  if (platform === "cursor") return <CursorAgentIcon className={className} />;
+  return <GrokBuildIcon className={className} />;
+}
+
 function ModelItems({
   models,
   selectedModelId,
+  selectedPlatform,
   disabled,
   onModelChange,
+  onPlatformChange,
   emptyLabel = "No models available",
+  favorites = [],
+  onToggleFavorite,
 }: Pick<
-  NativeModelPickerProps,
-  "models" | "selectedModelId" | "disabled" | "onModelChange"
+  AgentModelPickerProps,
+  "models" | "selectedModelId" | "selectedPlatform" | "disabled" | "onModelChange" | "onPlatformChange" | "favorites" | "onToggleFavorite"
 > & { emptyLabel?: string }) {
+  const favoriteKeys = new Set(favorites.map((favorite) => `${favorite.platform}:${favorite.modelId}`));
+  const selectedModelKey = selectedModelId
+    ? `${selectedPlatform ?? models.find((model) => model.id === selectedModelId)?.platform}:${selectedModelId}`
+    : "";
   if (models.length === 0) {
     return <DropdownMenuItem disabled>{emptyLabel}</DropdownMenuItem>;
   }
 
   return (
     <DropdownMenuRadioGroup
-      value={selectedModelId ?? ""}
-      onValueChange={onModelChange}
+      value={selectedModelKey}
+      onValueChange={(modelKey) => {
+        const model = models.find(
+          (candidate) => `${candidate.platform}:${candidate.id}` === modelKey,
+        );
+        if (!model) return;
+        onPlatformChange?.(model.platform);
+        onModelChange(model.id);
+      }}
     >
-      {models.map((model) => (
-        <DropdownMenuRadioItem
-          key={model.id}
-          value={model.id}
-          disabled={disabled}
-          className={cn(MODEL_ROW_HEIGHT_CLASS, "items-start py-2")}
-        >
-          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="flex min-w-0 items-center gap-1.5">
-              <span className="min-w-0 truncate text-sm font-medium">{model.label}</span>
-              {model.favorite ? (
-                <span className="shrink-0 rounded bg-zinc-800 px-1 py-0.5 text-[9px] uppercase tracking-wide text-muted-foreground">
-                  Favorite
+      {models.map((model) => {
+        const modelKey = `${model.platform}:${model.id}`;
+        const isFavorite = favoriteKeys.has(modelKey);
+        return (
+          <div key={modelKey} className="relative">
+            <DropdownMenuRadioItem
+              value={modelKey}
+              disabled={disabled || model.description === "Unavailable in the current catalog"}
+              className={cn(MODEL_ROW_HEIGHT_CLASS, "items-start py-2", onToggleFavorite && "pr-9")}
+            >
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="min-w-0 truncate text-sm font-medium">{model.label}</span>
                 </span>
-              ) : null}
-            </span>
-            {model.description ? (
-              <span className="truncate text-xs text-muted-foreground">
-                {model.description}
+                <span className="truncate text-[10px] text-muted-foreground/80">
+                  {model.providerLabel ?? PLATFORM_LABELS[model.platform]}
+                </span>
               </span>
+            </DropdownMenuRadioItem>
+            {onToggleFavorite ? (
+              <button
+                type="button"
+                aria-label={`${isFavorite ? "Remove" : "Add"} ${model.label} ${isFavorite ? "from" : "to"} favorites`}
+                aria-pressed={isFavorite}
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onToggleFavorite(model);
+                }}
+                className="absolute right-1 top-1/2 z-10 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-amber-400"
+              >
+                <Star className={cn("size-3.5", isFavorite && "fill-amber-400 text-amber-400")} />
+              </button>
             ) : null}
-          </span>
-        </DropdownMenuRadioItem>
-      ))}
+          </div>
+        );
+      })}
     </DropdownMenuRadioGroup>
   );
 }
@@ -102,7 +148,7 @@ function ReasoningItems({
   disabled,
   onReasoningChange,
 }: Pick<
-  NativeModelPickerProps,
+  AgentModelPickerProps,
   "reasoningOptions" | "selectedReasoningId" | "disabled" | "onReasoningChange"
 >) {
   return (
@@ -118,15 +164,7 @@ function ReasoningItems({
           className="items-start py-2"
         >
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="truncate text-sm font-medium">
-              {option.label}
-              {option.annotation ? ` (${option.annotation})` : ""}
-            </span>
-            {option.description ? (
-              <span className="line-clamp-2 text-xs text-muted-foreground">
-                {option.description}
-              </span>
-            ) : null}
+            <span className="truncate text-sm font-medium">{option.label}</span>
           </span>
         </DropdownMenuRadioItem>
       ))}
@@ -140,7 +178,7 @@ function SpeedItems({
   disabled,
   onFastModeChange,
 }: Pick<
-  NativeModelPickerProps,
+  AgentModelPickerProps,
   "fastModeEnabled" | "fastModeAvailable" | "disabled" | "onFastModeChange"
 >) {
   const canChange = fastModeAvailable && Boolean(onFastModeChange) && !disabled;
@@ -176,8 +214,17 @@ function SpeedItems({
   );
 }
 
-export function NativeModelPicker({
+export function AgentModelPicker({
+  id,
+  className,
+  ariaLabel,
   models,
+  enabledPlatforms,
+  selectedPlatform,
+  platformSelectionLocked = false,
+  favorites = [],
+  onPlatformChange,
+  onToggleFavorite,
   selectedModelId,
   selectedModelLabel,
   onModelChange,
@@ -191,8 +238,11 @@ export function NativeModelPicker({
   disabled = false,
   title,
   onRefreshModels,
-}: NativeModelPickerProps) {
+}: AgentModelPickerProps) {
   const [search, setSearch] = useState("");
+  const [catalogView, setCatalogView] = useState<AgentPlatform | "favorites">(
+    selectedPlatform ?? models[0]?.platform ?? "favorites",
+  );
   const [mobileSubmenu, setMobileSubmenu] = useState<MobileSubmenu | null>(null);
   const mobileViewId = useId();
   const mobileReasoningTriggerRef = useRef<HTMLDivElement>(null);
@@ -202,17 +252,27 @@ export function NativeModelPicker({
   const mobileReturnFocusRef = useRef<MobileSubmenu | null>(null);
   const isMobile = useMediaQuery("(max-width: 767px)");
   const normalizedSearch = search.trim().toLowerCase();
+  const availablePlatforms = useMemo(
+    () => enabledPlatforms ?? Array.from(new Set(models.map((model) => model.platform))),
+    [enabledPlatforms, models],
+  );
   const visibleModels = useMemo(() => {
-    const ordered = [...models].sort(
-      (a, b) => Number(Boolean(b.favorite)) - Number(Boolean(a.favorite)),
-    );
+    const byKey = new Map(models.map((model) => [`${model.platform}:${model.id}`, model]));
+    const ordered = catalogView === "favorites"
+      ? favorites.map((favorite) => byKey.get(`${favorite.platform}:${favorite.modelId}`) ?? {
+          platform: favorite.platform,
+          id: favorite.modelId,
+          label: favorite.modelId,
+          description: "Unavailable in the current catalog",
+        })
+      : models.filter((model) => model.platform === catalogView);
     if (!normalizedSearch) return ordered;
     return ordered.filter((model) =>
-      `${model.label} ${model.id} ${model.description ?? ""} ${model.searchText ?? ""}`
+      `${model.label} ${model.id} ${model.description ?? ""} ${model.platform}`
         .toLowerCase()
         .includes(normalizedSearch),
     );
-  }, [models, normalizedSearch]);
+  }, [catalogView, favorites, models, normalizedSearch]);
   const fastModeUnknown = fastModeEnabled === null;
   const showReasoningControls = reasoningOptions.length > 0;
   const displayLabel = selectedReasoningLabel
@@ -272,11 +332,16 @@ export function NativeModelPicker({
     >
       <DropdownMenuTrigger asChild>
         <button
+          id={id}
+          role={id ? "combobox" : undefined}
           type="button"
           disabled={disabled}
           title={effectiveTitle}
-          className="flex min-w-0 flex-1 items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 md:max-w-[320px] md:flex-none"
-          aria-label={displayLabel}
+          className={cn(
+            "flex min-w-0 flex-1 items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 md:max-w-[320px] md:flex-none",
+            className,
+          )}
+          aria-label={ariaLabel ?? displayLabel}
         >
           <ChevronDown className="h-3 w-3 shrink-0" />
           <span className="flex min-w-0 truncate">
@@ -416,15 +481,69 @@ export function NativeModelPicker({
         ) : isMobile ? (
           <div>
             <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Agent
+            </DropdownMenuLabel>
+            <div
+              className="flex max-w-full gap-1 overflow-x-auto px-2 pb-2"
+              role="group"
+              aria-label="Agent platforms"
+              data-native-mobile-platforms
+            >
+              <button
+                type="button"
+                aria-label="Favorite models"
+                aria-pressed={catalogView === "favorites"}
+                onClick={(event) => {
+                  event.preventDefault();
+                  setCatalogView("favorites");
+                }}
+                className={cn(
+                  "grid size-8 shrink-0 place-items-center rounded",
+                  catalogView === "favorites"
+                    ? "bg-muted text-amber-400"
+                    : "text-muted-foreground hover:bg-muted/60",
+                )}
+              >
+                <Star className="size-4" />
+              </button>
+              {availablePlatforms.map((availablePlatform) => (
+                <button
+                  key={availablePlatform}
+                  type="button"
+                  aria-label={`${availablePlatform} models`}
+                  aria-pressed={catalogView === availablePlatform}
+                  disabled={platformSelectionLocked && availablePlatform !== selectedPlatform}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    setSearch("");
+                    setCatalogView(availablePlatform);
+                    onPlatformChange?.(availablePlatform);
+                  }}
+                  className={cn(
+                    "grid size-8 shrink-0 place-items-center rounded disabled:cursor-not-allowed disabled:opacity-30",
+                    catalogView === availablePlatform
+                      ? "bg-muted text-foreground"
+                      : "text-muted-foreground hover:bg-muted/60",
+                  )}
+                >
+                  <PlatformIcon platform={availablePlatform} />
+                </button>
+              ))}
+            </div>
+            <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
               Model
             </DropdownMenuLabel>
             <div className="max-h-70 overflow-y-auto overscroll-contain" data-native-model-list>
               <ModelItems
                 models={visibleModels}
                 selectedModelId={selectedModelId}
+                selectedPlatform={selectedPlatform}
                 disabled={disabled}
                 onModelChange={onModelChange}
-                emptyLabel={models.length > 0 ? "No matches" : "No models available"}
+                onPlatformChange={onPlatformChange}
+                emptyLabel={normalizedSearch ? "No matches" : "No models available"}
+                favorites={favorites}
+                onToggleFavorite={onToggleFavorite}
               />
             </div>
             {moreModelCount > 0 ? (
@@ -512,12 +631,49 @@ export function NativeModelPicker({
             className={cn(
               "grid min-h-0 flex-1 overflow-hidden divide-x divide-zinc-700/60",
               showReasoningControls && showSpeedControls
-                ? "grid-cols-3"
+                ? "grid-cols-[3rem_repeat(3,minmax(0,1fr))]"
                 : showReasoningControls || showSpeedControls
-                  ? "grid-cols-2"
-                  : "grid-cols-1",
+                  ? "grid-cols-[3rem_repeat(2,minmax(0,1fr))]"
+                  : "grid-cols-[3rem_minmax(0,1fr)]",
             )}
           >
+            <div className="flex min-h-0 flex-col items-center gap-1 pr-1" aria-label="Agent platforms">
+              <button
+                type="button"
+                aria-label="Favorite models"
+                aria-pressed={catalogView === "favorites"}
+                onClick={(event) => {
+                  event.preventDefault();
+                  setCatalogView("favorites");
+                }}
+                className={cn("grid size-8 place-items-center rounded", catalogView === "favorites" ? "bg-muted text-amber-400" : "text-muted-foreground hover:bg-muted/60")}
+              >
+                <Star className="size-4" />
+              </button>
+              <div className="my-1 h-px w-6 bg-border" />
+              {availablePlatforms.map((platform) => (
+                <button
+                  key={platform}
+                  type="button"
+                  aria-label={`${platform} models`}
+                  aria-pressed={catalogView === platform}
+                  disabled={platformSelectionLocked && platform !== selectedPlatform}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    setCatalogView(platform);
+                    onPlatformChange?.(platform);
+                  }}
+                  className={cn(
+                    "grid size-8 place-items-center rounded disabled:cursor-not-allowed disabled:opacity-30",
+                    catalogView === platform
+                      ? "bg-muted text-foreground"
+                      : "text-muted-foreground hover:bg-muted/60",
+                  )}
+                >
+                  <PlatformIcon platform={platform} />
+                </button>
+              ))}
+            </div>
             <div className="flex min-h-0 min-w-0 flex-col pr-1" role="group" aria-label="Models">
               <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 Model
@@ -526,9 +682,13 @@ export function NativeModelPicker({
                 <ModelItems
                   models={visibleModels}
                   selectedModelId={selectedModelId}
+                  selectedPlatform={selectedPlatform}
                   disabled={disabled}
                   onModelChange={onModelChange}
+                  onPlatformChange={onPlatformChange}
                   emptyLabel={models.length > 0 ? "No matches" : "No models available"}
+                  favorites={favorites}
+                  onToggleFavorite={onToggleFavorite}
                 />
               </div>
               {moreModelCount > 0 ? (

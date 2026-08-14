@@ -2031,7 +2031,7 @@ describe("sendPrompt", () => {
       });
 
       const parts = getSessionMessages(session.id).find((message) => message.role === "assistant")?.parts;
-      expect(parts?.map((part) => part.timestamp)).toEqual([
+      expect(parts?.map((part) => part.createdAt)).toEqual([
         "2026-07-26T10:00:00.000Z",
         "2026-07-26T10:03:00.000Z",
       ]);
@@ -2111,7 +2111,7 @@ describe("sendPrompt", () => {
         ?.parts.find((candidate) => candidate.type === "thinking");
       expect(thinkingPart).toMatchObject({
         content: "Final reasoning",
-        timestamp: "2026-07-26T11:00:00.000Z",
+        createdAt: "2026-07-26T11:00:00.000Z",
       });
     });
   });
@@ -2142,7 +2142,7 @@ describe("sendPrompt", () => {
       const textPart = getSessionMessages(session.id)
         .find((message) => message.role === "assistant")
         ?.parts.find((part) => part.type === "text");
-      expect(textPart?.timestamp).toBe("2026-07-26T12:00:00.000Z");
+      expect(textPart?.createdAt).toBe("2026-07-26T12:00:00.000Z");
 
       call.push({ type: "result", subtype: "success" });
       call.finish();
@@ -2174,7 +2174,7 @@ describe("sendPrompt", () => {
         ?.parts.find((part) => part.type === "text");
       expect(textPart).toMatchObject({
         content: "Final answer",
-        timestamp: "2026-07-26T13:00:00.000Z",
+        createdAt: "2026-07-26T13:00:00.000Z",
       });
     });
   });
@@ -2312,7 +2312,7 @@ describe("sendPrompt", () => {
       const streamedTextTimestamp = getSessionMessages(session.id)
         .find((m) => m.role === "assistant")
         ?.parts.find((part) => part.type === "text")
-        ?.timestamp;
+        ?.createdAt;
       expect(Number.isFinite(new Date(streamedTextTimestamp ?? "").getTime())).toBe(true);
 
       // The SDK emits one assistant message per content block, each with a fresh
@@ -2342,7 +2342,7 @@ describe("sendPrompt", () => {
       expect(assistant?.parts.map((part) => part.type)).toEqual(["thinking", "text"]);
       expect(assistant?.parts[0]?.content).toBe("Reasoning complete.");
       expect(assistant?.parts[1]?.content).toBe("Answer final");
-      expect(assistant?.parts[1]?.timestamp).toBe(streamedTextTimestamp);
+      expect(assistant?.parts[1]?.createdAt).toBe(streamedTextTimestamp);
       expect(assistant?.content).toBe("Answer final");
     } finally {
       stop();
@@ -2455,7 +2455,7 @@ describe("sendPrompt", () => {
       expect(assistant?.parts[0]?.content).toBe("Need the repo state.");
       expect(assistant?.parts[2]?.content).toBe("Working tree is clean.");
       expect(
-        Number.isFinite(new Date(assistant?.parts[2]?.timestamp ?? "").getTime()),
+        Number.isFinite(new Date(assistant?.parts[2]?.createdAt ?? "").getTime()),
       ).toBe(true);
       expect(assistant?.content).toBe("Working tree is clean.");
     } finally {

@@ -14,7 +14,7 @@ describe("native agent adapter registry", () => {
       expect(adapter.platform).toBe(platform);
       expect(adapter.label.length).toBeGreaterThan(0);
       expect(typeof adapter.loadController).toBe("function");
-      expect(typeof adapter.normalizeMessages).toBe("function");
+      expect(adapter.capabilities.composer).toBeDefined();
     }
   });
 

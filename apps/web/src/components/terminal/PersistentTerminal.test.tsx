@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useCallback, useState } from "react";
+import { StrictMode, useCallback, useState } from "react";
 import * as realSessionStore from "@/stores/sessionStore";
 import * as realClipboardImagePaste from "@/hooks/useClipboardImagePaste";
 import { invoke } from "@/lib/native/backend";
@@ -560,6 +560,29 @@ describe("PersistentTerminal", () => {
         element.className.includes("absolute inset-x-0 top-0")
       ) ?? null,
     );
+  });
+
+  it("retries the terminal connection after the Strict Mode mount probe cancels it", async () => {
+    portalTerminalIsOpened = false;
+
+    render(
+      <StrictMode>
+        <PersistentTerminal
+          terminalData={createTerminalData()}
+          tabId="tab-1"
+          tabType="plain"
+          containerId="container-1"
+          environmentId="env-1"
+          isEnvironmentVisible
+          isActive
+          isFocused
+          isFirstTab={false}
+          paneId="pane-1"
+        />
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(2));
   });
 
   it("uses the fallback connection for an already-open disconnected terminal", async () => {
@@ -2120,6 +2143,9 @@ describe("PersistentTerminal", () => {
 
     expect(terminalKeyHandler!(new KeyboardEvent("keyup", { key: "v", metaKey: true })))
       .toBe(true);
+    expect(terminalKeyHandler!(
+      new KeyboardEvent("keydown", { key: "w", metaKey: true }),
+    )).toBe(false);
     expect(terminalKeyHandler!(
       new KeyboardEvent("keydown", { key: "2", code: "Digit2", ctrlKey: true }),
     )).toBe(false);

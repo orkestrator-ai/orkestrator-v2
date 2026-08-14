@@ -17,8 +17,8 @@ import {
 const LazyFileViewerTab = lazy(async () => ({
   default: (await import("@/components/terminal/FileViewerTab")).FileViewerTab,
 }));
-const LazyNativeAgentTab = lazy(async () => ({
-  default: (await import("@/components/native-agent")).NativeAgentTab,
+const LazyAgentNativeTab = lazy(async () => ({
+  default: (await import("@/components/native-agent")).AgentNativeTab,
 }));
 const LazyClaudeTmuxChatTab = lazy(async () => ({
   default: (await import("@/components/claude/ClaudeTmuxChatTab")).ClaudeTmuxChatTab,
@@ -240,7 +240,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   loadingFallback={renderTabFallback(isTabActive && isActive)}
                   renderError={renderTabError(isTabActive && isActive)}
                 >
-                  <LazyNativeAgentTab
+                  <LazyAgentNativeTab
                     tabId={tab.id}
                     data={nativeAgentData}
                     isActive={isTabActive && isActive}

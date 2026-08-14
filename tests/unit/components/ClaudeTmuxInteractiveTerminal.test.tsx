@@ -301,6 +301,26 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     expect(writeInteractiveTerminalMock).not.toHaveBeenCalled();
   });
 
+  test("passes Cmd+W through to the application tab shortcut", async () => {
+    render(
+      <ClaudeTmuxInteractiveTerminal
+        tabId="tab-1"
+        environmentId={environmentId}
+        isActive
+      />,
+    );
+
+    await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+    expect(terminalInstances[0]!.emitKey({
+      type: "keydown",
+      key: "w",
+      metaKey: true,
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+    })).toBe(false);
+  });
+
   test("fits without focusing the terminal when activated on mobile", async () => {
     setMobileViewport(true);
     render(

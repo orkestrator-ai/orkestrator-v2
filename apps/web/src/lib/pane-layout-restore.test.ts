@@ -118,8 +118,9 @@ describe("reconcilePersistedLayout", () => {
       tabs: [
         {
           id: "native",
-          type: "claude-native",
-          claudeNativeData: {
+          type: "agent-native",
+          nativeAgentData: {
+            platform: "claude",
             environmentId: "env-1",
             containerId: "container-1",
             sessionId: "session-1",
@@ -155,12 +156,11 @@ describe("reconcilePersistedLayout", () => {
     expect(restored?.root).toMatchObject({
       tabs: [{
         nativeAgentData: { platform: "codex", sessionId: "thread-1" },
-        codexNativeData: { sessionId: "thread-1" },
       }],
     });
   });
 
-  test("restores the newer session after a mixed-version layout conflict", () => {
+  test("restores the newer session after a native layout conflict", () => {
     const layout = (tab: TabInfo) => ({
       version: PANE_LAYOUT_VERSION,
       containerId: "container-1",
@@ -172,15 +172,15 @@ describe("reconcilePersistedLayout", () => {
         activeTabId: tab.id,
       },
     });
-    const legacyTab = (sessionId: string): TabInfo => ({
+    const nativeTab = (sessionId: string): TabInfo => ({
       id: "codex",
-      type: "codex-native",
-      codexNativeData: { environmentId: "env-1", sessionId },
+      type: "agent-native",
+      nativeAgentData: { platform: "codex", environmentId: "env-1", sessionId },
     });
-    const base = layout(legacyTab("thread-old"));
-    const local = layout(legacyTab("thread-new"));
+    const base = layout(nativeTab("thread-old"));
+    const local = layout(nativeTab("thread-new"));
     const remote = layout({
-      ...legacyTab("thread-old"),
+      ...nativeTab("thread-old"),
       displayTitle: "Remote title",
       nativeAgentData: {
         platform: "codex",
@@ -199,7 +199,6 @@ describe("reconcilePersistedLayout", () => {
       tabs: [{
         displayTitle: "Remote title",
         nativeAgentData: { platform: "codex", sessionId: "thread-new" },
-        codexNativeData: { sessionId: "thread-new" },
       }],
     });
   });
@@ -560,8 +559,8 @@ describe("reconcilePersistedLayout", () => {
       kind: "leaf",
       tabs: [
         { id: "file", fileData: { worktreePath: "/worktrees/current", isLocalEnvironment: true } },
-        { id: "codex", codexNativeData: { environmentId: "env-1", sessionId: "cx-1", isLocal: true } },
-        { id: "open", openCodeNativeData: { environmentId: "env-1", sessionId: "oc-1", isLocal: true } },
+        { id: "codex", nativeAgentData: { platform: "codex", environmentId: "env-1", sessionId: "cx-1", isLocal: true } },
+        { id: "open", nativeAgentData: { platform: "opencode", environmentId: "env-1", sessionId: "oc-1", isLocal: true } },
         { id: "tmux", claudeTmuxData: { environmentId: "env-1", isLocal: true } },
         { id: "build", buildTabData: { environmentId: "env-1", pipelineId: "pipeline-1", taskId: "task-1", isLocal: true } },
         { id: "looped", loopedReviewTabData: { environmentId: "env-1", workflowId: "workflow-1", isLocal: true } },
@@ -766,7 +765,7 @@ describe("pane field preservation", () => {
       root: {
         kind: "leaf" as const,
         id: "pane",
-        tabs: [{ id: "review-3", type: "claude-native" as const }],
+        tabs: [{ id: "review-3", type: "agent-native" as const }],
         activeTabId: "review-3",
       },
     };
@@ -777,8 +776,8 @@ describe("pane field preservation", () => {
         kind: "leaf" as const,
         id: "pane",
         tabs: [
-          { id: "review-3", type: "claude-native" as const },
-          { id: "review-4", type: "claude-native" as const },
+          { id: "review-3", type: "agent-native" as const },
+          { id: "review-4", type: "agent-native" as const },
         ],
         activeTabId: "review-4",
       },
@@ -803,8 +802,8 @@ describe("pane field preservation", () => {
         tabs: [
           {
             id: "claude",
-            type: "claude-native",
-            claudeNativeData: {
+            type: "agent-native",
+            nativeAgentData: {
               environmentId: "env-1",
               containerId: "container-1",
               sessionId: "authoritative-session",
@@ -812,8 +811,8 @@ describe("pane field preservation", () => {
           },
           {
             id: "codex",
-            type: "codex-native",
-            codexNativeData: {
+            type: "agent-native",
+            nativeAgentData: {
               environmentId: "env-1",
               containerId: "container-1",
               sessionId: "authoritative-codex-session",
@@ -821,8 +820,8 @@ describe("pane field preservation", () => {
           },
           {
             id: "opencode",
-            type: "opencode-native",
-            openCodeNativeData: {
+            type: "agent-native",
+            nativeAgentData: {
               environmentId: "env-1",
               containerId: "container-1",
               sessionId: "authoritative-opencode-session",
@@ -843,10 +842,10 @@ describe("pane field preservation", () => {
         tabs: [
           {
             id: "claude",
-            type: "claude-native",
+            type: "agent-native",
             initialPrompt: "local prompt",
             initialCommands: ["local command"],
-            claudeNativeData: {
+            nativeAgentData: {
               environmentId: "env-1",
               containerId: "container-1",
               sessionId: "stale-session",
@@ -855,8 +854,8 @@ describe("pane field preservation", () => {
           },
           {
             id: "codex",
-            type: "codex-native",
-            codexNativeData: {
+            type: "agent-native",
+            nativeAgentData: {
               environmentId: "env-1",
               containerId: "container-1",
               sessionId: "stale-codex-session",
@@ -865,8 +864,8 @@ describe("pane field preservation", () => {
           },
           {
             id: "opencode",
-            type: "opencode-native",
-            openCodeNativeData: {
+            type: "agent-native",
+            nativeAgentData: {
               environmentId: "env-1",
               containerId: "container-1",
               sessionId: "stale-opencode-session",
@@ -875,9 +874,9 @@ describe("pane field preservation", () => {
           },
           {
             id: "changed-type",
-            type: "claude-native",
+            type: "agent-native",
             initialPrompt: "must not cross a type change",
-            claudeNativeData: {
+            nativeAgentData: {
               environmentId: "env-1",
               hostPort: 4999,
             },
@@ -896,16 +895,16 @@ describe("pane field preservation", () => {
     expect(claude).toMatchObject({
       initialPrompt: "local prompt",
       initialCommands: ["local command"],
-      claudeNativeData: {
+      nativeAgentData: {
         sessionId: "authoritative-session",
         hostPort: 4101,
       },
     });
-    expect(codex?.codexNativeData).toMatchObject({
+    expect(codex?.nativeAgentData).toMatchObject({
       sessionId: "authoritative-codex-session",
       hostPort: 4102,
     });
-    expect(opencode?.openCodeNativeData).toMatchObject({
+    expect(opencode?.nativeAgentData).toMatchObject({
       sessionId: "authoritative-opencode-session",
       hostPort: 4103,
     });
@@ -923,10 +922,10 @@ describe("pane field preservation", () => {
     const nativeTabs: TabInfo[] = [
       {
         id: "claude",
-        type: "claude-native",
+        type: "agent-native",
         initialPrompt: "continue the launch",
         initialCommands: ["bun test"],
-        claudeNativeData: {
+        nativeAgentData: {
           environmentId: "env-1",
           containerId: "container-1",
           sessionId: "local-claude-session",
@@ -935,8 +934,8 @@ describe("pane field preservation", () => {
       },
       {
         id: "codex",
-        type: "codex-native",
-        codexNativeData: {
+        type: "agent-native",
+        nativeAgentData: {
           environmentId: "env-1",
           containerId: "container-1",
           sessionId: "local-codex-session",
@@ -945,8 +944,8 @@ describe("pane field preservation", () => {
       },
       {
         id: "opencode",
-        type: "opencode-native",
-        openCodeNativeData: {
+        type: "agent-native",
+        nativeAgentData: {
           environmentId: "env-1",
           containerId: "container-1",
           sessionId: "local-opencode-session",
@@ -1007,8 +1006,8 @@ describe("pane field preservation", () => {
               },
               {
                 id: "claude",
-                type: "claude-native",
-                claudeNativeData: {
+                type: "agent-native",
+                nativeAgentData: {
                   environmentId: "env-1",
                   containerId: "container-1",
                   sessionId: "authoritative-claude-session",
@@ -1016,8 +1015,8 @@ describe("pane field preservation", () => {
               },
               {
                 id: "codex",
-                type: "codex-native",
-                codexNativeData: {
+                type: "agent-native",
+                nativeAgentData: {
                   environmentId: "env-1",
                   containerId: "container-1",
                   sessionId: "authoritative-codex-session",
@@ -1025,8 +1024,8 @@ describe("pane field preservation", () => {
               },
               {
                 id: "opencode",
-                type: "opencode-native",
-                openCodeNativeData: {
+                type: "agent-native",
+                nativeAgentData: {
                   environmentId: "env-1",
                   containerId: "container-1",
                   sessionId: "authoritative-opencode-session",
@@ -1047,19 +1046,19 @@ describe("pane field preservation", () => {
     expect(moved.tabs.find((tab) => tab.id === "claude")).toMatchObject({
       initialPrompt: "continue the launch",
       initialCommands: ["bun test"],
-      claudeNativeData: {
+      nativeAgentData: {
         sessionId: "authoritative-claude-session",
         hostPort: 4101,
       },
     });
     expect(
-      moved.tabs.find((tab) => tab.id === "codex")?.codexNativeData,
+      moved.tabs.find((tab) => tab.id === "codex")?.nativeAgentData,
     ).toMatchObject({
       sessionId: "authoritative-codex-session",
       hostPort: 4102,
     });
     expect(
-      moved.tabs.find((tab) => tab.id === "opencode")?.openCodeNativeData,
+      moved.tabs.find((tab) => tab.id === "opencode")?.nativeAgentData,
     ).toMatchObject({
       sessionId: "authoritative-opencode-session",
       hostPort: 4103,
@@ -1079,7 +1078,7 @@ describe("pane field preservation", () => {
       id,
       type,
       nativeAgentData: {
-        platform: type.replace("-native", "") as "claude",
+        platform: id as "claude",
         environmentId: "env-1",
         sessionId: `local-${id}-session`,
       },
@@ -1092,18 +1091,18 @@ describe("pane field preservation", () => {
         kind: "leaf",
         id: "pane",
         tabs: [
-          nativeTab("claude", "claude-native", {
-            claudeNativeData: { environmentId: "env-1", hostPort: 4101 },
+          nativeTab("claude", "agent-native", {
+            nativeAgentData: { environmentId: "env-1", hostPort: 4101 },
           }),
-          nativeTab("codex", "codex-native", {
-            codexNativeData: { environmentId: "env-1", hostPort: 4102 },
+          nativeTab("codex", "agent-native", {
+            nativeAgentData: { environmentId: "env-1", hostPort: 4102 },
           }),
-          nativeTab("opencode", "opencode-native", {
-            openCodeNativeData: { environmentId: "env-1", hostPort: 4103 },
+          nativeTab("opencode", "agent-native", {
+            nativeAgentData: { environmentId: "env-1", hostPort: 4103 },
           }),
-          nativeTab("cursor", "cursor-native", {
-            acpNativeData: {
-              provider: "cursor",
+          nativeTab("cursor", "agent-native", {
+            nativeAgentData: {
+              platform: "cursor",
               environmentId: "env-1",
               hostPort: 4104,
             },
@@ -1116,7 +1115,7 @@ describe("pane field preservation", () => {
       id,
       type,
       nativeAgentData: {
-        platform: type.replace("-native", "") as "claude",
+        platform: id as "claude",
         environmentId: "env-1",
         sessionId: `authoritative-${id}-session`,
       },
@@ -1128,10 +1127,10 @@ describe("pane field preservation", () => {
         kind: "leaf",
         id: "pane",
         tabs: [
-          authoritativeTab("claude", "claude-native"),
-          authoritativeTab("codex", "codex-native"),
-          authoritativeTab("opencode", "opencode-native"),
-          authoritativeTab("cursor", "cursor-native"),
+          authoritativeTab("claude", "agent-native"),
+          authoritativeTab("codex", "agent-native"),
+          authoritativeTab("opencode", "agent-native"),
+          authoritativeTab("cursor", "agent-native"),
         ],
         activeTabId: "claude",
       },
@@ -1157,13 +1156,12 @@ describe("pane field preservation", () => {
   test("leaves the canonical identity alone when no host port is known", () => {
     const tab: TabInfo = {
       id: "codex",
-      type: "codex-native",
+      type: "agent-native",
       nativeAgentData: {
         platform: "codex",
         environmentId: "env-1",
         sessionId: "authoritative-session",
       },
-      codexNativeData: { environmentId: "env-1" },
     };
     const state = (tabs: TabInfo[]): EnvironmentPaneState => ({
       containerId: "container-1",
@@ -1173,7 +1171,7 @@ describe("pane field preservation", () => {
 
     const reconciled = preserveRendererLocalPaneFields(
       state([tab]),
-      state([{ ...tab, codexNativeData: { environmentId: "env-1" } }]),
+      state([{ ...tab, nativeAgentData: { environmentId: "env-1" } }]),
     );
     if (reconciled.root.kind !== "leaf") throw new Error("expected leaf");
 
@@ -1376,7 +1374,7 @@ describe("pane field preservation", () => {
         id: "pane",
         // Same id and type, but the authoritative record carries no native
         // connection data at all — the session it described is gone.
-        tabs: [{ id: "native", type: "claude-native" }],
+        tabs: [{ id: "native", type: "agent-native" }],
         activeTabId: "native",
       },
     };
@@ -1388,8 +1386,8 @@ describe("pane field preservation", () => {
         id: "pane",
         tabs: [{
           id: "native",
-          type: "claude-native",
-          claudeNativeData: {
+          type: "agent-native",
+          nativeAgentData: {
             environmentId: "env-1",
             containerId: "container-1",
             hostPort: 4321,
@@ -1405,11 +1403,11 @@ describe("pane field preservation", () => {
     // Re-attaching only the port would leave a tab claiming a live bridge with
     // no session behind it.
     expect(reconciled.root).toMatchObject({
-      tabs: [{ id: "native", type: "claude-native" }],
+      tabs: [{ id: "native", type: "agent-native" }],
     });
     expect(
-      (reconciled.root as { tabs: Array<{ claudeNativeData?: unknown }> })
-        .tabs[0]?.claudeNativeData,
+      (reconciled.root as { tabs: Array<{ nativeAgentData?: unknown }> })
+        .tabs[0]?.nativeAgentData,
     ).toBeUndefined();
   });
 });

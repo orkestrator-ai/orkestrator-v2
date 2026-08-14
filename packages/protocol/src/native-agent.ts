@@ -1,9 +1,10 @@
-import type { AgentInteractionRequest } from "./agent-interactions";
-import { isAgentPlatform, type AgentPlatform } from "./agent-platforms";
+import type { AgentInteractionRequest } from "./agent-interactions.js";
+import { isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
 
 /** Provider-neutral identity for one native-agent tab. */
 export interface NativeAgentTabData {
-  platform: AgentPlatform;
+  /** Locked on first dispatch. Undefined is the durable, unassigned state. */
+  platform?: AgentPlatform;
   environmentId: string;
   containerId?: string;
   hostPort?: number;
@@ -16,7 +17,7 @@ export function isNativeAgentTabData(value: unknown): value is NativeAgentTabDat
   const data = value as Record<string, unknown>;
   const optionalString = (field: string) =>
     data[field] === undefined || typeof data[field] === "string";
-  return isAgentPlatform(data.platform)
+  return (data.platform === undefined || isAgentPlatform(data.platform))
     && typeof data.environmentId === "string"
     && data.environmentId.length > 0
     && optionalString("containerId")
@@ -25,6 +26,34 @@ export function isNativeAgentTabData(value: unknown): value is NativeAgentTabDat
       || (Number.isSafeInteger(data.hostPort) && (data.hostPort as number) > 0))
     && (data.isLocal === undefined || typeof data.isLocal === "boolean");
 }
+
+export interface AgentReasoningOption {
+  id: string;
+  label: string;
+  description?: string;
+  annotation?: string;
+}
+
+/** Provider-neutral model catalog entry consumed by renderer presentation. */
+export interface AgentModel {
+  platform: AgentPlatform;
+  id: string;
+  label: string;
+  /** Provider label shown beneath the model name; defaults to the platform. */
+  providerLabel?: string;
+  description?: string;
+  reasoning?: AgentReasoningOption[];
+  defaultReasoningId?: string;
+  supportsSpeed?: boolean;
+  supportsMode?: boolean;
+}
+
+export interface AgentModelRef {
+  platform: AgentPlatform;
+  modelId: string;
+}
+
+export type AgentConversationMode = "build" | "plan";
 
 export type NativeAgentConnectionState = "connecting" | "connected" | "error";
 
@@ -89,6 +118,13 @@ export interface NativeAgentCapabilities {
   fork: boolean;
   slashCommands: boolean;
   backgroundTasks: boolean;
+  composer: {
+    provider: boolean;
+    model: boolean;
+    reasoning: boolean;
+    speed: boolean;
+    mode: boolean;
+  };
 }
 
 /**

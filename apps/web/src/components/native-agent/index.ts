@@ -1,12 +1,8 @@
-export { NativeAgentTab } from "./NativeAgentTab";
+export { AgentNativeTab } from "./AgentNativeTab";
 export {
   findNativeAgentAdapter,
   getNativeAgentAdapter,
   nativeAgentAdapters,
   type NativeAgentAdapter,
-  type NativeAgentTabProps,
+  type AgentNativeTabProps,
 } from "./adapter";
-export {
-  normalizeNativeAgentMessages,
-  type NativeAgentSourceMessages,
-} from "./normalization";

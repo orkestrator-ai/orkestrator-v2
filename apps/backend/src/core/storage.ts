@@ -1358,11 +1358,23 @@ function normalizePersistedConfig(config: AppConfig): AppConfig {
     enabledAgentPlatforms,
     isAgentPlatform(global.defaultAgent) ? global.defaultAgent : undefined,
   );
+  const favoriteModels = Array.isArray(global.favoriteModels)
+    ? global.favoriteModels.flatMap((value) => {
+        if (!isRecord(value) || !isAgentPlatform(value.platform)) return [];
+        const modelId = typeof value.modelId === "string" ? value.modelId.trim() : "";
+        return modelId ? [{ platform: value.platform, modelId }] : [];
+      }).filter((value, index, values) =>
+        values.findIndex((candidate) =>
+          candidate.platform === value.platform && candidate.modelId === value.modelId
+        ) === index
+      )
+    : [];
   if (
     global.codexMaxConcurrentThreads === codexMaxConcurrentThreads
     && global.useHostGitHubCredentials === useHostGitHubCredentials
     && JSON.stringify(global.enabledAgentPlatforms) === JSON.stringify(enabledAgentPlatforms)
     && global.defaultAgent === defaultAgent
+    && JSON.stringify(global.favoriteModels ?? []) === JSON.stringify(favoriteModels)
   ) {
     return reviewInstructionSanitized;
   }
@@ -1375,6 +1387,7 @@ function normalizePersistedConfig(config: AppConfig): AppConfig {
       useHostGitHubCredentials,
       enabledAgentPlatforms,
       defaultAgent,
+      favoriteModels,
     } as unknown as AppConfig["global"],
   };
 }
@@ -1428,6 +1441,7 @@ export function defaultConfig(): AppConfig {
       useHostClaudeCredentials: true,
       allowedDomains: [...DEFAULT_ALLOWED_DOMAINS],
       enabledAgentPlatforms: [...LEGACY_ENABLED_AGENT_PLATFORMS],
+      favoriteModels: [],
       defaultAgent: "claude",
       opencodeModel: "opencode/claude-sonnet-5",
       claudeModel: "claude-sonnet-5",
@@ -1520,9 +1534,13 @@ export function createEnvironment(
     opencodePid: undefined,
     claudeBridgePid: undefined,
     codexBridgePid: undefined,
+    cursorBridgePid: undefined,
+    grokBridgePid: undefined,
     localOpencodePort: undefined,
     localClaudePort: undefined,
     localCodexPort: undefined,
+    localCursorPort: undefined,
+    localGrokPort: undefined,
     defaultAgent: undefined,
     claudeMode: undefined,
     claudeNativeBackend: undefined,
@@ -2842,7 +2860,13 @@ export class StorageService {
         }
       }
 
-      const pidFields = ["opencodePid", "claudeBridgePid", "codexBridgePid"] as const;
+      const pidFields = [
+        "opencodePid",
+        "claudeBridgePid",
+        "codexBridgePid",
+        "cursorBridgePid",
+        "grokBridgePid",
+      ] as const;
       for (const field of pidFields) {
         if (!(field in updates)) continue;
         const value = updates[field];
@@ -2850,7 +2874,15 @@ export class StorageService {
         else if (isPositiveInteger(value)) environment[field] = value;
       }
 
-      const portFields = ["localOpencodePort", "localClaudePort", "localCodexPort", "entryPort", "hostEntryPort"] as const;
+      const portFields = [
+        "localOpencodePort",
+        "localClaudePort",
+        "localCodexPort",
+        "localCursorPort",
+        "localGrokPort",
+        "entryPort",
+        "hostEntryPort",
+      ] as const;
       for (const field of portFields) {
         if (!(field in updates)) continue;
         const value = updates[field];

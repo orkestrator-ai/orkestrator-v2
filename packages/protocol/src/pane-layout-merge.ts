@@ -25,47 +25,13 @@ type PersistedPaneLayoutInput = PaneLayoutMergeInput;
 type TabInfo = PaneLayoutTab;
 
 interface NativeAgentTabIdentity {
-  platform: string;
+  platform?: unknown;
   environmentId?: unknown;
   containerId?: unknown;
   hostPort?: unknown;
   sessionId?: unknown;
   isLocal?: unknown;
 }
-
-interface NativeAgentTabSpec {
-  platform: string;
-  legacyField: string;
-  acp: boolean;
-}
-
-const NATIVE_AGENT_TAB_SPECS: Readonly<Record<string, NativeAgentTabSpec>> = {
-  "claude-native": {
-    platform: "claude",
-    legacyField: "claudeNativeData",
-    acp: false,
-  },
-  "codex-native": {
-    platform: "codex",
-    legacyField: "codexNativeData",
-    acp: false,
-  },
-  "opencode-native": {
-    platform: "opencode",
-    legacyField: "openCodeNativeData",
-    acp: false,
-  },
-  "cursor-native": {
-    platform: "cursor",
-    legacyField: "acpNativeData",
-    acp: true,
-  },
-  "grok-native": {
-    platform: "grok",
-    legacyField: "acpNativeData",
-    acp: true,
-  },
-};
 
 const NATIVE_AGENT_IDENTITY_FIELDS = [
   "environmentId",
@@ -154,35 +120,20 @@ function mergeChangedFields(
 
 function nativeAgentIdentity(
   tab: TabInfo,
-  spec: NativeAgentTabSpec,
 ): NativeAgentTabIdentity | null {
+  if (tab.type !== "agent-native") return null;
   const record = tab as unknown as Record<string, unknown>;
-  let candidate: Record<string, unknown> | null = null;
-  if (
-    isPlainObject(record.nativeAgentData)
-    && record.nativeAgentData.platform === spec.platform
-  ) {
-    candidate = record.nativeAgentData;
-  } else {
-    const legacyCandidate = record[spec.legacyField];
-    if (isPlainObject(legacyCandidate)) candidate = legacyCandidate;
-  }
+  const candidate = isPlainObject(record.nativeAgentData)
+    ? record.nativeAgentData
+    : null;
   if (!candidate) return null;
 
-  const identity: NativeAgentTabIdentity = { platform: spec.platform };
+  const identity: NativeAgentTabIdentity = {};
+  if (candidate.platform !== undefined) identity.platform = candidate.platform;
   for (const field of NATIVE_AGENT_IDENTITY_FIELDS) {
     if (candidate[field] !== undefined) identity[field] = candidate[field];
   }
   return identity;
-}
-
-function hasCanonicalNativeAgentIdentity(
-  tab: TabInfo,
-  spec: NativeAgentTabSpec,
-): boolean {
-  const record = tab as unknown as Record<string, unknown>;
-  return isPlainObject(record.nativeAgentData)
-    && record.nativeAgentData.platform === spec.platform;
 }
 
 function selectNativeAgentIdentity(
@@ -190,20 +141,31 @@ function selectNativeAgentIdentity(
   local: NativeAgentTabIdentity | null,
   remote: NativeAgentTabIdentity | null,
 ): NativeAgentTabIdentity | null {
-  if (valuesEqual(local, base)) return clone(remote);
-  if (valuesEqual(remote, base) || valuesEqual(local, remote)) {
-    return clone(local);
+  if (!base && !local && !remote) return null;
+  const merged = mergeChangedFields(base ?? {}, local ?? {}, remote ?? {}) as NativeAgentTabIdentity;
+  const basePlatform = base?.platform;
+  const localPlatform = local?.platform;
+  const remotePlatform = remote?.platform;
+
+  // Once assigned, platform is immutable. When two unassigned clients race to
+  // assign different providers, use a role-independent ordering so both merge
+  // directions converge on the same value.
+  if (basePlatform !== undefined) {
+    merged.platform = clone(basePlatform);
+  } else if (localPlatform !== undefined && remotePlatform !== undefined) {
+    merged.platform = valuesEqual(localPlatform, remotePlatform)
+      ? clone(localPlatform)
+      : clone([String(localPlatform), String(remotePlatform)].sort()[0]);
+  } else if (localPlatform !== undefined || remotePlatform !== undefined) {
+    merged.platform = clone(localPlatform ?? remotePlatform);
+  } else {
+    delete merged.platform;
   }
-  // Match `mergeChangedFields`: when both writers changed the same logical
-  // identity, the renderer performing the retry owns the tie-break.
-  return clone(local);
+  return merged;
 }
 
 /**
- * Native tabs temporarily persist the same identity in a canonical field and
- * a provider-specific compatibility field. Treat those fields as one merge
- * unit so an older writer changing only the legacy projection cannot be paired
- * with a stale canonical session id from a concurrent newer writer.
+ * Treat native identity as one merge unit and make its platform lock-once.
  */
 function mergeNativeAgentIdentity(
   base: TabInfo,
@@ -211,25 +173,12 @@ function mergeNativeAgentIdentity(
   remote: TabInfo,
   merged: TabInfo,
 ): TabInfo {
-  // Own-property lookup only: tab types come from persisted layouts, and
-  // `"constructor"` or `"toString"` would otherwise resolve through
-  // `Object.prototype` to a value that is not a spec at all.
-  const spec = Object.prototype.hasOwnProperty.call(
-    NATIVE_AGENT_TAB_SPECS,
-    merged.type,
-  )
-    ? NATIVE_AGENT_TAB_SPECS[merged.type]
-    : undefined;
-  if (!spec) return merged;
+  if (merged.type !== "agent-native") return merged;
 
-  const baseIdentity = nativeAgentIdentity(base, spec);
-  const localIdentity = nativeAgentIdentity(local, spec);
-  const remoteIdentity = nativeAgentIdentity(remote, spec);
+  const baseIdentity = nativeAgentIdentity(base);
+  const localIdentity = nativeAgentIdentity(local);
+  const remoteIdentity = nativeAgentIdentity(remote);
   if (!baseIdentity && !localIdentity && !remoteIdentity) return merged;
-  const hasCanonicalProjection =
-    hasCanonicalNativeAgentIdentity(base, spec)
-    || hasCanonicalNativeAgentIdentity(local, spec)
-    || hasCanonicalNativeAgentIdentity(remote, spec);
 
   const selected = selectNativeAgentIdentity(
     baseIdentity,
@@ -238,14 +187,8 @@ function mergeNativeAgentIdentity(
   );
   const synchronized = { ...merged } as Record<string, unknown>;
   delete synchronized.nativeAgentData;
-  delete synchronized[spec.legacyField];
   if (!selected) return synchronized as unknown as TabInfo;
-
-  if (hasCanonicalProjection) synchronized.nativeAgentData = selected;
-  const { platform: _platform, ...legacyIdentity } = selected;
-  synchronized[spec.legacyField] = spec.acp
-    ? { provider: spec.platform, ...legacyIdentity }
-    : legacyIdentity;
+  synchronized.nativeAgentData = selected;
   return synchronized as unknown as TabInfo;
 }
 
@@ -449,17 +392,9 @@ export function mergePersistedPaneLayouts<T extends PersistedPaneLayoutInput>(
   if (!isPaneNode(base.root) || !isPaneNode(local.root) || !isPaneNode(remote.root)) {
     throw new Error("Cannot merge malformed pane layout");
   }
-  if (
-    serialized(local) === serialized(base)
-    && !options.selectionIntent
-  ) return clone(remote);
-  // Selection intent is an operation in its own right. Even when no remote
-  // structural change exists, returning the local snapshot here would silently
-  // discard an explicitly queued focus change.
-  if (
-    serialized(remote) === serialized(base)
-    && !options.selectionIntent
-  ) return clone(local);
+  // Do not short-circuit one-sided changes. Native platform is lock-once, so a
+  // stale writer changing an already-assigned platform must still pass through
+  // `mergeNativeAgentIdentity` even when the other side equals the base.
 
   const baseState = collectTabs(base.root);
   const localState = collectTabs(local.root);

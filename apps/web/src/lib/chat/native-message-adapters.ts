@@ -11,7 +11,6 @@ import type {
   NativeMessagePart,
   NativeTaskGroupPart,
   NativeToolGroupPart,
-  NativeToolInvocationPart,
 } from "./native-message-types";
 import type { AcpMessage } from "@/lib/acp-client";
 
@@ -82,64 +81,18 @@ function isAgentActivity(part: NativeMessagePart): part is NativeAgentActivityPa
   return part.type === "subagent" || part.type === "task-group";
 }
 
-function toNativeToolInvocationPart(
-  part: ClaudeMessagePart,
-): NativeToolInvocationPart {
-  return {
-    type: "tool-invocation",
-    content: part.content ?? part.toolName ?? "",
-    toolName: part.toolName,
-    toolArgs: part.toolArgs,
-    toolState: part.toolState,
-    agentState: part.agentState,
-    toolTitle: part.toolTitle,
-    toolOutput: part.toolOutput,
-    toolError: part.toolError,
-    toolDiff: part.toolDiff,
-    toolUseCount: part.toolUseCount,
-    tokenCount: part.tokenCount,
-    tokenCountText: part.tokenCountText,
-    agentUsageDisplay: part.agentUsageDisplay,
-    toolUseId: part.toolUseId,
-    parentTaskUseId: part.parentTaskUseId,
-    isMcpTool: part.isMcpTool,
-    mcpServerName: part.mcpServerName,
-    backgroundTask: part.backgroundTask,
-    taskSnapshot: part.taskSnapshot,
-  };
-}
-
 export function normalizeClaudePart(part: ClaudeMessagePart): NativeMessagePart | null {
   switch (part.type) {
     case "text":
-      return {
-        type: "text",
-        content: part.content ?? "",
-        ...(part.timestamp ? { createdAt: part.timestamp } : {}),
-        sourcePartId: part._messageUuid,
-        parentTaskUseId: part.parentTaskUseId,
-      };
     case "thinking":
-      return {
-        type: "thinking",
-        content: part.content ?? "",
-        ...(part.timestamp ? { createdAt: part.timestamp } : {}),
-        sourcePartId: part._messageUuid,
-        parentTaskUseId: part.parentTaskUseId,
-      };
     case "file":
-      return { type: "file", content: part.content ?? "" };
     case "tool-invocation":
-      return toNativeToolInvocationPart(part);
     case "tool-result":
-      return {
-        type: "tool-result",
-        content: part.content ?? "",
-        toolName: part.toolName,
-        toolState: part.toolState,
-        toolOutput: part.toolOutput,
-        toolError: part.toolError,
-      };
+    case "subagent":
+    case "agent-group":
+    case "tool-group":
+    case "task-group":
+      return part;
     default:
       return null;
   }
@@ -426,6 +379,10 @@ export function normalizeNativeMessage(message: NativeMessage): NativeMessage {
   return normalized;
 }
 
+export function normalizeNativeMessages(messages: readonly NativeMessage[]): NativeMessage[] {
+  return messages.map(normalizeNativeMessage);
+}
+
 export function normalizeOpenCodeNativeMessage(message: NativeMessage): NativeMessage {
   return normalizeNativeMessage(message);
 }
@@ -434,26 +391,9 @@ export function normalizeCodexNativeMessage(message: NativeMessage): NativeMessa
   return normalizeNativeMessage(message);
 }
 
-const normalizedAcpMessageCache = new WeakMap<AcpMessage, NativeMessage>();
-
 /** Normalize ACP messages for Cursor and Grok below the shared tab boundary. */
 export function normalizeAcpNativeMessage(message: AcpMessage): NativeMessage {
-  const cached = normalizedAcpMessageCache.get(message);
-  if (cached) return cached;
-  const normalized = normalizeNativeMessage({
-    id: message.id,
-    role: message.role,
-    content: message.content,
-    createdAt: message.createdAt,
-    parts: message.parts.map((part, index) => ({
-      type: part.type === "reasoning" ? "thinking" as const : "text" as const,
-      content: part.text,
-      sourcePartId: `${message.id}:${index}`,
-      sourceMessageId: message.id,
-    })),
-  });
-  normalizedAcpMessageCache.set(message, normalized);
-  return normalized;
+  return normalizeNativeMessage(message);
 }
 
 /** Same identity-cache rationale as `normalizeNativeMessage`, for Claude. */
@@ -494,7 +434,7 @@ function normalizeClaudeMessageUncached(message: ClaudeMessage): NativeMessage {
         dropEmptyThinkingParts(dedupeStreamedNativeParts(taskGroupedParts)),
       ),
     ),
-    createdAt: message.timestamp,
+    createdAt: message.createdAt,
     ...(message.modelId ? { modelId: message.modelId } : {}),
   };
 }

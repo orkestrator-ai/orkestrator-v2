@@ -132,6 +132,117 @@ describe("first-run agent platform selection", () => {
   });
 });
 
+describe("favorite model normalization", () => {
+  // `config.json` is user-editable on disk, so every read is a trust boundary:
+  // a malformed favourite must not reach the renderer's model picker, where an
+  // unknown platform has no catalogue and a blank id matches every model.
+  test("drops malformed, blank, and duplicate favorites on read", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await fs.writeFile(
+        path.join(dataDir, "config.json"),
+        JSON.stringify({
+          ...defaultConfig(),
+          global: {
+            ...defaultConfig().global,
+            favoriteModels: [
+              { platform: "claude", modelId: "claude-opus" },
+              // Trimmed to the same identity as the entry above.
+              { platform: "claude", modelId: "  claude-opus  " },
+              { platform: "codex", modelId: "gpt-codex" },
+              { platform: "not-an-agent", modelId: "anything" },
+              { platform: "claude", modelId: "   " },
+              { platform: "claude", modelId: 42 },
+              { platform: "claude" },
+              { modelId: "orphan" },
+              "claude/opus",
+              null,
+            ],
+          },
+        }),
+        "utf8",
+      );
+
+      const loaded = await storage.loadConfig();
+      expect(loaded.global.favoriteModels).toEqual([
+        { platform: "claude", modelId: "claude-opus" },
+        { platform: "codex", modelId: "gpt-codex" },
+      ]);
+    });
+  });
+
+  test("replaces a non-array favorites field with an empty list", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await fs.writeFile(
+        path.join(dataDir, "config.json"),
+        JSON.stringify({
+          ...defaultConfig(),
+          global: { ...defaultConfig().global, favoriteModels: "claude/opus" },
+        }),
+        "utf8",
+      );
+
+      expect((await storage.loadConfig()).global.favoriteModels).toEqual([]);
+    });
+  });
+
+  test("round-trips valid favorites through an update without reordering them", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const favoriteModels = [
+        { platform: "opencode" as const, modelId: "opencode/a" },
+        { platform: "claude" as const, modelId: "claude-opus" },
+      ];
+      const updated = await storage.updateGlobalConfig({
+        ...defaultConfig().global,
+        favoriteModels,
+      });
+      expect(updated.global.favoriteModels).toEqual(favoriteModels);
+
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      expect((await restarted.loadConfig()).global.favoriteModels).toEqual(favoriteModels);
+    });
+  });
+});
+
+describe("ACP bridge runtime persistence", () => {
+  test("round-trips and clears Cursor and Grok process coordinates", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = createEnvironment("project-1", { environmentType: "local" });
+      environment.id = "env-acp-runtime";
+      await storage.addEnvironment(environment);
+
+      await storage.updateEnvironment(environment.id, {
+        cursorBridgePid: 4101,
+        grokBridgePid: 4102,
+        localCursorPort: 57101,
+        localGrokPort: 57102,
+      });
+
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      expect(await restarted.getEnvironment(environment.id)).toMatchObject({
+        cursorBridgePid: 4101,
+        grokBridgePid: 4102,
+        localCursorPort: 57101,
+        localGrokPort: 57102,
+      });
+
+      await restarted.updateEnvironment(environment.id, {
+        cursorBridgePid: null,
+        grokBridgePid: null,
+        localCursorPort: null,
+        localGrokPort: null,
+      });
+      expect(await restarted.getEnvironment(environment.id)).not.toMatchObject({
+        cursorBridgePid: expect.any(Number),
+        grokBridgePid: expect.any(Number),
+        localCursorPort: expect.any(Number),
+        localGrokPort: expect.any(Number),
+      });
+    });
+  });
+});
+
 describe("backend-owned setup and build surfaces", () => {
   test("normalizes pre-setupPhase environment records on every read", async () => {
     await withTemporaryStorage(async (_storage, dataDir) => {

@@ -9,12 +9,12 @@ import {
 
 const nativeFetch = globalThis.fetch;
 
-function message(id: string, text: string): AcpMessage {
+function message(id: string, content: string): AcpMessage {
   return {
     id,
     role: "assistant",
-    content: text,
-    parts: [{ type: "text", text }],
+    content,
+    parts: [{ type: "text", content }],
     createdAt: "2026-08-13T00:00:00.000Z",
   };
 }

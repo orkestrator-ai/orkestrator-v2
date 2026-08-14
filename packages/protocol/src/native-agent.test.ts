@@ -25,7 +25,7 @@ describe("native agent protocol", () => {
     for (const value of [undefined, null, "codex", 7, true, [], [{ platform: "codex" }]]) {
       expect(isNativeAgentTabData(value)).toBe(false);
     }
-    expect(isNativeAgentTabData({ environmentId: "env" })).toBe(false);
+    expect(isNativeAgentTabData({ environmentId: "env" })).toBe(true);
     expect(isNativeAgentTabData({ platform: "codex" })).toBe(false);
   });
 
@@ -56,4 +56,3 @@ describe("native agent protocol", () => {
     })).toBe(true);
   });
 });
-

@@ -89,13 +89,13 @@ describe("pane layout persistence", () => {
 
     usePaneLayoutStore.getState().addTab("default", {
       id: "native",
-      type: "claude-native",
+      type: "agent-native",
       initialPrompt: "do not persist",
       agentHandoffId: "handoff-1",
       initialAgentModel: "gpt-5.6-sol",
       initialReasoningEffort: "xhigh",
       initialCommands: ["do not persist"],
-      claudeNativeData: {
+      nativeAgentData: {
         environmentId: "env-1",
         containerId: "container-1",
         hostPort: 1234,
@@ -634,7 +634,7 @@ describe("pane layout persistence", () => {
     // A direct write issued while the older write is still in flight must not
     // overtake it — otherwise the older payload lands last and discards the tab
     // this write exists to record.
-    usePaneLayoutStore.getState().addTab("default", { id: "agent", type: "codex-native" }, "env-1");
+    usePaneLayoutStore.getState().addTab("default", { id: "agent", type: "agent-native" }, "env-1");
     const flushed = flushPaneLayoutNow(
       "env-1",
       createPersistedPaneLayoutInput(usePaneLayoutStore.getState().environments.get("env-1")!),
@@ -667,7 +667,7 @@ describe("pane layout persistence", () => {
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
     store.finishHydration("env-1");
-    store.addTab("default", { id: "agent", type: "claude-native" }, "env-1");
+    store.addTab("default", { id: "agent", type: "agent-native" }, "env-1");
 
     await flushPaneLayoutNow(
       "env-1",
@@ -745,9 +745,9 @@ describe("pane layout persistence", () => {
     );
 
     await expect(flushPaneLayoutNow("env-1", input, save, async () => ({
-      ...createSaved("env-1", { ...input, version: 3 }),
+      ...createSaved("env-1", { ...input, version: 4 }),
       revision: 9,
-    }))).rejects.toThrow("Unsupported pane layout version: 3");
+    }))).rejects.toThrow("Unsupported pane layout version: 4");
     expect(save).not.toHaveBeenCalled();
   });
 
@@ -887,13 +887,13 @@ describe("pane layout persistence", () => {
             tabs: [
               {
                 id: "claude",
-                type: "claude-native" as const,
-                claudeNativeData: { environmentId: "env-1", hostPort: 1 },
+                type: "agent-native" as const,
+                nativeAgentData: { environmentId: "env-1", hostPort: 1 },
               },
               {
                 id: "codex",
-                type: "codex-native" as const,
-                codexNativeData: { environmentId: "env-1", hostPort: 2 },
+                type: "agent-native" as const,
+                nativeAgentData: { environmentId: "env-1", hostPort: 2 },
               },
             ],
             activeTabId: "codex",
@@ -903,8 +903,8 @@ describe("pane layout persistence", () => {
             id: "right",
             tabs: [{
               id: "opencode",
-              type: "opencode-native" as const,
-              openCodeNativeData: { environmentId: "env-1", hostPort: 3 },
+              type: "agent-native" as const,
+              nativeAgentData: { environmentId: "env-1", hostPort: 3 },
             }],
             activeTabId: "opencode",
           },
@@ -926,10 +926,7 @@ describe("pane layout persistence", () => {
     expect(state.root.children[0].activeTabId).toBe("codex");
   });
 
-  test("writes the canonical identity for a tab restored from a legacy-only record", () => {
-    // The forward-migration write path: an older persisted layout produces an
-    // in-memory tab with only the provider field, and the next write has to
-    // emit both projections or a newer reader never sees the session.
+  test("writes assigned canonical identities and strips live ports", () => {
     const state = {
       containerId: "container-1",
       activePaneId: "pane",
@@ -939,8 +936,9 @@ describe("pane layout persistence", () => {
         tabs: [
           {
             id: "claude",
-            type: "claude-native" as const,
-            claudeNativeData: {
+            type: "agent-native" as const,
+            nativeAgentData: {
+              platform: "claude" as const,
               environmentId: "env-1",
               sessionId: "claude-session",
               hostPort: 4101,
@@ -949,9 +947,9 @@ describe("pane layout persistence", () => {
           },
           {
             id: "cursor",
-            type: "cursor-native" as const,
-            acpNativeData: {
-              provider: "cursor" as const,
+            type: "agent-native" as const,
+            nativeAgentData: {
+              platform: "cursor" as const,
               environmentId: "env-1",
               sessionId: "cursor-session",
               hostPort: 4104,
@@ -983,7 +981,7 @@ describe("pane layout persistence", () => {
     expect(JSON.stringify(persisted)).not.toContain("4104");
   });
 
-  test("never persists a platform key inside a legacy provider record", () => {
+  test("persists the canonical platform lock", () => {
     const state = {
       containerId: null,
       activePaneId: "pane",
@@ -992,8 +990,7 @@ describe("pane layout persistence", () => {
         id: "pane",
         tabs: [{
           id: "codex",
-          type: "codex-native" as const,
-          codexNativeData: { environmentId: "env-1", sessionId: "thread-1" },
+          type: "agent-native" as const,
           nativeAgentData: {
             platform: "codex" as const,
             environmentId: "env-1",
@@ -1008,11 +1005,11 @@ describe("pane layout persistence", () => {
       createPersistedPaneLayoutInput(state).root as { tabs: TabInfo[] }
     ).tabs;
 
-    expect(tab?.codexNativeData).toEqual({
+    expect(tab?.nativeAgentData).toEqual({
+      platform: "codex",
       environmentId: "env-1",
       sessionId: "thread-1",
     });
-    expect(tab?.codexNativeData).not.toHaveProperty("platform");
   });
 
   test("leaves a non-native tab without a canonical identity", () => {
@@ -1319,7 +1316,7 @@ describe("pane layout persistence", () => {
       root: {
         kind: "leaf" as const,
         id: "default",
-        tabs: [{ id: "old-session", type: "claude-native" as const }],
+        tabs: [{ id: "old-session", type: "agent-native" as const }],
         activeTabId: "old-session",
       },
     };

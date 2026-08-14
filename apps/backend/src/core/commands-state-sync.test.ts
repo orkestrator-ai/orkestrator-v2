@@ -103,6 +103,75 @@ async function setOpenCodeModelProviders(
   });
 }
 
+describe("create-environment agent preference command", () => {
+  test("persists a successful agent-enabled create selection without replacing repository settings", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.updateRepositoryConfig("proj-1", {
+        defaultBranch: "develop",
+        prBaseBranch: "release",
+        lastEnvironmentType: "local",
+      });
+
+      await invoke("update_environment_agent_settings", {
+        environmentId: "e1",
+        defaultAgent: "codex",
+        claudeMode: null,
+        claudeNativeBackend: null,
+        opencodeMode: null,
+        codexMode: "terminal",
+        pendingAgentLaunch: true,
+        initialAgentModel: "gpt-remembered",
+        initialReasoningEffort: "xhigh",
+      });
+
+      expect(await storage.getRepositoryConfig("proj-1")).toEqual({
+        defaultBranch: "develop",
+        prBaseBranch: "release",
+        lastEnvironmentType: "local",
+        lastEnvironmentAgentSelection: {
+          platform: "codex",
+          mode: "terminal",
+          model: "gpt-remembered",
+          reasoningEffort: "xhigh",
+        },
+      });
+
+      await invoke("update_environment_agent_settings", {
+        environmentId: "e1",
+        defaultAgent: "claude",
+        claudeMode: "native",
+        claudeNativeBackend: null,
+        opencodeMode: null,
+        codexMode: null,
+        pendingAgentLaunch: false,
+      });
+
+      expect((await storage.getRepositoryConfig("proj-1"))
+        .lastEnvironmentAgentSelection?.platform).toBe("codex");
+    });
+  });
+
+  test("records provider-default model and reasoning choices as omitted fields", async () => {
+    await withCommands(async (invoke, storage) => {
+      await invoke("update_environment_agent_settings", {
+        environmentId: "e1",
+        defaultAgent: "opencode",
+        claudeMode: null,
+        claudeNativeBackend: null,
+        opencodeMode: "native",
+        codexMode: null,
+        pendingAgentLaunch: true,
+      });
+
+      expect((await storage.getRepositoryConfig("proj-1"))
+        .lastEnvironmentAgentSelection).toEqual({
+          platform: "opencode",
+          mode: "native",
+        });
+    });
+  });
+});
+
 describe("native agent model catalogue command", () => {
   test("normalizes provider catalogues and filters OpenCode to the configured providers", async () => {
     await withCommands(async (invoke, storage) => {

@@ -182,7 +182,10 @@ import {
   isStartBuildPipelineInput,
   type StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
-import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
+import {
+  AGENT_PLATFORM_LABELS,
+  isAgentPlatform,
+} from "@orkestrator/protocol/agent-platforms";
 import type {
   AgentModel,
   AgentReasoningOption,
@@ -10650,7 +10653,7 @@ export function createCommandRegistry(
       { portMappings: asPortMappings(portMappings) ?? [] },
     ).then(toClientEnvironment),
   );
-  register("update_environment_agent_settings", ({
+  register("update_environment_agent_settings", async ({
     environmentId,
     defaultAgent,
     claudeMode,
@@ -10662,6 +10665,7 @@ export function createCommandRegistry(
     initialReasoningEffort,
     initialPromptAttachments,
   }, { storage }) => {
+    const id = asString(environmentId, "environmentId");
     const updates = {
       defaultAgent,
       claudeMode,
@@ -10687,8 +10691,42 @@ export function createCommandRegistry(
       updates.initialPromptAttachments =
         initialPromptAttachments as Environment["initialPromptAttachments"];
     }
-    return storage.updateEnvironment(asString(environmentId, "environmentId"), updates)
-      .then(toClientEnvironment);
+    const updatedEnvironment = await storage.updateEnvironment(id, updates);
+
+    // This command is the successful create flow's durable commit point for
+    // agent launch settings. Keep the remembered picker tuple separate from
+    // repository defaults, which are explicit user settings shared by other
+    // launch surfaces.
+    if (pendingAgentLaunch === true && isAgentPlatform(defaultAgent)) {
+      const selectedMode =
+        defaultAgent === "claude"
+          ? claudeMode
+          : defaultAgent === "opencode"
+            ? opencodeMode
+            : defaultAgent === "codex"
+              ? codexMode
+              : "native";
+      if (selectedMode === "terminal" || selectedMode === "native") {
+        const repoConfig = await storage.getRepositoryConfig(
+          updatedEnvironment.projectId,
+        );
+        await storage.updateRepositoryConfig(updatedEnvironment.projectId, {
+          ...repoConfig,
+          lastEnvironmentAgentSelection: {
+            platform: defaultAgent,
+            mode: selectedMode,
+            ...(typeof initialAgentModel === "string" && initialAgentModel
+              ? { model: initialAgentModel }
+              : {}),
+            ...(typeof initialReasoningEffort === "string" && initialReasoningEffort
+              ? { reasoningEffort: initialReasoningEffort }
+              : {}),
+          },
+        });
+      }
+    }
+
+    return toClientEnvironment(updatedEnvironment);
   });
   register("set_environment_pending_agent_launch", ({ environmentId, pending }, { storage }) => {
     const nextPending = asRequiredBoolean(pending, "pending");

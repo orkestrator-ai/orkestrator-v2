@@ -36,6 +36,7 @@ import type {
 import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
+import { selectedAgentMode } from "@/lib/create-environment-agent-defaults";
 
 export interface CreateEnvironmentFlowOperations {
   createEnvironment: (
@@ -255,6 +256,19 @@ export function CreateEnvironmentFlowDialog({
         launchSettings.initialPromptAttachments,
       );
       updateEnvironment(environment.id, configuredEnvironment);
+      if (options.launchAgent) {
+        useConfigStore.getState().setRepositoryLastEnvironmentAgentSelection(
+          projectId,
+          {
+            platform: options.agentType,
+            mode: selectedAgentMode(options.agentType, options),
+            ...(options.model ? { model: options.model } : {}),
+            ...(options.reasoningEffort
+              ? { reasoningEffort: options.reasoningEffort }
+              : {}),
+          },
+        );
+      }
 
       setOptions(configuredEnvironment.id, {
         launchAgent: options.launchAgent,

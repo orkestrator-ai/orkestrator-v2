@@ -339,6 +339,8 @@ export function RepositorySettings({
         defaultBranch,
         prBaseBranch,
         lastEnvironmentType: currentRepoConfig?.lastEnvironmentType,
+        lastEnvironmentAgentSelection:
+          currentRepoConfig?.lastEnvironmentAgentSelection,
         defaultPortMappings: portMappings.length > 0 ? portMappings : undefined,
         filesToCopy: cleanedFilesToCopy.length > 0 ? cleanedFilesToCopy : undefined,
         defaultModel: defaultModel || undefined,

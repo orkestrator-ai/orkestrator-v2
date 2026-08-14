@@ -601,6 +601,13 @@ export interface RepositoryConfig {
   defaultBranch: string;
   prBaseBranch: string;
   lastEnvironmentType?: EnvironmentType;
+  /** Agent controls used by the most recently created agent-enabled environment. */
+  lastEnvironmentAgentSelection?: {
+    platform: DefaultAgent;
+    mode: AgentStyle;
+    model?: string;
+    reasoningEffort?: string;
+  };
   defaultPortMappings?: PortMapping[];
   filesToCopy?: string[];
   defaultModel?: string;

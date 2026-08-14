@@ -14,6 +14,7 @@ import type {
   AgentInteractionWorkflowSummary,
 } from "@orkestrator/protocol/agent-interactions";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { AgentModel } from "@orkestrator/protocol/native-agent";
 
 export type {
   AgentActivitySource,
@@ -105,13 +106,17 @@ export interface PersistedAgentModelCatalog<T> {
 
 /**
  * Host-wide last-known-good catalogues used before any environment bridge has
- * started. OpenCode remains project-scoped in `opencode-model-catalog.json`
- * because its provider list can differ between repositories.
+ * started. Cursor and Grok persist the provider-neutral models normalized by
+ * their ACP bridge. OpenCode remains project-scoped in
+ * `opencode-model-catalog.json` because its provider list can differ between
+ * repositories.
  */
 export interface AgentModelCatalogCache {
   schemaVersion: 1;
   claude?: PersistedAgentModelCatalog<ClaudeModelCatalogEntry>;
   codex?: PersistedAgentModelCatalog<CodexModelCatalogEntry>;
+  cursor?: PersistedAgentModelCatalog<AgentModel>;
+  grok?: PersistedAgentModelCatalog<AgentModel>;
 }
 
 export interface OpenCodeModelCatalogEntry {

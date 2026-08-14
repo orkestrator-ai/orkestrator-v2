@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "b
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import type { AcpApproval, AcpMessageWindow, AcpSessionSnapshot } from "@/lib/acp-client";
+import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
 // The merge is pure and is the contract under test in several cases below, so
 // keep the real implementation and stub only the network calls around it.
 import * as realAcpClient from "@/lib/acp-client";
@@ -15,18 +16,24 @@ import * as realReactVirtuoso from "react-virtuoso";
 const realAcpClientSnapshot = { ...realAcpClient };
 const realReactVirtuosoSnapshot = { ...realReactVirtuoso };
 
+function sessionSnapshot(overrides: Partial<AcpSessionSnapshot> = {}): AcpSessionSnapshot {
+  return {
+    id: "persisted-session",
+    provider: "cursor",
+    status: "idle",
+    messages: [],
+    baseIndex: 0,
+    revision: 1,
+    composer: EMPTY_NATIVE_AGENT_COMPOSER_STATE,
+    ...overrides,
+  };
+}
+
 const awaitBridgeReady = mock(async () => ({ status: "ready" as const, port: 4099, authToken: "token" }));
 const ensureNativeAgentSession = mock(async () => ({ providerSessionId: "new-session" }));
 const adoptNativeAgentSession = mock(async () => ({ providerSessionId: "persisted-session" }));
 const dispatchNativeAgentPrompt = mock(async () => ({ providerSessionId: "persisted-session" }));
-const getAcpSession = mock(async (): Promise<AcpSessionSnapshot> => ({
-  id: "persisted-session",
-  provider: "cursor" as const,
-  status: "idle" as const,
-  messages: [],
-  baseIndex: 0,
-  revision: 1,
-}));
+const getAcpSession = mock(async (): Promise<AcpSessionSnapshot> => sessionSnapshot());
 const getAcpMessageWindow = mock(
   async (_client: unknown, _sessionId: string, fromIndex: number): Promise<AcpMessageWindow> => ({
     messages: [],
@@ -39,6 +46,7 @@ const getAcpMessageWindow = mock(
 const getAcpApprovals = mock(async (): Promise<AcpApproval[]> => []);
 const resolveAcpApproval = mock(async () => undefined);
 const cancelAcpPrompt = mock(async () => undefined);
+const setAcpSessionConfig = mock(async () => EMPTY_NATIVE_AGENT_COMPOSER_STATE);
 const updateTabNativeSessionId = mock(() => undefined);
 const clearTabInitialPrompt = mock(() => undefined);
 
@@ -56,6 +64,7 @@ mock.module("@/lib/acp-client", () => ({
   getAcpSession,
   getAcpMessageWindow,
   resolveAcpApproval,
+  setAcpSessionConfig,
 }));
 mock.module("react-virtuoso", () => ({
   ...realReactVirtuosoSnapshot,
@@ -123,20 +132,14 @@ beforeEach(() => {
     getAcpApprovals,
     resolveAcpApproval,
     cancelAcpPrompt,
+    setAcpSessionConfig,
     updateTabNativeSessionId,
     clearTabInitialPrompt,
   ]) fn.mockClear();
   awaitBridgeReady.mockImplementation(async () => ({ status: "ready" as const, port: 4099, authToken: "token" }));
   adoptNativeAgentSession.mockImplementation(async () => ({ providerSessionId: "persisted-session" }));
   dispatchNativeAgentPrompt.mockImplementation(async () => ({ providerSessionId: "persisted-session" }));
-  getAcpSession.mockImplementation(async () => ({
-    id: "persisted-session",
-    provider: "cursor" as const,
-    status: "idle" as const,
-    messages: [],
-    baseIndex: 0,
-    revision: 1,
-  }));
+  getAcpSession.mockImplementation(async () => sessionSnapshot());
   getAcpMessageWindow.mockImplementation(async (_client, _sessionId, fromIndex) => ({
     messages: [],
     baseIndex: fromIndex,
@@ -145,6 +148,7 @@ beforeEach(() => {
     status: "idle" as const,
   }));
   getAcpApprovals.mockImplementation(async () => []);
+  setAcpSessionConfig.mockImplementation(async () => EMPTY_NATIVE_AGENT_COMPOSER_STATE);
 });
 
 afterEach(cleanup);
@@ -164,6 +168,7 @@ describe("AcpChatTab", () => {
       }],
       baseIndex: 0,
       revision: 4,
+      composer: EMPTY_NATIVE_AGENT_COMPOSER_STATE,
     }));
 
     render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
@@ -198,6 +203,7 @@ describe("AcpChatTab", () => {
       }],
       baseIndex: 0,
       revision: 4,
+      composer: EMPTY_NATIVE_AGENT_COMPOSER_STATE,
     }));
 
     render(<AcpChatTab tabId="tab-1" data={data} isActive />);
@@ -233,6 +239,7 @@ describe("AcpChatTab", () => {
       }],
       baseIndex: 0,
       revision: 4,
+      composer: EMPTY_NATIVE_AGENT_COMPOSER_STATE,
     }));
     getAcpApprovals.mockImplementation(async () => [{
       id: "approval-1",
@@ -286,6 +293,7 @@ describe("AcpChatTab", () => {
       logicalSessionKey: "env-environment-1:tab-1",
       prompt: "Run the checks",
       requestId: expect.any(String),
+      mode: "build",
     })));
   });
 
@@ -320,6 +328,7 @@ describe("AcpChatTab", () => {
       messages: [],
       baseIndex: 0,
       revision: 2,
+      composer: EMPTY_NATIVE_AGENT_COMPOSER_STATE,
     }));
     getAcpApprovals.mockImplementation(async () => [{
       id: "approval-1",
@@ -373,6 +382,7 @@ describe("AcpChatTab", () => {
       ],
       baseIndex: 0,
       revision: 2,
+      composer: EMPTY_NATIVE_AGENT_COMPOSER_STATE,
     }));
     getAcpApprovals.mockImplementation(async () => [{
       id: "approval-1",
@@ -426,6 +436,7 @@ describe("AcpChatTab", () => {
       messages: [],
       baseIndex: 0,
       revision: 2,
+      composer: EMPTY_NATIVE_AGENT_COMPOSER_STATE,
     }));
     const view = render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
     expect(await screen.findByPlaceholderText("Message Cursor Agent")).toBeTruthy();
@@ -444,6 +455,7 @@ describe("AcpChatTab", () => {
       }],
       baseIndex: 0,
       revision: 9,
+      composer: EMPTY_NATIVE_AGENT_COMPOSER_STATE,
     }));
     getAcpApprovals.mockImplementation(async () => [{
       id: "approval-late",
@@ -505,6 +517,7 @@ describe("AcpChatTab", () => {
         messages: [],
         baseIndex: 0,
         revision: 1,
+        composer: EMPTY_NATIVE_AGENT_COMPOSER_STATE,
       }))
       .mockImplementationOnce(async () => ({
         id: "persisted-session",
@@ -519,6 +532,7 @@ describe("AcpChatTab", () => {
         }],
         baseIndex: 0,
         revision: 2,
+        composer: EMPTY_NATIVE_AGENT_COMPOSER_STATE,
       }));
 
     render(<AcpChatTab tabId="tab-1" data={data} isActive />);
@@ -539,13 +553,8 @@ describe("AcpChatTab", () => {
     // for a container environment does Docker work in the backend. Running
     // status polls at 350ms, so an unthrottled retry would issue a handshake
     // roughly three times a second for as long as the tab stays open.
-    getAcpSession.mockImplementation(async () => ({
-      id: "persisted-session",
-      provider: "cursor" as const,
-      status: "running" as const,
-      messages: [],
-      baseIndex: 0,
-      revision: 1,
+    getAcpSession.mockImplementation(async () => sessionSnapshot({
+      status: "running",
     }));
     getAcpMessageWindow.mockImplementation(async () => {
       throw new Error("Unauthorized");
@@ -567,13 +576,8 @@ describe("AcpChatTab", () => {
   });
 
   test("drops a pending backed-off reconnect when the tab unmounts", async () => {
-    getAcpSession.mockImplementation(async () => ({
-      id: "persisted-session",
-      provider: "cursor" as const,
-      status: "running" as const,
-      messages: [],
-      baseIndex: 0,
-      revision: 1,
+    getAcpSession.mockImplementation(async () => sessionSnapshot({
+      status: "running",
     }));
     getAcpMessageWindow.mockImplementation(async () => {
       throw new Error("Unauthorized");
@@ -594,5 +598,49 @@ describe("AcpChatTab", () => {
     // Unmount is the one case where abandoning the retry is right: no
     // component is left to rehydrate, and the backend keeps the session.
     expect(awaitBridgeReady.mock.calls.length).toBe(beforeUnmount);
+  });
+
+  test("renders the bridge-normalized composer picker and applies config through the adapter", async () => {
+    const composer = {
+      ...EMPTY_NATIVE_AGENT_COMPOSER_STATE,
+      models: [{
+        id: "composer-2.5",
+        platform: "cursor" as const,
+        label: "Composer 2.5",
+        providerLabel: "Cursor",
+        reasoning: [{ id: "medium", label: "Medium" }, { id: "high", label: "High" }],
+        defaultReasoningId: "medium",
+        supportsSpeed: true,
+        supportsMode: true,
+      }],
+      selectedModelId: "composer-2.5",
+      selectedReasoningId: "medium",
+      fastModeEnabled: false,
+      fastModeAvailable: true,
+      selectedModeId: "build" as const,
+      modes: [
+        { id: "build" as const, label: "Build" },
+        { id: "plan" as const, label: "Plan" },
+      ],
+    };
+    getAcpSession.mockImplementation(async () => sessionSnapshot({ composer, revision: 4 }));
+    setAcpSessionConfig.mockImplementation(async () => ({
+      ...composer,
+      selectedReasoningId: "high",
+    }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive />);
+
+    expect(await screen.findByText("Composer 2.5")).toBeTruthy();
+    expect(screen.getByText("Build")).toBeTruthy();
+    const picker = screen.getByTitle(/Choose model, reasoning, and speed/);
+    fireEvent.pointerDown(picker);
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /High/ }));
+
+    await waitFor(() => expect(setAcpSessionConfig).toHaveBeenCalledWith(
+      expect.anything(),
+      "persisted-session",
+      { reasoningId: "high" },
+    ));
   });
 });

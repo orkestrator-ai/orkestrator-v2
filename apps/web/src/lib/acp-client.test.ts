@@ -3,9 +3,11 @@ import {
   createAcpClient,
   createAcpSession,
   mergeAcpMessageWindow,
+  normalizeAcpComposer,
   type AcpMessage,
   type AcpMessageWindow,
 } from "./acp-client";
+import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
 
 const nativeFetch = globalThis.fetch;
 
@@ -101,5 +103,21 @@ describe("ACP bridge authentication", () => {
 
     expect(request?.headers.get("x-orkestrator-acp-token")).toBe("bridge-secret");
     expect(request?.headers.has("authorization")).toBe(false);
+  });
+});
+
+describe("normalizeAcpComposer", () => {
+  test("replaces missing or malformed snapshots with the empty composer", () => {
+    expect(normalizeAcpComposer(undefined)).toEqual(EMPTY_NATIVE_AGENT_COMPOSER_STATE);
+    expect(normalizeAcpComposer({ models: [] } as never)).toEqual(EMPTY_NATIVE_AGENT_COMPOSER_STATE);
+  });
+
+  test("keeps a normalized snapshot intact", () => {
+    const composer = {
+      ...EMPTY_NATIVE_AGENT_COMPOSER_STATE,
+      models: [{ id: "composer-2.5", platform: "cursor" as const, label: "Composer 2.5" }],
+      selectedModelId: "composer-2.5",
+    };
+    expect(normalizeAcpComposer(composer)).toEqual(composer);
   });
 });

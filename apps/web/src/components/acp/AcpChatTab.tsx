@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Square } from "lucide-react";
+import { ArrowUp, ChevronDown, Square } from "lucide-react";
 import {
   adoptNativeAgentSession,
   awaitBridgeReady,
@@ -14,6 +14,7 @@ import {
   getAcpApprovals,
   mergeAcpMessageWindow,
   resolveAcpApproval,
+  setAcpSessionConfig,
   type AcpClient,
   type AcpSessionSnapshot,
   type AcpApproval,
@@ -24,10 +25,21 @@ import { Textarea } from "@/components/ui/textarea";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
+import type { AgentConversationMode } from "@orkestrator/protocol/native-agent";
+import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
+import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
+import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import { useVirtuosoScrollState } from "@/hooks";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import { normalizeNativeMessages } from "@/lib/chat/native-message-adapters";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 // A reconnect runs the full readiness handshake, which for a container
 // environment performs Docker work in the backend. The first failure recovers
@@ -49,9 +61,22 @@ interface AcpChatTabProps {
   data: NativeAgentData & { platform: "cursor" | "grok" };
   isActive: boolean;
   initialPrompt?: string;
+  initialAgentModel?: string;
+  initialReasoningEffort?: string;
+  initialConversationMode?: "build" | "plan";
+  initialFastMode?: boolean;
 }
 
-export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabProps) {
+export function AcpChatTab({
+  tabId,
+  data,
+  isActive,
+  initialPrompt,
+  initialAgentModel,
+  initialReasoningEffort,
+  initialConversationMode,
+  initialFastMode,
+}: AcpChatTabProps) {
   const [client, setClient] = useState<AcpClient | null>(null);
   const [session, setSession] = useState<AcpSessionSnapshot | null>(null);
   const [draft, setDraft] = useState("");
@@ -84,6 +109,7 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
       || environment?.startupAgentSession !== undefined;
   });
   const label = data.platform === "cursor" ? "Cursor Agent" : "Grok Build";
+  const { favorites, toggleFavorite } = useAgentModelFavorites();
   const sessionKey = `env-${data.environmentId}:${tabId}`;
   const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
     isActive,
@@ -139,7 +165,14 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
               ...sessionInput,
               providerSessionId: data.sessionId,
             })
-          : await ensureNativeAgentSession({ ...sessionInput, title: label });
+          : await ensureNativeAgentSession({
+              ...sessionInput,
+              title: label,
+              model: initialAgentModel,
+              reasoningEffort: initialReasoningEffort,
+              sessionMode: initialConversationMode,
+              fastMode: initialFastMode,
+            });
         const [nextSession, pendingApprovals] = await Promise.all([
           getAcpSession(nextClient, mapped.providerSessionId),
           getAcpApprovals(nextClient, mapped.providerSessionId),
@@ -185,6 +218,7 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
         status: slice.status,
         error: slice.error,
         revision: slice.revision,
+        composer: slice.composer ?? latest.composer,
       });
       if (approvalsRevision.current !== slice.revision) {
         approvalsRevision.current = slice.revision;
@@ -240,6 +274,12 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
         title: label,
         prompt,
         requestId,
+        model: session.composer?.selectedModelId,
+        reasoningEffort: session.composer?.selectedReasoningId,
+        mode: session.composer?.selectedModeId ?? "build",
+        ...(typeof session.composer?.fastModeEnabled === "boolean"
+          ? { fastMode: session.composer.fastModeEnabled }
+          : {}),
       });
       await refresh();
       if (!fixedRequestId) pendingManualRequest.current = null;
@@ -252,6 +292,22 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
       dispatchingPrompt.current = false;
     }
   }, [client, data.environmentId, data.platform, label, refresh, session, sessionKey]);
+
+  const patchComposer = useCallback(async (patch: {
+    modelId?: string;
+    reasoningId?: string;
+    fastMode?: boolean;
+    mode?: AgentConversationMode;
+  }) => {
+    const current = sessionRef.current;
+    if (!client || !current || current.status === "running") return;
+    try {
+      const composer = await setAcpSessionConfig(client, current.id, patch);
+      applySession({ ...current, composer, revision: current.revision + 1 });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, [applySession, client]);
 
   useEffect(() => {
     if (backendOwnsStartupPrompt && initialPrompt) {
@@ -280,6 +336,13 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
     () => normalizeNativeMessages(session?.messages ?? []),
     [data.platform, session?.messages],
   );
+  const composer = session?.composer ?? EMPTY_NATIVE_AGENT_COMPOSER_STATE;
+  const selectedModel = composer.models.find((model) => model.id === composer.selectedModelId)
+    ?? composer.models[0];
+  const selectedReasoningLabel = selectedModel?.reasoning?.find(
+    (option) => option.id === composer.selectedReasoningId,
+  )?.label;
+  const settingsLocked = session?.status === "running" || connecting;
 
   // An explicit retry is a fresh start: drop any backed-off attempt so the
   // user's click reconnects now rather than waiting out the current delay,
@@ -355,7 +418,63 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
             className="min-h-14 resize-none border-0 bg-transparent px-1 py-2 shadow-none focus-visible:ring-0"
             disabled={!session}
           />
-          <div className="flex items-center justify-end pt-1">
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <div className="flex min-w-0 flex-1 items-center gap-1">
+              <AgentModelPicker
+                models={composer.models}
+                favorites={favorites}
+                enabledPlatforms={[data.platform]}
+                selectedPlatform={data.platform}
+                platformSelectionLocked
+                onToggleFavorite={toggleFavorite}
+                selectedModelId={selectedModel?.id}
+                selectedModelLabel={selectedModel?.label ?? "No models available"}
+                onModelChange={(modelId) => { void patchComposer({ modelId }); }}
+                reasoningOptions={selectedModel?.reasoning ?? []}
+                selectedReasoningId={composer.selectedReasoningId}
+                selectedReasoningLabel={selectedReasoningLabel}
+                onReasoningChange={
+                  (selectedModel?.reasoning?.length ?? 0) > 0
+                    ? (reasoningId) => { void patchComposer({ reasoningId }); }
+                    : undefined
+                }
+                fastModeEnabled={composer.fastModeEnabled}
+                fastModeAvailable={composer.fastModeAvailable}
+                onFastModeChange={
+                  composer.fastModeAvailable
+                    ? (fastMode) => { void patchComposer({ fastMode }); }
+                    : undefined
+                }
+                disabled={!session || settingsLocked}
+              />
+              {composer.modes.length > 0 ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      disabled={!session || settingsLocked}
+                      className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                      title="Choose mode"
+                    >
+                      <ChevronDown className="h-3 w-3" />
+                      <span>{composer.selectedModeId === "plan" ? "Plan" : "Build"}</span>
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuRadioGroup
+                      value={composer.selectedModeId ?? "build"}
+                      onValueChange={(mode) => { void patchComposer({ mode: mode as AgentConversationMode }); }}
+                    >
+                      {composer.modes.map((mode) => (
+                        <DropdownMenuRadioItem key={mode.id} value={mode.id}>
+                          {mode.label}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : null}
+            </div>
             {session?.status === "running" ? (
               <Button size="icon" variant="ghost" className="h-8 w-8 rounded-full bg-destructive/10 text-destructive hover:bg-destructive/20" aria-label="Stop" onClick={() => client && void cancelAcpPrompt(client, session.id)}><Square className="h-4 w-4 fill-current" /></Button>
             ) : (

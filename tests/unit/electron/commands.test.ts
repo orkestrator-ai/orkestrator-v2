@@ -403,7 +403,7 @@ function createContext(
     repositoryConfig?: RepositoryConfig;
     globalConfig?: Record<string, unknown>;
     cacheAgentModelCatalog?: (
-      agent: "claude" | "codex",
+      agent: "claude" | "codex" | "cursor" | "grok",
       models: unknown[],
     ) => Promise<unknown>;
     dataDir?: string;
@@ -467,6 +467,8 @@ function createContext(
         options.cacheAgentModelCatalog
           ?? (async () => ({ schemaVersion: 1 as const })),
       ),
+      getAgentModelCatalogCache: mock(async () => ({ schemaVersion: 1 as const })),
+      getOpenCodeModelCatalog: mock(async () => null),
       getEnvironment: mock(async (environmentId: string) => environments.find((environment) => environment.id === environmentId) ?? null),
       getEnvironmentsByProject: mock(async (projectId: string) => environments.filter((environment) => environment.projectId === projectId)),
       loadEnvironments: mock(async () => environments),
@@ -11290,8 +11292,30 @@ exit 0
               .digest("hex"),
           }));
           http.createServer((req, res) => {
-            res.writeHead(req.url === "/global/health" ? 200 : 404, { "content-type": "application/json" });
-            res.end(JSON.stringify({ ok: true }));
+            if (req.url === "/global/health") {
+              res.writeHead(200, {
+                "content-type": "application/json",
+                "access-control-allow-origin": "*",
+              });
+              res.end(JSON.stringify({ ok: true }));
+              return;
+            }
+            if (req.url === "/global/models") {
+              res.writeHead(200, {
+                "content-type": "application/json",
+                "access-control-allow-origin": "*",
+              });
+              res.end(JSON.stringify({ models: [{
+                platform: ${JSON.stringify(provider)},
+                id: ${JSON.stringify(`${provider}-live-model`)},
+                label: ${JSON.stringify(`${provider} live model`)},
+                providerLabel: ${JSON.stringify(provider === "cursor" ? "Cursor" : "Grok")},
+                supportsMode: true,
+              }] }));
+              return;
+            }
+            res.writeHead(404, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: "not found" }));
           }).listen(Number(process.env.PORT), "127.0.0.1");
         `,
       );
@@ -11371,6 +11395,19 @@ exit 0
           context,
         ) as { running: boolean; port: number };
         expect(status).toMatchObject({ running: true, port: started.port });
+
+        const catalog = await commands.get("get_native_agent_model_catalog")?.(
+          { environmentId: environment.id },
+          context,
+        ) as Array<{ platform: string; id: string }>;
+        expect(catalog).toContainEqual(expect.objectContaining({
+          platform: provider,
+          id: `${provider}-live-model`,
+        }));
+        expect(context.storage.cacheAgentModelCatalog).toHaveBeenCalledWith(
+          provider,
+          [expect.objectContaining({ id: `${provider}-live-model` })],
+        );
 
         if (provider === "cursor") {
           // The fingerprint exists to restart on a *changed* credential. An

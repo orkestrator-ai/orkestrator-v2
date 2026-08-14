@@ -753,7 +753,10 @@ describe("ACP bridge", () => {
     ]);
     const statuses = [first.status, second.status].sort();
     expect(statuses).toEqual([202, 409]);
-    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toEqual(["prompt"]);
+    await waitFor(
+      () => fs.readFile(counterFile, "utf8").catch(() => ""),
+      (contents) => contents.trim() === "prompt",
+    );
   });
 
   test("keeps live approvals when a superseded agent process exits", async () => {
@@ -1009,5 +1012,94 @@ describe("ACP bridge", () => {
         .find((persisted) => persisted.id === "session-v1")
         ?.messages[1]?.parts.map((part) => part.type),
     ).toEqual(["thinking", "text"]);
+  });
+
+  test("normalizes Cursor ACP config into composer state and applies patches", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({}),
+    });
+    expect(created.status).toBe(201);
+    const session = await created.json() as {
+      id: string;
+      composer: {
+        models: Array<{ id: string; label: string; platform: string }>;
+        selectedModelId?: string;
+        selectedReasoningId?: string;
+        fastModeAvailable: boolean;
+        selectedModeId?: string;
+        modes: Array<{ id: string }>;
+      };
+    };
+    expect(session.composer.models.map((model) => model.id)).toEqual(["composer-2.5", "gpt-5.5"]);
+    expect(session.composer.models[0]).toMatchObject({
+      platform: "cursor",
+      label: "Composer 2.5",
+    });
+    expect(session.composer.selectedModelId).toBe("composer-2.5");
+    expect(session.composer.selectedReasoningId).toBe("medium");
+    expect(session.composer.fastModeAvailable).toBe(true);
+    expect(session.composer.selectedModeId).toBe("build");
+    expect(JSON.stringify(session)).not.toContain("configOptions");
+    expect(JSON.stringify(session)).not.toContain("_meta");
+
+    const catalog = await nativeFetch(`${base}/global/models`, { headers })
+      .then((response) => response.json()) as { models: Array<{ id: string }> };
+    expect(catalog.models.map((model) => model.id)).toEqual(["composer-2.5", "gpt-5.5"]);
+
+    const updated = await nativeFetch(`${base}/session/${session.id}/config`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        modelId: "gpt-5.5",
+        reasoningId: "high",
+        fastMode: true,
+        mode: "plan",
+      }),
+    });
+    expect(updated.status).toBe(200);
+    const composer = await updated.json() as {
+      selectedModelId?: string;
+      selectedReasoningId?: string;
+      fastModeEnabled: boolean | null;
+      selectedModeId?: string;
+    };
+    expect(composer.selectedModelId).toBe("gpt-5.5");
+    expect(composer.selectedReasoningId).toBe("high");
+    expect(composer.fastModeEnabled).toBe(true);
+    expect(composer.selectedModeId).toBe("plan");
+  });
+
+  test("normalizes Grok ACP models and reasoning without leaking vendor wire", async () => {
+    const { base, headers } = await spawnBridge({ env: { ACP_PROVIDER: "grok" } });
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({}),
+    });
+    expect(created.status).toBe(201);
+    const session = await created.json() as {
+      id: string;
+      composer: {
+        models: Array<{ id: string; reasoning?: Array<{ id: string; label: string }> }>;
+        selectedModelId?: string;
+        selectedReasoningId?: string;
+      };
+    };
+    expect(session.composer.selectedModelId).toBe("grok-build");
+    expect(session.composer.selectedReasoningId).toBe("high");
+    expect(session.composer.models[0]?.reasoning?.map((option) => option.id)).toEqual(["low", "high", "xhigh"]);
+    expect(JSON.stringify(session)).not.toContain("reasoningEfforts");
+
+    const updated = await nativeFetch(`${base}/session/${session.id}/config`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ reasoningId: "low" }),
+    });
+    expect(updated.status).toBe(200);
+    const composer = await updated.json() as { selectedReasoningId?: string };
+    expect(composer.selectedReasoningId).toBe("low");
   });
 });

@@ -5941,6 +5941,62 @@ async function peekContainerAgentBridge(
   return healthy ? { hostPort, authToken } : null;
 }
 
+async function fetchAcpNormalizedModels(
+  environment: Environment,
+  context: CommandContext,
+  kind: "cursor" | "grok",
+): Promise<AgentModel[]> {
+  const bridge = environment.environmentType === "local"
+    ? await peekLocalAgentBridge(environment.id, context, kind)
+    : environment.containerId
+      ? await peekContainerAgentBridge(environment.containerId, kind)
+      : null;
+  if (!bridge) return [];
+  const port = "port" in bridge ? bridge.port : bridge.hostPort;
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/global/models`, {
+      headers: {
+        Authorization: `Bearer ${bridge.authToken}`,
+        "X-Orkestrator-Acp-Token": bridge.authToken,
+      },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok) return [];
+    const body = await response.json() as { models?: unknown };
+    if (!Array.isArray(body.models)) return [];
+    return body.models.flatMap((candidate): AgentModel[] => {
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+      const model = candidate as Record<string, unknown>;
+      if (typeof model.id !== "string" || model.id.length === 0) return [];
+      const reasoning = Array.isArray(model.reasoning)
+        ? model.reasoning.flatMap((option): AgentReasoningOption[] => {
+            if (!option || typeof option !== "object" || typeof (option as { id?: unknown }).id !== "string") {
+              return [];
+            }
+            const entry = option as { id: string; label?: unknown };
+            return [{
+              id: entry.id,
+              label: typeof entry.label === "string" ? entry.label : entry.id,
+            }];
+          })
+        : undefined;
+      return [{
+        platform: kind,
+        id: model.id,
+        label: typeof model.label === "string" ? model.label : model.id,
+        ...(typeof model.providerLabel === "string" ? { providerLabel: model.providerLabel } : { providerLabel: kind === "cursor" ? "Cursor" : "Grok" }),
+        ...(typeof model.description === "string" ? { description: model.description } : {}),
+        ...(reasoning && reasoning.length > 0 ? { reasoning } : {}),
+        ...(typeof model.defaultReasoningId === "string" ? { defaultReasoningId: model.defaultReasoningId } : {}),
+        supportsSpeed: model.supportsSpeed === true,
+        supportsMode: model.supportsMode === true,
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
 async function configureOpenCodeAgentTools(
   port: number,
   password: string,
@@ -9431,7 +9487,8 @@ export function createCommandRegistry(
   register("get_agent_model_catalog_cache", (_args, { storage }) =>
     storage.getAgentModelCatalogCache()
   );
-  register("get_native_agent_model_catalog", async ({ environmentId }, { storage }) => {
+  register("get_native_agent_model_catalog", async ({ environmentId }, context) => {
+    const { storage } = context;
     const id = asNonBlankString(environmentId, "environmentId");
     const environment = await storage.getEnvironment(id);
     if (!environment) throw new Error(`Environment not found: ${id}`);
@@ -9442,6 +9499,24 @@ export function createCommandRegistry(
     const codexModels = cache.codex?.models ?? [];
     const openCodeModels = (await storage.getOpenCodeModelCatalog(environment.projectId))
       ?.models ?? [];
+    const [cursorModels, grokModels] = await Promise.all([
+      fetchAcpNormalizedModels(environment, context, "cursor"),
+      fetchAcpNormalizedModels(environment, context, "grok"),
+    ]);
+    for (const [agent, models] of [
+      ["cursor", cursorModels],
+      ["grok", grokModels],
+    ] as const) {
+      if (models.length === 0) continue;
+      try {
+        await storage.cacheAgentModelCatalog(agent, models);
+      } catch (error) {
+        console.warn(
+          `[ElectronBackend] Failed to persist the ${agent} model catalogue:`,
+          error instanceof Error ? error.message : "unknown error",
+        );
+      }
+    }
     const effortLabel = (effort: string) => {
       if (effort === "xhigh") return "Extra high";
       return effort.replace(/[-_]+/g, " ").replace(/^\w/, (letter) => letter.toUpperCase());
@@ -9488,6 +9563,8 @@ export function createCommandRegistry(
           supportsMode: true,
         }];
       }),
+      ...(cursorModels.length > 0 ? cursorModels : cache.cursor?.models ?? []),
+      ...(grokModels.length > 0 ? grokModels : cache.grok?.models ?? []),
     ];
     return result;
   });
@@ -11144,6 +11221,7 @@ export function createCommandRegistry(
         args.sessionMode === "plan" || args.sessionMode === "build"
           ? args.sessionMode
           : undefined,
+      fastMode: typeof args.fastMode === "boolean" ? args.fastMode : undefined,
     });
   });
 
@@ -11188,9 +11266,10 @@ export function createCommandRegistry(
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
+    const agent = asString(args.agent, "agent") as import("./models.js").NativeAgentProvider;
     return context.nativeAgents.dispatchPrompt({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
-      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      agent,
       logicalSessionKey: asNonBlankString(
         args.logicalSessionKey,
         "logicalSessionKey",
@@ -11224,9 +11303,15 @@ export function createCommandRegistry(
         && !Array.isArray(args.schema)
           ? args.schema as import("@orkestrator/protocol/structured-output").JsonSchema
           : undefined,
-      // Absent means plan: the permissive direction has to be asked for, since
-      // an unset mode otherwise resolves to bypassPermissions at the bridge.
-      mode: args.mode === "build" ? "build" : "plan",
+      // Claude/Codex/OpenCode: absent means plan, because an unset mode
+      // otherwise resolves to bypassPermissions at those bridges. Cursor/Grok
+      // keep the ACP session's current mode unless the caller is explicit —
+      // defaulting them to plan would rewrite every prompt onto Plan.
+      mode: args.mode === "build"
+        ? "build"
+        : args.mode === "plan"
+          ? "plan"
+          : (agent === "cursor" || agent === "grok" ? undefined : "plan"),
       fastMode: typeof args.fastMode === "boolean" ? args.fastMode : undefined,
       subAgent: typeof args.subAgent === "string" ? args.subAgent : undefined,
       includeLocalSettings:

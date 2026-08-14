@@ -34,6 +34,11 @@ const flushPaneLayoutNowMock = mock(async () => {});
 const getNativeAgentModelCatalogMock = mock(
   async (_environmentId: string): ReturnType<typeof realBackend.getNativeAgentModelCatalog> => [],
 );
+const awaitBridgeReadyMock = mock(async () => ({
+  status: "ready" as const,
+  port: 4099,
+  authToken: "token",
+}));
 
 /** Renders the identity it was handed so the projection can be asserted. */
 function stubController(testId: string) {
@@ -70,6 +75,7 @@ mock.module("@/components/acp", () => ({
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getNativeAgentModelCatalog: getNativeAgentModelCatalogMock,
+  awaitBridgeReady: awaitBridgeReadyMock,
 }));
 mock.module("@/lib/pane-layout-persistence", () => ({
   ...realPaneLayoutPersistenceSnapshot,
@@ -83,6 +89,12 @@ afterEach(() => {
   flushPaneLayoutNowMock.mockClear();
   getNativeAgentModelCatalogMock.mockReset();
   getNativeAgentModelCatalogMock.mockImplementation(async () => []);
+  awaitBridgeReadyMock.mockReset();
+  awaitBridgeReadyMock.mockImplementation(async () => ({
+    status: "ready" as const,
+    port: 4099,
+    authToken: "token",
+  }));
   useEnvironmentStore.setState({ environments: [] });
   usePaneLayoutStore.setState({
     environments: new Map(),
@@ -259,6 +271,47 @@ describe("AgentNativeTab", () => {
     expect(screen.getByRole("menuitemradio", { name: /OpenCode Go B/ })).toBeTruthy();
     expect(screen.getByText("OpenCode/opencode")).toBeTruthy();
     expect(screen.getByText("OpenCode/opencode-go")).toBeTruthy();
+  });
+
+  test("renders the cached Cursor catalogue without starting its ACP bridge", async () => {
+    useEnvironmentStore.setState({
+      environments: [{
+        id: "env-1",
+        projectId: "project-1",
+        name: "Cursor models",
+        order: 0,
+      } as never],
+    });
+    useNativeComposeStore.getState().updateDraft(
+      createSessionKey("env-1", "tab-cursor-models"),
+      { platform: "cursor" },
+    );
+    getNativeAgentModelCatalogMock.mockImplementation(async () => [
+      {
+        id: "composer-2.5",
+        platform: "cursor",
+        label: "Composer 2.5",
+        providerLabel: "Cursor",
+        reasoning: [{ id: "medium", label: "Medium" }],
+        defaultReasoningId: "medium",
+        supportsSpeed: true,
+        supportsMode: true,
+      },
+    ]);
+
+    render(
+      <AgentNativeTab
+        tabId="tab-cursor-models"
+        data={{ environmentId: "env-1" }}
+        isActive
+      />,
+    );
+
+    await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledWith("env-1"));
+    expect(awaitBridgeReadyMock).not.toHaveBeenCalled();
+    const picker = await screen.findByTitle(/Choose model/);
+    fireEvent.pointerDown(picker);
+    expect(screen.getByRole("menuitemradio", { name: /Composer 2.5/ })).toBeTruthy();
   });
 
   test("carries first-prompt mentions and pasted images through the provider lock", async () => {

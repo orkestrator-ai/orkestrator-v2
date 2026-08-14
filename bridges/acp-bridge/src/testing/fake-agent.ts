@@ -6,6 +6,83 @@ type JsonObject = Record<string, unknown>;
 
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 let promptRequestId: number | null = null;
+const provider = process.env.ACP_PROVIDER === "grok" ? "grok" : "cursor";
+
+const cursorConfig = {
+  sessionId: "fake-session",
+  modes: {
+    currentModeId: "agent",
+    availableModes: [
+      { id: "agent", name: "Agent", description: "Full tool access" },
+      { id: "plan", name: "Plan", description: "Read-only planning" },
+    ],
+  },
+  configOptions: [
+    {
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue: "composer-2.5",
+      options: [
+        { value: "composer-2.5", name: "Composer 2.5" },
+        { value: "gpt-5.5", name: "GPT-5.5" },
+      ],
+    },
+    {
+      id: "thought_level",
+      name: "Reasoning",
+      category: "thought_level",
+      type: "select",
+      currentValue: "medium",
+      options: [
+        { value: "medium", name: "Medium" },
+        { value: "high", name: "High" },
+      ],
+    },
+    {
+      id: "fast",
+      name: "Fast",
+      category: "model_config",
+      type: "boolean",
+      currentValue: false,
+    },
+  ],
+};
+
+const grokConfig = {
+  sessionId: "fake-session",
+  modes: {
+    currentModeId: "agent",
+    availableModes: [
+      { id: "agent", name: "Agent" },
+      { id: "plan", name: "Plan" },
+    ],
+  },
+  models: {
+    currentModelId: "grok-build",
+    availableModels: [
+      {
+        modelId: "grok-build",
+        name: "Grok Build",
+        _meta: {
+          supportsReasoningEffort: true,
+          reasoningEffort: "high",
+          reasoningEfforts: [{ value: "low" }, { value: "high" }, { value: "xhigh" }],
+        },
+      },
+      { modelId: "grok-composer-2.5-fast", name: "Composer 2.5 Fast" },
+    ],
+  },
+};
+
+function sessionPayload(): JsonObject {
+  return (provider === "grok" ? grokConfig : cursorConfig) as JsonObject;
+}
+
+function isObject(value: unknown): value is JsonObject {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 
 if (process.env.FAKE_ACP_LIFECYCLE_FILE) {
   appendFileSync(process.env.FAKE_ACP_LIFECYCLE_FILE, `start:${process.pid}\n`);
@@ -40,7 +117,39 @@ lines.on("line", (line) => {
     return;
   }
   if (message.method === "session/new" && typeof message.id === "number") {
-    write({ jsonrpc: "2.0", id: message.id, result: { sessionId: "fake-session" } });
+    write({ jsonrpc: "2.0", id: message.id, result: sessionPayload() });
+    return;
+  }
+  if (message.method === "session/set_config_option" && typeof message.id === "number") {
+    const params = isObject(message.params) ? message.params : {};
+    const configId = typeof params.configId === "string" ? params.configId : "";
+    const option = cursorConfig.configOptions.find((entry) => entry.id === configId);
+    if (option) option.currentValue = params.value as never;
+    write({ jsonrpc: "2.0", id: message.id, result: { configOptions: cursorConfig.configOptions } });
+    return;
+  }
+  if (message.method === "session/set_mode" && typeof message.id === "number") {
+    const params = isObject(message.params) ? message.params : {};
+    const modeId = typeof params.modeId === "string" ? params.modeId : "agent";
+    if (provider === "grok") grokConfig.modes.currentModeId = modeId;
+    else cursorConfig.modes.currentModeId = modeId;
+    write({ jsonrpc: "2.0", id: message.id, result: {} });
+    return;
+  }
+  if (message.method === "session/set_model" && typeof message.id === "number") {
+    const params = isObject(message.params) ? message.params : {};
+    const modelId = typeof params.modelId === "string" ? params.modelId : grokConfig.models.currentModelId;
+    grokConfig.models.currentModelId = modelId;
+    const meta = isObject(params._meta) ? params._meta : {};
+    const current = grokConfig.models.availableModels.find((model) => model.modelId === modelId);
+    if (current && typeof meta.reasoningEffort === "string" && current._meta) {
+      current._meta.reasoningEffort = meta.reasoningEffort;
+    }
+    write({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: { _meta: { model: { Ok: modelId } } },
+    });
     return;
   }
   if (message.method === "session/load" && typeof message.id === "number") {

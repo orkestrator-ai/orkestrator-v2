@@ -16,6 +16,7 @@ import type {
 import { MAX_CODEX_CONCURRENT_THREADS } from "./constants.js";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type { PaneLayoutMergeInput } from "@orkestrator/protocol/pane-layout-merge";
+import type { AgentModel } from "@orkestrator/protocol/native-agent";
 
 async function withTemporaryStorage<T>(
   run: (storage: StorageService, dataDir: string) => Promise<T>,
@@ -1794,7 +1795,7 @@ describe("OpenCode model catalogue cache", () => {
 });
 
 describe("host agent model catalogue cache", () => {
-  test("round-trips Claude and Codex catalogues across storage instances", async () => {
+  test("round-trips host agent catalogues across storage instances", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       const claudeModels: ClaudeModelCatalogEntry[] = [{
         id: "claude-opus-latest",
@@ -1810,9 +1811,28 @@ describe("host agent model catalogue cache", () => {
         reasoningEfforts: ["low", "medium", "high", "xhigh", "ultra"],
         defaultReasoningEffort: "medium",
       }];
+      const cursorModels: AgentModel[] = [{
+        platform: "cursor",
+        id: "composer-latest",
+        label: "Composer Latest",
+        providerLabel: "Cursor",
+        reasoning: [{ id: "high", label: "High", annotation: "Slower" }],
+        defaultReasoningId: "high",
+        supportsSpeed: true,
+        supportsMode: true,
+      }];
+      const grokModels: AgentModel[] = [{
+        platform: "grok",
+        id: "grok-code-latest",
+        label: "Grok Code Latest",
+        providerLabel: "Grok",
+        supportsMode: true,
+      }];
 
       await storage.cacheAgentModelCatalog("claude", claudeModels);
       await storage.cacheAgentModelCatalog("codex", codexModels);
+      await storage.cacheAgentModelCatalog("cursor", cursorModels);
+      await storage.cacheAgentModelCatalog("grok", grokModels);
 
       const reopened = new StorageService(dataDir);
       await reopened.init();
@@ -1820,6 +1840,8 @@ describe("host agent model catalogue cache", () => {
         schemaVersion: 1,
         claude: { models: claudeModels },
         codex: { models: codexModels },
+        cursor: { models: cursorModels },
+        grok: { models: grokModels },
       });
     });
   });
@@ -1842,6 +1864,14 @@ describe("host agent model catalogue cache", () => {
           codex: {
             updatedAt: new Date().toISOString(),
             models: [{ id: "gpt-broken", name: "Broken", reasoningEfforts: ["impossible"] }],
+          },
+          cursor: {
+            updatedAt: new Date().toISOString(),
+            models: [{ platform: "grok", id: "wrong-provider", label: "Wrong" }],
+          },
+          grok: {
+            updatedAt: new Date().toISOString(),
+            models: [{ platform: "grok", id: "broken", label: 42 }],
           },
         }),
       );
@@ -1988,6 +2018,13 @@ describe("host agent model catalogue cache", () => {
             defaultReasoningEffort: "impossible",
           }] as unknown as CodexModelCatalogEntry[],
         ),
+      ).rejects.toThrow("at least one valid model");
+      await expect(
+        storage.cacheAgentModelCatalog("cursor", [{
+          platform: "grok",
+          id: "wrong-provider",
+          label: "Wrong provider",
+        }] as AgentModel[]),
       ).rejects.toThrow("at least one valid model");
     });
   });

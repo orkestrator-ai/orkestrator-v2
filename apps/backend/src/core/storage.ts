@@ -61,6 +61,7 @@ import {
   type ResourceRevisionMap,
   type ResourceSnapshotRevision,
 } from "@orkestrator/protocol/resource-events";
+import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import {
   DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
   isValidCodexMaxConcurrentThreads,
@@ -1212,6 +1213,91 @@ function normalizeCodexModelCatalogEntries(
   return normalized;
 }
 
+function normalizeAcpModelCatalogEntries(
+  value: unknown,
+  platform: "cursor" | "grok",
+): AgentModel[] {
+  if (!Array.isArray(value)) return [];
+  const normalized: AgentModel[] = [];
+  const seen = new Set<string>();
+  for (const candidate of value) {
+    if (!isRecord(candidate) || candidate.platform !== platform) continue;
+    const id = isNonBlankString(candidate.id) ? candidate.id.trim() : "";
+    const label = isNonBlankString(candidate.label) ? candidate.label.trim() : "";
+    if (!id || !label || seen.has(id)) continue;
+    if (
+      (candidate.providerLabel != null && typeof candidate.providerLabel !== "string")
+      || (candidate.description != null && typeof candidate.description !== "string")
+      || (candidate.defaultReasoningId != null && typeof candidate.defaultReasoningId !== "string")
+      || (candidate.supportsSpeed != null && typeof candidate.supportsSpeed !== "boolean")
+      || (candidate.supportsMode != null && typeof candidate.supportsMode !== "boolean")
+    ) {
+      continue;
+    }
+    let reasoning: AgentModel["reasoning"];
+    if (candidate.reasoning != null) {
+      if (!Array.isArray(candidate.reasoning)) continue;
+      reasoning = [];
+      const reasoningIds = new Set<string>();
+      let invalid = false;
+      for (const option of candidate.reasoning) {
+        if (!isRecord(option)) {
+          invalid = true;
+          break;
+        }
+        const optionId = isNonBlankString(option.id) ? option.id.trim() : "";
+        const optionLabel = isNonBlankString(option.label) ? option.label.trim() : "";
+        if (
+          !optionId
+          || !optionLabel
+          || reasoningIds.has(optionId)
+          || (option.description != null && typeof option.description !== "string")
+          || (option.annotation != null && typeof option.annotation !== "string")
+        ) {
+          invalid = true;
+          break;
+        }
+        reasoningIds.add(optionId);
+        reasoning.push({
+          id: optionId,
+          label: optionLabel,
+          ...(isNonBlankString(option.description)
+            ? { description: option.description.trim() }
+            : {}),
+          ...(isNonBlankString(option.annotation)
+            ? { annotation: option.annotation.trim() }
+            : {}),
+        });
+      }
+      if (invalid) continue;
+    }
+
+    seen.add(id);
+    normalized.push({
+      platform,
+      id,
+      label,
+      ...(isNonBlankString(candidate.providerLabel)
+        ? { providerLabel: candidate.providerLabel.trim() }
+        : {}),
+      ...(isNonBlankString(candidate.description)
+        ? { description: candidate.description.trim() }
+        : {}),
+      ...(reasoning ? { reasoning } : {}),
+      ...(isNonBlankString(candidate.defaultReasoningId)
+        ? { defaultReasoningId: candidate.defaultReasoningId.trim() }
+        : {}),
+      ...(typeof candidate.supportsSpeed === "boolean"
+        ? { supportsSpeed: candidate.supportsSpeed }
+        : {}),
+      ...(typeof candidate.supportsMode === "boolean"
+        ? { supportsMode: candidate.supportsMode }
+        : {}),
+    });
+  }
+  return normalized;
+}
+
 function parsePersistedAgentModelCatalogCache(
   value: unknown,
 ): AgentModelCatalogCache {
@@ -1235,10 +1321,20 @@ function parsePersistedAgentModelCatalogCache(
 
   const claude = parseCatalog(value.claude, normalizeClaudeModelCatalogEntries);
   const codex = parseCatalog(value.codex, normalizeCodexModelCatalogEntries);
+  const cursor = parseCatalog(
+    value.cursor,
+    (models) => normalizeAcpModelCatalogEntries(models, "cursor"),
+  );
+  const grok = parseCatalog(
+    value.grok,
+    (models) => normalizeAcpModelCatalogEntries(models, "grok"),
+  );
   return {
     schemaVersion: 1,
     ...(claude ? { claude } : {}),
     ...(codex ? { codex } : {}),
+    ...(cursor ? { cursor } : {}),
+    ...(grok ? { grok } : {}),
   };
 }
 
@@ -3631,12 +3727,18 @@ export class StorageService {
     models: CodexModelCatalogEntry[],
   ): Promise<AgentModelCatalogCache>;
   async cacheAgentModelCatalog(
-    agent: "claude" | "codex",
-    models: ClaudeModelCatalogEntry[] | CodexModelCatalogEntry[],
+    agent: "cursor" | "grok",
+    models: AgentModel[],
+  ): Promise<AgentModelCatalogCache>;
+  async cacheAgentModelCatalog(
+    agent: "claude" | "codex" | "cursor" | "grok",
+    models: ClaudeModelCatalogEntry[] | CodexModelCatalogEntry[] | AgentModel[],
   ): Promise<AgentModelCatalogCache> {
     const normalizedModels = agent === "claude"
       ? normalizeClaudeModelCatalogEntries(models)
-      : normalizeCodexModelCatalogEntries(models);
+      : agent === "codex"
+        ? normalizeCodexModelCatalogEntries(models)
+        : normalizeAcpModelCatalogEntries(models, agent);
     if (normalizedModels.length === 0) {
       throw new Error(`${agent} model catalogue must contain at least one valid model.`);
     }

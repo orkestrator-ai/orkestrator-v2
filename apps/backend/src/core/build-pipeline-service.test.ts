@@ -34,7 +34,10 @@ import { StorageService } from "./storage.js";
 import {
   BuildPipelineService,
 } from "./build-pipeline-service.js";
-import { ProviderUnavailableError } from "./build-pipeline-provider.js";
+import {
+  ProviderSessionFailedError,
+  ProviderUnavailableError,
+} from "./build-pipeline-provider.js";
 import type {
   BuildPipelineProvider,
   ProviderCreateSessionOptions,
@@ -2121,6 +2124,85 @@ describe("BuildPipelineService", () => {
       });
     });
   }
+
+  // A bridge that answers a status read with a terminal turn error is reachable,
+  // not broken, so the stage must fail with the provider's own explanation
+  // instead of letting the throw escape as an anonymous provider read fault.
+  test("fails durably with the detail when provider status throws a session failure", async () => {
+    await withService(async (service, storage, provider) => {
+      const { started } = await startBuilding(service, storage);
+      provider.status = async () => {
+        throw new ProviderSessionFailedError(
+          provider.agent,
+          "Selected model is at capacity. Please try a different model.",
+        );
+      };
+
+      await service.advanceNow(started.id);
+
+      const failed = await pipeline(storage, started.id);
+      // Read before toMatchObject: it substitutes its asymmetric matcher into
+      // the received object, so a later read of `failed.error` is not a string.
+      const recordedError = failed.error;
+      expect(failed).toMatchObject({
+        phase: "failed",
+        error: expect.stringContaining("failed"),
+      });
+      // The provider's own explanation must survive into the durable error, so
+      // the message is the detailed form rather than the bare stage failure.
+      expect(recordedError).toContain(
+        "Selected model is at capacity. Please try a different model.",
+      );
+    });
+  });
+
+  // A terminal turn error proves the bridge answered, so a stale reconnect
+  // attempt accusing it of being unreachable must be cleared instead of
+  // outliving it and eventually failing the pipeline with "stayed unreachable"
+  // instead of the real reason. Clearing returns, so the stage failure lands on
+  // the following pass rather than this one.
+  test("clears a stale reconnect attempt before failing on a terminal turn error", async () => {
+    await withService(async (service, storage, provider) => {
+      const { started, session } = await startBuilding(service, storage);
+      provider.status = async () => {
+        throw new ProviderUnavailableError("claude bridge is unreachable");
+      };
+
+      await service.advanceNow(started.id);
+
+      const reconnecting = await pipeline(storage, started.id);
+      expect(reconnecting.phase).toBe("building");
+      expect(reconnecting.reconnectAttempt).toMatchObject({
+        agent: provider.agent,
+        sessionId: session.sdkSessionId,
+      });
+
+      provider.status = async () => {
+        throw new ProviderSessionFailedError(
+          provider.agent,
+          "Selected model is at capacity. Please try a different model.",
+        );
+      };
+
+      // The bridge answered, so this pass spends itself clearing the accusation.
+      await service.advanceNow(started.id);
+
+      const cleared = await pipeline(storage, started.id);
+      expect(cleared.phase).toBe("building");
+      expect(cleared.reconnectAttempt).toBeUndefined();
+      expect(cleared.error).toBeUndefined();
+
+      // Only now does the terminal turn error reach the failing branch.
+      await service.advanceNow(started.id);
+
+      const failed = await pipeline(storage, started.id);
+      const recordedError = failed.error;
+      expect(failed.phase).toBe("failed");
+      expect(recordedError).toContain(
+        "Selected model is at capacity. Please try a different model.",
+      );
+    });
+  });
 
   test("persists the provider's session failure detail", async () => {
     await withService(async (service, storage, provider) => {

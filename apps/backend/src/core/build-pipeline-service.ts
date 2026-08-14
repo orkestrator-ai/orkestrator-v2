@@ -50,6 +50,7 @@ import {
   AmbiguousPromptDispatchError,
   createBuildPipelineProvider,
   ProviderUnavailableError,
+  readProviderStatus,
   type BridgeConnection,
   type BuildPipelineProvider,
   type ProviderDependencies,
@@ -1404,7 +1405,15 @@ export class BuildPipelineService {
     if (await this.enforcePendingInteraction(pipeline, provider, session)) {
       return;
     }
-    const status = await provider.status(session.sdkSessionId);
+    // Read as data. A bridge that answers with a terminal turn error is
+    // reachable, so this must reach both the reconnect-clearing block below —
+    // otherwise a stale `reconnectAttempt` outlives the harness it accused —
+    // and the `error` branch, which is the only one that fails the stage with
+    // the provider's own explanation rather than an anonymous read fault.
+    const { status, error: statusDetail } = await readProviderStatus(
+      provider,
+      session.sdkSessionId,
+    );
     // Only the harness that was recorded as unreachable can clear its own
     // reconnect attempt. A stage transition resolves the *next* step's provider
     // before it records that step's session, so a failure there belongs to a
@@ -1428,7 +1437,9 @@ export class BuildPipelineService {
       throw new Error(`The ${session.label.toLowerCase()} is no longer available`);
     }
     if (status === "error") {
-      throw new Error(`The ${session.label.toLowerCase()} failed`);
+      throw new Error(statusDetail
+        ? `The ${session.label.toLowerCase()} failed: ${statusDetail}`
+        : `The ${session.label.toLowerCase()} failed`);
     }
     if (status === "blocked") {
       // Observe-only Milestone 3 must not advance or fail a phase. The parked

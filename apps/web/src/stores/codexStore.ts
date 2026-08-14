@@ -14,7 +14,10 @@ import {
   type CodexSessionPhase,
   type CodexSlashCommand,
 } from "@/lib/codex-client";
-import { mergeNativeMessagesPreservingClientOnly } from "@/lib/chat/client-only-messages";
+import {
+  isClientOnlyNativeMessage,
+  mergeNativeMessagesPreservingClientOnly,
+} from "@/lib/chat/client-only-messages";
 import { deepEqualJson } from "@/lib/chat/message-identity";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import type { FileMention } from "@/types";
@@ -306,6 +309,51 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
     mergeMessages: mergeNativeMessagesPreservingClientOnly,
     shouldReplaceMessage: shouldReplaceCodexMessage,
   })(set, get, api),
+
+  /**
+   * Installs a live full-message frame.
+   *
+   * Codex streams authoritative user messages for backend-owned prompt
+   * dispatches. A renderer-owned send already has an optimistic user row, so a
+   * newly arriving user echo must pass through the same fingerprint merge as a
+   * transcript snapshot. Otherwise direct sends briefly render twice while the
+   * queue-only case renders correctly. Assistant updates keep the cheaper
+   * id-based path because they cannot acknowledge optimistic user messages.
+   */
+  upsertMessage: (sessionKey, message) =>
+    set((state) => {
+      const session = state.sessions.get(sessionKey);
+      if (!session) return state;
+      const existingIndex = session.messages.findIndex(
+        (candidate) => candidate.id === message.id,
+      );
+      const existing = existingIndex < 0
+        ? undefined
+        : session.messages[existingIndex];
+      if (existing && !shouldReplaceCodexMessage(existing, message)) {
+        return state;
+      }
+
+      let messages: CodexMessage[];
+      if (existingIndex >= 0) {
+        messages = session.messages.slice();
+        messages[existingIndex] = message;
+      } else if (message.role === "user") {
+        const authoritative = session.messages.filter(
+          (candidate) => !isClientOnlyNativeMessage(candidate),
+        );
+        messages = mergeNativeMessagesPreservingClientOnly(
+          session.messages,
+          [...authoritative, message],
+        );
+      } else {
+        messages = [...session.messages, message];
+      }
+
+      const sessions = new Map(state.sessions);
+      sessions.set(sessionKey, { ...session, messages });
+      return { sessions };
+    }),
 
   patchMessage: (sessionKey, patch) => {
     if (!patch?.messageId) return "needs-reconcile";

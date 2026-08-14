@@ -2265,7 +2265,14 @@ describe("session lifecycle", () => {
       (event) => event.type === "message.updated"
         && (event.data?.message as { role?: unknown } | undefined)?.role === "assistant",
     );
+    const initialUserUpdates = h.events.filter(
+      (event) => event.type === "message.updated"
+        && (event.data?.message as { role?: unknown } | undefined)?.role === "user",
+    );
+    expect(initialUserUpdates).toHaveLength(1);
     expect(initialAssistantUpdates).toHaveLength(1);
+    expect(h.events.indexOf(initialUserUpdates[0]!))
+      .toBeLessThan(h.events.indexOf(initialAssistantUpdates[0]!));
     expect(
       (initialAssistantUpdates[0]!.data?.message as { revision?: number }).revision,
     ).toBe(1);
@@ -6758,7 +6765,10 @@ describe("slash commands", () => {
 
     expect(outcome).toMatchObject({ ok: true });
     expect(h.child().requests.some((r) => r.method === "turn/start")).toBe(false);
-    const assistant = h.events.find((event) => event.type === "message.updated");
+    const assistant = h.events.find(
+      (event) => event.type === "message.updated"
+        && (event.data?.message as { role?: unknown } | undefined)?.role === "assistant",
+    );
     expect(
       (assistant?.data?.message as { content: string } | undefined)?.content,
     ).toContain("Available Codex slash commands");

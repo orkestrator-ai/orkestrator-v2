@@ -3842,6 +3842,12 @@ export class AppServerRuntime {
 
     this.applyPromptTitle(session, context, input.prompt);
     for (const id of context.bridgeSessionIds) {
+      // Direct renderer sends already have an optimistic user row, but prompts
+      // dispatched by the backend queue do not. Publish the authoritative user
+      // row as well as the assistant placeholder so every mounted client sees
+      // the complete turn immediately. The renderer reconciles this echo with
+      // any matching optimistic row.
+      this.options.emit({ type: "message.updated", sessionId: id, data: { message: userMessage } });
       this.options.emit({ type: "message.updated", sessionId: id, data: { message: assistantMessage } });
     }
     this.emitStatus(context);
@@ -4569,11 +4575,13 @@ export class AppServerRuntime {
         data: { title: session.title },
       });
     }
-    this.options.emit({
-      type: "message.updated",
-      sessionId: session.id,
-      data: { message: assistantMessage },
-    });
+    for (const message of [userMessage, assistantMessage]) {
+      this.options.emit({
+        type: "message.updated",
+        sessionId: session.id,
+        data: { message },
+      });
+    }
     this.options.emit({ type: "session.updated", sessionId: session.id });
     this.options.emit({
       type: "session.idle",

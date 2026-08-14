@@ -3569,6 +3569,13 @@ describe("CodexChatTab", () => {
 
   test("updates an active idle tab when another client starts a turn", async () => {
     const externalTurnStarted = deferred<void>();
+    const queuedUserMessage: TestCodexMessage = {
+      id: "queued-user-prompt",
+      role: "user",
+      content: "Address all review findings",
+      parts: [{ type: "text", content: "Address all review findings" }],
+      createdAt: "2026-08-02T09:30:00.000Z",
+    };
     const externalMessage = createMessage(
       "mobile-address-all",
       "Addressing the review findings",
@@ -3584,6 +3591,11 @@ describe("CodexChatTab", () => {
             phase: "running",
             turnStartedAt: "2026-08-02T09:30:00.000Z",
           },
+        };
+        yield {
+          type: "message.updated",
+          sessionId: SESSION_ID,
+          data: { message: queuedUserMessage },
         };
         yield {
           type: "message.updated",
@@ -3605,8 +3617,9 @@ describe("CodexChatTab", () => {
       expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
         isLoading: true,
         loadingStartedAt: Date.parse("2026-08-02T09:30:00.000Z"),
-        messages: [externalMessage],
+        messages: [queuedUserMessage, externalMessage],
       });
+      expect(screen.queryByText("Address all review findings")).not.toBeNull();
       expect(screen.queryByText("Codex is thinking...")).not.toBeNull();
     });
   });

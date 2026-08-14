@@ -208,6 +208,31 @@ describe("codexStore message helpers", () => {
     expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([newer]);
   });
 
+  test("replaces an optimistic prompt when its live user echo arrives", () => {
+    const store = useCodexStore.getState();
+    const optimistic = createOptimisticNativeMessage(
+      "optimistic-live-echo",
+      "Run the queued checks",
+      [],
+      "2026-04-15T10:00:00.000Z",
+    );
+    store.addMessage(SESSION_KEY, optimistic);
+
+    store.upsertMessage(SESSION_KEY, {
+      id: "server-live-echo",
+      role: "user",
+      content: "Run the queued checks",
+      parts: [{ type: "text", content: "Run the queued checks" }],
+      createdAt: "2026-04-15T10:00:01.000Z",
+    });
+
+    expect(
+      useCodexStore.getState().sessions.get(SESSION_KEY)?.messages.map(
+        (message) => message.id,
+      ),
+    ).toEqual(["server-live-echo"]);
+  });
+
   test("does not replace a session object when its error is unchanged", () => {
     useCodexStore.getState().setSessionError(SESSION_KEY, "boom");
     const sessionBefore = useCodexStore.getState().sessions.get(SESSION_KEY);

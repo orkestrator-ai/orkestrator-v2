@@ -663,6 +663,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     multiReviewLaunchInFlightRef.current = true;
     setMultiReviewLaunchPending(true);
     let workflowId: string | undefined;
+    let cancelRequested = false;
     try {
       const workflow = await backend.startMultiReview({
         environmentId: selectedEnvironmentId,
@@ -679,17 +680,31 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         displayTitle: "Multi Review",
       });
       if (!created) {
-        await backend.cancelMultiReview(workflow.id);
+        const launchError = "The environment is not ready or the maximum tab count was reached.";
+        const cancelled = await backend.cancelMultiReview(workflow.id);
+        cancelRequested = true;
+        useMultiReviewStore.getState().replaceWorkflow(cancelled);
+        // Cancellation is asynchronous, and only a terminal workflow may be
+        // deleted. Deleting a still-cancelling one is rejected by the backend,
+        // which would replace this message with a confusing storage error and
+        // strand the record. Keep it installed for recovery instead.
+        if (cancelled.phase !== "cancelled") {
+          throw new Error(
+            `${launchError} Cancellation is still in progress; the saved Multi Review remains available for recovery.`,
+          );
+        }
         await backend.deleteMultiReviewWorkflow(workflow.id);
         useMultiReviewStore.getState().removeWorkflow(workflow.id);
-        throw new Error("The environment is not ready or the maximum tab count was reached.");
+        throw new Error(launchError);
       }
       setMultiReviewDialogOpen(false);
     } catch (error) {
       toast.error("Could not open Multi Review", {
         description: error instanceof Error ? error.message : String(error),
       });
-      if (workflowId) void backend.cancelMultiReview(workflowId).catch(() => undefined);
+      if (workflowId && !cancelRequested) {
+        void backend.cancelMultiReview(workflowId).catch(() => undefined);
+      }
     } finally {
       multiReviewLaunchInFlightRef.current = false;
       setMultiReviewLaunchPending(false);

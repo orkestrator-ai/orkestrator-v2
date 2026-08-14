@@ -89,8 +89,10 @@ const cancelLoopedReviewMock = mock(async (
 ): Promise<{ id: string; phase: string }> => cancelledLoopedWorkflow);
 const startedMultiReview = { id: "multi-workflow-1", phase: "reviewing" as const };
 const startMultiReviewMock = mock(async (_options: unknown) => startedMultiReview);
-const cancelMultiReviewMock = mock(async (_workflowId: string) => ({
-  id: "multi-workflow-1", phase: "cancelled" as const,
+const cancelMultiReviewMock = mock(async (
+  _workflowId: string,
+): Promise<{ id: string; phase: "cancelled" | "cancelling" }> => ({
+  id: "multi-workflow-1", phase: "cancelled",
 }));
 const deleteMultiReviewWorkflowMock = mock(async (_workflowId: string) => {});
 const installMultiReviewWorkflowMock = mock((_workflow: unknown) => {});
@@ -2581,6 +2583,65 @@ describe("ActionBar workflow tabs", () => {
       displayTitle: "Multi Review",
     });
     expect(installMultiReviewWorkflowMock).toHaveBeenCalledWith(startedMultiReview);
+  });
+
+  test("keeps a still-cancelling Multi Review recoverable when the tab cannot open", async () => {
+    // Cancellation is asynchronous, so the backend answers `cancelling`, not
+    // `cancelled`. Deleting there is rejected, which would replace the real
+    // launch error with a storage error and strand the record.
+    cancelMultiReviewMock.mockImplementation(async () => ({
+      id: "multi-workflow-1", phase: "cancelling" as const,
+    }));
+    createTabMock.mockImplementation((type: string) => type !== "multi-review");
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentWorkspaceReady = true;
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+
+    await waitFor(() => expect(cancelMultiReviewMock).toHaveBeenCalledWith("multi-workflow-1"));
+    expect(deleteMultiReviewWorkflowMock).not.toHaveBeenCalled();
+    expect(removeMultiReviewWorkflowMock).not.toHaveBeenCalled();
+    expect(installMultiReviewWorkflowMock).toHaveBeenLastCalledWith({
+      id: "multi-workflow-1", phase: "cancelling",
+    });
+    expect(toastErrorMock).toHaveBeenCalledWith("Could not open Multi Review", {
+      description: expect.stringContaining("maximum tab count was reached"),
+    });
+    expect(toastErrorMock).toHaveBeenCalledWith("Could not open Multi Review", {
+      description: expect.stringContaining("remains available for recovery"),
+    });
+    // The rollback already requested cancellation; it must not be re-issued.
+    expect(cancelMultiReviewMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("deletes a Multi Review that finished cancelling before its tab could open", async () => {
+    createTabMock.mockImplementation((type: string) => type !== "multi-review");
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentWorkspaceReady = true;
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+
+    await waitFor(() =>
+      expect(deleteMultiReviewWorkflowMock).toHaveBeenCalledWith("multi-workflow-1"));
+    expect(removeMultiReviewWorkflowMock).toHaveBeenCalledWith("multi-workflow-1");
+    expect(toastErrorMock).toHaveBeenCalledWith("Could not open Multi Review", {
+      description: "The environment is not ready or the maximum tab count was reached.",
+    });
+    expect(cancelMultiReviewMock).toHaveBeenCalledTimes(1);
   });
 
   test("launches one dedicated looped-review tab with the default six-pass allowance", async () => {

@@ -124,6 +124,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     await waitFor(() => expect(cancel).toHaveBeenCalledWith(ready.id));
 
     const failed = { ...ready, phase: "failed" as const, backendRevision: 9, error: "offline" };
+    const retry = mock(async () => ({ ...ready, phase: "reviewing" as const, backendRevision: 10 }));
     act(() => {
       useMultiReviewStore.setState({ workflows: new Map([[ready.id, failed]]) });
     });
@@ -131,13 +132,17 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
       isActive
       hydrateWorkflow={mock(async () => failed)}
-      commands={{
-        address: mock(async () => failed),
-        retry: mock(async () => failed),
-        cancel,
-      }}
+      commands={{ address: mock(async () => failed), retry, cancel }}
     />);
     expect(screen.getByRole("button", { name: "Abandon" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Retry failed stage" })).toBeTruthy();
+    expect(screen.getByText("offline")).toBeTruthy();
+
+    // Retry is a backend intent; the tab installs whatever snapshot it returns
+    // rather than deciding the next phase itself.
+    fireEvent.click(screen.getByRole("button", { name: "Retry failed stage" }));
+    await waitFor(() => expect(retry).toHaveBeenCalledWith(ready.id));
+    await waitFor(() =>
+      expect(useMultiReviewStore.getState().workflows.get(ready.id)?.phase).toBe("reviewing"));
+    expect(screen.queryByRole("button", { name: "Retry failed stage" })).toBeNull();
   });
 });

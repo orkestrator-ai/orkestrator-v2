@@ -182,6 +182,10 @@ export class MultiReviewService {
       if (workflow.phase !== "failed") return workflow;
       const failedReviewer = workflow.reviewers.find((reviewer) => reviewer.status === "failed");
       if (failedReviewer) {
+        // Retrying allocates a fresh session, so the abandoned one must be
+        // aborted while its id is still known. Clearing the id first would
+        // leave a provider turn running that nothing can ever reach again.
+        await this.abandonSession(workflow, failedReviewer, failedReviewer.providerSessionId);
         failedReviewer.status = "pending";
         delete failedReviewer.error;
         delete failedReviewer.providerSessionId;
@@ -195,6 +199,9 @@ export class MultiReviewService {
         workflow.fixSession.status = "idle";
         delete workflow.activeRequest;
       } else {
+        await this.abandonSession(
+          workflow, workflow.fixModel, workflow.fixSession?.providerSessionId,
+        );
         workflow.phase = "consolidating";
         delete workflow.fixSession;
         delete workflow.activeRequest;
@@ -436,120 +443,192 @@ export class MultiReviewService {
     }
   }
 
+  /**
+   * Best-effort abort of a session this workflow is about to stop tracking.
+   * Failure is tolerated: the retry must still proceed, and a provider that
+   * cannot confirm the abort is no worse than the session being dropped.
+   */
+  private async abandonSession(
+    workflow: MultiReviewWorkflow,
+    selection: MultiReviewModelSelection,
+    providerSessionId: string | undefined,
+  ): Promise<void> {
+    if (!providerSessionId) return;
+    try {
+      const provider = await this.provider(workflow, selection);
+      await provider.abort(providerSessionId);
+    } catch {
+      // Intentionally ignored; the caller is discarding this session either way.
+    }
+  }
+
   private async advanceReviewers(workflow: MultiReviewWorkflow, token: string): Promise<void> {
     for (let index = 0; index < workflow.reviewers.length; index++) {
       const reviewer = workflow.reviewers[index]!;
       if (reviewer.status === "completed" || reviewer.status === "failed"
         || reviewer.status === "cancelled") continue;
-      const provider = await this.provider(workflow, reviewer);
-      await this.assertFence(workflow.id, token);
-      if (reviewer.status === "pending") {
-        const sessionKey = `multi-review:${workflow.id}:reviewer:${reviewer.id}`;
-        const providerSessionId = await provider.createSession("review", `Multi Review · Reviewer ${index + 1}`, {
-          clientSessionKey: sessionKey,
-          mode: "build",
-          model: reviewer.model === "default" ? undefined : reviewer.model,
-          effort: reviewer.reasoningEffort,
-          interaction: {
-            origin: "looped-review",
-            interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-            phase: "review",
-            workflowId: workflow.id,
-            provider: reviewer.agent,
-            fence: sessionKey,
-          },
+      // Tag every failure with the reviewer being advanced. `fail()` cannot
+      // otherwise tell which one raised it, and guessing marks a healthy
+      // running reviewer failed while the real one stays pending.
+      const done = await this.advanceReviewer(workflow, token, reviewer, index)
+        .catch((error) => {
+          if (error instanceof ControllerFenceError) throw error;
+          throw new ReviewerStageError(reviewer.id, error);
         });
-        await this.assertFence(workflow.id, token);
-        reviewer.sessionKey = sessionKey;
-        reviewer.providerSessionId = providerSessionId;
-        reviewer.requestId = randomUUID();
-        reviewer.dispatchState = "prepared";
-        reviewer.status = "running";
-        reviewer.startedAt = nowIso();
-        await this.save(workflow, token);
-      }
-      if (!reviewer.providerSessionId || !reviewer.requestId) continue;
-      provider.registerSession?.(reviewer.providerSessionId, {
-        origin: "looped-review",
-        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-        phase: "review",
-        workflowId: workflow.id,
-        provider: reviewer.agent,
-        fence: reviewer.sessionKey,
-      });
-      if (reviewer.dispatchState === "prepared") {
-        reviewer.dispatchState = "dispatching";
-        await this.save(workflow, token);
-        try {
-          await provider.send(
-            reviewer.providerSessionId,
-            createMultiReviewerPrompt({
-              targetBranch: workflow.targetBranch,
-              reviewInstruction: workflow.reviewInstruction,
-              reviewerNumber: index + 1,
-              reviewerCount: workflow.reviewers.length,
-            }),
-            {
-              requestId: reviewer.requestId,
-              schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema,
-              mode: "build",
-              model: reviewer.model === "default" ? undefined : reviewer.model,
-              effort: reviewer.reasoningEffort,
-            },
-          );
-        } catch (error) {
-          if (error instanceof AmbiguousPromptDispatchError) return;
-          throw error;
-        }
-        await this.assertFence(workflow.id, token);
-        reviewer.dispatchState = "sent";
-        await this.save(workflow, token);
-      }
-      if (reviewer.dispatchState === "dispatching") {
-        // Dispatch acceptance is ambiguous after a crash. The stable request id
-        // makes provider reconciliation authoritative; never send it twice.
-        reviewer.dispatchState = "sent";
-        await this.save(workflow, token);
-      }
-      if (reviewer.status !== "running") continue;
-      await this.resolveUnattendedInteractions(workflow, token, provider, reviewer.providerSessionId);
-      const status = await provider.status(reviewer.providerSessionId);
-      await this.assertFence(workflow.id, token);
-      if (status === "running" || status === "blocked") continue;
-      if (status === "error" || status === "missing") {
-        reviewer.status = "failed";
-        reviewer.error = status === "missing"
-          ? "The reviewer session no longer exists"
-          : "The reviewer session failed";
-        workflow.phase = "failed";
-        workflow.error = reviewer.error;
-        await this.save(workflow, token);
-        return;
-      }
-      const result = await provider.structured<unknown>(reviewer.providerSessionId, reviewer.requestId);
-      await this.assertFence(workflow.id, token);
-      if (!result) {
-        reviewer.idleResultPolls = (reviewer.idleResultPolls ?? 0) + 1;
-        if (reviewer.idleResultPolls >= MAX_IDLE_RESULT_POLLS) {
-          reviewer.status = "failed";
-          reviewer.error = "The reviewer became idle without returning its structured report";
-          workflow.phase = "failed";
-          workflow.error = reviewer.error;
-        }
-        await this.save(workflow, token);
-        if (reviewer.status === "failed") return;
-        continue;
-      }
-      reviewer.report = this.parseReportResult(result);
-      reviewer.status = "completed";
-      reviewer.completedAt = nowIso();
-      delete reviewer.idleResultPolls;
-      await this.save(workflow, token);
+      if (done === "stop") return;
     }
     if (workflow.reviewers.every((reviewer) => reviewer.status === "completed")) {
       workflow.phase = "consolidating";
       await this.save(workflow, token);
     }
+  }
+
+  /** Advances one reviewer. `stop` ends the pass without touching the rest. */
+  private async advanceReviewer(
+    workflow: MultiReviewWorkflow,
+    token: string,
+    reviewer: MultiReviewWorkflow["reviewers"][number],
+    index: number,
+  ): Promise<"continue" | "stop"> {
+    const provider = await this.provider(workflow, reviewer);
+    await this.assertFence(workflow.id, token);
+    if (reviewer.status === "pending") {
+      const sessionKey = `multi-review:${workflow.id}:reviewer:${reviewer.id}`;
+      const providerSessionId = await provider.createSession("review", `Multi Review · Reviewer ${index + 1}`, {
+        clientSessionKey: sessionKey,
+        mode: "build",
+        model: reviewer.model === "default" ? undefined : reviewer.model,
+        effort: reviewer.reasoningEffort,
+        interaction: {
+          origin: "looped-review",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          phase: "review",
+          workflowId: workflow.id,
+          provider: reviewer.agent,
+          fence: sessionKey,
+        },
+      });
+      await this.assertFence(workflow.id, token);
+      reviewer.sessionKey = sessionKey;
+      reviewer.providerSessionId = providerSessionId;
+      reviewer.requestId = randomUUID();
+      reviewer.dispatchState = "prepared";
+      reviewer.status = "running";
+      reviewer.startedAt = nowIso();
+      await this.save(workflow, token);
+    }
+    if (!reviewer.providerSessionId || !reviewer.requestId) return "continue";
+    provider.registerSession?.(reviewer.providerSessionId, {
+      origin: "looped-review",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      phase: "review",
+      workflowId: workflow.id,
+      provider: reviewer.agent,
+      fence: reviewer.sessionKey,
+    });
+    if (reviewer.dispatchState === "prepared") {
+      reviewer.dispatchState = "dispatching";
+      await this.save(workflow, token);
+      try {
+        await provider.send(
+          reviewer.providerSessionId,
+          createMultiReviewerPrompt({
+            targetBranch: workflow.targetBranch,
+            reviewInstruction: workflow.reviewInstruction,
+            reviewerNumber: index + 1,
+            reviewerCount: workflow.reviewers.length,
+          }),
+          {
+            requestId: reviewer.requestId,
+            schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema,
+            mode: "build",
+            model: reviewer.model === "default" ? undefined : reviewer.model,
+            effort: reviewer.reasoningEffort,
+          },
+        );
+      } catch (error) {
+        if (error instanceof AmbiguousPromptDispatchError) return "stop";
+        throw error;
+      }
+      await this.assertFence(workflow.id, token);
+      reviewer.dispatchState = "sent";
+      await this.save(workflow, token);
+    }
+    if (reviewer.dispatchState === "dispatching") {
+      // Dispatch acceptance is ambiguous after a crash. The stable request id
+      // makes provider reconciliation authoritative; never send it twice.
+      reviewer.dispatchState = "sent";
+      await this.save(workflow, token);
+    }
+    if (reviewer.status !== "running") return "continue";
+    await this.resolveUnattendedInteractions(workflow, token, provider, reviewer.providerSessionId);
+    const status = await provider.status(reviewer.providerSessionId);
+    await this.assertFence(workflow.id, token);
+    if (status === "running") return this.clearStall(workflow, token, reviewer);
+    if (status === "blocked") {
+      // Every unattended interaction was already resolved above, and a provider
+      // without an interaction surface can never be unblocked from here. Bound
+      // the wait the same way the idle path is bounded rather than polling a
+      // stalled reviewer forever.
+      return this.recordStall(
+        workflow, token, reviewer,
+        "The reviewer stayed blocked without a resolvable interaction",
+      );
+    }
+    if (status === "error" || status === "missing") {
+      reviewer.status = "failed";
+      reviewer.error = status === "missing"
+        ? "The reviewer session no longer exists"
+        : "The reviewer session failed";
+      workflow.phase = "failed";
+      workflow.error = reviewer.error;
+      await this.save(workflow, token);
+      return "stop";
+    }
+    const result = await provider.structured<unknown>(reviewer.providerSessionId, reviewer.requestId);
+    await this.assertFence(workflow.id, token);
+    if (!result) {
+      return this.recordStall(
+        workflow, token, reviewer,
+        "The reviewer became idle without returning its structured report",
+      );
+    }
+    reviewer.report = this.parseReportResult(result);
+    reviewer.status = "completed";
+    reviewer.completedAt = nowIso();
+    delete reviewer.idleResultPolls;
+    await this.save(workflow, token);
+    return "continue";
+  }
+
+  /** Counts one stalled poll, failing the reviewer once the bound is reached. */
+  private async recordStall(
+    workflow: MultiReviewWorkflow,
+    token: string,
+    reviewer: MultiReviewWorkflow["reviewers"][number],
+    error: string,
+  ): Promise<"continue" | "stop"> {
+    reviewer.idleResultPolls = (reviewer.idleResultPolls ?? 0) + 1;
+    if (reviewer.idleResultPolls >= MAX_IDLE_RESULT_POLLS) {
+      reviewer.status = "failed";
+      reviewer.error = error;
+      workflow.phase = "failed";
+      workflow.error = error;
+    }
+    await this.save(workflow, token);
+    return reviewer.status === "failed" ? "stop" : "continue";
+  }
+
+  /** Observed progress retires the stall count so it cannot accumulate. */
+  private async clearStall(
+    workflow: MultiReviewWorkflow,
+    token: string,
+    reviewer: MultiReviewWorkflow["reviewers"][number],
+  ): Promise<"continue"> {
+    if (reviewer.idleResultPolls === undefined) return "continue";
+    delete reviewer.idleResultPolls;
+    await this.save(workflow, token);
+    return "continue";
   }
 
   private async advanceFixModel(workflow: MultiReviewWorkflow, token: string): Promise<void> {
@@ -639,7 +718,23 @@ export class MultiReviewService {
     await this.resolveUnattendedInteractions(workflow, token, provider, session.providerSessionId);
     const status = await provider.status(session.providerSessionId);
     await this.assertFence(workflow.id, token);
-    if (status === "running" || status === "blocked") return;
+    if (status === "running") {
+      if (request.idleResultPolls !== undefined) {
+        delete request.idleResultPolls;
+        await this.save(workflow, token);
+      }
+      return;
+    }
+    if (status === "blocked") {
+      // Unattended interactions were already resolved above; a provider still
+      // reporting blocked cannot be waited on indefinitely.
+      request.idleResultPolls = (request.idleResultPolls ?? 0) + 1;
+      await this.save(workflow, token);
+      if (request.idleResultPolls >= MAX_IDLE_RESULT_POLLS) {
+        throw new Error("The fix model stayed blocked without a resolvable interaction");
+      }
+      return;
+    }
     if (status === "error" || status === "missing") {
       throw new Error(status === "missing"
         ? "The consolidation session no longer exists"
@@ -722,7 +817,15 @@ export class MultiReviewService {
     workflow.phase = "failed";
     workflow.error = errorMessage(error).slice(0, 4_096);
     if (failedDuringReview) {
-      const reviewer = workflow.reviewers.find((entry) => entry.status === "running")
+      // Prefer the reviewer the failure was raised against. Falling back to the
+      // first running one would blame a healthy reviewer for a later reviewer's
+      // failure, and retrying that reviewer would then abandon a live session.
+      const attributed = error instanceof ReviewerStageError
+        ? workflow.reviewers.find((entry) => entry.id === error.reviewerId
+          && entry.status !== "completed" && entry.status !== "cancelled")
+        : undefined;
+      const reviewer = attributed
+        ?? workflow.reviewers.find((entry) => entry.status === "running")
         ?? workflow.reviewers.find((entry) => entry.status === "pending");
       if (reviewer) {
         reviewer.status = "failed";
@@ -842,5 +945,16 @@ class ControllerFenceError extends Error {
   constructor() {
     super("Multi review controller lease was lost");
     this.name = "ControllerFenceError";
+  }
+}
+
+/**
+ * Carries the reviewer a failure belongs to. The message is the underlying
+ * error's, so persisted workflow errors read exactly as they did before.
+ */
+class ReviewerStageError extends Error {
+  constructor(readonly reviewerId: string, reason: unknown) {
+    super(errorMessage(reason));
+    this.name = "ReviewerStageError";
   }
 }

@@ -2258,11 +2258,16 @@ describe("ActionBar workflow tabs", () => {
     );
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
-    fireEvent.click(screen.getByRole("button", { name: "Create PR with Claude" }));
+    expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
     expect(setModeCreatePendingMock).toHaveBeenCalledTimes(2);
     expect(createTabMock).toHaveBeenLastCalledWith(
-      "claude",
-      expect.objectContaining({ displayTitle: "PR" }),
+      "opencode",
+      expect.objectContaining({
+        agentLaunchMode: "native",
+        displayTitle: "PR",
+        initialAgentModel: expect.any(String),
+      }),
     );
 
     currentEnvironment = {
@@ -2310,36 +2315,76 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
-  test("routes every PR workflow context-menu provider", async () => {
+  test("configures a PR launch in a modal rather than a provider menu", () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
     };
-    const view = render(<ActionBar />);
+    render(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
-    expectProviderMenuOrder("Create PR with");
 
-    for (const [label, agent] of [
-      ["Codex", "codex"],
-      ["OpenCode", "opencode"],
-    ] as const) {
-      fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
-      fireEvent.click(screen.getByRole("button", { name: `Create PR with ${label}` }));
-      expect(createTabMock).toHaveBeenLastCalledWith(
-        agent,
-        expect.objectContaining({ displayTitle: "PR" }),
-      );
-    }
+    expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Create PR with Claude" })).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Agent, model and reasoning" })).toBeTruthy();
 
+    // Dismissing must leave the environment untouched: the modal replaces a menu
+    // whose every item launched an agent immediately.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Configure pull request" })).toBeNull();
+    expect(createTabMock).not.toHaveBeenCalled();
+    expect(setModeCreatePendingMock).not.toHaveBeenCalled();
+  });
+
+  test("opens the PR modal after a mobile long press without launching a default PR", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    render(<ActionBar presentation="grid" />);
+
+    const createPrButton = screen.getByRole("button", { name: "Create PR" });
+    fireEvent.pointerDown(createPrButton, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 24,
+      clientY: 24,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 575));
+    fireEvent.pointerUp(createPrButton, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 24,
+      clientY: 24,
+    });
+
+    expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy();
+
+    // The click mobile browsers synthesize after the gesture must be consumed.
+    fireEvent.click(createPrButton);
+    expect(createTabMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
+    expect(createTabMock).toHaveBeenCalledWith(
+      "codex",
+      expect.objectContaining({
+        agentLaunchMode: "native",
+        displayTitle: "PR",
+      }),
+    );
+  }, 20_000);
+
+  test("routes every PR workflow context-menu provider", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prState: "open",
       hasMergeConflicts: true,
     };
-    view.rerender(<ActionBar />);
+    const view = render(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
     expectProviderMenuOrder("Resolve with");

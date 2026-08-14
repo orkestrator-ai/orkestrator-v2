@@ -157,6 +157,16 @@ describe("native compose bar controls", () => {
     }
   });
 
+  test("shows the provider platform icon before the model name", () => {
+    const { container: claude } = renderClaudeComposeBar();
+    const { container: codex } = renderCodexComposeBar();
+    const { container: openCode } = renderOpenCodeComposeBar();
+
+    expect(claude.querySelector("[data-native-compose-platform='claude']")).toBeTruthy();
+    expect(codex.querySelector("[data-native-compose-platform='codex']")).toBeTruthy();
+    expect(openCode.querySelector("[data-native-compose-platform='opencode']")).toBeTruthy();
+  });
+
   test("keeps every optional action reachable with long model labels", () => {
     const longModelName = "A deliberately long model name for responsive coverage";
     const { container: claude } = renderClaudeComposeBar({

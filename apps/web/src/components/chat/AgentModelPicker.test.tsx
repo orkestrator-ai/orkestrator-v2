@@ -92,6 +92,59 @@ describe("AgentModelPicker", () => {
     expect(container.querySelectorAll("button[title='Choose model, reasoning, and speed']")).toHaveLength(1);
   });
 
+  test("shows the selected platform icon before the model name", () => {
+    setMobileViewport(false);
+    renderPicker({ selectedPlatform: "codex" });
+
+    const trigger = screen.getByTitle("Choose model, reasoning, and speed");
+    const icon = trigger.querySelector("[data-native-compose-platform='codex']");
+    const label = [...trigger.querySelectorAll("span")].find((node) =>
+      node.textContent?.startsWith("A model name that can become very long"),
+    );
+    expect(icon).toBeTruthy();
+    expect(icon?.querySelector("svg")).toBeTruthy();
+    expect(label).toBeTruthy();
+    expect(
+      Boolean(icon && label && (icon.compareDocumentPosition(label) & Node.DOCUMENT_POSITION_FOLLOWING)),
+    ).toBe(true);
+  });
+
+  test.each([
+    ["claude", "claude"],
+    ["codex", "codex"],
+    ["opencode", "opencode"],
+    ["cursor", "cursor"],
+    ["grok", "grok"],
+  ] as const)("renders the %s platform icon on the trigger", (platform, expected) => {
+    setMobileViewport(false);
+    renderPicker({
+      models: [{ platform, id: "model-1", label: "Model 1" }],
+      selectedPlatform: platform,
+      selectedModelId: "model-1",
+      selectedModelLabel: "Model 1",
+    });
+
+    expect(
+      screen.getByTitle("Choose model, reasoning, and speed")
+        .querySelector(`[data-native-compose-platform='${expected}']`),
+    ).toBeTruthy();
+  });
+
+  test("infers the trigger platform from the selected model when it is not passed", () => {
+    setMobileViewport(false);
+    renderPicker({
+      models: [{ platform: "claude", id: "opus", label: "Opus" }],
+      selectedPlatform: undefined,
+      selectedModelId: "opus",
+      selectedModelLabel: "Opus",
+    });
+
+    expect(
+      screen.getByTitle("Choose model, reasoning, and speed")
+        .querySelector("[data-native-compose-platform='claude']"),
+    ).toBeTruthy();
+  });
+
   test("routes mobile model, reasoning, and speed selections", async () => {
     setMobileViewport(true);
     const { onModelChange } = renderPicker();

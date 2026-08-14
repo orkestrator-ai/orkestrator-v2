@@ -1119,7 +1119,9 @@ describe("AgentNativeTab", () => {
       render(<AgentNativeTab tabId="tab-unbounded-usage" data={identity("grok")} isActive />);
 
       expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
-      expect(screen.queryByRole("button", { name: /Context window/ })).toBeNull();
+      await waitFor(() => {
+        expect(screen.queryByRole("button", { name: /Context window/ })).toBeNull();
+      });
     });
 
     test("renders the context wheel from the percentage the provider reported", async () => {

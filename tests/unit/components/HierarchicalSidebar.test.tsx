@@ -5,7 +5,7 @@ import type { DragEndEvent, DragStartEvent } from "@dnd-kit/core";
 import { mockReadImage } from "../../mocks/clipboard";
 import { restoreMatchMedia, setMobileViewport } from "../../mocks/match-media";
 import { useClaudeOptionsStore, useConfigStore, useUIStore } from "@/stores";
-import type { Environment, Project } from "@/types";
+import type { Environment, LastEnvironmentAgentSelection, Project } from "@/types";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import {
   dispatchResourceChange,
@@ -58,6 +58,19 @@ const getContainerGitHubCredentialStatusMock = mock(async () => ({
   source: "host-cli" as const,
   available: true,
 }));
+const rememberEnvironmentAgentSelectionMock = mock(
+  async (projectId: string, selection: LastEnvironmentAgentSelection) => {
+    const config = structuredClone(useConfigStore.getState().config);
+    config.repositories[projectId] = {
+      ...(config.repositories[projectId] ?? {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+      }),
+      lastEnvironmentAgentSelection: selection,
+    };
+    return config;
+  },
+);
 const renameEnvironmentFromPromptMock = mock(async () => {});
 const updateEnvironmentMock = mock(() => {});
 const startEnvironmentMock = mock(async () => undefined);
@@ -119,6 +132,7 @@ mock.module("@/hooks/useEnvironmentDiffStats", () => ({
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getContainerGitHubCredentialStatus: getContainerGitHubCredentialStatusMock,
+  rememberEnvironmentAgentSelection: rememberEnvironmentAgentSelectionMock,
   renameEnvironmentFromPrompt: renameEnvironmentFromPromptMock,
   updateEnvironmentAgentSettings: updateEnvironmentAgentSettingsMock,
 }));
@@ -217,6 +231,7 @@ describe("HierarchicalSidebar", () => {
     cleanup();
     createEnvironmentMock.mockClear();
     updateEnvironmentAgentSettingsMock.mockClear();
+    rememberEnvironmentAgentSelectionMock.mockClear();
     getContainerGitHubCredentialStatusMock.mockClear();
     getContainerGitHubCredentialStatusMock.mockResolvedValue({
       source: "host-cli",
@@ -1101,7 +1116,7 @@ describe("HierarchicalSidebar", () => {
         null,
         null,
         true,
-        "default",
+        "sonnet",
         undefined,
         [],
       );

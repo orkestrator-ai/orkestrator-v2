@@ -4,7 +4,6 @@ import type {
   AppConfig,
   EnvironmentType,
   GlobalConfig,
-  LastEnvironmentAgentSelection,
   RepositoryConfig,
 } from "@/types";
 import { DEFAULT_TERMINAL_SCROLLBACK, TERMINAL_BACKGROUND_COLOR } from "@/constants/terminal";
@@ -107,10 +106,6 @@ interface ConfigState {
   updateGlobalConfig: (updates: Partial<GlobalConfig>) => void;
   setRepositoryConfig: (repoId: string, config: RepositoryConfig) => void;
   setRepositoryLastEnvironmentType: (repoId: string, environmentType: EnvironmentType) => void;
-  setRepositoryLastEnvironmentAgentSelection: (
-    repoId: string,
-    selection: LastEnvironmentAgentSelection,
-  ) => void;
   removeRepositoryConfig: (repoId: string) => void;
   setLoading: (isLoading: boolean) => void;
   setError: (error: string | null) => void;
@@ -173,27 +168,6 @@ export const useConfigStore = create<ConfigState>()((set, get) => ({
             [repoId]: {
               ...existing,
               lastEnvironmentType: environmentType,
-            },
-          },
-        },
-      };
-    }),
-
-  setRepositoryLastEnvironmentAgentSelection: (repoId, selection) =>
-    set((state) => {
-      const existing = state.config.repositories[repoId] ?? {
-        defaultBranch: "main",
-        prBaseBranch: "main",
-      };
-
-      return {
-        config: {
-          ...state.config,
-          repositories: {
-            ...state.config.repositories,
-            [repoId]: {
-              ...existing,
-              lastEnvironmentAgentSelection: selection,
             },
           },
         },

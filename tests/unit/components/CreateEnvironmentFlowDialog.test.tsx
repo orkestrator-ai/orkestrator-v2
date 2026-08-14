@@ -1,8 +1,11 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { Environment } from "@/types";
+import { useState } from "react";
+import type { Environment, LastEnvironmentAgentSelection } from "@/types";
 import type { GitHubCredentialStatus } from "@/lib/backend";
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
+import { useClaudeStore } from "@/stores/claudeStore";
+import { useConfigStore } from "@/stores/configStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 
@@ -18,10 +21,24 @@ const getContainerGitHubCredentialStatusMock = mock(async () => ({
   source: "host-cli" as const,
   available: true,
 }));
+const rememberEnvironmentAgentSelectionMock = mock(
+  async (projectId: string, selection: LastEnvironmentAgentSelection) => {
+    const config = structuredClone(useConfigStore.getState().config);
+    config.repositories[projectId] = {
+      ...(config.repositories[projectId] ?? {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+      }),
+      lastEnvironmentAgentSelection: selection,
+    };
+    return config;
+  },
+);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getContainerGitHubCredentialStatus: getContainerGitHubCredentialStatusMock,
+  rememberEnvironmentAgentSelection: rememberEnvironmentAgentSelectionMock,
   updateEnvironmentAgentSettings: updateEnvironmentAgentSettingsMock,
 }));
 
@@ -85,12 +102,32 @@ async function submitCreateFlow(options: { turnOffLaunchAgent?: boolean } = {}) 
 describe("CreateEnvironmentFlowDialog", () => {
   beforeEach(() => {
     updateEnvironmentAgentSettingsMock.mockClear();
+    rememberEnvironmentAgentSelectionMock.mockClear();
+    rememberEnvironmentAgentSelectionMock.mockImplementation(
+      async (projectId, selection) => {
+        const config = structuredClone(useConfigStore.getState().config);
+        config.repositories[projectId] = {
+          ...(config.repositories[projectId] ?? {
+            defaultBranch: "main",
+            prBaseBranch: "main",
+          }),
+          lastEnvironmentAgentSelection: selection,
+        };
+        return config;
+      },
+    );
     getContainerGitHubCredentialStatusMock.mockClear();
     getContainerGitHubCredentialStatusMock.mockResolvedValue({
       source: "host-cli",
       available: true,
     });
     useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
+    useClaudeStore.setState({ models: [] });
+    useConfigStore.setState({
+      config: structuredClone(useConfigStore.getInitialState().config),
+      isLoading: false,
+      error: null,
+    });
     useProjectStore.setState({
       projects: [{
         id: "project-1",
@@ -474,7 +511,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     const call = await submitCreateFlow();
     expect(call[0]).toBe("env-created");
     expect(call[6]).toBe(true);
-    expect(call[7]).toBe("default");
+    expect(call[7]).toBe("sonnet");
     expect(call[8]).toBeUndefined();
   });
 
@@ -609,6 +646,24 @@ describe("CreateEnvironmentFlowDialog", () => {
     expect(call[6]).toBe(true);
     expect(call[7]).toBe("gpt-5.4-mini");
     expect(call[8]).toBe("high");
+    expect(rememberEnvironmentAgentSelectionMock).toHaveBeenCalledWith(
+      "project-1",
+      {
+        platform: "codex",
+        mode: "native",
+        model: "gpt-5.4-mini",
+        reasoningEffort: "high",
+      },
+    );
+    expect(
+      useConfigStore.getState().config.repositories["project-1"]
+        ?.lastEnvironmentAgentSelection,
+    ).toEqual({
+      platform: "codex",
+      mode: "native",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "high",
+    });
     expect(
       useClaudeOptionsStore.getState().getOptions("env-selected-options"),
     ).toEqual(expect.objectContaining({
@@ -616,6 +671,124 @@ describe("CreateEnvironmentFlowDialog", () => {
       model: "gpt-5.4-mini",
       reasoningEffort: "high",
     }));
+  });
+
+  test("continues creation without publishing local preference state when remembering fails", async () => {
+    const preferenceError = new Error("config storage unavailable");
+    rememberEnvironmentAgentSelectionMock.mockRejectedValueOnce(preferenceError);
+    const onOpenChange = mock(() => {});
+    const startEnvironment = mock(async () => {});
+    const originalConsoleWarn = console.warn;
+    console.warn = mock(() => {});
+    try {
+      render(
+        <CreateEnvironmentFlowDialog
+          open
+          onOpenChange={onOpenChange}
+          projectId="project-1"
+          createEnvironment={mock(async () => ({ id: "env-preference-failed" }) as Environment)}
+          updateEnvironment={() => {}}
+          startEnvironment={startEnvironment}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+      await waitFor(() => {
+        expect(startEnvironment).toHaveBeenCalledWith(
+          "env-preference-failed",
+          "",
+          { background: true, silent: true },
+        );
+        expect(onOpenChange).toHaveBeenCalledWith(false);
+      });
+      expect(
+        useConfigStore.getState().config.repositories["project-1"]
+          ?.lastEnvironmentAgentSelection,
+      ).toBeUndefined();
+      expect(console.warn).toHaveBeenCalledWith(
+        "[CreateEnvironmentFlowDialog] Failed to remember agent selection:",
+        preferenceError,
+      );
+    } finally {
+      console.warn = originalConsoleWarn;
+    }
+  });
+
+  test("restores the durably remembered selection after closing and reopening", async () => {
+    function Harness() {
+      const [open, setOpen] = useState(true);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>Reopen creator</button>
+          <CreateEnvironmentFlowDialog
+            open={open}
+            onOpenChange={setOpen}
+            projectId="project-1"
+            createEnvironment={mock(async () => ({ id: "env-reopen" }) as Environment)}
+            updateEnvironment={() => {}}
+            startEnvironment={async () => {}}
+          />
+        </>
+      );
+    }
+
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog") === null).toBe(true);
+    act(() => {
+      const config = structuredClone(useConfigStore.getState().config);
+      config.repositories["project-1"] = {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+        lastEnvironmentAgentSelection: {
+          platform: "codex",
+          mode: "native",
+          model: "gpt-5.4-mini",
+          reasoningEffort: "high",
+        },
+      };
+      useConfigStore.getState().setConfig(config);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reopen creator" }));
+    const picker = await screen.findByRole("combobox", { name: "Agent, model and reasoning" });
+    expect(picker.textContent).toContain("GPT-5.4-Mini");
+    expect(picker.textContent).toContain("High");
+    fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
+    expect(screen.getByRole("button", { name: "codex models" }).getAttribute("aria-pressed"))
+      .toBe("true");
+  });
+
+  test("does not let a late catalog refresh replace a user-touched agent selection", async () => {
+    render(
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={() => {}}
+        projectId="project-1"
+        createEnvironment={mock(async () => ({ id: "env-late-catalog" }) as Environment)}
+        updateEnvironment={() => {}}
+        startEnvironment={async () => {}}
+      />,
+    );
+
+    const picker = screen.getByRole("combobox", { name: "Agent, model and reasoning" });
+    fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByRole("button", { name: "codex models" }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+
+    act(() => {
+      useClaudeStore.setState({
+        models: [{
+          id: "late-claude",
+          name: "Late Claude",
+          supportsEffort: false,
+        }],
+      });
+    });
+
+    fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
+    expect(screen.getByRole("button", { name: "codex models" }).getAttribute("aria-pressed"))
+      .toBe("true");
   });
 
   test("forwards non-empty launch attachments only while launch is enabled", () => {

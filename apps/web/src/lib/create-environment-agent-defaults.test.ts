@@ -65,6 +65,36 @@ describe("resolveCreateEnvironmentAgentDefaults", () => {
     });
   });
 
+  test("resolves a configured Claude model from its concrete id to the catalog alias", () => {
+    expect(resolveCreateEnvironmentAgentDefaults({
+      catalog: {
+        ...catalog,
+        claude: [
+          {
+            id: "default",
+            name: "Default",
+            reasoningEfforts: [],
+            resolvedModel: "claude-opus",
+          },
+          {
+            id: "sonnet",
+            name: "Sonnet",
+            reasoningEfforts: ["high"],
+            resolvedModel: "claude-sonnet",
+          },
+        ],
+      },
+      enabledAgents: ["claude"],
+      configured: {
+        ...configured,
+        models: { claude: "claude-sonnet" },
+      },
+    })).toMatchObject({
+      agent: "claude",
+      model: "sonnet",
+    });
+  });
+
   test("uses safe current-catalog fallbacks for retired model controls", () => {
     expect(resolveCreateEnvironmentAgentDefaults({
       catalog,

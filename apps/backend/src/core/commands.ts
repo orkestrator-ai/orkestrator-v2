@@ -10004,7 +10004,7 @@ export function createCommandRegistry(
   });
   register("get_repository_config", ({ projectId }, { storage }) => storage.getRepositoryConfig(asString(projectId, "projectId")));
   register("update_repository_config", async ({ projectId, repoConfig }, context) => {
-    const updated = await context.storage.updateRepositoryConfig(
+    const updated = await context.storage.updateRepositorySettings(
       asString(projectId, "projectId"),
       repoConfig as never,
     );
@@ -10014,6 +10014,37 @@ export function createCommandRegistry(
     // the setting the user just changed.
     void syncDiffStatsTracking(context).catch(() => undefined);
     return redactAppConfig(updated);
+  });
+  register("remember_environment_agent_selection", async ({
+    projectId,
+    platform,
+    mode,
+    model,
+    reasoningEffort,
+  }, { storage }) => {
+    if (!isAgentPlatform(platform)) {
+      throw new Error("Expected platform to be a supported agent platform");
+    }
+    const selectedPlatform = platform;
+    const selectedMode = asString(mode, "mode");
+    if (selectedMode !== "terminal" && selectedMode !== "native") {
+      throw new Error("Expected mode to be terminal or native");
+    }
+    const selectedModel = asOptionalString(model)?.trim();
+    const selectedReasoningEffort = asOptionalString(reasoningEffort)?.trim();
+    return redactAppConfig(await storage.patchRepositoryConfig(
+      asString(projectId, "projectId"),
+      {
+        lastEnvironmentAgentSelection: {
+          platform: selectedPlatform,
+          mode: selectedMode,
+          ...(selectedModel ? { model: selectedModel } : {}),
+          ...(selectedReasoningEffort
+            ? { reasoningEffort: selectedReasoningEffort }
+            : {}),
+        },
+      },
+    ));
   });
   register("get_linear_connection", async (_args, context) => {
     const auth = await context.storage.getLinearAuth();
@@ -10393,7 +10424,9 @@ export function createCommandRegistry(
       entryPort: repoConfig.entryPort,
       pendingRenamePrompt,
     });
-    await storage.updateRepositoryConfig(project.id, { ...repoConfig, lastEnvironmentType: env.environmentType });
+    await storage.patchRepositoryConfig(project.id, {
+      lastEnvironmentType: env.environmentType,
+    });
     return toClientEnvironment(await storage.addEnvironment(env));
   });
   register("delete_environment", async ({ environmentId }, context) => {
@@ -10691,42 +10724,7 @@ export function createCommandRegistry(
       updates.initialPromptAttachments =
         initialPromptAttachments as Environment["initialPromptAttachments"];
     }
-    const updatedEnvironment = await storage.updateEnvironment(id, updates);
-
-    // This command is the successful create flow's durable commit point for
-    // agent launch settings. Keep the remembered picker tuple separate from
-    // repository defaults, which are explicit user settings shared by other
-    // launch surfaces.
-    if (pendingAgentLaunch === true && isAgentPlatform(defaultAgent)) {
-      const selectedMode =
-        defaultAgent === "claude"
-          ? claudeMode
-          : defaultAgent === "opencode"
-            ? opencodeMode
-            : defaultAgent === "codex"
-              ? codexMode
-              : "native";
-      if (selectedMode === "terminal" || selectedMode === "native") {
-        const repoConfig = await storage.getRepositoryConfig(
-          updatedEnvironment.projectId,
-        );
-        await storage.updateRepositoryConfig(updatedEnvironment.projectId, {
-          ...repoConfig,
-          lastEnvironmentAgentSelection: {
-            platform: defaultAgent,
-            mode: selectedMode,
-            ...(typeof initialAgentModel === "string" && initialAgentModel
-              ? { model: initialAgentModel }
-              : {}),
-            ...(typeof initialReasoningEffort === "string" && initialReasoningEffort
-              ? { reasoningEffort: initialReasoningEffort }
-              : {}),
-          },
-        });
-      }
-    }
-
-    return toClientEnvironment(updatedEnvironment);
+    return toClientEnvironment(await storage.updateEnvironment(id, updates));
   });
   register("set_environment_pending_agent_launch", ({ environmentId, pending }, { storage }) => {
     const nextPending = asRequiredBoolean(pending, "pending");

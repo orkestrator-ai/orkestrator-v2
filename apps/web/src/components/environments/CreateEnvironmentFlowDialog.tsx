@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   getContainerGitHubCredentialStatus,
+  rememberEnvironmentAgentSelection,
   updateEnvironmentAgentSettings,
   type GitHubCredentialStatus,
 } from "@/lib/backend";
@@ -257,17 +258,23 @@ export function CreateEnvironmentFlowDialog({
       );
       updateEnvironment(environment.id, configuredEnvironment);
       if (options.launchAgent) {
-        useConfigStore.getState().setRepositoryLastEnvironmentAgentSelection(
-          projectId,
-          {
+        try {
+          const updatedConfig = await rememberEnvironmentAgentSelection(projectId, {
             platform: options.agentType,
             mode: selectedAgentMode(options.agentType, options),
             ...(options.model ? { model: options.model } : {}),
             ...(options.reasoningEffort
               ? { reasoningEffort: options.reasoningEffort }
               : {}),
-          },
-        );
+          });
+          useConfigStore.getState().setConfig(updatedConfig);
+        } catch (preferenceError) {
+          console.warn(
+            "[CreateEnvironmentFlowDialog] Failed to remember agent selection:",
+            preferenceError,
+          );
+          toast.warning("Environment created, but agent preference was not saved");
+        }
       }
 
       setOptions(configuredEnvironment.id, {

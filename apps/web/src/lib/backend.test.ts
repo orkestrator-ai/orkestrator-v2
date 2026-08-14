@@ -79,6 +79,7 @@ const {
   updateFeaturePlan,
   updateAgentModelDefault,
   updateEnvironmentAgentSettings,
+  rememberEnvironmentAgentSelection,
   writeInitialPromptAttachments,
   applyPaneLayoutIntent,
   listAgentSkills,
@@ -194,6 +195,29 @@ describe("backend setup wrappers", () => {
         initialReasoningEffort: "high",
       }],
     ]);
+  });
+
+  test("persists a repository-scoped create-environment agent selection", async () => {
+    const config = { version: "1.0" } as AppConfig;
+    invokeMock.mockResolvedValueOnce(config);
+
+    await expect(rememberEnvironmentAgentSelection("project-1", {
+      platform: "codex",
+      mode: "terminal",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "high",
+    })).resolves.toBe(config);
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      "remember_environment_agent_selection",
+      {
+        projectId: "project-1",
+        platform: "codex",
+        mode: "terminal",
+        model: "gpt-5.4-mini",
+        reasoningEffort: "high",
+      },
+    );
   });
 
   test("omits the one-shot option keys when they are absent or blank", async () => {

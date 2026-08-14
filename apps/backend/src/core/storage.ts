@@ -4101,6 +4101,58 @@ export class StorageService {
     });
   }
 
+  /**
+   * Update user-editable repository settings without accepting a stale renderer
+   * echo for state owned by successful environment creation.
+   */
+  async updateRepositorySettings(
+    projectId: string,
+    repoConfig: RepositoryConfig,
+  ): Promise<AppConfig> {
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadConfig();
+      const current = config.repositories[projectId] ?? defaultRepositoryConfig();
+      const userSettings = { ...repoConfig };
+      delete userSettings.lastEnvironmentType;
+      delete userSettings.lastEnvironmentAgentSelection;
+      config.repositories[projectId] = {
+        ...defaultRepositoryConfig(),
+        ...userSettings,
+        ...(current.lastEnvironmentType !== undefined
+          ? { lastEnvironmentType: current.lastEnvironmentType }
+          : {}),
+        ...(current.lastEnvironmentAgentSelection !== undefined
+          ? {
+              lastEnvironmentAgentSelection:
+                current.lastEnvironmentAgentSelection,
+            }
+          : {}),
+      };
+      await this.saveJson(this.configFile(), config);
+      this.announce("config", "app");
+      return config;
+    });
+  }
+
+  /** Atomically patch backend-owned repository state under the config lock. */
+  async patchRepositoryConfig(
+    projectId: string,
+    updates: Partial<RepositoryConfig>,
+  ): Promise<AppConfig> {
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadConfig();
+      const current = config.repositories[projectId] ?? defaultRepositoryConfig();
+      config.repositories[projectId] = {
+        ...defaultRepositoryConfig(),
+        ...current,
+        ...updates,
+      };
+      await this.saveJson(this.configFile(), config);
+      this.announce("config", "app");
+      return config;
+    });
+  }
+
   async updateGlobalConfig(
     globalConfig: AppConfig["global"],
     options: { preserveCredentials?: boolean } = {},

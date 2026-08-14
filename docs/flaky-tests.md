@@ -10,6 +10,19 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `MobileAppShellLayout > opens the project drawer on initial mobile entry and keeps workspace content mounted` (`apps/web/src/components/layout/MobileAppShellLayout.test.tsx`)
+
+- **Status:** resolved
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-fix-c4cb555c-full-tests.log`
+- **Worker configuration:** The web workspace package ran `bun test src --parallel=2` while the other workspace, root, bridge, and protocol-lockfile groups ran concurrently.
+- **Failure:** The test exceeded Bun's 5,000 ms outer budget and timed out after 5,014.67 ms. No assertion failure was reported.
+- **Suite counts:** Web package: 4,805 total, 4,803 passed, 1 skipped, 1 failed across 210 files with 14,866 assertions in 104.69 seconds. The backend, root, bridge, protocol, CLI, desktop, and web-public groups passed.
+- **Isolated rerun:** `set -o pipefail; bun test --cwd apps/web src/components/layout/MobileAppShellLayout.test.tsx --parallel 2>&1 | tee /tmp/orkestrator-fix-mobile-layout-isolated.log` -> 23 passed, 0 failed in 4.41 seconds; the affected case passed in 2,197.66 ms.
+- **Root cause:** The case combined the initial Radix drawer auto-focus boundary and a later close-and-restore focus boundary under one five-second test budget. The two behaviors are independent and each already has a distinct user-visible assertion, but their asynchronous focus work accumulated enough aggregate scheduling delay to exhaust the shared budget.
+- **Fix:** Split the initial-open and close-button focus behaviors into separate tests so each transition has an independent lifecycle and budget without weakening either assertion.
+- **Verification:** The owning file is stress-tested after the split and the subsequent aggregate result is recorded in this change's validation handoff.
+
 ## `StorageService prompt queues > live lease timer restores and announces a sole claimed head` (`apps/backend/src/core/storage-prompt-queues.test.ts`)
 
 - **Status:** open

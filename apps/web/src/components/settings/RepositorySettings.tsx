@@ -414,10 +414,16 @@ export function RepositorySettings({
         const models = codexModels.length > 0 ? codexModels : CODEX_MODELS;
         return models.map((m) => ({ id: m.id, name: m.name }));
       }
+      case "cursor":
+      case "grok":
+        return (projectModelCatalog[effectiveAgent] ?? []).map((model) => ({
+          id: model.id,
+          name: model.name,
+        }));
       default:
         return [];
     }
-  }, [effectiveAgent, claudeModels, projectModelCatalog.opencode, codexModels]);
+  }, [effectiveAgent, claudeModels, projectModelCatalog, codexModels]);
 
   const selectedCodexModel = useMemo(() => {
     if (effectiveAgent !== "codex") return undefined;
@@ -457,10 +463,20 @@ export function RepositorySettings({
           ? CODEX_EFFORT_LEVELS.filter((effort) => supportedEfforts.includes(effort.value))
           : CODEX_EFFORT_LEVELS;
       }
+      case "cursor":
+      case "grok": {
+        const model = (projectModelCatalog[effectiveAgent] ?? []).find(
+          (candidate) => candidate.id === defaultModel,
+        );
+        return (model?.reasoningEfforts ?? []).map((effort) => ({
+          value: effort,
+          label: effort.charAt(0).toUpperCase() + effort.slice(1),
+        }));
+      }
       default:
         return [];
     }
-  }, [effectiveAgent, defaultModel, claudeModels, projectModelCatalog.opencode, selectedCodexModel]);
+  }, [effectiveAgent, defaultModel, claudeModels, projectModelCatalog, selectedCodexModel]);
 
   useEffect(() => {
     if (

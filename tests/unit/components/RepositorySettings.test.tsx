@@ -149,6 +149,7 @@ import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
+import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { RepositorySettings } from "../../../apps/web/src/components/settings/RepositorySettings";
 import type { AppConfig, Project } from "@/types";
 
@@ -202,6 +203,7 @@ function resetStores(config = makeConfig()) {
   useClaudeStore.setState({ models: [] });
   useOpenCodeStore.setState({ models: new Map(), modelSource: new Map() });
   useCodexStore.setState({ models: CODEX_MODELS });
+  useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [] });
 }
 
 function renderSettings({
@@ -480,6 +482,48 @@ describe("RepositorySettings", () => {
         .toContain("openrouter/cached-model");
       expect(modelSelect.textContent).toContain("Cached Model");
     });
+
+    for (const platform of ["cursor", "grok"] as const) {
+      const label = platform === "cursor" ? "Cursor Agent" : "Grok Build";
+      test(`uses cached ${label} models and reasoning without a running environment`, () => {
+        renderSettings({
+          config: {
+            global: {
+              defaultAgent: platform,
+              enabledAgentPlatforms: ["claude", "codex", platform, "opencode"],
+            } as AppConfig["global"],
+            repositories: {
+              "project-1": {
+                defaultBranch: "main",
+                prBaseBranch: "main",
+                defaultAgent: platform,
+                defaultModel: `${platform}-cached-model`,
+              },
+            },
+          },
+          prepareStores: () => {
+            useAgentModelCatalogStore.getState().setAcpModels([{
+              id: `${platform}-cached-model`,
+              label: `${label} Cached Model`,
+              platform,
+              reasoning: [
+                { id: "default", label: "Default" },
+                { id: "high", label: "High" },
+              ],
+            }]);
+          },
+        });
+
+        expect(screen.queryByText("Start an environment to load available models"))
+          .toBeNull();
+        const selects = getMockSelects();
+        expect(Array.from(selects[2]!.options).map((option) => option.value))
+          .toContain(`${platform}-cached-model`);
+        expect(selects[2]!.textContent).toContain(`${label} Cached Model`);
+        expect(Array.from(selects[3]!.options).map((option) => option.value))
+          .toContain("high");
+      });
+    }
 
     test("filters Codex efforts by model and clears an unsupported saved effort", async () => {
       renderSettings({

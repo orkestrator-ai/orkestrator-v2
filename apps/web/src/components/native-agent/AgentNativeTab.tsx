@@ -88,6 +88,7 @@ import {
 } from "@/lib/chat/workspace-attachments";
 import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores/configStore";
+import { syncCachedAcpModels } from "@/stores/agentModelCatalogStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import {
   nativeComposeDraft,
@@ -273,6 +274,10 @@ function UnassignedNativeAgentComposer({
     setModels([]);
     void getNativeAgentModelCatalog(environmentId)
       .then((catalog) => {
+        // The backend has already normalized and durably cached these models.
+        // Mirror its response so every other mounted launcher updates without
+        // each picker performing its own storage read.
+        syncCachedAcpModels(catalog);
         if (!cancelled) setModels(catalog);
       })
       .catch((error) => {

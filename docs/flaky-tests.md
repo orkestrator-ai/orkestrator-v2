@@ -103,6 +103,13 @@ history rather than two partial ones.
 - **Root cause:** The case combined the initial Radix drawer auto-focus boundary and a later close-and-restore focus boundary under one five-second test budget. The two behaviors are independent and each already has a distinct user-visible assertion, but their asynchronous focus work accumulated enough aggregate scheduling delay to exhaust the shared budget.
 - **Fix:** Split the initial-open and close-button focus behaviors into separate tests so each transition has an independent lifecycle and budget without weakening either assertion.
 - **Verification:** The owning file is stress-tested after the split and the subsequent aggregate result is recorded in this change's validation handoff.
+- **Related aggregate-only recurrence (2026-08-14):** `closes the initial project drawer from its close button and restores trigger focus` (5,269.69 ms) and `closes the project drawer from its backdrop and restores trigger focus` (5,598.78 ms) timed out while the same file's other tests passed. The originally fixed `opens the project drawer on initial mobile entry and keeps workspace content mounted` case was not among the failures.
+- **Original command:** `set -o pipefail; bun --cwd apps/web test src/components/native-agent/AgentNativeTab.test.tsx --parallel 2>&1 | tee /tmp/orkestrator-agent-native-tab-isolated-final.log`
+- **Worker configuration:** The command expanded the web package test script to Bun's 18-worker `bun test src --parallel` suite across 211 files; the extra path argument did not limit the package script.
+- **Failure and suite counts:** 4,843 passed, 1 skipped, and 3 failed across 4,847 tests; the third failure was the deterministic unbounded-provider context-wheel assertion recorded and fixed in this change.
+- **Isolated rerun:** `set -o pipefail; bun test --cwd apps/web ./src/components/layout/MobileAppShellLayout.test.tsx --parallel 2>&1 | tee /tmp/orkestrator-mobile-app-shell-layout-isolated.log` -> 24 passed, 0 failed, 111 assertions in 8.21 seconds; both affected cases passed.
+- **Verification:** `set -o pipefail; bun run --cwd apps/web test 2>&1 | tee /tmp/orkestrator-web-full-coverage-fix.log` -> 4,846 passed, 1 skipped, 0 failed across 4,847 tests in 24.07 seconds.
+- **Hypothesis:** The two affected cases each await Radix drawer close and focus restoration under the five-second default budget. Their 4.14-second and 3.00-second isolated durations, combined with the aggregate-only failure and a green subsequent aggregate, point to worker scheduling contention rather than a deterministic drawer behavior failure.
 
 ## `MultiReviewService > keeps a provider alive while a transcript read overlaps fix execution` (`apps/backend/src/core/multi-review-service.test.ts`)
 

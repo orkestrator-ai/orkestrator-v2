@@ -614,7 +614,48 @@ describe("NativeMessage", () => {
     expect(flow).toBeTruthy();
     expect(getClassTokens(flow)).toContain("flex-wrap");
     expect(getClassTokens(flow)).toContain("w-full");
-    expect(flow?.querySelectorAll("button")).toHaveLength(2);
+    expect(getClassTokens(flow)).toEqual(
+      expect.arrayContaining(["flex", "min-w-0", "items-start", "gap-3"]),
+    );
+
+    const attachmentButtons = flow?.querySelectorAll("button") ?? [];
+    expect(attachmentButtons).toHaveLength(2);
+    for (const attachment of attachmentButtons) {
+      expect(getClassTokens(attachment)).toEqual(
+        expect.arrayContaining(["w-40", "max-w-full", "shrink-0"]),
+      );
+    }
+  });
+
+  test("keeps separated attachment flows around interleaved text", () => {
+    const message: NativeMessageType = {
+      id: "msg-separated-attachment-flows",
+      role: "user",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        { type: "file", content: "/tmp/before.png" },
+        { type: "text", content: "Explain the difference" },
+        { type: "file", content: "/tmp/after.png" },
+      ],
+    };
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    const flows = Array.from(
+      container.querySelectorAll('[data-message-attachment-flow="true"]'),
+    );
+    expect(flows).toHaveLength(2);
+    expect(flows[0]?.querySelectorAll("button")).toHaveLength(1);
+    expect(flows[1]?.querySelectorAll("button")).toHaveLength(1);
+
+    const text = screen.getByText("Explain the difference");
+    expect(
+      flows[0]!.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      text.compareDocumentPosition(flows[1]!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   test("reopens a cached local image preview without reading the file again", async () => {

@@ -40,7 +40,6 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { ClaudeIcon, CodexIcon, CursorAgentIcon, GrokBuildIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import { cn } from "@/lib/utils";
@@ -72,13 +71,16 @@ import { useClaudeStore } from "@/stores/claudeStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import type { InitialPromptImageAttachment } from "@/lib/initial-prompt-attachments";
 import { buildReviewModelCatalog } from "@/lib/review-launch-options";
-import { modelsForAgent } from "@/lib/agent-launch";
+import { effortLabel, modelsForAgent } from "@/lib/agent-launch";
 import {
   getCachedOpenCodeModelCatalog,
   type CachedOpenCodeModel,
 } from "@/lib/backend";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
-import { firstEnabledAgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import {
+  firstEnabledAgentPlatform,
+  type AgentPlatform,
+} from "@orkestrator/protocol/agent-platforms";
 
 // Stable empty array reference to prevent infinite re-renders when no default port mappings are provided
 const EMPTY_PORT_MAPPINGS: PortMapping[] = [];
@@ -616,8 +618,29 @@ export function CreateEnvironmentDialog({
           ? codexMode
           : "native";
   const availableModels = modelsForAgent(modelCatalog, agentType);
+  const enabledAgentPlatforms = (
+    config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]
+  ) as AgentPlatform[];
+  const pickerModels = enabledAgentPlatforms.flatMap((platform) =>
+    modelsForAgent(modelCatalog, platform).map((option) => ({
+      platform,
+      id: option.id,
+      label: option.name,
+      description: option.description,
+    })),
+  );
+  const selectedModel = availableModels.find((candidate) => candidate.id === model);
   const availableReasoningEfforts =
     availableModels.find((candidate) => candidate.id === model)?.reasoningEfforts ?? [];
+  const reasoningOptions = availableReasoningEfforts.length > 0
+    ? [
+        { id: "default", label: "Default" },
+        ...availableReasoningEfforts.map((effort) => ({
+          id: effort,
+          label: effortLabel(effort),
+        })),
+      ]
+    : [];
 
   useEffect(() => {
     if (!open) return;
@@ -647,12 +670,13 @@ export function CreateEnvironmentDialog({
 
   const selectAgent = useCallback(
     (nextAgent: AgentType) => {
+      if (nextAgent === agentType) return;
       setAgentType(nextAgent);
       const nextSelection = getInitialAgentSelection(nextAgent);
       setModel(nextSelection.model);
       setReasoningEffort(nextSelection.reasoningEffort);
     },
-    [getInitialAgentSelection],
+    [agentType, getInitialAgentSelection],
   );
 
   const setUseTui = useCallback(
@@ -1089,141 +1113,29 @@ export function CreateEnvironmentDialog({
                 </Label>
               </div>
             </div>
-            <div className="grid grid-cols-1 gap-3 rounded-xl border border-border/70 bg-zinc-950/45 p-3 sm:grid-cols-[max-content_minmax(0,1fr)_minmax(9rem,max-content)]">
-              <div className="grid grid-rows-[1rem_2.25rem] gap-1.5">
-                <Label className="text-xs font-normal leading-4 text-muted-foreground">
-                  Agent
-                </Label>
-                <div
-                  role="radiogroup"
-                  aria-label="Default Agent"
-                  className="flex h-9 w-fit items-center gap-1 rounded-md border border-input bg-input/30 p-1"
-                >
-                  {([
-                    {
-                      value: "claude",
-                      label: "Claude",
-                      icon: <ClaudeIcon className="h-4 w-4" />,
-                    },
-                    {
-                      value: "codex",
-                      label: "Codex",
-                      icon: <CodexIcon className="h-4 w-4" />,
-                    },
-                    {
-                      value: "opencode",
-                      label: "OpenCode",
-                      icon: <OpenCodeIcon className="h-4 w-4" />,
-                    },
-                    {
-                      value: "cursor",
-                      label: "Cursor Agent",
-                      icon: <CursorAgentIcon className="h-4 w-4" />,
-                    },
-                    {
-                      value: "grok",
-                      label: "Grok Build",
-                      icon: <GrokBuildIcon className="h-4 w-4" />,
-                    },
-                  ] as const)
-                    .filter((option) => (config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]).includes(option.value))
-                    .map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      role="radio"
-                      aria-label={option.label}
-                      aria-checked={agentType === option.value}
-                      title={option.label}
-                      onClick={() => selectAgent(option.value)}
-                      disabled={isLoading || !launchAgent}
-                      className={cn(
-                        "grid h-7 w-8 place-items-center rounded-sm text-muted-foreground transition-colors hover:bg-zinc-800 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                        agentType === option.value &&
-                          "bg-primary text-primary-foreground shadow-sm hover:bg-primary hover:text-primary-foreground",
-                        (isLoading || !launchAgent) && "cursor-not-allowed",
-                      )}
-                    >
-                      {option.icon}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="grid min-w-0 grid-rows-[1rem_2.25rem] gap-1.5">
-                <Label htmlFor="agent-model" className="text-xs font-normal leading-4 text-muted-foreground">
-                  Model
-                </Label>
-                {agentType === "opencode" ? (
-                  <AgentModelPicker
-                    id="agent-model"
-                    ariaLabel="Model"
-                    models={availableModels.map((option) => ({
-                      platform: "opencode" as const,
-                      id: option.id,
-                      label: option.name,
-                      description: option.description,
-                    }))}
-                    enabledPlatforms={["opencode"]}
-                    selectedPlatform="opencode"
-                    favorites={favoriteModels}
-                    onToggleFavorite={toggleFavoriteModel}
-                    selectedModelId={model}
-                    selectedModelLabel={availableModels.find((option) => option.id === model)?.name ?? "Select model"}
-                    onModelChange={selectModel}
-                    reasoningOptions={[]}
-                    disabled={isLoading || !launchAgent}
-                    title="Agent model"
-                  />
-                ) : (
-                  <Select
-                    value={model}
-                    onValueChange={selectModel}
-                    disabled={isLoading || !launchAgent}
-                  >
-                    <SelectTrigger id="agent-model" className="w-full">
-                      <SelectValue placeholder="Select model" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableModels.map((option) => (
-                        <SelectItem key={option.id} value={option.id}>
-                          {option.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-              </div>
-
-              <div className="grid min-w-0 grid-rows-[1rem_2.25rem] gap-1.5">
-                <Label
-                  htmlFor="agent-reasoning-effort"
-                  className="text-xs font-normal leading-4 text-muted-foreground"
-                >
-                  Reasoning effort
-                </Label>
-                <Select
-                  value={reasoningEffort}
-                  onValueChange={setReasoningEffort}
-                  disabled={
-                    isLoading ||
-                    !launchAgent ||
-                    availableReasoningEfforts.length === 0
-                  }
-                >
-                  <SelectTrigger id="agent-reasoning-effort" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="default">Default</SelectItem>
-                    {availableReasoningEfforts.map((effort) => (
-                      <SelectItem key={effort} value={effort}>
-                        {effort.charAt(0).toUpperCase() + effort.slice(1)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+            <div className="rounded-xl border border-border/70 bg-zinc-950/45 p-2">
+              <AgentModelPicker
+                id="agent-model"
+                ariaLabel="Agent, model and reasoning"
+                models={pickerModels}
+                enabledPlatforms={enabledAgentPlatforms}
+                selectedPlatform={agentType}
+                favorites={favoriteModels}
+                onPlatformChange={selectAgent}
+                onToggleFavorite={toggleFavoriteModel}
+                selectedModelId={model}
+                selectedModelLabel={selectedModel?.name ?? "Select model"}
+                onModelChange={selectModel}
+                reasoningOptions={reasoningOptions}
+                selectedReasoningId={reasoningEffort}
+                selectedReasoningLabel={
+                  reasoningOptions.find((option) => option.id === reasoningEffort)?.label
+                }
+                onReasoningChange={setReasoningEffort}
+                disabled={isLoading || !launchAgent}
+                title="Choose agent, model, and reasoning"
+                className="min-h-9 w-full max-w-none justify-start md:max-w-none md:flex-1"
+              />
             </div>
           </div>
             </TabsContent>

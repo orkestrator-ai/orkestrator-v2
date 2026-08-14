@@ -260,6 +260,13 @@ const MAX_TOOL_TITLE_BYTES = 4 * 1024;
 const MAX_TOOL_PATH_BYTES = 16 * 1024;
 /** Bounds both the time and the retained memory of `diffFileLines`. */
 const MAX_DIFF_EDIT_DISTANCE = 512;
+/**
+ * Unchanged lines kept either side of a change. Rendering every line instead
+ * billed the *whole file* per edit: a one-line change to a 200KiB source file
+ * produced a 4,993-line "diff" of which 4,989 lines were untouched context, and
+ * 58 such edits exhausted the 8MiB transcript budget in a single turn.
+ */
+const DIFF_CONTEXT_LINES = 3;
 const MAX_SESSIONS = parseBoundedInteger(process.env.ACP_MAX_SESSIONS, 256, 1, 256);
 const MAX_APPROVALS_PER_SESSION = 64;
 const MAX_STRUCTURED_RESULTS = 4;
@@ -819,15 +826,16 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
   if (!text) return;
   const message = currentAssistantMessage(state);
   const partType = kind === "agent_thought_chunk" ? "thinking" : "text";
-  const previous = message.parts.at(-1);
+  const lastPart = message.parts.at(-1);
+  // The trim notice is a marker, not a stream. Appending a chunk to it would
+  // rewrite the notice into agent output and lose the announcement.
+  const previous = isTrimNotice(message, lastPart) ? undefined : lastPart;
   if (previous?.type !== partType && message.parts.length >= MAX_PARTS_PER_MESSAGE) {
-    state.outputTruncated = true;
-    state.status = "error";
-    state.error = `${provider} output exceeded the transcript limit`;
-    state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
-    state.revision += 1;
-    schedulePersist();
-    return;
+    if (turnRequiresCompleteOutput(state)) {
+      failTranscriptLimit(state);
+      return;
+    }
+    trimPartsTo(message, MAX_PARTS_PER_MESSAGE - 1);
   }
   const currentPartText = previous?.type === partType ? previous.content : "";
   const nextPartText = appendBounded(currentPartText, text, MAX_MESSAGE_TEXT_BYTES);
@@ -853,11 +861,12 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     || state.uncheckedTranscriptBytes >= TRANSCRIPT_CHECK_INTERVAL_BYTES
     ? boundTranscript(state)
     : false;
-  if (nextPartText.truncated || nextContent.truncated || transcriptTruncated) {
-    state.outputTruncated = true;
-    state.status = "error";
-    state.error = `${provider} output exceeded the transcript limit`;
-    state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
+  if (
+    (nextPartText.truncated || nextContent.truncated || transcriptTruncated)
+    && turnRequiresCompleteOutput(state)
+  ) {
+    failTranscriptLimit(state);
+    return;
   }
   schedulePersist();
 }
@@ -885,8 +894,11 @@ function applyToolCallUpdate(
   if (!part) {
     owner = currentAssistantMessage(state);
     if (owner.parts.length >= MAX_PARTS_PER_MESSAGE) {
-      failTranscriptLimit(state);
-      return;
+      if (turnRequiresCompleteOutput(state)) {
+        failTranscriptLimit(state);
+        return;
+      }
+      trimPartsTo(owner, MAX_PARTS_PER_MESSAGE - 1);
     }
     part = {
       type: "tool-invocation",
@@ -922,7 +934,7 @@ function applyToolCallUpdate(
     || state.uncheckedTranscriptBytes >= TRANSCRIPT_CHECK_INTERVAL_BYTES
     ? boundTranscript(state)
     : false;
-  if (transcriptTruncated) {
+  if (transcriptTruncated && turnRequiresCompleteOutput(state)) {
     failTranscriptLimit(state);
     return;
   }
@@ -1034,6 +1046,21 @@ function boundedModelId(value: unknown): string | undefined {
   return trimmed;
 }
 
+/**
+ * Whether losing transcript content has to fail the turn.
+ *
+ * A structured turn is worth exactly its complete output, so any loss must
+ * fail: the caller would otherwise parse a truncated answer as a whole one. An
+ * interactive turn is a conversation, and trimming its oldest steps to stay
+ * inside the display budget is routine housekeeping. Failing the session there
+ * strands the *entire* conversation behind a "Connection Failed" screen —
+ * `HttpBridgeProvider.status()` turns any bridge error status into a thrown
+ * command — and the failure is persisted, so Retry only reads it back.
+ */
+function turnRequiresCompleteOutput(state: SessionState): boolean {
+  return state.currentTurnOutput !== null;
+}
+
 function failTranscriptLimit(state: SessionState): void {
   state.outputTruncated = true;
   state.status = "error";
@@ -1041,6 +1068,43 @@ function failTranscriptLimit(state: SessionState): void {
   state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
   state.revision += 1;
   schedulePersist();
+}
+
+const TRANSCRIPT_TRIM_NOTICE =
+  "[Earlier steps in this response were dropped: it reached the transcript display limit.]";
+
+function trimNoticePartId(message: BridgeMessage): string {
+  return `${message.id}:transcript-trimmed`;
+}
+
+function isTrimNotice(
+  message: BridgeMessage,
+  part: BridgeMessagePart | undefined,
+): boolean {
+  return part !== undefined && part.sourcePartId === trimNoticePartId(message);
+}
+
+/**
+ * Drop the oldest parts of `message` until it holds at most `targetLength`,
+ * leaving one notice in their place. Always drops at least one, so callers can
+ * loop on it, and counts the notice against the target so trimming for room
+ * cannot itself push the message back over a cap.
+ *
+ * The announcement matters more here than for the rest of the transcript: the
+ * parts most likely to be dropped are the tool calls that did the work, and a
+ * silent cut reads as a response that simply never took those steps. The notice
+ * is keyed by `sourcePartId`, so repeated trims replace it rather than stack.
+ */
+function trimPartsTo(message: BridgeMessage, targetLength: number): void {
+  if (isTrimNotice(message, message.parts[0])) message.parts.shift();
+  const keep = Math.max(0, targetLength - 1);
+  message.parts.splice(0, Math.max(1, message.parts.length - keep));
+  message.parts.unshift({
+    type: "text",
+    content: TRANSCRIPT_TRIM_NOTICE,
+    sourcePartId: trimNoticePartId(message),
+    sourceMessageId: message.id,
+  });
 }
 
 function boundedString(value: unknown, maximumBytes: number): string | undefined {
@@ -1137,11 +1201,16 @@ function normalizeAcpContentDiff(value: JsonObject): BridgeToolDiff | undefined 
   if (!filePath && rawBefore === undefined && rawAfter === undefined && diff === undefined) {
     return undefined;
   }
+  // The file states are only ever rendered as the fallback for a part that has
+  // no diff at all: the renderer treats `diff` as authoritative the moment it
+  // exists. Keeping them alongside one stored two more whole copies of the file
+  // per edit — 5.3MiB of one 8MiB transcript — that nothing would ever read.
+  const keepFileStates = keepInline && diff === undefined;
   return {
     ...(filePath ? { filePath } : {}),
     ...(stats ? { additions: stats.additions, deletions: stats.deletions } : {}),
-    ...(keepInline && rawBefore !== undefined ? { before: rawBefore } : {}),
-    ...(keepInline && rawAfter !== undefined ? { after: rawAfter } : {}),
+    ...(keepFileStates && rawBefore !== undefined ? { before: rawBefore } : {}),
+    ...(keepFileStates && rawAfter !== undefined ? { after: rawAfter } : {}),
     ...(diff !== undefined ? { diff } : {}),
   };
 }
@@ -1199,21 +1268,88 @@ function createDisplayDiff(
   const lines = diffFileLines(fileLines(before ?? ""), fileLines(after));
   let additions = 0;
   let deletions = 0;
-  const rendered = lines.map((line) => {
+  for (const line of lines) {
     if (line.type === "add") additions += 1;
     if (line.type === "remove") deletions += 1;
-    return `${line.type === "add" ? "+" : line.type === "remove" ? "-" : " "}${line.content}`;
-  });
+  }
   const path = safeDiffPath(filePath ?? "unknown-file");
   return {
     diff: truncateDisplayText(
-      [`--- ${before === undefined ? "/dev/null" : path}`, `+++ ${path}`, "@@", ...rendered].join("\n"),
+      [
+        `--- ${before === undefined ? "/dev/null" : path}`,
+        `+++ ${path}`,
+        ...renderDiffHunks(lines),
+      ].join("\n"),
       MAX_TOOL_DIFF_BYTES,
       "\n… file diff truncated",
     ),
     additions,
     deletions,
   };
+}
+
+/**
+ * Render the changed regions as unified hunks rather than the whole file.
+ *
+ * Runs of unchanged lines longer than twice the context are elided, and each
+ * surviving region gets a `@@` header carrying its line numbers so the reader
+ * can still place it in the file. A file with no changes at all renders as a
+ * single empty `@@` header, which is what it is: nothing to show.
+ */
+function renderDiffHunks(lines: DisplayDiffLine[]): string[] {
+  const changed = lines.reduce<number[]>((indexes, line, index) => {
+    if (line.type !== "context") indexes.push(index);
+    return indexes;
+  }, []);
+  if (changed.length === 0) return ["@@"];
+
+  const rendered: string[] = [];
+  let beforeLine = 1;
+  let afterLine = 1;
+  let cursor = 0;
+  let nextChange = 0;
+
+  while (nextChange < changed.length) {
+    const start = Math.max(cursor, changed[nextChange]! - DIFF_CONTEXT_LINES);
+    // Extend the hunk while the next change is close enough that the gap
+    // between them is cheaper to print than a second header.
+    let end = Math.min(lines.length - 1, changed[nextChange]! + DIFF_CONTEXT_LINES);
+    while (
+      nextChange + 1 < changed.length
+      && changed[nextChange + 1]! - DIFF_CONTEXT_LINES <= end + 1
+    ) {
+      nextChange += 1;
+      end = Math.min(lines.length - 1, changed[nextChange]! + DIFF_CONTEXT_LINES);
+    }
+    nextChange += 1;
+
+    // Advance the line counters across everything elided before this hunk.
+    for (let index = cursor; index < start; index += 1) {
+      const type = lines[index]!.type;
+      if (type !== "add") beforeLine += 1;
+      if (type !== "remove") afterLine += 1;
+    }
+
+    let beforeCount = 0;
+    let afterCount = 0;
+    const body: string[] = [];
+    for (let index = start; index <= end; index += 1) {
+      const line = lines[index]!;
+      if (line.type !== "add") beforeCount += 1;
+      if (line.type !== "remove") afterCount += 1;
+      body.push(
+        `${line.type === "add" ? "+" : line.type === "remove" ? "-" : " "}${line.content}`,
+      );
+    }
+    rendered.push(
+      `@@ -${beforeLine},${beforeCount} +${afterLine},${afterCount} @@`,
+      ...body,
+    );
+    beforeLine += beforeCount;
+    afterLine += afterCount;
+    cursor = end + 1;
+  }
+  return rendered;
 }
 
 function fileLines(value: string): string[] {
@@ -1379,11 +1515,17 @@ function boundTranscript(state: SessionState): boolean {
   }
   const onlyMessage = state.messages[0];
   while (bytes > MAX_TRANSCRIPT_BYTES && onlyMessage && onlyMessage.parts.length > 1) {
-    onlyMessage.parts.shift();
+    // Strictly shorter every pass, so the loop still terminates once only the
+    // notice is left.
+    trimPartsTo(onlyMessage, onlyMessage.parts.length - 1);
     truncatedCurrentMessage = true;
     bytes = Buffer.byteLength(JSON.stringify(state.messages));
   }
   if (bytes > MAX_TRANSCRIPT_BYTES) {
+    // One part alone is over the whole-transcript budget, so nothing left to
+    // drop can bring it back under and the bound is genuinely unenforceable.
+    // Every part is individually capped well below 8MiB, so this is a backstop
+    // against a future cap being raised, not a state the agents can reach.
     state.outputTruncated = true;
     state.status = "error";
     state.error = `${provider} output exceeded the transcript limit`;
@@ -2291,14 +2433,24 @@ async function loadPersistedState(): Promise<void> {
       })
       .slice(-MAX_MESSAGES);
     const usage = restorePersistedUsage(candidate.usage);
+    // A session persisted by an older build's fatal transcript trim is healed
+    // rather than restored. Trimming an interactive turn is no longer a
+    // failure, `boundTranscript` below re-applies the bound to whatever was
+    // persisted, and the status is otherwise unclearable: the tab renders it as
+    // a connection failure whose only control reads the same state back.
+    const healed = candidate.status === "error"
+      && typeof candidate.error === "string"
+      && candidate.error.endsWith("output exceeded the transcript limit");
     const state: SessionState = {
       id: candidate.id.slice(0, 128),
       ...(typeof candidate.clientSessionKey === "string"
         ? { clientSessionKey: candidate.clientSessionKey.slice(0, 512) }
         : {}),
       acpSessionId: candidate.acpSessionId.slice(0, 512),
-      status: candidate.status === "idle" || candidate.status === "error" ? candidate.status : "error",
-      ...(typeof candidate.error === "string" ? { error: candidate.error.slice(0, 4_000) } : {}),
+      status: healed || candidate.status === "idle" ? "idle" : "error",
+      ...(!healed && typeof candidate.error === "string"
+        ? { error: candidate.error.slice(0, 4_000) }
+        : {}),
       messages,
       child: null,
       revision: Number.isSafeInteger(candidate.revision) ? Number(candidate.revision) : 0,

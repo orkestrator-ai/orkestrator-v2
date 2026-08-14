@@ -728,6 +728,35 @@ lines.on("line", (line) => {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }
+    if (prompt.startsWith("CONTEXTEDIT")) {
+      // The shape that exhausted the transcript in the field: a one-line change
+      // to a large file, sent as whole-file oldText/newText.
+      const lines = Array.from({ length: 5000 }, (_, index) => `const line_${index} = ${index};`);
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "context-1",
+            title: "Edit one line of a large file",
+            kind: "edit",
+            status: "completed",
+            content: [{
+              type: "diff",
+              path: "src/large.ts",
+              oldText: lines.join("\n"),
+              newText: lines
+                .map((line, index) => index === 2500 ? `${line} // touched` : line)
+                .join("\n"),
+            }],
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
     if (prompt.startsWith("WIDEEDIT")) {
       // More changed lines than the Myers search is allowed to explore, but well
       // inside the inline byte limit, so the bounded fallback has to produce it.

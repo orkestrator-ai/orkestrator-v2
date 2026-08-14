@@ -44,6 +44,13 @@ interface AgentModelPickerProps {
 
 const MODEL_ROW_HEIGHT_CLASS = "h-14";
 const VISIBLE_MODEL_ROWS = 5;
+/**
+ * Radix leaves the radio indicator at its static position, which on a two-line
+ * row lands between the two lines instead of on the name. Anchor it to the
+ * first line box (row padding + one `text-sm` line) so the bullet reads as
+ * belonging to the model name.
+ */
+const RADIO_ROW_CLASS = "items-start py-2 [&>span:first-child]:top-2 [&>span:first-child]:h-5";
 type MobileSubmenu = "reasoning" | "speed";
 
 const PLATFORM_LABELS: Record<AgentPlatform, string> = {
@@ -100,7 +107,7 @@ function ModelItems({
             <DropdownMenuRadioItem
               value={modelKey}
               disabled={disabled || model.description === "Unavailable in the current catalog"}
-              className={cn(MODEL_ROW_HEIGHT_CLASS, "items-start py-2", onToggleFavorite && "pr-9")}
+              className={cn(MODEL_ROW_HEIGHT_CLASS, RADIO_ROW_CLASS, onToggleFavorite && "pr-9")}
             >
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <span className="flex min-w-0 items-center gap-1.5">
@@ -156,7 +163,7 @@ function ReasoningItems({
           key={option.id}
           value={option.id}
           disabled={disabled || !onReasoningChange}
-          className="items-start py-2"
+          className={RADIO_ROW_CLASS}
         >
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
             <span className="truncate text-sm font-medium">{option.label}</span>
@@ -186,6 +193,7 @@ function SpeedItems({
       <DropdownMenuRadioItem
         value="normal"
         disabled={!canChange}
+        className={RADIO_ROW_CLASS}
       >
         <span className="flex min-w-0 flex-col">
           <span>Normal</span>
@@ -195,6 +203,7 @@ function SpeedItems({
       <DropdownMenuRadioItem
         value="fast"
         disabled={!canChange}
+        className={RADIO_ROW_CLASS}
       >
         <span className="flex min-w-0 flex-col">
           <span className="flex items-center gap-1">

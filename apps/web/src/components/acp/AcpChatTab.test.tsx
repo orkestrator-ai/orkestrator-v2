@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import type { AcpApproval, AcpMessageWindow, AcpSessionSnapshot } from "@/lib/acp-client";
 // The merge is pure and is the contract under test in several cases below, so
@@ -113,11 +113,8 @@ const data = {
 };
 
 function getAcpPromptInput(container: ParentNode = document): HTMLElement {
-  const input = container.querySelector<HTMLElement>(
-    '[data-placeholder="Message Cursor Agent"]',
-  );
-  if (!input) throw new Error("Expected the Cursor Agent prompt input");
-  return input;
+  const queryRoot = container instanceof HTMLElement ? container : document.body;
+  return within(queryRoot).getByRole("textbox", { name: "Message Cursor Agent" });
 }
 
 beforeEach(() => {
@@ -199,9 +196,8 @@ describe("AcpChatTab", () => {
     );
 
     const composeBar = await screen.findByTestId("acp-native-compose-bar");
-    expect(
-      composeBar.querySelector('[data-placeholder="Message Grok Build"]'),
-    ).toBeTruthy();
+    expect(within(composeBar).getByRole("textbox", { name: "Message Grok Build" }))
+      .toBeTruthy();
     expect(composeBar.querySelector("[data-native-compose-toolbar]")).toBeTruthy();
   });
 
@@ -337,6 +333,79 @@ describe("AcpChatTab", () => {
     expect(dispatchNativeAgentPrompt).toHaveBeenLastCalledWith(expect.objectContaining({
       requestId: "initial-prompt:environment-1:tab-1",
     }));
+  });
+
+  test("submits Enter but preserves Shift+Enter and IME composition", async () => {
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const composeBar = await screen.findByTestId("acp-native-compose-bar");
+    const compose = getAcpPromptInput(composeBar);
+
+    compose.textContent = "Use a multiline prompt";
+    fireEvent.input(compose);
+
+    const shiftEnter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    compose.dispatchEvent(shiftEnter);
+    expect(shiftEnter.defaultPrevented).toBe(false);
+    expect(dispatchNativeAgentPrompt).not.toHaveBeenCalled();
+
+    const composingEnter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+      isComposing: true,
+    });
+    compose.dispatchEvent(composingEnter);
+    expect(composingEnter.defaultPrevented).toBe(false);
+    expect(dispatchNativeAgentPrompt).not.toHaveBeenCalled();
+
+    const enter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () => {
+      compose.dispatchEvent(enter);
+    });
+    expect(enter.defaultPrevented).toBe(true);
+
+    await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "Use a multiline prompt" }),
+    ));
+  });
+
+  test("locks the composer while a manual dispatch is pending", async () => {
+    let acceptDispatch!: (value: { providerSessionId: string }) => void;
+    dispatchNativeAgentPrompt.mockImplementation(() => new Promise((resolve) => {
+      acceptDispatch = resolve;
+    }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const composeBar = await screen.findByTestId("acp-native-compose-bar");
+    const compose = getAcpPromptInput(composeBar);
+    compose.textContent = "Only dispatch once";
+    fireEvent.input(compose);
+
+    const send = screen.getByTitle("Send") as HTMLButtonElement;
+    fireEvent.click(send);
+    await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalledTimes(1));
+
+    expect(send.disabled).toBe(true);
+    expect(compose.getAttribute("contenteditable")).toBe("false");
+    fireEvent.click(send);
+    fireEvent.keyDown(compose, { key: "Enter" });
+    expect(dispatchNativeAgentPrompt).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      acceptDispatch({ providerSessionId: "persisted-session" });
+    });
+    await waitFor(() => {
+      expect(compose.getAttribute("contenteditable")).toBe("true");
+    });
   });
 
   test("rehydrates approvals, resolves them, and exposes cancellation and bridge errors", async () => {

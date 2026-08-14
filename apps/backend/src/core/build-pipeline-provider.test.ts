@@ -4767,6 +4767,54 @@ describe("HTTP build pipeline provider (codex)", () => {
     ]);
   });
 
+  test("does not hold a Codex transcript behind expired runtime inventory", async () => {
+    let message = "old transcript";
+    let runtimeReads = 0;
+    let releaseRuntime!: () => void;
+    const runtimeGate = new Promise<void>((resolve) => { releaseRuntime = resolve; });
+    const { provider } = httpProvider(async (url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [message] });
+      if (url.endsWith("/config")) {
+        return Response.json({ mode: "build", fastMode: false, durable: true });
+      }
+      if (url.endsWith("/runtime-health")) {
+        runtimeReads += 1;
+        if (runtimeReads > 1) await runtimeGate;
+        return Response.json({
+          engine: { state: runtimeReads > 1 ? "refreshed" : "ready" },
+          mcp: { data: [] },
+          skills: { data: [] },
+          hooks: { data: [] },
+          notices: [],
+        });
+      }
+      return Response.json({ status: "idle", phase: "idle", messageRevision: 1 });
+    }, codexConnection);
+
+    const first = await provider.interactiveSnapshot?.("codex-1");
+    expect(first?.runtime?.state).toBe("ready");
+    const metadata = (provider as unknown as {
+      interactiveMetadata: Map<string, { expiresAt: number }>;
+    }).interactiveMetadata.get("codex-1");
+    expect(metadata).toBeDefined();
+    metadata!.expiresAt = 0;
+    message = "latest transcript";
+
+    const second = await Promise.race([
+      provider.interactiveSnapshot!("codex-1"),
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(() => reject(new Error("Transcript waited for runtime inventory")), 100);
+      }),
+    ]);
+    expect(second.messages).toEqual(["latest transcript"]);
+    expect(second.runtime?.state).toBe("ready");
+    expect(runtimeReads).toBe(2);
+
+    releaseRuntime();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
   test("sends codex attachments as data URLs without claude-only options", async () => {
     const { provider, requests } = httpProvider(
       () => new Response(null, { status: 204 }),

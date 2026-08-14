@@ -17,6 +17,7 @@ import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionSto
 import { getNativeAgentData } from "@/types/paneLayout";
 import { createSessionKey } from "@/lib/utils";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { dispatchResourceChange } from "@/lib/resource-sync";
 
 // Snapshot before installing the stubs so the real modules are restored for
 // any suite that runs after this file in the same module registry.
@@ -265,6 +266,9 @@ function NativeSessionHarness() {
   return (
     <div>
       <output data-testid="hook-session-id">{session.projection?.sessionId}</output>
+      <output data-testid="hook-message">
+        {(session.projection?.messages[0] as NativeMessage | undefined)?.content}
+      </output>
       <button type="button" onClick={() => { void session.refresh(); }}>Refresh</button>
       <button type="button" onClick={() => { void session.resume("session-b"); }}>Resume B</button>
     </div>
@@ -894,6 +898,86 @@ describe("AgentNativeTab", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(screen.getByTestId("hook-session-id").textContent).toBe("session-b");
+  });
+
+  test("hydrates a cached session while its remount adoption probe is still pending", async () => {
+    const sessionKey = createSessionKey("env-1", "tab-hook-race");
+    useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+      ...(await defaultProjection({ agent: "claude", environmentId: "env-1" })),
+      sessionId: "session-a",
+      messages: [{
+        id: "assistant-stale",
+        role: "assistant",
+        content: "stale transcript",
+        parts: [],
+        createdAt: "2026-08-14T10:00:00.000Z",
+      }],
+    });
+    let releaseAdoption!: () => void;
+    adoptNativeAgentSessionMock.mockImplementationOnce(async (input) => {
+      await new Promise<void>((resolve) => { releaseAdoption = resolve; });
+      return {
+        providerSessionId: input.providerSessionId,
+        logicalSessionKey: input.logicalSessionKey,
+        environmentId: input.environmentId,
+        agent: input.agent,
+      };
+    });
+    getNativeAgentProjectionMock.mockImplementationOnce(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      sessionId: "session-a",
+      messages: [{
+        id: "assistant-latest",
+        role: "assistant",
+        content: "latest transcript",
+        parts: [],
+        createdAt: "2026-08-14T10:00:01.000Z",
+      }],
+      revision: 2,
+    }));
+
+    render(<NativeSessionHarness />);
+    expect(screen.getByTestId("hook-message").textContent).toBe("stale transcript");
+    await waitFor(() => expect(screen.getByTestId("hook-message").textContent)
+      .toBe("latest transcript"));
+    expect(adoptNativeAgentSessionMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      releaseAdoption();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  });
+
+  test("coalesces a resource invalidation with a projection read already in flight", async () => {
+    render(<NativeSessionHarness />);
+    await waitFor(() => expect(screen.getByTestId("hook-session-id").textContent)
+      .toBe("claude-session"));
+    const callsBeforeRefresh = getNativeAgentProjectionMock.mock.calls.length;
+    let releaseRefresh!: () => void;
+    getNativeAgentProjectionMock.mockImplementationOnce(async (input) => {
+      await new Promise<void>((resolve) => { releaseRefresh = resolve; });
+      return defaultProjection(input as never);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length)
+      .toBe(callsBeforeRefresh + 1));
+    act(() => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
+      });
+    });
+    await Promise.resolve();
+    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsBeforeRefresh + 1);
+
+    await act(async () => {
+      releaseRefresh();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
   });
 
   test("polls an active tab faster while a turn runs and stops entirely when inactive", async () => {

@@ -124,10 +124,16 @@ export function useNativeAgentSession<TMessage = unknown>({
    * every subsequent read so the window cannot silently collapse.
    */
   const [messageLimit, setMessageLimit] = useState<number | undefined>(undefined);
-  const projectionRef = useRef<NativeAgentSessionProjection<TMessage> | null>(null);
+  // Seed the imperative view from the shared renderer cache. Environment
+  // switches unmount this hook, but the cache survives; using it here lets the
+  // remount start its authoritative transcript read immediately instead of
+  // waiting for a redundant provider-adoption probe first.
+  const projectionRef = useRef<NativeAgentSessionProjection<TMessage> | null>(
+    sharedProjection ?? null,
+  );
   const refreshSequenceRef = useRef(0);
   const projectionOperationEpochRef = useRef(0);
-  const backgroundRefreshInFlightRef = useRef(false);
+  const refreshesInFlightRef = useRef(0);
   const pendingDispatchRef = useRef<{
     prompt: string;
     requestId: string;
@@ -187,10 +193,10 @@ export function useNativeAgentSession<TMessage = unknown>({
   const refresh = useCallback(async (options?: { manual?: boolean }) => {
     if (!enabled) return null;
     const background = options?.manual === false;
-    if (background && backgroundRefreshInFlightRef.current) {
+    if (background && refreshesInFlightRef.current > 0) {
       return projectionRef.current;
     }
-    if (background) backgroundRefreshInFlightRef.current = true;
+    refreshesInFlightRef.current += 1;
     const sequence = ++refreshSequenceRef.current;
     const operationEpoch = projectionOperationEpochRef.current;
     setIsRefreshing(true);
@@ -218,7 +224,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       }
       return null;
     } finally {
-      if (background) backgroundRefreshInFlightRef.current = false;
+      refreshesInFlightRef.current = Math.max(0, refreshesInFlightRef.current - 1);
       if (
         sequence === refreshSequenceRef.current
         && operationEpoch === projectionOperationEpochRef.current
@@ -232,6 +238,16 @@ export function useNativeAgentSession<TMessage = unknown>({
       return null;
     }
     setIsRefreshing(true);
+    const cached = projectionRef.current;
+    const cachedSessionMatches = Boolean(
+      initialProviderSessionId
+      && cached?.platform === platform
+      && cached.sessionId === initialProviderSessionId,
+    );
+    // On an environment remount the durable mapping has already been adopted.
+    // Start the transcript read alongside the liveness/adoption check so the
+    // common path pays the slower operation once, not both in series.
+    const cachedSessionRefresh = cachedSessionMatches ? refresh() : null;
     try {
       if (initialProviderSessionId) {
         try {
@@ -269,6 +285,16 @@ export function useNativeAgentSession<TMessage = unknown>({
       lastInitTimeRef.current = Date.now();
       acknowledgeInitialLaunchOptions();
       setRuntimeError(null);
+      if (cachedSessionRefresh) {
+        const hydrated = await cachedSessionRefresh;
+        if (
+          hydrated?.connection === "connected"
+          && hydrated.platform === platform
+          && hydrated.sessionId === initialProviderSessionId
+        ) {
+          return hydrated;
+        }
+      }
       return await refresh();
     } catch (error) {
       setRuntimeError(error instanceof Error ? error.message : String(error));
@@ -299,10 +325,14 @@ export function useNativeAgentSession<TMessage = unknown>({
   useEffect(() => {
     const unsubscribeChange = onResourceChanged(
       "native-agent-session",
-      ({ id }) => { if (enabled && isActive && id === environmentId) void refresh(); },
+      ({ id }) => {
+        if (enabled && isActive && id === environmentId) {
+          void refresh({ manual: false });
+        }
+      },
     );
     const unsubscribeResync = onResourceResync(() => {
-      if (enabled && isActive) void refresh();
+      if (enabled && isActive) void refresh({ manual: false });
     });
     return () => {
       unsubscribeChange();

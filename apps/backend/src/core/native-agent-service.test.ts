@@ -1086,6 +1086,78 @@ describe("NativeAgentService", () => {
     });
   });
 
+  test("does not hold an updated transcript behind expired discovery metadata", async () => {
+    let now = 1_000;
+    let message = "old transcript";
+    let releaseCatalog!: () => void;
+    let releaseCommands!: () => void;
+    const catalogGate = new Promise<void>((resolve) => { releaseCatalog = resolve; });
+    const commandGate = new Promise<void>((resolve) => { releaseCommands = resolve; });
+    let catalogReads = 0;
+    const invoke: Invoke = async <T>(command: string): Promise<T> => {
+      if (command !== "get_native_agent_model_catalog") {
+        throw new Error(`Unexpected backend command: ${command}`);
+      }
+      catalogReads += 1;
+      if (catalogReads > 1) await catalogGate;
+      return [{ platform: "codex", id: "gpt-old", label: "GPT old" }] as T;
+    };
+    let commandReads = 0;
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [{
+          id: "message-1",
+          role: "assistant",
+          content: message,
+          parts: [],
+          createdAt: "2026-08-14T10:00:00.000Z",
+        }],
+      }),
+      slashCommands: async () => {
+        commandReads += 1;
+        if (commandReads > 1) await commandGate;
+        return [{ name: commandReads > 1 ? "/new" : "/old" }];
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-stale-discovery-",
+      provider: async () => stub.provider,
+      invoke,
+      now: () => now,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-stale-discovery",
+      };
+      await service.ensureSession(identity);
+      await service.getProjection(identity);
+
+      now += 30_001;
+      message = "latest transcript";
+      const projection = await Promise.race([
+        service.getProjection(identity),
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("Transcript waited for discovery metadata")), 100);
+        }),
+      ]);
+
+      expect(projection?.messages).toEqual([
+        expect.objectContaining({ content: "latest transcript" }),
+      ]);
+      expect(projection?.composer?.models).toEqual([
+        expect.objectContaining({ id: "gpt-old" }),
+      ]);
+      expect(projection?.slashCommands?.map((command) => command.name))
+        .toEqual(["/old", "/steer"]);
+
+      releaseCatalog();
+      releaseCommands();
+      await waitForCondition(() => catalogReads === 2 && commandReads === 2);
+    });
+  });
+
   test("advertises runtime session-action commands beside provider discovery", async () => {
     const stub = createProviderStub("codex", {
       interactiveSnapshot: async () => ({ status: "idle", messages: [] }),

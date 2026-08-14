@@ -81,6 +81,7 @@ import {
   firstEnabledAgentPlatform,
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
+import type { AgentModel } from "@orkestrator/protocol/native-agent";
 
 // Stable empty array reference to prevent infinite re-renders when no default port mappings are provided
 const EMPTY_PORT_MAPPINGS: PortMapping[] = [];
@@ -708,6 +709,26 @@ export function CreateEnvironmentDialog({
     [availableModels, reasoningEffort],
   );
 
+  const selectAgentModel = useCallback(
+    (nextModel: AgentModel) => {
+      const targetModels = modelsForAgent(modelCatalog, nextModel.platform);
+      const supportedEfforts =
+        targetModels.find((candidate) => candidate.id === nextModel.id)?.reasoningEfforts ?? [];
+      const nextReasoningEffort = nextModel.platform === agentType
+        ? reasoningEffort
+        : getInitialAgentSelection(nextModel.platform).reasoningEffort;
+
+      setAgentType(nextModel.platform);
+      setModel(nextModel.id);
+      setReasoningEffort(
+        nextReasoningEffort !== "default" && supportedEfforts.includes(nextReasoningEffort)
+          ? nextReasoningEffort
+          : "default",
+      );
+    },
+    [agentType, getInitialAgentSelection, modelCatalog, reasoningEffort],
+  );
+
   const selectMobileSection = useCallback(
     (nextSection: MobileSection) => {
       if (nextSection === mobileSection) return;
@@ -1126,6 +1147,7 @@ export function CreateEnvironmentDialog({
                 selectedModelId={model}
                 selectedModelLabel={selectedModel?.name ?? "Select model"}
                 onModelChange={selectModel}
+                onModelSelect={selectAgentModel}
                 reasoningOptions={reasoningOptions}
                 selectedReasoningId={reasoningEffort}
                 selectedReasoningLabel={

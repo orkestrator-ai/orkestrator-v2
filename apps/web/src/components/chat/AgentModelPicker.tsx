@@ -27,6 +27,7 @@ interface AgentModelPickerProps {
   favorites?: AgentModelRef[];
   onPlatformChange?: (platform: AgentPlatform) => void;
   onToggleFavorite?: (model: AgentModel) => void;
+  onModelSelect?: (model: AgentModel) => void;
   selectedModelId?: string;
   selectedModelLabel: string;
   onModelChange: (modelId: string) => void;
@@ -64,13 +65,14 @@ function ModelItems({
   selectedPlatform,
   disabled,
   onModelChange,
+  onModelSelect,
   onPlatformChange,
   emptyLabel = "No models available",
   favorites = [],
   onToggleFavorite,
 }: Pick<
   AgentModelPickerProps,
-  "models" | "selectedModelId" | "selectedPlatform" | "disabled" | "onModelChange" | "onPlatformChange" | "favorites" | "onToggleFavorite"
+  "models" | "selectedModelId" | "selectedPlatform" | "disabled" | "onModelChange" | "onModelSelect" | "onPlatformChange" | "favorites" | "onToggleFavorite"
 > & { emptyLabel?: string }) {
   const favoriteKeys = new Set(favorites.map((favorite) => `${favorite.platform}:${favorite.modelId}`));
   const selectedModelKey = selectedModelId
@@ -88,6 +90,10 @@ function ModelItems({
           (candidate) => `${candidate.platform}:${candidate.id}` === modelKey,
         );
         if (!model) return;
+        if (onModelSelect) {
+          onModelSelect(model);
+          return;
+        }
         onPlatformChange?.(model.platform);
         onModelChange(model.id);
       }}
@@ -220,6 +226,7 @@ export function AgentModelPicker({
   favorites = [],
   onPlatformChange,
   onToggleFavorite,
+  onModelSelect,
   selectedModelId,
   selectedModelLabel,
   onModelChange,
@@ -550,6 +557,7 @@ export function AgentModelPicker({
                 selectedPlatform={selectedPlatform}
                 disabled={disabled}
                 onModelChange={onModelChange}
+                onModelSelect={onModelSelect}
                 onPlatformChange={onPlatformChange}
                 emptyLabel={normalizedSearch ? "No matches" : "No models available"}
                 favorites={favorites}
@@ -695,6 +703,7 @@ export function AgentModelPicker({
                   selectedPlatform={selectedPlatform}
                   disabled={disabled}
                   onModelChange={onModelChange}
+                  onModelSelect={onModelSelect}
                   onPlatformChange={onPlatformChange}
                   emptyLabel={models.length > 0 ? "No matches" : "No models available"}
                   favorites={favorites}

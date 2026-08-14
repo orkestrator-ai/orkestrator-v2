@@ -1184,6 +1184,75 @@ describe("resolveAgentDefaults", () => {
     expect(options[1]?.textContent).toContain("Model A");
   });
 
+  test("preserves the target agent effort when selecting a cross-platform favorite", async () => {
+    useOpenCodeStore.setState({
+      models: new Map([
+        ["existing-env", [{
+          id: "provider/source",
+          name: "OpenCode Source",
+          provider: "Provider",
+          variants: ["deep"],
+        }]],
+      ]),
+    });
+    useCodexStore.setState({
+      models: [{
+        id: "codex-favorite",
+        name: "Codex Favorite",
+        description: "Favorite",
+        reasoningEfforts: ["high"],
+      }],
+    });
+    const config = structuredClone(defaultConfig);
+    config.global.defaultAgent = "opencode";
+    config.global.opencodeModel = "provider/source";
+    config.global.codexModel = "codex-favorite";
+    config.global.codexReasoningEffort = "high";
+    config.global.favoriteModels = [{ platform: "codex", modelId: "codex-favorite" }];
+    config.repositories["cross-platform"] = {
+      defaultBranch: "main",
+      prBaseBranch: "main",
+      defaultAgent: "opencode",
+      defaultModel: "provider/source",
+      defaultEffort: "deep",
+    };
+    useConfigStore.setState({ config });
+    const onCreate = mock(async () => {});
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+        projectId="cross-platform"
+      />,
+    );
+
+    expect(getAgentModelPicker().textContent).toContain("OpenCode Source");
+    expect(getAgentModelPicker().textContent).toContain("Deep");
+    openAgentModelPicker();
+    fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
+    fireEvent.click(
+      await screen.findByRole("menuitemradio", { name: /Codex Favorite/ }),
+    );
+
+    await waitFor(() => {
+      expect(getAgentModelPicker().textContent).toContain("Codex Favorite");
+      expect(getAgentModelPicker().textContent).toContain("High");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentType: "codex",
+          model: "codex-favorite",
+          reasoningEffort: "high",
+        }),
+      );
+    });
+  });
+
   test("prefers a live OpenCode catalog over the durable project cache", async () => {
     useOpenCodeStore.setState({
       models: new Map([

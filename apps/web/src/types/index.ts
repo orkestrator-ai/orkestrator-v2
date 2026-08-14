@@ -485,6 +485,12 @@ export interface GlobalConfig {
   codexReasoningEffort: CodexReasoningEffortPreference;
   /** OpenCode mode - terminal CLI or native chat interface */
   opencodeMode: OpenCodeMode;
+  /**
+   * OpenCode provider catalogues offered in model pickers. The backend filters
+   * against this before the catalogue is sent to the renderer. An empty list
+   * means unrestricted (every provider OpenCode advertises).
+   */
+  openCodeModelProviders?: string[];
   /** Claude mode - terminal CLI or native chat interface */
   claudeMode: ClaudeMode;
   /** Default backend used when Claude mode is "native" (sdk or tmux) */

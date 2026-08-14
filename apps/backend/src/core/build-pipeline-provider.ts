@@ -48,7 +48,13 @@ import type {
   NativeAgentSlashCommand,
   NativeAgentTurnPhase,
 } from "@orkestrator/protocol/native-agent";
-import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
+import {
+  DEFAULT_OPENCODE_MODEL_PROVIDERS,
+  EMPTY_NATIVE_AGENT_COMPOSER_STATE,
+  isSelectableOpenCodeModelId,
+  isSelectableOpenCodeProvider,
+  normalizeOpenCodeModelProviders,
+} from "@orkestrator/protocol/native-agent";
 import {
   parseLeadingSlashCommand,
   type ParsedSlashCommand,
@@ -562,6 +568,15 @@ export type ProviderDependencies = {
   onInteractionObservation?: (
     event: ProviderInteractionObservationEvent,
   ) => void | Promise<void>;
+  /**
+   * Resolve the OpenCode provider allowlist for the model catalogue. Filtering
+   * happens here, in the backend, so the renderer is never sent the thousands
+   * of models OpenCode advertises. Omitted means the default managed pair.
+   */
+  resolveOpenCodeModelProviders?: () =>
+    | readonly string[]
+    | undefined
+    | Promise<readonly string[] | undefined>;
 };
 
 const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 30_000;
@@ -683,7 +698,10 @@ function openCodeCatalogDefault(value: unknown): {
   };
 }
 
-function normalizeOpenCodeComposerCatalog(value: unknown): {
+function normalizeOpenCodeComposerCatalog(
+  value: unknown,
+  allowedProviders: readonly string[] = DEFAULT_OPENCODE_MODEL_PROVIDERS,
+): {
   models: AgentModel[];
   selectedModelId?: string;
   selectedReasoningId?: string;
@@ -692,6 +710,11 @@ function normalizeOpenCodeComposerCatalog(value: unknown): {
   for (const provider of openCodeCatalogProviders(value).slice(0, 128)) {
     const providerId = nonEmptyString(provider.id);
     if (!providerId) continue;
+    // Reject the provider before its models are walked. OpenCode advertises
+    // thousands of models across every provider it knows about, and the 512
+    // cap below is reached long before the managed catalogues are seen if the
+    // unselectable ones are allowed to consume the budget.
+    if (!isSelectableOpenCodeProvider(providerId, allowedProviders)) continue;
     for (const model of openCodeProviderModels(provider.models).slice(0, 512)) {
       const localId = nonEmptyString(model.id);
       if (!localId) continue;
@@ -738,10 +761,17 @@ function normalizeOpenCodeComposerCatalog(value: unknown): {
     if (models.length >= 512) break;
   }
   const defaults = openCodeCatalogDefault(value);
+  // OpenCode's own default may name a provider the user excluded. Surfacing it
+  // would pre-select a model the picker cannot show, so it is dropped with the
+  // rest of that provider's catalogue.
+  const selectedModelId = defaults.modelId
+    && isSelectableOpenCodeModelId(defaults.modelId, allowedProviders)
+    ? defaults.modelId
+    : undefined;
   return {
     models,
-    ...(defaults.modelId ? { selectedModelId: defaults.modelId } : {}),
-    ...(defaults.reasoningId
+    ...(selectedModelId ? { selectedModelId } : {}),
+    ...(selectedModelId && defaults.reasoningId
       ? { selectedReasoningId: defaults.reasoningId }
       : {}),
   };
@@ -3356,6 +3386,9 @@ class OpenCodeProvider implements BuildPipelineProvider {
   }>();
   private catalogMetadata: {
     expiresAt: number;
+    /** The allowlist this catalogue was filtered against; a settings edit
+     * changes it and must not be served a stale, differently-filtered list. */
+    providersKey: string;
     catalog: ReturnType<typeof normalizeOpenCodeComposerCatalog>;
   } | null = null;
   private commandNames: { names: Set<string>; expiresAt: number } | null = null;
@@ -3376,6 +3409,10 @@ class OpenCodeProvider implements BuildPipelineProvider {
   private readonly onInteractionObservation?: (
     event: ProviderInteractionObservationEvent,
   ) => void | Promise<void>;
+  private readonly resolveOpenCodeModelProviders?: () =>
+    | readonly string[]
+    | undefined
+    | Promise<readonly string[] | undefined>;
 
   constructor(
     private readonly connection: BridgeConnection,
@@ -3405,6 +3442,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
     );
     this.autoAnswerRequests = dependencies.autoAnswerRequests === true;
     this.onInteractionObservation = dependencies.onInteractionObservation;
+    this.resolveOpenCodeModelProviders = dependencies.resolveOpenCodeModelProviders;
     // An interactive provider has nothing to monitor: every request belongs to a
     // tab that will answer it. Subscribing anyway would open a permanent event
     // stream per provider for no consumer.
@@ -3449,7 +3487,13 @@ class OpenCodeProvider implements BuildPipelineProvider {
   private async readComposerCatalog(): Promise<
     ReturnType<typeof normalizeOpenCodeComposerCatalog>
   > {
-    if (this.catalogMetadata && this.catalogMetadata.expiresAt > Date.now()) {
+    const allowedProviders = await this.openCodeModelProviders();
+    const providersKey = allowedProviders.join(",");
+    if (
+      this.catalogMetadata
+      && this.catalogMetadata.expiresAt > Date.now()
+      && this.catalogMetadata.providersKey === providersKey
+    ) {
       return this.catalogMetadata.catalog;
     }
     const [providerResult, fallbackResult] = await Promise.allSettled([
@@ -3458,15 +3502,39 @@ class OpenCodeProvider implements BuildPipelineProvider {
     ]);
     const payload = (result: PromiseSettledResult<unknown>): unknown =>
       result.status === "fulfilled" ? asRecord(result.value)?.data ?? {} : {};
-    const live = normalizeOpenCodeComposerCatalog(payload(providerResult));
+    const live = normalizeOpenCodeComposerCatalog(
+      payload(providerResult),
+      allowedProviders,
+    );
     const catalog = live.models.length > 0
       ? live
-      : normalizeOpenCodeComposerCatalog(payload(fallbackResult));
+      : normalizeOpenCodeComposerCatalog(
+          payload(fallbackResult),
+          allowedProviders,
+        );
     this.catalogMetadata = {
       expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+      providersKey,
       catalog,
     };
     return catalog;
+  }
+
+  /**
+   * The configured allowlist, or the managed default when config is
+   * unavailable. A failed read must not widen the catalogue to every provider.
+   */
+  private async openCodeModelProviders(): Promise<readonly string[]> {
+    if (!this.resolveOpenCodeModelProviders) {
+      return DEFAULT_OPENCODE_MODEL_PROVIDERS;
+    }
+    try {
+      return normalizeOpenCodeModelProviders(
+        await this.resolveOpenCodeModelProviders(),
+      );
+    } catch {
+      return DEFAULT_OPENCODE_MODEL_PROVIDERS;
+    }
   }
 
   async modelCatalog(): Promise<AgentModel[]> {

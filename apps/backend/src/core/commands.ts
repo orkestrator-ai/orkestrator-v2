@@ -189,6 +189,11 @@ import type {
   NativeAgentControlUpdate,
   NativeAgentSessionAction,
 } from "@orkestrator/protocol/native-agent";
+import {
+  isSelectableOpenCodeModelId,
+  isSelectableOpenCodeProvider,
+  normalizeOpenCodeModelProviders,
+} from "@orkestrator/protocol/native-agent";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import { isTabTeardownKind } from "@orkestrator/protocol/tab-teardown";
 import {
@@ -9813,20 +9818,30 @@ export function createCommandRegistry(
       ?? cache.claude?.models
       ?? [];
     const codexModels = cache.codex?.models ?? [];
-    const openCodeModels = (await storage.getOpenCodeModelCatalog(environment.projectId))
-      ?.models ?? [];
+    // The live catalogue is already filtered by the provider, but a cache
+    // written before the allowlist changed is not. Filter here too so the
+    // renderer never receives a provider the user excluded.
+    const openCodeModelProviders = normalizeOpenCodeModelProviders(
+      (await storage.loadConfig()).global.openCodeModelProviders,
+    );
+    const openCodeModels = ((await storage.getOpenCodeModelCatalog(environment.projectId))
+      ?.models ?? []).filter((model) =>
+        isSelectableOpenCodeProvider(model.provider, openCodeModelProviders)
+      );
     const runningOpenCodeBridge = environment.environmentType === "local"
       ? await peekLocalAgentBridge(environment.id, context, "opencode")
       : environment.containerId
         ? await peekContainerAgentBridge(environment.containerId, "opencode")
         : null;
-    const liveOpenCodeModels = context.nativeAgents && runningOpenCodeBridge
+    const liveOpenCodeModels = (context.nativeAgents && runningOpenCodeBridge
       ? await context.nativeAgents.listProjectionModels({
           environmentId: id,
           agent: "opencode",
           logicalSessionKey: `model-catalog:${id}`,
         }).catch(() => [])
-      : [];
+      : []).filter((model) =>
+        isSelectableOpenCodeModelId(model.id, openCodeModelProviders)
+      );
     if (liveOpenCodeModels.length > 0) {
       await storage.cacheOpenCodeModelCatalog(
         environment.projectId,
@@ -10994,11 +11009,24 @@ export function createCommandRegistry(
     if (!await pathExists(modelPath)) return { recent: [], favorite: [], variant: {} };
     return JSON.parse(await fs.readFile(modelPath, "utf8"));
   });
-  register("get_opencode_model_catalog_cache", (args, { storage }) => {
+  register("get_opencode_model_catalog_cache", async (args, { storage }) => {
     assertOnlyKeys(args, ["projectId"], "arguments");
-    return storage.getOpenCodeModelCatalog(
+    const snapshot = await storage.getOpenCodeModelCatalog(
       asNonBlankString(args.projectId, "projectId"),
     );
+    if (!snapshot) return snapshot;
+    // A cache written before the allowlist changed still holds the providers
+    // the user has since excluded. Filter on read so the launch dialogs get
+    // the same catalogue as the chat picker.
+    const allowedProviders = normalizeOpenCodeModelProviders(
+      (await storage.loadConfig()).global.openCodeModelProviders,
+    );
+    return {
+      ...snapshot,
+      models: snapshot.models.filter((model) =>
+        isSelectableOpenCodeProvider(model.provider, allowedProviders)
+      ),
+    };
   });
   register("cache_opencode_model_catalog", (args, { storage }) => {
     assertOnlyKeys(args, ["projectId", "models"], "arguments");

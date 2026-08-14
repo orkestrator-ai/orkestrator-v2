@@ -67,6 +67,10 @@ import {
 } from "@orkestrator/protocol/resource-events";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import {
+  DEFAULT_OPENCODE_MODEL_PROVIDERS,
+  normalizeOpenCodeModelProviders,
+} from "@orkestrator/protocol/native-agent";
+import {
   DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
   isValidCodexMaxConcurrentThreads,
   MAX_CODEX_CONCURRENT_THREADS,
@@ -1573,12 +1577,20 @@ function normalizePersistedConfig(config: AppConfig): AppConfig {
         ) === index
       )
     : [];
+  // An absent list is the pre-existing install migrating onto the managed
+  // default pair; an explicitly empty one is the user opting into every
+  // provider and must survive normalization.
+  const openCodeModelProviders = normalizeOpenCodeModelProviders(
+    global.openCodeModelProviders,
+  );
   if (
     global.codexMaxConcurrentThreads === codexMaxConcurrentThreads
     && global.useHostGitHubCredentials === useHostGitHubCredentials
     && JSON.stringify(global.enabledAgentPlatforms) === JSON.stringify(enabledAgentPlatforms)
     && global.defaultAgent === defaultAgent
     && JSON.stringify(global.favoriteModels ?? []) === JSON.stringify(favoriteModels)
+    && JSON.stringify(global.openCodeModelProviders)
+      === JSON.stringify(openCodeModelProviders)
   ) {
     return reviewInstructionSanitized;
   }
@@ -1592,6 +1604,7 @@ function normalizePersistedConfig(config: AppConfig): AppConfig {
       enabledAgentPlatforms,
       defaultAgent,
       favoriteModels,
+      openCodeModelProviders,
     } as unknown as AppConfig["global"],
   };
 }
@@ -1652,6 +1665,7 @@ export function defaultConfig(): AppConfig {
       codexModel: "gpt-5.4",
       codexReasoningEffort: "medium",
       opencodeMode: "terminal",
+      openCodeModelProviders: [...DEFAULT_OPENCODE_MODEL_PROVIDERS],
       claudeMode: "terminal",
       claudeNativeBackend: "sdk",
       claudeNativeFastModeDefault: false,

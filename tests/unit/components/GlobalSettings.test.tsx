@@ -794,6 +794,110 @@ describe("GlobalSettings", () => {
     expect(mockOpenInBrowser).toHaveBeenCalledWith("http://100.88.12.3:34121/");
   });
 
+  describe("OpenCode model providers", () => {
+    const providerItems = () =>
+      screen.getAllByRole("button", { name: /^Remove .* provider$/ })
+        .map((button) =>
+          button.closest("li")?.querySelector("span")?.textContent ?? ""
+        );
+
+    test("defaults to the two managed provider catalogues", () => {
+      render(<GlobalSettings activeSection="opencode" />);
+
+      expect(providerItems()).toEqual(["opencode", "opencode-go"]);
+      // Nothing is dirty yet, so the section must not offer a reset.
+      expect(screen.queryByRole("button", { name: "Reset to defaults" })).toBeNull();
+    });
+
+    test("adds a provider and saves the widened list", async () => {
+      render(<GlobalSettings activeSection="opencode" />);
+
+      fireEvent.change(screen.getByLabelText("Add a provider"), {
+        target: { value: "OpenRouter" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+      // Ids are stored lowercased so a stray capital cannot select nothing.
+      expect(providerItems()).toEqual(["opencode", "opencode-go", "openrouter"]);
+      fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+      await waitFor(() => {
+        expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+          expect.objectContaining({
+            openCodeModelProviders: ["opencode", "opencode-go", "openrouter"],
+          }),
+        );
+      });
+    });
+
+    test("removes a provider and saves the narrowed list", async () => {
+      render(<GlobalSettings activeSection="opencode" />);
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Remove opencode-go provider" }),
+      );
+      expect(providerItems()).toEqual(["opencode"]);
+      fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+      await waitFor(() => {
+        expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+          expect.objectContaining({ openCodeModelProviders: ["opencode"] }),
+        );
+      });
+    });
+
+    test("rejects a duplicate, a blank, and a pasted model id", () => {
+      render(<GlobalSettings activeSection="opencode" />);
+      const input = screen.getByLabelText("Add a provider");
+      const addButton = () =>
+        screen.getByRole("button", { name: "Add" }) as HTMLButtonElement;
+
+      expect(addButton().disabled).toBe(true);
+
+      fireEvent.change(input, { target: { value: "opencode" } });
+      expect(screen.getByText("That provider is already in the list.")).toBeTruthy();
+      expect(addButton().disabled).toBe(true);
+
+      // A whole model id would silently match no provider.
+      fireEvent.change(input, { target: { value: "opencode/claude-sonnet-5" } });
+      expect(screen.getByText(/Use the provider id/)).toBeTruthy();
+      expect(addButton().disabled).toBe(true);
+
+      fireEvent.change(input, { target: { value: "   " } });
+      expect(addButton().disabled).toBe(true);
+    });
+
+    test("warns that clearing every provider offers the whole catalogue", async () => {
+      render(<GlobalSettings activeSection="opencode" />);
+
+      for (const provider of ["opencode", "opencode-go"]) {
+        fireEvent.click(
+          screen.getByRole("button", { name: `Remove ${provider} provider` }),
+        );
+      }
+
+      expect(screen.getByText(/every provider OpenCode advertises/)).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+      await waitFor(() => {
+        expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+          expect.objectContaining({ openCodeModelProviders: [] }),
+        );
+      });
+    });
+
+    test("restores the managed defaults after an edit", () => {
+      render(<GlobalSettings activeSection="opencode" />);
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Remove opencode provider" }),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Reset to defaults" }));
+
+      expect(providerItems()).toEqual(["opencode", "opencode-go"]);
+    });
+  });
+
   test("renders every settings section", () => {
     const { rerender } = render(<GlobalSettings activeSection="general" />);
     expect(screen.getByText("Preferred Editor")).toBeTruthy();

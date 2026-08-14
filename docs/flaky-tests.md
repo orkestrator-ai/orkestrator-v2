@@ -10,6 +10,42 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `Electron tmux backend command registration` — three lifecycle tests (`tests/unit/electron/tmux-backend.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Affected tests:** `serializes stop behind an in-flight start so no tmux session is orphaned` (2,010.43 ms), `keeps per-environment hook state under the shared runtime root and removes it on stop` (154.62 ms), and `environment teardown kills live sessions, restores settings and removes the runtime root` (1,469.94 ms).
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-full-tests-2.log`
+- **Worker configuration:** the root and agent-support group ran `bun test ./tests ./e2e/agent-testing ./apps/desktop/electron ./apps/desktop/scripts/dev --parallel` while the workspace, bridge, and protocol-lockfile groups ran concurrently.
+- **Failure:** all three failed as `error: timed out waiting for condition` from the file's own `waitFor` helper (`tmux-backend.test.ts:830`), reached through `withFakeTmuxRuntime`. The surrounding output also shows the fake runtime's `claude` shim missing during a probe: `ENOENT ... /T/ork-tmux-runtime-rXh3aJ/bin/claude`.
+- **Suite counts:** root and agent-support group: 3 failed; the workspace, bridge, and protocol-lockfile groups all passed in the same run.
+- **Isolated rerun:** `bun test tests/unit/electron/tmux-backend.test.ts` -> 173 passed, 0 failed.
+- **Pre-existing:** unrelated to the OpenCode provider-filter change, which touches no tmux, PTY, or runtime-root code. These three did not fail in the immediately preceding full run of the same tree, which failed a different pair of tests instead; the group's failures move between runs.
+- **Hypothesis:** the three failures share `withFakeTmuxRuntime`, which builds a temporary runtime root with executable shims and waits on real spawn/kill transitions. The `ENOENT` on the shim path suggests the fake runtime was torn down or not fully written while another test in the same worker was still probing it, so the awaited condition never became true. Whether the shared temp-root lifecycle is worker-safe should be established before any timeout is raised.
+
+## `MobileAppShellLayout > opens the project drawer on initial mobile entry and keeps workspace content mounted` (`apps/web/src/components/layout/MobileAppShellLayout.test.tsx`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-full-tests.log`
+- **Worker configuration:** the web workspace package ran `bun test src --parallel` while the remaining workspace, root, bridge, and protocol-lockfile groups ran concurrently.
+- **Failure:** `this test timed out after 5000ms` (duration: 5,701.98 ms). No assertion failed; the test never reached one. Every other test in the owning file passed in the same aggregate run, including the adjacent `toggles the project drawer closed with a second menu-button tap` at 17.51 ms.
+- **Suite counts:** workspace group failed with this plus one deterministic `tests/unit/electron/commands-registry-coverage.test.ts` failure that the OpenCode provider-filter change intentionally updated. The root and agent-support group reported 2,372 passed, 11 skipped, 0 failed.
+- **Isolated rerun:** `bun test --cwd apps/web src/components/layout/MobileAppShellLayout.test.tsx` -> 23 passed, 0 failed.
+- **Hypothesis:** this is the only test in the file that waits on the initial mobile-entry drawer animation and the workspace-content mount together, so it holds the longest asynchronous wait in the file. Under aggregate scheduling that combined wait can exceed the 5 s default while the same work completes in ~10 ms in isolation. Nothing in the failure indicates an incorrect drawer or mount result. The wait should be tied to an explicit readiness signal rather than the default timeout before the timeout is raised.
+
+## `MultiReviewService > keeps a provider alive while a transcript read overlaps fix execution` (`apps/backend/src/core/multi-review-service.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun test --cwd apps/backend src/core --parallel 2>&1 | tee /tmp/ork-be-core-tests.log`
+- **Worker configuration:** the backend `src/core` directory ran as a single `bun test --parallel` group (49 files) with no other group running concurrently.
+- **Failure:** `expect(received).toBe(expected)` at `multi-review-service.test.ts:278` — expected `2` dispose calls, received `1` (duration: 217.80 ms). The preceding assertion at line 274 (`disposeCalls === disposalsAfterReady`) had already passed.
+- **Suite counts:** backend `src/core`: 1,590 total, 1,588 passed, 2 failed across 49 files. The other failure was a deterministic assertion in `commands-state-sync.test.ts` that the OpenCode provider-filter change intentionally updated, and is unrelated to this entry.
+- **Isolated rerun:** `bun test --cwd apps/backend src/core/multi-review-service.test.ts` -> 32 passed, 0 failed.
+- **Pre-existing:** confirmed independent of the OpenCode provider-filter change. The working tree was stashed and the same parallel command rerun on the clean checkout: 1,584 passed, 1 failed, failing on this same test at the same assertion (215.41 ms). It also reproduces on every parallel run of this group rather than intermittently, so within this group it is deterministic; it is recorded here because the owning file passes alone.
+- **Hypothesis:** the test releases the blocked status call, polls `snapshot(started.id)` until `phase === "completed"`, and then immediately asserts the final dispose count. Reaching the completed phase and running the provider's teardown appear to be separate awaits, so under parallel scheduling the assertion can observe the phase transition before the release-path disposal has run. The failure is a timing boundary in the test's completion signal, not evidence of a leaked provider; the durable phase is already correct when it fires. An explicit wait on the dispose count (or an instrumented teardown signal) should be evaluated before changing the service's disposal ordering.
+
 ## `StorageService prompt queues > live lease timer restores and announces a sole claimed head` (`apps/backend/src/core/storage-prompt-queues.test.ts`)
 
 - **Status:** open

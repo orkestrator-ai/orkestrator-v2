@@ -3703,6 +3703,11 @@ export class NativeAgentService {
       autoAnswerRequests: false,
       stageImages: (images) =>
         this.stageImages(input.environmentId, images),
+      // Read per call rather than per provider: providers are cached for the
+      // life of a bridge connection, so a settings edit would otherwise not
+      // reach the catalogue until the environment restarted.
+      resolveOpenCodeModelProviders: async () =>
+        (await this.storage.loadConfig()).global.openCodeModelProviders,
     });
     this.cacheProvider(cacheKey, provider, connectionIdentity);
     return provider;

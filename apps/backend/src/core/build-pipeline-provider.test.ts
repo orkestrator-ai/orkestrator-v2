@@ -2369,7 +2369,7 @@ function openCodeActivityProvider(
   fake: OpenCodeFake,
   dependencies: Pick<
     ProviderDependencies,
-    "now" | "openCodeExistenceCacheTtlMs"
+    "now" | "openCodeExistenceCacheTtlMs" | "resolveOpenCodeModelProviders"
   > = {},
 ) {
   return createBuildPipelineProvider(
@@ -3867,8 +3867,8 @@ describe("OpenCode build pipeline provider", () => {
     const providerList = mock(async () => ({
       data: {
         providers: [{
-          id: "anthropic",
-          name: "Anthropic",
+          id: "opencode",
+          name: "OpenCode",
           models: {
             "claude-sonnet": {
               name: "Claude Sonnet",
@@ -3882,7 +3882,7 @@ describe("OpenCode build pipeline provider", () => {
           },
         }],
         default: {
-          providerID: "anthropic",
+          providerID: "opencode",
           modelID: "claude-sonnet",
           variant: "high",
         },
@@ -3901,9 +3901,9 @@ describe("OpenCode build pipeline provider", () => {
     try {
       await expect(provider.modelCatalog?.()).resolves.toEqual([{
         platform: "opencode",
-        id: "anthropic/claude-sonnet",
+        id: "opencode/claude-sonnet",
         label: "Claude Sonnet",
-        providerLabel: "Anthropic",
+        providerLabel: "OpenCode",
         reasoning: [
           { id: "default", label: "Default" },
           { id: "high", label: "High" },
@@ -3919,10 +3919,10 @@ describe("OpenCode build pipeline provider", () => {
         title: "Shared investigation",
         shareUrl: "https://share.opencode.test/live",
         composer: {
-          selectedModelId: "anthropic/claude-sonnet",
+          selectedModelId: "opencode/claude-sonnet",
           selectedReasoningId: "high",
           models: [{
-            id: "anthropic/claude-sonnet",
+            id: "opencode/claude-sonnet",
             contextWindow: 200_000,
             supportsImageInput: true,
           }],
@@ -3930,6 +3930,137 @@ describe("OpenCode build pipeline provider", () => {
       });
       await provider.modelCatalog?.();
       expect(providerList).toHaveBeenCalledTimes(1);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  /** A catalogue whose unmanaged providers alone exceed the 512-model cap. */
+  const crowdedOpenCodeCatalog = () => ({
+    data: {
+      providers: [
+        {
+          id: "hpc-ai",
+          name: "HPC-AI",
+          models: Object.fromEntries(
+            Array.from({ length: 600 }, (_unused, index) => [
+              `flood-${index}`,
+              { name: `Flood ${index}` },
+            ]),
+          ),
+        },
+        {
+          id: "openrouter",
+          name: "OpenRouter",
+          models: { "kimi-k2.5": { name: "Kimi K2.5" } },
+        },
+        {
+          id: "opencode",
+          name: "OpenCode",
+          models: { "claude-sonnet-5": { name: "Claude Sonnet 5" } },
+        },
+        {
+          id: "opencode-go",
+          name: "OpenCode Go",
+          models: { "grok-code": { name: "Grok Code" } },
+        },
+      ],
+      default: { providerID: "hpc-ai", modelID: "flood-0" },
+    },
+  });
+
+  test("excludes unmanaged providers before the model cap can hide the managed ones", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: { list: mock(async () => crowdedOpenCodeCatalog()) },
+    });
+    // The unmanaged provider is listed first and alone exceeds the 512-model
+    // budget, so filtering after truncation would return nothing selectable.
+    const provider = openCodeActivityProvider(fake);
+    try {
+      const models = await provider.modelCatalog?.();
+      expect(models?.map((model) => model.id)).toEqual([
+        "opencode/claude-sonnet-5",
+        "opencode-go/grok-code",
+      ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("drops an OpenCode default that names an excluded provider", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: { list: mock(async () => crowdedOpenCodeCatalog()) },
+    });
+    fake.setSessionGetResponse("owned-session", {
+      data: { id: "owned-session", directory: "/workspace" },
+    });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      const snapshot = await provider.interactiveSnapshot?.("owned-session");
+      // Pre-selecting `hpc-ai/flood-0` would name a model the picker cannot show.
+      expect(snapshot?.composer?.selectedModelId).toBeUndefined();
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("honours a configured allowlist and re-filters when it changes", async () => {
+    const fake = openCodeFake();
+    const providerList = mock(async () => crowdedOpenCodeCatalog());
+    Object.assign(fake.client as object, { provider: { list: providerList } });
+    let allowed: string[] = ["openrouter"];
+    const provider = openCodeActivityProvider(fake, {
+      resolveOpenCodeModelProviders: () => allowed,
+    });
+    try {
+      await expect(provider.modelCatalog?.()).resolves.toEqual([
+        expect.objectContaining({ id: "openrouter/kimi-k2.5" }),
+      ]);
+      // A settings edit must not be served the previously cached catalogue.
+      allowed = ["opencode-go"];
+      await expect(provider.modelCatalog?.()).resolves.toEqual([
+        expect.objectContaining({ id: "opencode-go/grok-code" }),
+      ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("treats an empty allowlist as unrestricted", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: { list: mock(async () => crowdedOpenCodeCatalog()) },
+    });
+    const provider = openCodeActivityProvider(fake, {
+      resolveOpenCodeModelProviders: () => [],
+    });
+    try {
+      const models = await provider.modelCatalog?.();
+      expect(models?.some((model) => model.id.startsWith("hpc-ai/"))).toBe(true);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("falls back to the managed default when the allowlist cannot be read", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: { list: mock(async () => crowdedOpenCodeCatalog()) },
+    });
+    // A failed config read must not widen the catalogue to every provider.
+    const provider = openCodeActivityProvider(fake, {
+      resolveOpenCodeModelProviders: () => {
+        throw new Error("config unavailable");
+      },
+    });
+    try {
+      const models = await provider.modelCatalog?.();
+      expect(models?.map((model) => model.id)).toEqual([
+        "opencode/claude-sonnet-5",
+        "opencode-go/grok-code",
+      ]);
     } finally {
       await provider.dispose?.();
     }

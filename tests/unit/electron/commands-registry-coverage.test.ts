@@ -357,7 +357,11 @@ describe("direct backend command registry coverage", () => {
       projectId: "project-1",
       catalogVersion: "v1",
       updatedAt: "2026-07-29T00:00:00.000Z",
-      models: [{ id: "opencode/cached", name: "Cached", provider: "opencode" }],
+      models: [
+        { id: "opencode/cached", name: "Cached", provider: "opencode" },
+        // Excluded by the default allowlist, so the read must drop it.
+        { id: "hpc-ai/flood", name: "Flood", provider: "hpc-ai" },
+      ],
     };
     const getOpenCodeModelCatalog = mock(async () => cached);
     const cacheOpenCodeModelCatalog = mock(async (_projectId: string, models: unknown[]) => ({
@@ -380,6 +384,8 @@ describe("direct backend command registry coverage", () => {
       cacheOpenCodeModelCatalog,
       getAgentModelCatalogCache,
       cacheAgentModelCatalog,
+      // The cached-catalogue read filters by the configured OpenCode providers.
+      loadConfig: mock(async () => ({ global: {} })),
     });
 
     for (const bridge of ["opencode", "claude", "codex"]) {
@@ -417,7 +423,11 @@ describe("direct backend command registry coverage", () => {
 
     await expect(
       invoke("get_opencode_model_catalog_cache", { projectId: " project-1 " }, context),
-    ).resolves.toEqual(cached);
+    ).resolves.toEqual({
+      ...cached,
+      models: [{ id: "opencode/cached", name: "Cached", provider: "opencode" }],
+    });
+    // Writes stay the complete durable record; only the reads narrow.
     const models = [{ id: "opencode/gpt-5", name: "GPT-5", provider: "opencode" }];
     await expect(
       invoke("cache_opencode_model_catalog", { projectId: "project-1", models }, context),

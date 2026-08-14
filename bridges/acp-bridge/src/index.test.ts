@@ -282,6 +282,59 @@ describe("ACP bridge", () => {
     expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toEqual(["prompt"]);
   });
 
+  test("rolls back a keyed session when initial configuration fails", async () => {
+    const directory = await temporaryDirectory();
+    const failureFile = resolve(directory, "config-failed.log");
+    const lifecycleFile = resolve(directory, "config-lifecycle.log");
+    const bridge = await spawnBridge({ env: {
+      FAKE_ACP_FAIL_CONFIG_ONCE_FILE: failureFile,
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+      ACP_MAX_SESSIONS: "1",
+    } });
+    const create = () => nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({
+        clientSessionKey: "env-1:configured-tab",
+        reasoningId: "high",
+      }),
+    });
+
+    const failed = await create();
+    expect(failed.status).toBe(500);
+    expect(await failed.json()).toMatchObject({ error: "fake configuration failure" });
+
+    const retried = await create();
+    expect(retried.status).toBe(201);
+    expect(await retried.json()).toMatchObject({
+      composer: { selectedReasoningId: "high" },
+    });
+    await waitFor(
+      () => fs.readFile(lifecycleFile, "utf8").catch(() => ""),
+      (contents) => (contents.match(/^start:/gm)?.length ?? 0) === 2,
+    );
+  });
+
+  test("rejects unsupported vendor requests instead of acknowledging them", async () => {
+    const directory = await temporaryDirectory();
+    const responseFile = resolve(directory, "vendor-response.log");
+    const bridge = await spawnBridge({ env: { FAKE_ACP_VENDOR_REQUEST_FILE: responseFile } });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+    });
+    expect(created.status).toBe(201);
+    const response = await waitFor(
+      () => fs.readFile(responseFile, "utf8").then((value) => JSON.parse(value.trim())).catch(() => null) as Promise<Record<string, unknown> | null>,
+      Boolean,
+    );
+    expect(response).toMatchObject({
+      id: 901,
+      error: { code: -32601, message: "Unsupported ACP client method: x.ai/ask_user_question" },
+    });
+    expect(response).not.toHaveProperty("result");
+  });
+
   test("times out hung initialization and rejects malformed agent output", async () => {
     const hung = await spawnBridge({ env: { FAKE_ACP_HANG_INITIALIZE: "1", ACP_RPC_TIMEOUT_MS: "30" } });
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -893,6 +946,36 @@ describe("ACP bridge", () => {
     expect(await fs.readFile(stateFile, "utf8")).not.toBe("{ this is not json");
   });
 
+  test("quarantines structurally malformed persisted composer state", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const stateFile = resolve(stateDirectory, "state.json");
+    await fs.writeFile(stateFile, JSON.stringify({
+      version: 2,
+      provider: "cursor",
+      sessions: [{
+        id: "malformed-session",
+        clientSessionKey: "env-1:tab-1",
+        acpSessionId: "fake-session",
+        status: "idle",
+        revision: 1,
+        messages: [],
+        structured: [],
+        promptJournal: [],
+        sessionConfig: { composer: {}, wire: {} },
+      }],
+    }));
+
+    const bridge = await spawnBridge({ stateDirectory });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-1:tab-1" }),
+    });
+    expect(created.status).toBe(201);
+    expect(await created.json()).not.toMatchObject({ id: "malformed-session" });
+    expect((await fs.readdir(stateDirectory)).some((entry) => entry.includes("corrupt"))).toBe(true);
+  });
+
   test("starts clean when the state file belongs to another provider", async () => {
     const stateDirectory = await temporaryDirectory();
     await fs.writeFile(
@@ -1101,5 +1184,34 @@ describe("ACP bridge", () => {
     expect(updated.status).toBe(200);
     const composer = await updated.json() as { selectedReasoningId?: string };
     expect(composer.selectedReasoningId).toBe("low");
+  });
+
+  test("applies Grok vendor catalogue updates to session and global snapshots", async () => {
+    const { base, headers } = await spawnBridge({ env: {
+      ACP_PROVIDER: "grok",
+      FAKE_ACP_EMIT_MODEL_UPDATE: "1",
+    } });
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+    }).then((response) => response.json()) as { id: string };
+    const dispatched = await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "DIRECT:update models", requestId: "model-update" }),
+    });
+    expect(dispatched.status).toBe(202);
+
+    const session = await waitFor(
+      () => nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) => response.json()) as Promise<{
+        status: string;
+        composer: { selectedModelId?: string; models: Array<{ id: string }> };
+      }>,
+      (value) => value.status === "idle" && value.composer.models.some((model) => model.id === "grok-next"),
+    );
+    expect(session.composer.selectedModelId).toBe("grok-next");
+    const catalog = await nativeFetch(`${base}/global/models`, { headers })
+      .then((response) => response.json()) as { models: Array<{ id: string }> };
+    expect(catalog.models.map((model) => model.id)).toContain("grok-next");
   });
 });

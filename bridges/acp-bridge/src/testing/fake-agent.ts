@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { createInterface } from "node:readline";
-import { appendFileSync, closeSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync } from "node:fs";
 
 type JsonObject = Record<string, unknown>;
 
@@ -118,9 +118,27 @@ lines.on("line", (line) => {
   }
   if (message.method === "session/new" && typeof message.id === "number") {
     write({ jsonrpc: "2.0", id: message.id, result: sessionPayload() });
+    if (process.env.FAKE_ACP_VENDOR_REQUEST_FILE) {
+      write({
+        jsonrpc: "2.0",
+        id: 901,
+        method: "x.ai/ask_user_question",
+        params: { sessionId: "fake-session", question: "Continue?" },
+      });
+    }
     return;
   }
   if (message.method === "session/set_config_option" && typeof message.id === "number") {
+    const failOnceFile = process.env.FAKE_ACP_FAIL_CONFIG_ONCE_FILE;
+    if (failOnceFile && !existsSync(failOnceFile)) {
+      appendFileSync(failOnceFile, "failed\n");
+      write({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: { code: -32603, message: "fake configuration failure" },
+      });
+      return;
+    }
     const params = isObject(message.params) ? message.params : {};
     const configId = typeof params.configId === "string" ? params.configId : "";
     const option = cursorConfig.configOptions.find((entry) => entry.id === configId);
@@ -171,6 +189,21 @@ lines.on("line", (line) => {
     const text = (message.params as { prompt?: Array<{ text?: unknown }> }).prompt?.[0]?.text;
     // Exit without answering, so the bridge observes its child dying mid-turn.
     if (typeof text === "string" && text.startsWith("CRASH")) process.exit(9);
+    if (provider === "grok" && process.env.FAKE_ACP_EMIT_MODEL_UPDATE === "1") {
+      grokConfig.models.availableModels.push({
+        modelId: "grok-next",
+        name: "Grok Next",
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "x.ai/models/update",
+        params: {
+          sessionId: "fake-session",
+          currentModelId: "grok-next",
+          models: grokConfig.models.availableModels,
+        },
+      });
+    }
     // Answer, then close the read end of the pipe while staying alive. The
     // bridge's next write then fails with EPIPE against a child it still
     // believes is running — the exact race an unhandled stream error would
@@ -257,5 +290,12 @@ lines.on("line", (line) => {
     });
     write({ jsonrpc: "2.0", id: promptRequestId, result: { stopReason: "end_turn" } });
     promptRequestId = null;
+    return;
+  }
+  if (message.id === 901 && process.env.FAKE_ACP_VENDOR_REQUEST_FILE) {
+    appendFileSync(
+      process.env.FAKE_ACP_VENDOR_REQUEST_FILE,
+      `${JSON.stringify(message)}\n`,
+    );
   }
 });

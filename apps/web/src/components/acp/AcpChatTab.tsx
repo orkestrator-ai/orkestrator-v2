@@ -102,6 +102,7 @@ export function AcpChatTab({
   const dispatchingPrompt = useRef(false);
   const updateTabNativeSessionId = usePaneLayoutStore((state) => state.updateTabNativeSessionId);
   const clearTabInitialPrompt = usePaneLayoutStore((state) => state.clearTabInitialPrompt);
+  const clearTabInitialAgentOptions = usePaneLayoutStore((state) => state.clearTabInitialAgentOptions);
   const backendOwnsStartupPrompt = useEnvironmentStore((state) => {
     if (tabId !== "startup-agent") return false;
     const environment = state.getEnvironmentById(data.environmentId);
@@ -186,6 +187,14 @@ export function AcpChatTab({
         applySession(nextSession);
         setApprovals(pendingApprovals);
         updateTabNativeSessionId(tabId, nextSession.id, data.environmentId);
+        if (
+          initialAgentModel !== undefined
+          || initialReasoningEffort !== undefined
+          || initialConversationMode !== undefined
+          || initialFastMode !== undefined
+        ) {
+          clearTabInitialAgentOptions(tabId, data.environmentId);
+        }
       } catch (caught) {
         if (mounted) setError(caught instanceof Error ? caught.message : String(caught));
       } finally {
@@ -196,7 +205,7 @@ export function AcpChatTab({
       }
     })();
     return () => { mounted = false; };
-  }, [applySession, connectNonce, data.environmentId, data.platform, data.sessionId, label, sessionKey, tabId, updateTabNativeSessionId]);
+  }, [applySession, clearTabInitialAgentOptions, connectNonce, data.environmentId, data.platform, data.sessionId, label, sessionKey, tabId, updateTabNativeSessionId]);
 
   const refresh = useCallback(async () => {
     const current = sessionRef.current;

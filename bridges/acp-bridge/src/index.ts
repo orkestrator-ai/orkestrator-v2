@@ -13,9 +13,12 @@ import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-
 import {
   applyConfigOptionUpdate,
   applyCurrentModeUpdate,
+  applyGrokCatalogUpdate,
   applyGrokModelChange,
   mergeComposerCatalog,
   normalizeAcpSessionConfig,
+  parsePersistedAcpSessionConfig,
+  parsePersistedComposerState,
   planComposerApply,
   type AcpComposerPatch,
   type AcpNormalizedSessionConfig,
@@ -339,9 +342,6 @@ class AcpProcess {
     if (typeof message.id === "number" && typeof message.method === "string") {
       if (message.method === "session/request_permission") {
         this.onPermission(message.id, isObject(message.params) ? message.params : {});
-      } else if (isVendorMethod(message.method)) {
-        this.onVendor(message.method, isObject(message.params) ? message.params : {});
-        this.respond(message.id, {});
       } else {
         this.#write({
           jsonrpc: "2.0",
@@ -355,8 +355,9 @@ class AcpProcess {
       this.onUpdate(message.params);
       return;
     }
-    if (typeof message.method === "string" && isVendorMethod(message.method)) {
-      this.onVendor(message.method, isObject(message.params) ? message.params : {});
+    if (typeof message.method === "string") {
+      const params = isObject(message.params) ? message.params : {};
+      if (isVendorModelUpdate(message.method, params)) this.onVendor(message.method, params);
     }
   }
 
@@ -448,10 +449,19 @@ async function createSessionReserved(
     attachChild(state, child);
     sessions.set(id, state);
     if (clientSessionKey) clientSessionKeys.set(clientSessionKey, id);
-    const patch = composerPatchFromSpawn(spawnOptions);
-    if (patch) await applyComposerPatch(state, patch, signal);
-    await persistState();
-    return state;
+    try {
+      const patch = composerPatchFromSpawn(spawnOptions);
+      if (patch) await applyComposerPatch(state, patch, signal);
+      await persistState();
+      return state;
+    } catch (error) {
+      if (sessions.get(id) === state) sessions.delete(id);
+      if (clientSessionKey && clientSessionKeys.get(clientSessionKey) === id) {
+        clientSessionKeys.delete(clientSessionKey);
+      }
+      clearApprovals(state);
+      throw error;
+    }
   } catch (error) {
     await child.close();
     throw error;
@@ -1158,8 +1168,15 @@ class HttpError extends Error {
   }
 }
 
-function isVendorMethod(method: string): boolean {
-  return method.startsWith("x.ai/") || method.startsWith("_x.ai/") || method.startsWith("cursor/");
+function isVendorModelUpdate(method: string, params: JsonObject): boolean {
+  if (method === "x.ai/models/update" || method === "_x.ai/models/update" || method === "cursor/models/update") {
+    return true;
+  }
+  if (method !== "x.ai/session/update" && method !== "_x.ai/session/update" && method !== "cursor/session/update") {
+    return false;
+  }
+  const update = isObject(params.update) ? params.update : params;
+  return update.sessionUpdate === "model_changed" || update.sessionUpdate === "models_update";
 }
 
 function rememberCatalog(composer: NativeAgentComposerState): void {
@@ -1232,7 +1249,12 @@ async function applyComposerPatch(
 function applyVendorUpdate(state: SessionState, method: string, params: JsonObject): void {
   const update = isObject(params.update) ? params.update : params;
   const kind = typeof update.sessionUpdate === "string" ? update.sessionUpdate : "";
-  if (method.endsWith("/models/update") || kind === "model_changed" || kind === "models_update") {
+  if (method.endsWith("/models/update") || kind === "models_update") {
+    state.sessionConfig = applyGrokCatalogUpdate(provider, state.sessionConfig, update);
+    rememberCatalog(state.sessionConfig.composer);
+    state.revision += 1;
+    schedulePersist();
+  } else if (kind === "model_changed") {
     state.sessionConfig = applyGrokModelChange(provider, state.sessionConfig, update);
     rememberCatalog(state.sessionConfig.composer);
     state.revision += 1;
@@ -1282,12 +1304,16 @@ async function probeCatalog(signal?: AbortSignal): Promise<NativeAgentComposerSt
 }
 
 function restoreSessionConfig(candidate: JsonObject): AcpNormalizedSessionConfig {
-  if (isObject(candidate.sessionConfig) && isObject(candidate.sessionConfig.composer)) {
-    return candidate.sessionConfig as AcpNormalizedSessionConfig;
+  if (candidate.sessionConfig !== undefined) {
+    const restored = parsePersistedAcpSessionConfig(provider, candidate.sessionConfig);
+    if (!restored) throw new Error("ACP persisted session config is malformed");
+    return restored;
   }
-  if (isObject(candidate.composer)) {
+  if (candidate.composer !== undefined) {
+    const composer = parsePersistedComposerState(provider, candidate.composer);
+    if (!composer) throw new Error("ACP persisted composer state is malformed");
     return {
-      composer: candidate.composer as NativeAgentComposerState,
+      composer,
       wire: { configOptions: [], availableModeIds: {}, usesSetModel: false },
     };
   }

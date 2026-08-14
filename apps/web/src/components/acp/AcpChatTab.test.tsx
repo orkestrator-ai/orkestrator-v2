@@ -49,6 +49,7 @@ const cancelAcpPrompt = mock(async () => undefined);
 const setAcpSessionConfig = mock(async () => EMPTY_NATIVE_AGENT_COMPOSER_STATE);
 const updateTabNativeSessionId = mock(() => undefined);
 const clearTabInitialPrompt = mock(() => undefined);
+const clearTabInitialAgentOptions = mock(() => undefined);
 
 mock.module("@/lib/backend", () => ({
   adoptNativeAgentSession,
@@ -106,7 +107,12 @@ mock.module("@/stores/paneLayoutStore", () => ({
   usePaneLayoutStore: (selector: (state: {
     updateTabNativeSessionId: typeof updateTabNativeSessionId;
     clearTabInitialPrompt: typeof clearTabInitialPrompt;
-  }) => unknown) => selector({ updateTabNativeSessionId, clearTabInitialPrompt }),
+    clearTabInitialAgentOptions: typeof clearTabInitialAgentOptions;
+  }) => unknown) => selector({
+    updateTabNativeSessionId,
+    clearTabInitialPrompt,
+    clearTabInitialAgentOptions,
+  }),
 }));
 mock.module("@/stores/environmentStore", () => ({
   useEnvironmentStore: (selector: (state: { getEnvironmentById: () => undefined }) => unknown) =>
@@ -135,6 +141,7 @@ beforeEach(() => {
     setAcpSessionConfig,
     updateTabNativeSessionId,
     clearTabInitialPrompt,
+    clearTabInitialAgentOptions,
   ]) fn.mockClear();
   awaitBridgeReady.mockImplementation(async () => ({ status: "ready" as const, port: 4099, authToken: "token" }));
   adoptNativeAgentSession.mockImplementation(async () => ({ providerSessionId: "persisted-session" }));
@@ -184,6 +191,38 @@ describe("AcpChatTab", () => {
       "persisted-session",
       "environment-1",
     );
+  });
+
+  test("clears one-shot composer options after a new ACP session rehydrates", async () => {
+    const unboundData = {
+      platform: "cursor" as const,
+      environmentId: "environment-1",
+    };
+    ensureNativeAgentSession.mockImplementation(async () => ({ providerSessionId: "new-session" }));
+    getAcpSession.mockImplementation(async () => sessionSnapshot({ id: "new-session" }));
+
+    render(
+      <AcpChatTab
+        tabId="tab-1"
+        data={unboundData}
+        isActive
+        initialAgentModel="composer-2.5"
+        initialReasoningEffort="high"
+        initialConversationMode="plan"
+        initialFastMode
+      />,
+    );
+
+    await waitFor(() => expect(ensureNativeAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "composer-2.5",
+        reasoningEffort: "high",
+        sessionMode: "plan",
+        fastMode: true,
+      }),
+    ));
+    await waitFor(() => expect(clearTabInitialAgentOptions)
+      .toHaveBeenCalledWith("tab-1", "environment-1"));
   });
 
   test("renders reasoning as a collapsed thinking disclosure, not as assistant prose", async () => {

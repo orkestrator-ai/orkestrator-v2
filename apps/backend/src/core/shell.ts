@@ -186,8 +186,11 @@ export async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-export async function readFileBase64(filePath: string): Promise<string> {
-  return (await readReadableHostFile(filePath)).toString("base64");
+export async function readFileBase64(
+  filePath: string,
+  allowedRoots?: string[],
+): Promise<string> {
+  return (await readReadableHostFile(filePath, allowedRoots)).toString("base64");
 }
 
 /**

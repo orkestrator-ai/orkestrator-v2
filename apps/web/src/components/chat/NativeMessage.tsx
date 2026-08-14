@@ -949,6 +949,9 @@ function ImagePreviewOverlay({
     <div
       className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-8"
       onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Image preview: ${filename}`}
     >
       <div
         className="relative max-w-full max-h-full"
@@ -957,6 +960,8 @@ function ImagePreviewOverlay({
         <button
           onClick={onClose}
           className="absolute -top-10 right-0 p-2 text-white/70 hover:text-white transition-colors"
+          aria-label="Close image preview"
+          autoFocus
         >
           <X className="w-6 h-6" />
         </button>
@@ -1066,41 +1071,35 @@ function getSafeContainerRelativePath(path: string): string | null {
 function FilePart({
   path,
   fileUrl,
+  filename,
   containerId,
+  eagerPreview = false,
 }: {
   path: string;
   fileUrl?: string;
+  filename?: string;
   containerId?: string;
+  eagerPreview?: boolean;
 }) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
 
-  const displayName = path.split("/").pop() || path || "file";
+  const displayName = filename || path.split(/[\\/]/).pop() || path || "file";
   const isImage = isImageReference(fileUrl) || isImageReference(path);
 
-  const handleClick = useCallback(async () => {
-    if (!isImage) return;
-
-    if (imageSrc) {
-      setPreviewOpen(true);
-      return;
-    }
-
+  const loadImage = useCallback(async () => {
+    if (!isImage) return null;
     setLoading(true);
     setLoadError(false);
     try {
       if (fileUrl?.startsWith("data:image/")) {
-        setImageSrc(fileUrl);
-        setPreviewOpen(true);
-        return;
+        return fileUrl;
       }
 
       if (fileUrl?.startsWith("http://") || fileUrl?.startsWith("https://")) {
-        setImageSrc(fileUrl);
-        setPreviewOpen(true);
-        return;
+        return fileUrl;
       }
 
       const localFilePath = fileUrl?.startsWith("file://")
@@ -1116,9 +1115,7 @@ function FilePart({
 
         const base64 = await readContainerFileBase64(containerId, relativePath);
         const mimeType = getMimeType(containerPath);
-        setImageSrc(`data:${mimeType};base64,${base64}`);
-        setPreviewOpen(true);
-        return;
+        return `data:${mimeType};base64,${base64}`;
       }
 
       const filePath = localFilePath ?? (path.startsWith("/") ? path : null);
@@ -1129,43 +1126,87 @@ function FilePart({
 
       const base64 = await readFileBase64(filePath);
       const mimeType = getMimeType(filePath);
-      setImageSrc(`data:${mimeType};base64,${base64}`);
-      setPreviewOpen(true);
+      return `data:${mimeType};base64,${base64}`;
     } catch (err) {
       console.error("[NativeMessage] Failed to load image preview:", err, {
         path,
         fileUrl,
       });
       setLoadError(true);
+      return null;
     } finally {
       setLoading(false);
     }
-  }, [isImage, imageSrc, path, fileUrl, containerId]);
+  }, [isImage, path, fileUrl, containerId]);
+
+  useEffect(() => {
+    if (!eagerPreview || !isImage || imageSrc) return;
+    let cancelled = false;
+
+    void loadImage().then((source) => {
+      if (!cancelled && source) setImageSrc(source);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [eagerPreview, imageSrc, isImage, loadImage]);
+
+  const handleClick = useCallback(async () => {
+    if (!isImage) return;
+    if (imageSrc) {
+      setPreviewOpen(true);
+      return;
+    }
+
+    const source = await loadImage();
+    if (!source) return;
+    setImageSrc(source);
+    setPreviewOpen(true);
+  }, [imageSrc, isImage, loadImage]);
 
   return (
     <>
       <button
         onClick={handleClick}
-        disabled={!isImage || loading}
+        disabled={!isImage}
+        aria-label={isImage ? `Open full image: ${displayName}` : undefined}
+        aria-busy={isImage ? loading : undefined}
         className={cn(
-          "inline-flex items-center gap-1.5 text-xs my-0 py-1.5 px-2.5 rounded-md border transition-colors",
+          "text-xs my-0 rounded-md border transition-colors",
           isImage
-            ? "bg-muted/50 border-border hover:bg-muted hover:border-border/80 cursor-pointer"
-            : "bg-muted/30 border-border/50 cursor-default",
+            ? "group relative block w-40 overflow-hidden bg-muted/50 border-border hover:border-foreground/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background cursor-zoom-in"
+            : "inline-flex items-center gap-1.5 py-1.5 px-2.5 bg-muted/30 border-border/50 cursor-default",
           loading && "opacity-50",
         )}
       >
-        {isImage ? (
-          <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" />
+        {isImage && imageSrc ? (
+          <img
+            src={imageSrc}
+            alt={`Thumbnail: ${displayName}`}
+            className="h-24 w-full bg-black/10 object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+          />
+        ) : isImage ? (
+          <span className="flex h-24 w-full items-center justify-center bg-muted/40">
+            <ImageIcon className="size-5 text-muted-foreground" />
+          </span>
         ) : (
           <FileText className="w-3.5 h-3.5 text-muted-foreground" />
         )}
-        <span className="font-mono truncate max-w-[240px] text-muted-foreground">
+        <span className={cn(
+          "font-mono truncate text-muted-foreground",
+          isImage ? "block border-t border-border/60 px-2 py-1.5 text-left" : "max-w-[240px]",
+        )}>
           {displayName}
         </span>
-        {loading && <span className="text-muted-foreground">(loading...)</span>}
+        {loading && !isImage && <span className="text-muted-foreground">(loading...)</span>}
         {loadError && (
-          <span className="text-destructive text-[10px]">(error)</span>
+          <span className={cn(
+            "text-destructive text-[10px]",
+            isImage && "absolute right-1.5 top-1.5 rounded bg-background/90 px-1.5 py-0.5",
+          )}>
+            preview unavailable
+          </span>
         )}
       </button>
 
@@ -1721,6 +1762,7 @@ function MessagePart({
   truncateUserPrompt = false,
   renderJsonPayload = true,
   containerId,
+  eagerImagePreview = false,
   partKey,
 }: {
   part: NativeMessagePart;
@@ -1728,6 +1770,7 @@ function MessagePart({
   truncateUserPrompt?: boolean;
   renderJsonPayload?: boolean;
   containerId?: string;
+  eagerImagePreview?: boolean;
   /** Stable identity for this part's position, used to persist expansion state. */
   partKey: string;
 }) {
@@ -1798,7 +1841,15 @@ function MessagePart({
       // Tool results are typically shown inline with tool invocations
       return null;
     case "file":
-      return <FilePart path={part.content} fileUrl={part.fileUrl} containerId={containerId} />;
+      return (
+        <FilePart
+          path={part.content}
+          fileUrl={part.fileUrl}
+          filename={part.filename}
+          containerId={containerId}
+          eagerPreview={eagerImagePreview}
+        />
+      );
     case "subagent":
       return (
         <SubagentPart part={part} containerId={containerId} partKey={partKey} />
@@ -2034,6 +2085,7 @@ function renderMessageParts(
         truncateUserPrompt={message.role === "user"}
         renderJsonPayload={message.role !== "user"}
         containerId={options.containerId}
+        eagerImagePreview={message.role === "user"}
         partKey={`${message.id}-part-${index}`}
       />
   ));

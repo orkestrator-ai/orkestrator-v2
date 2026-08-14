@@ -811,6 +811,7 @@ describe("native message adapters", () => {
         type: "file",
         content: "/workspace/screen.png",
         fileUrl: "/workspace/screen.png",
+        filename: "screen.png",
       },
     ]);
   });
@@ -1222,18 +1223,69 @@ describe("native message adapters", () => {
         type: "file",
         content: "/workspace/a.png",
         fileUrl: "/workspace/a.png",
+        filename: "a.png",
       },
       {
         type: "file",
         content: "/workspace/readme.md",
         fileUrl: undefined,
+        filename: "readme.md",
       },
       {
         type: "file",
         content: "/workspace/b.jpg",
         fileUrl: "/workspace/b.jpg",
+        filename: "b.jpg",
       },
     ]);
+  });
+
+  test("parses initial-prompt attachments for every native agent", () => {
+    const rawContent = [
+      "Compare this layout",
+      '<attached-files><attachment type="image" path="/tmp/layout&amp;notes.png" filename="layout&amp;notes.png" /></attached-files>',
+    ].join("\n");
+    const message: NativeMessage = {
+      id: "native-initial-prompt",
+      role: "user",
+      content: rawContent,
+      createdAt: "2026-08-14T18:00:00.000Z",
+      parts: [{ type: "text", content: rawContent }],
+    };
+
+    const normalized = normalizeNativeMessage(message);
+
+    expect(normalized.content).toBe("Compare this layout");
+    expect(normalized.parts).toEqual([
+      { type: "text", content: "Compare this layout" },
+      {
+        type: "file",
+        content: "/tmp/layout&notes.png",
+        fileUrl: "/tmp/layout&notes.png",
+        filename: "layout&notes.png",
+      },
+    ]);
+  });
+
+  test("does not duplicate a structured file part beside initial-prompt XML", () => {
+    const rawContent = [
+      "Inspect this",
+      '<attached-files><attachment type="image" path="/workspace/a.png" filename="a.png" /></attached-files>',
+    ].join("\n");
+    const message: NativeMessage = {
+      id: "native-structured-initial-prompt",
+      role: "user",
+      content: rawContent,
+      createdAt: "2026-08-14T18:00:00.000Z",
+      parts: [
+        { type: "text", content: rawContent },
+        { type: "file", content: "/workspace/a.png", fileUrl: "/workspace/a.png" },
+      ],
+    };
+
+    const normalized = normalizeNativeMessage(message);
+
+    expect(normalized.parts.filter((part) => part.type === "file")).toHaveLength(1);
   });
 
   test("leaves malformed attachment blocks in message text", () => {

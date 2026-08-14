@@ -12865,7 +12865,12 @@ export function createCommandRegistry(
   register("read_local_file_at_branch", ({ worktreePath, filePath, branch }) =>
     readLocalFileAtBranch(asString(worktreePath, "worktreePath"), asString(filePath, "filePath"), asString(branch, "branch")),
   );
-  register("read_file_base64", ({ filePath }) => readFileBase64(asString(filePath, "filePath")));
+  register("read_file_base64", ({ filePath }, context) =>
+    readFileBase64(
+      asString(filePath, "filePath"),
+      [getWorktreeBaseDir(context)],
+    )
+  );
   register("write_local_file", ({ worktreePath, filePath, base64Data }) => writeFileBase64(asString(worktreePath, "worktreePath"), asString(filePath, "filePath"), asString(base64Data, "base64Data")));
   register("revert_local_file", async ({ environmentId, filePath, targetBranch }, context) => {
     const id = asString(environmentId, "environmentId");

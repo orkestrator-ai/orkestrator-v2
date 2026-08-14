@@ -357,6 +357,18 @@ bun run --cwd apps/desktop typecheck   # Electron TypeScript type checking
 bun run --cwd apps/backend typecheck   # Backend TypeScript type checking
 ```
 
+When running tests, always capture the complete stdout and stderr in a log file;
+terminal and tool output buffers are often truncated. Keep the exit status of the
+test command by enabling `pipefail`, for example:
+
+```bash
+set -o pipefail
+bun test tests --parallel 2>&1 | tee /tmp/orkestrator-root-tests.log
+```
+
+Use a descriptive log name for each suite or rerun, and inspect the saved log for
+the full failure context instead of relying only on buffered terminal output.
+
 ### Flaky Test Tracking
 
 Keep [`docs/flaky-tests.md`](docs/flaky-tests.md) current whenever test behavior

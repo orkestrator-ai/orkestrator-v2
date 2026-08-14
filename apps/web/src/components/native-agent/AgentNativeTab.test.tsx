@@ -1145,6 +1145,23 @@ describe("AgentNativeTab", () => {
       });
     });
 
+    test("keeps advanced session settings out of the input bar", async () => {
+      seedProjection({
+        composer: {
+          executionProfiles: [{ id: "reviewer", label: "Reviewer" }],
+          includeLocalSettings: true,
+          promptSuggestionsEnabled: true,
+        },
+      });
+      render(<AgentNativeTab tabId="tab-settings" data={identity("claude")} isActive />);
+
+      await screen.findByRole("textbox");
+      expect(screen.queryByRole("combobox", { name: "Execution profile" })).toBeNull();
+      expect(screen.queryByText("Provider default")).toBeNull();
+      expect(screen.queryByText("Local settings")).toBeNull();
+      expect(screen.queryByText("Suggestions")).toBeNull();
+    });
+
     test("offers to load earlier messages when the transcript is windowed", async () => {
       seedProjection({ messageWindow: { limit: 512, truncated: true } });
       render(<AgentNativeTab tabId="tab-window" data={identity("opencode")} isActive />);

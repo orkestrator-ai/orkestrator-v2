@@ -1845,44 +1845,6 @@ function SharedNativeAgentController({
                   </DropdownMenuContent>
                 </DropdownMenu>
               ) : null}
-              {(composer.executionProfiles?.length ?? 0) > 0 ? (
-                <select
-                  aria-label="Execution profile"
-                  className="h-8 max-w-44 rounded-md border border-input bg-background px-2 text-xs"
-                  value={composer.selectedExecutionProfileId ?? ""}
-                  disabled={settingsLocked}
-                  onChange={(event) => {
-                    void updateControlsSafely({ executionProfileId: event.target.value || null });
-                  }}
-                >
-                  <option value="">Provider default</option>
-                  {composer.executionProfiles!.map((profile) => (
-                    <option key={profile.id} value={profile.id}>{profile.label}</option>
-                  ))}
-                </select>
-              ) : null}
-              {typeof composer.includeLocalSettings === "boolean" ? (
-                <label className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground" title="Include .claude/settings.local.json">
-                  <input
-                    type="checkbox"
-                    checked={composer.includeLocalSettings}
-                    disabled={settingsLocked}
-                    onChange={(event) => { void updateControlsSafely({ includeLocalSettings: event.target.checked }); }}
-                  />
-                  Local settings
-                </label>
-              ) : null}
-              {typeof composer.promptSuggestionsEnabled === "boolean" ? (
-                <label className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    checked={composer.promptSuggestionsEnabled}
-                    disabled={settingsLocked}
-                    onChange={(event) => { void updateControlsSafely({ promptSuggestions: event.target.checked }); }}
-                  />
-                  Suggestions
-                </label>
-              ) : null}
             </>
           ) : null}
           onStop={stopSafely}

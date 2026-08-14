@@ -92,6 +92,13 @@ describe("dockerOwnerMatches", () => {
     expect(dockerOwnerMatches("orkestrator-owner=", owner)).toBe(false);
     expect(dockerOwnerMatches("orkestrator-owner", owner)).toBe(false);
   });
+
+  test("requires an exact owner in agent-test mode", () => {
+    expect(dockerOwnerMatches(`orkestrator-owner=${owner}`, owner, true)).toBe(true);
+    expect(dockerOwnerMatches("app=orkestrator-v2", owner, true)).toBe(false);
+    expect(dockerOwnerMatches(undefined, owner, true)).toBe(false);
+    expect(dockerOwnerMatches("orkestrator-owner=bbbbbbbbbbbbbbbb", owner, true)).toBe(false);
+  });
 });
 
 describe("countPrunedDockerResources", () => {

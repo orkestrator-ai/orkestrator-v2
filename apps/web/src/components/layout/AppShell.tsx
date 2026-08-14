@@ -80,6 +80,7 @@ export function AppShell({ children }: AppShellProps) {
     activeProjectName,
     isMobile,
     activeEnvironmentName,
+    import.meta.env.VITE_ORKESTRATOR_PROFILE?.trim() || null,
   );
   const activeTab = useMemo(() => {
     if (!selectedEnvironmentId) return null;

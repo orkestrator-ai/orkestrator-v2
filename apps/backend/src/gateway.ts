@@ -53,6 +53,7 @@ type NetworkInterfaceMap = NodeJS.Dict<NetworkInterfaceInfo[]>;
 type ListenerKind = "control" | "browser";
 type GatewayRouteKey =
   | "login"
+  | "agent-test-bootstrap"
   | "logout"
   | "status"
   | "gateway-settings"
@@ -86,6 +87,10 @@ export interface OrkestratorGatewayOptions {
   bindAddress?: string;
   fallbackBindAddress?: string;
   port?: number;
+  /** Fail on an occupied requested browser port instead of attaching nearby. */
+  strictPort?: boolean;
+  /** Enables the loopback-only, single-use browser bootstrap used by agent tests. */
+  agentTestMode?: boolean;
   controlBindAddress?: string;
   controlPort?: number;
   env?: NodeJS.ProcessEnv;
@@ -112,6 +117,10 @@ export interface OrkestratorGatewayOptions {
 
 const AUTH_COOKIE = "orkestrator_gateway_auth";
 const API_PREFIX = "/__orkestrator";
+const AGENT_TEST_BOOTSTRAP_TTL_MS = 60_000;
+const AGENT_TEST_SESSION_TTL_MS = 15 * 60_000;
+const MAX_AGENT_TEST_BOOTSTRAPS = 16;
+const MAX_AGENT_TEST_SESSIONS = 32;
 const DEFAULT_GATEWAY_PORT = 34121;
 const GATEWAY_PORT_FALLBACK_ATTEMPTS = 20;
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
@@ -637,6 +646,7 @@ function measureChunkBytes(
 
 function classifyGatewayRoute(pathname: string): GatewayRouteKey {
   if (pathname === `${API_PREFIX}/login`) return "login";
+  if (pathname.startsWith(`${API_PREFIX}/agent-test/bootstrap`)) return "agent-test-bootstrap";
   if (pathname === `${API_PREFIX}/logout`) return "logout";
   if (pathname === `${API_PREFIX}/status`) return "status";
   if (pathname === `${API_PREFIX}/gateway-settings`) return "gateway-settings";
@@ -2532,6 +2542,8 @@ export class OrkestratorGateway {
   private readonly bindAddress?: string;
   private readonly fallbackBindAddress?: string;
   private readonly port?: number;
+  private readonly strictPort: boolean;
+  private readonly agentTestMode: boolean;
   private readonly controlBindAddress?: string;
   private readonly controlPort?: number;
   private readonly env: NodeJS.ProcessEnv;
@@ -2551,6 +2563,8 @@ export class OrkestratorGateway {
   private servers = new Set<Server>();
   private token = "";
   private authFile = "";
+  private agentTestBootstraps = new Map<string, number>();
+  private agentTestSessions = new Map<string, number>();
   private clients = new Map<EventClientWriter, GatewayEventClient>();
   /**
    * Latest full-pane tmux frame dropped for each lagging client/session.
@@ -2576,6 +2590,8 @@ export class OrkestratorGateway {
     this.bindAddress = options.bindAddress;
     this.fallbackBindAddress = options.fallbackBindAddress;
     this.port = options.port;
+    this.strictPort = options.strictPort ?? false;
+    this.agentTestMode = options.agentTestMode ?? false;
     this.controlBindAddress = options.controlBindAddress;
     this.controlPort = options.controlPort;
     this.env = options.env ?? process.env;
@@ -2608,8 +2624,7 @@ export class OrkestratorGateway {
     this.metrics = new GatewayMetricsStore(this.compression);
     this.terminalWebSocket = new TerminalWebSocketGateway({
       backend: this.backend,
-      tokenMatches: (request, suppliedToken) => tokenMatches(
-        this.token,
+      tokenMatches: (request, suppliedToken) => this.gatewayCredentialMatches(
         suppliedToken ?? getBearerToken(request.headers) ?? getCookie(request.headers, AUTH_COOKIE),
       ),
       originAllowed: (request) => Boolean(
@@ -2694,6 +2709,7 @@ export class OrkestratorGateway {
     preferredPort: number,
   ): Promise<{ bindAddress: string; port: number; url: string }> {
     if (preferredPort === 0) return this.listen(bindAddress, preferredPort, "browser");
+    if (this.strictPort) return this.listen(bindAddress, preferredPort, "browser");
 
     for (let offset = 0; offset <= GATEWAY_PORT_FALLBACK_ATTEMPTS; offset += 1) {
       const candidatePort = preferredPort + offset;
@@ -2796,6 +2812,8 @@ export class OrkestratorGateway {
       await persistGatewayToken(authFile, token);
       this.token = token;
       this.authFile = authFile;
+      this.agentTestBootstraps.clear();
+      this.agentTestSessions.clear();
       // Authentication is latched when a WebSocket becomes ready. Rotating
       // the credential must therefore revoke every connection authenticated
       // with the previous value rather than waiting for a reconnect.
@@ -2811,6 +2829,8 @@ export class OrkestratorGateway {
   }
 
   async stop(): Promise<void> {
+    this.agentTestBootstraps.clear();
+    this.agentTestSessions.clear();
     if (this.keepalive) {
       clearInterval(this.keepalive);
       this.keepalive = null;
@@ -3264,8 +3284,45 @@ export class OrkestratorGateway {
   }
 
   private authenticated(request: IncomingMessage): boolean {
-    const token = getBearerToken(request.headers) ?? getCookie(request.headers, AUTH_COOKIE);
-    return tokenMatches(this.token, token);
+    const credential = getBearerToken(request.headers) ?? getCookie(request.headers, AUTH_COOKIE);
+    return this.gatewayCredentialMatches(credential);
+  }
+
+  private gatewayCredentialMatches(candidate: string | null): boolean {
+    if (tokenMatches(this.token, candidate)) return true;
+    if (!this.agentTestMode || !candidate) return false;
+    const expiresAt = this.agentTestSessions.get(candidate);
+    if (expiresAt === undefined) return false;
+    if (expiresAt <= Date.now()) {
+      this.agentTestSessions.delete(candidate);
+      return false;
+    }
+    return true;
+  }
+
+  private pruneAgentTestCredentials(now = Date.now()): void {
+    for (const [code, expiresAt] of this.agentTestBootstraps) {
+      if (expiresAt <= now) this.agentTestBootstraps.delete(code);
+    }
+    for (const [session, expiresAt] of this.agentTestSessions) {
+      if (expiresAt <= now) this.agentTestSessions.delete(session);
+    }
+  }
+
+  private issueAgentTestSession(now = Date.now()): string {
+    this.pruneAgentTestCredentials(now);
+    while (this.agentTestSessions.size >= MAX_AGENT_TEST_SESSIONS) {
+      const oldest = this.agentTestSessions.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.agentTestSessions.delete(oldest);
+    }
+    const session = randomBytes(32).toString("base64url");
+    this.agentTestSessions.set(session, now + AGENT_TEST_SESSION_TTL_MS);
+    return session;
+  }
+
+  private agentTestSessionCookie(session: string): string {
+    return `${AUTH_COOKIE}=${session}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${Math.floor(AGENT_TEST_SESSION_TTL_MS / 1000)}`;
   }
 
   private isOriginAllowed(request: IncomingMessage, originValue: string): boolean {
@@ -3413,6 +3470,11 @@ export class OrkestratorGateway {
       return;
     }
 
+    if (url.pathname === `${API_PREFIX}/agent-test/bootstrap/exchange`) {
+      await this.handleAgentTestBootstrapExchange(request, response, listenerKind);
+      return;
+    }
+
     if (url.pathname === `${API_PREFIX}/logout`) {
       response.writeHead(303, {
         location: `${API_PREFIX}/login`,
@@ -3429,6 +3491,11 @@ export class OrkestratorGateway {
       } else {
         jsonResponse(response, 401, { error: "Authentication required" });
       }
+      return;
+    }
+
+    if (url.pathname === `${API_PREFIX}/agent-test/bootstrap`) {
+      await this.handleAgentTestBootstrapMint(request, response, listenerKind);
       return;
     }
 
@@ -3606,12 +3673,90 @@ export class OrkestratorGateway {
       return;
     }
 
+    const cookie = this.agentTestMode
+      ? this.agentTestSessionCookie(this.issueAgentTestSession())
+      : gatewayTokenCookieHeader(this.token);
     response.writeHead(303, {
       location: "/",
-      "set-cookie": gatewayTokenCookieHeader(this.token),
+      "set-cookie": cookie,
       "cache-control": "no-store",
     });
     response.end();
+  }
+
+  private agentTestBootstrapAllowed(request: IncomingMessage, listenerKind: ListenerKind): boolean {
+    return this.agentTestMode
+      && listenerKind === "browser"
+      && Boolean(request.socket.remoteAddress && isLoopbackAddress(request.socket.remoteAddress));
+  }
+
+  private async handleAgentTestBootstrapMint(
+    request: IncomingMessage,
+    response: ServerResponse,
+    listenerKind: ListenerKind,
+  ): Promise<void> {
+    if (!this.agentTestBootstrapAllowed(request, listenerKind)) {
+      jsonResponse(response, 404, { error: "Not found" });
+      return;
+    }
+    if (request.method !== "POST") {
+      response.writeHead(405, { allow: "POST" });
+      response.end();
+      return;
+    }
+    const now = Date.now();
+    this.pruneAgentTestCredentials(now);
+    while (this.agentTestBootstraps.size >= MAX_AGENT_TEST_BOOTSTRAPS) {
+      const oldest = this.agentTestBootstraps.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.agentTestBootstraps.delete(oldest);
+    }
+    const code = randomBytes(32).toString("base64url");
+    const expiresAt = now + AGENT_TEST_BOOTSTRAP_TTL_MS;
+    this.agentTestBootstraps.set(code, expiresAt);
+    jsonResponse(response, 201, { code, expiresAt }, { "cache-control": "no-store" });
+  }
+
+  private async handleAgentTestBootstrapExchange(
+    request: IncomingMessage,
+    response: ServerResponse,
+    listenerKind: ListenerKind,
+  ): Promise<void> {
+    if (!this.agentTestBootstrapAllowed(request, listenerKind)) {
+      jsonResponse(response, 404, { error: "Not found" });
+      return;
+    }
+    if (request.method !== "POST") {
+      response.writeHead(405, { allow: "POST" });
+      response.end();
+      return;
+    }
+    let body: Record<string, unknown>;
+    try {
+      ({ body } = await readJsonBody(request, 4096));
+    } catch (error) {
+      if (error instanceof RequestBodyTooLargeError) {
+        jsonResponse(response, 413, { error: error.message });
+        return;
+      }
+      if (error instanceof InvalidRequestBodyError) {
+        jsonResponse(response, 400, { error: error.message });
+        return;
+      }
+      throw error;
+    }
+    const code = typeof body.code === "string" ? body.code : "";
+    const expiresAt = this.agentTestBootstraps.get(code);
+    this.agentTestBootstraps.delete(code);
+    if (expiresAt === undefined || expiresAt <= Date.now()) {
+      jsonResponse(response, 401, { error: "Bootstrap code is invalid or expired" });
+      return;
+    }
+    const session = this.issueAgentTestSession();
+    jsonResponse(response, 200, { ok: true }, {
+      "cache-control": "no-store",
+      "set-cookie": this.agentTestSessionCookie(session),
+    });
   }
 
   /**

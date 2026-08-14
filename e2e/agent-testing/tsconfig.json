@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node", "bun", "@playwright/test"]
+  },
+  "include": [
+    "*.ts",
+    "../../apps/desktop/electron/runtime-profile.ts",
+    "../../apps/desktop/electron/app-constants.ts",
+    "../../apps/desktop/scripts/dev/profile-io.ts"
+  ]
+}

@@ -101,6 +101,25 @@ body {
   touch-action: manipulation;
 }
 
+body[data-orkestrator-dev-profile]::before {
+  content: "DEV · " attr(data-orkestrator-dev-profile);
+  position: fixed;
+  top: 7px;
+  right: 10px;
+  z-index: 2147483647;
+  border: 1px solid rgb(251 146 60 / 0.7);
+  border-radius: 9999px;
+  background: rgb(124 45 18 / 0.92);
+  color: #ffedd5;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 16px;
+  pointer-events: none;
+  -webkit-app-region: no-drag;
+}
+
 /*
  * Percentages, not viewport units. When CSS `zoom` applies to the root element
  * Chromium scales the initial containing block to match, so this chain stays

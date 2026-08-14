@@ -66,6 +66,18 @@ if [ "$1" = "images" ] && [ "$2" = "-q" ]; then
   printf 'image-a\\nimage-a\\nimage-b\\n'
   exit 0
 fi
+if [ "$1" = "inspect" ]; then
+  case "$*" in
+    *orkestrator-owner*)
+      case "$*" in
+        *foreign-container*) printf 'foreign-owner\trunning\n' ;;
+        *) printf '${REGISTRY_DOCKER_OWNER}\trunning\n' ;;
+      esac
+      ;;
+    *) printf 'running\n' ;;
+  esac
+  exit 0
+fi
 if [ "$1" = "port" ]; then
   [ "\${FAKE_DOCKER_PORT_MISSING:-}" = "1" ] && exit 1
   printf '0.0.0.0:%s\\n' "\${FAKE_DOCKER_PORT:-43123}"
@@ -276,6 +288,67 @@ describe("direct backend command registry coverage", () => {
     expect(log).not.toContain("docker system prune");
     expect(log).toContain("docker rm -f orphan-container");
     expect(log).not.toContain("docker rm -f assigned-container");
+  });
+
+  test("agent-test Docker cleanup never adopts or prunes ownerless containers", async () => {
+    const context = contextWithStorage({ loadEnvironments: mock(async () => []) });
+    context.strictDockerOwner = true;
+
+    await expect(invoke("docker_system_prune", {}, context)).resolves.toMatchObject({
+      containersDeleted: 1,
+      spaceReclaimed: 768_000_000,
+    });
+    const log = await commandLogContents();
+    expect(log).toContain(
+      `docker container prune -f --filter label=orkestrator-owner=${REGISTRY_DOCKER_OWNER}`,
+    );
+    expect(log).not.toContain("label!=orkestrator-owner");
+  });
+
+  test("agent-test container commands reject foreign ownership before reads or execution", async () => {
+    const context = contextWithStorage({});
+    context.strictDockerOwner = true;
+
+    for (const [command, args] of [
+      ["get_container_logs", { containerId: "foreign-container" }],
+      ["start_codex_server", { containerId: "foreign-container" }],
+      ["create_terminal_session", { containerId: "foreign-container", cols: 80, rows: 24 }],
+      ["read_container_file", { containerId: "foreign-container", filePath: "README.md" }],
+    ] as const) {
+      await expect(invoke(command, args, context)).rejects.toThrow(
+        "not owned by this development profile",
+      );
+    }
+
+    const log = await commandLogContents();
+    expect(log.match(/docker inspect/g)).toHaveLength(4);
+    expect(log).not.toContain("docker logs");
+    expect(log).not.toContain("docker exec");
+
+    await expect(invoke(
+      "get_container_logs",
+      { containerId: "assigned-container" },
+      context,
+    )).resolves.toBe("");
+    expect(await commandLogContents()).toContain("docker logs --tail 200 assigned-container");
+  });
+
+  test("the ownership wrapper costs nothing outside an agent-test profile", async () => {
+    // The wrapper sits in front of *every* command carrying a containerId,
+    // including ones the renderer polls. Without the strict-mode guard each of
+    // those would pay for an extra `docker inspect` round trip in production.
+    const context = contextWithStorage({});
+    expect(context.strictDockerOwner).toBeFalsy();
+
+    await expect(invoke(
+      "get_container_logs",
+      { containerId: "foreign-container" },
+      context,
+    )).resolves.toBe("");
+
+    const log = await commandLogContents();
+    expect(log).not.toContain("docker inspect");
+    expect(log).toContain("docker logs --tail 200 foreign-container");
   });
 
   test("stops each bridge, reports authenticated OpenCode health, and delegates model caching", async () => {

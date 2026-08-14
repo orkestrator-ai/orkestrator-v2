@@ -5977,6 +5977,58 @@ describe("remote gateway", () => {
     expect(logout.headers["set-cookie"]?.[0]).toContain("Max-Age=0");
   });
 
+  test("uses a loopback-only single-use exchange for agent-test browser sessions", async () => {
+    const { info } = await startGateway({ agentTestMode: true });
+    const bootstrapUrl = `${info.url}__orkestrator/agent-test/bootstrap`;
+
+    const unauthenticated = await requestUrl(bootstrapUrl, { method: "POST" });
+    expect(unauthenticated.status).toBe(401);
+
+    const minted = await requestUrl(bootstrapUrl, {
+      method: "POST",
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+    expect(minted.status).toBe(201);
+    const { code } = minted.json() as { code: string };
+    expect(code).toHaveLength(43);
+
+    const exchange = await requestUrl(`${bootstrapUrl}/exchange`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    expect(exchange.status).toBe(200);
+    const cookie = exchange.headers["set-cookie"]?.[0];
+    expect(cookie).toContain("orkestrator_gateway_auth=");
+    expect(cookie).not.toContain(info.token);
+    expect(cookie).toContain("Max-Age=900");
+
+    const authenticated = await requestUrl(`${info.url}__orkestrator/status`, {
+      headers: { cookie },
+    });
+    expect(authenticated.status).toBe(200);
+
+    const reused = await requestUrl(`${bootstrapUrl}/exchange`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    expect(reused.status).toBe(401);
+  });
+
+  test("does not store the persistent gateway token in an agent-test login cookie", async () => {
+    const { info } = await startGateway({ agentTestMode: true });
+    const accepted = await requestUrl(`${info.url}__orkestrator/login`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: `token=${encodeURIComponent(info.token)}`,
+    });
+    const cookie = accepted.headers["set-cookie"]?.[0];
+    expect(accepted.status).toBe(303);
+    expect(cookie).toContain("orkestrator_gateway_auth=");
+    expect(cookie).not.toContain(info.token);
+  });
+
   test("returns and rotates the persisted token for an authenticated client", async () => {
     const { info, dataDir } = await startGateway({ env: {} });
     const oldCookie = `orkestrator_gateway_auth=${info.token}`;

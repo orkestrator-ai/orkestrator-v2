@@ -1,0 +1,9 @@
+{
+  "name": "orkestrator-agent-test-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun server.ts",
+    "check": "bun test"
+  }
+}

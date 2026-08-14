@@ -6,6 +6,12 @@ import "./lib/native/web-gateway";
 import { renderReactRoot } from "./lib/app-renderer";
 import { startApp } from "./lib/app-startup";
 
+const runtimeProfile = import.meta.env.VITE_ORKESTRATOR_PROFILE?.trim();
+if (runtimeProfile) {
+  document.body.dataset.orkestratorDevProfile = runtimeProfile;
+  document.title = `Orkestrator AI — DEV [${runtimeProfile}]`;
+}
+
 function logReactRootError(
   label: string,
   error: unknown,

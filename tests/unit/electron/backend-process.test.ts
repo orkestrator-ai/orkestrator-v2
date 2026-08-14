@@ -7,8 +7,11 @@ import { defaultConfig } from "../../../apps/backend/src/core/storage";
 import {
   BackendHttpClient,
   BackendProcess,
+  agentTestDockerConfigDir,
   createBackendProcessEnvironment,
   getBrowserGatewayStatus,
+  hostDockerConfigDir,
+  seedAgentTestDockerConfig,
 } from "../../../apps/desktop/electron/backend-process";
 
 const directories: string[] = [];
@@ -117,6 +120,139 @@ describe("Electron backend process supervisor", () => {
       ORKESTRATOR_GATEWAY_DISABLED: "0",
       ORKESTRATOR_VERSION: "2.4.9",
     });
+  });
+
+  test("agent-test child environments suppress ambient credentials by default", () => {
+    const isolated = createBackendProcessEnvironment({
+      HOME: "/Users/tester",
+      ANTHROPIC_API_KEY: "anthropic-secret",
+      OPENAI_API_KEY: "openai-secret",
+      OPENCODE_API_KEY: "opencode-secret",
+      GH_TOKEN: "github-secret",
+      CURSOR_API_KEY: "cursor-secret",
+      AWS_ACCESS_KEY_ID: "aws-secret",
+      NPM_TOKEN: "npm-secret",
+      DATABASE_URL: "postgres://secret",
+      SSH_AUTH_SOCK: "/tmp/private-agent.sock",
+      CUSTOM_SERVICE_LOGIN: "unexpected-credential-name",
+    }, true, "/resources", "2.8.2", {
+      flavor: "agent-test",
+      credentialSources: [],
+      isolatedCredentialRoot: "/profiles/qa/credentials",
+    });
+
+    expect(isolated.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(isolated.OPENAI_API_KEY).toBeUndefined();
+    expect(isolated.OPENCODE_API_KEY).toBeUndefined();
+    expect(isolated.GH_TOKEN).toBeUndefined();
+    expect(isolated.CURSOR_API_KEY).toBeUndefined();
+    expect(isolated.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(isolated.NPM_TOKEN).toBeUndefined();
+    expect(isolated.DATABASE_URL).toBeUndefined();
+    expect(isolated.SSH_AUTH_SOCK).toBeUndefined();
+    expect(isolated.CUSTOM_SERVICE_LOGIN).toBeUndefined();
+    expect(isolated.HOME).toBe("/profiles/qa/credentials/home");
+    expect(isolated.ORKESTRATOR_AGENT_TEST_HOST_HOME).toBe("/Users/tester");
+    expect(isolated.CODEX_HOME).toBe("/profiles/qa/credentials/codex");
+    expect(isolated.CLAUDE_CONFIG_DIR).toBe("/profiles/qa/credentials/claude");
+    expect(isolated.GIT_CONFIG_GLOBAL).toBe(process.platform === "win32" ? "NUL" : "/dev/null");
+  });
+
+  test("agent-test environments restore only explicitly allowed provider credentials", () => {
+    const isolated = createBackendProcessEnvironment({
+      HOME: "/Users/tester",
+      OPENAI_API_KEY: "allowed-openai",
+      ANTHROPIC_API_KEY: "blocked-anthropic",
+      NPM_TOKEN: "blocked-npm",
+    }, true, "/resources", "2.8.2", {
+      flavor: "agent-test",
+      credentialSources: ["codex"],
+      isolatedCredentialRoot: "/profiles/qa/credentials",
+    });
+
+    expect(isolated.OPENAI_API_KEY).toBe("allowed-openai");
+    expect(isolated.CODEX_HOME).toBe("/Users/tester/.codex");
+    expect(isolated.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(isolated.NPM_TOKEN).toBeUndefined();
+    expect(isolated.CLAUDE_CONFIG_DIR).toBe("/profiles/qa/credentials/claude");
+  });
+
+  test("agent-test environments keep the Docker daemon endpoint while isolating its credentials", () => {
+    // Where the daemon is, is topology, not a credential. Stripping it sends
+    // every backend `docker` call to the built-in default socket, which is not
+    // where Colima, Rancher Desktop, or a remote daemon listen.
+    const isolated = createBackendProcessEnvironment({
+      HOME: "/Users/tester",
+      DOCKER_HOST: "unix:///Users/tester/.colima/default/docker.sock",
+      DOCKER_CONTEXT: "colima",
+      DOCKER_TLS_VERIFY: "1",
+      DOCKER_CERT_PATH: "/Users/tester/.docker/certs",
+      DOCKER_AUTH_CONFIG: "{\"auths\":{}}",
+    }, true, "/resources", "2.8.2", {
+      flavor: "agent-test",
+      credentialSources: [],
+      isolatedCredentialRoot: "/profiles/qa/credentials",
+    });
+
+    expect(isolated.DOCKER_HOST).toBe("unix:///Users/tester/.colima/default/docker.sock");
+    expect(isolated.DOCKER_CONTEXT).toBe("colima");
+    expect(isolated.DOCKER_TLS_VERIFY).toBe("1");
+    expect(isolated.DOCKER_CERT_PATH).toBe("/Users/tester/.docker/certs");
+    // Registry credentials are not topology and stay behind.
+    expect(isolated.DOCKER_AUTH_CONFIG).toBeUndefined();
+    expect(isolated.DOCKER_CONFIG).toBe(agentTestDockerConfigDir("/profiles/qa/credentials"));
+  });
+
+  test("seeds the isolated Docker config with the host context and none of its credentials", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "orkestrator-docker-config-"));
+    directories.push(root);
+    const source = path.join(root, "host-docker");
+    await mkdir(path.join(source, "contexts", "meta", "abc123"), { recursive: true });
+    await writeFile(path.join(source, "contexts", "meta", "abc123", "meta.json"), "{\"Name\":\"desktop-linux\"}");
+    await writeFile(path.join(source, "config.json"), JSON.stringify({
+      currentContext: "desktop-linux",
+      credsStore: "desktop",
+      auths: { "registry.example.com": { auth: "c2VjcmV0OnRva2Vu" } },
+    }));
+
+    const isolatedCredentialRoot = path.join(root, "credentials");
+    await seedAgentTestDockerConfig({ isolatedCredentialRoot, sourceDir: source });
+
+    const target = agentTestDockerConfigDir(isolatedCredentialRoot);
+    // The context metadata is what makes `docker` reach the same daemon.
+    await expect(readFile(path.join(target, "contexts", "meta", "abc123", "meta.json"), "utf8"))
+      .resolves.toBe("{\"Name\":\"desktop-linux\"}");
+    const seeded = JSON.parse(await readFile(path.join(target, "config.json"), "utf8")) as Record<string, unknown>;
+    expect(seeded).toEqual({ currentContext: "desktop-linux" });
+    expect(Object.keys(seeded)).not.toContain("auths");
+    expect(Object.keys(seeded)).not.toContain("credsStore");
+  });
+
+  test("still produces a usable isolated Docker config when the host has none", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "orkestrator-docker-config-missing-"));
+    directories.push(root);
+    const isolatedCredentialRoot = path.join(root, "credentials");
+
+    // A machine that has never run Docker must not fail profile startup.
+    await seedAgentTestDockerConfig({
+      isolatedCredentialRoot,
+      sourceDir: path.join(root, "absent"),
+    });
+
+    const seeded = await readFile(
+      path.join(agentTestDockerConfigDir(isolatedCredentialRoot), "config.json"),
+      "utf8",
+    );
+    expect(JSON.parse(seeded)).toEqual({});
+  });
+
+  test("resolves the host Docker configuration directory from DOCKER_CONFIG or the home directory", () => {
+    expect(hostDockerConfigDir({ DOCKER_CONFIG: "/custom/docker" }, "/Users/tester"))
+      .toBe("/custom/docker");
+    expect(hostDockerConfigDir({ DOCKER_CONFIG: "   " }, "/Users/tester"))
+      .toBe(path.join("/Users/tester", ".docker"));
+    expect(hostDockerConfigDir({}, "/Users/tester"))
+      .toBe(path.join("/Users/tester", ".docker"));
   });
 
   test("start threads the Electron application version into the spawned child", async () => {

@@ -86,8 +86,8 @@ function createDependencies(
   };
 }
 
-const WORKSPACE = "workspace (web, backend, web-public, cli, protocol)";
-const ROOT = "root (tests/)";
+const WORKSPACE = "workspace (web, backend, desktop, web-public, cli, protocol)";
+const ROOT = "root and agent-support tests";
 const BRIDGES = "bridges";
 const PROTOCOL = "codex protocol lockfile";
 
@@ -144,6 +144,10 @@ describe("scripts/test-all.ts", () => {
     expect(workspaceGroup.args).toContain("--concurrency=2");
     expect(workspaceGroup.env).toEqual({ [WORKSPACE_WORKERS_ENV]: "2" });
     expect(rootGroup.args).toContain("--parallel=4");
+    expect(rootGroup.args.slice(0, 2)).toEqual(["test", "./tests"]);
+    expect(rootGroup.args).toContain("./e2e/agent-testing/artifact-sanitizer.test.ts");
+    expect(rootGroup.args).toContain("./test-fixtures/agent-project/server.test.ts");
+    expect(workspaceGroup.args).toContain("--filter=@orkestrator/desktop");
     expect(bridgeGroup.args).toContain("--parallel=2");
   });
 
@@ -397,6 +401,25 @@ describe("scripts/test-all.ts", () => {
     });
 
     expect(exitStatuses).toEqual([13]);
+  });
+
+  test("the default exit path sets a status instead of tearing the process down", async () => {
+    // Every group's output is printed as one buffered block, and a pipe — which
+    // is what the documented `| tee` workflow makes stdout — accepts that write
+    // asynchronously. `process.exit` would kill the process mid-flush and
+    // truncate the failing group's output at the pipe buffer, discarding the
+    // only text that explains why the run failed.
+    const previousExitCode = process.exitCode;
+    try {
+      const { dependencies } = createDependencies({ statusByName: { [ROOT]: 13 } });
+      await main(dependencies);
+      expect(process.exitCode).toBe(13);
+    } finally {
+      // `undefined` does not clear it in Bun, and leaving 13 behind would fail
+      // this file's own run. Bun tracks test failures itself, so restoring 0 as
+      // the "no status yet" value cannot mask one.
+      process.exitCode = previousExitCode ?? 0;
+    }
   });
 
   test("CLI entrypoint returns normally after successful suites", async () => {

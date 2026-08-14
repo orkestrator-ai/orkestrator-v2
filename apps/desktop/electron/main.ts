@@ -31,13 +31,20 @@ import {
 import { createBrowserPreviewMainAdapters } from "./browser-preview-main-adapters.js";
 import { claimSingleInstanceLock, registerSecondInstanceFocus } from "./single-instance.js";
 import { createApplicationMenuTemplate } from "./application-menu.js";
+import { runtimeProfileFromEnvironment } from "./runtime-profile.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const isDev = process.env.ELECTRON_DEV === "1";
+const runtimeProfile = runtimeProfileFromEnvironment();
+const runtimeFlavor = runtimeProfile?.flavor ?? (isDev ? "development" : "production");
+const productName = runtimeProfile?.electronTitle ?? PRODUCT_NAME;
 
-app.setName(PRODUCT_NAME);
-app.setPath("userData", path.join(app.getPath("appData"), userDataDirectoryName(isDev)));
+app.setName(productName);
+app.setPath(
+  "userData",
+  runtimeProfile?.dataDir ?? path.join(app.getPath("appData"), userDataDirectoryName(isDev)),
+);
 
 // Must follow the `userData` override above: the lock is scoped to that path.
 const isPrimaryInstance = claimSingleInstanceLock(app);
@@ -64,7 +71,7 @@ function emitToRenderers(event: string, payload: unknown): void {
 
 function createMenu(): void {
   const template = createApplicationMenuTemplate({
-    productName: PRODUCT_NAME,
+    productName,
     closeTab: () => emitToRenderers("menu-close-tab", undefined),
     zoom: (direction) => emitToRenderers("menu-zoom", direction),
   });
@@ -80,6 +87,7 @@ async function createWindow(): Promise<void> {
     appPath: app.getAppPath(),
     rendererRoot: isDev ? undefined : path.join(process.resourcesPath, "web"),
     devServerUrl: process.env.VITE_DEV_SERVER_URL,
+    title: productName,
   });
   mainWindow = createdWindow;
   registerBrowserPreviewWindowCleanup({
@@ -134,7 +142,9 @@ async function startApplication(): Promise<void> {
     resourcesPath: process.resourcesPath,
   });
   const dataDir = app.getPath("userData");
-  const storedPlatformSelection = await loadAgentPlatformSelection(dataDir);
+  const storedPlatformSelection = runtimeFlavor === "agent-test"
+    ? { enabled: [], needsFirstRunChoice: false }
+    : await loadAgentPlatformSelection(dataDir);
   const enabledAgentPlatforms = storedPlatformSelection.needsFirstRunChoice
     ? await chooseAgentPlatforms({ BrowserWindowCtor: BrowserWindow, dirname: __dirname })
     : storedPlatformSelection.enabled;
@@ -164,14 +174,23 @@ async function startApplication(): Promise<void> {
     resourceRoot,
     toolchainBinDir,
     rendererDevServerUrl: isDev ? process.env.VITE_DEV_SERVER_URL : undefined,
-    desktopWebClient: true,
+    gatewayHost: runtimeProfile?.gatewayHost,
+    gatewayPort: runtimeProfile?.gatewayPort,
+    allowNonTailscaleBind: runtimeFlavor === "agent-test",
+    desktopWebClient: runtimeFlavor !== "agent-test",
+    runtimeFlavor,
+    worktreeDir: runtimeProfile?.worktreeDir,
+    dockerImage: runtimeProfile?.dockerImage,
+    strictDockerOwner: runtimeFlavor === "agent-test",
+    strictGatewayPort: runtimeFlavor === "agent-test",
+    credentialSources: runtimeProfile?.credentialSources,
     onEvent: (event, payload) => {
       if (connectionManager) connectionManager.handleLocalEvent(event, payload);
       else emitToRenderers(event, payload);
     },
     onUnexpectedExit: (error) => {
       dialog.showErrorBox(
-        `${PRODUCT_NAME} backend stopped`,
+        `${productName} backend stopped`,
         `${error.message}\n\nThe application will close. Restart it to recover.`,
       );
       app.quit();
@@ -215,6 +234,18 @@ async function startApplication(): Promise<void> {
   await createWindow();
   await toolchainProgress.close();
 
+  if (runtimeProfile) {
+    const info = backendProcess.getInfo();
+    process.stdout.write(`${JSON.stringify({
+      type: "orkestrator-electron-ready",
+      profile: runtimeProfile.id,
+      electronPid: process.pid,
+      backendPid: backendProcess.getPid(),
+      authFile: info?.authFile,
+      browserUrl: info?.browserUrl,
+    })}\n`);
+  }
+
   registerBrowserPreviewWindowActivation({
     onActivate: (listener) => app.on("activate", listener),
     getWindowCount: () => BrowserWindow.getAllWindows().length,
@@ -229,19 +260,19 @@ if (isPrimaryInstance) {
   void app.whenReady().then(startApplication).catch((error: unknown) => {
     console.error("[Desktop] Startup failed:", error);
     dialog.showErrorBox(
-      `${PRODUCT_NAME} failed to start`,
+      `${productName} failed to start`,
       error instanceof Error ? error.message : String(error),
     );
     app.quit();
   });
 } else {
   console.error(
-    `[Desktop] Another ${PRODUCT_NAME} instance is already using ${app.getPath("userData")}. Quit it and try again.`,
+    `[Desktop] Another ${productName} instance is already using ${app.getPath("userData")}. Quit it and try again.`,
   );
 }
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  if (process.platform !== "darwin" || runtimeFlavor === "agent-test") app.quit();
 });
 
 registerBackendShutdown(app, backendProcess);

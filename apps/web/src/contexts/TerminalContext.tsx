@@ -44,6 +44,8 @@ export interface CreateTabOptions {
   loopedReviewId?: string;
   /** Existing authoritative workflow opened by a Multi Review tab. */
   multiReviewId?: string;
+  /** Reviewer transcript opened inside an existing Multi Review workflow. */
+  multiReviewReviewerId?: string;
   /** Existing native provider session opened from a backend-owned workflow. */
   resumeSessionId?: string;
 }

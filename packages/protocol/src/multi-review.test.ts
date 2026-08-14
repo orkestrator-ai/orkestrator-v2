@@ -92,4 +92,27 @@ describe("multi review protocol", () => {
     expect(isMultiReviewWorkflow({ ...workflow, cancellingSince: undefined })).toBe(false);
     expect(isMultiReviewWorkflow({ ...workflow, phase: "reviewing" })).toBe(false);
   });
+
+  test("accepts bounded durable schema-repair state", () => {
+    const workflow = {
+      version: MULTI_REVIEW_WORKFLOW_VERSION,
+      controller: "backend",
+      id: "workflow-repair", environmentId: "env-1", projectId: "project-1",
+      targetBranch: "main",
+      reviewers: [{
+        id: "reviewer-1", agent: "claude", model: "opus", status: "running",
+        requestId: "repair-request", dispatchState: "prepared",
+        schemaRepairAttempts: 1, schemaRepairPrompt: "Return corrected JSON.",
+      }],
+      fixModel: { agent: "codex", model: "gpt-5.6" },
+      phase: "reviewing",
+      createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
+      backendRevision: 2,
+    };
+    expect(isMultiReviewWorkflow(workflow)).toBe(true);
+    expect(isMultiReviewWorkflow({
+      ...workflow,
+      reviewers: [{ ...workflow.reviewers[0], schemaRepairAttempts: 4 }],
+    })).toBe(false);
+  });
 });

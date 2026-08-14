@@ -4,14 +4,18 @@ import {
   isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
   isStartMultiReviewInput,
+  type MultiReviewPhase,
   type MultiReviewModelSelection,
+  type MultiReviewReviewerTranscript,
   type MultiReviewWorkflow,
   type StartMultiReviewInput,
 } from "@orkestrator/protocol/multi-review";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import {
+  ReviewContractValidationError,
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
-  parseStructuredReviewReport,
+  safeParseStructuredReviewReport,
+  type ReviewContractValidationIssue,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { Environment } from "./models.js";
@@ -23,7 +27,7 @@ import {
   type BuildPipelineProvider,
   type ProviderDependencies,
 } from "./build-pipeline-provider.js";
-import { addressPrompt } from "./build-pipeline-prompts.js";
+import { addressPrompt, structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
 import {
   REVIEW_FIX_RESULT_JSON_SCHEMA,
   parseFixResult,
@@ -38,6 +42,13 @@ const DEFAULT_POLL_MS = 1_000;
 const CONTROLLER_LEASE_MS = 15_000;
 const CONTROLLER_RENEW_MS = 5_000;
 const MAX_IDLE_RESULT_POLLS = 5;
+const MAX_SCHEMA_REPAIR_ATTEMPTS = 3;
+/**
+ * Caps one transcript response. The reviewer tab polls this read model while a
+ * review runs, and the bridge transcript itself is unbounded, so without a cap
+ * every poll would carry the whole history. The viewer renders the tail.
+ */
+const MAX_REVIEWER_TRANSCRIPT_MESSAGES = 500;
 const CANCELLATION_DEADLINE_MS = 10 * 60_000;
 
 function nowIso(): string {
@@ -46,6 +57,48 @@ function nowIso(): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+class FixResultValidationError extends Error {
+  readonly issues: readonly ReviewContractValidationIssue[];
+
+  constructor(
+    message: string,
+    path = "$",
+    details?: Record<string, unknown>,
+  ) {
+    const detailText = details
+      ? ` Provider validation details: ${JSON.stringify(details)}`
+      : "";
+    super(`${message}${detailText}`);
+    this.name = "FixResultValidationError";
+    this.issues = [{ path, code: "invalid_value", message: this.message }];
+  }
+}
+
+function isSupervisedPhase(phase: MultiReviewPhase): boolean {
+  return phase === "reviewing"
+    || phase === "consolidating"
+    || phase === "fixing"
+    || phase === "cancelling";
+}
+
+function hasWorkflowActivity(workflow: MultiReviewWorkflow): boolean {
+  return isSupervisedPhase(workflow.phase)
+    || workflow.reviewers.some((reviewer) => reviewer.status === "running")
+    || workflow.fixSession?.status === "running";
+}
+
+const NO_VALID_REPORT_ERROR = "No reviewer produced a valid report";
+
+/** Summarises why every reviewer failed, deduplicating a shared root cause. */
+function multiReviewFailureSummary(
+  reviewers: readonly MultiReviewWorkflow["reviewers"][number][],
+): string {
+  const reasons = [...new Set(reviewers.flatMap((reviewer) =>
+    reviewer.error ? [reviewer.error] : []))];
+  if (reasons.length === 0) return NO_VALID_REPORT_ERROR;
+  return `${NO_VALID_REPORT_ERROR}: ${reasons.join("; ")}`.slice(0, 4_096);
 }
 
 export interface MultiReviewServiceOptions {
@@ -67,7 +120,9 @@ export class MultiReviewService {
   private readonly locks = new Map<string, Promise<void>>();
   private readonly scheduledRuns = new Map<string, { pending: boolean; promise: Promise<void> }>();
   private readonly providers = new Map<string, BuildPipelineProvider>();
+  private readonly providerCreations = new Map<string, Promise<BuildPipelineProvider>>();
   private readonly providerUsers = new Map<string, Set<string>>();
+  private readonly providerReaders = new Map<string, number>();
   private readonly leases = new Map<string, { token: string; expiresAt: string }>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private renewTimer: ReturnType<typeof setInterval> | null = null;
@@ -86,6 +141,11 @@ export class MultiReviewService {
     if (this.renewTimer) clearInterval(this.renewTimer);
     this.timer = null;
     this.renewTimer = null;
+    // The workflow store is authoritative across backend restarts. Restore the
+    // environment projection before the renderer can mistake an active review
+    // for completed work, and retire a stale working source left by a workflow
+    // that settled while the previous process was shutting down.
+    await this.reconcileEnvironmentActivity();
     if (this.options.autoAdvance !== false) {
       this.timer = setInterval(() => void this.requestTick(), this.options.pollIntervalMs ?? DEFAULT_POLL_MS);
       this.timer.unref?.();
@@ -111,10 +171,67 @@ export class MultiReviewService {
     ]);
     await Promise.allSettled([...this.providers.values()].map((provider) => provider.dispose?.()));
     this.providers.clear();
+    this.providerCreations.clear();
     this.providerUsers.clear();
+    this.providerReaders.clear();
     await Promise.allSettled([...this.leases].map(([workflowId, lease]) =>
       this.storage.releaseMultiReviewController(workflowId, this.ownerId, lease.token)));
     this.leases.clear();
+  }
+
+  /**
+   * Reads a reviewer's live provider transcript without copying it into the
+   * workflow snapshot. The provider remains authoritative while the review is
+   * running; callers can refetch after a hidden tab becomes active again.
+   */
+  async reviewerTranscript(
+    workflowId: string,
+    reviewerId: string,
+  ): Promise<MultiReviewReviewerTranscript> {
+    const record = await this.storage.getMultiReviewWorkflow(workflowId);
+    if (!record || !isMultiReviewWorkflow(record.snapshot)) {
+      throw new Error(`Multi review workflow not found: ${workflowId}`);
+    }
+    const workflow = record.snapshot;
+    const reviewer = workflow.reviewers.find((entry) => entry.id === reviewerId);
+    if (!reviewer) throw new Error(`Multi review reviewer not found: ${reviewerId}`);
+
+    let messages: unknown[] = [];
+    if (reviewer.providerSessionId) {
+      const key = this.providerKey(workflow, reviewer);
+      this.providerReaders.set(key, (this.providerReaders.get(key) ?? 0) + 1);
+      try {
+        const provider = await this.providerInstance(workflow, reviewer);
+        provider.registerSession?.(reviewer.providerSessionId, {
+          origin: "looped-review",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          phase: "review",
+          workflowId: workflow.id,
+          provider: reviewer.agent,
+          fence: reviewer.sessionKey,
+        });
+        const transcript = await provider.messages(reviewer.providerSessionId);
+        messages = transcript.length > MAX_REVIEWER_TRANSCRIPT_MESSAGES
+          ? transcript.slice(-MAX_REVIEWER_TRANSCRIPT_MESSAGES)
+          : transcript;
+      } finally {
+        await this.releaseProviderReaderByKey(key);
+      }
+    }
+
+    return {
+      workflowId: workflow.id,
+      reviewerId: reviewer.id,
+      agent: reviewer.agent,
+      model: reviewer.model,
+      ...(reviewer.reasoningEffort ? { reasoningEffort: reviewer.reasoningEffort } : {}),
+      status: reviewer.status,
+      messages,
+      ...(reviewer.report ? { report: reviewer.report } : {}),
+      ...(reviewer.error ? { error: reviewer.error } : {}),
+      ...(reviewer.startedAt ? { startedAt: reviewer.startedAt } : {}),
+      ...(reviewer.completedAt ? { completedAt: reviewer.completedAt } : {}),
+    };
   }
 
   async start(input: StartMultiReviewInput): Promise<MultiReviewWorkflow> {
@@ -148,6 +265,7 @@ export class MultiReviewService {
       throw new Error("Finish, cancel, or delete the existing Multi Review before starting another");
     }
     workflow.backendRevision = saved.revision;
+    await this.syncWorkflowActivity(workflow);
     void this.advanceNow(workflow.id);
     return workflow;
   }
@@ -180,19 +298,26 @@ export class MultiReviewService {
       if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
       const { workflow, token } = controlled;
       if (workflow.phase !== "failed") return workflow;
-      const failedReviewer = workflow.reviewers.find((reviewer) => reviewer.status === "failed");
-      if (failedReviewer) {
-        // Retrying allocates a fresh session, so the abandoned one must be
-        // aborted while its id is still known. Clearing the id first would
-        // leave a provider turn running that nothing can ever reach again.
-        await this.abandonSession(workflow, failedReviewer, failedReviewer.providerSessionId);
-        failedReviewer.status = "pending";
-        delete failedReviewer.error;
-        delete failedReviewer.providerSessionId;
-        delete failedReviewer.sessionKey;
-        delete failedReviewer.requestId;
-        delete failedReviewer.dispatchState;
-        delete failedReviewer.idleResultPolls;
+      // Reviewer failures are independent, so a single pass can fail several of
+      // them at once. Restoring only the first would consolidate from fewer
+      // reviewers than the user asked for, without saying so.
+      const failedReviewers = workflow.reviewers.filter((reviewer) => reviewer.status === "failed");
+      if (failedReviewers.length > 0) {
+        for (const failedReviewer of failedReviewers) {
+          // Retrying allocates a fresh session, so the abandoned one must be
+          // aborted while its id is still known. Clearing the id first would
+          // leave a provider turn running that nothing can ever reach again.
+          await this.abandonSession(workflow, failedReviewer, failedReviewer.providerSessionId);
+          failedReviewer.status = "pending";
+          delete failedReviewer.error;
+          delete failedReviewer.providerSessionId;
+          delete failedReviewer.sessionKey;
+          delete failedReviewer.requestId;
+          delete failedReviewer.dispatchState;
+          delete failedReviewer.schemaRepairAttempts;
+          delete failedReviewer.schemaRepairPrompt;
+          delete failedReviewer.idleResultPolls;
+        }
         workflow.phase = "reviewing";
       } else if (workflow.consolidatedReport && workflow.fixSession) {
         workflow.phase = "ready";
@@ -260,8 +385,7 @@ export class MultiReviewService {
     await Promise.all(records.flatMap((record) => {
       if (!isMultiReviewWorkflow(record.snapshot)) return [];
       const phase = record.snapshot.phase;
-      return phase === "reviewing" || phase === "consolidating" || phase === "fixing"
-        || phase === "cancelling" ? [this.runLocked(record.id)] : [];
+      return isSupervisedPhase(phase) ? [this.runLocked(record.id)] : [];
     }));
   }
 
@@ -334,7 +458,49 @@ export class MultiReviewService {
       workflow, workflow.backendRevision, { ownerId: this.ownerId, token },
     );
     workflow.backendRevision = saved.revision;
+    await this.syncWorkflowActivity(workflow);
     return workflow;
+  }
+
+  /** Project durable workflow activity into the environment badge source. */
+  private async syncWorkflowActivity(workflow: MultiReviewWorkflow): Promise<void> {
+    const desired = hasWorkflowActivity(workflow) ? "working" : "idle";
+    const environment = await this.storage.getEnvironment(workflow.environmentId);
+    if (!environment || environment.agentActivitySources?.["multi-review"]?.state === desired) {
+      return;
+    }
+    await this.storage.setEnvironmentAgentActivity(
+      workflow.environmentId,
+      desired,
+      nowIso(),
+      "multi-review",
+    );
+  }
+
+  /** Rehydrate active reviews and clear stale review activity on service boot. */
+  private async reconcileEnvironmentActivity(): Promise<void> {
+    const [records, environments] = await Promise.all([
+      this.storage.listAllMultiReviewWorkflows(),
+      this.storage.loadEnvironments(),
+    ]);
+    const activeEnvironmentIds = new Set(
+      records.flatMap((record) =>
+        isMultiReviewWorkflow(record.snapshot) && hasWorkflowActivity(record.snapshot)
+          ? [record.snapshot.environmentId]
+          : []),
+    );
+    await Promise.all(environments.flatMap((environment) => {
+      const desired = activeEnvironmentIds.has(environment.id) ? "working" : "idle";
+      if (!activeEnvironmentIds.has(environment.id)
+        && !environment.agentActivitySources?.["multi-review"]) return [];
+      if (environment.agentActivitySources?.["multi-review"]?.state === desired) return [];
+      return [this.storage.setEnvironmentAgentActivity(
+        environment.id,
+        desired,
+        nowIso(),
+        "multi-review",
+      )];
+    }));
   }
 
   private async advance(workflowId: string): Promise<void> {
@@ -467,20 +633,51 @@ export class MultiReviewService {
       const reviewer = workflow.reviewers[index]!;
       if (reviewer.status === "completed" || reviewer.status === "failed"
         || reviewer.status === "cancelled") continue;
-      // Tag every failure with the reviewer being advanced. `fail()` cannot
-      // otherwise tell which one raised it, and guessing marks a healthy
-      // running reviewer failed while the real one stays pending.
-      const done = await this.advanceReviewer(workflow, token, reviewer, index)
-        .catch((error) => {
-          if (error instanceof ControllerFenceError) throw error;
-          throw new ReviewerStageError(reviewer.id, error);
-        });
+      let done: "continue" | "stop";
+      try {
+        done = await this.advanceReviewer(workflow, token, reviewer, index);
+      } catch (error) {
+        if (error instanceof ControllerFenceError) throw error;
+        // A reviewer is one independent input to the consolidated result. Keep
+        // its failure local so the remaining reviewers can still produce a
+        // valid report for the workflow.
+        // The failure may have been raised while the provider turn was still
+        // executing. Abort the session best-effort so that turn cannot keep
+        // running through consolidation and the fix stage; the session id is
+        // kept so the read-only transcript stays reachable and a later retry
+        // can abort again without harm.
+        if (reviewer.providerSessionId) {
+          await this.abandonSession(workflow, reviewer, reviewer.providerSessionId);
+        }
+        reviewer.status = "failed";
+        reviewer.error = errorMessage(error).slice(0, 4_096);
+        delete reviewer.idleResultPolls;
+        await this.save(workflow, token);
+        done = "continue";
+      }
       if (done === "stop") return;
     }
-    if (workflow.reviewers.every((reviewer) => reviewer.status === "completed")) {
+
+    if (workflow.reviewers.some((reviewer) =>
+      reviewer.status === "pending" || reviewer.status === "running")) return;
+
+    const completedReviewers = workflow.reviewers.filter((reviewer) =>
+      reviewer.status === "completed" && reviewer.report !== undefined);
+    if (completedReviewers.length > 0) {
       workflow.phase = "consolidating";
+      delete workflow.error;
       await this.save(workflow, token);
+      return;
     }
+
+    workflow.phase = "failed";
+    // Reviewers fail locally, so an environment-wide cause (an unreachable
+    // bridge, a deleted worktree) reaches here as the same message on every
+    // reviewer. Carry the distinct causes up rather than reporting a bare
+    // "no valid report", which reads as a model-quality problem instead.
+    workflow.error = multiReviewFailureSummary(workflow.reviewers);
+    await this.save(workflow, token);
+    await this.release(workflow, token);
   }
 
   /** Advances one reviewer. `stop` ends the pass without touching the rest. */
@@ -532,12 +729,12 @@ export class MultiReviewService {
       try {
         await provider.send(
           reviewer.providerSessionId,
-          createMultiReviewerPrompt({
-            targetBranch: workflow.targetBranch,
-            reviewInstruction: workflow.reviewInstruction,
-            reviewerNumber: index + 1,
-            reviewerCount: workflow.reviewers.length,
-          }),
+          reviewer.schemaRepairPrompt ?? createMultiReviewerPrompt({
+              targetBranch: workflow.targetBranch,
+              reviewInstruction: workflow.reviewInstruction,
+              reviewerNumber: index + 1,
+              reviewerCount: workflow.reviewers.length,
+            }),
           {
             requestId: reviewer.requestId,
             schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema,
@@ -580,10 +777,8 @@ export class MultiReviewService {
       reviewer.error = status === "missing"
         ? "The reviewer session no longer exists"
         : "The reviewer session failed";
-      workflow.phase = "failed";
-      workflow.error = reviewer.error;
       await this.save(workflow, token);
-      return "stop";
+      return "continue";
     }
     const result = await provider.structured<unknown>(reviewer.providerSessionId, reviewer.requestId);
     await this.assertFence(workflow.id, token);
@@ -593,12 +788,47 @@ export class MultiReviewService {
         "The reviewer became idle without returning its structured report",
       );
     }
-    reviewer.report = this.parseReportResult(result);
+    const parsed = this.parseReportResult(result);
+    if (!parsed.success) {
+      return this.prepareReviewerReportRepair(
+        workflow,
+        token,
+        reviewer,
+        parsed.error,
+      );
+    }
+    reviewer.report = parsed.data;
     reviewer.status = "completed";
     reviewer.completedAt = nowIso();
+    delete reviewer.schemaRepairPrompt;
     delete reviewer.idleResultPolls;
     await this.save(workflow, token);
     return "continue";
+  }
+
+  private async prepareReviewerReportRepair(
+    workflow: MultiReviewWorkflow,
+    token: string,
+    reviewer: MultiReviewWorkflow["reviewers"][number],
+    error: ReviewContractValidationError,
+  ): Promise<"stop"> {
+    const attempt = (reviewer.schemaRepairAttempts ?? 0) + 1;
+    if (attempt > MAX_SCHEMA_REPAIR_ATTEMPTS) {
+      throw new Error(
+        `${error.message} The reviewer could not produce a valid report in ${MAX_SCHEMA_REPAIR_ATTEMPTS} repair attempts.`,
+      );
+    }
+    reviewer.schemaRepairAttempts = attempt;
+    reviewer.schemaRepairPrompt = structuredReportRepairPrompt(
+      error.issues,
+      attempt,
+      MAX_SCHEMA_REPAIR_ATTEMPTS,
+    );
+    reviewer.requestId = randomUUID();
+    reviewer.dispatchState = "prepared";
+    delete reviewer.idleResultPolls;
+    await this.save(workflow, token);
+    return "stop";
   }
 
   /** Counts one stalled poll, failing the reviewer once the bound is reached. */
@@ -612,11 +842,9 @@ export class MultiReviewService {
     if (reviewer.idleResultPolls >= MAX_IDLE_RESULT_POLLS) {
       reviewer.status = "failed";
       reviewer.error = error;
-      workflow.phase = "failed";
-      workflow.error = error;
     }
     await this.save(workflow, token);
-    return reviewer.status === "failed" ? "stop" : "continue";
+    return "continue";
   }
 
   /** Observed progress retires the stall count so it cannot accumulate. */
@@ -682,17 +910,20 @@ export class MultiReviewService {
     if (request.state === "prepared") {
       request.state = "dispatching";
       await this.save(workflow, token);
-      const prompt = request.kind === "consolidate"
+      const prompt = request.schemaRepairPrompt ?? (request.kind === "consolidate"
         ? createMultiReviewConsolidationPrompt({
             targetBranch: workflow.targetBranch,
-            reports: workflow.reviewers.map((reviewer) => ({
-              reviewerId: reviewer.id,
-              agent: reviewer.agent,
-              model: reviewer.model,
-              report: reviewer.report!,
-            })),
+            reports: workflow.reviewers.flatMap((reviewer) =>
+              reviewer.status === "completed" && reviewer.report
+                ? [{
+                    reviewerId: reviewer.id,
+                    agent: reviewer.agent,
+                    model: reviewer.model,
+                    report: reviewer.report,
+                  }]
+                : []),
           })
-        : addressPrompt(workflow.consolidatedReport!);
+        : addressPrompt(workflow.consolidatedReport!));
       try {
         await provider.send(session.providerSessionId, prompt, {
           requestId: request.requestId,
@@ -751,7 +982,18 @@ export class MultiReviewService {
       return;
     }
     if (request.kind === "consolidate") {
-      workflow.consolidatedReport = this.parseReportResult(result);
+      const parsed = this.parseReportResult(result);
+      if (!parsed.success) {
+        await this.prepareFixSessionSchemaRepair(
+          workflow,
+          token,
+          request,
+          session,
+          parsed.error,
+        );
+        return;
+      }
+      workflow.consolidatedReport = parsed.data;
       workflow.phase = "ready";
       session.status = "idle";
       session.completedAt = nowIso();
@@ -760,8 +1002,32 @@ export class MultiReviewService {
       await this.release(workflow, token);
       return;
     }
-    if (!result.ok) throw new Error(result.error.message);
-    const fixed = parseFixResult(result.value);
+    let fixed: ReturnType<typeof parseFixResult>;
+    if (!result.ok && result.error.code !== "schema_retry_exhausted"
+      && result.error.code !== "malformed_output") {
+      throw new Error(result.error.message);
+    }
+    try {
+      if (!result.ok) {
+        const path = typeof result.error.details?.path === "string"
+          ? result.error.details.path
+          : "$";
+        throw new FixResultValidationError(result.error.message, path, result.error.details);
+      }
+      fixed = parseFixResult(result.value);
+    } catch (error) {
+      const diagnostic = error instanceof FixResultValidationError
+        ? error
+        : new FixResultValidationError(errorMessage(error));
+      await this.prepareFixSessionSchemaRepair(
+        workflow,
+        token,
+        request,
+        session,
+        diagnostic,
+      );
+      return;
+    }
     workflow.fixResult = fixed;
     session.completedAt = nowIso();
     delete workflow.activeRequest;
@@ -778,8 +1044,62 @@ export class MultiReviewService {
   }
 
   private parseReportResult(result: StructuredOutputResult<unknown>) {
-    if (!result.ok) throw new Error(result.error.message);
-    return parseStructuredReviewReport(result.value);
+    if (!result.ok) {
+      if (result.error.code === "schema_retry_exhausted"
+        || result.error.code === "malformed_output") {
+        const detailPath = typeof result.error.details?.path === "string"
+          ? result.error.details.path
+          : "$";
+        const detailText = result.error.details
+          ? ` Provider validation details: ${JSON.stringify(result.error.details)}`
+          : "";
+        return {
+          success: false as const,
+          error: new ReviewContractValidationError("structured-review-report", [{
+            path: detailPath,
+            code: "invalid_value",
+            message: `${result.error.message}${detailText}`,
+          }]),
+        };
+      }
+      throw new Error(result.error.message);
+    }
+    return safeParseStructuredReviewReport(result.value);
+  }
+
+  private async prepareFixSessionSchemaRepair(
+    workflow: MultiReviewWorkflow,
+    token: string,
+    request: NonNullable<MultiReviewWorkflow["activeRequest"]>,
+    session: NonNullable<MultiReviewWorkflow["fixSession"]>,
+    error: Pick<ReviewContractValidationError, "message" | "issues">,
+  ): Promise<void> {
+    const attempt = (request.schemaRepairAttempts ?? 0) + 1;
+    if (attempt > MAX_SCHEMA_REPAIR_ATTEMPTS) {
+      throw new Error(
+        `${error.message} The fix model could not produce a valid ${request.kind === "fix" ? "fix result" : "consolidated report"} in ${MAX_SCHEMA_REPAIR_ATTEMPTS} repair attempts.`,
+      );
+    }
+    const requestId = randomUUID();
+    request.requestId = requestId;
+    request.state = "prepared";
+    request.createdAt = nowIso();
+    request.schemaRepairAttempts = attempt;
+    request.schemaRepairPrompt = structuredReportRepairPrompt(
+      error.issues,
+      attempt,
+      MAX_SCHEMA_REPAIR_ATTEMPTS,
+      request.kind === "fix" ? {
+        schema: REVIEW_FIX_RESULT_JSON_SCHEMA,
+        resultLabel: "fix result",
+        workLabel: "fix work",
+        stageLabel: "fix stage",
+        preserveInstruction: "Do not repeat the fix, re-run validation, or edit any file. Keep the files changed, commands run, notes, and limitations you already established, and change only what the errors above require.",
+      } : undefined,
+    );
+    delete request.idleResultPolls;
+    session.requestIds.push(requestId);
+    await this.save(workflow, token);
   }
 
   private async resolveUnattendedInteractions(
@@ -817,17 +1137,15 @@ export class MultiReviewService {
     workflow.phase = "failed";
     workflow.error = errorMessage(error).slice(0, 4_096);
     if (failedDuringReview) {
-      // Prefer the reviewer the failure was raised against. Falling back to the
-      // first running one would blame a healthy reviewer for a later reviewer's
-      // failure, and retrying that reviewer would then abandon a live session.
-      const attributed = error instanceof ReviewerStageError
-        ? workflow.reviewers.find((entry) => entry.id === error.reviewerId
-          && entry.status !== "completed" && entry.status !== "cancelled")
-        : undefined;
-      const reviewer = attributed
-        ?? workflow.reviewers.find((entry) => entry.status === "running")
-        ?? workflow.reviewers.find((entry) => entry.status === "pending");
-      if (reviewer) {
+      // This failure abandons every live reviewer session, so none of them may
+      // stay `running` on a settled workflow: `hasWorkflowActivity` reads that
+      // status, and a survivor would pin the environment badge to "working"
+      // for good, including across the boot-time reconcile.
+      const running = workflow.reviewers.filter((entry) => entry.status === "running");
+      const abandoned = running.length > 0
+        ? running
+        : workflow.reviewers.filter((entry) => entry.status === "pending").slice(0, 1);
+      for (const reviewer of abandoned) {
         reviewer.status = "failed";
         reviewer.error = workflow.error;
       }
@@ -848,15 +1166,29 @@ export class MultiReviewService {
       ...workflow.reviewers.map((reviewer) => this.providerKey(workflow, reviewer)),
       this.providerKey(workflow, workflow.fixModel),
     ]);
-    await Promise.allSettled([...keys].map(async (key) => {
-      const users = this.providerUsers.get(key);
-      users?.delete(workflow.id);
-      if (users && users.size > 0) return;
-      this.providerUsers.delete(key);
-      const provider = this.providers.get(key);
-      this.providers.delete(key);
-      await provider?.dispose?.();
-    }));
+    await Promise.allSettled([...keys].map((key) => this.releaseProviderUserByKey(workflow.id, key)));
+  }
+
+  private async releaseProviderUserByKey(workflowId: string, key: string): Promise<void> {
+    const users = this.providerUsers.get(key);
+    users?.delete(workflowId);
+    if (users?.size === 0) this.providerUsers.delete(key);
+    await this.disposeProviderIfUnused(key);
+  }
+
+  private async releaseProviderReaderByKey(key: string): Promise<void> {
+    const readers = this.providerReaders.get(key) ?? 0;
+    if (readers <= 1) this.providerReaders.delete(key);
+    else this.providerReaders.set(key, readers - 1);
+    await this.disposeProviderIfUnused(key);
+  }
+
+  private async disposeProviderIfUnused(key: string): Promise<void> {
+    if ((this.providerUsers.get(key)?.size ?? 0) > 0
+      || (this.providerReaders.get(key) ?? 0) > 0) return;
+    const provider = this.providers.get(key);
+    this.providers.delete(key);
+    await provider?.dispose?.();
   }
 
   private async assertFence(workflowId: string, token: string): Promise<void> {
@@ -896,22 +1228,39 @@ export class MultiReviewService {
     const users = this.providerUsers.get(key) ?? new Set<string>();
     users.add(workflow.id);
     this.providerUsers.set(key, users);
+    return this.providerInstance(workflow, selection);
+  }
+
+  private async providerInstance(
+    workflow: MultiReviewWorkflow,
+    selection: MultiReviewModelSelection,
+  ): Promise<BuildPipelineProvider> {
+    const key = this.providerKey(workflow, selection);
     const cached = this.providers.get(key);
     if (cached) return cached;
-    if (this.options.provider) {
-      const provider = await this.options.provider(workflow, selection);
+    const pending = this.providerCreations.get(key);
+    if (pending) return pending;
+    const creation = (async () => {
+      const provider = this.options.provider
+        ? await this.options.provider(workflow, selection)
+        : await (async () => {
+            const environment = await this.storage.getEnvironment(workflow.environmentId);
+            if (!environment) throw new Error("Review environment no longer exists");
+            const connection = await this.bridgeConnection(selection.agent, environment);
+            return createBuildPipelineProvider(connection, {
+              ...this.options.providerDependencies,
+              autoAnswerRequests: false,
+            });
+          })();
       this.providers.set(key, provider);
       return provider;
+    })();
+    this.providerCreations.set(key, creation);
+    try {
+      return await creation;
+    } finally {
+      if (this.providerCreations.get(key) === creation) this.providerCreations.delete(key);
     }
-    const environment = await this.storage.getEnvironment(workflow.environmentId);
-    if (!environment) throw new Error("Review environment no longer exists");
-    const connection = await this.bridgeConnection(selection.agent, environment);
-    const provider = createBuildPipelineProvider(connection, {
-      ...this.options.providerDependencies,
-      autoAnswerRequests: false,
-    });
-    this.providers.set(key, provider);
-    return provider;
   }
 
   private async bridgeConnection(
@@ -945,16 +1294,5 @@ class ControllerFenceError extends Error {
   constructor() {
     super("Multi review controller lease was lost");
     this.name = "ControllerFenceError";
-  }
-}
-
-/**
- * Carries the reviewer a failure belongs to. The message is the underlying
- * error's, so persisted workflow errors read exactly as they did before.
- */
-class ReviewerStageError extends Error {
-  constructor(readonly reviewerId: string, reason: unknown) {
-    super(errorMessage(reason));
-    this.name = "ReviewerStageError";
   }
 }

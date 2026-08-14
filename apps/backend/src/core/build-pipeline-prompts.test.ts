@@ -316,6 +316,9 @@ describe("build pipeline prompts", () => {
     );
 
     expect(prompt).toContain("Only the structured report you emitted was rejected");
+    expect(prompt).toContain("<structured-review-expected-schema-json>");
+    expect(prompt).toContain('"additionalProperties": false');
+    expect(prompt).toContain('"reviewScope"');
     expect(prompt).toContain("$.testResults.failures");
     expect(prompt).toContain("Failure details count must equal failed.");
     expect(prompt).toContain("$.issues[0].confidence");

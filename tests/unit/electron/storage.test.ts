@@ -871,7 +871,41 @@ describe("Electron StorageService", () => {
       frontendIdleAt,
       "unknown-source" as never,
     )).rejects.toThrow(
-      "source must be frontend, claude-terminal, claude-tmux, or native-agent",
+      "source must be frontend, claude-terminal, claude-tmux, native-agent, or multi-review",
+    );
+  });
+
+  test("accepts backend-owned multi-review activity without renderer observer ids", async () => {
+    const dataDir = await createTempDir("ork-storage-multi-review-activity-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(
+      createEnvironment("project-1"),
+    );
+    const occurredAt = new Date(
+      Date.parse(environment.agentActivityUpdatedAt!) + 1_000,
+    ).toISOString();
+
+    await expect(storage.setEnvironmentAgentActivity(
+      environment.id,
+      "working",
+      occurredAt,
+      "multi-review",
+    )).resolves.toMatchObject({
+      agentActivityState: "working",
+      agentActivitySources: {
+        "multi-review": { state: "working", updatedAt: occurredAt },
+      },
+    });
+
+    await expect(storage.setEnvironmentAgentActivity(
+      environment.id,
+      "idle",
+      new Date(Date.parse(occurredAt) + 1_000).toISOString(),
+      "multi-review",
+      "renderer-observer-id",
+    )).rejects.toThrow(
+      "observerId must be a non-blank string of at most 256 characters for frontend activity",
     );
   });
 

@@ -9,6 +9,8 @@ import { StackedEyes } from "./MultiReviewLaunchDialog";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { hydrateMultiReviewWorkflow } from "@/lib/multi-review-persistence";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
+import { MultiReviewReviewerTab } from "./MultiReviewReviewerTab";
 import * as backend from "@/lib/backend";
 
 interface MultiReviewCommands {
@@ -28,6 +30,7 @@ interface MultiReviewTabProps {
   isActive: boolean;
   hydrateWorkflow?: typeof hydrateMultiReviewWorkflow;
   commands?: MultiReviewCommands;
+  openReviewer?: (reviewerId: string, index: number) => void;
 }
 
 function phaseCopy(phase: MultiReviewPhase): string {
@@ -44,12 +47,14 @@ function phaseCopy(phase: MultiReviewPhase): string {
   return labels[phase];
 }
 
-export function MultiReviewTab({
+function MultiReviewOverviewTab({
   data,
   isActive,
   hydrateWorkflow = hydrateMultiReviewWorkflow,
   commands = defaultCommands,
+  openReviewer,
 }: MultiReviewTabProps) {
+  const createTab = useOptionalTerminalContext()?.createTab;
   const workflow = useMultiReviewStore((state) => state.workflows.get(data.workflowId));
   const replaceWorkflow = useMultiReviewStore((state) => state.replaceWorkflow);
   const [error, setError] = useState<string | null>(null);
@@ -123,7 +128,24 @@ export function MultiReviewTab({
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
               {workflow.reviewers.map((reviewer, index) => (
-                <div key={reviewer.id} className="flex items-center gap-2.5 rounded-lg border border-border/45 bg-background/40 px-3 py-2.5">
+                <button
+                  key={reviewer.id}
+                  type="button"
+                  disabled={!reviewer.providerSessionId || (!openReviewer && !createTab)}
+                  aria-label={`Open Reviewer ${index + 1} transcript`}
+                  className="flex items-center gap-2.5 rounded-lg border border-border/45 bg-background/40 px-3 py-2.5 text-left transition-colors enabled:cursor-pointer enabled:hover:border-cyan-400/35 enabled:hover:bg-cyan-500/5 disabled:cursor-default"
+                  onClick={() => {
+                    if (openReviewer) {
+                      openReviewer(reviewer.id, index);
+                      return;
+                    }
+                    createTab?.("multi-review", {
+                      multiReviewId: workflow.id,
+                      multiReviewReviewerId: reviewer.id,
+                      displayTitle: `Reviewer ${index + 1}`,
+                    });
+                  }}
+                >
                   {reviewer.status === "completed" ? <CheckCircle2 className="size-4 text-emerald-500" />
                     : reviewer.status === "failed" ? <AlertCircle className="size-4 text-destructive" />
                       : reviewer.status === "cancelled" ? <Square className="size-4 text-muted-foreground" />
@@ -132,8 +154,15 @@ export function MultiReviewTab({
                   <div className="min-w-0">
                     <p className="truncate text-xs font-medium">Reviewer {index + 1} · {reviewer.agent}</p>
                     <p className="truncate text-[11px] text-muted-foreground">{reviewer.model}{reviewer.reasoningEffort ? ` · ${reviewer.reasoningEffort}` : ""}</p>
+                    {/* The workflow error generalizes a shared cause; this is the
+                        only place the reviewer's own failure is legible. */}
+                    {reviewer.error ? (
+                      <p className="truncate text-[11px] text-destructive" title={reviewer.error}>
+                        {reviewer.error}
+                      </p>
+                    ) : null}
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           </section>
@@ -180,4 +209,16 @@ export function MultiReviewTab({
       </footer>
     </div>
   );
+}
+
+export function MultiReviewTab(props: MultiReviewTabProps) {
+  if (props.data.reviewerId) {
+    return (
+      <MultiReviewReviewerTab
+        data={{ ...props.data, reviewerId: props.data.reviewerId }}
+        isActive={props.isActive}
+      />
+    );
+  }
+  return <MultiReviewOverviewTab {...props} />;
 }

@@ -241,6 +241,10 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
   if (type === "multi-review") {
     if (!isRecord(value.multiReviewTabData)) return null;
     const workflowId = nonEmptyString(value.multiReviewTabData.workflowId);
+    const reviewerId = value.multiReviewTabData.reviewerId === undefined
+      ? undefined
+      : nonEmptyString(value.multiReviewTabData.reviewerId);
+    if (value.multiReviewTabData.reviewerId !== undefined && !reviewerId) return null;
     if (!workflowId || !context.hasMultiReview?.(workflowId)) return null;
     return {
       ...common,
@@ -248,6 +252,7 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
       multiReviewTabData: {
         environmentId: context.environmentId,
         workflowId,
+        ...(reviewerId ? { reviewerId } : {}),
         isLocal: context.isLocal,
       },
     };

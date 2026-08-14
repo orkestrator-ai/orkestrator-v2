@@ -6168,6 +6168,40 @@ describe("TerminalContainer", () => {
         }));
     });
 
+    test("creates a read-only Multi Review reviewer transcript tab", async () => {
+      const accepted = mock((_created: boolean) => {});
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateTabHarness
+            type="multi-review"
+            options={{
+              multiReviewId: "multi-1",
+              multiReviewReviewerId: "reviewer-1",
+              displayTitle: "Reviewer 1",
+            }}
+            onResult={accepted}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => expect(accepted).toHaveBeenCalledWith(true));
+      expect(usePaneLayoutStore.getState().getAllTabs("env-visible"))
+        .toContainEqual(expect.objectContaining({
+          type: "multi-review",
+          displayTitle: "Reviewer 1",
+          multiReviewTabData: expect.objectContaining({
+            workflowId: "multi-1",
+            reviewerId: "reviewer-1",
+          }),
+        }));
+    });
+
     test("opens a backend workflow provider session in the created native tab", async () => {
       render(
         <TerminalProvider>

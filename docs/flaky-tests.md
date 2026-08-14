@@ -34,7 +34,7 @@ history rather than two partial ones.
 
 ## `orkestrator CLI package` built-artifact checks (`packages/cli/tests/cli.test.ts`)
 
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-13
 - **Original command:** `bun run test` (root group: `bun test tests --parallel=4`)
 - **Worker configuration:** Four Bun workers in the root group while the workspace, bridge, and protocol-lockfile groups ran concurrently. The workspace group also ran the CLI package's `test:workspace` task against the same package directory.
@@ -43,7 +43,10 @@ history rather than two partial ones.
 - **Isolated rerun:** `bun test packages/cli/tests/cli.test.ts` -> all six artifact checks passed; the file reported 7 passed, 1 failed, 18 assertions in 2.33 seconds, with only the deterministic release-version assertion still failing.
 - **Recurrence:** `bun run test` on 2026-08-13 again raced the workspace CLI build against the root CLI file: `resolves every unbundled import from the directory its bundle ships in` failed with a missing `resources/claude-bridge/dist/index.js`, and `packs the runtime payload and nothing else` observed a package missing `dist/main.js` and both bridge bundles. The immediate `bun test packages/cli/tests/cli.test.ts` rerun passed every artifact check (7 passed, 1 deterministic version failure, 18 assertions in 2.10 seconds).
 - **Recurrence (credential-refresh follow-up):** `bun run test` on 2026-08-13 reproduced only `packs the runtime payload and nothing else` in the four-worker root group while the workspace CLI task ran concurrently. The packed file list omitted `dist/main.js`, `resources/claude-bridge/dist/index.js`, and `resources/codex-bridge/dist/index.js`; the root group reported 3,910 passed, 1 skipped, and 1 failed across 148 files in 111.53 seconds. The immediate isolated rerun, `bun test packages/cli/tests/cli.test.ts`, passed all 8 tests with 27 assertions in 2.04 seconds.
-- **Hypothesis:** The CLI build starts by recursively removing `packages/cli/dist` and `packages/cli/resources`. In the aggregate runner, the workspace CLI task and root CLI tests operate on those same paths concurrently, so a workspace rebuild can remove or partially restage artifacts while the root tests read them. The immediate isolated rerun had stable artifacts and all six affected checks passed.
+- **Recurrence (agent-test development mode):** `bun run test` on 2026-08-14 reproduced `packs the runtime payload and nothing else` (exit 1 after 10.49 ms) and `starts and gracefully stops the packaged backend` (`Cannot find module '../dist/main.js'`, 22.67 ms). The root group reported 3,886 passed, 1 skipped, and 3 failed across 148 files in 122.17 seconds; the third failure was a deterministic orchestration assertion. The immediate `bun test packages/cli/tests/cli.test.ts` rerun passed all 8 tests with 27 assertions in 2.46 seconds.
+- **Root cause:** Bun treats the bare positional argument `tests` as a substring path filter. The aggregate root command therefore selected both `./tests` and `packages/cli/tests` while Turbo independently ran the CLI workspace task. The CLI build starts by recursively removing `packages/cli/dist` and `packages/cli/resources`, so the duplicate root tests could inspect or execute those paths during restaging.
+- **Fix:** The aggregate runner now passes the explicit relative path `./tests`, which Bun scans as a directory and which excludes package-owned test directories. The CLI package remains covered once by its Turbo workspace task.
+- **Verification:** `bun test packages/cli/tests/cli.test.ts` passed 8 tests with 0 failures and 27 assertions in 2.46 seconds. The corrected `bun run test` aggregate then passed the workspace group (CLI 8/8), root group (3,881 passed, 1 skipped, 0 failed), bridges (2,318 passed, 11 skipped, 0 failed), protocol lockfile, and iOS (40 passed, 0 failed).
 
 ## `AcpChatTab > keeps a rejected initial prompt available for a remount retry` (`apps/web/src/components/acp/AcpChatTab.test.tsx`)
 

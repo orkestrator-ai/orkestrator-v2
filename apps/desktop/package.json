@@ -6,7 +6,12 @@
   "scripts": {
     "build": "bun scripts/build.ts",
     "dev": "bun scripts/dev.ts",
-    "typecheck": "bunx tsc --noEmit -p tsconfig.electron.json"
+    "dev:test": "bun scripts/dev-test.ts",
+    "dev:status": "bun scripts/dev-status.ts",
+    "dev:stop": "bun scripts/dev-stop.ts",
+    "dev:reset": "bun scripts/dev-reset.ts",
+    "docker:build:dev": "bun scripts/dev-build-image.ts",
+    "typecheck": "bunx tsc --noEmit -p tsconfig.electron.json && bunx tsc --noEmit -p tsconfig.scripts.json"
   },
   "dependencies": {
     "@orkestrator/backend": "workspace:*",

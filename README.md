@@ -280,6 +280,10 @@ Debug mode only takes effect when the container is created. Changing it on a run
 
 ## Development
 
+For isolated real-stack development and agent QA, including disposable fixtures,
+dynamic ports, status manifests, Playwright, Electron smoke testing, and safe
+cleanup, see [Isolated development and agent testing](docs/development/agent-testing.md).
+
 ```bash
 # Run with hot reload
 bun run dev

@@ -17,6 +17,7 @@ const operation = process.argv[2];
 const requestedPath = process.argv[3] || "";
 const home = os.homedir();
 const cwd = process.cwd();
+const isolatedAgentTest = process.env.ORKESTRATOR_AGENT_TEST_ISOLATED === "1";
 const maxEntriesPerRoot = 500;
 const maxRoots = 256;
 const maxSkills = 2000;
@@ -96,6 +97,7 @@ async function projectDirectories() {
 }
 
 async function claudePluginRoots() {
+  if (isolatedAgentTest) return [];
   const manifest = await jsonFile(path.join(home, ".claude", "plugins", "installed_plugins.json"));
   if (!manifest || typeof manifest !== "object" || !manifest.plugins || typeof manifest.plugins !== "object") return [];
   const result = [];
@@ -210,12 +212,12 @@ async function rootPlan() {
         : "/etc/claude-code/skills";
     return {
       specs: [
-        { path: managed, scope: "admin", recursive: false },
-        { path: path.join(home, ".claude", "skills"), scope: "user", recursive: false },
+        ...(isolatedAgentTest ? [] : [{ path: managed, scope: "admin", recursive: false }]),
+        ...(isolatedAgentTest ? [] : [{ path: path.join(home, ".claude", "skills"), scope: "user", recursive: false }]),
         ...projects.map((dir) => ({ path: path.join(dir, ".claude", "skills"), scope: "project", projectBoundary: dir, recursive: false })),
         ...(await claudePluginRoots()),
       ].slice(0, maxRoots),
-      targetOnly: [{ path: path.join(home, ".agents", "skills") }],
+      targetOnly: isolatedAgentTest ? [] : [{ path: path.join(home, ".agents", "skills") }],
     };
   }
 
@@ -229,9 +231,9 @@ async function rootPlan() {
           { path: path.join(dir, ".codex", "skills"), scope: "project", projectBoundary: dir, recursive: true },
           { path: path.join(dir, ".agents", "skills"), scope: "project", projectBoundary: dir, recursive: true },
         ]),
-        ...(process.platform === "win32" ? [] : [{ path: "/etc/codex/skills", scope: "admin", recursive: true }]),
+        ...(process.platform === "win32" || isolatedAgentTest ? [] : [{ path: "/etc/codex/skills", scope: "admin", recursive: true }]),
         { path: path.join(codexHome, "skills"), scope: "user", skip: [".system"], recursive: true },
-        { path: path.join(home, ".agents", "skills"), scope: "shared", recursive: true },
+        ...(isolatedAgentTest ? [] : [{ path: path.join(home, ".agents", "skills"), scope: "shared", recursive: true }]),
         { path: path.join(codexHome, "skills", ".system"), scope: "system", recursive: true },
         ...(await codexPluginRoots(codexHome)),
       ].slice(0, maxRoots),
@@ -251,8 +253,10 @@ async function rootPlan() {
         { path: path.join(dir, ".opencode", "skill"), scope: "project", projectBoundary: dir, recursive: true },
       ]),
       { path: path.join(configHome, "skills"), scope: "user", recursive: true },
-      { path: path.join(home, ".claude", "skills"), scope: "shared", recursive: true },
-      { path: path.join(home, ".agents", "skills"), scope: "shared", recursive: true },
+      ...(isolatedAgentTest ? [] : [
+        { path: path.join(home, ".claude", "skills"), scope: "shared", recursive: true },
+        { path: path.join(home, ".agents", "skills"), scope: "shared", recursive: true },
+      ]),
     ].slice(0, maxRoots),
     targetOnly: [],
   };

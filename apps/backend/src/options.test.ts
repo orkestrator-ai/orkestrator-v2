@@ -152,6 +152,25 @@ describe("standalone backend options", () => {
     expect(parseOptions([], {}).desktopWebClient).toBe(false);
   });
 
+  test("parses an agent-test isolation policy", () => {
+    expect(parseOptions([
+      "--runtime-flavor", "agent-test",
+      "--worktree-dir", "/profiles/qa/worktrees",
+      "--docker-image", "orkestrator-v2:dev-workspace",
+      "--credential-source", "codex",
+      "--strict-gateway-port",
+    ], {})).toMatchObject({
+      runtimeFlavor: "agent-test",
+      worktreeDir: "/profiles/qa/worktrees",
+      dockerImage: "orkestrator-v2:dev-workspace",
+      strictDockerOwner: true,
+      strictGatewayPort: true,
+      credentialSources: ["codex"],
+    });
+    expect(() => parseOptions(["--runtime-flavor", "preview"], {})).toThrow("runtime-flavor");
+    expect(() => parseOptions(["--credential-source", "github"], {})).toThrow("credential-source");
+  });
+
   test("explicitly supports macOS and Linux only", () => {
     expect(() => assertSupportedPlatform("darwin")).not.toThrow();
     expect(() => assertSupportedPlatform("linux")).not.toThrow();

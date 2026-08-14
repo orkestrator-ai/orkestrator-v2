@@ -32,6 +32,11 @@ export function createBackendProcessEnvironment(
   isDev: boolean,
   resourceRoot: string,
   appVersion?: string,
+  runtime?: {
+    flavor: "production" | "development" | "agent-test";
+    credentialSources?: readonly string[];
+    isolatedCredentialRoot?: string;
+  },
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...parentEnv, ORKESTRATOR_GATEWAY_DISABLED: "0" };
   const version = appVersion?.trim();
@@ -59,6 +64,38 @@ export function createBackendProcessEnvironment(
   delete env.ORKESTRATOR_TAILSCALE_SERVE_PORT;
   delete env.ORKESTRATOR_TAILSCALE_BIN;
   delete env.ORKESTRATOR_TOOLCHAIN_BIN;
+  delete env.ORKESTRATOR_RUNTIME_FLAVOR;
+  delete env.ORKESTRATOR_WORKTREE_DIR;
+  delete env.ORKESTRATOR_DOCKER_IMAGE;
+  delete env.ORKESTRATOR_CREDENTIAL_SOURCE;
+  if (runtime?.flavor === "agent-test") {
+    const allowed = new Set(runtime.credentialSources ?? []);
+    env.ORKESTRATOR_AGENT_TEST_ISOLATED = "1";
+    if (runtime.isolatedCredentialRoot) {
+      env.GH_CONFIG_DIR = path.join(runtime.isolatedCredentialRoot, "github-disabled");
+      env.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : "/dev/null";
+    }
+    if (!allowed.has("claude")) {
+      delete env.ANTHROPIC_API_KEY;
+      if (runtime.isolatedCredentialRoot) env.CLAUDE_CONFIG_DIR = path.join(runtime.isolatedCredentialRoot, "claude");
+    }
+    if (!allowed.has("codex")) {
+      delete env.OPENAI_API_KEY;
+      if (runtime.isolatedCredentialRoot) env.CODEX_HOME = path.join(runtime.isolatedCredentialRoot, "codex");
+    }
+    if (!allowed.has("opencode")) {
+      delete env.OPENCODE_API_KEY;
+      if (runtime.isolatedCredentialRoot) {
+        env.XDG_CONFIG_HOME = path.join(runtime.isolatedCredentialRoot, "xdg-config");
+        env.XDG_DATA_HOME = path.join(runtime.isolatedCredentialRoot, "xdg-data");
+        env.XDG_STATE_HOME = path.join(runtime.isolatedCredentialRoot, "xdg-state");
+      }
+    }
+    delete env.CURSOR_API_KEY;
+    delete env.GROK_API_KEY;
+    delete env.GH_TOKEN;
+    delete env.GITHUB_TOKEN;
+  }
   return env;
 }
 
@@ -192,6 +229,12 @@ export class BackendProcess {
     allowNonTailscaleBind?: boolean;
     desktopWebClient?: boolean;
     tailscaleExecutable?: string;
+    runtimeFlavor?: "production" | "development" | "agent-test";
+    worktreeDir?: string;
+    dockerImage?: string;
+    strictDockerOwner?: boolean;
+    strictGatewayPort?: boolean;
+    credentialSources?: Array<"claude" | "codex" | "opencode">;
     onEvent: (event: string, payload: unknown) => void;
     onUnexpectedExit?: (error: Error) => void;
   }): Promise<BackendHttpClient> {
@@ -217,6 +260,12 @@ export class BackendProcess {
     allowNonTailscaleBind?: boolean;
     desktopWebClient?: boolean;
     tailscaleExecutable?: string;
+    runtimeFlavor?: "production" | "development" | "agent-test";
+    worktreeDir?: string;
+    dockerImage?: string;
+    strictDockerOwner?: boolean;
+    strictGatewayPort?: boolean;
+    credentialSources?: Array<"claude" | "codex" | "opencode">;
     onEvent: (event: string, payload: unknown) => void;
     onUnexpectedExit?: (error: Error) => void;
   }): Promise<BackendHttpClient> {
@@ -244,6 +293,12 @@ export class BackendProcess {
     }
     if (options.allowNonTailscaleBind) args.push("--allow-non-tailscale-bind");
     if (options.rendererDevServerUrl) args.push("--renderer-dev-server-url", options.rendererDevServerUrl);
+    if (options.runtimeFlavor) args.push("--runtime-flavor", options.runtimeFlavor);
+    if (options.worktreeDir) args.push("--worktree-dir", options.worktreeDir);
+    if (options.dockerImage) args.push("--docker-image", options.dockerImage);
+    if (options.strictDockerOwner) args.push("--strict-docker-owner");
+    if (options.strictGatewayPort) args.push("--strict-gateway-port");
+    if (options.credentialSources?.length) args.push("--credential-source", options.credentialSources.join(","));
 
     // Isolate desktop startup from any remote-service configuration in the parent shell.
     const env = createBackendProcessEnvironment(
@@ -251,6 +306,11 @@ export class BackendProcess {
       options.isDev,
       options.resourceRoot,
       options.appVersion,
+      options.runtimeFlavor ? {
+        flavor: options.runtimeFlavor,
+        credentialSources: options.credentialSources,
+        isolatedCredentialRoot: path.join(options.dataDir, "agent-credentials"),
+      } : undefined,
     );
     const child = spawn(bun, args, { env, stdio: ["ignore", "pipe", "pipe"] });
     this.child = child;
@@ -332,6 +392,8 @@ export class BackendProcess {
   }
 
   getInfo(): GatewayStartInfo | null { return this.info; }
+
+  getPid(): number | undefined { return this.child?.pid; }
 
   stop(): void {
     this.client?.stopListening();

@@ -33,6 +33,11 @@ const backend = new OrkestratorBackend({
   toolchainBinDir: options.toolchainBinDir,
   appRoot: options.appRoot,
   resourceRoot: options.resourceRoot,
+  runtimeFlavor: options.runtimeFlavor,
+  worktreeDir: options.worktreeDir,
+  dockerImage: options.dockerImage,
+  strictDockerOwner: options.strictDockerOwner,
+  credentialSources: options.credentialSources,
   emit: (event, payload) => gateway?.emit(event, payload),
 });
 await backend.init();
@@ -52,6 +57,8 @@ gateway = new OrkestratorGateway({
   compression: options.compression,
   allowNonTailscaleBind: options.allowNonTailscaleBind || options.tailscaleServe || options.desktopWebClient,
   allowedOrigins: options.allowedOrigins,
+  strictPort: options.strictGatewayPort,
+  agentTestMode: options.runtimeFlavor === "agent-test",
   webClientControl: managedWebClient ?? undefined,
 });
 

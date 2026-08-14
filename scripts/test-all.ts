@@ -197,7 +197,10 @@ export function buildConcurrentGroups(cores: number): TestGroup[] {
     {
       name: "root (tests/)",
       command: "bun",
-      args: ["test", "tests", `--parallel=${workers.root}`],
+      // A bare `tests` is a Bun substring filter and also matches
+      // packages/*/tests. An explicit relative path confines discovery to the
+      // repository's root tests and prevents package build/test races.
+      args: ["test", "./tests", `--parallel=${workers.root}`],
     },
     {
       // The bridge packages have no `test` script of their own, so they are not

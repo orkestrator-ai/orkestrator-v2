@@ -30,6 +30,12 @@ export type BackendOptions = {
   desktopWebClient: boolean;
   tailscaleServePort: number;
   tailscaleExecutable: string;
+  runtimeFlavor: "production" | "development" | "agent-test";
+  worktreeDir?: string;
+  dockerImage: string;
+  strictDockerOwner: boolean;
+  strictGatewayPort: boolean;
+  credentialSources: Array<"claude" | "codex" | "opencode">;
 };
 
 export function assertSupportedPlatform(platform: NodeJS.Platform = process.platform): void {
@@ -75,6 +81,23 @@ function parsePortOption(value: string | undefined, optionName: string): number 
   return port;
 }
 
+function parseRuntimeFlavor(value: string | undefined): BackendOptions["runtimeFlavor"] {
+  if (value === undefined) return "production";
+  if (value === "production" || value === "development" || value === "agent-test") return value;
+  throw new Error(`Invalid --runtime-flavor value: ${value}`);
+}
+
+function parseCredentialSources(value: string | undefined): BackendOptions["credentialSources"] {
+  if (!value?.trim()) return [];
+  const values = [...new Set(value.split(",").map((entry) => entry.trim()).filter(Boolean))];
+  for (const entry of values) {
+    if (entry !== "claude" && entry !== "codex" && entry !== "opencode") {
+      throw new Error(`Invalid --credential-source value: ${entry}`);
+    }
+  }
+  return values as BackendOptions["credentialSources"];
+}
+
 export function parseOptions(
   args: string[],
   env: NodeJS.ProcessEnv = process.env,
@@ -98,6 +121,12 @@ export function parseOptions(
   if (tailscaleServePort === 0) {
     throw new Error("Invalid --tailscale-serve-port value: 0");
   }
+  const runtimeFlavor = parseRuntimeFlavor(
+    valueAfter(args, "--runtime-flavor") ?? env.ORKESTRATOR_RUNTIME_FLAVOR,
+  );
+  const credentialSources = parseCredentialSources(
+    valueAfter(args, "--credential-source") ?? env.ORKESTRATOR_CREDENTIAL_SOURCE,
+  );
   return {
     dataDir,
     toolchainBinDir: path.resolve(
@@ -130,5 +159,15 @@ export function parseOptions(
     tailscaleExecutable: valueAfter(args, "--tailscale-bin")
       ?? env.ORKESTRATOR_TAILSCALE_BIN
       ?? defaultTailscaleExecutable(),
+    runtimeFlavor,
+    worktreeDir: (valueAfter(args, "--worktree-dir") ?? env.ORKESTRATOR_WORKTREE_DIR)
+      ? path.resolve(valueAfter(args, "--worktree-dir") ?? env.ORKESTRATOR_WORKTREE_DIR!)
+      : undefined,
+    dockerImage: valueAfter(args, "--docker-image")
+      ?? env.ORKESTRATOR_DOCKER_IMAGE
+      ?? "orkestrator-v2:latest",
+    strictDockerOwner: args.includes("--strict-docker-owner") || runtimeFlavor === "agent-test",
+    strictGatewayPort: args.includes("--strict-gateway-port") || runtimeFlavor === "agent-test",
+    credentialSources,
   };
 }

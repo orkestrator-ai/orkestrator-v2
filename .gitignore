@@ -44,6 +44,7 @@ pids/
 coverage/
 .nyc_output/
 /output/playwright/
+/output/agent-testing/
 
 # TypeScript
 *.tsbuildinfo

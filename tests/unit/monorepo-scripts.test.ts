@@ -16,6 +16,7 @@ describe("monorepo orchestration scripts", () => {
   test("desktop build and development scripts propagate failures and clean children", () => {
     const build = read("apps/desktop/scripts/build.ts");
     const dev = read("apps/desktop/scripts/dev.ts");
+    const lifecycle = read("apps/desktop/scripts/dev/lifecycle.ts");
     expect(build).toContain("result.status !== 0");
     expect(build).toContain('run("bunx", ["tsc", "--noEmit"');
     expect(build).toContain("const result = await Bun.build");
@@ -24,13 +25,15 @@ describe("monorepo orchestration scripts", () => {
     expect(build).toContain('external: ["electron"]');
     expect(build).toContain('target: "node"');
     expect(build).toContain("rmSync(output");
-    expect(dev).toContain("vite.kill()");
-    expect(dev).toContain('process.on("SIGINT"');
-    expect(dev).toContain("Timed out waiting for");
-    expect(dev).toContain('electron.on("exit"');
-    expect(dev).toContain("handleElectronExit(code, signal");
+    expect(dev).toContain("await startDevelopment");
+    expect(dev).toContain("process.exitCode = 1");
+    expect(lifecycle).toContain("killOwnedChild(electron");
+    expect(lifecycle).toContain("killOwnedChild(vite");
+    expect(lifecycle).toContain('process.once("SIGINT"');
+    expect(lifecycle).toContain("Timed out waiting for");
+    expect(lifecycle).toContain('electron!.once("exit"');
+    expect(lifecycle).toContain("exited unexpectedly");
     expect(build).toContain('process.platform === "win32"');
-    expect(dev).toContain('process.platform === "win32"');
   });
 
   test("desktop packaging and PTY dependencies match the macOS/Linux Bun-only support policy", () => {

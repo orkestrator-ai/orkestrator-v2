@@ -16,6 +16,7 @@ export type CreateMainWindowOptions = {
   appPath: string;
   rendererRoot?: string;
   devServerUrl?: string;
+  title?: string;
 };
 
 export function isTrustedRendererUrl(candidateUrl: string, trustedRendererUrl: string): boolean {
@@ -49,7 +50,7 @@ export async function createMainWindow(options: CreateMainWindowOptions): Promis
     ? options.devServerUrl ?? "http://127.0.0.1:1420"
     : pathToFileURL(rendererIndexPath).href;
   const mainWindow = new options.BrowserWindowCtor({
-    title: PRODUCT_NAME,
+    title: options.title ?? PRODUCT_NAME,
     width: 1400,
     height: 900,
     minWidth: 800,

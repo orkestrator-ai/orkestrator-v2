@@ -144,6 +144,7 @@ describe("scripts/test-all.ts", () => {
     expect(workspaceGroup.args).toContain("--concurrency=2");
     expect(workspaceGroup.env).toEqual({ [WORKSPACE_WORKERS_ENV]: "2" });
     expect(rootGroup.args).toContain("--parallel=4");
+    expect(rootGroup.args.slice(0, 2)).toEqual(["test", "./tests"]);
     expect(bridgeGroup.args).toContain("--parallel=2");
   });
 

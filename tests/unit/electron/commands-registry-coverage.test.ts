@@ -278,6 +278,21 @@ describe("direct backend command registry coverage", () => {
     expect(log).not.toContain("docker rm -f assigned-container");
   });
 
+  test("agent-test Docker cleanup never adopts or prunes ownerless containers", async () => {
+    const context = contextWithStorage({ loadEnvironments: mock(async () => []) });
+    context.strictDockerOwner = true;
+
+    await expect(invoke("docker_system_prune", {}, context)).resolves.toMatchObject({
+      containersDeleted: 1,
+      spaceReclaimed: 768_000_000,
+    });
+    const log = await commandLogContents();
+    expect(log).toContain(
+      `docker container prune -f --filter label=orkestrator-owner=${REGISTRY_DOCKER_OWNER}`,
+    );
+    expect(log).not.toContain("label!=orkestrator-owner");
+  });
+
   test("stops each bridge, reports authenticated OpenCode health, and delegates model caching", async () => {
     const cached = {
       schemaVersion: 2,

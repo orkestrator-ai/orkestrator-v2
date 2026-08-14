@@ -221,6 +221,11 @@ export type CommandContext = {
   emit: BackendEmit;
   appRoot: string;
   resourceRoot: string;
+  runtimeFlavor?: "production" | "development" | "agent-test";
+  worktreeDir?: string;
+  dockerImage?: string;
+  strictDockerOwner?: boolean;
+  credentialSources?: ReadonlySet<"claude" | "codex" | "opencode">;
   environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
   toolchainBinDir?: string;
   agentTools?: {
@@ -3347,9 +3352,9 @@ function dockerLabelValue(labels: unknown, key: string): string | undefined {
  * writer of that label, so adoption can never reach a container it did not
  * create.
  */
-function dockerOwnerMatches(labels: unknown, owner: string): boolean {
+function dockerOwnerMatches(labels: unknown, owner: string, requireExactOwner = false): boolean {
   const value = dockerLabelValue(labels, DOCKER_LABEL_OWNER);
-  return value === undefined || value === owner;
+  return value === owner || (!requireExactOwner && value === undefined);
 }
 
 /**
@@ -4187,6 +4192,22 @@ async function getDockerStatus(containerId: string): Promise<EnvironmentStatus> 
   return parseDockerStatus(stdout);
 }
 
+async function assertDockerContainerOwned(
+  containerId: string,
+  context: Pick<CommandContext, "storage" | "strictDockerOwner">,
+): Promise<void> {
+  if (!context.strictDockerOwner) return;
+  const owner = dockerOwnerNamespace(context.storage.getDataDir());
+  const { stdout } = await runCommand(
+    "docker",
+    ["inspect", "-f", `{{ index .Config.Labels "${DOCKER_LABEL_OWNER}" }}`, containerId],
+    { timeoutMs: 10_000 },
+  );
+  if (stdout.trim() !== owner) {
+    throw new Error("Refusing Docker operation on a container not owned by this development profile");
+  }
+}
+
 /**
  * How long one `docker ps` snapshot may serve status reads. A multi-project
  * refresh fans out one `get_environments` per project almost simultaneously;
@@ -4196,6 +4217,7 @@ const DOCKER_CONTAINER_STATE_CACHE_MS = 3_000;
 
 let dockerContainerStateCache: {
   fetchedAt: number;
+  ownershipKey: string;
   states: Promise<Map<string, EnvironmentStatus> | null>;
 } | null = null;
 
@@ -4204,14 +4226,20 @@ let dockerContainerStateCache: {
  * inspect` per environment. Returns null when Docker is unreachable so
  * callers fall back to their existing per-container handling.
  */
-async function listOrkestratorContainerStates(): Promise<Map<string, EnvironmentStatus> | null> {
+async function listOrkestratorContainerStates(
+  context?: Pick<CommandContext, "storage" | "strictDockerOwner">,
+): Promise<Map<string, EnvironmentStatus> | null> {
   try {
+    const ownerFilter = context?.strictDockerOwner
+      ? ["--filter", `label=${DOCKER_LABEL_OWNER}=${dockerOwnerNamespace(context.storage.getDataDir())}`]
+      : [];
     const { stdout } = await runCommand("docker", [
       "ps",
       "-a",
       "--no-trunc",
       "--filter",
       `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`,
+      ...ownerFilter,
       "--format",
       "{{.ID}}\t{{.State}}",
     ], { timeoutMs: 10_000 });
@@ -4227,16 +4255,22 @@ async function listOrkestratorContainerStates(): Promise<Map<string, Environment
   }
 }
 
-function getOrkestratorContainerStates(): Promise<Map<string, EnvironmentStatus> | null> {
+function getOrkestratorContainerStates(
+  context?: Pick<CommandContext, "storage" | "strictDockerOwner">,
+): Promise<Map<string, EnvironmentStatus> | null> {
   const now = Date.now();
+  const ownershipKey = context?.strictDockerOwner
+    ? dockerOwnerNamespace(context.storage.getDataDir())
+    : "legacy";
   if (
     dockerContainerStateCache
+    && dockerContainerStateCache.ownershipKey === ownershipKey
     && now - dockerContainerStateCache.fetchedAt < DOCKER_CONTAINER_STATE_CACHE_MS
   ) {
     return dockerContainerStateCache.states;
   }
-  const states = listOrkestratorContainerStates();
-  dockerContainerStateCache = { fetchedAt: now, states };
+  const states = listOrkestratorContainerStates(context);
+  dockerContainerStateCache = { fetchedAt: now, ownershipKey, states };
   return states;
 }
 
@@ -4265,6 +4299,7 @@ async function syncStoredEnvironmentStatus(
   environment: Environment,
   storage: StorageService,
   knownContainerStates?: Map<string, EnvironmentStatus> | null,
+  strictKnownContainerStates = false,
 ): Promise<Environment> {
   if (environment.environmentType === "local") {
     return environment;
@@ -4304,6 +4339,9 @@ async function syncStoredEnvironmentStatus(
   if (knownState !== undefined && knownState === environment.status) {
     return environment;
   }
+  if (strictKnownContainerStates && knownContainerStates && knownState === undefined) {
+    return storage.updateEnvironment(environment.id, { status: "stopped", containerId: null });
+  }
 
   try {
     const status = await getDockerStatus(environment.containerId);
@@ -4324,8 +4362,8 @@ async function syncStoredEnvironmentStatus(
   }
 }
 
-function getWorktreeBaseDir(): string {
-  return path.join(os.homedir(), APP_SLUG, "workspaces");
+function getWorktreeBaseDir(context?: Pick<CommandContext, "worktreeDir">): string {
+  return context?.worktreeDir ?? path.join(os.homedir(), APP_SLUG, "workspaces");
 }
 
 function normalizeConfiguredProjectFiles(filesToCopy: string[] | undefined): string[] {
@@ -4984,6 +5022,7 @@ async function startEnvironmentOnce(
         environment.branch,
         repoConfig.defaultBranch,
         repoConfig.filesToCopy,
+        getWorktreeBaseDir(context),
       );
       unpersistedWorktree = {
         projectPath: project.localPath,
@@ -5012,12 +5051,17 @@ async function startEnvironmentOnce(
       await storage.updateEnvironment(environment.id, { containerId });
       unpersistedContainerId = null;
     }
+    await assertDockerContainerOwned(containerId, context);
     await runCommand("docker", ["start", containerId], { timeoutMs: 60_000 });
     await ensureContainerProjectFilesAccess(containerId);
     const config = await storage.loadConfig();
-    const githubToken = await resolveContainerGitHubToken(config.global);
-    await syncContainerGitHubCredential(containerId, githubToken);
-    await syncContainerClaudeCredentialBestEffort(containerId, config.global);
+    if (context.runtimeFlavor !== "agent-test") {
+      const githubToken = await resolveContainerGitHubToken(config.global);
+      await syncContainerGitHubCredential(containerId, githubToken);
+    }
+    if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("claude")) {
+      await syncContainerClaudeCredentialBestEffort(containerId, config.global);
+    }
     const hostEntryPort = environment.entryPort ? await getHostPort(containerId, environment.entryPort) : null;
     const updated = await storage.updateEnvironment(environment.id, {
       status: "running",
@@ -5260,17 +5304,19 @@ async function createLocalWorktree(
   branch: string,
   baseBranch?: string,
   filesToCopy?: string[],
+  worktreeBaseDir?: string,
 ): Promise<{ path: string; branch: string; createdFromCommit: string }> {
-  await fs.mkdir(getWorktreeBaseDir(), { recursive: true });
+  const baseDir = worktreeBaseDir ?? getWorktreeBaseDir();
+  await fs.mkdir(baseDir, { recursive: true });
   const baseSlug = sanitizeBranchName(branch);
   const startPoint = await resolveRemoteWorktreeStartPoint(projectPath, baseBranch?.trim() || "main");
   let finalBranch = baseSlug;
-  let worktreePath = path.join(getWorktreeBaseDir(), `${sanitizeEnvironmentName(projectName)}-${finalBranch}`);
+  let worktreePath = path.join(baseDir, `${sanitizeEnvironmentName(projectName)}-${finalBranch}`);
 
   let suffix = 1;
   while (await pathExists(worktreePath) || await gitBranchExists(projectPath, finalBranch)) {
     finalBranch = `${baseSlug}-${suffix}`;
-    worktreePath = path.join(getWorktreeBaseDir(), `${sanitizeEnvironmentName(projectName)}-${finalBranch}`);
+    worktreePath = path.join(baseDir, `${sanitizeEnvironmentName(projectName)}-${finalBranch}`);
     suffix += 1;
   }
 
@@ -8344,7 +8390,11 @@ async function createDockerContainer(environment: Environment, context: CommandC
 
   const dockerEnvironment: NodeJS.ProcessEnv = { ...process.env };
   const redactValues: string[] = [];
-  const anthropicApiKey = config.global.anthropicApiKey?.trim();
+  const allowClaudeCredentials = context.runtimeFlavor !== "agent-test"
+    || context.credentialSources?.has("claude");
+  const anthropicApiKey = allowClaudeCredentials
+    ? config.global.anthropicApiKey?.trim()
+    : undefined;
   if (anthropicApiKey) {
     dockerEnvironment.ANTHROPIC_API_KEY = anthropicApiKey;
     redactValues.push(anthropicApiKey);
@@ -8357,7 +8407,9 @@ async function createDockerContainer(environment: Environment, context: CommandC
   // The host-environment fallback inside `resolveCursorApiKey` is deliberate for
   // headless runs, and the same helper reports its `source` to the settings pane
   // so an inherited key is never forwarded invisibly.
-  const { apiKey: cursorApiKey } = resolveCursorApiKey(config.global);
+  const { apiKey: cursorApiKey } = context.runtimeFlavor === "agent-test"
+    ? { apiKey: undefined }
+    : resolveCursorApiKey(config.global);
   if (cursorApiKey) {
     dockerEnvironment.CURSOR_API_KEY = cursorApiKey;
     redactValues.push(cursorApiKey);
@@ -8381,20 +8433,30 @@ async function createDockerContainer(environment: Environment, context: CommandC
   const bindIfExists = async (source: string, target: string, readonly = true) => {
     if (await pathExists(source)) args.push("-v", `${source}:${target}${readonly ? ":ro" : ""}`);
   };
-  await bindIfExists(path.join(home, ".claude"), "/claude-config");
-  await bindIfExists(path.join(home, ".claude.json"), "/claude-config.json");
-  await bindIfExists(path.join(home, ".codex"), "/codex-home");
+  if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("claude")) {
+    await bindIfExists(path.join(home, ".claude"), "/claude-config");
+    await bindIfExists(path.join(home, ".claude.json"), "/claude-config.json");
+  }
+  if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("codex")) {
+    await bindIfExists(path.join(home, ".codex"), "/codex-home");
+  }
   // Agent homes must remain writable. Cursor creates project/session state and
   // Grok creates session databases during ACP startup, so mounting the host
   // directories directly over their homes makes both bridges fail immediately.
   // Mount portable inputs separately; entrypoint.sh copies a bounded allowlist.
-  await bindIfExists(path.join(home, ".cursor"), "/cursor-config");
-  await bindIfExists(path.join(home, ".grok"), "/grok-home");
-  await bindIfExists(path.join(home, ".config", "grok"), "/grok-config");
-  await bindIfExists(path.join(home, ".config", "opencode"), "/opencode-config");
-  await bindIfExists(path.join(home, ".local", "share", "opencode"), "/opencode-data");
-  await bindIfExists(path.join(home, ".local", "state", "opencode"), "/opencode-state");
-  await bindIfExists(path.join(home, ".gitconfig"), "/tmp/gitconfig");
+  if (context.runtimeFlavor !== "agent-test") {
+    await bindIfExists(path.join(home, ".cursor"), "/cursor-config");
+    await bindIfExists(path.join(home, ".grok"), "/grok-home");
+    await bindIfExists(path.join(home, ".config", "grok"), "/grok-config");
+  }
+  if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("opencode")) {
+    await bindIfExists(path.join(home, ".config", "opencode"), "/opencode-config");
+    await bindIfExists(path.join(home, ".local", "share", "opencode"), "/opencode-data");
+    await bindIfExists(path.join(home, ".local", "state", "opencode"), "/opencode-state");
+  }
+  if (context.runtimeFlavor !== "agent-test") {
+    await bindIfExists(path.join(home, ".gitconfig"), "/tmp/gitconfig");
+  }
 
   if (project.localPath) {
     await bindIfExists(path.join(project.localPath, ".env"), "/project-env/.env");
@@ -8411,7 +8473,7 @@ async function createDockerContainer(environment: Environment, context: CommandC
   args.push("-p", `127.0.0.1::${CURSOR_ACP_BRIDGE_PORT}/tcp`);
   args.push("-p", `127.0.0.1::${GROK_ACP_BRIDGE_PORT}/tcp`);
   if (repoConfig.entryPort) args.push("-p", `127.0.0.1::${repoConfig.entryPort}/tcp`);
-  args.push(DOCKER_IMAGE);
+  args.push(context.dockerImage ?? DOCKER_IMAGE);
 
   const { stdout } = await runCommand("docker", args, {
     env: dockerEnvironment,
@@ -9863,11 +9925,11 @@ export function createCommandRegistry(
     const knownContainerStates = environments.some(
       (environment) => environment.environmentType !== "local" && environment.containerId,
     )
-      ? await getOrkestratorContainerStates()
+      ? await getOrkestratorContainerStates(context)
       : null;
     const synced = await Promise.all(
       environments.map((environment) =>
-        syncStoredEnvironmentStatus(environment, storage, knownContainerStates)
+        syncStoredEnvironmentStatus(environment, storage, knownContainerStates, context.strictDockerOwner)
       ),
     );
     for (let index = 0; index < synced.length; index += 1) {
@@ -9968,25 +10030,28 @@ export function createCommandRegistry(
     const envId = asString(environmentId, "environmentId");
     await renameEnvironmentFromPrompt(envId, asString(prompt, "prompt"), context);
   });
-  register("get_environment_status", async ({ environmentId }, { storage }) => {
+  register("get_environment_status", async ({ environmentId }, context) => {
+    const { storage } = context;
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
     const knownContainerStates = environment.environmentType !== "local" && environment.containerId
-      ? await getOrkestratorContainerStates()
+      ? await getOrkestratorContainerStates(context)
       : null;
-    return (await syncStoredEnvironmentStatus(environment, storage, knownContainerStates)).status;
+    return (await syncStoredEnvironmentStatus(environment, storage, knownContainerStates, context.strictDockerOwner)).status;
   });
-  register("sync_environment_status", async ({ environmentId }, { storage }) => {
+  register("sync_environment_status", async ({ environmentId }, context) => {
+    const { storage } = context;
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
     const knownContainerStates = environment.environmentType !== "local" && environment.containerId
-      ? await getOrkestratorContainerStates()
+      ? await getOrkestratorContainerStates(context)
       : null;
     return toClientEnvironment(
-      await syncStoredEnvironmentStatus(environment, storage, knownContainerStates),
+      await syncStoredEnvironmentStatus(environment, storage, knownContainerStates, context.strictDockerOwner),
     );
   });
-  register("sync_all_environments_with_docker", async (_args, { storage }) => {
+  register("sync_all_environments_with_docker", async (_args, context) => {
+    const { storage } = context;
     const cleared: string[] = [];
     const environments = (await storage.loadEnvironments()).filter(
       (environment) => environment.containerId,
@@ -9995,9 +10060,14 @@ export function createCommandRegistry(
     // A container listed by the labelled `docker ps -a` definitely still
     // exists; only unlisted ones need the per-container existence probe, which
     // also covers containers created without the label.
-    const knownContainerStates = await getOrkestratorContainerStates();
+    const knownContainerStates = await getOrkestratorContainerStates(context);
     for (const environment of environments) {
       if (knownContainerStates?.has(environment.containerId!)) continue;
+      if (context.strictDockerOwner && knownContainerStates) {
+        await storage.updateEnvironment(environment.id, { status: "stopped", containerId: null });
+        cleared.push(environment.id);
+        continue;
+      }
       try {
         await getDockerStatus(environment.containerId!);
       } catch {
@@ -10308,7 +10378,7 @@ export function createCommandRegistry(
 
   register("check_docker", () => commandExists("docker").then(async (exists) => exists && runCommand("docker", ["info"], { timeoutMs: 10_000 }).then(() => true, () => false)));
   register("docker_version", async () => (await runCommand("docker", ["version", "--format", "{{.Server.Version}}"], { timeoutMs: 10_000 })).stdout.trim());
-  register("check_base_image", () => runCommand("docker", ["image", "inspect", DOCKER_IMAGE], { timeoutMs: 10_000 }).then(() => true, () => false));
+  register("check_base_image", (_args, context) => runCommand("docker", ["image", "inspect", context.dockerImage ?? DOCKER_IMAGE], { timeoutMs: 10_000 }).then(() => true, () => false));
   register("provision_environment", async ({ environmentId }, context) => {
     const environment = await context.storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
@@ -10316,21 +10386,40 @@ export function createCommandRegistry(
     await context.storage.updateEnvironment(environment.id, { containerId });
     return containerId;
   });
-  register("docker_start_container", async ({ containerId }, { storage }) => {
+  register("docker_start_container", async ({ containerId }, context) => {
+    const { storage } = context;
     const id = asString(containerId, "containerId");
+    await assertDockerContainerOwned(id, context);
     await runCommand("docker", ["start", id], { timeoutMs: 60_000 });
     await ensureContainerProjectFilesAccess(id);
     const config = await storage.loadConfig();
-    await syncContainerGitHubCredential(
-      id,
-      await resolveContainerGitHubToken(config.global),
-    );
-    await syncContainerClaudeCredentialBestEffort(id, config.global);
+    if (context.runtimeFlavor !== "agent-test") {
+      await syncContainerGitHubCredential(
+        id,
+        await resolveContainerGitHubToken(config.global),
+      );
+    }
+    if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("claude")) {
+      await syncContainerClaudeCredentialBestEffort(id, config.global);
+    }
   });
-  register("docker_stop_container", ({ containerId }) => runCommand("docker", ["stop", asString(containerId, "containerId")], { timeoutMs: 60_000 }).then(() => undefined));
-  register("docker_remove_container", ({ containerId }) => runCommand("docker", ["rm", "-f", asString(containerId, "containerId")], { timeoutMs: 60_000 }).then(() => undefined));
-  register("docker_container_status", ({ containerId }) => getDockerStatus(asString(containerId, "containerId")));
-  register("list_docker_containers", async (_args, { storage }) => {
+  register("docker_stop_container", async ({ containerId }, context) => {
+    const id = asString(containerId, "containerId");
+    await assertDockerContainerOwned(id, context);
+    await runCommand("docker", ["stop", id], { timeoutMs: 60_000 });
+  });
+  register("docker_remove_container", async ({ containerId }, context) => {
+    const id = asString(containerId, "containerId");
+    await assertDockerContainerOwned(id, context);
+    await runCommand("docker", ["rm", "-f", id], { timeoutMs: 60_000 });
+  });
+  register("docker_container_status", async ({ containerId }, context) => {
+    const id = asString(containerId, "containerId");
+    await assertDockerContainerOwned(id, context);
+    return getDockerStatus(id);
+  });
+  register("list_docker_containers", async (_args, context) => {
+    const { storage } = context;
     const dockerOwner = dockerOwnerNamespace(storage.getDataDir());
     // Ownership is filtered here rather than by a second `--filter label=` so an
     // unlabelled pre-upgrade container is still reachable. See dockerOwnerMatches.
@@ -10345,7 +10434,7 @@ export function createCommandRegistry(
     ], { timeoutMs: 10_000 });
     return stdout.split("\n").filter(Boolean).flatMap((line) => {
       const [id = "", name = "", labels = ""] = line.split("\t");
-      if (!dockerOwnerMatches(labels, dockerOwner)) return [];
+      if (!dockerOwnerMatches(labels, dockerOwner, context.strictDockerOwner)) return [];
       return [[id, name]];
     });
   });
@@ -10357,7 +10446,8 @@ export function createCommandRegistry(
     child.stdout.on("data", (data) => emit("container-log", { containerId: id, line: data.toString() }));
     child.stderr.on("data", (data) => emit("container-log", { containerId: id, line: data.toString() }));
   });
-  register("docker_system_prune", async ({ pruneVolumes }, { storage }) => {
+  register("docker_system_prune", async ({ pruneVolumes }, context) => {
+    const { storage } = context;
     // The ordinary cleanup action is intentionally owner-scoped. Docker cannot
     // safely filter image/network/volume prune by container ownership, so those
     // resource classes remain untouched even when an older renderer sends the
@@ -10371,13 +10461,13 @@ export function createCommandRegistry(
     // yet the listings adopt them as this installation's. A second pass scoped
     // to this app's label minus the owner label removes exactly those legacy
     // containers, so cleanup matches what the UI reports as owned.
-    const [owned, legacy] = await Promise.all([
-      pruneContainers([`label=${DOCKER_LABEL_OWNER}=${dockerOwner}`]),
-      pruneContainers([
-        `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`,
-        `label!=${DOCKER_LABEL_OWNER}`,
-      ]),
-    ]);
+    const owned = await pruneContainers([`label=${DOCKER_LABEL_OWNER}=${dockerOwner}`]);
+    const legacy = context.strictDockerOwner
+      ? { stdout: "" }
+      : await pruneContainers([
+          `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`,
+          `label!=${DOCKER_LABEL_OWNER}`,
+        ]);
     const reclaimedText = (stdout: string) => /Total reclaimed space:\s*([^\n]+)/.exec(stdout)?.[1] ?? "0B";
     return {
       containersDeleted: countPrunedDockerResources(owned.stdout) + countPrunedDockerResources(legacy.stdout),
@@ -10387,13 +10477,17 @@ export function createCommandRegistry(
       spaceReclaimed: parseDockerByteSize(reclaimedText(owned.stdout)) + parseDockerByteSize(reclaimedText(legacy.stdout)),
     };
   });
-  register("get_docker_system_stats", async () => {
-    const containers = await runCommand("docker", ["ps", "-a", "-q"], { timeoutMs: 10_000 }).then((r) => r.stdout.split("\n").filter(Boolean).length, () => 0);
-    const running = await runCommand("docker", ["ps", "-q"], { timeoutMs: 10_000 }).then((r) => r.stdout.split("\n").filter(Boolean).length, () => 0);
-    const images = await runCommand("docker", ["images", "-q"], { timeoutMs: 10_000 }).then((r) => new Set(r.stdout.split("\n").filter(Boolean)).size, () => 0);
+  register("get_docker_system_stats", async (_args, context) => {
+    const ownerFilter = context.strictDockerOwner
+      ? ["--filter", `label=${DOCKER_LABEL_OWNER}=${dockerOwnerNamespace(context.storage.getDataDir())}`]
+      : [];
+    const containers = await runCommand("docker", ["ps", "-a", "-q", ...ownerFilter], { timeoutMs: 10_000 }).then((r) => r.stdout.split("\n").filter(Boolean).length, () => 0);
+    const running = await runCommand("docker", ["ps", "-q", ...ownerFilter], { timeoutMs: 10_000 }).then((r) => r.stdout.split("\n").filter(Boolean).length, () => 0);
+    const images = await runCommand("docker", ["images", "-q", ...(context.strictDockerOwner ? [context.dockerImage ?? DOCKER_IMAGE] : [])], { timeoutMs: 10_000 }).then((r) => new Set(r.stdout.split("\n").filter(Boolean)).size, () => 0);
     return { memoryUsed: 0, memoryTotal: os.totalmem(), cpus: os.cpus().length, cpuUsagePercent: 0, diskUsed: 0, diskTotal: 0, containersRunning: running, containersTotal: containers, imagesTotal: images };
   });
-  register("get_orkestrator_containers", async ({}, { storage }) => {
+  register("get_orkestrator_containers", async ({}, context) => {
+    const { storage } = context;
     const environments = await storage.loadEnvironments();
     const dockerOwner = dockerOwnerNamespace(storage.getDataDir());
     const { stdout } = await runCommand("docker", ["ps", "-a", "--no-trunc", "--filter", `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`, "--format", "{{json .}}"], { timeoutMs: 20_000 });
@@ -10402,7 +10496,7 @@ export function createCommandRegistry(
       const row = JSON.parse(line) as Record<string, unknown>;
       const id = typeof row.ID === "string" ? row.ID : "";
       const env = findEnvironmentByContainerId(environments, id);
-      if (!env && !dockerOwnerMatches(row.Labels, dockerOwner)) {
+      if (!dockerOwnerMatches(row.Labels, dockerOwner, context.strictDockerOwner)) {
         return [];
       }
       const labelledEnvironmentId = dockerLabelValue(row.Labels, DOCKER_LABEL_ENVIRONMENT_ID);
@@ -10441,7 +10535,9 @@ export function createCommandRegistry(
     }
     return removed;
   });
-  register("reattach_container", async ({ projectId, containerId, name }, { storage }) => {
+  register("reattach_container", async ({ projectId, containerId, name }, context) => {
+    const { storage } = context;
+    await assertDockerContainerOwned(asString(containerId, "containerId"), context);
     const env = createEnvironment(asString(projectId, "projectId"), { name: asOptionalString(name) ?? `reattached-${String(containerId).slice(0, 8)}` });
     env.containerId = asString(containerId, "containerId");
     env.status = await getDockerStatus(env.containerId).catch(() => "stopped");
@@ -10534,7 +10630,10 @@ export function createCommandRegistry(
       "cat /tmp/opencode-serve.log 2>/dev/null || true",
     ),
   );
-  register("get_opencode_model_preferences", async () => {
+  register("get_opencode_model_preferences", async (_args, context) => {
+    if (context.runtimeFlavor === "agent-test" && !context.credentialSources?.has("opencode")) {
+      return { recent: [], favorite: [], variant: {} };
+    }
     const modelPath = homePath(".local", "state", "opencode", "model.json");
     if (!await pathExists(modelPath)) return { recent: [], favorite: [], variant: {} };
     return JSON.parse(await fs.readFile(modelPath, "utf8"));
@@ -10884,12 +10983,16 @@ export function createCommandRegistry(
       dockerExec(asString(containerId, "containerId"), `cat ${logFile} 2>/dev/null || true`));
   }
 
-  register("list_agent_skills", async (args) => {
+  register("list_agent_skills", async (args, context) => {
     assertOnlyKeys(args, ["provider"], "list_agent_skills argument");
+    if (context.runtimeFlavor === "agent-test") return [];
     return scanAgentSkills(asAgentSkillProvider(args.provider));
   });
-  register("read_agent_skill", async (args) => {
+  register("read_agent_skill", async (args, context) => {
     assertOnlyKeys(args, ["provider", "filePath"], "read_agent_skill argument");
+    if (context.runtimeFlavor === "agent-test") {
+      throw new Error("Host agent skills are unavailable in isolated agent-test profiles");
+    }
     return readAgentSkillFile(
       asAgentSkillProvider(args.provider),
       asString(args.filePath, "filePath"),
@@ -10929,13 +11032,19 @@ export function createCommandRegistry(
     );
   });
 
-  register("has_claude_credentials", () => pathExists(homePath(".claude", ".credentials.json")).then(async (exists) => exists || pathExists(homePath(".claude.json"))));
+  register("has_claude_credentials", (_args, context) => {
+    if (context.runtimeFlavor === "agent-test" && !context.credentialSources?.has("claude")) return false;
+    return pathExists(homePath(".claude", ".credentials.json")).then(async (exists) => exists || pathExists(homePath(".claude.json")));
+  });
   register("get_credential_status", async (_args, context) => ({
     available: await commands.get("has_claude_credentials")?.({}, context),
     expiresAt: null,
   }));
   register("check_claude_cli", (_args, context) => hasPackagedOrPathBinary(context, "claude"));
-  register("check_claude_config", () => pathExists(homePath(".claude.json")));
+  register("check_claude_config", (_args, context) => {
+    if (context.runtimeFlavor === "agent-test" && !context.credentialSources?.has("claude")) return false;
+    return pathExists(homePath(".claude.json"));
+  });
   register("check_opencode_cli", (_args, context) => hasPackagedOrPathBinary(context, "opencode"));
   register("check_codex_cli", (_args, context) => hasPackagedOrPathBinary(context, "codex"));
   // Cursor and Grok report only what this backend generation can actually

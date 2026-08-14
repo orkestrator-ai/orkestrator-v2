@@ -58,6 +58,11 @@ export class OrkestratorBackend {
     toolchainBinDir: string;
     appRoot: string;
     resourceRoot: string;
+    runtimeFlavor?: "production" | "development" | "agent-test";
+    worktreeDir?: string;
+    dockerImage?: string;
+    strictDockerOwner?: boolean;
+    credentialSources?: Array<"claude" | "codex" | "opencode">;
     emit: BackendEmit;
     startupReapers?: {
       localServers?: typeof reapOrphanedLocalServers;
@@ -88,6 +93,11 @@ export class OrkestratorBackend {
       toolchainBinDir: options.toolchainBinDir,
       appRoot: options.appRoot,
       resourceRoot: options.resourceRoot,
+      runtimeFlavor: options.runtimeFlavor ?? "production",
+      worktreeDir: options.worktreeDir,
+      dockerImage: options.dockerImage,
+      strictDockerOwner: options.strictDockerOwner ?? false,
+      credentialSources: new Set(options.credentialSources ?? []),
       emit: options.emit,
       agentTools: this.agentTools,
       environmentLifecycleTasks: this.environmentLifecycleTasks,

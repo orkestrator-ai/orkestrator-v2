@@ -26,4 +26,13 @@ describe("getApplicationTitle", () => {
     expect(getApplicationTitle(null, false)).toBe("Orkestrator AI");
     expect(getApplicationTitle(null, true)).toBe("Orkestrator AI");
   });
+
+  test("keeps development profile identity in renderer titles", () => {
+    expect(getApplicationTitle(null, false, null, "agent-123")).toBe(
+      "Orkestrator AI — DEV [agent-123]",
+    );
+    expect(getApplicationTitle("fixture", false, null, "agent-123")).toBe(
+      "Orkestrator AI — DEV [agent-123] - fixture",
+    );
+  });
 });

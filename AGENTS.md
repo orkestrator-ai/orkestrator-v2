@@ -350,7 +350,7 @@ Files:
 
 ```bash
 bun run test                  # Full suite: workspace + root + bridges + protocol concurrently, then iOS
-bun test tests --parallel     # Root integration/unit tests only
+bun test ./tests --parallel   # Root integration/unit tests only; explicit path avoids package tests
 bun test bridges --parallel   # Bridge suites only
 bun run --cwd apps/web typecheck       # Web TypeScript type checking
 bun run --cwd apps/desktop typecheck   # Electron TypeScript type checking
@@ -363,7 +363,7 @@ test command by enabling `pipefail`, for example:
 
 ```bash
 set -o pipefail
-bun test tests --parallel 2>&1 | tee /tmp/orkestrator-root-tests.log
+bun test ./tests --parallel 2>&1 | tee /tmp/orkestrator-root-tests.log
 ```
 
 Use a descriptive log name for each suite or rerun, and inspect the saved log for
@@ -466,6 +466,10 @@ afterAll(() => {
 Use this only as a last resort — prefer not mocking sibling components at all when feasible (see rule 3 above).
 
 ## Development Commands
+
+For agent-driven real-stack QA, follow
+[`docs/development/agent-testing.md`](docs/development/agent-testing.md). Never use
+the live source checkout as the test project.
 
 ```bash
 # Install dependencies

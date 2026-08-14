@@ -32,17 +32,20 @@ import type {
   NativeAgentControlUpdate,
   NativeAgentDispatchOutcome,
   NativeAgentForkOutcome,
+  NativeAgentMessageWindow,
   NativeAgentResumeEntry,
   NativeAgentSessionProjection,
   NativeAgentSessionAction,
   NativeAgentSessionActionOutcome,
   NativeAgentSlashCommand,
 } from "@orkestrator/protocol/native-agent";
+import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import type {
   Environment,
   OpenCodeIncompleteTurnNotice,
   PersistedNativeAgentSession,
+  PersistedNativeAgentPendingDispatch,
 } from "./models.js";
 import type { StorageService } from "./storage.js";
 import {
@@ -131,6 +134,14 @@ export interface NativeAgentProjectionInput {
   environmentId: string;
   agent: BuildPipelineAgent;
   logicalSessionKey: string;
+  /**
+   * Newest messages this projection may carry.
+   *
+   * Omitted means "keep whatever window this session already had", so a caller
+   * that only wants status — the agent-information panel, the reconciler —
+   * cannot shrink a transcript the tab has expanded.
+   */
+  messageLimit?: number;
 }
 
 function controlsFromSessionInput(
@@ -260,6 +271,14 @@ const NATIVE_PROJECTION_CACHE_LIMIT = 1_024;
 const NATIVE_PROJECTION_ACTIVE_REFRESH_MS = 350;
 const NATIVE_PROJECTION_IDLE_REFRESH_MS = 1_500;
 const NATIVE_PROJECTION_MAX_MESSAGES = 512;
+/**
+ * Ceiling for an explicitly expanded transcript window.
+ *
+ * The default window keeps ordinary refreshes small; a user who asks to see
+ * earlier messages can raise it up to here, which is still bounded by
+ * `NATIVE_PROJECTION_MAX_BYTES`.
+ */
+const NATIVE_PROJECTION_MAX_WINDOW_MESSAGES = 4_096;
 const NATIVE_PROJECTION_MAX_BYTES = 8 * 1024 * 1024;
 const NATIVE_MODEL_CATALOG_TTL_MS = 30_000;
 const NATIVE_MODEL_CATALOG_CACHE_LIMIT = 128;
@@ -750,6 +769,25 @@ export class NativeAgentService {
     return this.refreshProjection(input, true);
   }
 
+  /**
+   * Drop every cached model/command list for this environment and re-read.
+   *
+   * Providers discover models at their own cadence, so a user who has just
+   * installed or authorized one needs a way to say "look again" without
+   * restarting the environment. Neutral, so it works for any provider rather
+   * than only the one whose tab used to own a refresh button.
+   */
+  async refreshProjectionModels(
+    input: NativeAgentProjectionInput,
+  ): Promise<NativeAgentSessionProjection | null> {
+    this.assertProjectionInput(input);
+    this.modelCatalogCache.delete(input.environmentId);
+    this.slashCommandCache.delete(`${input.environmentId}\0${input.agent}`);
+    const provider = await this.provider(input);
+    await provider.refreshCatalog?.();
+    return this.refreshProjection(input, true);
+  }
+
   async listProjectionModels(
     input: NativeAgentProjectionInput,
   ): Promise<AgentModel[]> {
@@ -777,7 +815,7 @@ export class NativeAgentService {
           requestId: input.requestId,
         });
       }
-      await this.dispatchPromptInternal(input);
+      await this.dispatchPromptInternal(input, undefined, true);
       void this.refreshProjection(input, true).catch(() => undefined);
       return { outcome: "accepted", requestId: input.requestId };
     } catch (error) {
@@ -789,6 +827,15 @@ export class NativeAgentService {
           error: error.message,
         };
       }
+      const key = nativeAgentSessionStorageKey(
+        input.environmentId,
+        input.agent,
+        input.logicalSessionKey,
+      );
+      await this.storage.clearPendingNativeAgentDispatch(
+        key,
+        input.requestId,
+      ).catch(() => false);
       return {
         outcome: "rejected",
         error: error instanceof Error ? error.message : "Prompt dispatch failed",
@@ -803,6 +850,45 @@ export class NativeAgentService {
         });
       }
     }
+  }
+
+  async retryRecoverableDispatch(
+    input: NativeAgentProjectionInput,
+  ): Promise<NativeAgentDispatchOutcome> {
+    this.assertProjectionInput(input);
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const session = await this.storage.getNativeAgentSession(key);
+    const pending = session?.pendingDispatch;
+    if (!session || !pending) {
+      return {
+        outcome: "rejected",
+        error: "There is no recoverable dispatch for this session",
+      };
+    }
+    return this.dispatchIntent({
+      environmentId: session.environmentId,
+      agent: session.agent,
+      logicalSessionKey: session.logicalSessionKey,
+      origin: session.origin,
+      interactionPolicy: session.interactionPolicy,
+      prompt: pending.prompt,
+      requestId: pending.requestId,
+      images: pending.images,
+      attachments: pending.attachments,
+      schema: pending.schema,
+      mode: pending.mode,
+      fastMode: pending.fastMode,
+      subAgent: pending.subAgent,
+      executionAgent: pending.executionAgent,
+      includeLocalSettings: pending.includeLocalSettings,
+      promptSuggestions: pending.promptSuggestions,
+      model: pending.model,
+      reasoningEffort: pending.reasoningEffort,
+    });
   }
 
   async stopProjectionSession(
@@ -853,7 +939,21 @@ export class NativeAgentService {
     if (!provider.listResumableSessions) {
       throw new Error(`${input.agent} does not support session resume`);
     }
-    return (await provider.listResumableSessions()).slice(0, 512);
+    /*
+     * Ordered here rather than in each picker: providers return their own order
+     * (OpenCode's is creation order), so the session the user most likely wants
+     * was not necessarily at the top. Unknown timestamps sink to the bottom
+     * instead of sorting as 1970.
+     */
+    const entries = await provider.listResumableSessions();
+    const activityAt = (entry: NativeAgentResumeEntry) => {
+      const raw = entry.updatedAt ?? entry.createdAt;
+      const parsed = raw ? Date.parse(raw) : Number.NaN;
+      return Number.isNaN(parsed) ? 0 : parsed;
+    };
+    return [...entries]
+      .sort((left, right) => activityAt(right) - activityAt(left))
+      .slice(0, 512);
   }
 
   async resumeProjectionSession(
@@ -1057,8 +1157,11 @@ export class NativeAgentService {
     return { key, session, provider };
   }
 
-  private projectionMessages(messages: unknown[]): unknown[] {
-    const bounded = messages.slice(-NATIVE_PROJECTION_MAX_MESSAGES).map((raw) => {
+  private projectionMessages(
+    messages: unknown[],
+    limit: number,
+  ): { messages: unknown[]; window: NativeAgentMessageWindow } {
+    const bounded = messages.slice(-limit).map((raw) => {
       const message = raw && typeof raw === "object" && !Array.isArray(raw)
         ? raw as Record<string, unknown>
         : null;
@@ -1096,7 +1199,28 @@ export class NativeAgentService {
     if (bytes > NATIVE_PROJECTION_MAX_BYTES) {
       throw new ProviderUnavailableError("Provider transcript projection is oversized");
     }
-    return bounded;
+    return {
+      messages: bounded,
+      window: { limit, truncated: messages.length > bounded.length },
+    };
+  }
+
+  /**
+   * Resolve the transcript window for one refresh.
+   *
+   * Callers that ask for a bigger window raise it; callers that ask for nothing
+   * inherit the window the session already had. Clamped so a renderer cannot
+   * ask the provider for an unbounded transcript.
+   */
+  private resolveMessageLimit(
+    requested: number | undefined,
+    previous: number | undefined,
+  ): number {
+    const candidate = requested ?? previous ?? NATIVE_PROJECTION_MAX_MESSAGES;
+    if (!Number.isSafeInteger(candidate) || candidate <= 0) {
+      return NATIVE_PROJECTION_MAX_MESSAGES;
+    }
+    return Math.min(candidate, NATIVE_PROJECTION_MAX_WINDOW_MESSAGES);
   }
 
   private async projectionComposer(
@@ -1205,12 +1329,17 @@ export class NativeAgentService {
     input: NativeAgentProjectionInput,
     provider: NativeAgentRuntimeProvider,
   ): Promise<NativeAgentSlashCommand[]> {
-    if (!nativeCapabilities(input.agent).slashCommands || !provider.slashCommands) {
-      return [];
+    const capabilities = nativeCapabilities(input.agent);
+    // Runtime-performed commands exist even for a provider that advertises no
+    // command discovery of its own, so they are merged outside the early exit.
+    const withActions = (commands: NativeAgentSlashCommand[]) =>
+      withSessionActionSlashCommands(commands, capabilities);
+    if (!capabilities.slashCommands || !provider.slashCommands) {
+      return withActions([]);
     }
     const key = `${input.environmentId}\0${input.agent}`;
     const cached = this.slashCommandCache.get(key);
-    if (cached && cached.expiresAt > this.now()) return cached.commands;
+    if (cached && cached.expiresAt > this.now()) return withActions(cached.commands);
     try {
       const commands = (await provider.slashCommands()).slice(0, 512);
       if (!cached && this.slashCommandCache.size >= NATIVE_SLASH_COMMAND_CACHE_LIMIT) {
@@ -1221,11 +1350,11 @@ export class NativeAgentService {
         commands,
         expiresAt: this.now() + NATIVE_SLASH_COMMAND_TTL_MS,
       });
-      return commands;
+      return withActions(commands);
     } catch {
       // Discovery metadata is optional. Keep the transcript usable when a
       // provider temporarily cannot enumerate commands.
-      return cached?.commands ?? [];
+      return withActions(cached?.commands ?? []);
     }
   }
 
@@ -1239,7 +1368,17 @@ export class NativeAgentService {
       input.logicalSessionKey,
     );
     const previous = this.projectionCache.get(key);
-    if (!force && previous && previous.nextRefreshAt > this.now()) {
+    const messageLimit = this.resolveMessageLimit(
+      input.messageLimit,
+      previous?.input.messageLimit,
+    );
+    const windowed: NativeAgentProjectionInput = { ...input, messageLimit };
+    if (
+      !force
+      && previous
+      && previous.nextRefreshAt > this.now()
+      && previous.input.messageLimit === messageLimit
+    ) {
       return previous.projection;
     }
     let generation = previous?.generation ?? `unresolved:${input.agent}`;
@@ -1309,11 +1448,35 @@ export class NativeAgentService {
         input,
         resolved.provider,
       );
-      const messages = this.projectionMessages(snapshot.messages);
+      const transcript = this.projectionMessages(snapshot.messages, messageLimit);
+      const terminalNotices = [
+        ...(snapshot.notices ?? []).filter(
+          (notice) => notice.kind === "error" || notice.kind === "stopped",
+        ),
+        ...(snapshot.error && !(snapshot.notices ?? []).some(
+          (notice) => notice.kind === "error" && notice.message === snapshot.error,
+        ) ? [{ kind: "error" as const, message: snapshot.error }] : []),
+      ];
+      const messages = [
+        ...transcript.messages,
+        ...terminalNotices.map((notice) => ({
+          id: `native-terminal:${notice.kind}:${createHash("sha256")
+            .update(notice.message)
+            .digest("hex")
+            .slice(0, 16)}`,
+          role: "system" as const,
+          content: notice.message,
+          parts: [{ type: "text" as const, content: notice.message }],
+          // Provider terminal metadata does not consistently carry a time.
+          // A fixed value keeps repeated authoritative reads byte-stable.
+          createdAt: "1970-01-01T00:00:00.000Z",
+        })),
+      ];
       const projection: NativeAgentSessionProjection = {
         platform: input.agent,
         environmentId: input.environmentId,
         sessionId: resolved.session.providerSessionId,
+        messageWindow: transcript.window,
         ...(snapshot.title ? { title: snapshot.title } : {}),
         ...(snapshot.shareUrl === undefined ? {} : { shareUrl: snapshot.shareUrl }),
         connection: "connected",
@@ -1355,7 +1518,19 @@ export class NativeAgentService {
         ...(contextUsage ? { contextUsage } : {}),
         ...(snapshot.rateLimits ? { rateLimits: snapshot.rateLimits } : {}),
         ...(snapshot.runtime ? { runtime: snapshot.runtime } : {}),
-        ...(snapshot.notices ? { notices: snapshot.notices } : {}),
+        ...((snapshot.notices ?? []).some(
+          (notice) => notice.kind !== "error" && notice.kind !== "stopped",
+        ) ? {
+          notices: snapshot.notices!.filter(
+            (notice) => notice.kind !== "error" && notice.kind !== "stopped",
+          ),
+        } : {}),
+        ...(resolved.session.pendingDispatch ? {
+          recoverableDispatch: {
+            requestId: resolved.session.pendingDispatch.requestId,
+            createdAt: resolved.session.pendingDispatch.createdAt,
+          },
+        } : {}),
         ...(snapshot.backgroundTasks
           ? { backgroundTasks: snapshot.backgroundTasks }
           : {}),
@@ -1397,7 +1572,7 @@ export class NativeAgentService {
           ? undefined
           : String(snapshot.providerRevision),
       };
-      return this.commitProjection(key, input, projection, generation);
+      return this.commitProjection(key, windowed, projection, generation);
     } catch (error) {
       const projection: NativeAgentSessionProjection = {
         ...(previous?.projection ?? {
@@ -1422,7 +1597,7 @@ export class NativeAgentService {
         revision: 0,
         generation,
       };
-      return this.commitProjection(key, input, projection, generation);
+      return this.commitProjection(key, windowed, projection, generation);
     }
   }
 
@@ -1500,6 +1675,7 @@ export class NativeAgentService {
       session: PersistedNativeAgentSession,
       provider: NativeAgentRuntimeProvider,
     ) => Promise<PromptDispatchPreparation>,
+    persistAmbiguousDispatch = false,
   ): Promise<PersistedNativeAgentSession> {
     this.assertAcceptingWork();
     if (!nonBlank(input.prompt) || !nonBlank(input.requestId)) {
@@ -1533,6 +1709,9 @@ export class NativeAgentService {
             }
             await provider.send(durable.providerSessionId, input.prompt, {
               requestId: input.requestId,
+              // Only a person typing into the composer can mean "run this
+              // command"; workflow-authored prompts are literal text.
+              allowProviderCommands: durable.origin === "interactive-native",
               images: input.images,
               attachments: input.attachments,
               schema: input.schema,
@@ -1555,9 +1734,33 @@ export class NativeAgentService {
               state: "working",
             });
           },
+          persistAmbiguousDispatch && session.origin === "interactive-native"
+            ? this.persistedPendingDispatch(input)
+            : undefined,
         ),
     );
     return result.session;
+  }
+
+  private persistedPendingDispatch(
+    input: DispatchNativeAgentPromptInput,
+  ): PersistedNativeAgentPendingDispatch {
+    return {
+      requestId: input.requestId,
+      prompt: input.prompt,
+      images: input.images,
+      attachments: input.attachments,
+      schema: input.schema,
+      mode: input.mode,
+      fastMode: input.fastMode,
+      subAgent: input.subAgent,
+      executionAgent: input.executionAgent,
+      includeLocalSettings: input.includeLocalSettings,
+      promptSuggestions: input.promptSuggestions,
+      model: input.model,
+      reasoningEffort: input.reasoningEffort,
+      createdAt: new Date(this.now()).toISOString(),
+    };
   }
 
   async claimOpenCodeManualPrompt(input: {

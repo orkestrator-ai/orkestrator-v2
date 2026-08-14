@@ -22,10 +22,12 @@ import {
   listNativeAgentResumableSessions,
   movePromptQueueMessage,
   performNativeAgentSessionAction,
+  refreshNativeAgentModels,
   removePromptQueueMessage,
   resolveNativeAgentInteraction,
   resumeNativeAgentSession,
   retryPromptQueueDispatch,
+  retryNativeAgentDispatch,
   stopNativeAgentSession,
   stopNativeAgentBackgroundTask,
   updateNativeAgentControls,
@@ -34,6 +36,11 @@ import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
 import { createSessionKey } from "@/lib/utils";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+
+/** Mirrors the backend's default window; only used to size the first expansion. */
+const DEFAULT_MESSAGE_WINDOW = 512;
+/** Mirrors the backend ceiling, so the button stops offering what it would clamp. */
+const MAX_MESSAGE_WINDOW = 4_096;
 
 interface UseNativeAgentSessionOptions {
   platform: AgentPlatform;
@@ -106,6 +113,12 @@ export function useNativeAgentSession<TMessage = unknown>({
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(enabled);
   const [isDispatching, setIsDispatching] = useState(false);
+  /**
+   * How much transcript this tab has asked for. Undefined keeps the backend
+   * default; `loadEarlierMessages` raises it, and the raised value is resent on
+   * every subsequent read so the window cannot silently collapse.
+   */
+  const [messageLimit, setMessageLimit] = useState<number | undefined>(undefined);
   const projectionRef = useRef<NativeAgentSessionProjection<TMessage> | null>(null);
   const refreshSequenceRef = useRef(0);
   const pendingDispatchRef = useRef<{
@@ -162,7 +175,12 @@ export function useNativeAgentSession<TMessage = unknown>({
     const sequence = ++refreshSequenceRef.current;
     setIsRefreshing(true);
     try {
-      const next = await getNativeAgentProjection<TMessage>(identity);
+      const next = await getNativeAgentProjection<TMessage>({
+        ...identity,
+        // Sent on every read so an expanded transcript survives a reconnect,
+        // a generation change, or a refresh triggered by another tab.
+        ...(messageLimit === undefined ? {} : { messageLimit }),
+      });
       if (sequence === refreshSequenceRef.current) {
         applyProjection(next);
         setRuntimeError(null);
@@ -176,7 +194,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     } finally {
       if (sequence === refreshSequenceRef.current) setIsRefreshing(false);
     }
-  }, [applyProjection, enabled, identity]);
+  }, [applyProjection, enabled, identity, messageLimit]);
 
   const connect = useCallback(async () => {
     if (!enabled) {
@@ -411,6 +429,17 @@ export function useNativeAgentSession<TMessage = unknown>({
     await retryPromptQueueDispatch(queueKey);
     return refresh();
   }, [queueKey, refresh]);
+  const retryRecoverableDispatch = useCallback(async () => {
+    setIsDispatching(true);
+    try {
+      const outcome = await retryNativeAgentDispatch(identity);
+      if (outcome.outcome !== "unknown") pendingDispatchRef.current = null;
+      await refresh();
+      return outcome;
+    } finally {
+      setIsDispatching(false);
+    }
+  }, [identity, refresh]);
   const listResumable = useCallback(
     () => listNativeAgentResumableSessions(identity),
     [identity],
@@ -439,6 +468,32 @@ export function useNativeAgentSession<TMessage = unknown>({
     },
     [identity, refresh],
   );
+  const refreshModels = useCallback(async () => {
+    const next = await refreshNativeAgentModels<TMessage>(identity);
+    applyProjection(next);
+    return next;
+  }, [applyProjection, identity]);
+  /**
+   * Widen the transcript window, then reconcile.
+   *
+   * Grows from whatever the backend actually returned rather than from a local
+   * counter, so repeated clicks cannot outrun the provider or ask for a window
+   * the session never had.
+   */
+  const loadEarlierMessages = useCallback(async () => {
+    const current = projectionRef.current?.messageWindow?.limit
+      ?? messageLimit
+      ?? DEFAULT_MESSAGE_WINDOW;
+    const next = Math.min(current * 2, MAX_MESSAGE_WINDOW);
+    if (next <= current) return projectionRef.current;
+    setMessageLimit(next);
+    const projection = await getNativeAgentProjection<TMessage>({
+      ...identity,
+      messageLimit: next,
+    });
+    applyProjection(projection);
+    return projection;
+  }, [applyProjection, identity, messageLimit]);
 
   return {
     sessionKey,
@@ -459,10 +514,13 @@ export function useNativeAgentSession<TMessage = unknown>({
     removeQueued,
     moveQueued,
     retryQueue,
+    retryRecoverableDispatch,
     listResumable,
     resume,
     fork,
     performAction,
+    refreshModels,
+    loadEarlierMessages,
     initialLaunchOptionsRef,
     initialLaunchOptionsPendingRef,
     acknowledgeInitialLaunchOptions,

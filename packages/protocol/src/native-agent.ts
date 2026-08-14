@@ -96,6 +96,17 @@ export type NativeAgentDispatchOutcome =
   | { outcome: "rejected"; error: string }
   | { outcome: "unknown"; requestId: string; error?: string };
 
+/**
+ * A provider may have accepted this request even though Orkestrator did not
+ * receive the acknowledgement. The backend retains the exact dispatch and
+ * exposes only this content-free descriptor; retrying is a backend intent so
+ * every renderer/provider uses the same idempotent recovery path.
+ */
+export interface NativeAgentRecoverableDispatch {
+  requestId: string;
+  createdAt: string;
+}
+
 export type NativeAgentTurnPhase =
   | "idle"
   | "running"
@@ -260,6 +271,8 @@ export interface NativeAgentRuntimeSummary {
 export type NativeAgentNotice =
   | { kind: "recovery"; message: string }
   | { kind: "incomplete-turn"; message: string }
+  | { kind: "error"; message: string }
+  | { kind: "stopped"; message: string }
   | { kind: "warning"; message: string };
 
 export interface NativeAgentBackgroundTaskSummary {
@@ -280,6 +293,14 @@ export interface NativeAgentResumeEntry {
   title?: string;
   createdAt?: string;
   updatedAt?: string;
+  /**
+   * Provider-reported liveness, normalized so the shared picker can badge a
+   * session it would be resuming mid-turn. Providers that cannot report it
+   * leave it undefined rather than guessing `idle`.
+   */
+  status?: "idle" | "running" | "error";
+  /** Short trailing detail, e.g. "12 messages". Already bounded by the adapter. */
+  detail?: string;
 }
 
 export interface NativeAgentForkOutcome {
@@ -291,6 +312,21 @@ export interface NativeAgentSlashCommand {
   name: string;
   description?: string;
   argumentHint?: string;
+}
+
+/**
+ * How much of a transcript the projection is carrying.
+ *
+ * The projection is deliberately bounded, so a long session is windowed to its
+ * newest messages. The renderer needs to know that happened: silently dropping
+ * history reads as data loss, and the "load earlier" affordance has to know
+ * whether there is anything earlier to load.
+ */
+export interface NativeAgentMessageWindow {
+  /** Messages the projection was allowed to carry. */
+  limit: number;
+  /** True when the provider had more messages than the window. */
+  truncated: boolean;
 }
 
 export interface NativeAgentControlUpdate {
@@ -321,6 +357,8 @@ export interface NativeAgentSessionProjection<TMessage = unknown> {
   connection: NativeAgentConnectionState;
   turn: NativeAgentTurnState;
   messages: TMessage[];
+  /** Present whenever the transcript is windowed; absent means "everything". */
+  messageWindow?: NativeAgentMessageWindow;
   interactions: AgentInteractionRequest[];
   composerControls: NativeAgentComposerControl[];
   /** Rich, provider-neutral model metadata used by the common model picker. */
@@ -332,6 +370,8 @@ export interface NativeAgentSessionProjection<TMessage = unknown> {
   rateLimits?: NativeAgentRateLimitWindow[];
   runtime?: NativeAgentRuntimeSummary;
   notices?: NativeAgentNotice[];
+  /** Content-free marker for an idempotent backend-owned retry. */
+  recoverableDispatch?: NativeAgentRecoverableDispatch;
   backgroundTasks?: NativeAgentBackgroundTaskSummary[];
   suggestedPrompt?: string;
   completionBlockedByBackgroundTasks?: boolean;

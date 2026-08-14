@@ -7,6 +7,7 @@ import {
   type AgentInteractionResolution,
   type AgentInteractionResolutionAction,
 } from "@orkestrator/protocol/agent-interactions";
+import { BlockingPromptCard } from "@/components/chat/BlockingPromptCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
@@ -168,15 +169,53 @@ export function NativeAgentInteractionCard({
     }));
   };
 
-  return (
-    <div className="rounded-xl border border-amber-400/30 bg-amber-400/5 p-4 text-sm">
-      <div className="flex items-baseline justify-between gap-2">
-        <p className="font-medium text-amber-100">{interaction.presentation.title}</p>
-        {remaining ? <span className="text-xs tabular-nums text-muted-foreground">{remaining}</span> : null}
-      </div>
-      {interaction.presentation.body ? (
-        <p className="mt-2 whitespace-pre-wrap text-xs text-muted-foreground">{interaction.presentation.body}</p>
+  const actions = (
+    <>
+      {interaction.kind === "plan-approval" ? (
+        <>
+          <Button size="sm" variant="ghost" disabled={submitting || expired} onClick={() => { void resolve("deny"); }}>
+            Dismiss
+          </Button>
+          <Button size="sm" variant="outline" disabled={submitting || expired} onClick={() => { void resolve("decline", feedback); }}>
+            Request changes
+          </Button>
+        </>
+      ) : (
+        <Button size="sm" variant="outline" disabled={submitting || expired} onClick={() => { void resolve("deny"); }}>
+          {interaction.presentation.declineLabel ?? "Deny"}
+        </Button>
+      )}
+      {(interaction.kind === "command-approval" || interaction.kind === "file-approval" || interaction.kind === "permission" || interaction.kind === "mcp-form" || interaction.kind === "mcp-url") ? (
+        <Button size="sm" variant="ghost" disabled={submitting || expired} onClick={() => { void resolve("cancel"); }}>Cancel turn</Button>
       ) : null}
+      {interaction.presentation.approveForSessionLabel ? (
+        <Button size="sm" variant="ghost" disabled={submitting || expired || interaction.presentation.confirmDisabled} onClick={() => { void resolve("approve-for-session"); }}>
+          {interaction.presentation.approveForSessionLabel}
+        </Button>
+      ) : null}
+      <Button size="sm" disabled={submitting || expired || !canSubmit || interaction.presentation.confirmDisabled} onClick={() => { void resolve("answer"); }}>
+        {interaction.presentation.confirmLabel ?? "Continue"}
+      </Button>
+    </>
+  );
+
+  return (
+    /*
+     * The same shell every blocking prompt has used since the three provider
+     * cards were unified: one amber treatment, one arrival announcement for
+     * screen readers, and one place that renders expiry and retry.
+     */
+    <BlockingPromptCard
+      state={submitting ? "submitting" : expired ? "expired" : error ? "retryable-error" : "pending"}
+      error={error}
+      title={interaction.presentation.title}
+      description={interaction.presentation.body}
+      meta={remaining && !expired ? remaining : undefined}
+      arrivalAnnouncement={`${interaction.presentation.title} needs a response.`}
+      role="group"
+      actions={actions}
+    >
+      <div className="px-4 py-3 text-sm">
       {interaction.kind === "plan-approval" && planContent ? (
         <details open className="mt-3 rounded-md border border-border/60 bg-muted/20">
           <summary className="cursor-pointer px-3 py-2 text-xs font-medium">
@@ -260,6 +299,7 @@ export function NativeAgentInteractionCard({
                     optionIds: question.multiple
                       ? selected ? current.optionIds.filter((id) => id !== option.id) : [...current.optionIds, option.id]
                       : [option.id],
+                    ...(!question.multiple ? { freeText: "" } : {}),
                   }))}>
                     {option.label}
                   </Button>
@@ -268,9 +308,9 @@ export function NativeAgentInteractionCard({
             </div>
             {question.allowFreeText ? (
               question.secret ? (
-                <Input type="password" autoComplete="off" value={answer.freeText} disabled={submitting || expired} aria-label={`${question.prompt} response`} onChange={(event) => setQuestionAnswer(question.id, true, (current) => ({ ...current, freeText: event.target.value }))} />
+                <Input type="password" autoComplete="off" value={answer.freeText} disabled={submitting || expired} aria-label={`${question.prompt} response`} onChange={(event) => setQuestionAnswer(question.id, true, (current) => ({ ...current, freeText: event.target.value, ...(!question.multiple && event.target.value ? { optionIds: [] } : {}) }))} />
               ) : (
-                <textarea value={answer.freeText} disabled={submitting || expired} aria-label={`${question.prompt} response`} rows={3} className="w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-xs" onChange={(event) => setQuestionAnswer(question.id, false, (current) => ({ ...current, freeText: event.target.value }))} />
+                <textarea value={answer.freeText} disabled={submitting || expired} aria-label={`${question.prompt} response`} rows={3} className="w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-xs" onChange={(event) => setQuestionAnswer(question.id, false, (current) => ({ ...current, freeText: event.target.value, ...(!question.multiple && event.target.value ? { optionIds: [] } : {}) }))} />
               )
             ) : null}
           </fieldset>
@@ -291,35 +331,7 @@ export function NativeAgentInteractionCard({
         </label>
       ) : null}
 
-      <div className="mt-3 flex flex-wrap gap-2">
-        {interaction.kind === "plan-approval" ? (
-          <>
-            <Button size="sm" variant="ghost" disabled={submitting || expired} onClick={() => { void resolve("deny"); }}>
-              Dismiss
-            </Button>
-            <Button size="sm" variant="outline" disabled={submitting || expired} onClick={() => { void resolve("decline", feedback); }}>
-              Request changes
-            </Button>
-          </>
-        ) : (
-          <Button size="sm" variant="outline" disabled={submitting || expired} onClick={() => { void resolve("deny"); }}>
-            {interaction.presentation.declineLabel ?? "Deny"}
-          </Button>
-        )}
-        {(interaction.kind === "command-approval" || interaction.kind === "file-approval" || interaction.kind === "permission" || interaction.kind === "mcp-form" || interaction.kind === "mcp-url") ? (
-          <Button size="sm" variant="ghost" disabled={submitting || expired} onClick={() => { void resolve("cancel"); }}>Cancel turn</Button>
-        ) : null}
-        {interaction.presentation.approveForSessionLabel ? (
-          <Button size="sm" variant="ghost" disabled={submitting || expired || interaction.presentation.confirmDisabled} onClick={() => { void resolve("approve-for-session"); }}>
-            {interaction.presentation.approveForSessionLabel}
-          </Button>
-        ) : null}
-        <Button size="sm" disabled={submitting || expired || !canSubmit || interaction.presentation.confirmDisabled} onClick={() => { void resolve("answer"); }}>
-          {interaction.presentation.confirmLabel ?? "Continue"}
-        </Button>
       </div>
-      {expired ? <p role="status" className="mt-2 text-xs text-muted-foreground">This request has expired.</p> : null}
-      {error ? <p role="alert" className="mt-2 text-xs text-destructive">{error}</p> : null}
-    </div>
+    </BlockingPromptCard>
   );
 }

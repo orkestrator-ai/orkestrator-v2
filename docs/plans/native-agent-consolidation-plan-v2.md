@@ -112,6 +112,14 @@ dispatch.
 - Ordinary drafts, first-prompt options, queued-message editing, handoff,
   stop markers, model defaults and provider-specific fork boundaries retain
   their pre-consolidation behavior.
+- A parity audit after the merge found affordances that had been lost with the
+  provider tabs and restored them as shared, capability-driven behavior:
+  container-relative inline images, agent-assigned tab titles, `/steer` as a
+  session action, OpenCode command execution and built-in command discovery,
+  workspace attach alongside mention, model-catalogue refresh, Shift+Tab mode
+  cycling, queue metadata and the occupied-composer guard, transcript
+  windowing with an explicit "load earlier" path, the shared resume picker and
+  the shared blocking-prompt card.
 - The old raw container-log drawer is intentionally represented by bounded
   provider errors, recovery notices and Retry. Unbounded process output is not
   copied into renderer state because it can contain prompt/file data.

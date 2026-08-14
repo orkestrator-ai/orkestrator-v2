@@ -1291,6 +1291,13 @@ function asNumber(value: unknown, name: string): number {
   return value;
 }
 
+function asPositiveInteger(value: unknown, name: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) <= 0) {
+    throw new Error(`Expected ${name} to be a positive integer`);
+  }
+  return value as number;
+}
+
 function asTerminalDimension(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 }
@@ -11656,6 +11663,20 @@ export function createCommandRegistry(
     );
   });
 
+  register("retry_native_agent_dispatch", async (args, context) => {
+    if (!context.nativeAgents) {
+      throw new Error("Native agent service is unavailable");
+    }
+    return context.nativeAgents.retryRecoverableDispatch({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(
+        args.logicalSessionKey,
+        "logicalSessionKey",
+      ),
+    });
+  });
+
   register("get_native_agent_session", async (args, context) => {
     const environmentId = asNonBlankString(args.environmentId, "environmentId");
     const agent = asString(args.agent, "agent") as import("./models.js").NativeAgentProvider;
@@ -11684,6 +11705,23 @@ export function createCommandRegistry(
       throw new Error("Native agent service is unavailable");
     }
     return context.nativeAgents.getProjection({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(
+        args.logicalSessionKey,
+        "logicalSessionKey",
+      ),
+      messageLimit: args.messageLimit === undefined
+        ? undefined
+        : asPositiveInteger(args.messageLimit, "messageLimit"),
+    });
+  });
+
+  register("refresh_native_agent_models", async (args, context) => {
+    if (!context.nativeAgents) {
+      throw new Error("Native agent service is unavailable");
+    }
+    return context.nativeAgents.refreshProjectionModels({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
       agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
       logicalSessionKey: asNonBlankString(

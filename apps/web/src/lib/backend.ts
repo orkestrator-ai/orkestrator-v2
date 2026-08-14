@@ -2135,8 +2135,18 @@ export async function getNativeAgentProjection<TMessage = unknown>(input: {
   environmentId: string;
   agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
   logicalSessionKey: string;
+  /** Omit to keep the window this session already has; never to shrink it. */
+  messageLimit?: number;
 }): Promise<NativeAgentSessionProjection<TMessage> | null> {
   return invoke("get_native_agent_projection", input);
+}
+
+export async function refreshNativeAgentModels<TMessage = unknown>(input: {
+  environmentId: string;
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  logicalSessionKey: string;
+}): Promise<NativeAgentSessionProjection<TMessage> | null> {
+  return invoke("refresh_native_agent_models", input);
 }
 
 export async function stopNativeAgentSession<TMessage = unknown>(input: {
@@ -2271,6 +2281,17 @@ export async function dispatchNativeAgentIntent(input: {
 }): Promise<NativeAgentDispatchOutcome> {
   return invoke<NativeAgentDispatchOutcome>(
     "dispatch_native_agent_intent",
+    input,
+  );
+}
+
+export async function retryNativeAgentDispatch(input: {
+  environmentId: string;
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  logicalSessionKey: string;
+}): Promise<NativeAgentDispatchOutcome> {
+  return invoke<NativeAgentDispatchOutcome>(
+    "retry_native_agent_dispatch",
     input,
   );
 }

@@ -96,6 +96,7 @@ import type {
   PersistedMultiReviewWorkflow,
   PersistedBuildPipeline,
   PersistedNativeAgentSession,
+  PersistedNativeAgentPendingDispatch,
   PersistedComposeDraft,
   PersistedFileDraft,
   PersistedPromptQueue,
@@ -853,6 +854,59 @@ function isPersistedNativeAgentSession(
         Array.isArray(value.dispatchedRequestIds)
         && value.dispatchedRequestIds.length <= 1_000
         && value.dispatchedRequestIds.every(isNonBlankString)
+      )
+    )
+    && (
+      value.pendingDispatch === undefined
+      || (
+        isRecord(value.pendingDispatch)
+        && isNonBlankString(value.pendingDispatch.requestId)
+        && isNonBlankString(value.pendingDispatch.prompt)
+        && typeof value.pendingDispatch.createdAt === "string"
+        && Number.isFinite(Date.parse(value.pendingDispatch.createdAt))
+        && (value.pendingDispatch.model === undefined || isNonBlankString(value.pendingDispatch.model))
+        && (value.pendingDispatch.reasoningEffort === undefined || isNonBlankString(value.pendingDispatch.reasoningEffort))
+        && (value.pendingDispatch.mode === undefined || value.pendingDispatch.mode === "plan" || value.pendingDispatch.mode === "build")
+        && (value.pendingDispatch.fastMode === undefined || typeof value.pendingDispatch.fastMode === "boolean")
+        && (value.pendingDispatch.subAgent === undefined || isNonBlankString(value.pendingDispatch.subAgent))
+        && (value.pendingDispatch.executionAgent === undefined || isNonBlankString(value.pendingDispatch.executionAgent))
+        && (value.pendingDispatch.includeLocalSettings === undefined || typeof value.pendingDispatch.includeLocalSettings === "boolean")
+        && (value.pendingDispatch.promptSuggestions === undefined || typeof value.pendingDispatch.promptSuggestions === "boolean")
+        && (value.pendingDispatch.schema === undefined || isRecord(value.pendingDispatch.schema))
+        && (
+          value.pendingDispatch.images === undefined
+          || (
+            Array.isArray(value.pendingDispatch.images)
+            && value.pendingDispatch.images.length <= 64
+            && value.pendingDispatch.images.every((image) =>
+              isRecord(image)
+              && isNonBlankString(image.filename)
+              && isNonBlankString(image.data)
+            )
+          )
+        )
+        && (
+          value.pendingDispatch.attachments === undefined
+          || (
+            Array.isArray(value.pendingDispatch.attachments)
+            && value.pendingDispatch.attachments.length <= 64
+            && value.pendingDispatch.attachments.every((attachment) =>
+              isRecord(attachment)
+              && (attachment.type === "image" || attachment.type === "file")
+              && isNonBlankString(attachment.path)
+              && (attachment.dataUrl === undefined || typeof attachment.dataUrl === "string")
+              && (attachment.filename === undefined || typeof attachment.filename === "string")
+            )
+          )
+        )
+        && (() => {
+          try {
+            return Buffer.byteLength(JSON.stringify(value.pendingDispatch), "utf8")
+              <= 32 * 1024 * 1024;
+          } catch {
+            return false;
+          }
+        })()
       )
     )
     && (
@@ -5321,6 +5375,7 @@ export class StorageService {
       openCodeIncompleteTurnNotice?:
         PersistedNativeAgentSession["openCodeIncompleteTurnNotice"] | null;
     }>,
+    pendingDispatch?: PersistedNativeAgentPendingDispatch,
   ): Promise<{
     session: PersistedNativeAgentSession;
     dispatched: boolean;
@@ -5332,11 +5387,31 @@ export class StorageService {
       const loaded = await this.loadNativeAgentSessions();
       const { sessions, opaque, migrated } = loaded;
       this.assertReadableNativeAgentSession(loaded, key);
-      const session = sessions[key];
+      let session = sessions[key];
       if (!session) throw new Error("Native agent session was not found");
       if (session.dispatchedRequestIds?.includes(requestId)) {
+        if (session.pendingDispatch?.requestId === requestId) {
+          session = { ...session, pendingDispatch: undefined, updatedAt: nowIso() };
+          sessions[key] = session;
+          await this.saveNativeAgentSessions(sessions, opaque);
+        }
         if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return { session, dispatched: false };
+      }
+
+      if (pendingDispatch) {
+        if (pendingDispatch.requestId !== requestId) {
+          throw new Error("Pending native agent dispatch request ID mismatch");
+        }
+        session = {
+          ...session,
+          pendingDispatch,
+          updatedAt: nowIso(),
+        };
+        sessions[key] = session;
+        // Persist before touching the provider. A crash or lost acknowledgement
+        // can then replay this exact request through the same idempotency key.
+        await this.saveNativeAgentSessions(sessions, opaque);
       }
 
       // Keep the cross-process lock until the provider has acknowledged this
@@ -5351,6 +5426,7 @@ export class StorageService {
         }
         const updated: PersistedNativeAgentSession = {
           ...session,
+          pendingDispatch: undefined,
           ...(outcome.openCodeIncompleteTurnNotice === null
             ? { openCodeIncompleteTurnNotice: undefined }
             : {
@@ -5368,6 +5444,7 @@ export class StorageService {
         ...session,
         // Any successfully accepted prompt supersedes a prior recovery notice.
         openCodeIncompleteTurnNotice: undefined,
+        pendingDispatch: undefined,
         dispatchedRequestIds: [
           ...(session.dispatchedRequestIds ?? []).slice(-999),
           requestId,
@@ -5378,6 +5455,33 @@ export class StorageService {
       await this.saveNativeAgentSessions(sessions, opaque);
       this.announce("native-agent-session", session.environmentId);
       return { session: updated, dispatched: true };
+    });
+  }
+
+  async clearPendingNativeAgentDispatch(
+    key: string,
+    requestId: string,
+  ): Promise<boolean> {
+    if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
+      throw new Error("Pending native agent dispatch identity must not be blank");
+    }
+    return this.enqueueNativeAgentSessionMutation(async () => {
+      const loaded = await this.loadNativeAgentSessions();
+      const { sessions, opaque, migrated } = loaded;
+      this.assertReadableNativeAgentSession(loaded, key);
+      const session = sessions[key];
+      if (!session || session.pendingDispatch?.requestId !== requestId) {
+        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
+        return false;
+      }
+      sessions[key] = {
+        ...session,
+        pendingDispatch: undefined,
+        updatedAt: nowIso(),
+      };
+      await this.saveNativeAgentSessions(sessions, opaque);
+      this.announce("native-agent-session", session.environmentId);
+      return true;
     });
   }
 

@@ -554,6 +554,33 @@ describe("NativeAgentService", () => {
     });
   });
 
+  test("renders provider terminal states as uniform durable transcript rows", async () => {
+    const stub = createProviderStub("opencode", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        notices: [{ kind: "stopped", message: "Query stopped by user." }],
+      }),
+    });
+    await withService({
+      prefix: "orkestrator-native-terminal-row-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "opencode" as const,
+        logicalSessionKey: "env-env-1:tab-terminal",
+      };
+      await service.ensureSession(identity);
+      const projection = await service.getProjection(identity);
+      expect(projection?.messages).toEqual([expect.objectContaining({
+        role: "system",
+        content: "Query stopped by user.",
+      })]);
+      expect(projection?.notices).toBeUndefined();
+    });
+  });
+
   test("projects bounded slash commands and caches discovery independently of transcript refresh", async () => {
     let now = 1_000;
     const stub = createProviderStub("claude", {
@@ -598,6 +625,94 @@ describe("NativeAgentService", () => {
       now += 30_001;
       await service.getProjection(identity);
       expect(stub.slashCommands).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  test("advertises runtime session-action commands beside provider discovery", async () => {
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+      slashCommands: async () => [{ name: "/review", description: "Review changes" }],
+    });
+    await withService({
+      prefix: "orkestrator-native-projection-actions-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-actions",
+      };
+      await service.ensureSession(identity);
+      const projection = await service.getProjection(identity);
+      // `/steer` is performed by the runtime rather than the model, so it has
+      // to be advertised by whoever knows the capability — not by a tab.
+      expect(projection?.slashCommands?.map((command) => command.name))
+        .toEqual(["/review", "/steer"]);
+    });
+  });
+
+  test("orders resumable sessions by most recent activity", async () => {
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+    });
+    (stub.provider as { listResumableSessions?: unknown }).listResumableSessions =
+      async () => [
+        { sessionId: "older", updatedAt: "2026-08-01T00:00:00.000Z" },
+        { sessionId: "undated" },
+        { sessionId: "newest", updatedAt: "2026-08-14T00:00:00.000Z", status: "running" as const },
+      ];
+    await withService({
+      prefix: "orkestrator-native-projection-resume-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "env-env-1:tab-resume",
+      };
+      await service.ensureSession(identity);
+      const entries = await service.listProjectionResumableSessions(identity);
+      // Providers return their own order; the picker must not have to know
+      // which field each provider sorts on. Undated entries sink.
+      expect(entries.map((entry) => entry.sessionId))
+        .toEqual(["newest", "older", "undated"]);
+      expect(entries[0]?.status).toBe("running");
+    });
+  });
+
+  test("windows a long transcript and reports that it was truncated", async () => {
+    const messages = Array.from({ length: 600 }, (_, index) => ({
+      id: `message-${index}`,
+      role: "assistant" as const,
+      content: `line ${index}`,
+      parts: [],
+      createdAt: "2026-08-14T10:00:00.000Z",
+    }));
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => ({ status: "idle", messages }),
+    });
+    await withService({
+      prefix: "orkestrator-native-projection-window-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "env-env-1:tab-window",
+      };
+      await service.ensureSession(identity);
+      const bounded = await service.getProjection(identity);
+      expect(bounded?.messages).toHaveLength(512);
+      expect(bounded?.messageWindow).toEqual({ limit: 512, truncated: true });
+
+      const expanded = await service.getProjection({ ...identity, messageLimit: 1_024 });
+      expect(expanded?.messages).toHaveLength(600);
+      expect(expanded?.messageWindow).toEqual({ limit: 1_024, truncated: false });
+
+      // A caller that asks for nothing — the reconciler, the info panel —
+      // inherits the expanded window instead of collapsing the tab's view.
+      const inherited = await service.getProjection(identity);
+      expect(inherited?.messages).toHaveLength(600);
     });
   });
 
@@ -719,7 +834,7 @@ describe("NativeAgentService", () => {
     await withService({
       prefix: "orkestrator-native-dispatch-outcomes-",
       provider: async () => stub.provider,
-    }, async ({ service }) => {
+    }, async ({ service, storage }) => {
       const base = {
         environmentId: "env-1",
         agent: "cursor" as const,
@@ -746,6 +861,29 @@ describe("NativeAgentService", () => {
         requestId: "unknown-1",
         error: "Response was lost",
       });
+
+      const key = nativeAgentSessionStorageKey(
+        base.environmentId,
+        base.agent,
+        base.logicalSessionKey,
+      );
+      expect((await storage.getNativeAgentSession(key))?.pendingDispatch).toMatchObject({
+        requestId: "unknown-1",
+        prompt: "Do the work",
+      });
+      await expect(service.getProjection(base)).resolves.toMatchObject({
+        recoverableDispatch: { requestId: "unknown-1" },
+      });
+
+      result = "accepted";
+      await expect(service.retryRecoverableDispatch(base)).resolves.toEqual({
+        outcome: "accepted",
+        requestId: "unknown-1",
+      });
+      expect(stub.send.mock.calls.at(-1)?.[2]).toMatchObject({
+        requestId: "unknown-1",
+      });
+      expect((await storage.getNativeAgentSession(key))?.pendingDispatch).toBeUndefined();
     });
   });
 

@@ -50,6 +50,10 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
 import {
+  parseLeadingSlashCommand,
+  type ParsedSlashCommand,
+} from "@orkestrator/protocol/agent-slash-commands";
+import {
   mimeTypeForFilename,
   promptAttachmentUrl,
   type PromptAttachment,
@@ -120,6 +124,34 @@ const CLAUDE_BUILT_IN_SLASH_COMMANDS: readonly NativeAgentSlashCommand[] = [
   { name: "/review", description: "Review recent changes" },
   { name: "/status", description: "Show session status" },
   { name: "/vim", description: "Toggle vim mode" },
+];
+
+/**
+ * OpenCode's documented built-in commands.
+ *
+ * `/command` only returns *configurable* commands (project, global, skills), so
+ * without this merge the menu silently lost everything a TUI user knows. The
+ * list lived in the renderer until consolidation; it belongs here, beside the
+ * Claude list, because command discovery is provider knowledge.
+ */
+const OPENCODE_BUILT_IN_SLASH_COMMANDS: readonly NativeAgentSlashCommand[] = [
+  { name: "/compact", description: "Compact the current session" },
+  { name: "/connect", description: "Add a provider" },
+  { name: "/details", description: "Toggle tool execution details" },
+  { name: "/editor", description: "Open an external editor" },
+  { name: "/exit", description: "Exit OpenCode" },
+  { name: "/export", description: "Export current conversation" },
+  { name: "/help", description: "Show help" },
+  { name: "/init", description: "Create or update AGENTS.md" },
+  { name: "/models", description: "List available models" },
+  { name: "/new", description: "Start a new session" },
+  { name: "/redo", description: "Redo the previously undone message" },
+  { name: "/sessions", description: "List and switch sessions" },
+  { name: "/share", description: "Share current session" },
+  { name: "/themes", description: "List available themes" },
+  { name: "/thinking", description: "Toggle reasoning visibility" },
+  { name: "/undo", description: "Undo the last message" },
+  { name: "/unshare", description: "Unshare current session" },
 ];
 
 // Shared by every backend workflow/provider instance. The scope includes the
@@ -366,6 +398,15 @@ export interface ProviderSendOptions {
   /** Overrides the connection default for this prompt only. */
   model?: string;
   effort?: string;
+  /**
+   * Let a submission that names one of the provider's own slash commands run
+   * as that command.
+   *
+   * Set for interactive composer dispatch only. Workflow prompts are authored
+   * by Orkestrator and must reach the model exactly as written, even when they
+   * happen to begin with a slash.
+   */
+  allowProviderCommands?: boolean;
 }
 
 /**
@@ -468,6 +509,8 @@ export interface NativeAgentRuntimeProvider extends BuildPipelineProvider {
     messageId?: string,
   ): Promise<NativeAgentForkOutcome>;
   slashCommands?(): Promise<NativeAgentSlashCommand[]>;
+  /** Drop provider-side model/command caches so the next read re-discovers. */
+  refreshCatalog?(): Promise<void> | void;
   stopBackgroundTask?(sessionId: string, taskId: string): Promise<void>;
   dismissSuggestedPrompt?(sessionId: string): Promise<void>;
   performSessionAction?(
@@ -544,6 +587,7 @@ const MCP_FORM_CONTENT_QUESTION_ID = "mcp-form-content";
 const MAX_RENDERED_FILE_CHANGES = 48;
 const MAX_RENDERED_FILE_CHANGE_TEXT_LENGTH = 256;
 const INTERACTIVE_RUNTIME_METADATA_TTL_MS = 30_000;
+const OPENCODE_COMMAND_NAME_TTL_MS = 30_000;
 
 function setBoundedMapEntry<K, V>(
   map: Map<K, V>,
@@ -2042,7 +2086,10 @@ class HttpBridgeProvider implements BuildPipelineProvider {
           ? undefined
           : truncatedText(question.header, "Question"),
         required: true,
-        multiple: true,
+        // request_user_input serializes every answer as an array, but each
+        // Codex option list is mutually exclusive. Wire shape is not choice
+        // semantics; normalize that distinction before the shared UI.
+        multiple: false,
         secret: question?.isSecret === true,
         allowFreeText: question?.isOther === true || options.length === 0,
         options: options.map((entry, optionIndex) => {
@@ -2435,6 +2482,9 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       return {
         status,
         messages,
+        ...(typeof payload?.title === "string" && payload.title.trim()
+          ? { title: payload.title.trim() }
+          : {}),
         composer: composer as unknown as NativeAgentComposerState,
         providerRevision: providerRevision as number,
         ...(typeof providerError === "string" ? { error: providerError } : {}),
@@ -2555,6 +2605,9 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       return {
         status,
         messages,
+        ...(typeof payload.title === "string" && payload.title.trim()
+          ? { title: payload.title.trim() }
+          : {}),
         controls: {
           ...(typeof config?.model === "string" ? { modelId: config.model } : {}),
           ...(typeof config?.modelReasoningEffort === "string"
@@ -2624,6 +2677,9 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     return {
       status,
       messages,
+      ...(typeof payload.title === "string" && payload.title.trim()
+        ? { title: payload.title.trim() }
+        : {}),
       composer: {
         ...EMPTY_NATIVE_AGENT_COMPOSER_STATE,
         ...(executionProfiles?.length ? { executionProfiles } : {}),
@@ -2708,6 +2764,13 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     return composer as unknown as NativeAgentComposerState;
   }
 
+  refreshCatalog(): void {
+    // Execution profiles and runtime inventory are discovered alongside models,
+    // so an explicit refresh has to drop them too or the picker re-renders the
+    // same stale list it was asked to replace.
+    this.interactiveMetadata.clear();
+  }
+
   async listResumableSessions(): Promise<NativeAgentResumeEntry[]> {
     if (this.agent === "cursor" || this.agent === "grok") return [];
     const response = await bridgeFetch(
@@ -2732,11 +2795,23 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       const createdAt = nonEmptyString(session?.createdAt);
       const updatedAt = nonEmptyString(session?.updatedAt)
         ?? nonEmptyString(session?.lastActivity);
+      const status = session?.status === "running"
+        || session?.status === "error"
+        || session?.status === "idle"
+        ? session.status
+        : undefined;
+      const messageCount = Number.isSafeInteger(session?.messageCount)
+        ? session!.messageCount as number
+        : undefined;
       return [{
         sessionId: id,
         ...(typeof session?.title === "string" ? { title: session.title } : {}),
         ...(createdAt && Number.isFinite(Date.parse(createdAt)) ? { createdAt } : {}),
         ...(updatedAt && Number.isFinite(Date.parse(updatedAt)) ? { updatedAt } : {}),
+        ...(status ? { status } : {}),
+        ...(messageCount === undefined
+          ? {}
+          : { detail: `${messageCount} message${messageCount === 1 ? "" : "s"}` }),
       }];
     });
   }
@@ -3221,6 +3296,30 @@ function normalizeOpenCodeInteractiveMessage(
   };
 }
 
+function normalizeOpenCodeTerminalState(value: unknown): {
+  kind: "error" | "stopped";
+  message: string;
+} | null {
+  const info = asRecord(asRecord(value)?.info);
+  if (!info || info.error === undefined || info.error === null) return null;
+  const error = asRecord(info.error);
+  const name = nonEmptyString(error?.name);
+  if (name === "MessageAbortedError") {
+    return { kind: "stopped", message: "Query stopped by user." };
+  }
+  const data = asRecord(error?.data);
+  const detail = typeof info.error === "string"
+    ? info.error
+    : nonEmptyString(data?.message)
+      ?? nonEmptyString(error?.message)
+      ?? name
+      ?? "OpenCode session failed";
+  return {
+    kind: "error",
+    message: boundedText(detail, "OpenCode session failed"),
+  };
+}
+
 class OpenCodeProvider implements BuildPipelineProvider {
   readonly agent = "opencode" as const;
   private readonly client: OpencodeClient;
@@ -3259,6 +3358,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
     expiresAt: number;
     catalog: ReturnType<typeof normalizeOpenCodeComposerCatalog>;
   } | null = null;
+  private commandNames: { names: Set<string>; expiresAt: number } | null = null;
   private sessionListCache: {
     snapshot: OpenCodeExistenceSnapshot;
     expiresAt: number;
@@ -3632,6 +3732,13 @@ class OpenCodeProvider implements BuildPipelineProvider {
       });
     }
     const modelParts = (options.model ?? this.connection.model)?.split("/");
+    // A submission that names one of OpenCode's commands runs as that command
+    // rather than as prompt text the model has to interpret. Only interactive
+    // dispatch opts in: a workflow prompt that happens to start with a slash
+    // must keep reaching the model verbatim.
+    const command = options.allowProviderCommands
+      ? await this.resolveProviderCommand(shapedPrompt)
+      : null;
     // Validate before any provider I/O. A local failure is definitive and must
     // not be retried as though the prompt might have reached OpenCode.
     openCodeRequestMarker(options.requestId);
@@ -3661,17 +3768,35 @@ class OpenCodeProvider implements BuildPipelineProvider {
       );
       let response;
       try {
-        response = await this.client.session.promptAsync({
-          sessionID: sessionId,
-          directory: this.connection.directory,
-          messageID,
-          parts: parts as never,
-          model: modelParts && modelParts.length > 1
-            ? { providerID: modelParts[0]!, modelID: modelParts.slice(1).join("/") }
-            : undefined,
-          agent: options.executionAgent ?? options.mode ?? "build",
-          variant: options.effort ?? this.connection.effort,
-        }, this.requestOptions());
+        response = command
+          ? await this.client.session.command({
+            sessionID: sessionId,
+            directory: this.connection.directory,
+            messageID,
+            command: command.name.replace(/^\//, ""),
+            // `arguments` is a *required* field on the server's command request
+            // body, so a bare `/init` must still send an empty string. Passing
+            // `undefined` drops the key in `JSON.stringify` and the server
+            // answers 400, which the caller reads as a failed dispatch.
+            arguments: command.arguments ?? "",
+            model: options.model ?? this.connection.model,
+            agent: options.executionAgent ?? options.mode,
+            variant: options.effort ?? this.connection.effort,
+            // Text became the command name and its arguments; only the files
+            // survive as parts.
+            parts: parts.filter((part) => part.type === "file") as never,
+          }, this.requestOptions())
+          : await this.client.session.promptAsync({
+            sessionID: sessionId,
+            directory: this.connection.directory,
+            messageID,
+            parts: parts as never,
+            model: modelParts && modelParts.length > 1
+              ? { providerID: modelParts[0]!, modelID: modelParts.slice(1).join("/") }
+              : undefined,
+            agent: options.executionAgent ?? options.mode ?? "build",
+            variant: options.effort ?? this.connection.effort,
+          }, this.requestOptions());
       } catch (error) {
         // The request may have reached OpenCode before the response was lost.
         // The reservation keeps the same ID until transcript reconciliation.
@@ -4426,6 +4551,15 @@ class OpenCodeProvider implements BuildPipelineProvider {
       normalizedMessages,
       collectRawOpenCodeSubagentIds(rawMessages),
     );
+    // OpenCode persists terminal errors on the final assistant message rather
+    // than in its lifecycle snapshot. Normalize that provider detail here so
+    // the shared projection can render the same durable terminal row for every
+    // provider, including aborts initiated outside this renderer.
+    const terminal = normalizeOpenCodeTerminalState(
+      [...rawMessages].reverse().find((candidate) =>
+        Boolean(asRecord(asRecord(candidate)?.info))
+      ),
+    );
     const usageTurns = rawMessages.flatMap((message) => {
       const info = asRecord(asRecord(message)?.info);
       const tokens = asRecord(info?.tokens);
@@ -4483,7 +4617,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
         })
       : undefined;
     return {
-      status,
+      status: terminal?.kind === "error" ? "error" : status,
       messages,
       ...(metadata.title ? { title: metadata.title } : {}),
       ...(metadata.shareUrl === undefined ? {} : { shareUrl: metadata.shareUrl }),
@@ -4500,6 +4634,10 @@ class OpenCodeProvider implements BuildPipelineProvider {
       },
       ...(latestUsage ? { contextUsage: latestUsage } : {}),
       runtime: metadata.runtime,
+      ...(terminal ? { notices: [terminal] } : {}),
+      ...(terminal?.kind === "error"
+        ? { phase: "error" as const, error: terminal.message }
+        : {}),
     };
   }
 
@@ -4683,6 +4821,44 @@ class OpenCodeProvider implements BuildPipelineProvider {
     });
   }
 
+  refreshCatalog(): void {
+    this.catalogMetadata = null;
+    this.commandNames = null;
+    this.interactiveMetadata.clear();
+  }
+
+  /**
+   * Match a submission against the commands this runtime can execute.
+   *
+   * Discovery is only attempted for text that actually starts with a slash, and
+   * the result is cached, so an ordinary prompt never pays for a command list.
+   * A discovery failure resolves to "not a command": sending the text to the
+   * model is recoverable, refusing the user's prompt is not.
+   */
+  private async resolveProviderCommand(
+    prompt: string,
+  ): Promise<ParsedSlashCommand | null> {
+    const parsed = parseLeadingSlashCommand(prompt);
+    if (!parsed) return null;
+    let names = this.commandNames && this.commandNames.expiresAt > this.now()
+      ? this.commandNames.names
+      : null;
+    if (!names) {
+      try {
+        names = new Set(
+          (await this.slashCommands()).map((command) => command.name.toLowerCase()),
+        );
+        this.commandNames = {
+          names,
+          expiresAt: this.now() + OPENCODE_COMMAND_NAME_TTL_MS,
+        };
+      } catch {
+        return null;
+      }
+    }
+    return names.has(parsed.name) ? parsed : null;
+  }
+
   async slashCommands(): Promise<NativeAgentSlashCommand[]> {
     const responses = await Promise.allSettled([
       this.client.command.list({}, this.requestOptions()),
@@ -4691,7 +4867,9 @@ class OpenCodeProvider implements BuildPipelineProvider {
         this.requestOptions(),
       ),
     ]);
-    const commands = new Map<string, NativeAgentSlashCommand>();
+    const commands = new Map<string, NativeAgentSlashCommand>(
+      OPENCODE_BUILT_IN_SLASH_COMMANDS.map((command) => [command.name, command]),
+    );
     for (const settled of responses) {
       if (settled.status !== "fulfilled" || !Array.isArray(settled.value.data)) continue;
       for (const candidate of settled.value.data.slice(0, 512)) {

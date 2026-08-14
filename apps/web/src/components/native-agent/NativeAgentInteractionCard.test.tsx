@@ -86,6 +86,37 @@ describe("NativeAgentInteractionCard", () => {
     expect(screen.getByLabelText("Access token response").tagName).toBe("TEXTAREA");
   });
 
+  test("keeps single-choice options and custom text mutually exclusive", async () => {
+    const request = interaction(false);
+    request.presentation.questions[0] = {
+      ...request.presentation.questions[0]!,
+      prompt: "Language",
+      options: [
+        { id: "typescript", label: "TypeScript", providerValue: "TypeScript" },
+        { id: "rust", label: "Rust", providerValue: "Rust" },
+      ],
+    };
+    const onResolve = mock(async (_resolution: AgentInteractionResolution) => ({
+      result: "applied" as const,
+      interactionId: request.id,
+      sessionId: request.sessionId,
+      revision: 2,
+    }));
+    render(<NativeAgentInteractionCard interaction={request} onResolve={onResolve} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "TypeScript" }));
+    fireEvent.change(screen.getByLabelText("Language response"), {
+      target: { value: "Zig" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() => expect(onResolve).toHaveBeenCalledTimes(1));
+    expect(onResolve.mock.calls[0]?.[0]).toMatchObject({
+      answer: { answers: [{ questionId: "token", freeText: "Zig" }] },
+    });
+    expect(onResolve.mock.calls[0]?.[0].answer?.answers[0]?.optionIds).toBeUndefined();
+  });
+
   test("renders typed MCP schema fields and serializes the object response", async () => {
     const onResolve = mock(async (_resolution: AgentInteractionResolution) => ({
       result: "applied" as const,

@@ -430,6 +430,33 @@ export interface OpenCodeIncompleteTurnNotice {
 }
 
 /**
+ * Exact replay data for a dispatch whose provider acknowledgement was lost.
+ * This lives only in the backend's sensitive store; projections expose the
+ * request id and timestamp, never prompt or attachment content.
+ */
+export interface PersistedNativeAgentPendingDispatch {
+  requestId: string;
+  prompt: string;
+  images?: Array<{ filename: string; data: string }>;
+  attachments?: Array<{
+    type: "image" | "file";
+    path: string;
+    dataUrl?: string;
+    filename?: string;
+  }>;
+  schema?: Record<string, unknown>;
+  mode?: "plan" | "build";
+  fastMode?: boolean;
+  subAgent?: string;
+  executionAgent?: string;
+  includeLocalSettings?: boolean;
+  promptSuggestions?: boolean;
+  model?: string;
+  reasoningEffort?: string;
+  createdAt: string;
+}
+
+/**
  * Durable mapping between a logical UI tab and the provider session that owns
  * its transcript. The backend creates this mapping atomically, so any number of
  * renderers asking for the same tab receive the same provider session.
@@ -446,6 +473,8 @@ export interface PersistedNativeAgentSession {
   /** Provider-neutral interactive choices that survive renderer/backend restarts. */
   controls?: import("@orkestrator/protocol/native-agent").NativeAgentControlUpdate;
   dispatchedRequestIds?: string[];
+  /** Retained only while the provider outcome is ambiguous. */
+  pendingDispatch?: PersistedNativeAgentPendingDispatch;
   /** Content-free authoritative outcome rehydrated by every OpenCode tab. */
   openCodeIncompleteTurnNotice?: OpenCodeIncompleteTurnNotice;
   createdAt: string;

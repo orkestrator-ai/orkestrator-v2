@@ -53,17 +53,36 @@ const ensureNativeAgentSessionMock = mock(async (input: {
   agent: input.agent,
 }));
 const listNativeAgentResumableSessionsMock = mock(async () => []);
+const performNativeAgentSessionActionMock = mock(async (_input: {
+  agent: string;
+  action: { kind: string; text?: string };
+}) => ({ outcome: "applied" as const }));
+const enqueuePromptQueueMessageMock = mock(async () => {});
+const removePromptQueueMessageMock = mock(async () => {});
+const movePromptQueueMessageMock = mock(async () => {});
+const dismissNativeAgentSuggestedPromptMock = mock(
+  async () => getNativeAgentProjectionMock({ agent: "claude", environmentId: "env-1" }),
+);
+const updateNativeAgentControlsMock = mock(
+  async (_input: { update: Record<string, unknown> }) =>
+    getNativeAgentProjectionMock({ agent: "codex", environmentId: "env-1" }),
+);
 const dispatchNativeAgentIntentMock = mock(async (input: { requestId: string }) => ({
   outcome: "accepted" as const,
   requestId: input.requestId,
+}));
+const retryNativeAgentDispatchMock = mock(async () => ({
+  outcome: "accepted" as const,
+  requestId: "recoverable-1",
 }));
 const stopNativeAgentSessionMock = mock(async () => getNativeAgentProjectionMock({
   agent: "claude",
   environmentId: "env-1",
 }));
-const getNativeAgentProjectionMock = mock(async (input: {
+const defaultProjection = async (input: {
   agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
   environmentId: string;
+  messageLimit?: number;
 }): Promise<NativeAgentSessionProjection<NativeMessage>> => ({
   platform: input.agent,
   environmentId: input.environmentId,
@@ -97,7 +116,8 @@ const getNativeAgentProjectionMock = mock(async (input: {
   },
   revision: 1,
   generation: "test-generation",
-}));
+});
+const getNativeAgentProjectionMock = mock(defaultProjection);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -107,10 +127,17 @@ mock.module("@/lib/backend", () => ({
   ensureNativeAgentSession: ensureNativeAgentSessionMock,
   listNativeAgentResumableSessions: listNativeAgentResumableSessionsMock,
   dispatchNativeAgentIntent: dispatchNativeAgentIntentMock,
+  retryNativeAgentDispatch: retryNativeAgentDispatchMock,
   stopNativeAgentSession: stopNativeAgentSessionMock,
   getFileTree: async () => [],
   getLocalFileTree: async () => [],
   getNativeAgentProjection: getNativeAgentProjectionMock,
+  performNativeAgentSessionAction: performNativeAgentSessionActionMock,
+  enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,
+  removePromptQueueMessage: removePromptQueueMessageMock,
+  movePromptQueueMessage: movePromptQueueMessageMock,
+  dismissNativeAgentSuggestedPrompt: dismissNativeAgentSuggestedPromptMock,
+  updateNativeAgentControls: updateNativeAgentControlsMock,
 }));
 mock.module("@/lib/pane-layout-persistence", () => ({
   ...realPaneLayoutPersistenceSnapshot,
@@ -146,8 +173,16 @@ afterEach(() => {
   ensureNativeAgentSessionMock.mockClear();
   listNativeAgentResumableSessionsMock.mockClear();
   dispatchNativeAgentIntentMock.mockClear();
+  retryNativeAgentDispatchMock.mockClear();
   stopNativeAgentSessionMock.mockClear();
+  performNativeAgentSessionActionMock.mockClear();
+  enqueuePromptQueueMessageMock.mockClear();
+  removePromptQueueMessageMock.mockClear();
+  movePromptQueueMessageMock.mockClear();
+  dismissNativeAgentSuggestedPromptMock.mockClear();
+  updateNativeAgentControlsMock.mockClear();
   getNativeAgentProjectionMock.mockClear();
+  getNativeAgentProjectionMock.mockImplementation(defaultProjection);
   useEnvironmentStore.setState({ environments: [] });
   usePaneLayoutStore.setState({
     environments: new Map(),
@@ -272,7 +307,7 @@ describe("AgentNativeTab", () => {
 
     fireEvent.click(within(dialog).getByRole("button", { name: /Codex/ }));
 
-    expect(await screen.findByRole("dialog", { name: "Resume session" })).toBeTruthy();
+    expect(await screen.findByRole("dialog", { name: "Resume Session" })).toBeTruthy();
     await waitFor(() => expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(1));
   });
 
@@ -517,7 +552,7 @@ describe("AgentNativeTab", () => {
     expect(await screen.findByRole("button", { name: "Retry save" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
 
-    expect(await screen.findByRole("dialog", { name: "Resume session" })).toBeTruthy();
+    expect(await screen.findByRole("dialog", { name: "Resume Session" })).toBeTruthy();
     expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(2);
   });
 
@@ -706,5 +741,259 @@ describe("AgentNativeTab", () => {
     expect(useNativeAgentProjectionStore.getState().turnStopMarkers.get(
       createSessionKey("env-1", "tab-review-running"),
     )?.sessionId).toBe("claude-session");
+  });
+
+  describe("capability-driven parity", () => {
+    /** A running turn on a provider that reports the given capabilities. */
+    function seedProjection(overrides: {
+      phase?: NativeAgentSessionProjection["turn"]["phase"];
+      actions?: NativeAgentSessionProjection["capabilities"]["actions"];
+      messageWindow?: NativeAgentSessionProjection["messageWindow"];
+      queue?: NativeAgentSessionProjection["queue"];
+      suggestedPrompt?: string;
+      promptSuggestions?: boolean;
+      messages?: NativeMessage[];
+      recoverableDispatch?: NativeAgentSessionProjection["recoverableDispatch"];
+    } = {}) {
+      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+        platform: input.agent,
+        environmentId: input.environmentId,
+        sessionId: `${input.agent}-session`,
+        connection: "connected" as const,
+        turn: { phase: overrides.phase ?? "idle" },
+        messages: overrides.messages ?? [{
+          id: "assistant-1",
+          role: "assistant" as const,
+          content: "Working",
+          parts: [],
+          createdAt: "2026-08-14T10:00:00.000Z",
+        }],
+        ...(overrides.messageWindow ? { messageWindow: overrides.messageWindow } : {}),
+        ...(overrides.queue ? { queue: overrides.queue } : {}),
+        ...(overrides.recoverableDispatch
+          ? { recoverableDispatch: overrides.recoverableDispatch }
+          : {}),
+        ...(overrides.suggestedPrompt
+          ? { suggestedPrompt: overrides.suggestedPrompt }
+          : {}),
+        interactions: [],
+        composerControls: [],
+        composer: {
+          models: [{
+            platform: input.agent,
+            id: "model-a",
+            label: "Model A",
+            reasoning: [{ id: "high", label: "High" }],
+          }],
+          selectedModelId: "model-a",
+          fastModeEnabled: false,
+          fastModeAvailable: false,
+          selectedModeId: "build" as const,
+          modes: [
+            { id: "build" as const, label: "Build" },
+            { id: "plan" as const, label: "Plan" },
+          ],
+          ...(overrides.promptSuggestions === undefined
+            ? {}
+            : { promptSuggestionsEnabled: overrides.promptSuggestions }),
+        },
+        capabilities: {
+          attachments: { files: true, images: true },
+          queue: true,
+          resume: true,
+          fork: true,
+          slashCommands: true,
+          backgroundTasks: false,
+          composer: {
+            provider: true,
+            model: true,
+            reasoning: true,
+            speed: true,
+            mode: true,
+            ...(overrides.promptSuggestions === undefined
+              ? {}
+              : { promptSuggestions: true }),
+          },
+          ...(overrides.actions ? { actions: overrides.actions } : {}),
+        },
+        revision: 1,
+        generation: "test-generation",
+      }));
+    }
+
+    test("routes a running-turn /steer to the session action instead of the queue", async () => {
+      seedProjection({ phase: "running", actions: { steer: true } });
+      render(<AgentNativeTab tabId="tab-steer" data={identity("codex")} isActive />);
+
+      const input = await screen.findByRole("textbox");
+      fireEvent.input(input, { target: { textContent: "/steer keep the diff small" } });
+      await waitFor(() => expect(
+        useNativeComposeStore.getState().drafts.get(createSessionKey("env-1", "tab-steer"))?.text,
+      ).toBe("/steer keep the diff small"));
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(performNativeAgentSessionActionMock).toHaveBeenCalled());
+      expect(performNativeAgentSessionActionMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        agent: "codex",
+        action: { kind: "steer", text: "keep the diff small" },
+      });
+      // The steering text must not also be queued as a follow-up prompt.
+      expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
+      expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+    });
+
+    test("reuses the request id when a steer could not be confirmed", async () => {
+      seedProjection({ phase: "running", actions: { steer: true } });
+      performNativeAgentSessionActionMock.mockImplementation(
+        async () => ({ outcome: "unknown" as const }) as never,
+      );
+      render(<AgentNativeTab tabId="tab-steer-retry" data={identity("codex")} isActive />);
+
+      const input = await screen.findByRole("textbox");
+      const steer = async () => {
+        fireEvent.input(input, { target: { textContent: "/steer narrow the scope" } });
+        await waitFor(() => expect(
+          useNativeComposeStore.getState().drafts
+            .get(createSessionKey("env-1", "tab-steer-retry"))?.text,
+        ).toBe("/steer narrow the scope"));
+        fireEvent.keyDown(input, { key: "Enter" });
+      };
+
+      await steer();
+      await waitFor(() => expect(performNativeAgentSessionActionMock).toHaveBeenCalledTimes(1));
+      await screen.findByText(/reuses the same request id/);
+      await steer();
+      await waitFor(() => expect(performNativeAgentSessionActionMock).toHaveBeenCalledTimes(2));
+
+      const [first, second] = performNativeAgentSessionActionMock.mock.calls;
+      // An unconfirmed action may already have reached the provider; resending
+      // the same text must deduplicate rather than steer the turn twice.
+      expect((second?.[0].action as { requestId?: string }).requestId)
+        .toBe((first?.[0].action as { requestId?: string }).requestId);
+      performNativeAgentSessionActionMock.mockImplementation(
+        async () => ({ outcome: "applied" as const }),
+      );
+    });
+
+    test("keeps /steer an ordinary prompt for a provider that cannot steer", async () => {
+      seedProjection({ phase: "running" });
+      render(<AgentNativeTab tabId="tab-no-steer" data={identity("claude")} isActive />);
+
+      const input = await screen.findByRole("textbox");
+      fireEvent.input(input, { target: { textContent: "/steer nope" } });
+      await waitFor(() => expect(
+        useNativeComposeStore.getState().drafts.get(createSessionKey("env-1", "tab-no-steer"))?.text,
+      ).toBe("/steer nope"));
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalled());
+      expect(performNativeAgentSessionActionMock).not.toHaveBeenCalled();
+    });
+
+    test("offers both attach and mention for a provider that accepts files", async () => {
+      seedProjection();
+      render(<AgentNativeTab tabId="tab-attach" data={identity("claude")} isActive />);
+
+      fireEvent.pointerDown(await screen.findByRole("button", { name: "Add attachment" }));
+      expect(await screen.findByRole("menuitem", { name: "Attach file from workspace" }))
+        .toBeTruthy();
+      expect(screen.getByRole("menuitem", { name: "Mention file from workspace" }))
+        .toBeTruthy();
+    });
+
+    test("cycles conversation mode with Shift+Tab", async () => {
+      seedProjection();
+      render(<AgentNativeTab tabId="tab-mode" data={identity("codex")} isActive />);
+
+      const input = await screen.findByRole("textbox");
+      fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+      await waitFor(() => expect(updateNativeAgentControlsMock).toHaveBeenCalled());
+      expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        update: { mode: "plan" },
+      });
+    });
+
+    test("offers to load earlier messages when the transcript is windowed", async () => {
+      seedProjection({ messageWindow: { limit: 512, truncated: true } });
+      render(<AgentNativeTab tabId="tab-window" data={identity("opencode")} isActive />);
+
+      fireEvent.click(await screen.findByRole("button", { name: "Load earlier messages" }));
+      await waitFor(() => expect(
+        getNativeAgentProjectionMock.mock.calls.some(
+          (call) => call[0].messageLimit === 1024,
+        ),
+      ).toBe(true));
+    });
+
+    test("refuses to load a queued prompt over an occupied composer", async () => {
+      seedProjection({
+        queue: { items: [{ id: "queued-1", text: "second prompt" }] },
+      });
+      render(<AgentNativeTab tabId="tab-queue" data={identity("claude")} isActive />);
+
+      const input = await screen.findByRole("textbox");
+      fireEvent.input(input, { target: { textContent: "half-written message" } });
+      await waitFor(() => expect(
+        useNativeComposeStore.getState().drafts.get(createSessionKey("env-1", "tab-queue"))?.text,
+      ).toBe("half-written message"));
+
+      fireEvent.click(await screen.findByTitle("View queued prompts"));
+      fireEvent.click(await screen.findByTitle("Click to edit this message"));
+
+      await waitFor(() => expect(removePromptQueueMessageMock).not.toHaveBeenCalled());
+      expect(
+        useNativeComposeStore.getState().drafts.get(createSessionKey("env-1", "tab-queue"))?.text,
+      ).toBe("half-written message");
+    });
+
+    test("shows provider status and detail in the shared resume picker", async () => {
+      // An empty transcript centers the composer, where the picker's entry
+      // point is the visible one.
+      seedProjection({ messages: [] });
+      listNativeAgentResumableSessionsMock.mockImplementation(async () => [
+        {
+          sessionId: "older-session",
+          title: "Earlier work",
+          updatedAt: "2026-08-01T00:00:00.000Z",
+          status: "running" as const,
+          detail: "12 messages",
+        },
+      ] as never);
+      render(<AgentNativeTab tabId="tab-resume-detail" data={identity("claude")} isActive />);
+
+      fireEvent.click((await screen.findAllByRole("button", { name: /Resume Session/ }))[0]!);
+      const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
+      expect(within(dialog).getByText("Earlier work")).toBeTruthy();
+      expect(within(dialog).getByText("12 messages")).toBeTruthy();
+      expect(within(dialog).getByText(/Running/)).toBeTruthy();
+    });
+
+    test("dismisses an accepted suggestion for any provider that tracks them", async () => {
+      seedProjection({ suggestedPrompt: "Run the tests", promptSuggestions: true });
+      render(<AgentNativeTab tabId="tab-suggest" data={identity("claude")} isActive />);
+
+      fireEvent.click(await screen.findByRole("button", { name: /Suggested: Run the tests/ }));
+      await waitFor(() => expect(dismissNativeAgentSuggestedPromptMock).toHaveBeenCalledTimes(1));
+      expect(
+        useNativeComposeStore.getState().drafts.get(createSessionKey("env-1", "tab-suggest"))?.text,
+      ).toBe("Run the tests");
+    });
+
+    test("retries an ambiguous dispatch through the backend-owned replay", async () => {
+      seedProjection({
+        recoverableDispatch: {
+          requestId: "recoverable-1",
+          createdAt: "2026-08-14T10:00:00.000Z",
+        },
+      });
+      render(<AgentNativeTab tabId="tab-recoverable" data={identity("codex")} isActive />);
+
+      fireEvent.click(await screen.findByRole("button", { name: "Retry send" }));
+      await waitFor(() => expect(retryNativeAgentDispatchMock).toHaveBeenCalledWith({
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: createSessionKey("env-1", "tab-recoverable"),
+      }));
+    });
   });
 });

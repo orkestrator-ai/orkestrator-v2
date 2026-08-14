@@ -2,6 +2,10 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, History, X } from "lucide-react";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
+import {
+  isProviderSlashCommand,
+  resolveSessionActionCommand,
+} from "@orkestrator/protocol/agent-slash-commands";
 import { Button } from "@/components/ui/button";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
@@ -12,6 +16,10 @@ import { NativeComposeBar } from "@/components/chat/NativeComposeBar";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
+import {
+  NativeResumeSessionDialog,
+  type ResumableSession,
+} from "@/components/chat/NativeResumeSessionDialog";
 import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
 import { useMessageForkAction } from "@/components/chat/MessageForkAction";
 import {
@@ -31,6 +39,8 @@ import {
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import { useFileMentions } from "@/hooks/useFileMentions";
 import { useFileSearch } from "@/hooks/useFileSearch";
+import { useComposerFileSearchFeedback } from "@/hooks/useComposerFileSearchFeedback";
+import { useComposerMountFocus } from "@/hooks/useComposerMountFocus";
 import { useNativeComposeBarPaste } from "@/hooks/useNativeComposeBarPaste";
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { useNativeAgentSession } from "@/hooks/useNativeAgentSession";
@@ -71,6 +81,8 @@ import {
 } from "@/components/chat/message-fork";
 import { createPersistedPaneLayoutInput, flushPaneLayoutNow } from "@/lib/pane-layout-persistence";
 import { composeDraftKey, discardComposeDraft } from "@/lib/compose-draft-persistence";
+import { composerOccupiedError } from "@/lib/prompt-queue-errors";
+import { resolveWorkspaceAttachment } from "@/lib/chat/workspace-attachments";
 import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -91,7 +103,6 @@ import {
   type AgentNativeTabProps,
 } from "./adapter";
 import { NativeAgentInteractionCard } from "./NativeAgentInteractionCard";
-import { NativeAgentResumeDialog } from "./NativeAgentResumeDialog";
 import { CodexPlanModeCard } from "@/components/codex/CodexPlanModeCard";
 import { ClaudeBackgroundTaskHoldCard } from "@/components/claude/ClaudeBackgroundTaskHoldCard";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
@@ -295,7 +306,7 @@ function UnassignedNativeAgentComposer({
     closeFileMentionMenu({ suppressReopenFor: file.filename });
     inputRef.current?.insertMention(mention);
   }, [closeFileMentionMenu, createMention]);
-  const handleWorkspaceFileSelect = useCallback((file: FileCandidate) => {
+  const handleWorkspaceFileMention = useCallback((file: FileCandidate) => {
     const mention = createMention(file);
     closeFileMentionMenu({ suppressReopenFor: file.filename });
     inputRef.current?.insertMentionAtCursor(mention);
@@ -312,6 +323,33 @@ function UnassignedNativeAgentComposer({
       attachments: [...(current?.attachments ?? []), attachment],
     });
   }, [sessionKey, updateDraft]);
+  const handleWorkspaceFileAttach = useCallback((file: FileCandidate) => {
+    const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+    const resolved = resolveWorkspaceAttachment(file, {
+      containerId,
+      worktreePath,
+      allowFiles: selectedAdapter?.capabilities.attachments.files === true,
+      allowImages: selectedAdapter?.capabilities.attachments.images === true,
+      modelSupportsImages: selectedModel?.supportsImageInput,
+      modelLabel: selectedModel?.label,
+      attachedCount: current?.attachments.length ?? 0,
+    });
+    if ("error" in resolved) {
+      toast.error(resolved.error, { description: resolved.description });
+      return;
+    }
+    updateDraft(sessionKey, {
+      attachments: [...(current?.attachments ?? []), resolved.attachment],
+    });
+  }, [
+    containerId,
+    selectedAdapter,
+    selectedModel?.label,
+    selectedModel?.supportsImageInput,
+    sessionKey,
+    updateDraft,
+    worktreePath,
+  ]);
   const canAttachImage = useCallback(
     () => selectedAdapter?.capabilities.attachments.images === true
       && selectedModel?.supportsImageInput !== false,
@@ -331,6 +369,12 @@ function UnassignedNativeAgentComposer({
     onImageRejected: handleImageRejected,
     logLabel: "UnassignedNativeAgentComposer",
   });
+  useComposerFileSearchFeedback({
+    error: fileSearch.error,
+    refresh: fileSearch.refresh,
+    mentionMenuOpen: fileMentionMenuOpen,
+  });
+  useComposerMountFocus(inputRef);
 
   const send = () => {
     const prompt = buildInitialPromptWithAttachmentReferences(
@@ -380,6 +424,11 @@ function UnassignedNativeAgentComposer({
             if (fileMentionMenuOpen && handleFileMentionKeyDown(event, handleFileMentionSelect)) {
               return;
             }
+            if (event.key === "Tab" && event.shiftKey && canConfigureMode) {
+              event.preventDefault();
+              updateDraft(sessionKey, { mode: draft.mode === "plan" ? "build" : "plan" });
+              return;
+            }
             if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
             event.preventDefault();
             send();
@@ -396,15 +445,16 @@ function UnassignedNativeAgentComposer({
             ) : null}
           primaryControls={(
             <>
-              {selectedAdapter?.capabilities.attachments.files ? (
+              {selectedAdapter?.capabilities.attachments.files
+                || selectedAdapter?.capabilities.attachments.images ? (
                 <NativeAttachmentMenu
                   disabled={disabled}
                   fileSearch={fileSearch}
-                  onSelectFile={handleWorkspaceFileSelect}
+                  onSelectFile={handleWorkspaceFileAttach}
+                  onMentionFile={handleWorkspaceFileMention}
                   onCloseAutoFocus={() => inputRef.current?.focus()}
-                  fileActionLabel="Mention file from workspace"
-                  filePickerTitle="Mention workspace file"
-                  filePickerDescription="Search this environment and mention a file in the first prompt."
+                  filePickerDescription="Search this environment and attach a file to the first prompt."
+                  mentionPickerDescription="Search this environment and mention a file in the first prompt."
                 />
               ) : null}
               <AgentModelPicker
@@ -556,8 +606,16 @@ function SharedNativeAgentController({
   const [forkInFlight, setForkInFlight] = useState(false);
   const [planTransitionPending, setPlanTransitionPending] = useState(false);
   const [suggestionDismissPending, setSuggestionDismissPending] = useState(false);
+  const [namingEnvironment, setNamingEnvironment] = useState(false);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [dismissedPlanReviewId, setDismissedPlanReviewId] = useState<string | null>(null);
   const forkLatchRef = useRef(false);
+  /** Last session action whose delivery the provider could not confirm. */
+  const ambiguousActionRef = useRef<{
+    kind: string;
+    text: string;
+    requestId: string;
+  } | null>(null);
   const {
     sessionKey,
     runtimeProjection: projection,
@@ -576,9 +634,13 @@ function SharedNativeAgentController({
     removeQueued,
     moveQueued,
     retryQueue,
+    retryRecoverableDispatch,
     listResumable,
     resume,
     fork,
+    performAction,
+    refreshModels,
+    loadEarlierMessages,
   } = useNativeAgentSession<NativeMessage>({
     platform,
     environmentId: data.environmentId,
@@ -695,15 +757,27 @@ function SharedNativeAgentController({
           createdAt: turnStopMarker.createdAt,
         }]
       : handoff.displayMessages;
-    if (!optimisticPrompt || transcriptEchoedOptimistic) return base;
-    return [...base, createOptimisticNativeMessage(
-      `optimistic-native:${sessionKey}`,
-      optimisticPrompt.text,
-      optimisticPrompt.attachments,
-      optimisticPrompt.createdAt,
-    )];
+    const withOptimistic = !optimisticPrompt || transcriptEchoedOptimistic
+      ? base
+      : [...base, createOptimisticNativeMessage(
+          `optimistic-native:${sessionKey}`,
+          optimisticPrompt.text,
+          optimisticPrompt.attachments,
+          optimisticPrompt.createdAt,
+        )];
+    if (!namingEnvironment) return withOptimistic;
+    // Renaming the environment also renames the branch, and it runs before the
+    // first prompt is dispatched. Without this the tab looks stalled.
+    return [...withOptimistic, {
+      id: `native-naming:${sessionKey}`,
+      role: "system" as const,
+      content: "Naming environment...",
+      parts: [{ type: "text" as const, content: "Naming environment..." }],
+      createdAt: new Date().toISOString(),
+    }];
   }, [
     handoff.displayMessages,
+    namingEnvironment,
     optimisticPrompt,
     projection?.sessionId,
     sessionKey,
@@ -741,6 +815,14 @@ function SharedNativeAgentController({
     ),
     [composer?.models],
   );
+  /** Neutral reasoning label, from whichever model advertised the option. */
+  const reasoningLabel = useCallback((reasoningId: string) => {
+    for (const model of composer?.models ?? []) {
+      const option = model.reasoning?.find((candidate) => candidate.id === reasoningId);
+      if (option) return option.label;
+    }
+    return reasoningId;
+  }, [composer?.models]);
   const updateControlsSafely = useCallback(async (
     update: Parameters<typeof updateControls>[0],
   ) => {
@@ -773,6 +855,16 @@ function SharedNativeAgentController({
   const settingsLocked = phase !== "idle" && phase !== "error";
   const isRunning = phase === "running";
   const isTurnActive = phase === "running" || phase === "recovering" || phase === "cancelling";
+  /*
+   * "Stopping" and "reconnecting" are still loading, but they mean something
+   * different to the user than ordinary thinking. Derived from the neutral
+   * phase, so every provider that reports one gets the label.
+   */
+  const phaseStatusLabel = phase === "cancelling"
+    ? <span role="status" className="text-xs">Stopping…</span>
+    : phase === "recovering"
+      ? <span role="status" className="text-xs">Reconnecting to {label}…</span>
+      : undefined;
   const { elapsedSeconds, finalElapsedSeconds } = useElapsedTimer(
     isTurnActive,
     projection?.sessionId,
@@ -825,8 +917,71 @@ function SharedNativeAgentController({
           submittedAttachments.map(({ name, path }) => ({ name, path })),
         );
     if (!userPrompt) return false;
-    if (handoff.pendingHistory && /^\s*\//.test(userPrompt)) {
+    if (
+      handoff.pendingHistory
+      && isProviderSlashCommand(
+        userPrompt,
+        projection?.slashCommands ?? [],
+        projection?.capabilities,
+      )
+    ) {
       setSendError("Send a normal message first to complete the agent handoff; slash commands cannot carry transferred history.");
+      return false;
+    }
+    /*
+     * A command the runtime performs on the live turn (Codex `/steer`) is not a
+     * prompt: queueing it would run it after the turn it was meant to redirect.
+     * Capability-gated, so any provider that reports the action gets it.
+     */
+    const sessionAction = resolveSessionActionCommand(
+      userPrompt,
+      projection?.capabilities,
+      isRunning,
+    );
+    if (sessionAction) {
+      if (sessionAction.error) {
+        setSendError(sessionAction.error);
+        return false;
+      }
+      if (submittedAttachments.length > 0) {
+        setSendError("/steer supports text only. Remove the attachments and retry.");
+        return false;
+      }
+      setSendError(null);
+      clearDraft(sessionKey);
+      /*
+       * An unconfirmed action may already have reached the provider. Resending
+       * the same text reuses its request id so the provider deduplicates it,
+       * rather than steering the turn twice.
+       */
+      const ambiguous = ambiguousActionRef.current;
+      const actionRequestId = requestId
+        ?? (ambiguous?.kind === sessionAction.kind && ambiguous.text === sessionAction.text
+          ? ambiguous.requestId
+          : crypto.randomUUID());
+      try {
+        const outcome = await performAction({
+          kind: sessionAction.kind,
+          text: sessionAction.text,
+          requestId: actionRequestId,
+        });
+        ambiguousActionRef.current = outcome.outcome === "unknown"
+          ? { kind: sessionAction.kind, text: sessionAction.text, requestId: actionRequestId }
+          : null;
+        if (outcome.outcome === "applied") {
+          discardProvisionalDraft();
+          toast.success(`Sent to the active ${label} turn`);
+          return true;
+        }
+        setSendError(outcome.outcome === "unknown"
+          ? `Could not confirm whether ${label} received the steering text. Resending reuses the same request id.`
+          : outcome.outcome === "mismatch"
+            ? "The turn moved on before the steering text was delivered."
+            : `${label} is no longer running a turn to steer.`);
+      } catch (error) {
+        setSendError(error instanceof Error ? error.message : String(error));
+      }
+      updateDraft(sessionKey, { text, mentions: draft.mentions });
       return false;
     }
     const prompt = prependAgentHandoffHistory(handoff.pendingHistory, userPrompt);
@@ -844,6 +999,9 @@ function SharedNativeAgentController({
       && environment
       && isDefaultTimestampEnvironmentName(environment.name)
     ) {
+      // Renaming also renames the branch, so it runs before dispatch and can
+      // take a moment. Say what is happening instead of showing a stalled send.
+      setNamingEnvironment(true);
       try {
         await renameEnvironmentFromPrompt(data.environmentId, userPrompt);
       } catch (error) {
@@ -851,6 +1009,8 @@ function SharedNativeAgentController({
           "[AgentNativeTab] Failed to rename environment from first prompt:",
           error,
         );
+      } finally {
+        setNamingEnvironment(false);
       }
     }
     const options = {
@@ -931,6 +1091,10 @@ function SharedNativeAgentController({
     enqueue,
     handoff.pendingHistory,
     isDispatching,
+    isRunning,
+    label,
+    performAction,
+    projection?.capabilities,
     projection?.messages.length,
     send,
     sendLocked,
@@ -939,6 +1103,55 @@ function SharedNativeAgentController({
     tabId,
     updateDraft,
   ]);
+
+  /**
+   * Provider entries mapped to the shared picker's neutral row shape. Sorting
+   * and current-session exclusion belong to the dialog and the backend, not to
+   * each provider's own copy of a list.
+   */
+  const fetchResumableSessions = useCallback(
+    async (): Promise<ResumableSession[]> => (await listResumable()).map((entry) => ({
+      id: entry.sessionId,
+      ...(entry.title ? { title: entry.title } : {}),
+      activityAt: entry.updatedAt ?? entry.createdAt ?? null,
+      ...(entry.status ? { status: entry.status } : {}),
+      ...(entry.detail ? { detail: entry.detail } : {}),
+    })),
+    [listResumable],
+  );
+
+  /** What the send button would do with the draft as typed. */
+  const draftSessionAction = useMemo(
+    () => resolveSessionActionCommand(draft.text, projection?.capabilities, isRunning),
+    [draft.text, isRunning, projection?.capabilities],
+  );
+
+  /**
+   * Retire the suggestion locally and, where the provider tracks it, remotely.
+   * `promptSuggestions` is the neutral capability, so this works for whichever
+   * providers report suggestions rather than only for Claude.
+   */
+  const dismissSuggestion = useCallback(() => {
+    if (adapter.capabilities.composer.promptSuggestions !== true) return;
+    setSuggestionDismissPending(true);
+    void dismissSuggestedPrompt()
+      .catch((error) => toast.error(
+        error instanceof Error ? error.message : "Failed to dismiss suggestion",
+      ))
+      .finally(() => setSuggestionDismissPending(false));
+  }, [adapter.capabilities.composer.promptSuggestions, dismissSuggestedPrompt]);
+
+  const cycleMode = useMemo(() => {
+    const modes = composer?.modes ?? [];
+    if (modes.length < 2 || settingsLocked) return undefined;
+    return () => {
+      const index = modes.findIndex(
+        (mode) => mode.id === (composer?.selectedModeId ?? "build"),
+      );
+      const next = modes[(index + 1) % modes.length];
+      if (next) void updateControlsSafely({ mode: next.id });
+    };
+  }, [composer?.modes, composer?.selectedModeId, settingsLocked, updateControlsSafely]);
 
   const stopSafely = useCallback(async () => {
     try {
@@ -964,11 +1177,39 @@ function SharedNativeAgentController({
     closeFileMentionMenu({ suppressReopenFor: file.filename });
     inputRef.current?.insertMention(mention);
   }, [closeFileMentionMenu, createMention]);
-  const handleWorkspaceFileSelect = useCallback((file: FileCandidate) => {
+  const handleWorkspaceFileMention = useCallback((file: FileCandidate) => {
     const mention = createMention(file);
     closeFileMentionMenu({ suppressReopenFor: file.filename });
     inputRef.current?.insertMentionAtCursor(mention);
   }, [closeFileMentionMenu, createMention]);
+  const handleWorkspaceFileAttach = useCallback((file: FileCandidate) => {
+    const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+    const resolved = resolveWorkspaceAttachment(file, {
+      containerId: data.containerId,
+      worktreePath: environment?.worktreePath,
+      allowFiles: adapter.capabilities.attachments.files,
+      allowImages: adapter.capabilities.attachments.images,
+      modelSupportsImages: selectedModel?.supportsImageInput,
+      modelLabel: selectedModel?.label,
+      attachedCount: current?.attachments.length ?? 0,
+    });
+    if ("error" in resolved) {
+      toast.error(resolved.error, { description: resolved.description });
+      return;
+    }
+    updateDraft(sessionKey, {
+      attachments: [...(current?.attachments ?? []), resolved.attachment],
+    });
+  }, [
+    adapter.capabilities.attachments.files,
+    adapter.capabilities.attachments.images,
+    data.containerId,
+    environment?.worktreePath,
+    selectedModel?.label,
+    selectedModel?.supportsImageInput,
+    sessionKey,
+    updateDraft,
+  ]);
   const handlePastedImage = useCallback((attachment: {
     id: string;
     type: "image";
@@ -991,6 +1232,12 @@ function SharedNativeAgentController({
     onImageRejected: () => toast.error("Images are not supported by this agent"),
     logLabel: "SharedNativeAgentController",
   });
+  useComposerFileSearchFeedback({
+    error: fileSearch.error,
+    refresh: fileSearch.refresh,
+    mentionMenuOpen: fileMentionMenuOpen,
+  });
+  useComposerMountFocus(inputRef, isActive);
 
   const forkPlan = useMemo(
     () => buildMessageForkPlan(handoff.displayMessages, {
@@ -1199,16 +1446,41 @@ function SharedNativeAgentController({
       agentLabel={label}
       isActive={isActive}
       ownsGlobalShortcuts={ownsGlobalShortcuts}
+      // Without this, images the agent wrote inside the container render as
+      // bare paths instead of pictures.
+      containerId={data.containerId}
       connectionState={connectionState}
       errorMessage={errorMessage}
       onRetry={() => { void connect(); }}
       messages={messages}
       resolveModelLabel={resolveModelLabel}
       isLoading={isTurnActive}
+      statusLabel={phaseStatusLabel}
       elapsedSeconds={elapsedSeconds}
       finalElapsedSeconds={finalElapsedSeconds}
       centerCompose={messages.length === 0 && !isTurnActive}
       emptyStateMessage={`Ask ${label} to work on this repository.`}
+      transcriptHeader={projection?.messageWindow?.truncated ? (
+        <div className="mx-auto flex max-w-3xl items-center justify-center gap-2 px-2 py-3 text-xs text-muted-foreground">
+          <span>Earlier messages are not shown.</span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={loadingEarlier}
+            onClick={() => {
+              setLoadingEarlier(true);
+              void loadEarlierMessages()
+                .catch((error) => toast.error(
+                  error instanceof Error ? error.message : "Failed to load earlier messages",
+                ))
+                .finally(() => setLoadingEarlier(false));
+            }}
+          >
+            {loadingEarlier ? "Loading…" : "Load earlier messages"}
+          </Button>
+        </div>
+      ) : null}
       isAtBottom={isAtBottom}
       scrollToBottom={scrollToBottom}
       scrollProps={scrollProps}
@@ -1254,11 +1526,41 @@ function SharedNativeAgentController({
             <div
               key={`${notice.kind}:${index}`}
               role="status"
-              className="rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-100"
+              className={notice.kind === "error"
+                ? "rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+                : "rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-100"}
             >
               {notice.message}
             </div>
           ))}
+          {projection?.recoverableDispatch ? (
+            <div
+              role="alert"
+              className="flex items-center justify-between gap-3 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-100"
+            >
+              <span>The previous dispatch could not be confirmed. Retrying is idempotent.</span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={isDispatching}
+                onClick={() => {
+                  void retryRecoverableDispatch().then((outcome) => {
+                    if (outcome.outcome === "accepted") {
+                      setSendError(null);
+                      setOptimisticPrompt(null);
+                    } else if (outcome.outcome === "rejected") {
+                      setSendError(outcome.error);
+                    } else {
+                      setSendError(outcome.error ?? "The dispatch is still being reconciled.");
+                    }
+                  });
+                }}
+              >
+                Retry send
+              </Button>
+            </div>
+          ) : null}
           {sendError ? (
             <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               {sendError}
@@ -1273,33 +1575,31 @@ function SharedNativeAgentController({
             size="sm"
             variant="outline"
             title={projection.suggestedPrompt}
-            onClick={() => updateDraft(sessionKey, {
-              text: draft.text.trim()
-                ? `${draft.text.replace(/\s+$/, "")}\n\n${projection.suggestedPrompt}`
-                : projection.suggestedPrompt,
-            })}
+            onClick={() => {
+              // Appended, never replaced: the draft is the composer's backing
+              // store, so overwriting it destroys a half-written message.
+              updateDraft(sessionKey, {
+                text: draft.text.trim()
+                  ? `${draft.text.replace(/\s+$/, "")}\n\n${projection.suggestedPrompt}`
+                  : projection.suggestedPrompt,
+              });
+              // Accepting a suggestion consumes it. Providers that cannot be
+              // told simply drop it on the next refresh.
+              dismissSuggestion();
+            }}
           >
             Suggested: {projection.suggestedPrompt}
           </Button>
-          {platform === "claude" ? (
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              disabled={suggestionDismissPending}
-              aria-label="Dismiss suggested prompt"
-              onClick={() => {
-                setSuggestionDismissPending(true);
-                void dismissSuggestedPrompt()
-                  .catch((error) => toast.error(
-                    error instanceof Error ? error.message : "Failed to dismiss suggestion",
-                  ))
-                  .finally(() => setSuggestionDismissPending(false));
-              }}
-            >
-              <X className="size-4" />
-            </Button>
-          ) : null}
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            disabled={suggestionDismissPending}
+            aria-label="Dismiss suggested prompt"
+            onClick={dismissSuggestion}
+          >
+            <X className="size-4" />
+          </Button>
         </div>
       ) : null}
       messageActions={adapter.capabilities.fork
@@ -1314,26 +1614,32 @@ function SharedNativeAgentController({
         ? () => setResumeDialogOpen(true)
         : undefined}
       resumeDialog={adapter.capabilities.resume ? (
-        <NativeAgentResumeDialog
+        <NativeResumeSessionDialog
           open={resumeDialogOpen}
           onOpenChange={setResumeDialogOpen}
+          agentLabel={label}
           currentSessionId={projection?.sessionId}
-          loadSessions={listResumable}
-          onResume={async (session) => {
-            await resume(session.sessionId, {
+          fetchSessions={fetchResumableSessions}
+          onResume={(providerSessionId) => {
+            setResumeDialogOpen(false);
+            void resume(providerSessionId, {
               modelId: composer?.selectedModelId,
               reasoningId: composer?.selectedReasoningId,
               fastMode: composer?.fastModeEnabled ?? undefined,
               mode: composer?.selectedModeId,
-            });
-            clearPersistedVirtuosoState(sessionKey);
-            scrollToBottom();
+            }).then(() => {
+              clearPersistedVirtuosoState(sessionKey);
+              scrollToBottom();
+            }).catch((error) => toast.error(
+              error instanceof Error ? error.message : `Failed to resume ${label}`,
+            ));
           }}
         />
       ) : null}
       composer={(
         <NativeComposeBar
           testId="shared-native-compose-bar"
+          layout={messages.length === 0 && !isTurnActive ? "centered" : "bottom"}
           attachments={draft.attachments}
           onRemoveAttachment={(attachmentId) => updateDraft(sessionKey, {
             attachments: draft.attachments.filter((candidate) => candidate.id !== attachmentId),
@@ -1351,6 +1657,13 @@ function SharedNativeAgentController({
               return;
             }
             if (slashCommandMenuOpen && handleSlashCommandKeyDown(event)) return;
+            // Shift+Tab cycles conversation mode for any provider that reports
+            // one, rather than only where a provider tab implemented it.
+            if (event.key === "Tab" && event.shiftKey && cycleMode) {
+              event.preventDefault();
+              cycleMode();
+              return;
+            }
             if (event.key !== "Enter" || event.shiftKey) return;
             event.preventDefault();
             void submit(draft.text);
@@ -1376,11 +1689,13 @@ function SharedNativeAgentController({
             ) : null}
           primaryControls={composer ? (
             <>
-              {adapter.capabilities.attachments.files ? (
+              {adapter.capabilities.attachments.files
+                || adapter.capabilities.attachments.images ? (
                 <NativeAttachmentMenu
                   disabled={sendLocked && !canQueue}
                   fileSearch={fileSearch}
-                  onSelectFile={handleWorkspaceFileSelect}
+                  onSelectFile={handleWorkspaceFileAttach}
+                  onMentionFile={handleWorkspaceFileMention}
                   onCloseAutoFocus={() => inputRef.current?.focus()}
                 />
               ) : null}
@@ -1393,6 +1708,11 @@ function SharedNativeAgentController({
                 onToggleFavorite={toggleFavorite}
                 selectedModelId={selectedModel?.id}
                 selectedModelLabel={selectedModel?.label ?? "No models available"}
+                onRefreshModels={() => {
+                  void refreshModels().catch((error) => toast.error(
+                    error instanceof Error ? error.message : "Failed to refresh models",
+                  ));
+                }}
                 onModelChange={(modelId) => {
                   const nextModel = composer.models.find((model) => model.id === modelId);
                   const supportedReasoning = nextModel?.reasoning ?? [];
@@ -1533,10 +1853,12 @@ function SharedNativeAgentController({
               : null,
             onOpen: () => setQueueDialogOpen(true),
           } : undefined}
-          showSendButton={!sendLocked || canQueue}
-          sendDisabled={sendLocked || isDispatching
+          showSendButton={!sendLocked || canQueue || Boolean(draftSessionAction)}
+          sendDisabled={(sendLocked && !draftSessionAction) || isDispatching
             || (!draft.text.trim() && draft.attachments.length === 0)}
-          sendTitle={canQueue ? "Add to queue" : "Send"}
+          sendTitle={draftSessionAction
+            ? draftSessionAction.error ?? `Send to the current ${label} turn`
+            : canQueue ? "Add to queue" : "Send"}
           onSend={() => { void submit(draft.text); }}
           footer={projection?.queue ? (
             <QueuedPromptsDialog
@@ -1544,6 +1866,12 @@ function SharedNativeAgentController({
               onOpenChange={setQueueDialogOpen}
               messages={queuedMessages}
               onEdit={async (message) => {
+                // Editing loads the prompt into the composer, so anything
+                // already there would be destroyed. Refusing with a reason
+                // beats the silent overwrite.
+                if (draft.text.trim().length > 0 || draft.attachments.length > 0) {
+                  throw composerOccupiedError();
+                }
                 await removeQueued(message.id);
                 const queued = message as Record<string, unknown> & {
                   id: string;
@@ -1611,9 +1939,42 @@ function SharedNativeAgentController({
               onMove={async (fromIndex, toIndex) => {
                 const message = queuedMessages[fromIndex];
                 if (!message || fromIndex === toIndex) return;
-                await moveQueued(message.id, toIndex < fromIndex ? "up" : "down");
+                // The durable queue moves one position at a time, so a drag
+                // across several rows is applied as that many steps rather
+                // than silently landing one slot from where it was dropped.
+                const direction = toIndex < fromIndex ? "up" : "down";
+                for (let step = 0; step < Math.abs(toIndex - fromIndex); step += 1) {
+                  await moveQueued(message.id, direction);
+                }
               }}
               onRemove={async (messageId) => { await removeQueued(messageId); }}
+              renderMeta={(message) => {
+                const queued = message as Record<string, unknown>;
+                const attachments = Array.isArray(queued.attachments)
+                  ? queued.attachments.length
+                  : 0;
+                return (
+                  <>
+                    {queued.mode === "plan" || queued.mode === "build" ? (
+                      <span>{queued.mode === "plan" ? "Plan" : "Build"}</span>
+                    ) : null}
+                    {typeof queued.model === "string" ? (
+                      <span>{resolveModelLabel(queued.model)}</span>
+                    ) : null}
+                    {typeof queued.reasoningEffort === "string" ? (
+                      <span>{reasoningLabel(queued.reasoningEffort)}</span>
+                    ) : null}
+                    {queued.fastMode === true ? <span>Fast mode</span> : null}
+                    {typeof queued.executionAgent === "string"
+                      || typeof queued.agent === "string" ? (
+                        <span>{String(queued.executionAgent ?? queued.agent)}</span>
+                      ) : null}
+                    {attachments > 0 ? (
+                      <span>{attachments} attachment{attachments === 1 ? "" : "s"}</span>
+                    ) : null}
+                  </>
+                );
+              }}
               dispatchError={projection.queue.blocked
                 ? { message: projection.queue.blocked.error }
                 : undefined}

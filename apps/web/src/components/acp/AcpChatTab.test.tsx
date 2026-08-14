@@ -112,6 +112,14 @@ const data = {
   sessionId: "persisted-session",
 };
 
+function getAcpPromptInput(container: ParentNode = document): HTMLElement {
+  const input = container.querySelector<HTMLElement>(
+    '[data-placeholder="Message Cursor Agent"]',
+  );
+  if (!input) throw new Error("Expected the Cursor Agent prompt input");
+  return input;
+}
+
 beforeEach(() => {
   for (const fn of [
     awaitBridgeReady,
@@ -179,6 +187,22 @@ describe("AcpChatTab", () => {
       "persisted-session",
       "environment-1",
     );
+  });
+
+  test("uses the shared native compose bar for Grok sessions too", async () => {
+    render(
+      <AcpChatTab
+        tabId="tab-grok"
+        data={{ ...data, platform: "grok" }}
+        isActive
+      />,
+    );
+
+    const composeBar = await screen.findByTestId("acp-native-compose-bar");
+    expect(
+      composeBar.querySelector('[data-placeholder="Message Grok Build"]'),
+    ).toBeTruthy();
+    expect(composeBar.querySelector("[data-native-compose-toolbar]")).toBeTruthy();
   });
 
   test("renders reasoning as a collapsed thinking disclosure, not as assistant prose", async () => {
@@ -250,10 +274,12 @@ describe("AcpChatTab", () => {
     // Blocking prompts are pinned with the composer rather than left in the
     // transcript, so answering one never requires scrolling.
     expect(dock.contains(approval)).toBe(true);
-    expect(dock.contains(screen.getByPlaceholderText("Message Cursor Agent"))).toBe(true);
+    const composeBar = screen.getByTestId("acp-native-compose-bar");
+    expect(dock.contains(composeBar)).toBe(true);
+    expect(dock.contains(getAcpPromptInput(composeBar))).toBe(true);
     expect(screen.getByTestId("transcript-bottom-spacer")).toBeTruthy();
     // A running turn shows the shell's thinking indicator, not a bare spinner.
-    expect(screen.getByLabelText("Stop")).toBeTruthy();
+    expect(screen.getByTitle("Stop current query")).toBeTruthy();
     // The stubbed virtualizer reports "at bottom", so the shell must not offer
     // the scroll-down affordance.
     expect(screen.queryByLabelText("Scroll to bottom of conversation")).toBeNull();
@@ -278,9 +304,11 @@ describe("AcpChatTab", () => {
 
   test("routes manual prompts through the durable backend dispatcher", async () => {
     render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
-    const compose = await screen.findByPlaceholderText("Message Cursor Agent");
-    fireEvent.change(compose, { target: { value: "Run the checks" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    const composeBar = await screen.findByTestId("acp-native-compose-bar");
+    const compose = getAcpPromptInput(composeBar);
+    compose.textContent = "Run the checks";
+    fireEvent.input(compose);
+    fireEvent.click(screen.getByTitle("Send"));
 
     await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalledWith(expect.objectContaining({
       logicalSessionKey: "env-environment-1:tab-1",
@@ -346,7 +374,7 @@ describe("AcpChatTab", () => {
       "approval-1",
       "once",
     ));
-    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    fireEvent.click(screen.getByTitle("Stop current query"));
     expect(cancelAcpPrompt).toHaveBeenCalledWith(expect.anything(), "persisted-session");
   });
 
@@ -428,7 +456,8 @@ describe("AcpChatTab", () => {
       revision: 2,
     }));
     const view = render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
-    expect(await screen.findByPlaceholderText("Message Cursor Agent")).toBeTruthy();
+    const composeBar = await screen.findByTestId("acp-native-compose-bar");
+    expect(getAcpPromptInput(composeBar)).toBeTruthy();
     view.unmount();
 
     getAcpSession.mockImplementation(async () => ({
@@ -455,7 +484,7 @@ describe("AcpChatTab", () => {
     expect(await screen.findByText("Finished while you were away")).toBeTruthy();
     expect(await screen.findByText("Approve the follow-up")).toBeTruthy();
     // Idle again, so the composer offers Send rather than Stop.
-    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+    expect(screen.getByTitle("Send")).toBeTruthy();
   });
 
   test("retries the mount handshake from the error banner after a failed connect", async () => {
@@ -468,7 +497,7 @@ describe("AcpChatTab", () => {
     expect(screen.getByText("bridge is down")).toBeTruthy();
     // Match the other native tabs: connection errors replace the chat shell
     // instead of leaving a dead composer and a second status header visible.
-    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.queryByTitle("Send")).toBeNull();
 
     fireEvent.click(retry);
     // The second attempt uses the healthy default and reaches the composer.

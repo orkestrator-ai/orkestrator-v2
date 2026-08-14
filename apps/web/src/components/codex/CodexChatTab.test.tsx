@@ -7195,6 +7195,59 @@ describe("CodexChatTab", () => {
     });
   });
 
+  test("removes a live user echo when the bridge definitively rejects the prompt", async () => {
+    composeText = "This dispatch was rejected";
+    const sendStarted = deferred<void>();
+    const retractionDelivered = deferred<void>();
+    const authoritativeUser: TestCodexMessage = {
+      id: "rejected-authoritative-user",
+      role: "user",
+      content: composeText,
+      parts: [{ type: "text", content: composeText }],
+      createdAt: "2026-08-14T12:00:00.000Z",
+    };
+    const assistant = createMessage("rejected-assistant", "");
+    mockSubscribeToEvents.mockImplementation(
+      (_client: unknown, signal?: AbortSignal) => (async function* () {
+        await sendStarted.promise;
+        if (signal?.aborted) return;
+        yield {
+          type: "message.updated",
+          sessionId: SESSION_ID,
+          data: { message: authoritativeUser },
+        };
+        yield {
+          type: "message.updated",
+          sessionId: SESSION_ID,
+          data: { message: assistant },
+        };
+        yield {
+          type: "message.updated",
+          sessionId: SESSION_ID,
+          data: { removedMessageId: authoritativeUser.id },
+        };
+        retractionDelivered.resolve();
+        await waitForAbort(signal);
+      })(),
+    );
+    mockSendPrompt.mockImplementation(async () => {
+      sendStarted.resolve();
+      await retractionDelivered.promise;
+      return { outcome: "rejected", httpStatus: 503 } as const;
+    });
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => {
+      const session = useCodexStore.getState().sessions.get(SESSION_KEY);
+      expect(session?.messages.some((message) => message.content === composeText)).toBe(false);
+      expect(session?.messages.some((message) => message.id === assistant.id)).toBe(false);
+      expect(session?.error).toBe("Failed to send prompt (HTTP 503)");
+    });
+  });
+
   test("keeps the turn locked when prompt acceptance is ambiguous and status is unavailable", async () => {
     composeText = "Do not overlap this turn";
     mockSendPrompt.mockResolvedValue({

@@ -2962,6 +2962,10 @@ describe("at-most-once dispatch", () => {
     // The server said it did not accept the request, so the id is reusable.
     expect(h.runtime.getJournal().classify("req-1").action).toBe("dispatch");
     expect(h.runtime.getStatus(sessionId)!.phase).toBe("failed");
+    expect(await h.runtime.getMessages(sessionId)).toEqual([]);
+    expect(
+      h.events.filter((event) => typeof event.data?.removedMessageId === "string"),
+    ).toHaveLength(2);
   });
 
   test("an initial prompt retries one definite overload inside the bridge", async () => {
@@ -3238,6 +3242,10 @@ describe("at-most-once dispatch", () => {
     expect(outcome).toMatchObject({ ok: false });
     expect(attempts).toBe(1);
     expect(h.runtime.getStatus(sessionId)?.status).not.toBe("running");
+    expect(await h.runtime.getMessages(sessionId)).toEqual([]);
+    expect(
+      h.events.filter((event) => typeof event.data?.removedMessageId === "string"),
+    ).toHaveLength(2);
   });
 
   test("the default retry delay applies when no override is configured", async () => {
@@ -3512,6 +3520,10 @@ describe("at-most-once dispatch", () => {
     expect(h.child().requests.some((request) => request.method === "turn/start"))
       .toBe(false);
     expect(h.runtime.getJournal().classify("existing").action).toBe("reconcile");
+    expect(await h.runtime.getMessages(sessionId)).toEqual([]);
+    expect(
+      h.events.filter((event) => typeof event.data?.removedMessageId === "string"),
+    ).toHaveLength(2);
   });
 
   test("an oversized persisted journal blocks dispatch before thread creation", async () => {
@@ -6765,10 +6777,14 @@ describe("slash commands", () => {
 
     expect(outcome).toMatchObject({ ok: true });
     expect(h.child().requests.some((r) => r.method === "turn/start")).toBe(false);
-    const assistant = h.events.find(
+    const messageUpdates = h.events.filter(
       (event) => event.type === "message.updated"
-        && (event.data?.message as { role?: unknown } | undefined)?.role === "assistant",
+        && (event.data?.message as { role?: unknown } | undefined)?.role,
     );
+    expect(messageUpdates.map(
+      (event) => (event.data?.message as { role?: unknown }).role,
+    )).toEqual(["user", "assistant"]);
+    const assistant = messageUpdates[1];
     expect(
       (assistant?.data?.message as { content: string } | undefined)?.content,
     ).toContain("Available Codex slash commands");

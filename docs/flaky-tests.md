@@ -33,6 +33,18 @@ history rather than two partial ones.
 - **Suite counts:** 5,548 tests across 227 files; 5,546 passed, 1 skipped, and 1 failed in 21.24 seconds.
 - **Isolated rerun:** `bun test src/components/build-pipeline/BuildChatTab.test.tsx` from `apps/web` -> 75 passed, 0 failed, 230 assertions in 3.54 seconds; the affected test passed in 2,718.90 ms.
 - **Hypothesis:** The case holds a mocked backend send promise, waits for the in-flight render, releases it, then waits for the spinner to disappear. It already consumes more than half of Bun's outer budget in isolation, so worker scheduling and React commit latency under the aggregate pool can exhaust that budget even when both controlled transitions occur correctly. A deterministic signal for the two React commits, or a narrowly increased outer budget, should be evaluated before changing product behavior.
+- **Recurrence (Codex user-echo follow-up, 2026-08-14):** `bun run test` ran the web package as `bun test src --parallel=2` alongside the other aggregate groups. The case timed out after 5,000 ms (reported duration 5,085.96 ms); the web package reported 5,644 passed, 1 skipped, and 2 failed across 5,647 tests, while the full aggregate reported 14,072 passed, 13 skipped, and 2 failed across 14,087 tests. The immediate isolated rerun, `bun test ./src/components/build-pipeline/BuildChatTab.test.tsx` from `apps/web`, passed all 75 tests with 230 assertions in 4.25 seconds; the affected case passed in 3,061.64 ms. This is the same timeout shape as the original observation and does not touch the Codex files changed by the follow-up.
+
+## `authoritative resync > converges renderer collections through the real command boundary after a backend restart` (`apps/web/src/lib/store-resource-sync.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Original command:** `bun run test` (web workspace task: `bun test src --parallel=2`).
+- **Worker configuration:** Two Bun web workers while the remaining workspace packages, root, bridge, protocol-lockfile, and iOS groups ran through the aggregate runner.
+- **Failure:** `expect(received).toEqual(expected)` at `store-resource-sync.test.ts:1677`; the expected single-project collection was `[]` after the simulated backend restart (duration: 281.65 ms).
+- **Suite counts:** Web package: 5,647 total, 5,644 passed, 1 skipped, 2 failed. Full aggregate: 14,087 total, 14,072 passed, 13 skipped, 2 failed.
+- **Isolated rerun:** `bun test ./src/lib/store-resource-sync.test.ts` from `apps/web` -> 66 passed, 0 failed, 144 assertions in 7.19 seconds; the affected case passed in 233.76 ms.
+- **Hypothesis:** No root cause is established from one aggregate-only occurrence. The failure was a missing project collection after the test's real backend restart boundary, while the same boundary converged in the immediate isolated run; future recurrence should capture backend process timing and resource-resync generation ordering before changing the product assertion.
 
 ## `web-public install.sh > runs on both supported platforms` (`tests/unit/install-script.test.ts`)
 

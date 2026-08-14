@@ -3841,7 +3841,23 @@ export class AppServerRuntime {
     this.bumpMessageRevision(context);
 
     this.applyPromptTitle(session, context, input.prompt);
-    for (const id of context.bridgeSessionIds) {
+    const provisionalSessionIds = [...context.bridgeSessionIds];
+    let provisionalMessagesRetracted = false;
+    const retractProvisionalMessages = () => {
+      if (provisionalMessagesRetracted) return;
+      provisionalMessagesRetracted = true;
+      this.retractPromptMessages(
+        context!,
+        provisionalSessionIds,
+        [userMessage.id, assistantMessage.id],
+      );
+    };
+    // Set only after app-server explicitly says an initial attempt did not run.
+    // It stays true throughout retry preparation, where any failure is still a
+    // definite non-dispatch, and clears immediately before the replacement
+    // turn/start enters its own ambiguous write window.
+    let dispatchDefinitelyDidNotRun = false;
+    for (const id of provisionalSessionIds) {
       // Direct renderer sends already have an optimistic user row, but prompts
       // dispatched by the backend queue do not. Publish the authoritative user
       // row as well as the assistant placeholder so every mounted client sees
@@ -3889,6 +3905,7 @@ export class AppServerRuntime {
         ) {
           throw error;
         }
+        dispatchDefinitelyDidNotRun = true;
         // Overload is the sole definite rejection: app-server guarantees the
         // turn did not run. Persist that fact throughout the delay so a bridge
         // shutdown cannot erase the only evidence that reusing this id is safe.
@@ -3916,12 +3933,14 @@ export class AppServerRuntime {
           // below — the overload already proved this turn did not run, so this is
           // not a `cancelling`/`recovering` phase that must keep reporting busy.
           if (liveSession === session) {
+            retractProvisionalMessages();
             this.registry.setPhase(context, "failed", "Codex bridge is stopping");
             this.emitStatus(context);
             // The marker was persisted before the delay, so shutdown can return
             // without launching work or writing new state after engine stop.
             return { ok: false, status: 503, error: "Codex bridge is stopping" };
           }
+          retractProvisionalMessages();
           this.registry.setPhase(context, "failed", "Session was deleted before its retry");
           this.emitStatus(context);
           // A deleted session has no consumer to rehydrate this marker and must
@@ -3943,6 +3962,7 @@ export class AppServerRuntime {
           const message = this.stopping
             ? "Codex bridge stopped during retry recovery"
             : "Session was deleted during retry recovery";
+          retractProvisionalMessages();
           this.registry.setPhase(context, "failed", message);
           this.emitStatus(context);
           if (liveSession !== session) await this.journal.forget(requestId);
@@ -3983,6 +4003,7 @@ export class AppServerRuntime {
               ? error.message
               : "Codex failed to create a replacement thread";
             staleContext.dispatchInFlight = false;
+            retractProvisionalMessages();
             this.registry.setPhase(staleContext, "failed", message);
             this.emitStatus(staleContext);
             return { ok: false, status: 503, error: message };
@@ -3990,6 +4011,7 @@ export class AppServerRuntime {
           if (!thread.id) {
             const message = "Codex did not return a thread id";
             staleContext.dispatchInFlight = false;
+            retractProvisionalMessages();
             this.registry.setPhase(staleContext, "failed", message);
             this.emitStatus(staleContext);
             return { ok: false, status: 503, error: message };
@@ -4031,6 +4053,7 @@ export class AppServerRuntime {
           bridgeSessionId: session.id,
           threadId: context.threadId,
         });
+        dispatchDefinitelyDidNotRun = false;
         turn = await startTurn();
       }
       // Both halves of the exchange, so "fork from here" works on either bubble
@@ -4091,6 +4114,7 @@ export class AppServerRuntime {
     } catch (error) {
       context.dispatchInFlight = false;
       if (error instanceof DispatchJournalAdmissionError) {
+        retractProvisionalMessages();
         this.registry.setPhase(context, "failed", error.message);
         this.emitStatus(context);
         this.options.emit({
@@ -4109,7 +4133,8 @@ export class AppServerRuntime {
        * than idle, so nothing advances a build phase or accepts a new prompt on a
        * turn that may still be executing.
        */
-      if (classified.class === "rejected") {
+      if (classified.class === "rejected" || dispatchDefinitelyDidNotRun) {
+        retractProvisionalMessages();
         this.registry.setPhase(context, "failed", classified.engineError.message);
         await this.journal.markRetryable(requestId);
       } else {
@@ -4370,6 +4395,40 @@ export class AppServerRuntime {
     for (const sessionId of context.bridgeSessionIds) {
       const session = this.registry.getSession(sessionId);
       if (session) session.messageRevision += 1;
+    }
+  }
+
+  /**
+   * Removes a prompt exchange that was announced before dispatch but is now
+   * known not to have run. The original context can be detached during the
+   * initial-prompt retry path, so clean both it and any live replacement before
+   * publishing removal frames to every client that saw the provisional rows.
+   */
+  private retractPromptMessages(
+    context: ThreadContext,
+    sessionIds: readonly string[],
+    messageIds: readonly string[],
+  ): void {
+    const ids = new Set(messageIds);
+    const contexts = new Set<ThreadContext>([context]);
+    for (const sessionId of sessionIds) {
+      const liveContext = this.registry.getThreadForSession(sessionId);
+      if (liveContext) contexts.add(liveContext);
+    }
+    for (const candidate of contexts) {
+      candidate.messages = candidate.messages.filter((message) => !ids.has(message.id));
+    }
+
+    for (const sessionId of sessionIds) {
+      const session = this.registry.getSession(sessionId);
+      if (session) session.messageRevision += 1;
+      for (const removedMessageId of messageIds) {
+        this.options.emit({
+          type: "message.updated",
+          sessionId,
+          data: { removedMessageId },
+        });
+      }
     }
   }
 

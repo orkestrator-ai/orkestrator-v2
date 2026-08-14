@@ -233,6 +233,35 @@ describe("codexStore message helpers", () => {
     ).toEqual(["server-live-echo"]);
   });
 
+  test("replaces an attachment-only optimistic prompt when its live echo arrives", () => {
+    const store = useCodexStore.getState();
+    const optimistic = createOptimisticNativeMessage(
+      "optimistic-attachment-live-echo",
+      "",
+      [{ path: "/workspace/screenshot.png", name: "screenshot.png" }],
+      "2026-04-15T10:00:00.000Z",
+    );
+    store.addMessage(SESSION_KEY, optimistic);
+
+    store.upsertMessage(SESSION_KEY, {
+      id: "server-attachment-live-echo",
+      role: "user",
+      content: "",
+      parts: [{
+        type: "file",
+        content: "screenshot.png",
+        fileUrl: "file:///workspace/screenshot.png",
+      }],
+      createdAt: "2026-04-15T10:00:01.000Z",
+    });
+
+    expect(
+      useCodexStore.getState().sessions.get(SESSION_KEY)?.messages.map(
+        (message) => message.id,
+      ),
+    ).toEqual(["server-attachment-live-echo"]);
+  });
+
   test("does not replace a session object when its error is unchanged", () => {
     useCodexStore.getState().setSessionError(SESSION_KEY, "boom");
     const sessionBefore = useCodexStore.getState().sessions.get(SESSION_KEY);

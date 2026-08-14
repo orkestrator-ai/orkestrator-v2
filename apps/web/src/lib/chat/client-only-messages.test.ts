@@ -81,6 +81,21 @@ describe("client-only optimistic messages", () => {
     ]);
   });
 
+  test("omits an empty text part from an attachment-only optimistic message", () => {
+    const message = createOptimisticNativeMessage("optimistic-attachment-only", "", [
+      {
+        path: "/workspace/screenshots/error.png",
+        name: "error.png",
+      },
+    ]);
+
+    expect(message.parts).toEqual([{
+      type: "file",
+      content: "error.png",
+      fileUrl: "file:///workspace/screenshots/error.png",
+    }]);
+  });
+
   test("omits the file url for an attachment whose path is not absolute", () => {
     const message = createOptimisticNativeMessage("optimistic-relative", "Look at this", [
       { path: "screenshots/error.png", name: "error.png" },

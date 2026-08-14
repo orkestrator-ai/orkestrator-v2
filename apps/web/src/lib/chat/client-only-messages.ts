@@ -162,14 +162,16 @@ export function createOptimisticNativeMessage(
   attachments: OptimisticNativeAttachment[] = [],
   createdAt: string = new Date().toISOString(),
 ): NativeMessage {
-  const parts: NativeMessagePart[] = [
-    { type: "text", content: text },
-    ...attachments.map((attachment) => ({
-      type: "file" as const,
-      content: attachment.name || attachment.path,
-      fileUrl: toOptimisticFileUrl(attachment.path, attachment.previewUrl),
-    })),
-  ];
+  const parts: NativeMessagePart[] = [];
+  // Match the bridge projection: attachment-only prompts have no empty text
+  // part. Keeping one here changes the fingerprint and leaves the optimistic
+  // row beside its authoritative echo forever.
+  if (text.length > 0) parts.push({ type: "text", content: text });
+  parts.push(...attachments.map((attachment) => ({
+    type: "file" as const,
+    content: attachment.name || attachment.path,
+    fileUrl: toOptimisticFileUrl(attachment.path, attachment.previewUrl),
+  })));
 
   return {
     id: messageId,

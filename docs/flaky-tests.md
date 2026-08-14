@@ -823,7 +823,7 @@ Post-fix stress verification:
 - **Hypothesis:** The test queried immediately after a real-time sleep, so aggregate scheduling could delay the 550 ms production timer beyond the fixed 575 ms test wait. The owning file passes in isolation, consistent with a timing-sensitive assertion rather than a product failure.
 - **Root cause:** The assertion was made immediately after a fixed sleep instead of waiting for the timer-driven dialog state transition.
 - **Fix:** Commit `9065ed7f`; wrap the dialog assertion in `waitFor` with a 10-second test budget.
-- **Verification:** The owning file passed with 145 tests and 0 failures after the fix; the affected test completed in 620.53 ms.
+- **Verification:** The owning file passed with 145 tests and 0 failures after the fix; the affected test completed in 620.53 ms. The subsequent `/tmp/orkestrator-final-full-test.log` aggregate passed workspace (4,846 tests), root/agent-support (3,656 tests), bridges, Codex protocol lockfile checks, and iOS (40 tests) with 0 failures.
 
 ## `UpdateCoalescer > re-reads a dynamic interval across schedules in both directions` (`bridges/codex-bridge/src/messages/coalescer.test.ts`)
 

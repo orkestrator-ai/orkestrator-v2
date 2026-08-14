@@ -2,6 +2,10 @@ import { createSessionKey } from "@/lib/utils";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { createOptimisticNativeMessage } from "@/lib/chat/client-only-messages";
 import {
+  ERROR_MESSAGE_PREFIX,
+  SYSTEM_MESSAGE_PREFIX,
+} from "@/lib/opencode-client";
+import {
   CODEX_MODELS,
   DEFAULT_CODEX_MODEL,
   type CodexApproval,
@@ -260,6 +264,79 @@ describe("codexStore message helpers", () => {
         (message) => message.id,
       ),
     ).toEqual(["server-attachment-live-echo"]);
+  });
+
+  test("keeps error and system rows in chronological order around a live user echo", () => {
+    const store = useCodexStore.getState();
+    // Routing user frames through the fingerprint merge also re-orders the
+    // surviving client-only rows by timestamp, where the old id-based append
+    // simply pushed the echo onto the end. Neither row may be dropped, and the
+    // system note must stay above the prompt it preceded.
+    store.addMessage(SESSION_KEY, {
+      id: `${SYSTEM_MESSAGE_PREFIX}naming`,
+      role: "assistant",
+      content: "Naming environment...",
+      parts: [{ type: "text", content: "Naming environment..." }],
+      createdAt: "2026-04-15T10:00:00.000Z",
+    });
+    const optimistic = createOptimisticNativeMessage(
+      "optimistic-with-client-rows",
+      "Run the queued checks",
+      [],
+      "2026-04-15T10:00:01.000Z",
+    );
+    store.addMessage(SESSION_KEY, optimistic);
+    store.addMessage(SESSION_KEY, {
+      id: `${ERROR_MESSAGE_PREFIX}earlier-failure`,
+      role: "assistant",
+      content: "Something went wrong",
+      parts: [{ type: "text", content: "Something went wrong" }],
+      createdAt: "2026-04-15T10:00:03.000Z",
+    });
+
+    store.upsertMessage(SESSION_KEY, {
+      id: "server-with-client-rows",
+      role: "user",
+      content: "Run the queued checks",
+      parts: [{ type: "text", content: "Run the queued checks" }],
+      createdAt: "2026-04-15T10:00:02.000Z",
+    });
+
+    expect(
+      useCodexStore.getState().sessions.get(SESSION_KEY)?.messages.map(
+        (message) => message.id,
+      ),
+    ).toEqual([
+      `${SYSTEM_MESSAGE_PREFIX}naming`,
+      "server-with-client-rows",
+      `${ERROR_MESSAGE_PREFIX}earlier-failure`,
+    ]);
+  });
+
+  test("does not let an older user frame roll back a newer revision of the same id", () => {
+    // The revision guard runs before the user branch, so a replayed frame for a
+    // message the store already holds must bail without rebuilding the list —
+    // the merge would otherwise be free to reposition it.
+    const newer = {
+      id: "user-revisioned",
+      role: "user" as const,
+      content: "new snapshot",
+      parts: [{ type: "text" as const, content: "new snapshot" }],
+      createdAt: "2026-04-15T10:00:02.000Z",
+      revision: 4,
+    };
+    useCodexStore.getState().setMessages(SESSION_KEY, [newer]);
+    const sessionBefore = useCodexStore.getState().sessions.get(SESSION_KEY);
+
+    useCodexStore.getState().upsertMessage(SESSION_KEY, {
+      ...newer,
+      content: "older buffered frame",
+      parts: [{ type: "text", content: "older buffered frame" }],
+      revision: 3,
+    });
+
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toBe(sessionBefore);
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([newer]);
   });
 
   test("does not replace a session object when its error is unchanged", () => {

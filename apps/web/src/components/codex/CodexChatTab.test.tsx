@@ -7221,10 +7221,16 @@ describe("CodexChatTab", () => {
           sessionId: SESSION_ID,
           data: { message: assistant },
         };
+        // The bridge retracts the whole exchange, one frame per removed id.
         yield {
           type: "message.updated",
           sessionId: SESSION_ID,
           data: { removedMessageId: authoritativeUser.id },
+        };
+        yield {
+          type: "message.updated",
+          sessionId: SESSION_ID,
+          data: { removedMessageId: assistant.id },
         };
         retractionDelivered.resolve();
         await waitForAbort(signal);
@@ -7246,6 +7252,45 @@ describe("CodexChatTab", () => {
       expect(session?.messages.some((message) => message.id === assistant.id)).toBe(false);
       expect(session?.error).toBe("Failed to send prompt (HTTP 503)");
     });
+  });
+
+  test("coalesces a multi-frame prompt retraction into a single transcript read", async () => {
+    // A retraction emits one frame per removed id. Awaiting each one inline
+    // stalled the drain behind two full reads, and the second landed on a store
+    // the first had already replaced, so the mutated-during-request bail threw
+    // its result away. Both frames must join the same in-flight read.
+    const startFrames = deferred<void>();
+    const framesDelivered = deferred<void>();
+    mockSubscribeToEvents.mockImplementation(
+      (_client: unknown, signal?: AbortSignal) => (async function* () {
+        await startFrames.promise;
+        if (signal?.aborted) return;
+        yield {
+          type: "message.updated",
+          sessionId: SESSION_ID,
+          data: { removedMessageId: "retracted-user" },
+        };
+        yield {
+          type: "message.updated",
+          sessionId: SESSION_ID,
+          data: { removedMessageId: "retracted-assistant" },
+        };
+        framesDelivered.resolve();
+        await waitForAbort(signal);
+      })(),
+    );
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+    await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+    mockGetSessionMessages.mockClear();
+
+    startFrames.resolve();
+    await framesDelivered.promise;
+    await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalledTimes(1));
+    // Still one once everything queued behind the frames has settled.
+    await Promise.resolve();
+    expect(mockGetSessionMessages).toHaveBeenCalledTimes(1);
   });
 
   test("keeps the turn locked when prompt acceptance is ambiguous and status is unavailable", async () => {

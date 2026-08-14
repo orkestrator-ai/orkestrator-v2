@@ -313,6 +313,66 @@ describe("client-only optimistic messages", () => {
     expect(merged.map((message) => message.id)).toEqual(["server-attachment"]);
   });
 
+  test("retires an attachment-only optimistic message against an echo carrying an empty text part", () => {
+    // The OpenCode shape. Its client always sends `{ type: "text", text }` even
+    // for an attachment-only prompt (`sendPrompt` in `opencode-client.ts`) and
+    // `normalizeOpenCodePart` keeps a zero-length text part, whereas the Codex
+    // bridge omits it. This helper is shared, so the fingerprint has to match
+    // both or one agent duplicates every attachment-only prompt forever.
+    const optimistic = createOptimisticNativeMessage(
+      "optimistic-empty-text-echo",
+      "",
+      [{ path: "/workspace/a.png", name: "a.png" }],
+      "2026-04-15T10:00:01.000Z",
+    );
+    const incoming: NativeMessage[] = [
+      {
+        id: "server-empty-text-echo",
+        role: "user",
+        content: "",
+        parts: [
+          { type: "text", content: "" },
+          { type: "file", content: "a.png", fileUrl: "file:///workspace/a.png" },
+        ],
+        createdAt: "2026-04-15T10:00:02.000Z",
+      },
+    ];
+
+    const merged = mergeNativeMessagesPreservingClientOnly([optimistic], incoming);
+
+    expect(merged.map((message) => message.id)).toEqual(["server-empty-text-echo"]);
+  });
+
+  test("keeps an attachment-only optimistic message when the echo names a different file", () => {
+    // Ignoring the empty text part must not make every attachment-only prompt
+    // interchangeable: the filename still carries the whole identity.
+    const optimistic = createOptimisticNativeMessage(
+      "optimistic-empty-text-mismatch",
+      "",
+      [{ path: "/workspace/a.png", name: "a.png" }],
+      "2026-04-15T10:00:01.000Z",
+    );
+    const incoming: NativeMessage[] = [
+      {
+        id: "server-empty-text-other-file",
+        role: "user",
+        content: "",
+        parts: [
+          { type: "text", content: "" },
+          { type: "file", content: "b.png", fileUrl: "file:///workspace/b.png" },
+        ],
+        createdAt: "2026-04-15T10:00:02.000Z",
+      },
+    ];
+
+    const merged = mergeNativeMessagesPreservingClientOnly([optimistic], incoming);
+
+    expect(merged.map((message) => message.id)).toEqual([
+      "optimistic-empty-text-mismatch",
+      "server-empty-text-other-file",
+    ]);
+  });
+
   test("keeps an optimistic attachment message when the echo names a different file even with a matching url", () => {
     const optimistic = createOptimisticNativeMessage(
       "optimistic-different-file",

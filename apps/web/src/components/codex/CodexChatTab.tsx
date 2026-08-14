@@ -2929,7 +2929,13 @@ export function CodexChatTab({
               if (message?.id) {
                 upsertMessage(sessionKey, message);
               } else {
-                await refreshMessages(client, session.sessionId);
+                // A removal frame carries no message body, so a transcript read
+                // is the only repair. Coalesce it exactly like a patch gap
+                // rather than awaiting inline: retracting a prompt emits one
+                // frame per removed id, and awaiting each one stalls the drain
+                // behind two full reads whose second result the
+                // mutated-during-request bail discards anyway.
+                void recoverMessagePatchGap();
               }
               continue;
             }

@@ -4143,6 +4143,18 @@ export class AppServerRuntime {
           requestId,
           assistantMessage.id,
         );
+        // `absent` is a *proven* non-dispatch, exactly like an explicit
+        // rejection: `thread/read` is the one authority that can say the write
+        // never landed, and it said no turn ever carried this request. Withdraw
+        // the exchange announced before the write, or the renderer keeps a
+        // prompt bubble and a blank reply for a turn that never existed — its
+        // own rollback targets the optimistic id, which this turn's authoritative
+        // user echo has already retired.
+        //
+        // `attached` and `terminal` must keep the rows: that turn really ran.
+        // `recovering` is still unknown, and retracting there would erase a
+        // prompt that may be executing.
+        if (ambiguousResolution === "absent") retractProvisionalMessages();
       }
 
       if (

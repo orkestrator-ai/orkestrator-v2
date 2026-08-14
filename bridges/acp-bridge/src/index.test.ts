@@ -189,11 +189,37 @@ describe("ACP bridge", () => {
     expect(dataPreflight.headers.get("access-control-allow-private-network")).toBe("true");
   });
 
-  test("starts Cursor ACP with permissive command and MCP defaults", async () => {
+  test("starts local-default Cursor ACP without project MCP auto-approval", async () => {
     const stateDirectory = await temporaryDirectory();
     const argsFile = resolve(stateDirectory, "args.log");
     const { base, headers } = await spawnBridge({
-      env: { FAKE_ACP_ARGS_FILE: argsFile },
+      env: {
+        ACP_APPROVE_PROJECT_MCPS: "0",
+        FAKE_ACP_ARGS_FILE: argsFile,
+      },
+    });
+
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+    });
+    expect(created.status).toBe(201);
+
+    const args = await waitFor(
+      async () => fs.readFile(argsFile, "utf8").catch(() => ""),
+      (value) => value.length > 0,
+    );
+    expect(JSON.parse(args.trim())).toEqual(["--force", "acp"]);
+  });
+
+  test("starts explicitly isolated Cursor ACP with MCP auto-approval", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const argsFile = resolve(stateDirectory, "args.log");
+    const { base, headers } = await spawnBridge({
+      env: {
+        ACP_APPROVE_PROJECT_MCPS: "1",
+        FAKE_ACP_ARGS_FILE: argsFile,
+      },
     });
 
     const created = await nativeFetch(`${base}/session/create`, {

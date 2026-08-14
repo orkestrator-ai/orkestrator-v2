@@ -94,6 +94,7 @@ const authToken = process.env.ACP_BRIDGE_TOKEN?.trim() || randomBytes(32).toStri
 // ACP-capable CLI is `cursor-agent`; never let a missing configuration launch
 // the GUI as an accidental fallback.
 const executable = process.env.ACP_AGENT_PATH?.trim() || (provider === "cursor" ? "cursor-agent" : "grok");
+const approveProjectMcps = process.env.ACP_APPROVE_PROJECT_MCPS === "1";
 const stateDirectory = process.env.ACP_STATE_DIR?.trim();
 const stateFile = stateDirectory ? resolve(stateDirectory, "state.json") : null;
 const sessions = new Map<string, SessionState>();
@@ -143,15 +144,15 @@ class AcpProcess {
   onClose: (error: Error) => void = () => undefined;
 
   constructor() {
-    // Both agents expose their permissive setting as a global flag, so keep
-    // it before the ACP subcommand. Interactive Orkestrator sessions are
-    // intentionally permissive by default, matching Claude's
-    // bypassPermissions default. Cursor additionally has a distinct MCP
-    // approval flag. Explicit deny rules still win; any permission request an
-    // agent emits despite these defaults continues through the bridge's
-    // fail-closed approval flow below.
+    // Both agents expose their permissive command setting as a global flag, so
+    // keep it before the ACP subcommand. Cursor's separate MCP approval flag is
+    // restricted to explicitly isolated environments: a local worktree can
+    // contain repository-controlled `.cursor/mcp.json` commands, which must not
+    // gain host execution merely because the user opened an ACP tab. Explicit
+    // deny rules still win; any permission request an agent emits despite these
+    // defaults continues through the bridge's fail-closed approval flow below.
     const args = provider === "cursor"
-      ? ["--force", "--approve-mcps", "acp"]
+      ? ["--force", ...(approveProjectMcps ? ["--approve-mcps"] : []), "acp"]
       : ["--always-approve", "agent", "stdio"];
     this.child = spawn(executable, args, {
       cwd: workingDirectory,

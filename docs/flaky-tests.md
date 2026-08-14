@@ -822,7 +822,7 @@ Post-fix stress verification:
 - **Isolated rerun:** `bun test --cwd apps/web ./src/components/layout/ActionBar.test.tsx --parallel` -> 145 passed, 0 failed, 558 assertions in 13.24 seconds; the target passed in 598.64 ms.
 - **Hypothesis:** The test queried immediately after a real-time sleep, so aggregate scheduling could delay the 550 ms production timer beyond the fixed 575 ms test wait. The owning file passes in isolation, consistent with a timing-sensitive assertion rather than a product failure.
 - **Root cause:** The assertion was made immediately after a fixed sleep instead of waiting for the timer-driven dialog state transition.
-- **Fix:** Commit `e9167995`; wrap the dialog assertion in `waitFor` with a 10-second test budget.
+- **Fix:** Commit `9065ed7f`; wrap the dialog assertion in `waitFor` with a 10-second test budget.
 - **Verification:** The owning file passed with 145 tests and 0 failures after the fix; the affected test completed in 620.53 ms.
 
 ## `UpdateCoalescer > re-reads a dynamic interval across schedules in both directions` (`bridges/codex-bridge/src/messages/coalescer.test.ts`)

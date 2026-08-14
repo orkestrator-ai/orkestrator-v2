@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, ChevronDown, Square } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import {
   adoptNativeAgentSession,
   awaitBridgeReady,
   dispatchNativeAgentPrompt,
   ensureNativeAgentSession,
+  renameEnvironmentFromPrompt,
 } from "@/lib/backend";
+import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import {
   cancelAcpPrompt,
   createAcpClient,
@@ -21,9 +23,14 @@ import {
 } from "@/lib/acp-client";
 import type { NativeAgentData } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { NativeComposeBar } from "@/components/chat/NativeComposeBar";
+import type { MentionableInputRef } from "@/components/chat/MentionableInput";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import {
+  transcriptHasUserMessage,
+  useAcpPendingPromptStore,
+} from "@/stores/acpPendingPromptStore";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import type { AgentConversationMode } from "@orkestrator/protocol/native-agent";
 import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
@@ -40,6 +47,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import type { FileMention } from "@/types";
 
 // A reconnect runs the full readiness handshake, which for a container
 // environment performs Docker work in the backend. The first failure recovers
@@ -47,6 +55,12 @@ import {
 // keeps failing must not drive one handshake per poll.
 const RECONNECT_BASE_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 8_000;
+
+// ACP has no file-mention picker yet: this tab renders no mention menu and
+// never calls `insertMention`, so the compose bar's mention list is always
+// empty. A stable constant keeps `MentionableInput`'s content-sync effect from
+// seeing a new array identity on every render.
+const NO_MENTIONS: FileMention[] = [];
 
 function reconnectDelayMs(attempt: number): number {
   if (attempt <= 0) return 0;
@@ -88,6 +102,12 @@ export function AcpChatTab({
   // component stays mounted while hidden, so no later activation re-runs the
   // effect and submit is a no-op without a client and session.
   const [connectNonce, setConnectNonce] = useState(0);
+  // Mirrors `dispatchingPrompt` for render. The ref is what `submit` reads to
+  // reject re-entry; without a reactive copy the composer would keep offering
+  // a Send that silently does nothing for the whole rename. It is per-instance,
+  // so the composer also consults the store-backed naming flag, which a tab
+  // remounted mid-rename can still see.
+  const [dispatching, setDispatching] = useState(false);
   // A bridge restart changes its port and/or bearer credential. Direct ACP
   // polling is intentionally renderer-owned, so a failed request must retire
   // that client and re-run the authoritative backend readiness handshake.
@@ -100,9 +120,19 @@ export function AcpChatTab({
   const sentInitialPrompt = useRef(false);
   const pendingManualRequest = useRef<{ prompt: string; requestId: string } | null>(null);
   const dispatchingPrompt = useRef(false);
+  const inputRef = useRef<MentionableInputRef>(null);
+  const inputContainerRef = useRef<HTMLDivElement>(null);
+  // Sending disables the compose input, and a disabled contenteditable is not
+  // focusable, so the browser drops the caret. Restore it when the dispatch
+  // settles, but only when the composer is what held focus in the first place:
+  // a mouse click on Send, or a dialog opened mid-flight, must keep its focus.
+  const restoreComposerFocus = useRef(false);
   const updateTabNativeSessionId = usePaneLayoutStore((state) => state.updateTabNativeSessionId);
   const clearTabInitialPrompt = usePaneLayoutStore((state) => state.clearTabInitialPrompt);
   const clearTabInitialAgentOptions = usePaneLayoutStore((state) => state.clearTabInitialAgentOptions);
+  const setPendingPrompt = useAcpPendingPromptStore((state) => state.setPendingPrompt);
+  const setPendingPromptNaming = useAcpPendingPromptStore((state) => state.setPendingPromptNaming);
+  const clearPendingPrompt = useAcpPendingPromptStore((state) => state.clearPendingPrompt);
   const backendOwnsStartupPrompt = useEnvironmentStore((state) => {
     if (tabId !== "startup-agent") return false;
     const environment = state.getEnvironmentById(data.environmentId);
@@ -112,6 +142,9 @@ export function AcpChatTab({
   const label = data.platform === "cursor" ? "Cursor Agent" : "Grok Build";
   const { favorites, toggleFavorite } = useAgentModelFavorites();
   const sessionKey = `env-${data.environmentId}:${tabId}`;
+  // Store-backed rather than component state so switching environments during
+  // the rename does not erase the prompt the backend is still working on.
+  const pendingPrompt = useAcpPendingPromptStore((state) => state.pending.get(sessionKey));
   const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
     isActive,
     persistKey: sessionKey,
@@ -272,8 +305,33 @@ export function AcpChatTab({
       ?? (pending?.prompt === prompt ? pending.requestId : crypto.randomUUID());
     if (!fixedRequestId) pendingManualRequest.current = { prompt, requestId };
     dispatchingPrompt.current = true;
+    restoreComposerFocus.current = Boolean(
+      inputContainerRef.current
+      && document.activeElement
+      && inputContainerRef.current.contains(document.activeElement),
+    );
+    setDispatching(true);
     setDraft("");
     try {
+      // Rename a default timestamp environment (including its git branch)
+      // before the agent starts, matching Claude/Codex. A later rename would
+      // race the agent's own git operations.
+      if (session.messages.length === 0 && session.baseIndex === 0) {
+        const environment = useEnvironmentStore.getState().getEnvironmentById(data.environmentId);
+        if (environment && isDefaultTimestampEnvironmentName(environment.name)) {
+          setPendingPrompt(sessionKey, {
+            text: prompt,
+            createdAt: new Date().toISOString(),
+            isNaming: true,
+          });
+          try {
+            await renameEnvironmentFromPrompt(data.environmentId, prompt);
+          } catch (error) {
+            console.warn("[AcpChatTab] Failed to rename environment from prompt:", error);
+          }
+          setPendingPromptNaming(sessionKey, false);
+        }
+      }
       await dispatchNativeAgentPrompt({
         environmentId: data.environmentId,
         agent: data.platform,
@@ -290,17 +348,45 @@ export function AcpChatTab({
           ? { fastMode: session.composer.fastModeEnabled }
           : {}),
       });
+      // Deliberately not the point at which the local prompt is dropped. This
+      // refresh is a no-op whenever a poll is already in flight, and that poll
+      // was issued before the dispatch, so its window cannot contain the
+      // prompt. An effect retires the local copy once the transcript echoes it.
       await refresh();
       if (!fixedRequestId) pendingManualRequest.current = null;
       return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       setDraft(prompt);
+      // The dispatch definitively did not land, so there is no echo coming and
+      // the text belongs back in the composer rather than in the transcript.
+      clearPendingPrompt(sessionKey);
       return false;
     } finally {
+      setPendingPromptNaming(sessionKey, false);
       dispatchingPrompt.current = false;
+      setDispatching(false);
     }
-  }, [client, data.environmentId, data.platform, label, refresh, session, sessionKey]);
+  }, [
+    clearPendingPrompt,
+    client,
+    data.environmentId,
+    data.platform,
+    label,
+    refresh,
+    session,
+    sessionKey,
+    setPendingPrompt,
+    setPendingPromptNaming,
+  ]);
+
+  // Runs after the render that re-enables the input, which is the earliest
+  // point a contenteditable is focusable again.
+  useEffect(() => {
+    if (dispatching || !restoreComposerFocus.current) return;
+    restoreComposerFocus.current = false;
+    inputRef.current?.focus();
+  }, [dispatching]);
 
   const patchComposer = useCallback(async (patch: {
     modelId?: string;
@@ -341,10 +427,39 @@ export function AcpChatTab({
     tabId,
   ]);
 
-  const messages = useMemo<NativeMessage[]>(
-    () => normalizeNativeMessages(session?.messages ?? []),
-    [data.platform, session?.messages],
-  );
+  // The authoritative transcript has taken over, so the local copy has done its
+  // job. Retiring it here rather than when `submit` returns is what keeps the
+  // prompt on screen across a skipped refresh, an unmount, or a slow bridge.
+  const transcriptEchoedPrompt = transcriptHasUserMessage(session);
+  useEffect(() => {
+    if (pendingPrompt && transcriptEchoedPrompt) clearPendingPrompt(sessionKey);
+  }, [clearPendingPrompt, pendingPrompt, sessionKey, transcriptEchoedPrompt]);
+
+  const messages = useMemo<NativeMessage[]>(() => {
+    const transcript = normalizeNativeMessages(session?.messages ?? []);
+    // Suppressed as soon as the echo lands so the two never render together in
+    // the frame before the effect above clears the store entry.
+    if (!pendingPrompt || transcriptEchoedPrompt) return transcript;
+    const local: NativeMessage[] = [
+      {
+        id: "optimistic-acp-first-prompt",
+        role: "user",
+        content: pendingPrompt.text,
+        parts: [{ type: "text", content: pendingPrompt.text }],
+        createdAt: pendingPrompt.createdAt,
+      },
+    ];
+    if (pendingPrompt.isNaming) {
+      local.push({
+        id: "system-acp-naming-environment",
+        role: "system",
+        content: "Naming environment...",
+        parts: [{ type: "text", content: "Naming environment..." }],
+        createdAt: pendingPrompt.createdAt,
+      });
+    }
+    return [...transcript, ...local];
+  }, [pendingPrompt, session?.messages, transcriptEchoedPrompt]);
   const composer = session?.composer ?? EMPTY_NATIVE_AGENT_COMPOSER_STATE;
   const selectedModel = composer.models.find((model) => model.id === composer.selectedModelId)
     ?? composer.models[0];
@@ -380,7 +495,7 @@ export function AcpChatTab({
       errorMessage={error}
       onRetry={retry}
       messages={messages}
-      isLoading={session?.status === "running"}
+      isLoading={session?.status === "running" || pendingPrompt?.isNaming === true}
       elapsedSeconds={null}
       finalElapsedSeconds={null}
       centerCompose={false}
@@ -413,22 +528,30 @@ export function AcpChatTab({
         </div>
       ) : null}
       composer={
-        <div className="mx-auto mb-4 mt-2 w-[calc(100%_-_0.75rem)] shrink-0 rounded-2xl border border-border/70 bg-zinc-900/90 p-3 shadow-xl shadow-black/20 sm:w-[min(calc(100%_-_2rem),56rem)]">
-          <Textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void submit(draft);
-              }
-            }}
-            placeholder={`Message ${label}`}
-            className="min-h-14 resize-none border-0 bg-transparent px-1 py-2 shadow-none focus-visible:ring-0"
-            disabled={!session}
-          />
-          <div className="flex items-center justify-between gap-2 pt-1">
-            <div className="flex min-w-0 flex-1 items-center gap-1">
+        <NativeComposeBar
+          testId="acp-native-compose-bar"
+          attachments={[]}
+          onRemoveAttachment={() => undefined}
+          inputRef={inputRef}
+          inputContainerRef={inputContainerRef}
+          text={draft}
+          mentions={NO_MENTIONS}
+          onTextAndMentionsChange={(text) => setDraft(text)}
+          onCursorPositionChange={() => undefined}
+          onKeyDown={(event) => {
+            // MentionableInput owns the IME guard and never forwards an Enter
+            // that is confirming a composition, so re-checking it here would
+            // only risk drifting from the authoritative test.
+            if (event.key !== "Enter" || event.shiftKey) return;
+            event.preventDefault();
+            void submit(draft);
+          }}
+          placeholder={`Message ${label}`}
+          disabled={!session}
+          isSending={dispatching}
+          isLoading={session?.status === "running"}
+          primaryControls={(
+            <>
               <AgentModelPicker
                 models={composer.models}
                 favorites={favorites}
@@ -483,14 +606,16 @@ export function AcpChatTab({
                   </DropdownMenuContent>
                 </DropdownMenu>
               ) : null}
-            </div>
-            {session?.status === "running" ? (
-              <Button size="icon" variant="ghost" className="h-8 w-8 rounded-full bg-destructive/10 text-destructive hover:bg-destructive/20" aria-label="Stop" onClick={() => client && void cancelAcpPrompt(client, session.id)}><Square className="h-4 w-4 fill-current" /></Button>
-            ) : (
-              <Button size="icon" variant="ghost" className="h-8 w-8 rounded-full bg-muted hover:bg-muted/80" aria-label="Send" disabled={!draft.trim() || !session} onClick={() => void submit(draft)}><ArrowUp className="h-4 w-4" /></Button>
-            )}
-          </div>
-        </div>
+            </>
+          )}
+          onStop={() => client && session
+            ? cancelAcpPrompt(client, session.id)
+            : undefined}
+          showSendButton={session?.status !== "running"}
+          sendDisabled={!session || dispatching || pendingPrompt?.isNaming === true || !draft.trim()}
+          sendTitle="Send"
+          onSend={() => void submit(draft)}
+        />
       }
     />
   );

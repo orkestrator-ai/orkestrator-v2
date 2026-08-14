@@ -6469,6 +6469,10 @@ async function startLocalServerUnlocked(
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "acp-bridge");
     env.ACP_PROVIDER = kind;
+    // Local worktrees can contain repository-controlled Cursor MCP commands.
+    // Pin this explicitly after inheriting process.env so an ambient variable
+    // cannot bypass the local trust boundary.
+    env.ACP_APPROVE_PROJECT_MCPS = "0";
     env.ACP_STATE_DIR = path.join(
       context.storage.getDataDir(),
       "acp-bridge-state",
@@ -10919,6 +10923,7 @@ export function createCommandRegistry(
           export CWD=/workspace
           export ACP_PROVIDER=${acpProvider}
           export ACP_STATE_DIR=/tmp/orkestrator-acp-state/${acpProvider}
+          ${acpProvider === "cursor" ? "export ACP_APPROVE_PROJECT_MCPS=1" : ""}
           export ACP_AGENT_PATH="$(command -v ${acpExecutable} 2>/dev/null || echo ${acpExecutable})"
           export ACP_BRIDGE_TOKEN=${quoteShell(token)}
           ${acpProvider === "cursor"

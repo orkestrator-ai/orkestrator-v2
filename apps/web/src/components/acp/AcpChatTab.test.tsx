@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import type { AcpApproval, AcpMessageWindow, AcpSessionSnapshot } from "@/lib/acp-client";
 import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
@@ -33,6 +33,17 @@ const awaitBridgeReady = mock(async () => ({ status: "ready" as const, port: 409
 const ensureNativeAgentSession = mock(async () => ({ providerSessionId: "new-session" }));
 const adoptNativeAgentSession = mock(async () => ({ providerSessionId: "persisted-session" }));
 const dispatchNativeAgentPrompt = mock(async () => ({ providerSessionId: "persisted-session" }));
+// Typed from the real signature in `@/lib/backend` rather than inferred from
+// this body: `mock(async () => undefined)` infers `Promise<undefined>`, which
+// then rejects every `Promise<void>` override and fails `tsc` — invisibly,
+// because `bun test` does not typecheck.
+const renameEnvironmentFromPrompt = mock(async (): Promise<void> => {});
+const getEnvironmentById = mock((_id: string): { name: string } | undefined => undefined);
+const environmentStore = { getEnvironmentById };
+const useEnvironmentStore = Object.assign(
+  (selector: (state: typeof environmentStore) => unknown) => selector(environmentStore),
+  { getState: () => environmentStore },
+);
 const getAcpSession = mock(async (): Promise<AcpSessionSnapshot> => sessionSnapshot());
 const getAcpMessageWindow = mock(
   async (_client: unknown, _sessionId: string, fromIndex: number): Promise<AcpMessageWindow> => ({
@@ -56,6 +67,7 @@ mock.module("@/lib/backend", () => ({
   awaitBridgeReady,
   dispatchNativeAgentPrompt,
   ensureNativeAgentSession,
+  renameEnvironmentFromPrompt,
 }));
 mock.module("@/lib/acp-client", () => ({
   ...realAcpClientSnapshot,
@@ -115,11 +127,11 @@ mock.module("@/stores/paneLayoutStore", () => ({
   }),
 }));
 mock.module("@/stores/environmentStore", () => ({
-  useEnvironmentStore: (selector: (state: { getEnvironmentById: () => undefined }) => unknown) =>
-    selector({ getEnvironmentById: () => undefined }),
+  useEnvironmentStore,
 }));
 
 import { AcpChatTab } from "./AcpChatTab";
+import { useAcpPendingPromptStore } from "@/stores/acpPendingPromptStore";
 
 const data = {
   platform: "cursor" as const,
@@ -127,12 +139,19 @@ const data = {
   sessionId: "persisted-session",
 };
 
+function getAcpPromptInput(container: ParentNode = document): HTMLElement {
+  const queryRoot = container instanceof HTMLElement ? container : document.body;
+  return within(queryRoot).getByRole("textbox", { name: "Message Cursor Agent" });
+}
+
 beforeEach(() => {
   for (const fn of [
     awaitBridgeReady,
     ensureNativeAgentSession,
     adoptNativeAgentSession,
     dispatchNativeAgentPrompt,
+    renameEnvironmentFromPrompt,
+    getEnvironmentById,
     getAcpSession,
     getAcpMessageWindow,
     getAcpApprovals,
@@ -146,6 +165,11 @@ beforeEach(() => {
   awaitBridgeReady.mockImplementation(async () => ({ status: "ready" as const, port: 4099, authToken: "token" }));
   adoptNativeAgentSession.mockImplementation(async () => ({ providerSessionId: "persisted-session" }));
   dispatchNativeAgentPrompt.mockImplementation(async () => ({ providerSessionId: "persisted-session" }));
+  renameEnvironmentFromPrompt.mockImplementation(async () => {});
+  getEnvironmentById.mockImplementation(() => undefined);
+  // Real store, so the store-backed pending prompt is exercised end to end.
+  // It outlives the component by design, so each test starts from empty.
+  useAcpPendingPromptStore.setState({ pending: new Map() });
   getAcpSession.mockImplementation(async () => sessionSnapshot());
   getAcpMessageWindow.mockImplementation(async (_client, _sessionId, fromIndex) => ({
     messages: [],
@@ -159,6 +183,19 @@ beforeEach(() => {
 });
 
 afterEach(cleanup);
+
+/**
+ * Drains the microtask queue and one macrotask turn.
+ *
+ * Several assertions below are about what `submit` has *not* done by the time
+ * it settles, so they need the whole continuation — including its `finally` —
+ * to have run before they read the DOM.
+ */
+async function settle(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
 
 describe("AcpChatTab", () => {
   test("adopts and rehydrates the session persisted in pane data", async () => {
@@ -259,6 +296,21 @@ describe("AcpChatTab", () => {
     expect(screen.queryByText("No models available")).toBeNull();
   });
 
+  test("uses the shared native compose bar for Grok sessions too", async () => {
+    render(
+      <AcpChatTab
+        tabId="tab-grok"
+        data={{ ...data, platform: "grok" }}
+        isActive
+      />,
+    );
+
+    const composeBar = await screen.findByTestId("acp-native-compose-bar");
+    expect(within(composeBar).getByRole("textbox", { name: "Message Grok Build" }))
+      .toBeTruthy();
+    expect(composeBar.querySelector("[data-native-compose-toolbar]")).toBeTruthy();
+  });
+
   test("renders reasoning as a collapsed thinking disclosure, not as assistant prose", async () => {
     getAcpSession.mockImplementation(async () => ({
       id: "persisted-session",
@@ -330,10 +382,12 @@ describe("AcpChatTab", () => {
     // Blocking prompts are pinned with the composer rather than left in the
     // transcript, so answering one never requires scrolling.
     expect(dock.contains(approval)).toBe(true);
-    expect(dock.contains(screen.getByPlaceholderText("Message Cursor Agent"))).toBe(true);
+    const composeBar = screen.getByTestId("acp-native-compose-bar");
+    expect(dock.contains(composeBar)).toBe(true);
+    expect(dock.contains(getAcpPromptInput(composeBar))).toBe(true);
     expect(screen.getByTestId("transcript-bottom-spacer")).toBeTruthy();
     // A running turn shows the shell's thinking indicator, not a bare spinner.
-    expect(screen.getByLabelText("Stop")).toBeTruthy();
+    expect(screen.getByTitle("Stop current query")).toBeTruthy();
     // The stubbed virtualizer reports "at bottom", so the shell must not offer
     // the scroll-down affordance.
     expect(screen.queryByLabelText("Scroll to bottom of conversation")).toBeNull();
@@ -358,9 +412,11 @@ describe("AcpChatTab", () => {
 
   test("routes manual prompts through the durable backend dispatcher", async () => {
     render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
-    const compose = await screen.findByPlaceholderText("Message Cursor Agent");
-    fireEvent.change(compose, { target: { value: "Run the checks" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    const composeBar = await screen.findByTestId("acp-native-compose-bar");
+    const compose = getAcpPromptInput(composeBar);
+    compose.textContent = "Run the checks";
+    fireEvent.input(compose);
+    fireEvent.click(screen.getByTitle("Send"));
 
     await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalledWith(expect.objectContaining({
       logicalSessionKey: "env-environment-1:tab-1",
@@ -390,6 +446,210 @@ describe("AcpChatTab", () => {
     expect(dispatchNativeAgentPrompt).toHaveBeenLastCalledWith(expect.objectContaining({
       requestId: "initial-prompt:environment-1:tab-1",
     }));
+  });
+
+  test("submits Enter but preserves Shift+Enter and IME composition", async () => {
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const composeBar = await screen.findByTestId("acp-native-compose-bar");
+    const compose = getAcpPromptInput(composeBar);
+
+    compose.textContent = "Use a multiline prompt";
+    fireEvent.input(compose);
+
+    const shiftEnter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    compose.dispatchEvent(shiftEnter);
+    expect(shiftEnter.defaultPrevented).toBe(false);
+    expect(dispatchNativeAgentPrompt).not.toHaveBeenCalled();
+
+    const composingEnter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+      isComposing: true,
+    });
+    compose.dispatchEvent(composingEnter);
+    expect(composingEnter.defaultPrevented).toBe(false);
+    expect(dispatchNativeAgentPrompt).not.toHaveBeenCalled();
+
+    // The WebKit shape: compositionend already fired, so only keyCode 229
+    // still marks this Enter as an IME confirmation. The tab delegates that
+    // judgement to MentionableInput, so it has to hold end to end.
+    const webkitComposingEnter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+      isComposing: false,
+      keyCode: 229,
+    });
+    compose.dispatchEvent(webkitComposingEnter);
+    expect(webkitComposingEnter.defaultPrevented).toBe(false);
+    expect(dispatchNativeAgentPrompt).not.toHaveBeenCalled();
+
+    const enter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () => {
+      compose.dispatchEvent(enter);
+    });
+    expect(enter.defaultPrevented).toBe(true);
+
+    await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "Use a multiline prompt" }),
+    ));
+  });
+
+  test("locks the composer while a manual dispatch is pending", async () => {
+    let acceptDispatch!: (value: { providerSessionId: string }) => void;
+    dispatchNativeAgentPrompt.mockImplementation(() => new Promise((resolve) => {
+      acceptDispatch = resolve;
+    }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const composeBar = await screen.findByTestId("acp-native-compose-bar");
+    const compose = getAcpPromptInput(composeBar);
+    compose.textContent = "Only dispatch once";
+    fireEvent.input(compose);
+
+    const send = screen.getByTitle("Send") as HTMLButtonElement;
+    fireEvent.click(send);
+    await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalledTimes(1));
+
+    expect(send.disabled).toBe(true);
+    expect(compose.getAttribute("contenteditable")).toBe("false");
+    fireEvent.click(send);
+    fireEvent.keyDown(compose, { key: "Enter" });
+    expect(dispatchNativeAgentPrompt).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      acceptDispatch({ providerSessionId: "persisted-session" });
+    });
+    await waitFor(() => {
+      expect(compose.getAttribute("contenteditable")).toBe("true");
+    });
+  });
+
+  test("hands the draft back and unlocks the composer when a manual dispatch fails", async () => {
+    dispatchNativeAgentPrompt.mockImplementation(async () => {
+      throw new Error("dispatch rejected");
+    });
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const composeBar = await screen.findByTestId("acp-native-compose-bar");
+    const compose = getAcpPromptInput(composeBar);
+    compose.textContent = "Keep my words";
+    fireEvent.input(compose);
+
+    const send = screen.getByTitle("Send") as HTMLButtonElement;
+    fireEvent.click(send);
+
+    expect(await screen.findByText("dispatch rejected")).toBeTruthy();
+    // A failed send must return the prompt rather than eat it, and must not
+    // leave the composer locked behind the cleared `dispatching` flag.
+    await waitFor(() => expect(compose.textContent).toBe("Keep my words"));
+    expect(compose.getAttribute("contenteditable")).toBe("true");
+    expect((screen.getByTitle("Send") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  test("keeps the draft when Enter arrives while a turn is already running", async () => {
+    getAcpSession.mockImplementation(async () => sessionSnapshot({ status: "running" }));
+    getAcpMessageWindow.mockImplementation(async (_client, _sessionId, fromIndex) => ({
+      messages: [],
+      baseIndex: fromIndex,
+      totalMessages: fromIndex,
+      revision: 1,
+      status: "running" as const,
+    }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const composeBar = await screen.findByTestId("acp-native-compose-bar");
+    const compose = getAcpPromptInput(composeBar);
+    compose.textContent = "Not yet";
+    fireEvent.input(compose);
+
+    const enter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () => {
+      compose.dispatchEvent(enter);
+    });
+
+    // ACP has no prompt queue, so a mid-turn Enter is a no-op. The one thing it
+    // must never do is clear the draft it refused to send.
+    expect(dispatchNativeAgentPrompt).not.toHaveBeenCalled();
+    expect(compose.textContent).toBe("Not yet");
+    expect(screen.getByTitle("Stop current query")).toBeTruthy();
+    expect(screen.queryByTitle("Send")).toBeNull();
+  });
+
+  test("returns focus to the composer after a send that started there", async () => {
+    let acceptDispatch!: (value: { providerSessionId: string }) => void;
+    dispatchNativeAgentPrompt.mockImplementation(() => new Promise((resolve) => {
+      acceptDispatch = resolve;
+    }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const composeBar = await screen.findByTestId("acp-native-compose-bar");
+    const compose = getAcpPromptInput(composeBar);
+    compose.textContent = "Focus comes back";
+    fireEvent.input(compose);
+    compose.focus();
+    expect(document.activeElement).toBe(compose);
+
+    const enter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () => {
+      compose.dispatchEvent(enter);
+    });
+    await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalledTimes(1));
+
+    // A real browser drops the caret when contenteditable flips to false.
+    // happy-dom does not, so model it here — otherwise the assertion below
+    // would pass on focus that never moved.
+    expect(compose.getAttribute("contenteditable")).toBe("false");
+    compose.blur();
+    expect(document.activeElement).not.toBe(compose);
+
+    await act(async () => {
+      acceptDispatch({ providerSessionId: "persisted-session" });
+    });
+    await waitFor(() => expect(document.activeElement).toBe(compose));
+  });
+
+  test("does not pull focus back when the send started outside the composer", async () => {
+    let acceptDispatch!: (value: { providerSessionId: string }) => void;
+    dispatchNativeAgentPrompt.mockImplementation(() => new Promise((resolve) => {
+      acceptDispatch = resolve;
+    }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const composeBar = await screen.findByTestId("acp-native-compose-bar");
+    const compose = getAcpPromptInput(composeBar);
+    compose.textContent = "Sent by mouse";
+    fireEvent.input(compose);
+    compose.blur();
+    expect(document.activeElement).not.toBe(compose);
+
+    fireEvent.click(screen.getByTitle("Send"));
+    await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      acceptDispatch({ providerSessionId: "persisted-session" });
+    });
+    await waitFor(() => expect(compose.getAttribute("contenteditable")).toBe("true"));
+    // Restoring focus is only correct when the composer is what lost it.
+    expect(document.activeElement).not.toBe(compose);
   });
 
   test("rehydrates approvals, resolves them, and exposes cancellation and bridge errors", async () => {
@@ -428,7 +688,7 @@ describe("AcpChatTab", () => {
       "approval-1",
       "once",
     ));
-    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    fireEvent.click(screen.getByTitle("Stop current query"));
     expect(cancelAcpPrompt).toHaveBeenCalledWith(expect.anything(), "persisted-session");
   });
 
@@ -512,7 +772,8 @@ describe("AcpChatTab", () => {
       composer: EMPTY_NATIVE_AGENT_COMPOSER_STATE,
     }));
     const view = render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
-    expect(await screen.findByPlaceholderText("Message Cursor Agent")).toBeTruthy();
+    const composeBar = await screen.findByTestId("acp-native-compose-bar");
+    expect(getAcpPromptInput(composeBar)).toBeTruthy();
     view.unmount();
 
     getAcpSession.mockImplementation(async () => ({
@@ -540,7 +801,7 @@ describe("AcpChatTab", () => {
     expect(await screen.findByText("Finished while you were away")).toBeTruthy();
     expect(await screen.findByText("Approve the follow-up")).toBeTruthy();
     // Idle again, so the composer offers Send rather than Stop.
-    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+    expect(screen.getByTitle("Send")).toBeTruthy();
   });
 
   test("retries the mount handshake from the error banner after a failed connect", async () => {
@@ -553,7 +814,7 @@ describe("AcpChatTab", () => {
     expect(screen.getByText("bridge is down")).toBeTruthy();
     // Match the other native tabs: connection errors replace the chat shell
     // instead of leaving a dead composer and a second status header visible.
-    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.queryByTitle("Send")).toBeNull();
 
     fireEvent.click(retry);
     // The second attempt uses the healthy default and reaches the composer.
@@ -715,5 +976,326 @@ describe("AcpChatTab", () => {
       "persisted-session",
       { reasoningId: "high" },
     ));
+  });
+
+  test("renames a timestamp-named environment before dispatching the first Cursor prompt", async () => {
+    const callOrder: string[] = [];
+    getEnvironmentById.mockImplementation(() => ({ name: "20260814-004236" }));
+    renameEnvironmentFromPrompt.mockImplementation(async () => {
+      callOrder.push("rename");
+    });
+    dispatchNativeAgentPrompt.mockImplementation(async () => {
+      callOrder.push("dispatch");
+      return { providerSessionId: "persisted-session" };
+    });
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const compose = await screen.findByRole("textbox", { name: "Message Cursor Agent" });
+    compose.textContent = "Implement the billing export";
+    fireEvent.input(compose);
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalled());
+    expect(renameEnvironmentFromPrompt).toHaveBeenCalledWith(
+      "environment-1",
+      "Implement the billing export",
+    );
+    expect(callOrder).toEqual(["rename", "dispatch"]);
+  });
+
+  test("renames a compact Electron timestamp environment before the first Grok prompt", async () => {
+    getEnvironmentById.mockImplementation(() => ({ name: "202604151234567" }));
+
+    render(
+      <AcpChatTab
+        tabId="tab-1"
+        data={{ ...data, platform: "grok" }}
+        isActive={false}
+      />,
+    );
+    const compose = await screen.findByRole("textbox", { name: "Message Grok Build" });
+    compose.textContent = "Add pagination to the review table";
+    fireEvent.input(compose);
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(renameEnvironmentFromPrompt).toHaveBeenCalledWith(
+      "environment-1",
+      "Add pagination to the review table",
+    ));
+    expect(dispatchNativeAgentPrompt).toHaveBeenCalled();
+  });
+
+  test("does not rename a custom-named environment on the first ACP prompt", async () => {
+    getEnvironmentById.mockImplementation(() => ({ name: "review-table" }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const compose = await screen.findByRole("textbox", { name: "Message Cursor Agent" });
+    compose.textContent = "Keep this branch name";
+    fireEvent.input(compose);
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalled());
+    expect(renameEnvironmentFromPrompt).not.toHaveBeenCalled();
+  });
+
+  test("does not rename when the ACP session already has messages", async () => {
+    getEnvironmentById.mockImplementation(() => ({ name: "20260814-004236" }));
+    getAcpSession.mockImplementation(async () => sessionSnapshot({
+      messages: [{
+        id: "message-1",
+        role: "user" as const,
+        content: "Earlier work",
+        parts: [{ type: "text" as const, content: "Earlier work" }],
+        createdAt: "2026-08-13T00:00:00.000Z",
+      }],
+      revision: 2,
+    }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    expect(await screen.findByText("Earlier work")).toBeTruthy();
+    const compose = screen.getByRole("textbox", { name: "Message Cursor Agent" });
+    compose.textContent = "Continue the work";
+    fireEvent.input(compose);
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalled());
+    expect(renameEnvironmentFromPrompt).not.toHaveBeenCalled();
+  });
+
+  test("continues dispatching the first prompt when renaming fails", async () => {
+    const originalWarn = console.warn;
+    const consoleWarn = mock(() => {});
+    console.warn = consoleWarn as unknown as typeof console.warn;
+    const renameError = new Error("rename unavailable");
+    getEnvironmentById.mockImplementation(() => ({ name: "20260814-004236" }));
+    renameEnvironmentFromPrompt.mockImplementation(async () => {
+      throw renameError;
+    });
+
+    try {
+      render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+      const compose = await screen.findByRole("textbox", { name: "Message Cursor Agent" });
+      compose.textContent = "Investigate the failing setup flow";
+      fireEvent.input(compose);
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+      await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalledWith(
+        expect.objectContaining({ prompt: "Investigate the failing setup flow" }),
+      ));
+      expect(consoleWarn).toHaveBeenCalledWith(
+        "[AcpChatTab] Failed to rename environment from prompt:",
+        renameError,
+      );
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("shows the first prompt and naming feedback before the rename completes", async () => {
+    getEnvironmentById.mockImplementation(() => ({ name: "20260814-004236" }));
+    let resolveRename: (() => void) | undefined;
+    renameEnvironmentFromPrompt.mockImplementation(
+      () => new Promise<void>((resolve) => {
+        resolveRename = resolve;
+      }),
+    );
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const compose = await screen.findByRole("textbox", { name: "Message Cursor Agent" });
+    compose.textContent = "Audit the flaky reconnect flow";
+    fireEvent.input(compose);
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText("Audit the flaky reconnect flow")).toBeTruthy();
+    expect(screen.getByText("Naming environment...")).toBeTruthy();
+    expect(dispatchNativeAgentPrompt).not.toHaveBeenCalled();
+
+    resolveRename?.();
+
+    await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "Audit the flaky reconnect flow" }),
+    ));
+    await waitFor(() => expect(screen.queryByText("Naming environment...")).toBeNull());
+  });
+
+  test("auto-sends initialPrompt through the same rename path", async () => {
+    getEnvironmentById.mockImplementation(() => ({ name: "20260814-004236" }));
+
+    render(
+      <AcpChatTab
+        tabId="tab-1"
+        data={data}
+        isActive={false}
+        initialPrompt="Set up the environment for release automation"
+      />,
+    );
+
+    await waitFor(() => expect(renameEnvironmentFromPrompt).toHaveBeenCalledWith(
+      "environment-1",
+      "Set up the environment for release automation",
+    ));
+    expect(dispatchNativeAgentPrompt).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: "Set up the environment for release automation",
+      requestId: "initial-prompt:environment-1:tab-1",
+    }));
+  });
+
+  test("keeps the first prompt on screen when the post-dispatch refresh reads a stale window", async () => {
+    getEnvironmentById.mockImplementation(() => ({ name: "20260814-004236" }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const compose = await screen.findByRole("textbox", { name: "Message Cursor Agent" });
+    compose.textContent = "Trace the stale window";
+    fireEvent.input(compose);
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    // The default window mock returns no messages, which is exactly what a poll
+    // issued before the dispatch reports — and what `refresh` returns outright
+    // when it is skipped because an earlier poll is still in flight. Retiring
+    // the local row on the dispatch returning would blank the message here.
+    await waitFor(() => expect(getAcpMessageWindow).toHaveBeenCalled());
+    await settle();
+
+    expect(screen.getByText("Trace the stale window")).toBeTruthy();
+    expect(useAcpPendingPromptStore.getState().pending.get("env-environment-1:tab-1")).toEqual({
+      text: "Trace the stale window",
+      createdAt: expect.any(String),
+      isNaming: false,
+    });
+  });
+
+  test("retires the local copy once the transcript echoes the prompt", async () => {
+    getEnvironmentById.mockImplementation(() => ({ name: "20260814-004236" }));
+    getAcpMessageWindow.mockImplementation(async (_client, _sessionId, fromIndex) => ({
+      messages: [{
+        id: "message-1",
+        role: "user" as const,
+        content: "Ship the echo",
+        parts: [{ type: "text" as const, content: "Ship the echo" }],
+        createdAt: "2026-08-14T00:00:00.000Z",
+      }],
+      baseIndex: fromIndex,
+      totalMessages: fromIndex + 1,
+      revision: 2,
+      status: "idle" as const,
+    }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const compose = await screen.findByRole("textbox", { name: "Message Cursor Agent" });
+    compose.textContent = "Ship the echo";
+    fireEvent.input(compose);
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(useAcpPendingPromptStore.getState().pending.size).toBe(0));
+    await settle();
+    // The authoritative row replaced the local one rather than joining it.
+    expect(screen.getAllByText("Ship the echo").length).toBe(1);
+  });
+
+  test("keeps the pending first prompt across an unmount while the rename runs", async () => {
+    getEnvironmentById.mockImplementation(() => ({ name: "20260814-004236" }));
+    let resolveRename: (() => void) | undefined;
+    renameEnvironmentFromPrompt.mockImplementation(
+      () => new Promise<void>((resolve) => {
+        resolveRename = resolve;
+      }),
+    );
+
+    const first = render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const compose = await screen.findByRole("textbox", { name: "Message Cursor Agent" });
+    compose.textContent = "Rename across the switch";
+    fireEvent.input(compose);
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Rename across the switch")).toBeTruthy();
+
+    // Switching to another environment unmounts the tab. The rename and the
+    // dispatch it gates are backend work, so neither may be abandoned, and the
+    // prompt has to still be there when the user comes back.
+    first.unmount();
+    resolveRename?.();
+    await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "Rename across the switch" }),
+    ));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    expect(await screen.findByText("Rename across the switch")).toBeTruthy();
+    expect(screen.queryByText("Naming environment...")).toBeNull();
+  });
+
+  test("disables Send while the rename gates the first prompt", async () => {
+    getEnvironmentById.mockImplementation(() => ({ name: "20260814-004236" }));
+    let resolveRename: (() => void) | undefined;
+    renameEnvironmentFromPrompt.mockImplementation(
+      () => new Promise<void>((resolve) => {
+        resolveRename = resolve;
+      }),
+    );
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const compose = await screen.findByRole("textbox", { name: "Message Cursor Agent" });
+    compose.textContent = "Audit the naming gate";
+    fireEvent.input(compose);
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Naming environment...")).toBeTruthy();
+
+    // The rename is a backend round trip, so this window is seconds long. An
+    // enabled Send here is a lie: `submit` rejects it on its re-entry guard and
+    // says nothing.
+    compose.textContent = "A second thought";
+    fireEvent.input(compose);
+    expect(screen.getByRole("button", { name: "Send" }).hasAttribute("disabled")).toBe(true);
+
+    resolveRename?.();
+    await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(
+      screen.getByRole("button", { name: "Send" }).hasAttribute("disabled"),
+    ).toBe(false));
+  });
+
+  test("does not rename when the transcript window starts past the first message", async () => {
+    getEnvironmentById.mockImplementation(() => ({ name: "20260814-004236" }));
+    // An empty window over an evicted history: the session has run before even
+    // though it currently holds no rows, so its name is not up for grabs.
+    getAcpSession.mockImplementation(async () => sessionSnapshot({
+      baseIndex: 4,
+      revision: 6,
+    }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const compose = await screen.findByRole("textbox", { name: "Message Cursor Agent" });
+    compose.textContent = "Continue after eviction";
+    fireEvent.input(compose);
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalled());
+    expect(renameEnvironmentFromPrompt).not.toHaveBeenCalled();
+  });
+
+  test("returns the prompt to the composer and renames only once when the first dispatch fails", async () => {
+    getEnvironmentById.mockImplementation(() => ({ name: "20260814-004236" }));
+    renameEnvironmentFromPrompt.mockImplementation(async () => {
+      // The rename is what the retry's guard reads, so it is the reason a
+      // second attempt must not rename again.
+      getEnvironmentById.mockImplementation(() => ({ name: "billing-export" }));
+    });
+    dispatchNativeAgentPrompt.mockImplementationOnce(async () => {
+      throw new Error("bridge unavailable");
+    });
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const compose = await screen.findByRole("textbox", { name: "Message Cursor Agent" });
+    compose.textContent = "Implement the billing export";
+    fireEvent.input(compose);
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    // No echo is coming for a dispatch that never landed, so the local row is
+    // dropped and the text goes back to the composer instead of stranding it.
+    await waitFor(() => expect(screen.getByText("bridge unavailable")).toBeTruthy());
+    await waitFor(() => expect(useAcpPendingPromptStore.getState().pending.size).toBe(0));
+    expect(compose.textContent).toBe("Implement the billing export");
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalledTimes(2));
+    expect(renameEnvironmentFromPrompt).toHaveBeenCalledTimes(1);
   });
 });

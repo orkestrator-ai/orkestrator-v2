@@ -116,6 +116,7 @@ const authToken = process.env.ACP_BRIDGE_TOKEN?.trim() || randomBytes(32).toStri
 // ACP-capable CLI is `cursor-agent`; never let a missing configuration launch
 // the GUI as an accidental fallback.
 const executable = process.env.ACP_AGENT_PATH?.trim() || (provider === "cursor" ? "cursor-agent" : "grok");
+const approveProjectMcps = process.env.ACP_APPROVE_PROJECT_MCPS === "1";
 const stateDirectory = process.env.ACP_STATE_DIR?.trim();
 const stateFile = stateDirectory ? resolve(stateDirectory, "state.json") : null;
 const sessions = new Map<string, SessionState>();
@@ -173,9 +174,37 @@ class AcpProcess {
   onClose: (error: Error) => void = () => undefined;
 
   constructor(spawnOptions: AcpSpawnOptions = {}) {
+    // Both agents expose their permissive command setting as a global flag, so
+    // keep it before the ACP subcommand.
+    //
+    // Auto-approving *commands* is deliberate and unconditional, including on
+    // local worktrees: an Orkestrator ACP tab is an interactive agent session,
+    // and this matches the Claude bridge's local `bypassPermissions` default.
+    // Explicit deny rules still win, and any permission request an agent emits
+    // despite these defaults continues through the bridge's fail-closed
+    // approval flow below.
+    //
+    // Cursor's separate MCP approval flag is deliberately *not* unconditional.
+    // It is opt-in through ACP_APPROVE_PROJECT_MCPS, which the backend sets
+    // only for container environments. The distinction is who chooses the
+    // command: a permissive session still runs what the model decided to run,
+    // whereas `.cursor/mcp.json` is repository-controlled and would execute on
+    // the host the moment a tab opened, with no model or user involvement at
+    // all. Cloning a repository must not be enough to run its code.
+    //
+    // The check is `=== "1"`, so every other state — unset, empty, "true", or
+    // a stray ambient value — fails closed. Only the container launcher opts
+    // in; `startLocalServerUnlocked` pins it to "0" after inheriting the
+    // parent environment for exactly that reason.
     const args = provider === "cursor"
-      ? [...(spawnOptions.model ? ["--model", spawnOptions.model] : []), "acp"]
+      ? [
+          "--force",
+          ...(approveProjectMcps ? ["--approve-mcps"] : []),
+          ...(spawnOptions.model ? ["--model", spawnOptions.model] : []),
+          "acp",
+        ]
       : [
+          "--always-approve",
           "agent",
           ...(spawnOptions.model ? ["--model", spawnOptions.model] : []),
           ...(spawnOptions.effort ? ["--reasoning-effort", spawnOptions.effort] : []),

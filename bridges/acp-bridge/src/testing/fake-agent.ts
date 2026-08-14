@@ -84,6 +84,10 @@ function isObject(value: unknown): value is JsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+if (process.env.FAKE_ACP_ARGS_FILE) {
+  appendFileSync(process.env.FAKE_ACP_ARGS_FILE, `${JSON.stringify(process.argv.slice(2))}\n`);
+}
+
 if (process.env.FAKE_ACP_LIFECYCLE_FILE) {
   appendFileSync(process.env.FAKE_ACP_LIFECYCLE_FILE, `start:${process.pid}\n`);
   process.once("SIGTERM", () => {

@@ -77,7 +77,17 @@ const grokConfig = {
 };
 
 function sessionPayload(): JsonObject {
-  return (provider === "grok" ? grokConfig : cursorConfig) as JsonObject;
+  if (provider === "grok") return grokConfig as JsonObject;
+  // An agent that advertises no model option at all. The bridge must then leave
+  // the composer with no selection rather than inventing one, and assistant
+  // messages must carry no model attribution.
+  if (process.env.FAKE_ACP_NO_MODEL_OPTION === "1") {
+    return {
+      ...cursorConfig,
+      configOptions: cursorConfig.configOptions.filter((option) => option.id !== "model"),
+    } as JsonObject;
+  }
+  return cursorConfig as JsonObject;
 }
 
 function isObject(value: unknown): value is JsonObject {

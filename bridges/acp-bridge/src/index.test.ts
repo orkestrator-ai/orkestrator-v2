@@ -389,6 +389,179 @@ describe("ACP bridge", () => {
     });
   }
 
+  // The attribution has to be *stored per message*, not derived from whatever
+  // the composer currently has selected. Switching models mid-session is the
+  // only assertion that separates the two: a restart alone cannot, because the
+  // composer restores to the same selection the messages were stamped with.
+  test("keeps each assistant message on the model that produced it when the model changes", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const first = await spawnBridge({ stateDirectory });
+    const created = await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ clientSessionKey: "env-switch:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    const readSession = (bridge: { base: string; headers: Record<string, string> }) =>
+      waitFor(
+        () => nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+          .then((response) => response.json()) as Promise<{
+            status: string;
+            messages: Array<{ role: string; content: string; modelId?: string }>;
+          }>,
+        (value) => value.status === "idle",
+      );
+
+    // No `modelId` in the body: the turn runs on the agent's own default, and
+    // that default is what the message must record.
+    const firstTurn = await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ prompt: "DIRECT:first turn", requestId: "switch-1" }),
+    });
+    expect(firstTurn.status).toBe(202);
+    await readSession(first);
+
+    const secondTurn = await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({
+        prompt: "DIRECT:second turn",
+        requestId: "switch-2",
+        modelId: "gpt-5.5",
+      }),
+    });
+    expect(secondTurn.status).toBe(202);
+    // The 202 is written after the route has already set the session running,
+    // so this cannot observe the previous turn's idle snapshot.
+    const session = await readSession(first);
+
+    expect(session.messages.map((message) => [message.role, message.modelId])).toEqual([
+      // A user message is never attributed to a model.
+      ["user", undefined],
+      ["assistant", "composer-2.5"],
+      ["user", undefined],
+      ["assistant", "gpt-5.5"],
+    ]);
+    // The first reply keeps its own model even though the composer has since
+    // moved on, which is what a derived-at-read-time stamp would get wrong.
+    expect(session.messages[1]?.content).toBe("first turn");
+    expect(session.messages[3]?.content).toBe("second turn");
+
+    await waitFor(
+      () => fs.readFile(resolve(stateDirectory, "state.json"), "utf8")
+        .then((contents) => JSON.parse(contents) as {
+          sessions: Array<{ messages: Array<{ role: string; modelId?: string }> }>;
+        }),
+      (value) => value.sessions.some((persisted) =>
+        persisted.messages.filter((message) => message.role === "assistant").length === 2
+      ),
+    );
+    await stopChild(first.child);
+
+    const restarted = await spawnBridge({ stateDirectory });
+    const restored = await nativeFetch(`${restarted.base}/session/${created.id}`, {
+      headers: restarted.headers,
+    }).then((response) => response.json()) as {
+      messages: Array<{ role: string; modelId?: string }>;
+    };
+    expect(
+      restored.messages
+        .filter((message) => message.role === "assistant")
+        .map((message) => message.modelId),
+    ).toEqual(["composer-2.5", "gpt-5.5"]);
+  });
+
+  test("omits model attribution entirely when the agent advertises no model", async () => {
+    const { base, headers } = await spawnBridge({ env: { FAKE_ACP_NO_MODEL_OPTION: "1" } });
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-nomodel:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    const dispatched = await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "DIRECT:no model", requestId: "no-model-1" }),
+    });
+    expect(dispatched.status).toBe(202);
+
+    const session = await waitFor(
+      () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          composer: { selectedModelId?: string; models: unknown[] };
+          messages: Array<Record<string, unknown>>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    expect(session.composer.models).toEqual([]);
+    expect(session.composer.selectedModelId).toBeUndefined();
+    const assistant = session.messages.find((message) => message.role === "assistant");
+    // Absent, not an empty string: the renderer distinguishes "no model
+    // recorded" from a model whose id happens to be blank.
+    expect(assistant && "modelId" in assistant).toBe(false);
+  });
+
+  test("drops a persisted model id that is blank, oversized, or not a string", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const assistantMessage = (id: string, modelId: unknown) => ({
+      id,
+      role: "assistant",
+      content: id,
+      parts: [{
+        type: "text",
+        content: id,
+        sourcePartId: `${id}:0`,
+        sourceMessageId: id,
+      }],
+      createdAt: "2026-08-01T00:00:00.000Z",
+      modelId,
+    });
+    await fs.writeFile(
+      resolve(stateDirectory, "state.json"),
+      JSON.stringify({
+        version: 3,
+        provider: "cursor",
+        sessions: [{
+          id: "session-model-ids",
+          clientSessionKey: "env-1:tab-1",
+          acpSessionId: "acp-session-model-ids",
+          status: "idle",
+          revision: 4,
+          structured: [],
+          promptJournal: [],
+          messages: [
+            assistantMessage("kept", "  gpt-5.5  "),
+            assistantMessage("blank", "   "),
+            // One byte past the bound the live composer enforces. An identifier
+            // must be dropped rather than shortened into one that matches no
+            // catalogue entry.
+            assistantMessage("oversized", "m".repeat(1025)),
+            assistantMessage("nonstring", 42),
+            assistantMessage("absent", undefined),
+          ],
+        }],
+      }),
+    );
+
+    const bridge = await spawnBridge({ stateDirectory });
+    const session = await nativeFetch(`${bridge.base}/session/session-model-ids`, {
+      headers: bridge.headers,
+    }).then((response) => response.json()) as {
+      messages: Array<Record<string, unknown>>;
+    };
+
+    expect(session.messages.map((message) => message.id))
+      .toEqual(["kept", "blank", "oversized", "nonstring", "absent"]);
+    // Trimmed and kept, then dropped outright for every unusable form.
+    expect(session.messages[0]?.modelId).toBe("gpt-5.5");
+    expect(session.messages.slice(1).map((message) => "modelId" in message))
+      .toEqual([false, false, false, false]);
+  });
+
   test("keeps usage scoped to one turn and rehydrates the latest turn after restart", async () => {
     const stateDirectory = await temporaryDirectory();
     const first = await spawnBridge({ stateDirectory });

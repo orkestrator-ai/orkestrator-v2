@@ -290,6 +290,26 @@ function seedUnassignedPane(tabId: string) {
 }
 
 describe("AgentNativeTab", () => {
+  test.each(AGENT_PLATFORMS.map((platform) => [platform] as const))(
+    "keeps the context-window control in the %s compose bar before usage arrives",
+    async (platform) => {
+      render(
+        <AgentNativeTab
+          tabId={`tab-context-${platform}`}
+          data={identity(platform)}
+          isActive
+        />,
+      );
+
+      const contextButton = await screen.findByRole("button", {
+        name: "Context window usage unavailable",
+      });
+      const sendButton = screen.getByTitle("Send");
+
+      expect(contextButton.nextElementSibling).toBe(sendButton);
+    },
+  );
+
   test("keeps an unassigned tab composer-only without loading a bridge controller", () => {
     const { container } = render(
       <AgentNativeTab

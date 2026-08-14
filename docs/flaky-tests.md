@@ -640,3 +640,25 @@ Post-fix stress verification:
   --rerun-each 10` -> 470 passed, 0 failed. The capacity case now completes in
   0.13-0.37 ms, and the following Monaco lifecycle tests retained their exact
   call-count assertions across all ten runs.
+
+## `ActionBar workflow tabs > clears active long-press click suppression when the action bar unmounts` (`apps/web/src/components/layout/ActionBar.test.tsx`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-fix-c9efefa1-full-tests.log`
+- **Worker configuration:** The web workspace package ran `bun test src --parallel=2` while the remaining workspace, root, bridge, and protocol-lockfile groups ran concurrently.
+- **Failure:** Testing Library could not find an accessible `dialog` named `Configure code review` at `ActionBar.test.tsx:2474` (duration: 628.67 ms).
+- **Suite counts:** Web package: 4,808 total, 4,806 passed, 1 skipped, 1 failed across 210 files.
+- **Isolated rerun:** `bun test --cwd apps/web ./src/components/layout/ActionBar.test.tsx --parallel` -> 145 passed, 0 failed, 558 assertions in 15.95 seconds; the target passed in 587.91 ms.
+- **Hypothesis:** The aggregate-only result shows the expected long-press dialog was absent when queried, while the full owning file recreates it in isolation. No narrower trigger is established; a recurrence should capture the long-press timer, pointer events, and unmount/remount state before changing the product behavior or assertion.
+
+## `UpdateCoalescer > re-reads a dynamic interval across schedules in both directions` (`bridges/codex-bridge/src/messages/coalescer.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-fix-c9efefa1-full-tests.log`
+- **Worker configuration:** The bridge group ran `bun test bridges --parallel` concurrently with the workspace, root, and protocol-lockfile groups.
+- **Failure:** Expected `publishedAt` to contain 3 timestamps but received 4 at `coalescer.test.ts:90` (duration: 90.32 ms).
+- **Suite counts:** Bridges: 2,383 total, 2,371 passed, 11 skipped, 1 failed across 67 files.
+- **Isolated rerun:** `bun test ./bridges/codex-bridge/src/messages/coalescer.test.ts --parallel` -> 9 passed, 0 failed, 23 assertions in 268 ms; the target passed in 78.26 ms.
+- **Hypothesis:** The test coordinates multiple real elapsed-time intervals and observed one additional publish only under aggregate scheduling. A deterministic scheduler or callback boundary should be evaluated if it recurs; the available evidence does not establish a production coalescing defect.

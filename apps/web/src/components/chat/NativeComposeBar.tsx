@@ -162,8 +162,6 @@ export function NativeComposeBar({
             data-native-compose-controls="secondary"
             className="flex shrink-0 items-center gap-1"
           >
-            <ContextUsageWheel usage={contextUsage} className="ml-1" />
-
             {queue && queue.length > 0 ? (
               <button
                 type="button"
@@ -211,6 +209,8 @@ export function NativeComposeBar({
                 Address all
               </Button>
             ) : null}
+
+            <ContextUsageWheel usage={contextUsage} className="ml-1" />
 
             {showSendButton ? (
               <Button

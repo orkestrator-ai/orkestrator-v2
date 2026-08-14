@@ -55,14 +55,44 @@ copied `testProject` only.
 ## Automated checks
 
 Run focused package typechecks/tests first, with `--parallel` on direct suites.
-Then exercise the real stack:
+Every automated command must save complete stdout and stderr to a log file.
+Agent and tool output buffers often max out, so visible command output is not an
+authoritative record. Enable `pipefail`, pipe through `tee`, and run each pipeline
+separately so its exit status belongs to exactly one command:
 
 ```bash
-ORKESTRATOR_AGENT_TEST_PROFILE=codex-qa bun run test:agent:browser
-bun run test:agent:electron
+set -o pipefail
+bun run --cwd apps/web typecheck 2>&1 | tee /tmp/orkestrator-web-typecheck.log
+bun test ./apps/web/src/path/to/ChangedComponent.test.tsx --parallel \
+  2>&1 | tee /tmp/orkestrator-changed-component.log
+
+ORKESTRATOR_AGENT_TEST_PROFILE=codex-qa \
+ORKESTRATOR_AGENT_TEST_RUN_ID=codex-qa \
+bun run test:agent:browser 2>&1 | tee /tmp/orkestrator-agent-browser.log
+
+bun run test:agent:electron 2>&1 | tee /tmp/orkestrator-agent-electron.log
+
 # Against a profile started with --fixture-environments local,container:
-ORKESTRATOR_AGENT_TEST_PROFILE=container-qa bun run test:agent:docker
+ORKESTRATOR_AGENT_TEST_PROFILE=container-qa \
+bun run test:agent:docker 2>&1 | tee /tmp/orkestrator-agent-docker.log
+
+# Run for cross-cutting or release-sensitive changes:
+bun run test 2>&1 | tee /tmp/orkestrator-full-tests.log
 ```
+
+Use descriptive, unique `/tmp` filenames when agents run concurrently. Do not
+write transient console logs into the repository. If the visible tool output is
+truncated, use the command's exit status and inspect the saved file in bounded
+chunks instead of rerunning solely to recover output:
+
+```bash
+tail -n 200 /tmp/orkestrator-agent-browser.log
+rg -n "\(fail\)|error:|Failing groups:" /tmp/orkestrator-agent-browser.log
+```
+
+The exit status remains authoritative because `pipefail` preserves failures from
+the command before `tee`. Pattern searches are diagnostic only; some tests print
+expected errors while exercising failure handling.
 
 The browser suite uses the auth file outside Playwright to mint a 60-second,
 single-use loopback bootstrap, exchanges it by POST, and never puts the durable
@@ -116,6 +146,8 @@ deletes that profile's disposable state. Preserve downloaded binaries with
 ## Troubleshooting
 
 - Read `dev:status --json`, then inspect only the returned `logDir`.
+- For tests and typechecks, inspect the `/tmp` file named in the command rather
+  than relying on the agent/tool output buffer.
 - An occupied reserved port fails startup clearly; retrying allocates fresh ports.
 - If Docker is unavailable, use the local fixture flow.
 - A missing toolchain affects nested agents, not credential-free fixture/server

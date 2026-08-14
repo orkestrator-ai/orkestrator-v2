@@ -349,17 +349,26 @@ Files:
 ## Testing
 
 ```bash
-bun run test                  # Full suite: workspace + root + bridges + protocol concurrently, then iOS
-bun test ./tests --parallel   # Root integration/unit tests only; explicit path avoids package tests
-bun test bridges --parallel   # Bridge suites only
-bun run --cwd apps/web typecheck       # Web TypeScript type checking
-bun run --cwd apps/desktop typecheck   # Electron TypeScript type checking
-bun run --cwd apps/backend typecheck   # Backend TypeScript type checking
+set -o pipefail
+bun run test 2>&1 | tee /tmp/orkestrator-full-tests.log
+bun test ./tests --parallel 2>&1 | tee /tmp/orkestrator-root-tests.log
+bun test bridges --parallel 2>&1 | tee /tmp/orkestrator-bridge-tests.log
+bun run --cwd apps/web typecheck 2>&1 | tee /tmp/orkestrator-web-typecheck.log
+bun run --cwd apps/desktop typecheck 2>&1 | tee /tmp/orkestrator-desktop-typecheck.log
+bun run --cwd apps/backend typecheck 2>&1 | tee /tmp/orkestrator-backend-typecheck.log
 ```
 
-When running tests, always capture the complete stdout and stderr in a log file;
-terminal and tool output buffers are often truncated. Keep the exit status of the
-test command by enabling `pipefail`, for example:
+Run each pipeline separately so its exit status maps to one suite. The comments
+formerly shown beside these commands are summarized here: `bun run test` is the
+complete concurrent suite followed by iOS; `./tests` is the root-only suite and
+uses an explicit path to avoid package tests; the remaining commands cover the
+bridges and package typechecks.
+
+When running any test, typecheck, build verification, or smoke suite, always
+capture complete stdout and stderr in a file. Terminal, tool-call, and agent
+conversation buffers are routinely truncated and must never be treated as the
+authoritative test record. Pipe through `tee` and enable `pipefail` so the saved
+file is complete while the shell still returns the test command's failure:
 
 ```bash
 set -o pipefail
@@ -368,6 +377,232 @@ bun test ./tests --parallel 2>&1 | tee /tmp/orkestrator-root-tests.log
 
 Use a descriptive log name for each suite or rerun, and inspect the saved log for
 the full failure context instead of relying only on buffered terminal output.
+Use a unique suffix when concurrent agents might run the same suite. Keep these
+transient logs in `/tmp`, not in the repository, and never commit them.
+
+If a tool buffer maxes out, do not infer success or failure from the visible
+tail and do not rerun merely to recover the missing text. Check the process exit
+status, then inspect the saved file with bounded reads such as:
+
+```bash
+tail -n 200 /tmp/orkestrator-root-tests.log
+rg -n "\(fail\)|error:|Failing groups:" /tmp/orkestrator-root-tests.log
+```
+
+The exit status is authoritative; text matching is only a diagnostic aid because
+some tests intentionally exercise and print error paths.
+
+### Required frontend-to-browser test cycle for agents
+
+Use this cycle whenever a change affects rendered UI, routing, browser gateway
+behavior, frontend state, terminal presentation, environment controls, or any
+interaction a user can perform in the desktop window. The goal is to test the
+actual Vite renderer against a real isolated backend, not only component mocks.
+The detailed operational reference is
+[`docs/development/agent-testing.md`](docs/development/agent-testing.md).
+
+#### Safety boundaries
+
+- Use `dev:test`, not a production Orkestrator instance, for agent-driven QA.
+- Choose a unique, task-specific profile such as `agent-settings-dialog`. Do not
+  reuse a profile owned by another agent or workspace.
+- Always pass `--fixture` for UI workflows that need a project. Use only the
+  returned `testProject`; never add this Orkestrator checkout as a project.
+- Agent-test profiles are credential-free by default. Do not add
+  `--credential-source` unless the requested scenario genuinely requires one
+  named provider. Never enable credentials merely to make fixture testing work.
+- Do not assume ports, profile paths, browser URLs, or process IDs. Discover them
+  through `dev:status --json` on every run.
+- Never print, paste into chat, add to a URL, or save the gateway token. The
+  status manifest contains only the path to the mode-`0600` auth file.
+- Do not use broad cleanup commands (`docker prune`, recursive removal of a
+  development root, killing by executable name, or killing by port). Use the
+  profile lifecycle commands below.
+
+#### 1. Run the fast checks before starting the UI
+
+At minimum, typecheck the web package and run the owning test file. Add backend
+or desktop typechecks when the change crosses those boundaries. Capture complete
+output in logs.
+
+```bash
+set -o pipefail
+bun run --cwd apps/web typecheck 2>&1 | tee /tmp/orkestrator-web-typecheck.log
+bun test ./apps/web/src/path/to/ChangedComponent.test.tsx --parallel \
+  2>&1 | tee /tmp/orkestrator-changed-component.log
+```
+
+Do not proceed to browser QA with a known type error or deterministic focused
+test failure. A browser pass cannot compensate for a broken static or unit check.
+
+#### 2. Start or reuse an isolated real stack
+
+Start the profile in a long-lived terminal/tool session. The command remains
+alive to supervise Vite, Electron, the backend, bridges, and their process trees.
+
+```bash
+bun run dev:test -- --profile agent-settings-dialog --fixture
+```
+
+Startup is idempotent: running the same command for a live profile reports the
+existing instance instead of creating a second backend. In another command
+session, discover its state:
+
+```bash
+bun run dev:status -- --profile agent-settings-dialog --json
+```
+
+Wait until the manifest says `status: "ready"` and its liveness block reports
+the launcher, Vite, Electron, and backend as live. Use these returned fields:
+
+- `browserUrl` — exact URL for browser testing; never substitute a remembered port.
+- `electronTitle` — exact native window to target with Computer Use.
+- `testProject` — the only repository allowed for destructive/manual fixture work.
+- `logDir` — bounded launcher, Vite, Electron, and backend diagnostics.
+- `authFile` — secret-bearing local file path; do not expose its contents.
+
+If startup reports `failed`, inspect the manifest and files below its `logDir`.
+Do not search arbitrary production application-data directories for diagnostics.
+
+#### 3. Establish a green real-stack baseline
+
+Run the browser smoke suite against the already-running profile before or during
+manual exploration. It authenticates through a short-lived single-use exchange,
+creates a real local worktree, exercises a backend-owned terminal operation,
+reloads during progress, verifies authoritative rehydration and diff state, and
+cleans up its environment.
+
+```bash
+set -o pipefail
+ORKESTRATOR_AGENT_TEST_PROFILE=agent-settings-dialog \
+ORKESTRATOR_AGENT_TEST_RUN_ID=agent-settings-dialog \
+bun run test:agent:browser 2>&1 | tee /tmp/orkestrator-agent-browser.log
+```
+
+Use the optional suites only when their layer is in scope:
+
+```bash
+# Run each pipeline separately.
+set -o pipefail
+
+# Real Electron main process, preload, IPC, clipboard, title, userData, and shutdown
+bun run test:agent:electron 2>&1 | tee /tmp/orkestrator-agent-electron.log
+
+# Requires a profile started with --fixture-environments local,container
+ORKESTRATOR_AGENT_TEST_PROFILE=agent-container-qa \
+bun run test:agent:docker 2>&1 | tee /tmp/orkestrator-agent-docker.log
+```
+
+The Docker suite is opt-in because it builds/starts the workspace-specific
+development image. It must never use or retag `orkestrator-v2:latest`.
+
+#### 4. Test the changed frontend in a real browser
+
+Use the in-app Browser, Playwright, or Computer Use against the exact discovered
+`browserUrl`; do not use internet browsing/search tools for a loopback page. For
+repeatable assertions prefer Playwright and accessible roles/names. Use Browser
+or Computer Use for exploratory visual and native-window checks.
+
+If the login page appears, read the token locally from `authFile` and enter it
+only into the password field. Never put it in a query string, screenshot, shell
+argument, test report, or commentary. Confirm the page displays the orange DEV
+identity and the expected profile before changing any state.
+
+For a frontend change, exercise at least:
+
+1. The primary user path changed by the implementation.
+2. Empty, loading, success, and error/disabled states that are reachable safely.
+3. A page reload after the state change, proving the UI rehydrates from the
+   backend instead of depending on the event that originally produced it.
+4. A narrow viewport and a normal desktop viewport for layout-affecting changes.
+5. Keyboard focus, labels, and the relevant accessible role/name for new controls.
+
+Use only the seeded fixture for environment, terminal, server, preview, Git, and
+file-change workflows. To test a preview, create/start a fixture environment,
+open its terminal, run the fixture's `bun run dev`, and open the reported preview
+through Orkestrator. Do not run fixture commands in the Orkestrator source root.
+
+#### 5. Test inactive-environment rehydration
+
+Any change involving background work must explicitly exercise the inactive path:
+
+1. Start the operation in one fixture environment or tab.
+2. Switch to another environment/tab so the initiating React tree can unmount.
+3. Let the backend-owned operation progress or complete while it is inactive.
+4. Return and verify status, output, pending interactions, and controls.
+5. Reload once more and verify the same result from an authoritative snapshot.
+
+Do not accept a result that works only while the initiating component stays
+mounted. Live SSE/IPC events are incremental hints; the verification must prove
+that a missed event can be recovered.
+
+#### 6. Iterate without restarting unnecessarily
+
+- Frontend-only edits should arrive through Vite HMR in the running profile.
+  Wait for the update, then re-run the affected path. Hard-reload the page if the
+  test specifically needs a clean mount.
+- Changes to Electron main/preload code, backend startup/options, profile wiring,
+  or installed dependencies require stopping and starting the profile again.
+- Backend business-logic changes generally require a restart because the
+  supervised backend is not a Vite module.
+- Use `dev:reset` only when the scenario requires pristine persisted state. A
+  normal implementation loop should preserve the profile so reload and
+  rehydration behavior remain testable.
+- After every restart, call `dev:status --json` again; ports may have changed.
+
+#### 7. Minimum verification by change type
+
+| Change scope | Minimum required verification |
+| --- | --- |
+| CSS, layout, or visual component | Web typecheck; owning tests; real browser at desktop and narrow viewport; screenshot of non-sensitive UI if useful |
+| Frontend interaction or Zustand/Context state | Web typecheck; owning tests; browser smoke; primary path; reload; inactive-tab path when background state is involved |
+| Browser gateway or backend command | Backend and web typechecks; focused gateway/command tests; browser smoke; authenticated real-browser path |
+| Electron main, preload, IPC, or window behavior | Desktop typecheck; focused Electron tests; `test:agent:electron`; native-window check when visual behavior changed |
+| Docker lifecycle or container UI | Backend typecheck; exact-owner focused tests; local browser smoke; opt-in Docker fixture/suite when Docker is available |
+| Cross-cutting or release-sensitive change | All relevant checks above, then `set -o pipefail; bun run test 2>&1 \| tee /tmp/orkestrator-full-tests.log` |
+
+#### 8. Evidence and failure reporting
+
+Record enough evidence for another agent to reproduce the result:
+
+- Profile name and tested commit/worktree.
+- Exact commands and pass/fail counts.
+- Saved `/tmp` log path for every automated command; this is the authoritative
+  output when the agent/tool buffer is truncated.
+- Browser or Electron route used and viewport when layout matters.
+- Short reproduction steps, expected result, and actual result.
+- Artifact paths under `output/agent-testing/<run-id>/`.
+- Any skipped flow, with the concrete reason (for example Docker unavailable).
+
+Artifacts and reports must not contain gateway tokens, credentials, prompts,
+terminal contents, file contents, or attachment data. Failure screenshots should
+show only the UI needed to establish the issue. Browser traces are automatically
+redacted, but agents must still avoid adding secrets to test names, annotations,
+console messages, or filenames.
+
+If an automated suite fails, inspect its saved log and owning test first. If it
+failed in an aggregate/parallel run, rerun the owning file alone before calling
+it flaky, then follow the flaky-test procedure below.
+
+#### 9. Stop and clean up
+
+Always stop a profile when browser/manual QA is finished, even after a failed
+test. Reset it as well unless preserving state is intentional and stated in the
+handoff.
+
+```bash
+bun run dev:stop -- --profile agent-settings-dialog
+bun run dev:reset -- --profile agent-settings-dialog
+```
+
+`dev:stop` validates launcher PID plus process start time and reports surviving
+owned processes. `dev:reset` refuses live or unsafe targets, validates the
+profile sentinel, and removes only that profile's exact-owner containers and
+state. Use `--stop-first` only when intentionally combining those steps; use
+`--keep-toolchains` when downloaded toolchains should survive the reset.
+
+Before handing off, confirm there is no live launcher for the test profile and
+report whether its state was reset or deliberately retained.
 
 ### Flaky Test Tracking
 

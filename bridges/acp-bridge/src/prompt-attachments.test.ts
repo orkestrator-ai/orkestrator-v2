@@ -91,6 +91,19 @@ describe("readPromptImages", () => {
     ]);
   });
 
+  test("accepts safe workspace directories whose names begin with two dots", async () => {
+    const root = await workspace();
+    await fs.mkdir(resolve(root, "..screens"));
+    await fs.writeFile(resolve(root, "..screens/shot.png"), ONE_PIXEL_PNG);
+
+    await expect(readPromptImages([image("..screens/shot.png")], root)).resolves.toEqual([{
+      data: ONE_PIXEL_PNG.toString("base64"),
+      mimeType: "image/png",
+      path: "..screens/shot.png",
+      absolutePath: resolve(root, "..screens/shot.png"),
+    }]);
+  });
+
   test("refuses a path that escapes the workspace, directly or through a symlink", async () => {
     const root = await workspace();
     const outside = await workspace();
@@ -123,6 +136,19 @@ describe("readPromptImages", () => {
     await expect(readPromptImages([image("huge.png")], root)).rejects.toThrow("8MB");
     await expect(readPromptImages([image("directory.png")], root))
       .rejects.toThrow(PromptAttachmentError);
+  });
+
+  test("refuses an image that changes after its opened handle is validated", async () => {
+    const root = await workspace();
+    const imagePath = resolve(root, "changing.png");
+    await fs.writeFile(imagePath, ONE_PIXEL_PNG);
+
+    await expect(readPromptImages([image("changing.png")], root, {
+      afterInitialValidation: async (absolutePath) => {
+        expect(absolutePath).toBe(imagePath);
+        await fs.writeFile(absolutePath, Buffer.concat([ONE_PIXEL_PNG, Buffer.from("changed")]));
+      },
+    })).rejects.toThrow("changed while it was being read");
   });
 
   test("bounds the total bytes one prompt can carry", async () => {

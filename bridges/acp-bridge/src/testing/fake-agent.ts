@@ -115,7 +115,12 @@ lines.on("line", (line) => {
         protocolVersion: 1,
         // Agents that cannot resume a rollout must be rejected rather than
         // silently reattached to a session they have never heard of.
-        agentCapabilities: { loadSession: process.env.FAKE_ACP_NO_LOAD_SESSION !== "1" },
+        agentCapabilities: {
+          loadSession: process.env.FAKE_ACP_NO_LOAD_SESSION !== "1",
+          ...(process.env.FAKE_ACP_IMAGE_CAPABILITY
+            ? { promptCapabilities: { image: process.env.FAKE_ACP_IMAGE_CAPABILITY === "true" } }
+            : {}),
+        },
       },
     });
     return;

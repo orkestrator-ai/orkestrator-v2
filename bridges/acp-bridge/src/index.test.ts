@@ -4,7 +4,7 @@ import { createServer } from "node:net";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 // The repository-wide test preload installs a browser-like fetch for UI tests.
@@ -2236,64 +2236,87 @@ describe("ACP bridge", () => {
     expect(catalog.models.map((model) => model.id)).toContain("grok-next");
   });
 
-  test("sends workspace image attachments to the agent as inline image blocks", async () => {
-    const workspace = await temporaryDirectory();
-    const blocksFile = resolve(workspace, "prompt-blocks.log");
-    const imagePath = resolve(workspace, "screenshot.png");
-    await fs.writeFile(imagePath, ONE_PIXEL_PNG);
-    const { base, headers } = await spawnBridge({ env: {
-      CWD: workspace,
-      FAKE_ACP_PROMPT_BLOCKS_FILE: blocksFile,
-    } });
-    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
-      .then((response) => response.json()) as { id: string };
-
-    const dispatched = await nativeFetch(`${base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        prompt: "DIRECT:describe it",
-        requestId: "image-1",
-        // Relative to the workspace, as a renderer pick from the file tree is.
-        attachments: [{ type: "image", path: "screenshot.png", filename: "screenshot.png" }],
-      }),
-    });
-    expect(dispatched.status).toBe(202);
-    await waitFor(
-      () => nativeFetch(`${base}/session/${created.id}`, { headers })
-        .then((response) => response.json()) as Promise<{ status: string }>,
-      (session) => session.status === "idle",
-    );
-
-    const blocks = JSON.parse((await fs.readFile(blocksFile, "utf8")).trim()) as Array<{
-      type: string;
-      text?: string;
-      mimeType?: string;
-      data?: string;
-    }>;
-    expect(blocks[0]).toMatchObject({ type: "text", text: "DIRECT:describe it" });
-    // The bytes must reach the model natively; a path in the prompt text only
-    // works if the agent happens to open it, and neither agent reads images
-    // through its own file tools.
-    expect(blocks[1]).toEqual({
-      type: "image",
-      mimeType: "image/png",
-      data: ONE_PIXEL_PNG.toString("base64"),
-    });
-
-    const transcript = await nativeFetch(`${base}/session/${created.id}`, { headers })
-      .then((response) => response.json()) as {
-        messages: Array<{ role: string; parts: Array<{ type: string; content: string; fileUrl?: string }> }>;
+  for (const acpProvider of ["cursor", "grok"] as const) {
+    test(`sends and rehydrates workspace images for ${acpProvider}`, async () => {
+      const workspace = await temporaryDirectory();
+      const stateDirectory = await temporaryDirectory();
+      const blocksFile = resolve(workspace, "prompt-blocks.log");
+      const filename = "screen #1?.png";
+      const imagePath = resolve(workspace, filename);
+      await fs.writeFile(imagePath, ONE_PIXEL_PNG);
+      const bridgeEnv = {
+        ACP_PROVIDER: acpProvider,
+        CWD: workspace,
+        FAKE_ACP_PROMPT_BLOCKS_FILE: blocksFile,
+        // Grok currently understates this capability but accepts the standard
+        // image block; keep that compatibility case explicit in the harness.
+        FAKE_ACP_IMAGE_CAPABILITY: acpProvider === "cursor" ? "true" : "false",
       };
-    const user = transcript.messages.find((message) => message.role === "user");
-    expect(user?.parts.find((part) => part.type === "file")).toEqual({
-      type: "file",
-      content: "screenshot.png",
-      fileUrl: `file://${imagePath}`,
-      sourcePartId: expect.any(String),
-      sourceMessageId: expect.any(String),
-    } as never);
-  });
+      const first = await spawnBridge({ stateDirectory, env: bridgeEnv });
+      const created = await nativeFetch(`${first.base}/session/create`, {
+        method: "POST",
+        headers: first.headers,
+      }).then((response) => response.json()) as { id: string };
+
+      const dispatched = await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers: first.headers,
+        body: JSON.stringify({
+          prompt: "DIRECT:describe it",
+          requestId: "image-1",
+          // Relative to the workspace, as a renderer pick from the file tree is.
+          attachments: [{ type: "image", path: filename, filename }],
+        }),
+      });
+      expect(dispatched.status).toBe(202);
+      await waitFor(
+        () => nativeFetch(`${first.base}/session/${created.id}`, { headers: first.headers })
+          .then((response) => response.json()) as Promise<{ status: string }>,
+        (session) => session.status === "idle",
+      );
+
+      const blocks = JSON.parse((await fs.readFile(blocksFile, "utf8")).trim()) as Array<{
+        type: string;
+        text?: string;
+        mimeType?: string;
+        data?: string;
+      }>;
+      expect(blocks[0]).toMatchObject({ type: "text", text: "DIRECT:describe it" });
+      // The bytes must reach the model natively; a path in the prompt text only
+      // works if the agent happens to open it, and neither agent reads images
+      // through its own file tools.
+      expect(blocks[1]).toEqual({
+        type: "image",
+        mimeType: "image/png",
+        data: ONE_PIXEL_PNG.toString("base64"),
+      });
+
+      const transcript = await nativeFetch(`${first.base}/session/${created.id}`, {
+        headers: first.headers,
+      }).then((response) => response.json()) as {
+        messages: Array<{ role: string; parts: Array<Record<string, unknown>> }>;
+      };
+      const user = transcript.messages.find((message) => message.role === "user");
+      const filePart = user?.parts.find((part) => part.type === "file");
+      expect(filePart).toEqual({
+        type: "file",
+        content: filename,
+        fileUrl: pathToFileURL(imagePath).href,
+        sourcePartId: expect.any(String),
+        sourceMessageId: expect.any(String),
+      });
+
+      await stopChild(first.child);
+      const restarted = await spawnBridge({ stateDirectory, env: bridgeEnv });
+      const restored = await nativeFetch(`${restarted.base}/session/${created.id}`, {
+        headers: restarted.headers,
+      }).then((response) => response.json()) as {
+        messages: Array<{ role: string; parts: Array<Record<string, unknown>> }>;
+      };
+      expect(restored.messages.find((message) => message.role === "user")?.parts)
+        .toContainEqual(filePart);
+    });
+  }
 
   test("refuses attachments the bridge cannot safely read and leaves the turn dispatchable", async () => {
     const workspace = await temporaryDirectory();

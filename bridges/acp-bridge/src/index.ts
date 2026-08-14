@@ -3,6 +3,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   PARENT_PID_ENV,
   parseParentPid,
@@ -1574,7 +1575,7 @@ async function route(
         ...images.map((image, index): BridgeFilePart => ({
           type: "file",
           content: image.filename || image.path,
-          fileUrl: `file://${image.absolutePath}`,
+          fileUrl: pathToFileURL(image.absolutePath).href,
           sourcePartId: `${userMessageId}:${index + 1}`,
           sourceMessageId: userMessageId,
         })),

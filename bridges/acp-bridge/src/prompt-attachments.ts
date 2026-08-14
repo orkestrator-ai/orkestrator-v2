@@ -128,11 +128,19 @@ export function parsePromptAttachments(value: unknown): AcpPromptAttachment[] {
 export async function readPromptImages(
   attachments: readonly AcpPromptAttachment[],
   workspaceRoot: string,
+  options: {
+    /** Test seam for deterministically exercising a file swapped during its read. */
+    afterInitialValidation?: (absolutePath: string) => void | Promise<void>;
+  } = {},
 ): Promise<AcpPromptImage[]> {
   const images: AcpPromptImage[] = [];
   let totalBytes = 0;
   for (const attachment of attachments) {
-    const { bytes, absolutePath } = await readWorkspaceImage(attachment.path, workspaceRoot);
+    const { bytes, absolutePath } = await readWorkspaceImage(
+      attachment.path,
+      workspaceRoot,
+      options.afterInitialValidation,
+    );
     totalBytes += bytes.length;
     if (totalBytes > MAX_TOTAL_IMAGE_ATTACHMENT_BYTES) {
       throw new PromptAttachmentError(
@@ -197,7 +205,8 @@ function isPathWithin(root: string, candidate: string): boolean {
   if (candidate === root) return true;
   const childPath = relative(root, candidate);
   return Boolean(childPath)
-    && !childPath.startsWith("..")
+    && childPath !== ".."
+    && !childPath.startsWith(`..${sep}`)
     && !isAbsolute(childPath);
 }
 
@@ -261,6 +270,7 @@ async function assertOpenedWorkspaceFile(
 async function readWorkspaceImage(
   filePath: string,
   workspaceRoot: string,
+  afterInitialValidation?: (absolutePath: string) => void | Promise<void>,
 ): Promise<{ bytes: Buffer; absolutePath: string }> {
   const lexicalRoot = resolve(workspaceRoot);
   const targetPath = isAbsolute(filePath)
@@ -296,6 +306,7 @@ async function readWorkspaceImage(
   try {
     const initialStats = await handle.stat();
     await assertOpenedWorkspaceFile(targetPath, canonicalRoot, initialStats);
+    await afterInitialValidation?.(targetPath);
     if (initialStats.size > MAX_IMAGE_ATTACHMENT_BYTES) {
       throw new PromptAttachmentError(
         "attachment_too_large",

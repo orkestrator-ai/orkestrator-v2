@@ -10,6 +10,19 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `Electron tmux backend command registration` — three lifecycle tests (`tests/unit/electron/tmux-backend.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Affected tests:** `serializes stop behind an in-flight start so no tmux session is orphaned` (2,010.43 ms), `keeps per-environment hook state under the shared runtime root and removes it on stop` (154.62 ms), and `environment teardown kills live sessions, restores settings and removes the runtime root` (1,469.94 ms).
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-full-tests-2.log`
+- **Worker configuration:** the root and agent-support group ran `bun test ./tests ./e2e/agent-testing ./apps/desktop/electron ./apps/desktop/scripts/dev --parallel` while the workspace, bridge, and protocol-lockfile groups ran concurrently.
+- **Failure:** all three failed as `error: timed out waiting for condition` from the file's own `waitFor` helper (`tmux-backend.test.ts:830`), reached through `withFakeTmuxRuntime`. The surrounding output also shows the fake runtime's `claude` shim missing during a probe: `ENOENT ... /T/ork-tmux-runtime-rXh3aJ/bin/claude`.
+- **Suite counts:** root and agent-support group: 3 failed; the workspace, bridge, and protocol-lockfile groups all passed in the same run.
+- **Isolated rerun:** `bun test tests/unit/electron/tmux-backend.test.ts` -> 173 passed, 0 failed.
+- **Pre-existing:** unrelated to the OpenCode provider-filter change, which touches no tmux, PTY, or runtime-root code. These three did not fail in the immediately preceding full run of the same tree, which failed a different pair of tests instead; the group's failures move between runs.
+- **Hypothesis:** the three failures share `withFakeTmuxRuntime`, which builds a temporary runtime root with executable shims and waits on real spawn/kill transitions. The `ENOENT` on the shim path suggests the fake runtime was torn down or not fully written while another test in the same worker was still probing it, so the awaited condition never became true. Whether the shared temp-root lifecycle is worker-safe should be established before any timeout is raised.
+
 ## `Electron tmux backend command registration` aggregate launch/cleanup failures (`tests/unit/electron/tmux-backend.test.ts`)
 
 - **Status:** open
@@ -84,24 +97,24 @@ history rather than two partial ones.
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-fix-c4cb555c-full-tests.log`
 - **Worker configuration:** The web workspace package ran `bun test src --parallel=2` while the other workspace, root, bridge, and protocol-lockfile groups ran concurrently.
-- **Failure:** The test exceeded Bun's 5,000 ms outer budget and timed out after 5,014.67 ms. No assertion failure was reported.
+- **Failure:** The test exceeded Bun's 5,000 ms outer budget and timed out after 5,014.67 ms. No assertion failure was reported. An earlier observation of the same case on this date (`bun run test` into `/tmp/orkestrator-full-tests.log`, web package `bun test src --parallel`) timed out after 5,701.98 ms with no assertion failure; every other test in the owning file passed in that run, including the adjacent `toggles the project drawer closed with a second menu-button tap` at 17.51 ms.
 - **Suite counts:** Web package: 4,805 total, 4,803 passed, 1 skipped, 1 failed across 210 files with 14,866 assertions in 104.69 seconds. The backend, root, bridge, protocol, CLI, desktop, and web-public groups passed.
-- **Isolated rerun:** `set -o pipefail; bun test --cwd apps/web src/components/layout/MobileAppShellLayout.test.tsx --parallel 2>&1 | tee /tmp/orkestrator-fix-mobile-layout-isolated.log` -> 23 passed, 0 failed in 4.41 seconds; the affected case passed in 2,197.66 ms.
+- **Isolated rerun:** `set -o pipefail; bun test --cwd apps/web src/components/layout/MobileAppShellLayout.test.tsx --parallel 2>&1 | tee /tmp/orkestrator-fix-mobile-layout-isolated.log` -> 23 passed, 0 failed in 4.41 seconds; the affected case passed in 2,197.66 ms. An earlier isolated rerun of the same file also passed 23/0.
 - **Root cause:** The case combined the initial Radix drawer auto-focus boundary and a later close-and-restore focus boundary under one five-second test budget. The two behaviors are independent and each already has a distinct user-visible assertion, but their asynchronous focus work accumulated enough aggregate scheduling delay to exhaust the shared budget.
 - **Fix:** Split the initial-open and close-button focus behaviors into separate tests so each transition has an independent lifecycle and budget without weakening either assertion.
 - **Verification:** The owning file is stress-tested after the split and the subsequent aggregate result is recorded in this change's validation handoff.
 
-## `MultiReviewService keeps a provider alive while a transcript read overlaps fix execution` (`apps/backend/src/core/multi-review-service.test.ts`)
+## `MultiReviewService > keeps a provider alive while a transcript read overlaps fix execution` (`apps/backend/src/core/multi-review-service.test.ts`)
 
 - **Status:** open
 - **Date observed:** 2026-08-14
-- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-full-tests4.log`
-- **Worker configuration:** the backend workspace package ran `bun test src tests --parallel` while the other workspace, root, bridge, and protocol-lockfile groups ran concurrently.
-- **Failure:** `expect(received).toBe(expected)` at `multi-review-service.test.ts:278` — expected `2` disposals, received `1` (duration: 132.84 ms). Line 278 is the second disposal assertion, made after the blocked status call is released and the run reaches `completed`.
-- **Suite counts:** the aggregate's only failure; every other group passed. Observed in three of five consecutive full runs on 2026-08-14 and absent from the other two.
-- **Isolated rerun:** `bun test --cwd apps/backend src/core/multi-review-service.test.ts` -> 31 passed, 1 failed on the first attempt, then five consecutive repetitions of the same command failed once and passed four times (32 passed, 0 failed).
-- **Not caused by the change under review:** reproduced on a clean tree with the working change stashed (`git stash push --include-untracked`), which failed the same assertion at 128.45 ms.
-- **Hypothesis:** the test waits for `phase === "completed"` and then asserts the disposal count, but reaching `completed` and disposing the provider are separate steps. When the scheduler runs the snapshot poll between them the count is still at its previous value. The assertion likely needs to wait on the disposal itself rather than on the phase that precedes it.
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-full-tests4.log`; also `set -o pipefail; bun test --cwd apps/backend src/core --parallel 2>&1 | tee /tmp/ork-be-core-tests.log`
+- **Worker configuration:** Observed both as the backend workspace package (`bun test src tests --parallel` while the other workspace, root, bridge, and protocol-lockfile groups ran concurrently) and as a standalone `bun test --cwd apps/backend src/core --parallel` group of 49 files with no other group running concurrently.
+- **Failure:** `expect(received).toBe(expected)` at `multi-review-service.test.ts:278` — expected `2` dispose calls, received `1` (durations 132.84 ms and 217.80 ms). The preceding assertion at line 274 (`disposeCalls === disposalsAfterReady`) had already passed. Line 278 is the second disposal assertion, made after the blocked status call is released and the run reaches `completed`.
+- **Suite counts:** In the full aggregate, this was the only failure in three of five consecutive full runs on 2026-08-14 and absent from the other two. In the standalone `src/core` parallel group: 1,590 total, 1,588 passed, 2 failed across 49 files (the other failure was a deterministic assertion in `commands-state-sync.test.ts` unrelated to this entry). Within that group it reproduced on every parallel run rather than intermittently.
+- **Isolated rerun:** `bun test --cwd apps/backend src/core/multi-review-service.test.ts` -> 32 passed, 0 failed in one isolated run; another isolated first attempt was 31 passed, 1 failed, then five consecutive repetitions of the same command failed once and passed four times (32 passed, 0 failed).
+- **Pre-existing:** confirmed independent of the OpenCode provider-filter change and of later reviewed work. The working tree was stashed (`git stash push --include-untracked`) and the same parallel command rerun on the clean checkout: 1,584 passed, 1 failed, failing on this same test at the same assertion (215.41 ms and 128.45 ms).
+- **Hypothesis:** the test releases the blocked status call, polls `snapshot(started.id)` until `phase === "completed"`, and then immediately asserts the final dispose count. Reaching the completed phase and running the provider's teardown appear to be separate awaits, so the assertion can observe the phase transition before the release-path disposal has run. The failure is a timing boundary in the test's completion signal, not evidence of a leaked provider; the durable phase is already correct when it fires. An explicit wait on the dispose count (or an instrumented teardown signal) should be evaluated before changing the service's disposal ordering.
 
 ## `StorageService prompt queues > live lease timer restores and announces a sole claimed head` (`apps/backend/src/core/storage-prompt-queues.test.ts`)
 

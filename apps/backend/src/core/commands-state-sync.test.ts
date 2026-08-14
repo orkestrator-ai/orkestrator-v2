@@ -91,8 +91,20 @@ async function withCommands<T>(
 
 const KEY = "claude env-e1:tab-1";
 
+/** `updateGlobalConfig` replaces the whole block, so edit a loaded copy. */
+async function setOpenCodeModelProviders(
+  storage: StorageService,
+  openCodeModelProviders: string[],
+): Promise<void> {
+  const config = await storage.loadConfig();
+  await storage.updateGlobalConfig({
+    ...config.global,
+    openCodeModelProviders,
+  });
+}
+
 describe("native agent model catalogue command", () => {
-  test("normalizes provider catalogues and preserves every OpenCode upstream provider", async () => {
+  test("normalizes provider catalogues and filters OpenCode to the configured providers", async () => {
     await withCommands(async (invoke, storage) => {
       await storage.updateEnvironment("e1", {
         claudeModelCatalog: {
@@ -134,13 +146,14 @@ describe("native agent model catalogue command", () => {
         { id: "openrouter/c", name: "OpenRouter C", provider: "openrouter" },
       ]);
 
+      // Both picker-facing reads filter, so a cache written before the
+      // allowlist changed cannot leak an excluded provider to the renderer.
       const cached = await invoke("get_opencode_model_catalog_cache", {
         projectId: "proj-1",
       }) as { models: Array<{ provider: string }> };
       expect(cached.models.map((model) => model.provider)).toEqual([
         "opencode-go",
         "opencode",
-        "openrouter",
       ]);
 
       const models = await invoke("get_native_agent_model_catalog", {
@@ -152,16 +165,15 @@ describe("native agent model catalogue command", () => {
         "gpt-codex",
         "opencode-go/b",
         "opencode/a",
-        "openrouter/c",
         "composer-cached",
         "grok-cached",
       ]);
-      expect(models.slice(2, 5).map((model) => model.providerLabel)).toEqual([
+      expect(models.slice(2, 4).map((model) => model.providerLabel)).toEqual([
         "OpenCode/opencode-go",
         "OpenCode/opencode",
-        "OpenCode/openrouter",
       ]);
 
+      // Storage stays the complete durable record; only the reads narrow.
       const rewritten = await invoke("cache_opencode_model_catalog", {
         projectId: "proj-1",
         models: [
@@ -172,6 +184,54 @@ describe("native agent model catalogue command", () => {
       expect(rewritten.models.map((model) => model.provider)).toEqual([
         "hpc-ai",
         "opencode",
+      ]);
+    });
+  });
+
+  test("widens the catalogue when a provider is added to the configured list", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.cacheOpenCodeModelCatalog("proj-1", [
+        { id: "opencode/a", name: "OpenCode A", provider: "opencode" },
+        { id: "openrouter/c", name: "OpenRouter C", provider: "openrouter" },
+      ]);
+      await setOpenCodeModelProviders(storage, [
+        "opencode",
+        "opencode-go",
+        "openrouter",
+      ]);
+
+      const cached = await invoke("get_opencode_model_catalog_cache", {
+        projectId: "proj-1",
+      }) as { models: Array<{ provider: string }> };
+      expect(cached.models.map((model) => model.provider)).toEqual([
+        "opencode",
+        "openrouter",
+      ]);
+
+      const models = await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+      }) as Array<Record<string, unknown>>;
+      expect(models.map((model) => model.id)).toEqual([
+        "opencode/a",
+        "openrouter/c",
+      ]);
+    });
+  });
+
+  test("offers every provider when the configured list is emptied", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.cacheOpenCodeModelCatalog("proj-1", [
+        { id: "opencode/a", name: "OpenCode A", provider: "opencode" },
+        { id: "hpc-ai/b", name: "HPC B", provider: "hpc-ai" },
+      ]);
+      await setOpenCodeModelProviders(storage, []);
+
+      const models = await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+      }) as Array<Record<string, unknown>>;
+      expect(models.map((model) => model.id)).toEqual([
+        "hpc-ai/b",
+        "opencode/a",
       ]);
     });
   });

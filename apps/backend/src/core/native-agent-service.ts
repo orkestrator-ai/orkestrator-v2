@@ -794,6 +794,27 @@ export class NativeAgentService {
       : [];
   }
 
+  /**
+   * Read the bounded raw OpenCode catalogue for durable cache refreshes.
+   *
+   * Picker-facing callers must continue using `listProjectionModels`, which
+   * applies the configured provider allowlist. The cache deliberately retains
+   * the wider source catalogue so a provider added later is available to launch
+   * dialogs before an environment starts another bridge.
+   */
+  async listModelCatalogForCache(
+    input: NativeAgentProjectionInput,
+  ): Promise<AgentModel[]> {
+    this.assertProjectionInput(input);
+    const provider = await this.provider(input);
+    if (provider.rawModelCatalog) {
+      return (await provider.rawModelCatalog()).slice(0, 512);
+    }
+    return provider.modelCatalog
+      ? (await provider.modelCatalog()).slice(0, 512)
+      : [];
+  }
+
   async dispatchIntent(
     input: DispatchNativeAgentPromptInput,
   ): Promise<NativeAgentDispatchOutcome> {
@@ -3704,6 +3725,11 @@ export class NativeAgentService {
       autoAnswerRequests: false,
       stageImages: (images) =>
         this.stageImages(input.environmentId, images),
+      // Read per call rather than per provider: providers are cached for the
+      // life of a bridge connection, so a settings edit would otherwise not
+      // reach the catalogue until the environment restarted.
+      resolveOpenCodeModelProviders: async () =>
+        (await this.storage.loadConfig()).global.openCodeModelProviders,
     });
     this.cacheProvider(cacheKey, provider, connectionIdentity);
     return provider;

@@ -357,7 +357,11 @@ describe("direct backend command registry coverage", () => {
       projectId: "project-1",
       catalogVersion: "v1",
       updatedAt: "2026-07-29T00:00:00.000Z",
-      models: [{ id: "opencode/cached", name: "Cached", provider: "opencode" }],
+      models: [
+        { id: "opencode/cached", name: "Cached", provider: "opencode" },
+        // Excluded by the default allowlist, so the read must drop it.
+        { id: "hpc-ai/flood", name: "Flood", provider: "hpc-ai" },
+      ],
     };
     const getOpenCodeModelCatalog = mock(async () => cached);
     const cacheOpenCodeModelCatalog = mock(async (_projectId: string, models: unknown[]) => ({
@@ -380,6 +384,8 @@ describe("direct backend command registry coverage", () => {
       cacheOpenCodeModelCatalog,
       getAgentModelCatalogCache,
       cacheAgentModelCatalog,
+      // The cached-catalogue read filters by the configured OpenCode providers.
+      loadConfig: mock(async () => ({ global: {} })),
     });
 
     for (const bridge of ["opencode", "claude", "codex"]) {
@@ -417,7 +423,11 @@ describe("direct backend command registry coverage", () => {
 
     await expect(
       invoke("get_opencode_model_catalog_cache", { projectId: " project-1 " }, context),
-    ).resolves.toEqual(cached);
+    ).resolves.toEqual({
+      ...cached,
+      models: [{ id: "opencode/cached", name: "Cached", provider: "opencode" }],
+    });
+    // Writes stay the complete durable record; only the reads narrow.
     const models = [{ id: "opencode/gpt-5", name: "GPT-5", provider: "opencode" }];
     await expect(
       invoke("cache_opencode_model_catalog", { projectId: "project-1", models }, context),
@@ -453,6 +463,87 @@ describe("direct backend command registry coverage", () => {
     expect(log).toContain("pkill -f '[o]pencode serve'");
     expect(log).toContain("pkill -f '[c]laude-bridge/dist/index.js'");
     expect(log).toContain("pkill -f '[c]odex-bridge/dist/index.js'");
+  });
+
+  test("persists the whole live OpenCode catalogue while narrowing only its response", async () => {
+    const liveModels = [
+      {
+        platform: "opencode",
+        id: "opencode/claude-sonnet-5",
+        label: "Claude Sonnet 5",
+        providerLabel: "OpenCode",
+        reasoning: [{ id: "default", label: "Default" }],
+        defaultReasoningId: "default",
+        supportsSpeed: false,
+        supportsMode: true,
+      },
+      {
+        platform: "opencode",
+        id: "openrouter/kimi-k2.5",
+        label: "Kimi K2.5",
+        providerLabel: "OpenRouter",
+        reasoning: [{ id: "default", label: "Default" }],
+        defaultReasoningId: "default",
+        supportsSpeed: false,
+        supportsMode: true,
+      },
+    ];
+    const cacheOpenCodeModelCatalog = mock(async (_projectId: string, models: unknown[]) => ({
+      schemaVersion: 2,
+      projectId: "project-1",
+      catalogVersion: "v2",
+      updatedAt: "2026-08-14T00:00:00.000Z",
+      models,
+    }));
+    const context = contextWithStorage({
+      getEnvironment: mock(async () => ({
+        id: "env-1",
+        projectId: "project-1",
+        environmentType: "containerized",
+        containerId: "assigned-container",
+      })),
+      getAgentModelCatalogCache: mock(async () => ({ schemaVersion: 1 as const })),
+      getOpenCodeModelCatalog: mock(async () => null),
+      cacheOpenCodeModelCatalog,
+      loadConfig: mock(async () => ({
+        global: { openCodeModelProviders: ["opencode"] },
+      })),
+    });
+    (context as unknown as { nativeAgents: unknown }).nativeAgents = {
+      // The real service uses the provider's backend-only raw catalogue here;
+      // picker responses remain filtered below in the command.
+      listModelCatalogForCache: mock(async () => liveModels),
+    };
+
+    const health = await startHealthServer();
+    process.env.FAKE_DOCKER_PORT = String(health.port);
+    process.env.FAKE_OPENCODE_TOKEN = "t".repeat(43);
+    try {
+      const models = await invoke(
+        "get_native_agent_model_catalog",
+        { environmentId: "env-1" },
+        context,
+      ) as Array<{ id: string }>;
+
+      // The response is narrowed to the configured provider...
+      expect(models.map((model) => model.id)).toEqual(["opencode/claude-sonnet-5"]);
+    } finally {
+      delete process.env.FAKE_DOCKER_PORT;
+      delete process.env.FAKE_OPENCODE_TOKEN;
+      await health.close();
+    }
+
+    // ...but the durable cache keeps every provider the server reported.
+    // Persisting the narrowed list would make the allowlist durable, so
+    // re-adding `openrouter` later would leave the launch dialogs — which read
+    // this cache before any OpenCode server is ready — missing it until an
+    // environment happened to run and re-list.
+    expect(cacheOpenCodeModelCatalog).toHaveBeenCalledTimes(1);
+    const [, persisted] = cacheOpenCodeModelCatalog.mock.calls[0]!;
+    expect((persisted as Array<{ id: string }>).map((model) => model.id)).toEqual([
+      "opencode/claude-sonnet-5",
+      "openrouter/kimi-k2.5",
+    ]);
   });
 
   test("validates and delegates host agent model catalogue writes", async () => {

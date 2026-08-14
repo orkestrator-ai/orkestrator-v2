@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/select";
 import { useConfigStore } from "@/stores";
 import * as backend from "@/lib/backend";
-import { Loader2, Eye, EyeOff, Key, Github, CheckCircle2, XCircle, AlertCircle, Code2, Check, Terminal, Bot, FolderOpen, ExternalLink, Globe2, WifiOff, Copy, RefreshCw, RotateCcw } from "lucide-react";
+import { Loader2, Eye, EyeOff, Key, Github, CheckCircle2, XCircle, AlertCircle, Code2, Check, Terminal, Bot, Boxes, FolderOpen, ExternalLink, Globe2, WifiOff, Copy, RefreshCw, RotateCcw, X } from "lucide-react";
 import { AgentIcon } from "@/components/agents/AgentRadioGroup";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
@@ -65,9 +65,25 @@ import {
   AGENT_PLATFORM_LABELS,
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
+import {
+  DEFAULT_OPENCODE_MODEL_PROVIDERS,
+  MAX_OPENCODE_MODEL_PROVIDERS,
+  normalizeOpenCodeModelProviders,
+} from "@orkestrator/protocol/native-agent";
 
 // Domain validation regex
 const DOMAIN_REGEX = /^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
+
+// OpenCode provider ids are slug-like (`opencode`, `opencode-go`, `openrouter`).
+// A model id pasted whole would silently match nothing, so `/` is rejected.
+const OPENCODE_PROVIDER_ID_REGEX = /^[a-z0-9]+(?:[-_.][a-z0-9]+)*$/;
+
+function isDefaultOpenCodeProviderList(providers: readonly string[]): boolean {
+  return providers.length === DEFAULT_OPENCODE_MODEL_PROVIDERS.length
+    && providers.every((provider, index) =>
+      provider === DEFAULT_OPENCODE_MODEL_PROVIDERS[index]
+    );
+}
 const DEFAULT_CODEX_MAX_CONCURRENT_THREADS = 5;
 // Codex V2 adds the root conversation to this child-only limit.
 const MAX_CODEX_CONCURRENT_THREADS = Number.MAX_SAFE_INTEGER - 1;
@@ -120,6 +136,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [opencodeMode, setOpencodeMode] = useState<OpenCodeMode>(
     global.opencodeMode || "terminal"
   );
+  const [openCodeModelProviders, setOpenCodeModelProviders] = useState<string[]>(
+    () => normalizeOpenCodeModelProviders(global.openCodeModelProviders)
+  );
+  const [openCodeProviderDraft, setOpenCodeProviderDraft] = useState("");
   const [claudeMode, setClaudeMode] = useState<ClaudeMode>(
     global.claudeMode || "terminal"
   );
@@ -213,6 +233,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setEnabledAgentPlatforms(global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]);
     setOpencodeModel(global.opencodeModel || "opencode/claude-sonnet-5");
     setOpencodeMode(global.opencodeMode || "terminal");
+    setOpenCodeModelProviders(
+      normalizeOpenCodeModelProviders(global.openCodeModelProviders),
+    );
+    setOpenCodeProviderDraft("");
     setClaudeMode(global.claudeMode || "terminal");
     setClaudeNativeBackend(global.claudeNativeBackend || "sdk");
     setClaudeNativeFastModeDefault(global.claudeNativeFastModeDefault ?? false);
@@ -315,6 +339,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       defaultAgent !== (global.defaultAgent || "claude") ||
       opencodeModel !== (global.opencodeModel || "opencode/claude-sonnet-5") ||
       opencodeMode !== (global.opencodeMode || "terminal") ||
+      JSON.stringify(openCodeModelProviders)
+        !== JSON.stringify(normalizeOpenCodeModelProviders(global.openCodeModelProviders)) ||
       claudeMode !== (global.claudeMode || "terminal") ||
       claudeNativeBackend !== (global.claudeNativeBackend || "sdk") ||
       claudeNativeFastModeDefault !== (global.claudeNativeFastModeDefault ?? false) ||
@@ -336,7 +362,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     if (changed) {
       setSaveSuccess(false);
     }
-  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, cursorApiKey, clearCursorApiKey, useHostGitHubCredentials, useHostClaudeCredentials, githubToken, clearGithubToken, githubCredentialPropagationPending, allowedDomains, preferredEditor, enabledAgentPlatforms, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, codexMaxConcurrentThreads, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewInstruction, webClientApplyError, gatewayToken, savedGatewayToken, global]);
+  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, cursorApiKey, clearCursorApiKey, useHostGitHubCredentials, useHostClaudeCredentials, githubToken, clearGithubToken, githubCredentialPropagationPending, allowedDomains, preferredEditor, enabledAgentPlatforms, defaultAgent, opencodeModel, opencodeMode, openCodeModelProviders, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, codexMaxConcurrentThreads, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewInstruction, webClientApplyError, gatewayToken, savedGatewayToken, global]);
 
   // Validate domains on change
   const validateDomainsLocally = useCallback((domainsText: string) => {
@@ -433,6 +459,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
           | "max"
           | "ultra";
         opencodeMode: OpenCodeMode;
+        openCodeModelProviders: string[];
         claudeMode: ClaudeMode;
         claudeNativeBackend: ClaudeNativeBackend;
         claudeNativeFastModeDefault: boolean;
@@ -456,6 +483,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         favoriteModels: global.favoriteModels ?? [],
         defaultAgent,
         opencodeModel,
+        openCodeModelProviders: normalizeOpenCodeModelProviders(openCodeModelProviders),
         claudeModel: global.claudeModel || "claude-sonnet-5",
         codexModel: global.codexModel || "gpt-5.4",
         codexReasoningEffort: global.codexReasoningEffort || "medium",
@@ -630,6 +658,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setDefaultAgent(global.defaultAgent || "claude");
     setOpencodeModel(global.opencodeModel || "opencode/claude-sonnet-5");
     setOpencodeMode(global.opencodeMode || "terminal");
+    setOpenCodeModelProviders(
+      normalizeOpenCodeModelProviders(global.openCodeModelProviders),
+    );
+    setOpenCodeProviderDraft("");
     setClaudeMode(global.claudeMode || "terminal");
     setClaudeNativeBackend(global.claudeNativeBackend || "sdk");
     setClaudeNativeFastModeDefault(global.claudeNativeFastModeDefault ?? false);
@@ -1243,10 +1275,138 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     </div>
   );
 
-  const renderOpenCode = () => renderModeToggle(
-    opencodeMode,
-    setOpencodeMode,
-    "Choose how OpenCode runs in environments",
+  const openCodeProviderDraftId = openCodeProviderDraft.trim().toLowerCase();
+  const openCodeProviderDraftError = !openCodeProviderDraftId
+    ? null
+    : openCodeModelProviders.includes(openCodeProviderDraftId)
+      ? "That provider is already in the list."
+      : !OPENCODE_PROVIDER_ID_REGEX.test(openCodeProviderDraftId)
+        ? "Use the provider id, for example \"openrouter\"."
+        : openCodeModelProviders.length >= MAX_OPENCODE_MODEL_PROVIDERS
+          ? `At most ${MAX_OPENCODE_MODEL_PROVIDERS} providers.`
+          : null;
+  const canAddOpenCodeProvider = Boolean(openCodeProviderDraftId)
+    && !openCodeProviderDraftError;
+
+  const addOpenCodeProvider = () => {
+    if (!canAddOpenCodeProvider) return;
+    setOpenCodeModelProviders((current) => [...current, openCodeProviderDraftId]);
+    setOpenCodeProviderDraft("");
+  };
+
+  const renderOpenCode = () => (
+    <div className="max-w-2xl space-y-8">
+      {renderModeToggle(
+        opencodeMode,
+        setOpencodeMode,
+        "Choose how OpenCode runs in environments",
+      )}
+
+      <div className="space-y-3">
+        <div>
+          <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <Boxes className="h-4 w-4" />
+            Model Providers
+          </h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Only models from these OpenCode providers appear in model pickers.
+            Filtering happens before the catalog reaches the app, so excluded
+            providers are never loaded.
+          </p>
+        </div>
+
+        {openCodeModelProviders.length > 0 ? (
+          <ul className="space-y-2">
+            {openCodeModelProviders.map((provider) => (
+              <li
+                key={provider}
+                className="flex items-center justify-between gap-3 rounded-lg bg-zinc-900 px-3 py-2"
+              >
+                <span className="font-mono text-sm text-foreground">{provider}</span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  aria-label={`Remove ${provider} provider`}
+                  onClick={() =>
+                    setOpenCodeModelProviders((current) =>
+                      current.filter((candidate) => candidate !== provider),
+                    )}
+                  className="h-7 px-2 text-muted-foreground hover:text-destructive"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-500">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              No providers selected, so every provider OpenCode advertises is
+              offered. That can be several thousand models.
+            </span>
+          </p>
+        )}
+
+        <div className="space-y-1.5">
+          <Label htmlFor="opencode-provider" className="text-xs text-muted-foreground">
+            Add a provider
+          </Label>
+          <div className="flex gap-2">
+            <Input
+              id="opencode-provider"
+              value={openCodeProviderDraft}
+              onChange={(event) => setOpenCodeProviderDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                // The settings pane is inside a form-like layout; Enter here
+                // means "add this provider", not "save everything".
+                event.preventDefault();
+                addOpenCodeProvider();
+              }}
+              placeholder="provider id, e.g. openrouter"
+              spellCheck={false}
+              autoComplete="off"
+              aria-invalid={openCodeProviderDraftError ? true : undefined}
+              aria-describedby={
+                openCodeProviderDraftError ? "opencode-provider-error" : undefined
+              }
+              className="font-mono"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              onClick={addOpenCodeProvider}
+              disabled={!canAddOpenCodeProvider}
+            >
+              Add
+            </Button>
+          </div>
+          {openCodeProviderDraftError && (
+            <p id="opencode-provider-error" className="text-xs text-destructive">
+              {openCodeProviderDraftError}
+            </p>
+          )}
+        </div>
+
+        {!isDefaultOpenCodeProviderList(openCodeModelProviders) && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setOpenCodeModelProviders([...DEFAULT_OPENCODE_MODEL_PROVIDERS]);
+              setOpenCodeProviderDraft("");
+            }}
+            className="h-7 px-2 text-xs text-muted-foreground"
+          >
+            <RotateCcw className="mr-1.5 h-3 w-3" />
+            Reset to defaults
+          </Button>
+        )}
+      </div>
+    </div>
   );
 
   const renderCursor = () => (

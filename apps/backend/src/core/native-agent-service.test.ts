@@ -81,6 +81,8 @@ function createProviderStub(
     interactiveSnapshot?: (
       sessionId: string,
     ) => Promise<ProviderInteractiveSnapshot>;
+    modelCatalog?: NativeAgentRuntimeProvider["modelCatalog"];
+    rawModelCatalog?: NativeAgentRuntimeProvider["rawModelCatalog"];
     abort?: (sessionId: string) => Promise<void>;
     stopBackgroundTask?: NativeAgentRuntimeProvider["stopBackgroundTask"];
     dismissSuggestedPrompt?: NativeAgentRuntimeProvider["dismissSuggestedPrompt"];
@@ -109,6 +111,12 @@ function createProviderStub(
   const interactiveSnapshot = behaviour.interactiveSnapshot
     ? mock(behaviour.interactiveSnapshot)
     : undefined;
+  const modelCatalog = behaviour.modelCatalog
+    ? mock(behaviour.modelCatalog)
+    : undefined;
+  const rawModelCatalog = behaviour.rawModelCatalog
+    ? mock(behaviour.rawModelCatalog)
+    : undefined;
   const updateInteractiveControls = behaviour.updateInteractiveControls
     ? mock(behaviour.updateInteractiveControls)
     : undefined;
@@ -126,6 +134,8 @@ function createProviderStub(
     interactions: behaviour.interactions,
     messages: behaviour.messages ?? (async () => []),
     interactiveSnapshot,
+    modelCatalog,
+    rawModelCatalog,
     updateInteractiveControls,
     slashCommands,
     structured: async () => null,
@@ -146,6 +156,8 @@ function createProviderStub(
     stopBackgroundTask,
     dismissSuggestedPrompt,
     interactiveSnapshot,
+    modelCatalog,
+    rawModelCatalog,
     updateInteractiveControls,
     slashCommands,
     dispose,
@@ -467,6 +479,30 @@ function activePipeline(
 }
 
 describe("NativeAgentService", () => {
+  test("uses the provider's raw OpenCode catalogue for durable cache refreshes", async () => {
+    const filtered = [{ platform: "opencode" as const, id: "opencode/a", label: "A" }];
+    const raw = [
+      ...filtered,
+      { platform: "opencode" as const, id: "openrouter/b", label: "B" },
+    ];
+    const stub = createProviderStub("opencode", {
+      modelCatalog: async () => filtered,
+      rawModelCatalog: async () => raw,
+    });
+    await withService({
+      prefix: "orkestrator-native-catalog-cache-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      await expect(service.listModelCatalogForCache({
+        environmentId: "env-1",
+        agent: "opencode",
+        logicalSessionKey: "model-catalog:env-1",
+      })).resolves.toEqual(raw);
+      expect(stub.rawModelCatalog).toHaveBeenCalledTimes(1);
+      expect(stub.modelCatalog).not.toHaveBeenCalled();
+    });
+  });
+
   test("projects authoritative interactive state with stable revisions and inactive refresh", async () => {
     let now = 10_000;
     let providerRevision = 4;

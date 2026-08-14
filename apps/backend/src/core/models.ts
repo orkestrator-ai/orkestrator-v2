@@ -651,6 +651,12 @@ export interface AppConfig {
       | "max"
       | "ultra";
     opencodeMode: OpenCodeMode;
+    /**
+     * OpenCode provider catalogues offered in model pickers. Filtering happens
+     * in the backend so the renderer never receives the full OpenCode
+     * catalogue. An empty list means unrestricted.
+     */
+    openCodeModelProviders?: string[];
     claudeMode: ClaudeMode;
     claudeNativeBackend: ClaudeNativeBackend;
     claudeNativeFastModeDefault?: boolean;

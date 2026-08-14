@@ -48,7 +48,14 @@ import type {
   NativeAgentSlashCommand,
   NativeAgentTurnPhase,
 } from "@orkestrator/protocol/native-agent";
-import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
+import {
+  DEFAULT_OPENCODE_MODEL_PROVIDERS,
+  EMPTY_NATIVE_AGENT_COMPOSER_STATE,
+  isSelectableOpenCodeModelId,
+  isSelectableOpenCodeProvider,
+  normalizeOpenCodeModelProviders,
+  openCodeModelProvidersKey,
+} from "@orkestrator/protocol/native-agent";
 import {
   parseLeadingSlashCommand,
   type ParsedSlashCommand,
@@ -494,6 +501,13 @@ export interface BuildPipelineProvider {
 export interface NativeAgentRuntimeProvider extends BuildPipelineProvider {
   /** Live, bounded model discovery for launch surfaces without a session yet. */
   modelCatalog?(): Promise<AgentModel[]>;
+  /**
+   * Backend-only bounded discovery for the durable OpenCode cache. Unlike
+   * `modelCatalog`, this retains an unfiltered bounded source catalogue so a
+   * later allowlist expansion can work before another bridge is started. It
+   * must never be returned directly to a renderer.
+   */
+  rawModelCatalog?(): Promise<AgentModel[]>;
   interactiveSnapshot?(sessionId: string): Promise<ProviderInteractiveSnapshot>;
   updateInteractiveControls?(
     sessionId: string,
@@ -562,6 +576,15 @@ export type ProviderDependencies = {
   onInteractionObservation?: (
     event: ProviderInteractionObservationEvent,
   ) => void | Promise<void>;
+  /**
+   * Resolve the OpenCode provider allowlist for the model catalogue. Filtering
+   * happens here, in the backend, so the renderer is never sent the thousands
+   * of models OpenCode advertises. Omitted means the default managed pair.
+   */
+  resolveOpenCodeModelProviders?: () =>
+    | readonly string[]
+    | undefined
+    | Promise<readonly string[] | undefined>;
 };
 
 const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 30_000;
@@ -683,13 +706,27 @@ function openCodeCatalogDefault(value: unknown): {
   };
 }
 
-function normalizeOpenCodeComposerCatalog(value: unknown): {
+function normalizeOpenCodeComposerCatalog(
+  value: unknown,
+  allowedProviders: readonly string[] = DEFAULT_OPENCODE_MODEL_PROVIDERS,
+): {
   models: AgentModel[];
   selectedModelId?: string;
   selectedReasoningId?: string;
 } {
   const models: AgentModel[] = [];
-  for (const provider of openCodeCatalogProviders(value).slice(0, 128)) {
+  // Reject the provider before either cap is applied. OpenCode advertises
+  // thousands of models across every provider it knows about, so an excluded
+  // provider allowed to consume the 128-provider or 512-model budget pushes the
+  // selectable catalogues out of the picker entirely.
+  const selectableProviders = openCodeCatalogProviders(value)
+    .filter((provider) => {
+      const providerId = nonEmptyString(provider.id);
+      return providerId !== null
+        && isSelectableOpenCodeProvider(providerId, allowedProviders);
+    })
+    .slice(0, 128);
+  for (const provider of selectableProviders) {
     const providerId = nonEmptyString(provider.id);
     if (!providerId) continue;
     for (const model of openCodeProviderModels(provider.models).slice(0, 512)) {
@@ -738,10 +775,17 @@ function normalizeOpenCodeComposerCatalog(value: unknown): {
     if (models.length >= 512) break;
   }
   const defaults = openCodeCatalogDefault(value);
+  // OpenCode's own default may name a provider the user excluded. Surfacing it
+  // would pre-select a model the picker cannot show, so it is dropped with the
+  // rest of that provider's catalogue.
+  const selectedModelId = defaults.modelId
+    && isSelectableOpenCodeModelId(defaults.modelId, allowedProviders)
+    ? defaults.modelId
+    : undefined;
   return {
     models,
-    ...(defaults.modelId ? { selectedModelId: defaults.modelId } : {}),
-    ...(defaults.reasoningId
+    ...(selectedModelId ? { selectedModelId } : {}),
+    ...(selectedModelId && defaults.reasoningId
       ? { selectedReasoningId: defaults.reasoningId }
       : {}),
   };
@@ -3408,6 +3452,10 @@ class OpenCodeProvider implements BuildPipelineProvider {
   private readonly sessionExistenceRetryAt = new Map<string, number>();
   private readonly interactiveMetadata = new Map<string, {
     expiresAt: number;
+    /** This entry embeds a filtered catalogue, so it carries the same allowlist
+     * key as `catalogMetadata`. Without it a composer read served from this
+     * cache would keep the pre-edit catalogue for a whole TTL. */
+    providersKey: string;
     executionProfiles: NonNullable<NativeAgentComposerState["executionProfiles"]>;
     runtime: NativeAgentRuntimeSummary;
     models: AgentModel[];
@@ -3418,6 +3466,9 @@ class OpenCodeProvider implements BuildPipelineProvider {
   }>();
   private catalogMetadata: {
     expiresAt: number;
+    /** The allowlist this catalogue was filtered against; a settings edit
+     * changes it and must not be served a stale, differently-filtered list. */
+    providersKey: string;
     catalog: ReturnType<typeof normalizeOpenCodeComposerCatalog>;
   } | null = null;
   private commandNames: { names: Set<string>; expiresAt: number } | null = null;
@@ -3438,6 +3489,10 @@ class OpenCodeProvider implements BuildPipelineProvider {
   private readonly onInteractionObservation?: (
     event: ProviderInteractionObservationEvent,
   ) => void | Promise<void>;
+  private readonly resolveOpenCodeModelProviders?: () =>
+    | readonly string[]
+    | undefined
+    | Promise<readonly string[] | undefined>;
 
   constructor(
     private readonly connection: BridgeConnection,
@@ -3467,6 +3522,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
     );
     this.autoAnswerRequests = dependencies.autoAnswerRequests === true;
     this.onInteractionObservation = dependencies.onInteractionObservation;
+    this.resolveOpenCodeModelProviders = dependencies.resolveOpenCodeModelProviders;
     // An interactive provider has nothing to monitor: every request belongs to a
     // tab that will answer it. Subscribing anyway would open a permanent event
     // stream per provider for no consumer.
@@ -3508,10 +3564,17 @@ class OpenCodeProvider implements BuildPipelineProvider {
     ) => Promise<unknown>).call(owner, parameters, this.requestOptions());
   }
 
-  private async readComposerCatalog(): Promise<
+  private async readComposerCatalog(
+    allowedProviders: readonly string[],
+  ): Promise<
     ReturnType<typeof normalizeOpenCodeComposerCatalog>
   > {
-    if (this.catalogMetadata && this.catalogMetadata.expiresAt > Date.now()) {
+    const providersKey = openCodeModelProvidersKey(allowedProviders);
+    if (
+      this.catalogMetadata
+      && this.catalogMetadata.expiresAt > Date.now()
+      && this.catalogMetadata.providersKey === providersKey
+    ) {
       return this.catalogMetadata.catalog;
     }
     const [providerResult, fallbackResult] = await Promise.allSettled([
@@ -3520,19 +3583,52 @@ class OpenCodeProvider implements BuildPipelineProvider {
     ]);
     const payload = (result: PromiseSettledResult<unknown>): unknown =>
       result.status === "fulfilled" ? asRecord(result.value)?.data ?? {} : {};
-    const live = normalizeOpenCodeComposerCatalog(payload(providerResult));
+    const live = normalizeOpenCodeComposerCatalog(
+      payload(providerResult),
+      allowedProviders,
+    );
     const catalog = live.models.length > 0
       ? live
-      : normalizeOpenCodeComposerCatalog(payload(fallbackResult));
+      : normalizeOpenCodeComposerCatalog(
+          payload(fallbackResult),
+          allowedProviders,
+        );
     this.catalogMetadata = {
       expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+      providersKey,
       catalog,
     };
     return catalog;
   }
 
+  /**
+   * The configured allowlist, or the managed default when config is
+   * unavailable. A failed read must not widen the catalogue to every provider.
+   */
+  private async openCodeModelProviders(): Promise<readonly string[]> {
+    if (!this.resolveOpenCodeModelProviders) {
+      return DEFAULT_OPENCODE_MODEL_PROVIDERS;
+    }
+    try {
+      return normalizeOpenCodeModelProviders(
+        await this.resolveOpenCodeModelProviders(),
+      );
+    } catch {
+      return DEFAULT_OPENCODE_MODEL_PROVIDERS;
+    }
+  }
+
   async modelCatalog(): Promise<AgentModel[]> {
-    return (await this.readComposerCatalog()).models;
+    return (await this.readComposerCatalog(
+      await this.openCodeModelProviders(),
+    )).models;
+  }
+
+  async rawModelCatalog(): Promise<AgentModel[]> {
+    // The empty allowlist has the documented provider-filter meaning of
+    // unrestricted, while `normalizeOpenCodeComposerCatalog` still enforces
+    // its provider/model bounds before this reaches persistent storage.
+    return (await this.readComposerCatalog([])).models;
   }
 
   private async monitorRequests(): Promise<void> {
@@ -4712,8 +4808,19 @@ class OpenCodeProvider implements BuildPipelineProvider {
     title?: string;
     shareUrl?: string | null;
   }> {
+    // Resolved before the cache is consulted: this entry carries a catalogue
+    // filtered against a specific allowlist, and a settings edit must invalidate
+    // it here as well as in `readComposerCatalog`.
+    const allowedProviders = await this.openCodeModelProviders();
+    const providersKey = openCodeModelProvidersKey(allowedProviders);
     const cached = this.interactiveMetadata.get(sessionId);
-    if (cached && cached.expiresAt > Date.now()) return cached;
+    if (
+      cached
+      && cached.expiresAt > Date.now()
+      && cached.providersKey === providersKey
+    ) {
+      return cached;
+    }
 
     const directory = this.connection.directory;
     const results = await Promise.allSettled([
@@ -4725,7 +4832,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
       this.optionalSdkCall("session", "todo", { sessionID: sessionId, directory }),
       this.optionalSdkCall("session", "diff", { sessionID: sessionId, directory }),
       this.optionalSdkCall("session", "get", { sessionID: sessionId, directory }),
-      this.readComposerCatalog(),
+      this.readComposerCatalog(allowedProviders),
     ]);
     const data = (index: number, fallback: unknown): unknown => {
       const result = results[index];
@@ -4774,6 +4881,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
       : { models: [] };
     const entry = {
       expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+      providersKey,
       executionProfiles,
       runtime,
       models: catalog.models,

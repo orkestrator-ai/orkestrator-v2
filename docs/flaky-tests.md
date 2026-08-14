@@ -394,6 +394,14 @@ history rather than two partial ones.
 - **Evidence:** the preceding output shows `spawn ... ENOENT` from `apps/backend/src/core/tmux.ts:331`. The affected files pass in isolation (`bun test tests/unit/electron/{tmux-backend,commands,backend-process,commands-io-coverage}.test.ts --parallel` -> 564 passed, 1 skipped, 0 failed in 66.95 s), and a fresh `origin/main` worktree reproduces the same shape, so this is not attributable to any working change.
 - **Guidance:** do not record a new flake entry for these unless they fail on a host where `tmux` is installed and the root group runs in its normal time.
 
+## Environmental, not flaky: the iOS group when two worktrees build concurrently
+
+- **Status:** environmental; not a product or test defect
+- **Date observed:** 2026-08-14
+- **Observation:** `bun run test` on branch `missing-tool-calls` exited 65 with the iOS group as the only failing group. No Swift test ran and no test name is attributable — `xcodebuild` failed before the test bundle launched.
+- **Evidence:** the failure is `unable to attach DB: error: accessing build database "/private/var/folders/.../T/orkestrator-mobile-test-derived/Build/Intermediates.noindex/XCBuildData/build.db": database is locked Possibly there are two concurrent builds running in the same filesystem location.`, followed by `Testing cancelled because the build failed.` and `** TEST FAILED **`. `scripts/test-ios.ts:15-16` defaults derived data to `$TMPDIR/orkestrator-mobile-test-derived`, a machine-global path shared by every worktree, and there are ~35 sibling worktrees under `~/orkestrator-v2/workspaces/`. An immediate isolated rerun of `bun run test:ios` passed: `Executed 40 tests, with 0 failures (0 unexpected) in 0.163 seconds`, `** TEST SUCCEEDED **`. The four JS/TS groups in the same aggregate all passed live with the Turbo cache cleared (13,910 passed, 13 skipped, 0 failed), and the change under test touches no iOS or Swift code.
+- **Guidance:** do not record a new flake entry for an iOS group failure whose message is `database is locked`. Rerun `bun run test:ios` alone, and only investigate if it fails with no other build running against `$TMPDIR/orkestrator-mobile-test-derived`. A durable fix would give each worktree its own derived-data path.
+
 ## Final validation
 
 The `bun run test` verification runs recorded for the fixes above:

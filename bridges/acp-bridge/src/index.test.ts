@@ -2298,10 +2298,15 @@ describe("ACP bridge", () => {
       };
       const user = transcript.messages.find((message) => message.role === "user");
       const filePart = user?.parts.find((part) => part.type === "file");
+      // The encoded basename is pinned literally rather than recomputed with
+      // `pathToFileURL`: restating the implementation would still pass against
+      // the `file://${path}` template this replaced, which leaves `#` parsing as
+      // a fragment and resolves the preview to the wrong file or none at all.
+      // Only the temporary directory is derived, since it varies per run.
       expect(filePart).toEqual({
         type: "file",
         content: filename,
-        fileUrl: pathToFileURL(imagePath).href,
+        fileUrl: `${pathToFileURL(workspace).href}/screen%20%231%3F.png`,
         sourcePartId: expect.any(String),
         sourceMessageId: expect.any(String),
       });
@@ -2317,6 +2322,62 @@ describe("ACP bridge", () => {
         .toContainEqual(filePart);
     });
   }
+
+  test("dispatches an image-only prompt and indexes every attachment part", async () => {
+    const workspace = await temporaryDirectory();
+    const blocksFile = resolve(workspace, "prompt-blocks.log");
+    await fs.writeFile(resolve(workspace, "first.png"), ONE_PIXEL_PNG);
+    await fs.writeFile(resolve(workspace, "second.png"), ONE_PIXEL_PNG);
+    const { base, headers } = await spawnBridge({ env: {
+      CWD: workspace,
+      FAKE_ACP_PROMPT_BLOCKS_FILE: blocksFile,
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    const dispatched = await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        // Attaching a picture with no message at all is a normal send, so an
+        // empty prompt with attachments must not be refused as an empty turn.
+        prompt: "",
+        requestId: "image-only-1",
+        attachments: [
+          { type: "image", path: "first.png", filename: "first.png" },
+          { type: "image", path: "second.png", filename: "second.png" },
+        ],
+      }),
+    });
+    expect(dispatched.status).toBe(202);
+    await waitFor(
+      () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{ status: string }>,
+      (session) => session.status === "idle",
+    );
+
+    const blocks = JSON.parse((await fs.readFile(blocksFile, "utf8")).trim()) as Array<{
+      type: string;
+    }>;
+    // No empty text block: an agent handed `{ type: "text", text: "" }` can read
+    // it as an instruction, and both agents accept an image-only prompt.
+    expect(blocks.map((block) => block.type)).toEqual(["image", "image"]);
+
+    const user = await nativeFetch(`${base}/session/${created.id}`, { headers })
+      .then((response) => response.json())
+      .then((session) => (session as {
+        messages: Array<{ role: string; content: string; parts: Array<Record<string, unknown>> }>;
+      }).messages.find((message) => message.role === "user"));
+    expect(user?.content).toBe("");
+    expect(user?.parts.map((part) => part.type)).toEqual(["file", "file"]);
+    expect(user?.parts.map((part) => part.content)).toEqual(["first.png", "second.png"]);
+    // Part ids stay one-based across the attachments so the second image cannot
+    // reuse the id the text part would have taken.
+    const messageId = user?.parts[0]?.sourceMessageId;
+    expect(typeof messageId).toBe("string");
+    expect(user?.parts.map((part) => part.sourcePartId))
+      .toEqual([`${messageId}:1`, `${messageId}:2`]);
+  });
 
   test("refuses attachments the bridge cannot safely read and leaves the turn dispatchable", async () => {
     const workspace = await temporaryDirectory();

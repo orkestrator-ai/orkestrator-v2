@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import { resolve } from "node:path";
 import {
+  assertStableRead,
   MAX_IMAGE_ATTACHMENT_BYTES,
   MAX_PROMPT_ATTACHMENTS,
   parsePromptAttachments,
@@ -138,19 +139,6 @@ describe("readPromptImages", () => {
       .rejects.toThrow(PromptAttachmentError);
   });
 
-  test("refuses an image that changes after its opened handle is validated", async () => {
-    const root = await workspace();
-    const imagePath = resolve(root, "changing.png");
-    await fs.writeFile(imagePath, ONE_PIXEL_PNG);
-
-    await expect(readPromptImages([image("changing.png")], root, {
-      afterInitialValidation: async (absolutePath) => {
-        expect(absolutePath).toBe(imagePath);
-        await fs.writeFile(absolutePath, Buffer.concat([ONE_PIXEL_PNG, Buffer.from("changed")]));
-      },
-    })).rejects.toThrow("changed while it was being read");
-  });
-
   test("bounds the total bytes one prompt can carry", async () => {
     const root = await workspace();
     const large = Buffer.concat([
@@ -164,5 +152,40 @@ describe("readPromptImages", () => {
       Array.from({ length: 5 }, (_, index) => image(`large-${index}.png`)),
       root,
     )).rejects.toThrow("32MB");
+  });
+});
+
+describe("assertStableRead", () => {
+  const identity = { dev: 1, ino: 2, size: 64, mtimeMs: 1_000, ctimeMs: 1_000 };
+
+  test("accepts a file whose identity and length survived the read", () => {
+    expect(() => assertStableRead(identity, { ...identity }, 64)).not.toThrow();
+  });
+
+  test("refuses every way a file can move under an in-flight read", () => {
+    // Each of these is a real swap the opened handle cannot see by itself: the
+    // bytes already read would be sent as an image the file no longer contains.
+    const cases = [
+      ["replaced on another device", { ...identity, dev: 9 }, 64],
+      ["replaced by a new inode", { ...identity, ino: 9 }, 64],
+      ["rewritten at a different length", { ...identity, size: 128 }, 64],
+      ["rewritten in place", { ...identity, mtimeMs: 2_000 }, 64],
+      ["relinked without a content change", { ...identity, ctimeMs: 2_000 }, 64],
+      ["read short of the length it reports", { ...identity }, 32],
+    ] as const;
+
+    // Labelled outcomes rather than a bare loop of `toThrow`, so a regression
+    // names the case that stopped rejecting instead of a line number.
+    expect(cases.map(([label, final, bytesRead]) => {
+      try {
+        assertStableRead(identity, final, bytesRead);
+        return [label, "accepted"];
+      } catch (error) {
+        return [
+          label,
+          error instanceof PromptAttachmentError ? error.code : "unexpected error",
+        ];
+      }
+    })).toEqual(cases.map(([label]) => [label, "attachment_changed"]));
   });
 });

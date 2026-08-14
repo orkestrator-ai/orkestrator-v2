@@ -246,6 +246,14 @@ lines.on("line", (line) => {
         `${JSON.stringify(params?.prompt ?? [])}\n`,
       );
     }
+    // An image-only prompt carries no text block, so none of the keyword
+    // branches below can match it. Ending the turn is what a real agent does;
+    // falling through would park it on a permission request and hide whatever
+    // blocks the bridge actually sent.
+    if (!params?.prompt?.some((block) => typeof block.text === "string")) {
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
     if (prompt.startsWith("DIRECT:")) {
       write({
         jsonrpc: "2.0",

@@ -1350,6 +1350,28 @@ async function resolvePromptAttachments(
   return attachments.length > 0 ? attachments : undefined;
 }
 
+/**
+ * Drop the staged `dataUrl` before an attachment reaches an ACP bridge.
+ *
+ * That bridge reads every attachment's bytes from the workspace itself and
+ * ignores `dataUrl`, but it caps a request body at 2MiB. Forwarding the data URL
+ * spends that whole budget on a copy the bridge discards, so a screenshot much
+ * over 1.5MB would come back as HTTP 413 — a terminal rejection of a prompt the
+ * bridge is perfectly able to read from disk. The Claude and Codex bridges do
+ * consume `dataUrl`, so this is deliberately scoped to the ACP agents.
+ */
+function bridgePromptAttachments(
+  agent: HttpBridgeProvider["agent"],
+  attachments: PromptAttachment[] | undefined,
+): PromptAttachment[] | undefined {
+  if (!attachments || (agent !== "cursor" && agent !== "grok")) return attachments;
+  return attachments.map((attachment) => ({
+    type: attachment.type,
+    path: attachment.path,
+    ...(attachment.filename ? { filename: attachment.filename } : {}),
+  }));
+}
+
 class HttpBridgeProvider implements BuildPipelineProvider {
   readonly agent: "claude" | "codex" | "cursor" | "grok";
   private readonly stageImages?: ProviderDependencies["stageImages"];
@@ -1453,7 +1475,10 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       await this.ensureCodexMode(sessionId, options.mode);
       this.codexModes.set(sessionId, options.mode);
     }
-    const attachments = await resolvePromptAttachments(options, this.stageImages);
+    const attachments = bridgePromptAttachments(
+      this.agent,
+      await resolvePromptAttachments(options, this.stageImages),
+    );
     let response: Response;
     try {
       response = await bridgeFetch(

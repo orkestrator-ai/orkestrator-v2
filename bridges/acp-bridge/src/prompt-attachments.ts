@@ -128,19 +128,11 @@ export function parsePromptAttachments(value: unknown): AcpPromptAttachment[] {
 export async function readPromptImages(
   attachments: readonly AcpPromptAttachment[],
   workspaceRoot: string,
-  options: {
-    /** Test seam for deterministically exercising a file swapped during its read. */
-    afterInitialValidation?: (absolutePath: string) => void | Promise<void>;
-  } = {},
 ): Promise<AcpPromptImage[]> {
   const images: AcpPromptImage[] = [];
   let totalBytes = 0;
   for (const attachment of attachments) {
-    const { bytes, absolutePath } = await readWorkspaceImage(
-      attachment.path,
-      workspaceRoot,
-      options.afterInitialValidation,
-    );
+    const { bytes, absolutePath } = await readWorkspaceImage(attachment.path, workspaceRoot);
     totalBytes += bytes.length;
     if (totalBytes > MAX_TOTAL_IMAGE_ATTACHMENT_BYTES) {
       throw new PromptAttachmentError(
@@ -267,10 +259,53 @@ async function assertOpenedWorkspaceFile(
   }
 }
 
+/**
+ * The identity a read must still hold when it finishes.
+ *
+ * Extracted from the read so the comparison itself is testable: reproducing a
+ * genuine mid-read swap from a test would mean racing the read loop, and a hook
+ * in this module to make that deterministic would put a test-only injection
+ * point inside the very window these checks exist to protect.
+ */
+export interface ReadIdentity {
+  dev: number;
+  ino: number;
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+}
+
+/**
+ * Reject a file that moved under the read.
+ *
+ * A short read counts too: `bytesRead` disagreeing with the size the file
+ * reports is the same corruption as a changed inode, and sending a truncated
+ * image is worse than refusing it, because a half-decoded picture reads to the
+ * user as the model misunderstanding what they attached.
+ */
+export function assertStableRead(
+  initial: ReadIdentity,
+  final: ReadIdentity,
+  bytesRead: number,
+): void {
+  if (
+    final.dev !== initial.dev
+    || final.ino !== initial.ino
+    || final.size !== initial.size
+    || final.size !== bytesRead
+    || final.mtimeMs !== initial.mtimeMs
+    || final.ctimeMs !== initial.ctimeMs
+  ) {
+    throw new PromptAttachmentError(
+      "attachment_changed",
+      "Image attachment changed while it was being read; attach it again",
+    );
+  }
+}
+
 async function readWorkspaceImage(
   filePath: string,
   workspaceRoot: string,
-  afterInitialValidation?: (absolutePath: string) => void | Promise<void>,
 ): Promise<{ bytes: Buffer; absolutePath: string }> {
   const lexicalRoot = resolve(workspaceRoot);
   const targetPath = isAbsolute(filePath)
@@ -306,7 +341,6 @@ async function readWorkspaceImage(
   try {
     const initialStats = await handle.stat();
     await assertOpenedWorkspaceFile(targetPath, canonicalRoot, initialStats);
-    await afterInitialValidation?.(targetPath);
     if (initialStats.size > MAX_IMAGE_ATTACHMENT_BYTES) {
       throw new PromptAttachmentError(
         "attachment_too_large",
@@ -336,19 +370,7 @@ async function readWorkspaceImage(
 
     const finalStats = await handle.stat();
     await assertOpenedWorkspaceFile(targetPath, canonicalRoot, finalStats);
-    if (
-      finalStats.dev !== initialStats.dev
-      || finalStats.ino !== initialStats.ino
-      || finalStats.size !== initialStats.size
-      || finalStats.size !== totalBytes
-      || finalStats.mtimeMs !== initialStats.mtimeMs
-      || finalStats.ctimeMs !== initialStats.ctimeMs
-    ) {
-      throw new PromptAttachmentError(
-        "attachment_changed",
-        "Image attachment changed while it was being read; attach it again",
-      );
-    }
+    assertStableRead(initialStats, finalStats, totalBytes);
     return { bytes: Buffer.concat(chunks, totalBytes), absolutePath: targetPath };
   } catch (error) {
     if (error instanceof PromptAttachmentError) throw error;

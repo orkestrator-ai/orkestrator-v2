@@ -432,7 +432,14 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
         if (event.key === "Enter" && !event.shiftKey) {
           // Enter confirms an active IME composition. It must remain available
           // to the browser and must not reach provider submit handlers.
-          if (event.nativeEvent.isComposing) return;
+          //
+          // `isComposing` alone is not enough. WebKit — Safari and the
+          // WKWebView the iOS app loads the UI in — fires `compositionend`
+          // *before* this keydown, so both `isComposing` and our own
+          // `isComposingRef` are already false on the keystroke that is still
+          // only confirming the candidate. `keyCode` 229 is the one signal
+          // every engine still sets there.
+          if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
           event.preventDefault();
           onKeyDown?.(event);
           return;

@@ -37,6 +37,12 @@ import type { FileMention } from "@/types";
 const RECONNECT_BASE_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 8_000;
 
+// ACP has no file-mention picker yet: this tab renders no mention menu and
+// never calls `insertMention`, so the compose bar's mention list is always
+// empty. A stable constant keeps `MentionableInput`'s content-sync effect from
+// seeing a new array identity on every render.
+const NO_MENTIONS: FileMention[] = [];
+
 function reconnectDelayMs(attempt: number): number {
   if (attempt <= 0) return 0;
   return Math.min(
@@ -56,7 +62,6 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
   const [client, setClient] = useState<AcpClient | null>(null);
   const [session, setSession] = useState<AcpSessionSnapshot | null>(null);
   const [draft, setDraft] = useState("");
-  const [mentions, setMentions] = useState<FileMention[]>([]);
   const [dispatching, setDispatching] = useState(false);
   const [approvals, setApprovals] = useState<AcpApproval[]>([]);
   const [connecting, setConnecting] = useState(true);
@@ -80,6 +85,11 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
   const dispatchingPrompt = useRef(false);
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
+  // Sending disables the compose input, and a disabled contenteditable is not
+  // focusable, so the browser drops the caret. Restore it when the dispatch
+  // settles, but only when the composer is what held focus in the first place:
+  // a mouse click on Send, or a dialog opened mid-flight, must keep its focus.
+  const restoreComposerFocus = useRef(false);
   const updateTabNativeSessionId = usePaneLayoutStore((state) => state.updateTabNativeSessionId);
   const clearTabInitialPrompt = usePaneLayoutStore((state) => state.clearTabInitialPrompt);
   const backendOwnsStartupPrompt = useEnvironmentStore((state) => {
@@ -234,9 +244,13 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
       ?? (pending?.prompt === prompt ? pending.requestId : crypto.randomUUID());
     if (!fixedRequestId) pendingManualRequest.current = { prompt, requestId };
     dispatchingPrompt.current = true;
+    restoreComposerFocus.current = Boolean(
+      inputContainerRef.current
+      && document.activeElement
+      && inputContainerRef.current.contains(document.activeElement),
+    );
     setDispatching(true);
     setDraft("");
-    setMentions([]);
     try {
       await dispatchNativeAgentPrompt({
         environmentId: data.environmentId,
@@ -260,6 +274,14 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
       setDispatching(false);
     }
   }, [client, data.environmentId, data.platform, label, refresh, session, sessionKey]);
+
+  // Runs after the render that re-enables the input, which is the earliest
+  // point a contenteditable is focusable again.
+  useEffect(() => {
+    if (dispatching || !restoreComposerFocus.current) return;
+    restoreComposerFocus.current = false;
+    inputRef.current?.focus();
+  }, [dispatching]);
 
   useEffect(() => {
     if (backendOwnsStartupPrompt && initialPrompt) {
@@ -356,18 +378,14 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
           inputRef={inputRef}
           inputContainerRef={inputContainerRef}
           text={draft}
-          mentions={mentions}
-          onTextAndMentionsChange={(text, nextMentions) => {
-            setDraft(text);
-            setMentions(nextMentions);
-          }}
+          mentions={NO_MENTIONS}
+          onTextAndMentionsChange={(text) => setDraft(text)}
           onCursorPositionChange={() => undefined}
           onKeyDown={(event) => {
-            if (
-              event.key !== "Enter"
-              || event.shiftKey
-              || event.nativeEvent.isComposing
-            ) return;
+            // MentionableInput owns the IME guard and never forwards an Enter
+            // that is confirming a composition, so re-checking it here would
+            // only risk drifting from the authoritative test.
+            if (event.key !== "Enter" || event.shiftKey) return;
             event.preventDefault();
             void submit(draft);
           }}

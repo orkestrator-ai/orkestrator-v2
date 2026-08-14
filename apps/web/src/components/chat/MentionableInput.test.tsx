@@ -488,6 +488,38 @@ describe("MentionableInput", () => {
     expect(onKeyDown).not.toHaveBeenCalled();
   });
 
+  // WebKit (Safari, and the WKWebView the iOS app loads this UI in) fires
+  // compositionend before the confirming keydown, so `isComposing` is already
+  // false and only keyCode 229 still identifies the keystroke as an IME
+  // confirmation rather than a submit.
+  test("leaves a WebKit composition-confirming Enter to the browser", () => {
+    const onKeyDown = mock(() => {});
+    const { container } = render(
+      <MentionableInput
+        value=""
+        mentions={[]}
+        onChange={() => {}}
+        onKeyDown={onKeyDown}
+      />,
+    );
+
+    const input = container.querySelector("[contenteditable]")!;
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+      isComposing: false,
+      keyCode: 229,
+    });
+    expect(event.isComposing).toBe(false);
+    expect(event.keyCode).toBe(229);
+
+    input.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(onKeyDown).not.toHaveBeenCalled();
+  });
+
   test("renders as non-editable when disabled", () => {
     const { container } = render(
       <MentionableInput

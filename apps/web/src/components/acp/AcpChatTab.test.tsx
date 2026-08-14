@@ -363,6 +363,20 @@ describe("AcpChatTab", () => {
     expect(composingEnter.defaultPrevented).toBe(false);
     expect(dispatchNativeAgentPrompt).not.toHaveBeenCalled();
 
+    // The WebKit shape: compositionend already fired, so only keyCode 229
+    // still marks this Enter as an IME confirmation. The tab delegates that
+    // judgement to MentionableInput, so it has to hold end to end.
+    const webkitComposingEnter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+      isComposing: false,
+      keyCode: 229,
+    });
+    compose.dispatchEvent(webkitComposingEnter);
+    expect(webkitComposingEnter.defaultPrevented).toBe(false);
+    expect(dispatchNativeAgentPrompt).not.toHaveBeenCalled();
+
     const enter = new KeyboardEvent("keydown", {
       key: "Enter",
       bubbles: true,
@@ -406,6 +420,130 @@ describe("AcpChatTab", () => {
     await waitFor(() => {
       expect(compose.getAttribute("contenteditable")).toBe("true");
     });
+  });
+
+  test("hands the draft back and unlocks the composer when a manual dispatch fails", async () => {
+    dispatchNativeAgentPrompt.mockImplementation(async () => {
+      throw new Error("dispatch rejected");
+    });
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const composeBar = await screen.findByTestId("acp-native-compose-bar");
+    const compose = getAcpPromptInput(composeBar);
+    compose.textContent = "Keep my words";
+    fireEvent.input(compose);
+
+    const send = screen.getByTitle("Send") as HTMLButtonElement;
+    fireEvent.click(send);
+
+    expect(await screen.findByText("dispatch rejected")).toBeTruthy();
+    // A failed send must return the prompt rather than eat it, and must not
+    // leave the composer locked behind the cleared `dispatching` flag.
+    await waitFor(() => expect(compose.textContent).toBe("Keep my words"));
+    expect(compose.getAttribute("contenteditable")).toBe("true");
+    expect((screen.getByTitle("Send") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  test("keeps the draft when Enter arrives while a turn is already running", async () => {
+    getAcpSession.mockImplementation(async () => ({
+      id: "persisted-session",
+      provider: "cursor" as const,
+      status: "running" as const,
+      messages: [],
+      baseIndex: 0,
+      revision: 1,
+    }));
+    getAcpMessageWindow.mockImplementation(async (_client, _sessionId, fromIndex) => ({
+      messages: [],
+      baseIndex: fromIndex,
+      totalMessages: fromIndex,
+      revision: 1,
+      status: "running" as const,
+    }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const composeBar = await screen.findByTestId("acp-native-compose-bar");
+    const compose = getAcpPromptInput(composeBar);
+    compose.textContent = "Not yet";
+    fireEvent.input(compose);
+
+    const enter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () => {
+      compose.dispatchEvent(enter);
+    });
+
+    // ACP has no prompt queue, so a mid-turn Enter is a no-op. The one thing it
+    // must never do is clear the draft it refused to send.
+    expect(dispatchNativeAgentPrompt).not.toHaveBeenCalled();
+    expect(compose.textContent).toBe("Not yet");
+    expect(screen.getByTitle("Stop current query")).toBeTruthy();
+    expect(screen.queryByTitle("Send")).toBeNull();
+  });
+
+  test("returns focus to the composer after a send that started there", async () => {
+    let acceptDispatch!: (value: { providerSessionId: string }) => void;
+    dispatchNativeAgentPrompt.mockImplementation(() => new Promise((resolve) => {
+      acceptDispatch = resolve;
+    }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const composeBar = await screen.findByTestId("acp-native-compose-bar");
+    const compose = getAcpPromptInput(composeBar);
+    compose.textContent = "Focus comes back";
+    fireEvent.input(compose);
+    compose.focus();
+    expect(document.activeElement).toBe(compose);
+
+    const enter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () => {
+      compose.dispatchEvent(enter);
+    });
+    await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalledTimes(1));
+
+    // A real browser drops the caret when contenteditable flips to false.
+    // happy-dom does not, so model it here — otherwise the assertion below
+    // would pass on focus that never moved.
+    expect(compose.getAttribute("contenteditable")).toBe("false");
+    compose.blur();
+    expect(document.activeElement).not.toBe(compose);
+
+    await act(async () => {
+      acceptDispatch({ providerSessionId: "persisted-session" });
+    });
+    await waitFor(() => expect(document.activeElement).toBe(compose));
+  });
+
+  test("does not pull focus back when the send started outside the composer", async () => {
+    let acceptDispatch!: (value: { providerSessionId: string }) => void;
+    dispatchNativeAgentPrompt.mockImplementation(() => new Promise((resolve) => {
+      acceptDispatch = resolve;
+    }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const composeBar = await screen.findByTestId("acp-native-compose-bar");
+    const compose = getAcpPromptInput(composeBar);
+    compose.textContent = "Sent by mouse";
+    fireEvent.input(compose);
+    compose.blur();
+    expect(document.activeElement).not.toBe(compose);
+
+    fireEvent.click(screen.getByTitle("Send"));
+    await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      acceptDispatch({ providerSessionId: "persisted-session" });
+    });
+    await waitFor(() => expect(compose.getAttribute("contenteditable")).toBe("true"));
+    // Restoring focus is only correct when the composer is what lost it.
+    expect(document.activeElement).not.toBe(compose);
   });
 
   test("rehydrates approvals, resolves them, and exposes cancellation and bridge errors", async () => {

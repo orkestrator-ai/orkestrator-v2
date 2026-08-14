@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { TerminalProvider } from "@/contexts";
 import type { AcpApproval, AcpMessageWindow, AcpSessionSnapshot } from "@/lib/acp-client";
 // The merge is pure and is the contract under test in several cases below, so
 // keep the real implementation and stub only the network calls around it.
@@ -231,6 +232,149 @@ describe("AcpChatTab", () => {
     expect(within(composeBar).getByRole("textbox", { name: "Message Grok Build" }))
       .toBeTruthy();
     expect(composeBar.querySelector("[data-native-compose-toolbar]")).toBeTruthy();
+  });
+
+  test("renders normalized ACP tool calls from the bridge snapshot", async () => {
+    getAcpSession.mockImplementation(async () => ({
+      id: "persisted-session",
+      provider: "cursor" as const,
+      status: "idle" as const,
+      messages: [{
+        id: "message-tools",
+        role: "assistant" as const,
+        content: "",
+        parts: [{
+          type: "tool-invocation" as const,
+          content: "Search for references",
+          sourcePartId: "tool:search-1",
+          sourceMessageId: "message-tools",
+          toolUseId: "search-1",
+          toolName: "search",
+          toolArgs: { pattern: "value" },
+          toolState: "success" as const,
+          toolTitle: "Search for references",
+          toolOutput: "3 matches",
+        }],
+        createdAt: "2026-08-13T00:00:00.000Z",
+      }],
+      baseIndex: 0,
+      revision: 4,
+    }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive />);
+
+    expect(await screen.findByText("Search")).toBeTruthy();
+    expect(screen.getByText("value")).toBeTruthy();
+    expect(screen.getByText("success")).toBeTruthy();
+  });
+
+  test("renders accurate combined ACP edit metadata from the bridge snapshot", async () => {
+    getAcpSession.mockImplementation(async () => ({
+      id: "persisted-session",
+      provider: "cursor" as const,
+      status: "idle" as const,
+      messages: [{
+        id: "message-edit",
+        role: "assistant" as const,
+        content: "",
+        parts: [{
+          type: "tool-invocation" as const,
+          content: "Edit two files",
+          sourcePartId: "tool:edit-1",
+          sourceMessageId: "message-edit",
+          toolUseId: "edit-1",
+          toolName: "edit",
+          toolState: "success" as const,
+          toolTitle: "Edit two files",
+          toolDiff: {
+            additions: 2,
+            deletions: 2,
+            diff: [
+              "--- src/first.ts",
+              "+++ src/first.ts",
+              "@@",
+              " keep",
+              "-old",
+              "+new",
+              "--- src/second.ts",
+              "+++ src/second.ts",
+              "@@",
+              "-before",
+              "+after",
+            ].join("\n"),
+          },
+        }],
+        createdAt: "2026-08-13T00:00:00.000Z",
+      }],
+      baseIndex: 0,
+      revision: 4,
+    }));
+
+    render(
+      <TerminalProvider>
+        <AcpChatTab tabId="tab-1" data={data} isActive />
+      </TerminalProvider>,
+    );
+
+    expect(await screen.findByText("+2")).toBeTruthy();
+    expect(screen.getByText("-2")).toBeTruthy();
+    expect(screen.getByText("Edit two files")).toBeTruthy();
+  });
+
+  test("applies an incremental ACP tool lifecycle update from the message window", async () => {
+    const pendingPart = {
+      type: "tool-invocation" as const,
+      content: "Search for references",
+      sourcePartId: "tool:search-1",
+      sourceMessageId: "message-tools",
+      toolUseId: "search-1",
+      toolName: "search",
+      toolState: "pending" as const,
+      toolTitle: "Search for references",
+    };
+    getAcpSession.mockImplementation(async () => ({
+      id: "persisted-session",
+      provider: "cursor" as const,
+      status: "running" as const,
+      messages: [{
+        id: "message-tools",
+        role: "assistant" as const,
+        content: "",
+        parts: [pendingPart],
+        createdAt: "2026-08-13T00:00:00.000Z",
+      }],
+      baseIndex: 0,
+      revision: 4,
+    }));
+    getAcpApprovals.mockImplementation(async () => [{
+      id: "approval-refresh",
+      title: "Refresh tool state",
+      options: [{ optionId: "once", name: "Allow once", kind: "allow_once" }],
+    }]);
+    getAcpMessageWindow.mockImplementation(async () => ({
+      messages: [{
+        id: "message-tools",
+        role: "assistant" as const,
+        content: "",
+        parts: [{ ...pendingPart, toolState: "success" as const, toolOutput: "3 matches" }],
+        createdAt: "2026-08-13T00:00:00.000Z",
+      }],
+      baseIndex: 0,
+      totalMessages: 1,
+      revision: 5,
+      status: "idle" as const,
+    }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive />);
+    expect(await screen.findByText("running...")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+
+    expect(await screen.findByText("success")).toBeTruthy();
+    expect(getAcpMessageWindow).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "persisted-session",
+      0,
+    );
   });
 
   test("renders reasoning as a collapsed thinking disclosure, not as assistant prose", async () => {

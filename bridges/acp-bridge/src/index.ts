@@ -49,6 +49,8 @@ interface BridgeMessage {
   content: string;
   parts: BridgeMessagePart[];
   createdAt: string;
+  /** Model selected when this assistant response began. */
+  modelId?: string;
 }
 
 interface BridgeTextPart {
@@ -250,6 +252,9 @@ const MAX_TOOL_OUTPUT_BYTES = 512 * 1024;
 const MAX_TOOL_INLINE_FILE_BYTES = 256 * 1024;
 const MAX_TOOL_DIFF_BYTES = 1024 * 1024;
 const MAX_TOOL_ID_BYTES = 512;
+// Matches the bound `session-config.ts` applies to a persisted `selectedModelId`,
+// so a model id cannot mean one length live and another in the transcript.
+const MAX_MODEL_ID_BYTES = 1_024;
 const MAX_TOOL_NAME_BYTES = 256;
 const MAX_TOOL_TITLE_BYTES = 4 * 1024;
 const MAX_TOOL_PATH_BYTES = 16 * 1024;
@@ -812,17 +817,7 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
   if (kind !== "agent_message_chunk" && kind !== "agent_thought_chunk") return;
   const text = contentText(update.content);
   if (!text) return;
-  let message = state.messages.at(-1);
-  if (!message || message.role !== "assistant" || state.status !== "running") {
-    message = {
-      id: randomBytes(12).toString("hex"),
-      role: "assistant",
-      content: "",
-      parts: [],
-      createdAt: new Date().toISOString(),
-    };
-    state.messages.push(message);
-  }
+  const message = currentAssistantMessage(state);
   const partType = kind === "agent_thought_chunk" ? "thinking" : "text";
   const previous = message.parts.at(-1);
   if (previous?.type !== partType && message.parts.length >= MAX_PARTS_PER_MESSAGE) {
@@ -1011,16 +1006,32 @@ function setOptionalPartField<TKey extends keyof BridgeToolPart>(
 function currentAssistantMessage(state: SessionState): BridgeMessage {
   let message = state.messages.at(-1);
   if (!message || message.role !== "assistant" || state.status !== "running") {
+    const modelId = boundedModelId(state.sessionConfig.composer.selectedModelId);
     message = {
       id: randomBytes(12).toString("hex"),
       role: "assistant",
       content: "",
       parts: [],
       createdAt: new Date().toISOString(),
+      ...(modelId ? { modelId } : {}),
     };
     state.messages.push(message);
   }
   return message;
+}
+
+/**
+ * A model id is an identifier, not display text, so an oversized or non-string
+ * value is dropped rather than truncated — exactly as `session-config.ts`
+ * rejects an over-long `selectedModelId` instead of shortening it. A truncated
+ * id would match no catalogue entry and would render as a plausible-looking
+ * model the agent never actually ran; absent renders as "no model recorded".
+ */
+function boundedModelId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || Buffer.byteLength(trimmed) > MAX_MODEL_ID_BYTES) return undefined;
+  return trimmed;
 }
 
 function failTranscriptLimit(state: SessionState): void {
@@ -2366,6 +2377,7 @@ function normalizeBridgeMessage(value: unknown): BridgeMessage | null {
     && Array.isArray(value.parts)
     && typeof value.createdAt === "string")) return null;
   const messageId = value.id.slice(0, 256);
+  const modelId = boundedModelId(value.modelId);
   return {
     id: messageId,
     role: value.role,
@@ -2377,6 +2389,7 @@ function normalizeBridgeMessage(value: unknown): BridgeMessage | null {
         return normalized ? [normalized] : [];
       }),
     createdAt: value.createdAt.slice(0, 64),
+    ...(modelId ? { modelId } : {}),
   };
 }
 

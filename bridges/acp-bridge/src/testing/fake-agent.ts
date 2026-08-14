@@ -155,14 +155,18 @@ lines.on("line", (line) => {
         sessions: [
           {
             sessionId: "fake-session",
-            cwd,
+            ...(process.env.FAKE_ACP_LIST_MISSING_CWD === "1" ? {} : {
+              cwd: process.env.FAKE_ACP_LIST_WRONG_CWD === "1" ? `${cwd}-other` : cwd,
+            }),
             title: "Current ACP work",
             updatedAt: "2026-08-14T20:00:00.000Z",
             _meta: { messageCount: 4 },
           },
           {
             sessionId: "external-session",
-            cwd,
+            ...(process.env.FAKE_ACP_LIST_MISSING_CWD === "1" ? {} : {
+              cwd: process.env.FAKE_ACP_LIST_WRONG_CWD === "1" ? `${cwd}-other` : cwd,
+            }),
             title: "Previous ACP work",
             updatedAt: "2026-08-13T20:00:00.000Z",
             _meta: { messageCount: 12 },
@@ -227,6 +231,44 @@ lines.on("line", (line) => {
       return;
     }
     const params = isObject(message.params) ? message.params : {};
+    if (process.env.FAKE_ACP_REPLAY_HISTORY === "1") {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: typeof params.sessionId === "string" ? params.sessionId : "external-session",
+          update: {
+            sessionUpdate: "user_message_chunk",
+            messageId: "history-user-1",
+            content: { type: "text", text: "Earlier question" },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: typeof params.sessionId === "string" ? params.sessionId : "external-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            messageId: "history-agent-1",
+            content: { type: "text", text: "Earlier answer" },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: typeof params.sessionId === "string" ? params.sessionId : "external-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            messageId: "history-agent-1",
+            content: { type: "text", text: " continued" },
+          },
+        },
+      });
+    }
     write({
       jsonrpc: "2.0",
       id: message.id,

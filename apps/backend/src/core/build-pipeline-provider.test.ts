@@ -253,6 +253,31 @@ describe("HTTP build pipeline provider", () => {
     });
   });
 
+  for (const [agent, connection] of [
+    ["cursor" as const, cursorConnection],
+    ["grok" as const, grokConnection],
+  ] as const) {
+    test(`rejects malformed ${agent} ACP session responses`, async () => {
+      const malformedList = httpProvider(
+        (url) => url.endsWith("/session/list")
+          ? Response.json({ sessions: "not-an-array" })
+          : new Response(null, { status: 404 }),
+        connection,
+      );
+      await expect(malformedList.provider.listResumableSessions?.())
+        .rejects.toBeInstanceOf(ProviderUnavailableError);
+
+      const malformedResume = httpProvider(
+        (url) => url.endsWith("/session/resume")
+          ? Response.json({ status: "idle" }, { status: 201 })
+          : new Response(null, { status: 404 }),
+        connection,
+      );
+      await expect(malformedResume.provider.resumeSession?.("opaque-session"))
+        .rejects.toBeInstanceOf(ProviderUnavailableError);
+    });
+  }
+
   test("treats a successful empty structured result as pending", async () => {
     const { provider } = httpProvider(() =>
       Response.json({ structuredOutput: null }));

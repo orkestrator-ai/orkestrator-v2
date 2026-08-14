@@ -268,6 +268,7 @@ describe("ACP bridge", () => {
       const bridge = await spawnBridge({ env: {
         ACP_PROVIDER: acpProvider,
         FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+        FAKE_ACP_REPLAY_HISTORY: "1",
       } });
       const created = await nativeFetch(`${bridge.base}/session/create`, {
         method: "POST",
@@ -311,8 +312,6 @@ describe("ACP bridge", () => {
         headers: bridge.headers,
         body: JSON.stringify({
           sessionId: external!.id,
-          mode: "plan",
-          reasoningId: "high",
         }),
       });
       expect(resumedResponse.status).toBe(201);
@@ -320,10 +319,15 @@ describe("ACP bridge", () => {
         id: string;
         sessionId: string;
         status: string;
+        messages: Array<{ role: string; content: string }>;
       };
       expect(resumed.id).toBe(resumed.sessionId);
       expect(resumed.id).not.toBe(external!.id);
       expect(resumed.status).toBe("idle");
+      expect(resumed.messages.map((message) => [message.role, message.content])).toEqual([
+        ["user", "Earlier question"],
+        ["assistant", "Earlier answer continued"],
+      ]);
       expect(await fs.readFile(lifecycleFile, "utf8")).toContain("load:");
 
       // Once adopted, the same provider conversation resolves to the stable
@@ -347,8 +351,54 @@ describe("ACP bridge", () => {
     const response = await nativeFetch(`${bridge.base}/session/list`, { headers: bridge.headers });
     expect(response.status).toBe(410);
     expect(await response.json()).toMatchObject({
-      error: "cursor cannot list persisted ACP sessions",
+      error: "cursor cannot list resumable ACP sessions",
     });
+  });
+
+  test("does not list sessions when the agent can list but cannot load them", async () => {
+    const bridge = await spawnBridge({ env: { FAKE_ACP_NO_LOAD_SESSION: "1" } });
+    const response = await nativeFetch(`${bridge.base}/session/list`, { headers: bridge.headers });
+    expect(response.status).toBe(410);
+    expect(await response.json()).toMatchObject({
+      error: "cursor cannot list resumable ACP sessions",
+    });
+  });
+
+  for (const env of ["FAKE_ACP_LIST_MISSING_CWD", "FAKE_ACP_LIST_WRONG_CWD"] as const) {
+    test(`does not list ACP sessions with ${env}`, async () => {
+      const bridge = await spawnBridge({ env: { [env]: "1" } });
+      const response = await nativeFetch(`${bridge.base}/session/list`, { headers: bridge.headers });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ sessions: [] });
+    });
+  }
+
+  test("loads an existing bridge session even when resume controls are omitted", async () => {
+    const directory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "resume-without-controls.log");
+    const bridge = await spawnBridge({ env: { FAKE_ACP_LIFECYCLE_FILE: lifecycleFile } });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+    }).then((response) => response.json()) as { id: string };
+    const firstPid = Number(/^start:(\d+)$/m.exec(await fs.readFile(lifecycleFile, "utf8"))?.[1]);
+    process.kill(firstPid, "SIGKILL");
+    await waitFor(
+      async () => nativeFetch(`${bridge.base}/session/${created.id}/status`, { headers: bridge.headers }).then((response) => response.json()) as Promise<{ status: string }>,
+      (session) => session.status === "error",
+    );
+
+    const resumed = await nativeFetch(`${bridge.base}/session/resume`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ sessionId: created.id }),
+    });
+    expect(resumed.status).toBe(201);
+    expect((await resumed.json()) as { id: string; status: string }).toMatchObject({
+      id: created.id,
+      status: "idle",
+    });
+    expect(await fs.readFile(lifecycleFile, "utf8")).toContain("load:");
   });
 
   test("drives an ACP session and rehydrates a parked permission", async () => {

@@ -131,6 +131,8 @@ interface SessionState {
   status: SessionStatus;
   error?: string;
   messages: BridgeMessage[];
+  /** Provider message IDs seen during the current process, bounded with the transcript. */
+  historyMessageIds: Map<string, string>;
   child: AcpProcess | null;
   revision: number;
   structured: Map<string, unknown>;
@@ -164,6 +166,8 @@ interface SessionState {
   turnStartedAt?: number;
   /** `available_commands_update` size; both agents advertise their commands. */
   commandCount?: number;
+  /** Whether session/load is replaying transcript updates into this state. */
+  historyReplay: false | "hydrate" | "ignore";
 }
 
 interface PersistedUsage {
@@ -244,6 +248,7 @@ interface AcpSpawnOptions {
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_LINE_BYTES = 4 * 1024 * 1024;
 const MAX_MESSAGES = 500;
+const MAX_HISTORY_MESSAGE_IDS = 1_024;
 const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
 const MAX_MESSAGE_TEXT_BYTES = 2 * 1024 * 1024;
 const MAX_PARTS_PER_MESSAGE = 512;
@@ -610,8 +615,11 @@ async function listResumableSessionsReserved(): Promise<JsonObject[]> {
   const child = new AcpProcess();
   try {
     const initialized = await child.initialize();
-    if (!supportsSessionCapability(initialized, "list")) {
-      throw new HttpError(410, `${provider} cannot list persisted ACP sessions`);
+    const capabilities = isObject(initialized.agentCapabilities)
+      ? initialized.agentCapabilities
+      : undefined;
+    if (!supportsSessionCapability(initialized, "list") || capabilities?.loadSession !== true) {
+      throw new HttpError(410, `${provider} cannot list resumable ACP sessions`);
     }
     const knownSessions = new Map(
       [...sessions.values()].map((state) => [state.acpSessionId, state.id]),
@@ -632,8 +640,8 @@ async function listResumableSessionsReserved(): Promise<JsonObject[]> {
         if (!isObject(candidate)) continue;
         const acpSessionId = boundedString(candidate.sessionId, 512)?.trim();
         if (!acpSessionId || seenSessionIds.has(acpSessionId)) continue;
-        const cwd = boundedString(candidate.cwd, MAX_TOOL_PATH_BYTES);
-        if (cwd && resolve(cwd) !== workingDirectory) continue;
+        const cwd = boundedString(candidate.cwd, MAX_TOOL_PATH_BYTES)?.trim();
+        if (!cwd || resolve(cwd) !== workingDirectory) continue;
         seenSessionIds.add(acpSessionId);
         const meta = isObject(candidate._meta) ? candidate._meta : undefined;
         const messageCount = Number.isSafeInteger(meta?.messageCount)
@@ -692,13 +700,13 @@ async function resumeExistingSession(
   signal?: AbortSignal,
   patch?: AcpComposerPatch,
 ): Promise<SessionState> {
-  if (!patch) return state;
   if (state.status === "running" || state.dispatching) {
     throw new HttpError(409, "Session is already running");
   }
   state.dispatching = true;
   try {
-    await applyComposerPatch(state, patch, signal);
+    await ensureSessionProcess(state, signal);
+    if (patch) await applyComposerPatch(state, patch, signal);
     return state;
   } finally {
     state.dispatching = false;
@@ -725,6 +733,7 @@ async function resumeSessionReserved(
       acpSessionId,
       status: "idle",
       messages: [],
+      historyMessageIds: new Map(),
       child,
       revision: 0,
       structured: new Map(),
@@ -736,6 +745,7 @@ async function resumeSessionReserved(
       droppedMessages: 0,
       sessionConfig: emptySessionConfig(),
       dispatching: true,
+      historyReplay: "hydrate",
     };
     attachChild(state, child);
     sessions.set(state.id, state);
@@ -745,6 +755,7 @@ async function resumeSessionReserved(
       mcpServers: [],
       sessionId: acpSessionId,
     }, RPC_TIMEOUT_MS, signal);
+    state.historyReplay = false;
     if (isObject(loaded)) {
       const sessionConfig = normalizeAcpSessionConfig(provider, {
         ...loaded,
@@ -826,6 +837,7 @@ async function createSessionReserved(
       acpSessionId: created.sessionId,
       status: "idle",
       messages: [],
+      historyMessageIds: new Map(),
       child,
       revision: 0,
       structured: new Map(),
@@ -840,6 +852,7 @@ async function createSessionReserved(
       // configuration finishes, so hold the same claim the config and prompt
       // routes take rather than leaving a window where both see it idle.
       dispatching: true,
+      historyReplay: false,
     };
     attachChild(state, child);
     sessions.set(id, state);
@@ -907,12 +920,14 @@ async function ensureSessionProcess(state: SessionState, signal?: AbortSignal): 
       throw new HttpError(410, `${provider} cannot reload persisted ACP sessions`);
     }
     attachChild(state, child);
+    state.historyReplay = state.messages.length === 0 ? "hydrate" : "ignore";
     const loaded = await child.request("session/load", {
       cwd: workingDirectory,
       additionalDirectories: [],
       mcpServers: [],
       sessionId: state.acpSessionId,
     }, RPC_TIMEOUT_MS, signal);
+    state.historyReplay = false;
     if (isObject(loaded)) {
       const sessionConfig = normalizeAcpSessionConfig(provider, {
         ...loaded,
@@ -930,6 +945,7 @@ async function ensureSessionProcess(state: SessionState, signal?: AbortSignal): 
     return child;
   } catch (error) {
     if (state.child === child) state.child = null;
+    state.historyReplay = false;
     await child.close();
     throw error;
   }
@@ -1034,25 +1050,52 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     return;
   }
   if (state.outputTruncated) return;
+  if (state.historyReplay === "ignore" && (
+    kind === "user_message"
+    || kind === "user_message_chunk"
+    || kind === "agent_message"
+    || kind === "agent_message_chunk"
+    || kind === "agent_thought_chunk"
+  )) return;
   if (kind === "tool_call" || kind === "tool_call_update") {
     applyToolCallUpdate(state, update, kind === "tool_call");
     return;
   }
-  if (kind !== "agent_message_chunk" && kind !== "agent_thought_chunk") return;
+  if (kind !== "user_message"
+    && kind !== "user_message_chunk"
+    && kind !== "agent_message"
+    && kind !== "agent_message_chunk"
+    && kind !== "agent_thought_chunk") return;
   const text = contentText(update.content);
   if (!text) return;
-  let message = state.messages.at(-1);
-  if (!message || message.role !== "assistant" || state.status !== "running") {
+  const role = kind === "user_message" || kind === "user_message_chunk" ? "user" : "assistant";
+  const partType = kind === "agent_thought_chunk" ? "thinking" : "text";
+  const providerMessageId = boundedString(update.messageId, MAX_TOOL_ID_BYTES)?.trim();
+  let message = providerMessageId
+    ? findHistoryMessage(state, providerMessageId)
+    : undefined;
+  const last = state.messages.at(-1);
+  const canAdoptLiveUser = providerMessageId
+    && role === "user"
+    && state.status === "running"
+    && state.historyReplay === false;
+  if (!message && last?.role === role && (canAdoptLiveUser || (!providerMessageId && (
+    state.status === "running"
+    || (state.historyReplay === "hydrate" && last.parts.at(-1)?.type === partType)
+  )))) {
+    message = last;
+  }
+  if (!message) {
     message = {
       id: randomBytes(12).toString("hex"),
-      role: "assistant",
+      role,
       content: "",
       parts: [],
       createdAt: new Date().toISOString(),
     };
     state.messages.push(message);
   }
-  const partType = kind === "agent_thought_chunk" ? "thinking" : "text";
+  if (providerMessageId) rememberHistoryMessage(state, providerMessageId, message.id);
   const previous = message.parts.at(-1);
   if (previous?.type !== partType && message.parts.length >= MAX_PARTS_PER_MESSAGE) {
     state.outputTruncated = true;
@@ -1076,7 +1119,7 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     ? appendBounded(message.content, text, MAX_MESSAGE_TEXT_BYTES)
     : { value: message.content, truncated: false };
   message.content = nextContent.value;
-  if (partType === "text" && state.currentTurnOutput !== null) {
+  if (role === "assistant" && partType === "text" && state.currentTurnOutput !== null) {
     const captured = appendBounded(state.currentTurnOutput, text, MAX_MESSAGE_TEXT_BYTES);
     state.currentTurnOutput = captured.value;
     if (captured.truncated) state.outputTruncated = true;
@@ -1094,6 +1137,20 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
   }
   schedulePersist();
+}
+
+function findHistoryMessage(state: SessionState, providerMessageId: string): BridgeMessage | undefined {
+  const messageId = state.historyMessageIds.get(providerMessageId);
+  return messageId ? state.messages.find((message) => message.id === messageId) : undefined;
+}
+
+function rememberHistoryMessage(state: SessionState, providerMessageId: string, messageId: string): void {
+  if (!state.historyMessageIds.has(providerMessageId)
+    && state.historyMessageIds.size >= MAX_HISTORY_MESSAGE_IDS) {
+    const oldest = state.historyMessageIds.keys().next().value;
+    if (typeof oldest === "string") state.historyMessageIds.delete(oldest);
+  }
+  state.historyMessageIds.set(providerMessageId, messageId);
 }
 
 function applyToolCallUpdate(
@@ -1555,6 +1612,7 @@ function truncateDisplayText(value: string, maximumBytes: number, notice: string
 
 function contentText(value: unknown): string {
   if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(contentText).filter(Boolean).join("");
   if (!isObject(value)) return "";
   return typeof value.text === "string" ? value.text : "";
 }
@@ -2535,6 +2593,7 @@ async function loadPersistedState(): Promise<void> {
       status: candidate.status === "idle" || candidate.status === "error" ? candidate.status : "error",
       ...(typeof candidate.error === "string" ? { error: candidate.error.slice(0, 4_000) } : {}),
       messages,
+      historyMessageIds: new Map(),
       child: null,
       revision: Number.isSafeInteger(candidate.revision) ? Number(candidate.revision) : 0,
       structured: new Map(Array.isArray(candidate.structured)
@@ -2551,6 +2610,7 @@ async function loadPersistedState(): Promise<void> {
       droppedMessages: 0,
       sessionConfig: restoreSessionConfig(candidate),
       dispatching: false,
+      historyReplay: false,
       ...(usage ? { usage } : {}),
       ...(Number.isSafeInteger(candidate.commandCount) && Number(candidate.commandCount) >= 0
         ? { commandCount: Number(candidate.commandCount) }

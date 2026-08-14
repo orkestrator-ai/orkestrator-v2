@@ -145,12 +145,27 @@ class AcpProcess {
 
   constructor() {
     // Both agents expose their permissive command setting as a global flag, so
-    // keep it before the ACP subcommand. Cursor's separate MCP approval flag is
-    // restricted to explicitly isolated environments: a local worktree can
-    // contain repository-controlled `.cursor/mcp.json` commands, which must not
-    // gain host execution merely because the user opened an ACP tab. Explicit
-    // deny rules still win; any permission request an agent emits despite these
-    // defaults continues through the bridge's fail-closed approval flow below.
+    // keep it before the ACP subcommand.
+    //
+    // Auto-approving *commands* is deliberate and unconditional, including on
+    // local worktrees: an Orkestrator ACP tab is an interactive agent session,
+    // and this matches the Claude bridge's local `bypassPermissions` default.
+    // Explicit deny rules still win, and any permission request an agent emits
+    // despite these defaults continues through the bridge's fail-closed
+    // approval flow below.
+    //
+    // Cursor's separate MCP approval flag is deliberately *not* unconditional.
+    // It is opt-in through ACP_APPROVE_PROJECT_MCPS, which the backend sets
+    // only for container environments. The distinction is who chooses the
+    // command: a permissive session still runs what the model decided to run,
+    // whereas `.cursor/mcp.json` is repository-controlled and would execute on
+    // the host the moment a tab opened, with no model or user involvement at
+    // all. Cloning a repository must not be enough to run its code.
+    //
+    // The check is `=== "1"`, so every other state — unset, empty, "true", or
+    // a stray ambient value — fails closed. Only the container launcher opts
+    // in; `startLocalServerUnlocked` pins it to "0" after inheriting the
+    // parent environment for exactly that reason.
     const args = provider === "cursor"
       ? ["--force", ...(approveProjectMcps ? ["--approve-mcps"] : []), "acp"]
       : ["--always-approve", "agent", "stdio"];

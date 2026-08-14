@@ -13308,6 +13308,24 @@ exit 0
           } else {
             expect(execLog).not.toContain("ACP_APPROVE_PROJECT_MCPS");
           }
+          // The launch script is assembled by interpolation, and several
+          // branches expand to nothing for a non-Cursor provider. Parse the
+          // exact text with the same interpreter the container runs it under
+          // (`docker exec ... bash -lc`), so an interpolation that produces
+          // broken shell fails here rather than as a silent startup failure
+          // inside a container. `-n` parses without executing.
+          const detachedExec = execLog.slice(execLog.indexOf("exec -d "));
+          const scriptStart = detachedExec.indexOf(" bash -lc ") + " bash -lc ".length;
+          const setsidLine = detachedExec.indexOf(
+            `setsid bun /opt/acp-bridge/dist/index.js --provider=${provider}`,
+            scriptStart,
+          );
+          const scriptEnd = detachedExec.indexOf("2>&1 &", setsidLine) + "2>&1 &".length;
+          expect(setsidLine).toBeGreaterThan(scriptStart);
+          const launchScript = detachedExec.slice(scriptStart, scriptEnd);
+          const parsed = Bun.spawnSync(["bash", "-n", "-c", launchScript]);
+          expect(parsed.stderr.toString()).toBe("");
+          expect(parsed.exitCode).toBe(0);
           // The token is written under a restrictive umask, never echoed.
           expect(execLog).toContain("umask 077");
           expect(execLog).not.toContain(cursorApiKey ?? "configured-container-cursor-key");

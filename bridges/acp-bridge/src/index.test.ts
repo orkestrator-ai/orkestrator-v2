@@ -55,18 +55,26 @@ async function spawnBridge(options: {
 } = {}): Promise<{ child: ChildProcessWithoutNullStreams; base: string; headers: Record<string, string> }> {
   const port = options.port ?? await unusedPort();
   const token = options.token ?? "integration-test-token";
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    ACP_PROVIDER: "cursor",
+    ACP_AGENT_PATH: resolve(here, "testing/fake-agent.ts"),
+    ACP_BRIDGE_TOKEN: token,
+    PORT: String(port),
+    HOSTNAME: "127.0.0.1",
+    ...(options.stateDirectory ? { ACP_STATE_DIR: options.stateDirectory } : {}),
+    ...options.env,
+  };
+  // The child inherits this process's environment, so a test that pins a
+  // fail-closed default has to prove the variable is genuinely absent rather
+  // than merely unmentioned. An explicit `undefined` in `options.env` deletes
+  // it instead of leaking whatever the developer's or CI shell exported.
+  for (const [key, value] of Object.entries(options.env ?? {})) {
+    if (value === undefined) delete env[key];
+  }
   const child = spawn(process.execPath, [resolve(here, "index.ts")], {
     cwd: resolve(here, "../../.."),
-    env: {
-      ...process.env,
-      ACP_PROVIDER: "cursor",
-      ACP_AGENT_PATH: resolve(here, "testing/fake-agent.ts"),
-      ACP_BRIDGE_TOKEN: token,
-      PORT: String(port),
-      HOSTNAME: "127.0.0.1",
-      ...(options.stateDirectory ? { ACP_STATE_DIR: options.stateDirectory } : {}),
-      ...options.env,
-    },
+    env,
     stdio: ["pipe", "pipe", "pipe"],
   });
   children.add(child);
@@ -189,14 +197,13 @@ describe("ACP bridge", () => {
     expect(dataPreflight.headers.get("access-control-allow-private-network")).toBe("true");
   });
 
-  test("starts local-default Cursor ACP without project MCP auto-approval", async () => {
-    const stateDirectory = await temporaryDirectory();
-    const argsFile = resolve(stateDirectory, "args.log");
+  // The fake agent records its own argv, so these assert the exact command line
+  // the bridge builds. They cannot prove the real CLIs accept those flags —
+  // `docs/upgrade-agents.md` carries that as a manual step for version bumps.
+  async function readAgentArgs(env: NodeJS.ProcessEnv): Promise<string[]> {
+    const argsFile = resolve(await temporaryDirectory(), "args.log");
     const { base, headers } = await spawnBridge({
-      env: {
-        ACP_APPROVE_PROJECT_MCPS: "0",
-        FAKE_ACP_ARGS_FILE: argsFile,
-      },
+      env: { ...env, FAKE_ACP_ARGS_FILE: argsFile },
     });
 
     const created = await nativeFetch(`${base}/session/create`, {
@@ -205,57 +212,48 @@ describe("ACP bridge", () => {
     });
     expect(created.status).toBe(201);
 
-    const args = await waitFor(
+    const recorded = await waitFor(
       async () => fs.readFile(argsFile, "utf8").catch(() => ""),
-      (value) => value.length > 0,
+      (value) => value.trim().length > 0,
     );
-    expect(JSON.parse(args.trim())).toEqual(["--force", "acp"]);
+    // One session spawns one agent. A second line would mean the child was
+    // restarted, which should fail as itself rather than as a JSON parse error
+    // on two concatenated records.
+    const lines = recorded.trim().split("\n");
+    expect(lines).toHaveLength(1);
+    return JSON.parse(lines[0]!) as string[];
+  }
+
+  test("starts Cursor ACP without project MCP auto-approval by default", async () => {
+    // ACP_APPROVE_PROJECT_MCPS must fail closed when absent — the state every
+    // launcher except the container one leaves it in. Delete it outright
+    // instead of setting "0", so a regression to a default-on check such as
+    // `!== "0"` cannot satisfy this test.
+    expect(await readAgentArgs({ ACP_APPROVE_PROJECT_MCPS: undefined }))
+      .toEqual(["--force", "acp"]);
+  });
+
+  test("starts local-default Cursor ACP without project MCP auto-approval", async () => {
+    expect(await readAgentArgs({ ACP_APPROVE_PROJECT_MCPS: "0" }))
+      .toEqual(["--force", "acp"]);
+  });
+
+  test("treats a non-canonical Cursor MCP approval value as disabled", async () => {
+    // The backend only ever writes "0" or "1". Anything else arrived from an
+    // ambient environment the bridge did not choose, so it must not grant
+    // repository-controlled MCP servers a host process.
+    expect(await readAgentArgs({ ACP_APPROVE_PROJECT_MCPS: "true" }))
+      .toEqual(["--force", "acp"]);
   });
 
   test("starts explicitly isolated Cursor ACP with MCP auto-approval", async () => {
-    const stateDirectory = await temporaryDirectory();
-    const argsFile = resolve(stateDirectory, "args.log");
-    const { base, headers } = await spawnBridge({
-      env: {
-        ACP_APPROVE_PROJECT_MCPS: "1",
-        FAKE_ACP_ARGS_FILE: argsFile,
-      },
-    });
-
-    const created = await nativeFetch(`${base}/session/create`, {
-      method: "POST",
-      headers,
-    });
-    expect(created.status).toBe(201);
-
-    const args = await waitFor(
-      async () => fs.readFile(argsFile, "utf8").catch(() => ""),
-      (value) => value.length > 0,
-    );
-    expect(JSON.parse(args.trim())).toEqual(["--force", "--approve-mcps", "acp"]);
+    expect(await readAgentArgs({ ACP_APPROVE_PROJECT_MCPS: "1" }))
+      .toEqual(["--force", "--approve-mcps", "acp"]);
   });
 
   test("starts Grok ACP with automatic tool approval", async () => {
-    const stateDirectory = await temporaryDirectory();
-    const argsFile = resolve(stateDirectory, "args.log");
-    const { base, headers } = await spawnBridge({
-      env: {
-        ACP_PROVIDER: "grok",
-        FAKE_ACP_ARGS_FILE: argsFile,
-      },
-    });
-
-    const created = await nativeFetch(`${base}/session/create`, {
-      method: "POST",
-      headers,
-    });
-    expect(created.status).toBe(201);
-
-    const args = await waitFor(
-      async () => fs.readFile(argsFile, "utf8").catch(() => ""),
-      (value) => value.length > 0,
-    );
-    expect(JSON.parse(args.trim())).toEqual(["--always-approve", "agent", "stdio"]);
+    expect(await readAgentArgs({ ACP_PROVIDER: "grok" }))
+      .toEqual(["--always-approve", "agent", "stdio"]);
   });
 
   test("drives an ACP session and rehydrates a parked permission", async () => {

@@ -189,13 +189,22 @@ lines.on("line", (line) => {
     const text = (message.params as { prompt?: Array<{ text?: unknown }> }).prompt?.[0]?.text;
     // Exit without answering, so the bridge observes its child dying mid-turn.
     if (typeof text === "string" && text.startsWith("CRASH")) process.exit(9);
-    if (provider === "grok" && process.env.FAKE_ACP_EMIT_MODEL_UPDATE === "1") {
+    // Emitted on prompt rather than on session/new: the bridge only binds its
+    // vendor handler once session/new has returned, so a catalogue update
+    // racing that return would be dropped by the bridge, not by the transport.
+    if (provider === "grok" && (
+      process.env.FAKE_ACP_EMIT_MODEL_UPDATE === "1"
+      || process.env.FAKE_ACP_VENDOR_MODEL_REQUEST_FILE
+    )) {
       grokConfig.models.availableModels.push({
         modelId: "grok-next",
         name: "Grok Next",
       });
       write({
         jsonrpc: "2.0",
+        // The same payload in the request form some vendor extensions use. The
+        // bridge must apply it and answer, not reject it as unimplemented.
+        ...(process.env.FAKE_ACP_VENDOR_MODEL_REQUEST_FILE ? { id: 902 } : {}),
         method: "x.ai/models/update",
         params: {
           sessionId: "fake-session",
@@ -295,6 +304,13 @@ lines.on("line", (line) => {
   if (message.id === 901 && process.env.FAKE_ACP_VENDOR_REQUEST_FILE) {
     appendFileSync(
       process.env.FAKE_ACP_VENDOR_REQUEST_FILE,
+      `${JSON.stringify(message)}\n`,
+    );
+    return;
+  }
+  if (message.id === 902 && process.env.FAKE_ACP_VENDOR_MODEL_REQUEST_FILE) {
+    appendFileSync(
+      process.env.FAKE_ACP_VENDOR_MODEL_REQUEST_FILE,
       `${JSON.stringify(message)}\n`,
     );
   }

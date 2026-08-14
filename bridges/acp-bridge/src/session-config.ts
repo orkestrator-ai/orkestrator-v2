@@ -85,6 +85,15 @@ const EMPTY_WIRE: AcpConfigWire = {
   usesSetModel: false,
 };
 
+/**
+ * Bound and deduplicate every catalogue the normalizer produces. The persisted
+ * validator enforces the same limits on the way back in, so anything the
+ * normalizer emits beyond them would be state this bridge writes and then
+ * refuses to read.
+ */
+export const MAX_CATALOG_MODELS = 512;
+export const MAX_REASONING_OPTIONS = 64;
+
 export function emptyComposerState(): NativeAgentComposerState {
   return {
     models: [],
@@ -409,7 +418,9 @@ function composerFromConfigOptions(
   const thoughtOption = selectOption(configOptions, "thought_level");
   const fastOption = selectFastOption(configOptions);
   const reasoning = thoughtOption
-    ? (thoughtOption.options ?? []).map((option) => reasoningOption(option.value, option.name))
+    ? (thoughtOption.options ?? [])
+      .slice(0, MAX_REASONING_OPTIONS)
+      .map((option) => reasoningOption(option.value, option.name))
     : [];
   const selectedReasoningId = optionCurrentString(thoughtOption)
     ?? reasoning[0]?.id;
@@ -591,6 +602,7 @@ function parseConfigOptions(value: unknown): AcpConfigOption[] {
         : typeof candidate.currentValue === "boolean"
           ? candidate.currentValue
           : "";
+    const seenValues = new Set<string>();
     const options = Array.isArray(candidate.options)
       ? candidate.options.flatMap((option) => {
           if (!isObject(option)) return [];
@@ -599,7 +611,11 @@ function parseConfigOptions(value: unknown): AcpConfigOption[] {
             : typeof option.id === "string"
               ? option.id
               : "";
-          if (!optionValue) return [];
+          // Model ids come straight from here, and a duplicate would fail the
+          // persisted validator on the next bridge start.
+          if (!optionValue || seenValues.has(optionValue)
+            || seenValues.size >= MAX_CATALOG_MODELS) return [];
+          seenValues.add(optionValue);
           return [{
             value: optionValue,
             name: typeof option.name === "string" ? option.name : optionValue,
@@ -633,6 +649,7 @@ interface GrokModelCatalog {
 function parseGrokModelCatalog(value: unknown): GrokModelCatalog {
   if (!isObject(value)) return { models: [] };
   const list = Array.isArray(value.availableModels) ? value.availableModels : [];
+  const seen = new Set<string>();
   const models = list.flatMap((candidate) => {
     if (!isObject(candidate)) return [];
     const modelId = typeof candidate.modelId === "string"
@@ -640,13 +657,23 @@ function parseGrokModelCatalog(value: unknown): GrokModelCatalog {
       : typeof candidate.id === "string"
         ? candidate.id
         : "";
-    if (!modelId) return [];
+    // A duplicate id would survive normalization but fail the persisted
+    // validator, so the bridge would write state it cannot load back.
+    if (!modelId || seen.has(modelId) || seen.size >= MAX_CATALOG_MODELS) return [];
+    seen.add(modelId);
     const meta = isObject(candidate._meta) ? candidate._meta : {};
+    const seenEfforts = new Set<string>();
     const reasoningEfforts = Array.isArray(meta.reasoningEfforts)
       ? meta.reasoningEfforts.flatMap((entry) => {
-          if (typeof entry === "string") return [entry];
-          if (isObject(entry) && typeof entry.value === "string") return [entry.value];
-          return [];
+          const effort = typeof entry === "string"
+            ? entry
+            : isObject(entry) && typeof entry.value === "string"
+              ? entry.value
+              : "";
+          if (!effort || seenEfforts.has(effort)
+            || seenEfforts.size >= MAX_REASONING_OPTIONS) return [];
+          seenEfforts.add(effort);
+          return [effort];
         })
       : [];
     return [{
@@ -669,7 +696,7 @@ function parsePersistedComposer(
 ): NativeAgentComposerState | null {
   if (
     !Array.isArray(value.models)
-    || value.models.length > 512
+    || value.models.length > MAX_CATALOG_MODELS
     || !Array.isArray(value.modes)
     || value.modes.length > CONVERSATION_MODES.length
     || typeof value.fastModeAvailable !== "boolean"
@@ -686,7 +713,8 @@ function parsePersistedComposer(
     modelIds.add(id);
     let reasoning: AgentReasoningOption[] | undefined;
     if (candidate.reasoning !== undefined) {
-      if (!Array.isArray(candidate.reasoning) || candidate.reasoning.length > 64) return null;
+      if (!Array.isArray(candidate.reasoning)
+        || candidate.reasoning.length > MAX_REASONING_OPTIONS) return null;
       reasoning = [];
       const reasoningIds = new Set<string>();
       for (const option of candidate.reasoning) {

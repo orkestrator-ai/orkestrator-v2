@@ -171,6 +171,11 @@ function UnassignedNativeAgentComposer({
   const [models, setModels] = useState<AgentModel[]>([]);
   const platform = draft.platform ?? defaultPlatform;
   const selectedAdapter = findNativeAgentAdapter(platform);
+  // The catalogue is environment-scoped and already carries every platform, so
+  // it must not be refetched when the platform draft changes: `platformModels`
+  // filters it client-side. Re-running here would clear the list and re-issue a
+  // command that probes both ACP bridges, flashing "No models available" on
+  // every switch.
   useEffect(() => {
     let cancelled = false;
     setModels([]);
@@ -182,7 +187,7 @@ function UnassignedNativeAgentComposer({
         console.warn("[AgentNativeTab] Failed to load native model catalogue:", error);
       });
     return () => { cancelled = true; };
-  }, [environmentId, platform]);
+  }, [environmentId]);
   const fileSearch = useFileSearch(containerId, worktreePath);
   const {
     isMenuOpen: fileMentionMenuOpen,

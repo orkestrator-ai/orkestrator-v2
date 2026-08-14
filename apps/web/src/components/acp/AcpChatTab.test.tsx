@@ -225,6 +225,40 @@ describe("AcpChatTab", () => {
       .toHaveBeenCalledWith("tab-1", "environment-1"));
   });
 
+  // Incremental windows carry a composer only on a bridge new enough to send
+  // one. An older bridge omitting it must leave the picker alone rather than
+  // blanking the model the user is looking at on the very next poll.
+  test("keeps the composer when an incremental window carries none", async () => {
+    const composer = {
+      ...EMPTY_NATIVE_AGENT_COMPOSER_STATE,
+      models: [{
+        id: "composer-2.5",
+        platform: "cursor" as const,
+        label: "Composer 2.5",
+      }],
+      selectedModelId: "composer-2.5",
+    };
+    getAcpSession.mockImplementation(async () => sessionSnapshot({
+      status: "running",
+      revision: 1,
+      composer,
+    }));
+    getAcpMessageWindow.mockImplementation(async (_client, _sessionId, fromIndex) => ({
+      messages: [],
+      baseIndex: fromIndex,
+      totalMessages: fromIndex,
+      revision: 2,
+      status: "running" as const,
+    }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive />);
+
+    expect(await screen.findByText("Composer 2.5")).toBeTruthy();
+    await waitFor(() => expect(getAcpMessageWindow).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText("Composer 2.5")).toBeTruthy());
+    expect(screen.queryByText("No models available")).toBeNull();
+  });
+
   test("renders reasoning as a collapsed thinking disclosure, not as assistant prose", async () => {
     getAcpSession.mockImplementation(async () => ({
       id: "persisted-session",

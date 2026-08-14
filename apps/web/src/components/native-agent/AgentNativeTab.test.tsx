@@ -314,6 +314,61 @@ describe("AgentNativeTab", () => {
     expect(screen.getByRole("menuitemradio", { name: /Composer 2.5/ })).toBeTruthy();
   });
 
+  // The catalogue is environment-scoped and already holds every platform, so a
+  // platform switch must filter what is loaded rather than clearing the list and
+  // re-issuing a command that probes both ACP bridges.
+  test("does not refetch the catalogue when the composer platform changes", async () => {
+    useEnvironmentStore.setState({
+      environments: [{
+        id: "env-1",
+        projectId: "project-1",
+        name: "Model catalogue",
+        order: 0,
+      } as never],
+    });
+    const sessionKey = createSessionKey("env-1", "tab-platform-switch");
+    useNativeComposeStore.getState().updateDraft(sessionKey, { platform: "cursor" });
+    getNativeAgentModelCatalogMock.mockImplementation(async () => [
+      {
+        id: "composer-2.5",
+        platform: "cursor",
+        label: "Composer 2.5",
+        providerLabel: "Cursor",
+        supportsSpeed: true,
+        supportsMode: true,
+      },
+      {
+        id: "grok-build",
+        platform: "grok",
+        label: "Grok Build",
+        providerLabel: "Grok",
+        supportsSpeed: false,
+        supportsMode: true,
+      },
+    ]);
+
+    render(
+      <AgentNativeTab
+        tabId="tab-platform-switch"
+        data={{ environmentId: "env-1" }}
+        isActive
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTitle(/Choose model/).textContent)
+      .toContain("Composer 2.5"));
+    expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(1);
+
+    useNativeComposeStore.getState().updateDraft(sessionKey, { platform: "grok" });
+
+    // The grok half of the same catalogue resolves immediately: no refetch, and
+    // no transient "No models available".
+    await waitFor(() => expect(screen.getByTitle(/Choose model/).textContent)
+      .toContain("Grok Build"));
+    expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("No models available")).toBeNull();
+  });
+
   test("carries first-prompt mentions and pasted images through the provider lock", async () => {
     usePaneLayoutStore.setState({
       environments: new Map([

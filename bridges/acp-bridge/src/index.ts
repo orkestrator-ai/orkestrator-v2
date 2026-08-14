@@ -9,12 +9,12 @@ import {
   startParentWatchdog,
 } from "@orkestrator/protocol/parent-watchdog";
 import type { NativeAgentComposerState } from "@orkestrator/protocol/native-agent";
-import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
 import {
   applyConfigOptionUpdate,
   applyCurrentModeUpdate,
   applyGrokCatalogUpdate,
   applyGrokModelChange,
+  emptyComposerState,
   mergeComposerCatalog,
   normalizeAcpSessionConfig,
   parsePersistedAcpSessionConfig,
@@ -340,8 +340,16 @@ class AcpProcess {
       return;
     }
     if (typeof message.id === "number" && typeof message.method === "string") {
+      const params = isObject(message.params) ? message.params : {};
       if (message.method === "session/request_permission") {
-        this.onPermission(message.id, isObject(message.params) ? message.params : {});
+        this.onPermission(message.id, params);
+      } else if (isVendorModelUpdate(message.method, params)) {
+        // A model update carries state this bridge does support, so answer it
+        // even when the vendor chose the request form over a notification.
+        // Everything else is genuinely unimplemented and must say so rather
+        // than acknowledge a capability we do not have.
+        this.onVendor(message.method, params);
+        this.respond(message.id, {});
       } else {
         this.#write({
           jsonrpc: "2.0",
@@ -444,7 +452,10 @@ async function createSessionReserved(
       currentTurnOutput: null,
       droppedMessages: 0,
       sessionConfig,
-      dispatching: false,
+      // The session is reachable from `sessions` before its initial
+      // configuration finishes, so hold the same claim the config and prompt
+      // routes take rather than leaving a window where both see it idle.
+      dispatching: true,
     };
     attachChild(state, child);
     sessions.set(id, state);
@@ -453,8 +464,10 @@ async function createSessionReserved(
       const patch = composerPatchFromSpawn(spawnOptions);
       if (patch) await applyComposerPatch(state, patch, signal);
       await persistState();
+      state.dispatching = false;
       return state;
     } catch (error) {
+      state.dispatching = false;
       if (sessions.get(id) === state) sessions.delete(id);
       if (clientSessionKey && clientSessionKeys.get(clientSessionKey) === id) {
         clientSessionKeys.delete(clientSessionKey);
@@ -471,7 +484,14 @@ async function createSessionReserved(
 function attachChild(state: SessionState, child: AcpProcess): void {
   state.child = child;
   child.onUpdate = (params) => applySessionUpdate(state, params);
-  child.onVendor = (method, params) => applyVendorUpdate(state, method, params);
+  child.onVendor = (method, params) => {
+    // Same generation rule as `onClose` below: a superseded child can emit long
+    // after a replacement attached, and letting it rewrite `sessionConfig`
+    // would point the live session — and the process-wide catalogue — at a
+    // catalogue the attached agent never advertised.
+    if (state.child !== child || sessions.get(state.id) !== state) return;
+    applyVendorUpdate(state, method, params);
+  };
   child.onPermission = (requestId, params) => parkPermission(state, requestId, params);
   child.onClose = (error) => {
     // Only the currently attached child owns this session's approvals. A
@@ -865,11 +885,22 @@ async function route(
     return json(response, 200, state.sessionConfig.composer);
   }
   if (action === "config" && request.method === "POST") {
+    const body = await readJson(request);
+    // Claim before the first await, exactly as the prompt route does.
+    // `applyComposerPatch` yields on `ensureSessionProcess` and again on every
+    // RPC, so a bare check would let a second config POST — or a prompt —
+    // through and both would plan against the same stale `sessionConfig`.
     if (state.status === "running" || state.dispatching) {
       return json(response, 409, { error: "Session is already running" });
     }
-    const patch = parseComposerPatch(await readJson(request));
-    if (patch) await applyComposerPatch(state, patch, clientSignal);
+    const patch = parseComposerPatch(body);
+    if (!patch) return json(response, 200, state.sessionConfig.composer);
+    state.dispatching = true;
+    try {
+      await applyComposerPatch(state, patch, clientSignal);
+    } finally {
+      state.dispatching = false;
+    }
     return json(response, 200, state.sessionConfig.composer);
   }
   if (action === "activity" && request.method === "GET") return json(response, 200, { activity: state.status === "running" ? "working" : "idle" });
@@ -1303,22 +1334,34 @@ async function probeCatalog(signal?: AbortSignal): Promise<NativeAgentComposerSt
   return catalogProbe;
 }
 
+/**
+ * Composer configuration is a cache in front of the agent's own catalogue: the
+ * next `session/load` re-normalizes it. Malformed configuration therefore
+ * resets *that* session's composer and nothing else. Throwing here would take
+ * out the whole state file — every other session's transcript and, worse, its
+ * prompt journal, which is what keeps a resubmitted requestId from dispatching
+ * twice.
+ */
 function restoreSessionConfig(candidate: JsonObject): AcpNormalizedSessionConfig {
   if (candidate.sessionConfig !== undefined) {
     const restored = parsePersistedAcpSessionConfig(provider, candidate.sessionConfig);
-    if (!restored) throw new Error("ACP persisted session config is malformed");
-    return restored;
+    if (restored) return restored;
+    console.warn("[acp-bridge] Resetting a malformed persisted session config");
+    return emptySessionConfig();
   }
   if (candidate.composer !== undefined) {
     const composer = parsePersistedComposerState(provider, candidate.composer);
-    if (!composer) throw new Error("ACP persisted composer state is malformed");
-    return {
-      composer,
-      wire: { configOptions: [], availableModeIds: {}, usesSetModel: false },
-    };
+    if (composer) return { ...emptySessionConfig(), composer };
+    console.warn("[acp-bridge] Resetting a malformed persisted composer state");
   }
+  return emptySessionConfig();
+}
+
+function emptySessionConfig(): AcpNormalizedSessionConfig {
+  // `emptyComposerState()` rather than a spread of the shared constant: a
+  // shallow copy would alias its `models` and `modes` arrays across sessions.
   return {
-    composer: { ...EMPTY_NATIVE_AGENT_COMPOSER_STATE },
+    composer: emptyComposerState(),
     wire: { configOptions: [], availableModeIds: {}, usesSetModel: false },
   };
 }

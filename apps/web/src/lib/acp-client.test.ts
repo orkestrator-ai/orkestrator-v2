@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   createAcpClient,
   createAcpSession,
+  getAcpMessageWindow,
   mergeAcpMessageWindow,
   normalizeAcpComposer,
   type AcpMessage,
@@ -119,5 +120,65 @@ describe("normalizeAcpComposer", () => {
       selectedModelId: "composer-2.5",
     };
     expect(normalizeAcpComposer(composer)).toEqual(composer);
+  });
+
+  test("does not share the empty composer's arrays between callers", () => {
+    const first = normalizeAcpComposer(undefined);
+    const second = normalizeAcpComposer(undefined);
+    expect(first.models).not.toBe(second.models);
+    expect(first.modes).not.toBe(second.modes);
+  });
+});
+
+describe("getAcpMessageWindow", () => {
+  async function windowFrom(body: Record<string, unknown>): Promise<AcpMessageWindow> {
+    globalThis.fetch = (async () => new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as unknown as typeof fetch;
+    try {
+      return await getAcpMessageWindow(createAcpClient("http://127.0.0.1:4099", "token"), "s1", 0);
+    } finally {
+      globalThis.fetch = nativeFetch;
+    }
+  }
+
+  // A window is incremental. A bridge old enough not to send `composer` must
+  // leave the field absent so the caller keeps the snapshot it already has,
+  // rather than being handed an empty composer that blanks its model picker.
+  test("leaves composer undefined when the bridge omits it", async () => {
+    const slice = await windowFrom({
+      messages: [],
+      baseIndex: 0,
+      totalMessages: 0,
+      revision: 3,
+      status: "idle",
+    });
+    expect(slice.composer).toBeUndefined();
+  });
+
+  test("leaves composer undefined when the bridge sends an unusable one", async () => {
+    const slice = await windowFrom({
+      messages: [],
+      baseIndex: 0,
+      totalMessages: 0,
+      revision: 3,
+      status: "idle",
+      composer: { models: "not-an-array" },
+    });
+    expect(slice.composer).toBeUndefined();
+  });
+
+  test("passes a usable composer through", async () => {
+    const composer = { ...EMPTY_NATIVE_AGENT_COMPOSER_STATE, selectedModelId: "gpt-5.5" };
+    const slice = await windowFrom({
+      messages: [],
+      baseIndex: 0,
+      totalMessages: 0,
+      revision: 3,
+      status: "idle",
+      composer,
+    });
+    expect(slice.composer).toEqual(composer);
   });
 });

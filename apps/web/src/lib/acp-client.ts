@@ -88,7 +88,10 @@ export function getAcpMessageWindow(
   return request<AcpMessageWindow>(
     client,
     `/session/${encodeURIComponent(sessionId)}/messages?fromIndex=${Math.max(0, Math.trunc(fromIndex))}`,
-  ).then((window) => ({ ...window, composer: normalizeAcpComposer(window.composer) }));
+    // A window is an incremental update, so an absent or unusable `composer`
+    // means "no news" — a bridge old enough not to send one must not blank the
+    // caller's picker. Only a full snapshot substitutes the empty composer.
+  ).then((window) => ({ ...window, composer: optionalAcpComposer(window.composer) }));
 }
 
 /**
@@ -141,9 +144,15 @@ export function setAcpSessionConfig(
 export function normalizeAcpComposer(
   value: NativeAgentComposerState | undefined | null,
 ): NativeAgentComposerState {
-  if (!value || !Array.isArray(value.models) || !Array.isArray(value.modes)) {
-    return { ...EMPTY_NATIVE_AGENT_COMPOSER_STATE };
-  }
+  return optionalAcpComposer(value)
+    ?? { ...EMPTY_NATIVE_AGENT_COMPOSER_STATE, models: [], modes: [] };
+}
+
+/** `undefined` when there is nothing usable, so callers can keep what they hold. */
+export function optionalAcpComposer(
+  value: NativeAgentComposerState | undefined | null,
+): NativeAgentComposerState | undefined {
+  if (!value || !Array.isArray(value.models) || !Array.isArray(value.modes)) return undefined;
   return value;
 }
 

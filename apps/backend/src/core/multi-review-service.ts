@@ -102,7 +102,9 @@ export class MultiReviewService {
   private readonly locks = new Map<string, Promise<void>>();
   private readonly scheduledRuns = new Map<string, { pending: boolean; promise: Promise<void> }>();
   private readonly providers = new Map<string, BuildPipelineProvider>();
+  private readonly providerCreations = new Map<string, Promise<BuildPipelineProvider>>();
   private readonly providerUsers = new Map<string, Set<string>>();
+  private readonly providerReaders = new Map<string, number>();
   private readonly leases = new Map<string, { token: string; expiresAt: string }>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private renewTimer: ReturnType<typeof setInterval> | null = null;
@@ -151,7 +153,9 @@ export class MultiReviewService {
     ]);
     await Promise.allSettled([...this.providers.values()].map((provider) => provider.dispose?.()));
     this.providers.clear();
+    this.providerCreations.clear();
     this.providerUsers.clear();
+    this.providerReaders.clear();
     await Promise.allSettled([...this.leases].map(([workflowId, lease]) =>
       this.storage.releaseMultiReviewController(workflowId, this.ownerId, lease.token)));
     this.leases.clear();
@@ -176,8 +180,10 @@ export class MultiReviewService {
 
     let messages: unknown[] = [];
     if (reviewer.providerSessionId) {
+      const key = this.providerKey(workflow, reviewer);
+      this.providerReaders.set(key, (this.providerReaders.get(key) ?? 0) + 1);
       try {
-        const provider = await this.provider(workflow, reviewer);
+        const provider = await this.providerInstance(workflow, reviewer);
         provider.registerSession?.(reviewer.providerSessionId, {
           origin: "looped-review",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
@@ -188,13 +194,7 @@ export class MultiReviewService {
         });
         messages = await provider.messages(reviewer.providerSessionId);
       } finally {
-        // Ready, failed, and terminal workflows have already released their
-        // supervisor-owned provider reference. A later transcript read must
-        // not pin a fresh provider in the cache for the rest of the process.
-        if (workflow.phase === "ready" || workflow.phase === "failed"
-          || isMultiReviewTerminalPhase(workflow.phase)) {
-          await this.releaseProviderUser(workflow, reviewer);
-        }
+        await this.releaseProviderReaderByKey(key);
       }
     }
 
@@ -965,12 +965,12 @@ export class MultiReviewService {
       return;
     }
     let fixed: ReturnType<typeof parseFixResult>;
+    if (!result.ok && result.error.code !== "schema_retry_exhausted"
+      && result.error.code !== "malformed_output") {
+      throw new Error(result.error.message);
+    }
     try {
       if (!result.ok) {
-        if (result.error.code !== "schema_retry_exhausted"
-          && result.error.code !== "malformed_output") {
-          throw new Error(result.error.message);
-        }
         const path = typeof result.error.details?.path === "string"
           ? result.error.details.path
           : "$";
@@ -1125,18 +1125,23 @@ export class MultiReviewService {
     await Promise.allSettled([...keys].map((key) => this.releaseProviderUserByKey(workflow.id, key)));
   }
 
-  private async releaseProviderUser(
-    workflow: MultiReviewWorkflow,
-    selection: MultiReviewModelSelection,
-  ): Promise<void> {
-    await this.releaseProviderUserByKey(workflow.id, this.providerKey(workflow, selection));
-  }
-
   private async releaseProviderUserByKey(workflowId: string, key: string): Promise<void> {
     const users = this.providerUsers.get(key);
     users?.delete(workflowId);
-    if (users && users.size > 0) return;
-    this.providerUsers.delete(key);
+    if (users?.size === 0) this.providerUsers.delete(key);
+    await this.disposeProviderIfUnused(key);
+  }
+
+  private async releaseProviderReaderByKey(key: string): Promise<void> {
+    const readers = this.providerReaders.get(key) ?? 0;
+    if (readers <= 1) this.providerReaders.delete(key);
+    else this.providerReaders.set(key, readers - 1);
+    await this.disposeProviderIfUnused(key);
+  }
+
+  private async disposeProviderIfUnused(key: string): Promise<void> {
+    if ((this.providerUsers.get(key)?.size ?? 0) > 0
+      || (this.providerReaders.get(key) ?? 0) > 0) return;
     const provider = this.providers.get(key);
     this.providers.delete(key);
     await provider?.dispose?.();
@@ -1179,22 +1184,39 @@ export class MultiReviewService {
     const users = this.providerUsers.get(key) ?? new Set<string>();
     users.add(workflow.id);
     this.providerUsers.set(key, users);
+    return this.providerInstance(workflow, selection);
+  }
+
+  private async providerInstance(
+    workflow: MultiReviewWorkflow,
+    selection: MultiReviewModelSelection,
+  ): Promise<BuildPipelineProvider> {
+    const key = this.providerKey(workflow, selection);
     const cached = this.providers.get(key);
     if (cached) return cached;
-    if (this.options.provider) {
-      const provider = await this.options.provider(workflow, selection);
+    const pending = this.providerCreations.get(key);
+    if (pending) return pending;
+    const creation = (async () => {
+      const provider = this.options.provider
+        ? await this.options.provider(workflow, selection)
+        : await (async () => {
+            const environment = await this.storage.getEnvironment(workflow.environmentId);
+            if (!environment) throw new Error("Review environment no longer exists");
+            const connection = await this.bridgeConnection(selection.agent, environment);
+            return createBuildPipelineProvider(connection, {
+              ...this.options.providerDependencies,
+              autoAnswerRequests: false,
+            });
+          })();
       this.providers.set(key, provider);
       return provider;
+    })();
+    this.providerCreations.set(key, creation);
+    try {
+      return await creation;
+    } finally {
+      if (this.providerCreations.get(key) === creation) this.providerCreations.delete(key);
     }
-    const environment = await this.storage.getEnvironment(workflow.environmentId);
-    if (!environment) throw new Error("Review environment no longer exists");
-    const connection = await this.bridgeConnection(selection.agent, environment);
-    const provider = createBuildPipelineProvider(connection, {
-      ...this.options.providerDependencies,
-      autoAnswerRequests: false,
-    });
-    this.providers.set(key, provider);
-    return provider;
   }
 
   private async bridgeConnection(

@@ -6,7 +6,10 @@ import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
-import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import type {
+  StructuredOutputFailureCode,
+  StructuredOutputResult,
+} from "@orkestrator/protocol/structured-output";
 import type {
   MultiReviewModelSelection,
   MultiReviewWorkflow,
@@ -61,11 +64,16 @@ class Provider implements BuildPipelineProvider {
   invalidConsolidatedReports = 0;
   schemaFailureReports = 0;
   invalidFixResults = 0;
+  fixStructuredFailure: StructuredOutputFailureCode | null = null;
   messagesValue: unknown[] = [];
+  messagesCalls = 0;
+  disposeCalls = 0;
   /** Throws from `createSession` once this many sessions already exist. */
   failCreateSessionAfter: number | null = null;
   private statusGate: Promise<void> | null = null;
   private releaseStatusGate: (() => void) | null = null;
+  private messagesGate: Promise<void> | null = null;
+  private releaseMessagesGate: (() => void) | null = null;
   constructor(private readonly returnStructured = true) {}
   async createSession(_phase: "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts", _label: string, _options?: ProviderCreateSessionOptions) {
     if (this.failCreateSessionAfter !== null && this.sessions >= this.failCreateSessionAfter) {
@@ -89,12 +97,31 @@ class Provider implements BuildPipelineProvider {
     if (this.statusGate) await this.statusGate;
     return this.statusOverrides.get(sessionId) ?? this.statusValue;
   }
-  async messages(): Promise<unknown[]> { return this.messagesValue; }
+  async messages(): Promise<unknown[]> {
+    this.messagesCalls += 1;
+    if (this.messagesGate) await this.messagesGate;
+    return this.messagesValue;
+  }
   async structured<T>(sessionId: string, requestId: string): Promise<StructuredOutputResult<T> | null> {
     if (!this.returnStructured) return null;
     const sent = this.sends.get(requestId)!;
     const isConsolidation = sent.prompt.includes("<multi-review-reports-json>");
     if (sent.options.schema === REVIEW_FIX_RESULT_JSON_SCHEMA) {
+      if (this.fixStructuredFailure) {
+        const code = this.fixStructuredFailure;
+        this.fixStructuredFailure = null;
+        return {
+          ok: false,
+          provider: "claude",
+          requestId,
+          error: {
+            code,
+            message: `Fix result failed with ${code}`,
+            provider: "claude",
+            retryable: code !== "interrupted",
+          },
+        };
+      }
       if (this.invalidFixResults > 0) {
         this.invalidFixResults -= 1;
         return { ok: true, provider: "claude", requestId, value: {
@@ -161,6 +188,7 @@ class Provider implements BuildPipelineProvider {
     this.aborted.push(sessionId);
     if (this.abortError) throw this.abortError;
   }
+  async dispose(): Promise<void> { this.disposeCalls += 1; }
 
   blockStatus(): () => void {
     this.statusGate = new Promise<void>((resolve) => {
@@ -170,6 +198,17 @@ class Provider implements BuildPipelineProvider {
       this.releaseStatusGate?.();
       this.releaseStatusGate = null;
       this.statusGate = null;
+    };
+  }
+
+  blockMessages(): () => void {
+    this.messagesGate = new Promise<void>((resolve) => {
+      this.releaseMessagesGate = resolve;
+    });
+    return () => {
+      this.releaseMessagesGate?.();
+      this.releaseMessagesGate = null;
+      this.messagesGate = null;
     };
   }
 }
@@ -199,6 +238,37 @@ test("MultiReviewService exposes an authoritative reviewer transcript read model
       status: "running",
       messages: provider.messagesValue,
     });
+  });
+});
+
+test("MultiReviewService keeps a provider alive while a transcript read overlaps fix execution", async () => {
+  const provider = new Provider();
+  await withService("env-transcript-provider-race", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+    const ready = (await snapshot(started.id))!;
+    const reviewer = ready.reviewers[0]!;
+    const disposalsAfterReady = provider.disposeCalls;
+
+    const releaseMessages = provider.blockMessages();
+    const transcript = service.reviewerTranscript(started.id, reviewer.id);
+    await waitUntil(() => provider.messagesCalls > 0);
+
+    const statusCallsBeforeFix = provider.statusCalls;
+    const releaseStatus = provider.blockStatus();
+    await service.address(started.id);
+    await waitUntil(() => provider.statusCalls > statusCallsBeforeFix);
+
+    releaseMessages();
+    await transcript;
+    expect(provider.disposeCalls).toBe(disposalsAfterReady);
+
+    releaseStatus();
+    await waitUntil(async () => (await snapshot(started.id))?.phase === "completed");
+    expect(provider.disposeCalls).toBe(disposalsAfterReady + 1);
   });
 });
 
@@ -372,6 +442,32 @@ test("MultiReviewService asks the fix model to correct an invalid fix result", a
     expect(repair?.prompt).toContain('"complete"');
     expect(repair?.prompt).toContain("<structured-review-expected-schema-json>");
   });
+});
+
+test("MultiReviewService does not treat provider fix failures as schema repair work", async () => {
+  for (const code of ["provider_error", "interrupted"] as const) {
+    const provider = new Provider();
+    await withService(`env-fix-${code}`, provider, async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+
+      provider.fixStructuredFailure = code;
+      await service.address(started.id);
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "failed";
+      });
+
+      const failed = await snapshot(started.id);
+      expect(failed?.error).toBe(`Fix result failed with ${code}`);
+      expect(failed?.activeRequest?.schemaRepairAttempts).toBeUndefined();
+      expect(failed?.activeRequest?.schemaRepairPrompt).toBeUndefined();
+      expect(failed?.fixSession?.requestIds).toHaveLength(2);
+    });
+  }
 });
 
 test("MultiReviewService bounds repeated reviewer schema corrections", async () => {

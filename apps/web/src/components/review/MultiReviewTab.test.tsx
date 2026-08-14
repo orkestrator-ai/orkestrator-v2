@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
+import type {
+  MultiReviewReviewerTranscript,
+  MultiReviewWorkflow,
+} from "@orkestrator/protocol/multi-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { MultiReviewTab } from "./MultiReviewTab";
@@ -237,5 +240,76 @@ describe("MultiReviewReviewerTab", () => {
       toolArgs: { command: "git diff" },
       toolOutput: "diff output",
     }));
+  });
+
+  test("keeps the transcript full-height and does not overlap slow refreshes", async () => {
+    let resolveFirst!: (value: MultiReviewReviewerTranscript) => void;
+    const first = new Promise<MultiReviewReviewerTranscript>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const completed: MultiReviewReviewerTranscript = {
+      workflowId: "multi-1",
+      reviewerId: "reviewer-1",
+      agent: "codex",
+      model: "gpt-5.6",
+      status: "completed",
+      report,
+      messages: [],
+    };
+    let activeRequests = 0;
+    let maximumActiveRequests = 0;
+    let calls = 0;
+    const loadTranscript = mock(async () => {
+      calls += 1;
+      activeRequests += 1;
+      maximumActiveRequests = Math.max(maximumActiveRequests, activeRequests);
+      try {
+        return calls === 1 ? await first : completed;
+      } finally {
+        activeRequests -= 1;
+      }
+    });
+    let intervalCallback: (() => void) | undefined;
+    const originalSetInterval = window.setInterval;
+    const originalClearInterval = window.clearInterval;
+    window.setInterval = ((callback: TimerHandler) => {
+      if (typeof callback === "function") intervalCallback = () => callback();
+      return 1;
+    }) as typeof window.setInterval;
+    window.clearInterval = mock(() => undefined) as typeof window.clearInterval;
+    let unmount: (() => void) | undefined;
+
+    try {
+      ({ unmount } = render(<MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1", workflowId: "multi-1", reviewerId: "reviewer-1", isLocal: true,
+        }}
+        isActive
+        loadTranscript={loadTranscript}
+      />));
+
+      const body = screen.getByTestId("multi-review-reviewer-transcript-body");
+      expect(body.classList.contains("flex")).toBe(true);
+      expect(body.classList.contains("flex-col")).toBe(true);
+      await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(1));
+
+      act(() => {
+        intervalCallback?.();
+        intervalCallback?.();
+      });
+      expect(loadTranscript).toHaveBeenCalledTimes(1);
+      expect(maximumActiveRequests).toBe(1);
+
+      await act(async () => {
+        resolveFirst(completed);
+        await first;
+      });
+      await waitFor(() => expect(activeRequests).toBe(0));
+      expect(maximumActiveRequests).toBe(1);
+    } finally {
+      unmount?.();
+      window.setInterval = originalSetInterval;
+      window.clearInterval = originalClearInterval;
+    }
   });
 });

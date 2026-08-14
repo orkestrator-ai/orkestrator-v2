@@ -10,6 +10,30 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `StorageService prompt queues > live lease timer restores and announces a sole claimed head` (`apps/backend/src/core/storage-prompt-queues.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-review-980919fe-full-tests.log`
+- **Worker configuration:** The backend workspace package ran `bun test src tests --parallel` while the other workspace, root, bridge, and protocol-lockfile groups ran concurrently.
+- **Failure:** The queue had recovered the expired sole claim and reached revision 3, but `events` was still `[]` instead of containing the expected `{ resource: "prompt-queue", id: "e1" }` announcement (duration: 44.42 ms).
+- **Suite counts:** Backend package: 1,647 total, 1,646 passed, 1 failed across 55 files. The aggregate also had one separate deterministic root-suite failure from the reviewed activity-source change.
+- **Isolated rerun:** `bun test --cwd apps/backend src/core/storage-prompt-queues.test.ts` -> 57 passed, 0 failed, 197 assertions in 1.87 seconds; the target passed in 51.94 ms.
+- **Hypothesis:** The test uses a 25 ms real-time lease, clears claim-announcement events immediately after the claim call, and then polls the durable queue separately from the listener. Under aggregate scheduling, lease recovery can race that reset/observation boundary even though the recovered queue state is correct. A deterministic clock or explicit recovery boundary should be evaluated before changing the product timer.
+
+## `MultiReviewReviewerTab > keeps the transcript full-height and does not overlap slow refreshes` (`apps/web/src/components/review/MultiReviewTab.test.tsx`)
+
+- **Status:** resolved
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-fix-review-full-tests.log`
+- **Worker configuration:** The web workspace package ran `bun test src --parallel` while the remaining workspace, root, bridge, and protocol-lockfile groups ran concurrently.
+- **Failure:** The test timed out after 1,029.86 ms waiting for Virtuoso to expose the completed `Reviewer report` article. The failure DOM showed the article after the timed-out query snapshot, so the production request had completed and rendered but missed the test's one-second polling window under aggregate load.
+- **Suite counts:** Web package: 5,647 total, 5,645 passed, 1 skipped, 1 failed across 231 files. All other aggregate groups passed.
+- **Isolated rerun:** The owning file had passed before the aggregate run (6 passed, 0 failed). After the test fix, `bun test --cwd apps/web src/components/review/MultiReviewTab.test.tsx --rerun-each 10` passed all 60 executions with 290 assertions in 841 ms.
+- **Root cause:** The concurrency test coupled its completion signal to Virtuoso's deferred item rendering even though the behavior under test was request serialization. Aggregate scheduling could delay that unrelated render past Testing Library's one-second wait.
+- **Fix:** Resolve and await the controlled transcript request inside asynchronous `act()`, then wait for the instrumented active-request count to reach zero and assert its maximum remained one. The existing rendering test continues to cover the report UI separately.
+- **Verification:** Ten consecutive owning-file repetitions passed with zero failures. The subsequent aggregate result is recorded in this change's validation handoff.
+
 ## Unattributable `bun run test` failure — aggregate output truncated on exit (`scripts/test-all.ts`)
 
 - **Status:** resolved

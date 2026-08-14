@@ -54,12 +54,15 @@ export function MultiReviewReviewerTab({
   const [snapshot, setSnapshot] = useState<MultiReviewReviewerTranscript | null>(null);
   const [error, setError] = useState<string | null>(null);
   const requestGeneration = useRef(0);
+  const inFlightGeneration = useRef<number | null>(null);
   const containerId = useEnvironmentStore(
     (state) => state.getEnvironmentById(data.environmentId)?.containerId,
   ) ?? undefined;
 
   const refresh = useCallback(async () => {
-    const generation = ++requestGeneration.current;
+    const generation = requestGeneration.current;
+    if (inFlightGeneration.current === generation) return;
+    inFlightGeneration.current = generation;
     try {
       const next = await loadTranscript(data.workflowId, data.reviewerId);
       if (requestGeneration.current !== generation) return;
@@ -68,6 +71,8 @@ export function MultiReviewReviewerTab({
     } catch (reason) {
       if (requestGeneration.current !== generation) return;
       setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      if (inFlightGeneration.current === generation) inFlightGeneration.current = null;
     }
   }, [data.reviewerId, data.workflowId, loadTranscript]);
 
@@ -132,7 +137,10 @@ export function MultiReviewReviewerTab({
         </div>
       </header>
 
-      <div className="@container min-h-0 flex-1">
+      <div
+        className="@container flex min-h-0 flex-1 flex-col"
+        data-testid="multi-review-reviewer-transcript-body"
+      >
         <VirtualizedMessageList
           messages={messages}
           computeItemKey={(_index, message) => message.id}

@@ -904,4 +904,110 @@ describe("ACP bridge", () => {
     });
     expect(created.status).toBe(201);
   });
+
+  // A v1 file is what every already-installed bridge left on disk. Its parts
+  // use the pre-consolidation `{ type: "reasoning", text }` wire shape, which
+  // the renderer no longer converts, so the load path has to upgrade them or
+  // the restored transcript renders as empty rows.
+  test("upgrades v1 persisted messages to the neutral part shape", async () => {
+    const stateDirectory = await temporaryDirectory();
+    await fs.writeFile(
+      resolve(stateDirectory, "state.json"),
+      JSON.stringify({
+        version: 1,
+        provider: "cursor",
+        sessions: [{
+          id: "session-v1",
+          clientSessionKey: "env-1:tab-1",
+          acpSessionId: "acp-session-v1",
+          status: "idle",
+          revision: 7,
+          structured: [],
+          promptJournal: [],
+          messages: [
+            {
+              id: "message-user",
+              role: "user",
+              content: "Do the work",
+              parts: [{ type: "text", text: "Do the work" }],
+              createdAt: "2026-08-01T00:00:00.000Z",
+            },
+            {
+              id: "message-assistant",
+              role: "assistant",
+              content: "approved:once",
+              parts: [
+                { type: "reasoning", text: "Checking permission. " },
+                { type: "text", text: "approved:once" },
+              ],
+              createdAt: "2026-08-01T00:00:01.000Z",
+            },
+          ],
+        }],
+      }),
+    );
+
+    const bridge = await spawnBridge({ stateDirectory });
+    const session = await nativeFetch(`${bridge.base}/session/session-v1`, {
+      headers: bridge.headers,
+    }).then((response) => response.json()) as {
+      revision: number;
+      messages: Array<{
+        id: string;
+        parts: Array<Record<string, unknown>>;
+      }>;
+    };
+
+    expect(session.revision).toBe(7);
+    expect(session.messages.map((message) => message.id))
+      .toEqual(["message-user", "message-assistant"]);
+    // `reasoning` becomes `thinking`, `text` becomes `content`, and the part
+    // identity the renderer keys off is synthesized rather than left absent.
+    expect(session.messages[1]?.parts).toEqual([
+      {
+        type: "thinking",
+        content: "Checking permission. ",
+        sourcePartId: "message-assistant:0",
+        sourceMessageId: "message-assistant",
+      },
+      {
+        type: "text",
+        content: "approved:once",
+        sourcePartId: "message-assistant:1",
+        sourceMessageId: "message-assistant",
+      },
+    ]);
+    expect(session.messages[0]?.parts).toEqual([
+      {
+        type: "text",
+        content: "Do the work",
+        sourcePartId: "message-user:0",
+        sourceMessageId: "message-user",
+      },
+    ]);
+
+    // Loading alone does not rewrite the file; the next persist does, and it
+    // must write v2 with the upgraded parts so this migration runs only once.
+    const createdAfterLoad = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-1:tab-2" }),
+    });
+    expect(createdAfterLoad.status).toBe(201);
+
+    const rewritten = await waitFor(
+      async () => JSON.parse(
+        await fs.readFile(resolve(stateDirectory, "state.json"), "utf8"),
+      ) as {
+        version: number;
+        sessions: Array<{ id: string; messages: Array<{ parts: Array<{ type: string }> }> }>;
+      },
+      (value) => value.version === 2,
+    );
+    expect(
+      rewritten.sessions
+        .find((persisted) => persisted.id === "session-v1")
+        ?.messages[1]?.parts.map((part) => part.type),
+    ).toEqual(["thinking", "text"]);
+  });
 });

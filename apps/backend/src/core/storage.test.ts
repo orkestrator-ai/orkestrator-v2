@@ -132,6 +132,78 @@ describe("first-run agent platform selection", () => {
   });
 });
 
+describe("favorite model normalization", () => {
+  // `config.json` is user-editable on disk, so every read is a trust boundary:
+  // a malformed favourite must not reach the renderer's model picker, where an
+  // unknown platform has no catalogue and a blank id matches every model.
+  test("drops malformed, blank, and duplicate favorites on read", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await fs.writeFile(
+        path.join(dataDir, "config.json"),
+        JSON.stringify({
+          ...defaultConfig(),
+          global: {
+            ...defaultConfig().global,
+            favoriteModels: [
+              { platform: "claude", modelId: "claude-opus" },
+              // Trimmed to the same identity as the entry above.
+              { platform: "claude", modelId: "  claude-opus  " },
+              { platform: "codex", modelId: "gpt-codex" },
+              { platform: "not-an-agent", modelId: "anything" },
+              { platform: "claude", modelId: "   " },
+              { platform: "claude", modelId: 42 },
+              { platform: "claude" },
+              { modelId: "orphan" },
+              "claude/opus",
+              null,
+            ],
+          },
+        }),
+        "utf8",
+      );
+
+      const loaded = await storage.loadConfig();
+      expect(loaded.global.favoriteModels).toEqual([
+        { platform: "claude", modelId: "claude-opus" },
+        { platform: "codex", modelId: "gpt-codex" },
+      ]);
+    });
+  });
+
+  test("replaces a non-array favorites field with an empty list", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await fs.writeFile(
+        path.join(dataDir, "config.json"),
+        JSON.stringify({
+          ...defaultConfig(),
+          global: { ...defaultConfig().global, favoriteModels: "claude/opus" },
+        }),
+        "utf8",
+      );
+
+      expect((await storage.loadConfig()).global.favoriteModels).toEqual([]);
+    });
+  });
+
+  test("round-trips valid favorites through an update without reordering them", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const favoriteModels = [
+        { platform: "opencode" as const, modelId: "opencode/a" },
+        { platform: "claude" as const, modelId: "claude-opus" },
+      ];
+      const updated = await storage.updateGlobalConfig({
+        ...defaultConfig().global,
+        favoriteModels,
+      });
+      expect(updated.global.favoriteModels).toEqual(favoriteModels);
+
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      expect((await restarted.loadConfig()).global.favoriteModels).toEqual(favoriteModels);
+    });
+  });
+});
+
 describe("ACP bridge runtime persistence", () => {
   test("round-trips and clears Cursor and Grok process coordinates", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {

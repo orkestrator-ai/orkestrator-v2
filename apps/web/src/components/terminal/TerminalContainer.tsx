@@ -595,6 +595,11 @@ export function TerminalContainer({
   const setupSessionBindLifecycleGenerationRef = useRef(0);
   const setupSessionReconnectGenerationRef = useRef(0);
   const durableLaunchClearInFlightRef = useRef(false);
+  // Command+W arrives either from the Electron menu accelerator or, in a
+  // browser-served client, from the renderer fallback. These two refs keep
+  // exactly one of them closing a tab per keypress.
+  const menuOwnsCloseTabRef = useRef(false);
+  const rendererClosedTabPendingEchoRef = useRef(false);
   const [setupSessionBindNonce, setSetupSessionBindNonce] = useState(0);
   const [setupSessionBindRetryNonce, setSetupSessionBindRetryNonce] = useState(0);
   const [setupSessionReconnectNonce, setSetupSessionReconnectNonce] = useState(0);
@@ -1908,11 +1913,48 @@ export function TerminalContainer({
   useEffect(() => {
     if (!isActive) return;
     const unlisten = listen<void>("menu-close-tab", () => {
+      // The first menu event proves an Electron menu is delivering Command+W,
+      // so the renderer fallback below stands down from here on. Consume one
+      // pending fallback close first: the fallback only runs before this latch
+      // engages, so at most one menu event can be an echo of the same physical
+      // keypress, and acting on it would close a second, unrelated tab.
+      const echoesRendererClose = rendererClosedTabPendingEchoRef.current;
+      rendererClosedTabPendingEchoRef.current = false;
+      menuOwnsCloseTabRef.current = true;
+      if (echoesRendererClose) return;
       handleCloseActiveTab();
     });
     return () => {
       void unlisten.then((dispose) => dispose());
     };
+  }, [handleCloseActiveTab, isActive]);
+
+  // Browser-served clients (`apps/web-public`) have no Electron menu, so
+  // nothing would close the tab and the browser would close its own tab
+  // instead. Handle Command+W here and always preventDefault. The listener
+  // latches off as soon as a `menu-close-tab` event proves a native menu owns
+  // the shortcut, so the desktop app can never close two tabs for one press.
+  useEffect(() => {
+    if (!isActive) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key.toLowerCase() !== "w"
+        || !event.metaKey
+        || event.ctrlKey
+        || event.altKey
+        || event.shiftKey
+      ) {
+        return;
+      }
+      // Prevent the browser's own close-tab default even once the native menu
+      // has taken ownership; losing the whole window is worse than a no-op.
+      event.preventDefault();
+      if (menuOwnsCloseTabRef.current) return;
+      rendererClosedTabPendingEchoRef.current = true;
+      handleCloseActiveTab();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleCloseActiveTab, isActive]);
 
   // Clear launch options after they've been applied to the first tab.

@@ -6745,6 +6745,207 @@ describe("TerminalContainer", () => {
       });
     });
 
+    // A browser-served client (`apps/web-public`) runs the same tree with no
+    // Electron menu, so nothing would emit `menu-close-tab` and the browser
+    // would close its own tab instead of the pane tab.
+    test("closes the active pane tab from Command+W when no native menu owns it", async () => {
+      usePaneLayoutStore.setState((state) => ({
+        environments: new Map(state.environments).set("env-visible", {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              { id: "visible-tab", type: "plain" },
+              { id: "second-tab", type: "plain" },
+            ],
+            activeTabId: "second-tab",
+          },
+          activePaneId: "default",
+          containerId: "container-visible",
+        }),
+      }));
+
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+        </TerminalProvider>,
+      );
+      await waitFor(() => {
+        expect(listenMock).toHaveBeenCalledWith("menu-close-tab", expect.any(Function));
+      });
+
+      const event = new KeyboardEvent("keydown", {
+        key: "w",
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        window.dispatchEvent(event);
+      });
+
+      // The browser's own close-tab default must never win, even when this
+      // client has no tab of its own left to close.
+      expect(event.defaultPrevented).toBe(true);
+      await waitFor(() => {
+        const environment = usePaneLayoutStore.getState().environments.get("env-visible");
+        if (environment?.root.kind !== "leaf") throw new Error("expected leaf");
+        expect(environment.root.tabs.map((tab) => tab.id)).toEqual(["visible-tab"]);
+      });
+    });
+
+    test("leaves Command+W alone when it is not a bare Command chord", async () => {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+        </TerminalProvider>,
+      );
+      await waitFor(() => {
+        expect(listenMock).toHaveBeenCalledWith("menu-close-tab", expect.any(Function));
+      });
+
+      for (const modifiers of [
+        { metaKey: true, shiftKey: true },
+        { metaKey: true, altKey: true },
+        { metaKey: true, ctrlKey: true },
+        { ctrlKey: true },
+        {},
+      ]) {
+        const event = new KeyboardEvent("keydown", {
+          key: "w",
+          bubbles: true,
+          cancelable: true,
+          ...modifiers,
+        });
+        act(() => {
+          window.dispatchEvent(event);
+        });
+        expect(event.defaultPrevented, JSON.stringify(modifiers)).toBe(false);
+      }
+
+      const environment = usePaneLayoutStore.getState().environments.get("env-visible");
+      if (environment?.root.kind !== "leaf") throw new Error("expected leaf");
+      expect(environment.root.tabs.map((tab) => tab.id)).toEqual(["visible-tab"]);
+    });
+
+    // In Electron the accelerator normally swallows the keydown so only the
+    // menu path runs. If it ever does not, both paths see the same keypress
+    // and closing twice would take an unrelated tab with it.
+    test("closes exactly one tab when the menu event echoes a renderer-handled Command+W", async () => {
+      let closeTabListener: (() => void) | undefined;
+      listenMock.mockImplementation(async (event: string, handler: () => void) => {
+        if (event === "menu-close-tab") closeTabListener = handler;
+        return () => undefined;
+      });
+      usePaneLayoutStore.setState((state) => ({
+        environments: new Map(state.environments).set("env-visible", {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              { id: "visible-tab", type: "plain" },
+              { id: "second-tab", type: "plain" },
+              { id: "third-tab", type: "plain" },
+            ],
+            activeTabId: "third-tab",
+          },
+          activePaneId: "default",
+          containerId: "container-visible",
+        }),
+      }));
+
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+        </TerminalProvider>,
+      );
+      await waitFor(() => expect(closeTabListener).toBeDefined());
+
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent("keydown", {
+          key: "w",
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        }));
+        closeTabListener?.();
+      });
+
+      await waitFor(() => {
+        const environment = usePaneLayoutStore.getState().environments.get("env-visible");
+        if (environment?.root.kind !== "leaf") throw new Error("expected leaf");
+        expect(environment.root.tabs.map((tab) => tab.id)).toEqual(["visible-tab", "second-tab"]);
+      });
+
+      // The first menu event latches ownership: the renderer fallback must
+      // stand down for every later press so the menu stays the only closer.
+      const latched = new KeyboardEvent("keydown", {
+        key: "w",
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        window.dispatchEvent(latched);
+      });
+      expect(latched.defaultPrevented).toBe(true);
+      const afterLatch = usePaneLayoutStore.getState().environments.get("env-visible");
+      if (afterLatch?.root.kind !== "leaf") throw new Error("expected leaf");
+      expect(afterLatch.root.tabs.map((tab) => tab.id)).toEqual(["visible-tab", "second-tab"]);
+
+      act(() => {
+        closeTabListener?.();
+      });
+      await waitFor(() => {
+        const environment = usePaneLayoutStore.getState().environments.get("env-visible");
+        if (environment?.root.kind !== "leaf") throw new Error("expected leaf");
+        expect(environment.root.tabs.map((tab) => tab.id)).toEqual(["visible-tab"]);
+      });
+    });
+
+    test("does not close tabs from Command+W in an inactive environment", async () => {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive={false}
+          />
+        </TerminalProvider>,
+      );
+
+      const event = new KeyboardEvent("keydown", {
+        key: "w",
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        window.dispatchEvent(event);
+      });
+
+      expect(event.defaultPrevented).toBe(false);
+      const environment = usePaneLayoutStore.getState().environments.get("env-visible");
+      if (environment?.root.kind !== "leaf") throw new Error("expected leaf");
+      expect(environment.root.tabs.map((tab) => tab.id)).toEqual(["visible-tab"]);
+    });
+
     test("ignores a native preview link whose source tab is missing or is not a browser tab", async () => {
       let openLinkListener:
         | ((event: { tabId: string; url: string }) => void)

@@ -72,6 +72,12 @@ test("one picker chooses the provider, the model, and the reasoning effort", asy
 
   // Another provider's model is one hop away: no separate provider control.
   await trigger.click();
+  // The fixture uses the legacy Claude/Codex/OpenCode allowlist. Providers
+  // disabled in global settings must not reappear through the shared picker.
+  await expect(page.getByRole("button", { name: "claude models" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "opencode models" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "cursor models" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "grok models" })).toHaveCount(0);
   await page.getByRole("button", { name: "codex models" }).click();
   await page.getByRole("group", { name: "Models" })
     .getByRole("menuitemradio", { name: /Codex Review/ })

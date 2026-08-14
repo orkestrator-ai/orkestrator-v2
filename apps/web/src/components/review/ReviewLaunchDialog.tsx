@@ -60,9 +60,6 @@ export const REVIEW_TAB_OPTIONS: Array<{
   { value: "opencode", label: "OpenCode Native", agent: "opencode", mode: "native" },
 ];
 
-/** Every provider the picker's platform rail offers, in tab order. */
-const REVIEW_PLATFORMS: ReviewAgent[] = REVIEW_TAB_OPTIONS.map((option) => option.agent);
-
 export function getReviewAgent(tabType: ReviewTabType): ReviewAgent {
   return REVIEW_TAB_OPTIONS.find((option) => option.value === tabType)?.agent ?? "claude";
 }
@@ -121,17 +118,25 @@ export function ReviewLaunchDialog({
   busy = false,
   onConfirm,
 }: ReviewLaunchDialogProps) {
-  const { favorites, toggleFavorite } = useAgentModelFavorites();
+  const { favorites, enabledPlatforms, toggleFavorite } = useAgentModelFavorites();
+  // Configuration guarantees at least one enabled platform, but retain a safe
+  // fallback for older or malformed persisted state.
+  const reviewPlatforms: ReviewAgent[] = enabledPlatforms.length > 0
+    ? enabledPlatforms
+    : ["claude"];
+  const defaultEnabledTabType = reviewPlatforms.includes(defaultTabType)
+    ? defaultTabType
+    : reviewPlatforms[0]!;
   const initialModel = firstModelFor(
-    getReviewAgent(defaultTabType),
+    getReviewAgent(defaultEnabledTabType),
     catalog,
     preferredModels,
   );
-  const [tabType, setTabType] = useState(defaultTabType);
+  const [tabType, setTabType] = useState(defaultEnabledTabType);
   const [model, setModel] = useState(initialModel);
   const [reasoningEffort, setReasoningEffort] = useState(() =>
     defaultEffortFor(
-      getReviewAgent(defaultTabType),
+      getReviewAgent(defaultEnabledTabType),
       initialModel,
       catalog,
       preferredReasoningEfforts,
@@ -147,14 +152,14 @@ export function ReviewLaunchDialog({
     wasOpenRef.current = open;
     if (!justOpened) return;
     const nextModel = firstModelFor(
-      getReviewAgent(defaultTabType),
+      getReviewAgent(defaultEnabledTabType),
       catalog,
       preferredModels,
     );
-    setTabType(defaultTabType);
+    setTabType(defaultEnabledTabType);
     setModel(nextModel);
     setReasoningEffort(defaultEffortFor(
-      getReviewAgent(defaultTabType),
+      getReviewAgent(defaultEnabledTabType),
       nextModel,
       catalog,
       preferredReasoningEfforts,
@@ -162,7 +167,7 @@ export function ReviewLaunchDialog({
     setPassAllowance(String(LOOPED_REVIEW_DEFAULT_ALLOWANCE));
   }, [
     catalog,
-    defaultTabType,
+    defaultEnabledTabType,
     open,
     preferredModels,
     preferredReasoningEfforts,
@@ -182,14 +187,14 @@ export function ReviewLaunchDialog({
   // The picker owns provider, model and reasoning together, so it is fed every
   // provider's catalog at once rather than the selected provider's slice.
   const pickerModels = useMemo<AgentModel[]>(
-    () => REVIEW_PLATFORMS.flatMap((platform) =>
+    () => reviewPlatforms.flatMap((platform) =>
       modelsForAgent(catalog, platform).map((option) => ({
         platform,
         id: option.id,
         label: option.name,
         description: option.description,
       }))),
-    [catalog],
+    [catalog, reviewPlatforms],
   );
   const reasoningOptions: AgentReasoningOption[] = effortAvailable
     ? [
@@ -328,7 +333,7 @@ export function ReviewLaunchDialog({
                 id="review-model"
                 ariaLabel="Agent, model and reasoning"
                 models={pickerModels}
-                enabledPlatforms={REVIEW_PLATFORMS}
+                enabledPlatforms={reviewPlatforms}
                 selectedPlatform={agent}
                 favorites={favorites}
                 onToggleFavorite={toggleFavorite}

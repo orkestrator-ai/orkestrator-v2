@@ -258,6 +258,39 @@ describe("ReviewLaunchDialog", () => {
     });
   });
 
+  test("hides disabled providers and falls back from a disabled default", () => {
+    const config = useConfigStore.getState().config;
+    useConfigStore.setState({
+      config: {
+        ...config,
+        global: {
+          ...config.global,
+          enabledAgentPlatforms: ["claude"],
+        },
+      },
+    });
+    const { onConfirm } = renderDialog({
+      defaultTabType: "codex",
+      preferredModels: { claude: "claude-b" },
+      preferredReasoningEfforts: { claude: "xhigh" },
+    });
+
+    expect(picker().textContent).toContain("Claude B");
+    openPicker();
+    expect(screen.getByRole("button", { name: "claude models" })).toBeTruthy();
+    for (const agent of ["codex", "cursor", "grok", "opencode"]) {
+      expect(screen.queryByRole("button", { name: `${agent} models` })).toBeNull();
+    }
+    closePicker();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith({
+      tabType: "claude",
+      model: "claude-b",
+      reasoningEffort: "xhigh",
+    });
+  });
+
   test("shows the model and its reasoning effort on the single trigger", () => {
     renderDialog({
       preferredModels: { claude: "claude-a" },

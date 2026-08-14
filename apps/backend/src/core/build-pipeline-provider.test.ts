@@ -5502,6 +5502,36 @@ describe("HTTP build pipeline provider (ACP)", () => {
     }]);
   });
 
+  test("gives Cursor and Grok session creation enough time for initialize plus session/new", async () => {
+    const timeouts: number[] = [];
+    const originalTimeout = AbortSignal.timeout.bind(AbortSignal);
+    AbortSignal.timeout = ((ms: number) => {
+      timeouts.push(ms);
+      return originalTimeout(ms);
+    }) as typeof AbortSignal.timeout;
+    try {
+      for (const agent of ["cursor", "grok"] as const) {
+        timeouts.length = 0;
+        const { provider } = httpProvider(
+          () => Response.json({ sessionId: `${agent}-1` }, { status: 201 }),
+          { agent, baseUrl: `http://${agent}.test`, authToken: `${agent}-token` },
+        );
+        await provider.createSession("build", `${agent} session`);
+        expect(timeouts).toEqual([75_000]);
+      }
+
+      timeouts.length = 0;
+      const { provider } = httpProvider(
+        () => Response.json({ sessionId: "claude-1" }, { status: 201 }),
+        { agent: "claude", baseUrl: "http://claude.test", authToken: "claude-token" },
+      );
+      await provider.createSession("build", "Claude session");
+      expect(timeouts).toEqual([30_000]);
+    } finally {
+      AbortSignal.timeout = originalTimeout;
+    }
+  });
+
   test("surfaces the bounded ACP session-creation error detail", async () => {
     const { provider } = httpProvider(
       () => Response.json(

@@ -391,6 +391,14 @@ const LOCAL_SERVER_KINDS: readonly LocalServerKind[] = ["opencode", "claude", "c
 // group before escalating the bridge itself.
 const LOCAL_SERVER_SHUTDOWN_GRACE_MS = 8_000;
 const LOCAL_SERVER_KILL_WAIT_MS = 1_000;
+const LOCAL_SERVER_HEALTH_ATTEMPTS = 75;
+const LOCAL_SERVER_HEALTH_INTERVAL_MS = 200;
+/**
+ * Grok and Cursor take longer than the HTTP bridges to bind: the ACP child
+ * often becomes healthy about a second after the 15s wait gives up, which
+ * flashes Connection Failed and then attaches on the next refresh.
+ */
+const ACP_LOCAL_SERVER_HEALTH_ATTEMPTS = 120;
 let localServerShutdownRequested = false;
 let localServerShutdownPromise: Promise<void> | null = null;
 let terminateProcessTreeImpl = terminateProcessTree;
@@ -5975,15 +5983,21 @@ async function isHttpServerReachable(
   });
 }
 
+function localServerHealthAttempts(kind: LocalServerKind): number {
+  return kind === "cursor" || kind === "grok"
+    ? ACP_LOCAL_SERVER_HEALTH_ATTEMPTS
+    : LOCAL_SERVER_HEALTH_ATTEMPTS;
+}
+
 async function waitForHealth(
   port: number,
   pathName = "/global/health",
-  attempts = 75,
+  attempts = LOCAL_SERVER_HEALTH_ATTEMPTS,
   headers?: Record<string, string>,
 ): Promise<void> {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (await checkHttpHealth(port, pathName, headers)) return;
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, LOCAL_SERVER_HEALTH_INTERVAL_MS));
   }
   throw new Error(`Server on port ${port} did not become healthy`);
 }
@@ -6031,7 +6045,7 @@ async function waitForLocalServerStartup(
 
     child.once("error", onError);
     child.once("exit", onExit);
-    waitForHealth(port, "/global/health", 75, headers).then(() => complete(), (error: unknown) => {
+    waitForHealth(port, "/global/health", localServerHealthAttempts(kind), headers).then(() => complete(), (error: unknown) => {
       complete(error instanceof Error ? error : new Error(String(error)));
     });
   });
@@ -8810,7 +8824,7 @@ async function startContainerServer(
   if (!hostPort) throw new Error(`Container port ${port} is not mapped`);
   if (await checkHttpHealth(hostPort)) return { hostPort, wasRunning: true };
   await dockerExecDetached(containerId, command, redactValues);
-  await waitForHealth(hostPort).catch(async (error) => {
+  await waitForHealth(hostPort, "/global/health", localServerHealthAttempts(processName)).catch(async (error) => {
     const logFile = processName === "opencode"
       ? "/tmp/opencode-serve.log"
       : processName === "claude"

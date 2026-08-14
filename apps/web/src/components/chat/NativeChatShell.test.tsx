@@ -56,6 +56,7 @@ const originalResizeObserver = globalThis.ResizeObserver;
 function shellProps() {
   return {
     agentLabel: "Test",
+    platform: "codex" as const,
     agentExpansionScope: "environment-test",
     isActive: true,
     connectionState: "connected" as const,
@@ -441,10 +442,11 @@ describe("NativeChatShell", () => {
 
   describe("connection states", () => {
     test("shows a connecting screen instead of the transcript", () => {
-      render(
+      const { container } = render(
         <NativeChatShell
           {...shellProps()}
           agentLabel="Codex"
+          platform="codex"
           connectionState="connecting"
         />,
       );
@@ -452,6 +454,35 @@ describe("NativeChatShell", () => {
       expect(screen.getByText("Connecting to Codex...")).toBeTruthy();
       expect(screen.queryByTestId("compose-dock")).toBeNull();
       expect(screen.queryByTestId("transcript-bottom-spacer")).toBeNull();
+      const logo = container.querySelector("svg.agent-connecting-logo");
+      expect(logo).toBeTruthy();
+      expect(logo?.getAttribute("class")).toContain("h-16");
+      expect(container.querySelector(".animate-spin")).toBeNull();
+    });
+
+    test("uses the selected platform logo while connecting", () => {
+      const { container, rerender } = render(
+        <NativeChatShell
+          {...shellProps()}
+          agentLabel="Grok Build"
+          platform="grok"
+          connectionState="connecting"
+        />,
+      );
+
+      expect(container.querySelector("svg.agent-connecting-logo")?.getAttribute("viewBox"))
+        .toBe("0 0 33 32");
+
+      rerender(
+        <NativeChatShell
+          {...shellProps()}
+          agentLabel="Cursor Agent"
+          platform="cursor"
+          connectionState="connecting"
+        />,
+      );
+      expect(container.querySelector("svg.agent-connecting-logo")?.getAttribute("viewBox"))
+        .toBe("0 0 49 56");
     });
 
     test("reports the failure reason and retries on demand", () => {

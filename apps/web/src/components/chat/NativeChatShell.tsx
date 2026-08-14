@@ -7,10 +7,12 @@ import {
   type RefObject,
 } from "react";
 import type { StateSnapshot, VirtuosoHandle } from "react-virtuoso";
-import { AlertCircle, ArrowDown, History, Loader2, RefreshCw } from "lucide-react";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { AlertCircle, ArrowDown, History, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
+import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { NativeMessage } from "@/components/chat/NativeMessage";
@@ -24,6 +26,8 @@ export type NativeConnectionState = "connecting" | "connected" | "error";
 interface NativeChatShellProps<TMessage extends NativeMessageType> {
   /** Rendered as the assistant name and used in copy: "Connecting to {label}…". */
   agentLabel: string;
+  /** Brand mark shown on the connecting screen instead of a generic spinner. */
+  platform: AgentPlatform;
   /** Only the focused chat pane owns global keyboard shortcuts. */
   isActive: boolean;
   /** Split panes can both be active; only the focused pane owns find shortcuts. */
@@ -115,6 +119,7 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
  */
 export function NativeChatShell<TMessage extends NativeMessageType>({
   agentLabel,
+  platform,
   isActive,
   ownsGlobalShortcuts,
   containerId,
@@ -183,8 +188,14 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
 
   if (connectionState === "connecting") {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-4 p-4 text-muted-foreground">
-        <Loader2 className="h-8 w-8 animate-spin" />
+      <div
+        role="status"
+        className="flex h-full flex-col items-center justify-center gap-4 p-4 text-muted-foreground"
+      >
+        <AgentPlatformIcon
+          platform={platform}
+          className="agent-connecting-logo h-16 w-16"
+        />
         <p className="text-sm">Connecting to {agentLabel}...</p>
       </div>
     );

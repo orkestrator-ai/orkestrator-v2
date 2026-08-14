@@ -1510,6 +1510,7 @@ function SharedNativeAgentController({
     <NativeChatShell
       agentExpansionScope={data.environmentId}
       agentLabel={label}
+      platform={platform}
       isActive={isActive}
       ownsGlobalShortcuts={ownsGlobalShortcuts}
       // Without this, images the agent wrote inside the container render as

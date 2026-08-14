@@ -47,6 +47,20 @@ async function openTooltip(button: HTMLElement) {
 }
 
 describe("ContextUsageWheel", () => {
+  test("remains available before a provider reports usage", async () => {
+    const { container } = render(<ContextUsageWheel usage={null} />);
+    const button = screen.getByRole("button", {
+      name: "Context window usage unavailable",
+    });
+
+    expect(button.className).toContain("text-muted-foreground/50");
+    expect(container.querySelector("[data-context-usage-progress]")).toBeNull();
+    expect(await openTooltip(button)).toEqual([
+      "Context window:",
+      "Usage is not available yet.",
+    ]);
+  });
+
   test.each([
     [0, "0 100"],
     [42, "42 58"],

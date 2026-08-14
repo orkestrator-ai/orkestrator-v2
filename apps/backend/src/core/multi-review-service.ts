@@ -17,6 +17,7 @@ import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/s
 import type { Environment } from "./models.js";
 import type { StorageService } from "./storage.js";
 import {
+  AmbiguousPromptDispatchError,
   createBuildPipelineProvider,
   type BridgeConnection,
   type BuildPipelineProvider,
@@ -35,7 +36,9 @@ import {
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 const DEFAULT_POLL_MS = 1_000;
 const CONTROLLER_LEASE_MS = 15_000;
+const CONTROLLER_RENEW_MS = 5_000;
 const MAX_IDLE_RESULT_POLLS = 5;
+const CANCELLATION_DEADLINE_MS = 10 * 60_000;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -48,6 +51,9 @@ function errorMessage(error: unknown): string {
 export interface MultiReviewServiceOptions {
   autoAdvance?: boolean;
   pollIntervalMs?: number;
+  controllerLeaseMs?: number;
+  controllerRenewMs?: number;
+  cancellationDeadlineMs?: number;
   provider?: (
     workflow: MultiReviewWorkflow,
     selection: MultiReviewModelSelection,
@@ -59,9 +65,13 @@ export interface MultiReviewServiceOptions {
 export class MultiReviewService {
   private readonly ownerId = randomUUID();
   private readonly locks = new Map<string, Promise<void>>();
+  private readonly scheduledRuns = new Map<string, { pending: boolean; promise: Promise<void> }>();
   private readonly providers = new Map<string, BuildPipelineProvider>();
   private readonly providerUsers = new Map<string, Set<string>>();
+  private readonly leases = new Map<string, { token: string; expiresAt: string }>();
   private timer: ReturnType<typeof setInterval> | null = null;
+  private renewTimer: ReturnType<typeof setInterval> | null = null;
+  private tickRun: { pending: boolean; promise: Promise<void> } | null = null;
   private stopped = false;
 
   constructor(
@@ -73,29 +83,38 @@ export class MultiReviewService {
   async init(): Promise<void> {
     this.stopped = false;
     if (this.timer) clearInterval(this.timer);
+    if (this.renewTimer) clearInterval(this.renewTimer);
     this.timer = null;
+    this.renewTimer = null;
     if (this.options.autoAdvance !== false) {
-      this.timer = setInterval(() => void this.tick(), this.options.pollIntervalMs ?? DEFAULT_POLL_MS);
+      this.timer = setInterval(() => void this.requestTick(), this.options.pollIntervalMs ?? DEFAULT_POLL_MS);
       this.timer.unref?.();
-      void this.tick();
+      this.renewTimer = setInterval(
+        () => void this.renewLeases(),
+        this.options.controllerRenewMs ?? CONTROLLER_RENEW_MS,
+      );
+      this.renewTimer.unref?.();
+      void this.requestTick();
     }
   }
 
   async shutdown(): Promise<void> {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
+    if (this.renewTimer) clearInterval(this.renewTimer);
     this.timer = null;
-    await Promise.allSettled([...this.locks.values()]);
-    const records = await this.storage.listAllMultiReviewWorkflows().catch(() => []);
-    await Promise.allSettled(records.flatMap((record) =>
-      record.controllerLease?.ownerId === this.ownerId
-        ? [this.storage.releaseMultiReviewController(
-            record.id, this.ownerId, record.controllerLease.token,
-          )]
-        : []));
+    this.renewTimer = null;
+    await Promise.allSettled([
+      ...this.locks.values(),
+      ...[...this.scheduledRuns.values()].map((entry) => entry.promise),
+      ...(this.tickRun ? [this.tickRun.promise] : []),
+    ]);
     await Promise.allSettled([...this.providers.values()].map((provider) => provider.dispose?.()));
     this.providers.clear();
     this.providerUsers.clear();
+    await Promise.allSettled([...this.leases].map(([workflowId, lease]) =>
+      this.storage.releaseMultiReviewController(workflowId, this.ownerId, lease.token)));
+    this.leases.clear();
   }
 
   async start(input: StartMultiReviewInput): Promise<MultiReviewWorkflow> {
@@ -103,11 +122,6 @@ export class MultiReviewService {
     const environment = await this.storage.getEnvironment(input.environmentId);
     if (!environment || environment.projectId !== input.projectId || environment.deletionRequestedAt) {
       throw new Error("The review environment is unavailable");
-    }
-    const existing = await this.storage.listMultiReviewWorkflows(input.environmentId);
-    if (existing.some((record) => isMultiReviewWorkflow(record.snapshot)
-      && !isMultiReviewTerminalPhase(record.snapshot.phase))) {
-      throw new Error("Finish, cancel, or delete the existing Multi Review before starting another");
     }
     const timestamp = nowIso();
     const workflow: MultiReviewWorkflow = {
@@ -127,9 +141,12 @@ export class MultiReviewService {
       updatedAt: timestamp,
       backendRevision: 0,
     };
-    const saved = await this.storage.saveMultiReviewWorkflow(
-      workflow.id, workflow.environmentId, MULTI_REVIEW_WORKFLOW_VERSION, workflow, 0,
+    const saved = await this.storage.createMultiReviewWorkflowIfNoActive(
+      workflow.id, workflow.environmentId, MULTI_REVIEW_WORKFLOW_VERSION, workflow,
     );
+    if (!saved) {
+      throw new Error("Finish, cancel, or delete the existing Multi Review before starting another");
+    }
     workflow.backendRevision = saved.revision;
     void this.advanceNow(workflow.id);
     return workflow;
@@ -195,38 +212,39 @@ export class MultiReviewService {
       if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
       const { workflow, token } = controlled;
       if (isMultiReviewTerminalPhase(workflow.phase)) return workflow;
-      workflow.phase = "cancelling";
-      const sessions = [
-        ...workflow.reviewers.flatMap((reviewer) => reviewer.providerSessionId
-          ? [{ id: reviewer.providerSessionId, selection: reviewer }] : []),
-        ...(workflow.fixSession
-          ? [{ id: workflow.fixSession.providerSessionId, selection: workflow.fixModel }]
-          : []),
-      ];
-      await Promise.allSettled(sessions.map(async ({ id, selection }) => {
-        const provider = await this.provider(workflow, selection);
-        await provider.abort(id);
-      }));
-      for (const reviewer of workflow.reviewers) {
-        if (reviewer.status === "pending" || reviewer.status === "running") reviewer.status = "cancelled";
+      if (workflow.phase === "cancelling") {
+        void this.advanceNow(workflowId);
+        return workflow;
       }
-      if (workflow.fixSession?.status === "running") workflow.fixSession.status = "cancelled";
-      workflow.phase = "cancelled";
-      delete workflow.activeRequest;
+      workflow.phase = "cancelling";
+      workflow.cancellingSince = nowIso();
+      delete workflow.error;
       const saved = await this.save(workflow, token);
-      await this.release(workflow, token);
+      void this.advanceNow(workflowId);
       return saved;
     });
   }
 
   advanceNow(workflowId: string): Promise<void> {
-    return this.withLock(workflowId, async () => {
-      try {
-        await this.advance(workflowId);
-      } catch (error) {
-        await this.fail(workflowId, error);
-      }
-    }).then(() => undefined);
+    return this.runLocked(workflowId);
+  }
+
+  private requestTick(): Promise<void> {
+    if (this.tickRun) {
+      this.tickRun.pending = true;
+      return this.tickRun.promise;
+    }
+    const run = { pending: false, promise: Promise.resolve() };
+    run.promise = (async () => {
+      do {
+        run.pending = false;
+        await this.tick();
+      } while (run.pending && !this.stopped);
+    })().finally(() => {
+      if (this.tickRun === run) this.tickRun = null;
+    });
+    this.tickRun = run;
+    return run.promise;
   }
 
   private async tick(): Promise<void> {
@@ -236,8 +254,35 @@ export class MultiReviewService {
       if (!isMultiReviewWorkflow(record.snapshot)) return [];
       const phase = record.snapshot.phase;
       return phase === "reviewing" || phase === "consolidating" || phase === "fixing"
-        ? [this.advanceNow(record.id)] : [];
+        || phase === "cancelling" ? [this.runLocked(record.id)] : [];
     }));
+  }
+
+  private runLocked(workflowId: string): Promise<void> {
+    const existing = this.scheduledRuns.get(workflowId);
+    if (existing) {
+      existing.pending = true;
+      return existing.promise;
+    }
+    const run = { pending: false, promise: Promise.resolve() };
+    run.promise = (async () => {
+      do {
+        run.pending = false;
+        await this.withLock(workflowId, async () => {
+          try {
+            await this.advance(workflowId);
+          } catch (error) {
+            if (!(error instanceof ControllerFenceError)) {
+              await this.fail(workflowId, error);
+            }
+          }
+        });
+      } while (run.pending && !this.stopped);
+    })().finally(() => {
+      if (this.scheduledRuns.get(workflowId) === run) this.scheduledRuns.delete(workflowId);
+    });
+    this.scheduledRuns.set(workflowId, run);
+    return run.promise;
   }
 
   private withLock<T>(workflowId: string, operation: () => Promise<T>): Promise<T> {
@@ -262,11 +307,12 @@ export class MultiReviewService {
     workflowId: string,
   ): Promise<{ workflow: MultiReviewWorkflow; token: string } | null> {
     const claimed = await this.storage.claimMultiReviewController(
-      workflowId, this.ownerId, CONTROLLER_LEASE_MS,
+      workflowId, this.ownerId, this.controllerLeaseMs(),
     );
     if (!claimed.granted) return null;
     const record = await this.storage.getMultiReviewWorkflow(workflowId);
     if (!record || !isMultiReviewWorkflow(record.snapshot)) return null;
+    this.leases.set(workflowId, { token: claimed.token, expiresAt: claimed.expiresAt });
     return {
       workflow: { ...record.snapshot, controllerFence: claimed.token, backendRevision: record.revision },
       token: claimed.token,
@@ -285,13 +331,108 @@ export class MultiReviewService {
   }
 
   private async advance(workflowId: string): Promise<void> {
+    const existing = await this.storage.getMultiReviewWorkflow(workflowId);
+    if (!existing || !isMultiReviewWorkflow(existing.snapshot)) return;
+    const existingPhase = existing.snapshot.phase;
+    if (existingPhase !== "reviewing" && existingPhase !== "consolidating"
+      && existingPhase !== "fixing" && existingPhase !== "cancelling") return;
     const controlled = await this.loadControlled(workflowId);
     if (!controlled) return;
     const { workflow, token } = controlled;
-    if (workflow.phase === "reviewing") {
+    if (workflow.phase === "cancelling") {
+      await this.advanceCancellation(workflow, token);
+    } else if (workflow.phase === "reviewing") {
       await this.advanceReviewers(workflow, token);
     } else if (workflow.phase === "consolidating" || workflow.phase === "fixing") {
       await this.advanceFixModel(workflow, token);
+    }
+  }
+
+  private async advanceCancellation(
+    workflow: MultiReviewWorkflow,
+    token: string,
+  ): Promise<void> {
+    const waiting: string[] = [];
+    for (const reviewer of workflow.reviewers) {
+      if (reviewer.status !== "running" || !reviewer.providerSessionId) continue;
+      const result = await this.abortSession(
+        workflow, token, reviewer.providerSessionId, reviewer,
+      );
+      if (!result.settled) waiting.push(`reviewer ${reviewer.id}: ${result.error}`);
+    }
+    if (workflow.fixSession?.status === "running") {
+      const result = await this.abortSession(
+        workflow, token, workflow.fixSession.providerSessionId, workflow.fixModel,
+      );
+      if (!result.settled) waiting.push(`fix model: ${result.error}`);
+    }
+    const started = workflow.cancellingSince ? Date.parse(workflow.cancellingSince) : Number.NaN;
+    const timedOut = Number.isFinite(started)
+      && Date.now() - started >= (this.options.cancellationDeadlineMs ?? CANCELLATION_DEADLINE_MS);
+    if (waiting.length > 0 && !timedOut) {
+      workflow.error = `Cancellation is waiting for provider sessions to stop: ${waiting.join("; ")}`
+        .slice(0, 4_096);
+      await this.save(workflow, token);
+      return;
+    }
+    for (const reviewer of workflow.reviewers) {
+      if (reviewer.status === "pending" || reviewer.status === "running") {
+        reviewer.status = "cancelled";
+      }
+    }
+    if (workflow.fixSession?.status === "running") workflow.fixSession.status = "cancelled";
+    workflow.phase = "cancelled";
+    if (timedOut && waiting.length > 0) {
+      workflow.error = `Cancellation timed out while provider sessions were still active: ${waiting.join("; ")}`
+        .slice(0, 4_096);
+    } else {
+      delete workflow.error;
+    }
+    delete workflow.cancellingSince;
+    delete workflow.activeRequest;
+    await this.save(workflow, token);
+    await this.release(workflow, token);
+  }
+
+  private async abortSession(
+    workflow: MultiReviewWorkflow,
+    token: string,
+    providerSessionId: string,
+    selection: MultiReviewModelSelection,
+  ): Promise<{ settled: boolean; error: string }> {
+    try {
+      const provider = await this.provider(workflow, selection);
+      await this.assertFence(workflow.id, token);
+      let abortError: unknown;
+      try {
+        await provider.abort(providerSessionId);
+        await this.assertFence(workflow.id, token);
+      } catch (error) {
+        if (error instanceof ControllerFenceError) throw error;
+        abortError = error;
+      }
+      try {
+        const status = await provider.status(providerSessionId);
+        await this.assertFence(workflow.id, token);
+        if (status === "idle" || status === "missing" || status === "error") {
+          return { settled: true, error: "" };
+        }
+        return {
+          settled: false,
+          error: abortError ? errorMessage(abortError) : `provider still reports ${status}`,
+        };
+      } catch (statusError) {
+        if (statusError instanceof ControllerFenceError) throw statusError;
+        return {
+          settled: false,
+          error: abortError
+            ? `${errorMessage(abortError)}; status check failed: ${errorMessage(statusError)}`
+            : `status check failed: ${errorMessage(statusError)}`,
+        };
+      }
+    } catch (error) {
+      if (error instanceof ControllerFenceError) throw error;
+      return { settled: false, error: errorMessage(error) };
     }
   }
 
@@ -301,6 +442,7 @@ export class MultiReviewService {
       if (reviewer.status === "completed" || reviewer.status === "failed"
         || reviewer.status === "cancelled") continue;
       const provider = await this.provider(workflow, reviewer);
+      await this.assertFence(workflow.id, token);
       if (reviewer.status === "pending") {
         const sessionKey = `multi-review:${workflow.id}:reviewer:${reviewer.id}`;
         const providerSessionId = await provider.createSession("review", `Multi Review · Reviewer ${index + 1}`, {
@@ -317,6 +459,7 @@ export class MultiReviewService {
             fence: sessionKey,
           },
         });
+        await this.assertFence(workflow.id, token);
         reviewer.sessionKey = sessionKey;
         reviewer.providerSessionId = providerSessionId;
         reviewer.requestId = randomUUID();
@@ -337,22 +480,28 @@ export class MultiReviewService {
       if (reviewer.dispatchState === "prepared") {
         reviewer.dispatchState = "dispatching";
         await this.save(workflow, token);
-        await provider.send(
-          reviewer.providerSessionId,
-          createMultiReviewerPrompt({
-            targetBranch: workflow.targetBranch,
-            reviewInstruction: workflow.reviewInstruction,
-            reviewerNumber: index + 1,
-            reviewerCount: workflow.reviewers.length,
-          }),
-          {
-            requestId: reviewer.requestId,
-            schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema,
-            mode: "build",
-            model: reviewer.model === "default" ? undefined : reviewer.model,
-            effort: reviewer.reasoningEffort,
-          },
-        );
+        try {
+          await provider.send(
+            reviewer.providerSessionId,
+            createMultiReviewerPrompt({
+              targetBranch: workflow.targetBranch,
+              reviewInstruction: workflow.reviewInstruction,
+              reviewerNumber: index + 1,
+              reviewerCount: workflow.reviewers.length,
+            }),
+            {
+              requestId: reviewer.requestId,
+              schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema,
+              mode: "build",
+              model: reviewer.model === "default" ? undefined : reviewer.model,
+              effort: reviewer.reasoningEffort,
+            },
+          );
+        } catch (error) {
+          if (error instanceof AmbiguousPromptDispatchError) return;
+          throw error;
+        }
+        await this.assertFence(workflow.id, token);
         reviewer.dispatchState = "sent";
         await this.save(workflow, token);
       }
@@ -363,8 +512,9 @@ export class MultiReviewService {
         await this.save(workflow, token);
       }
       if (reviewer.status !== "running") continue;
-      await this.resolveUnattendedInteractions(provider, reviewer.providerSessionId);
+      await this.resolveUnattendedInteractions(workflow, token, provider, reviewer.providerSessionId);
       const status = await provider.status(reviewer.providerSessionId);
+      await this.assertFence(workflow.id, token);
       if (status === "running" || status === "blocked") continue;
       if (status === "error" || status === "missing") {
         reviewer.status = "failed";
@@ -377,6 +527,7 @@ export class MultiReviewService {
         return;
       }
       const result = await provider.structured<unknown>(reviewer.providerSessionId, reviewer.requestId);
+      await this.assertFence(workflow.id, token);
       if (!result) {
         reviewer.idleResultPolls = (reviewer.idleResultPolls ?? 0) + 1;
         if (reviewer.idleResultPolls >= MAX_IDLE_RESULT_POLLS) {
@@ -403,6 +554,7 @@ export class MultiReviewService {
 
   private async advanceFixModel(workflow: MultiReviewWorkflow, token: string): Promise<void> {
     const provider = await this.provider(workflow, workflow.fixModel);
+    await this.assertFence(workflow.id, token);
     if (!workflow.fixSession) {
       const sessionKey = `multi-review:${workflow.id}:fix`;
       const providerSessionId = await provider.createSession("review", "Multi Review · Consolidation", {
@@ -419,6 +571,7 @@ export class MultiReviewService {
           fence: sessionKey,
         },
       });
+      await this.assertFence(workflow.id, token);
       workflow.fixSession = {
         ...workflow.fixModel,
         sessionKey,
@@ -461,15 +614,21 @@ export class MultiReviewService {
             })),
           })
         : addressPrompt(workflow.consolidatedReport!);
-      await provider.send(session.providerSessionId, prompt, {
-        requestId: request.requestId,
-        schema: request.kind === "consolidate"
-          ? STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema
-          : REVIEW_FIX_RESULT_JSON_SCHEMA,
-        mode: request.kind === "consolidate" ? "plan" : "build",
-        model: workflow.fixModel.model === "default" ? undefined : workflow.fixModel.model,
-        effort: workflow.fixModel.reasoningEffort,
-      });
+      try {
+        await provider.send(session.providerSessionId, prompt, {
+          requestId: request.requestId,
+          schema: request.kind === "consolidate"
+            ? STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema
+            : REVIEW_FIX_RESULT_JSON_SCHEMA,
+          mode: request.kind === "consolidate" ? "plan" : "build",
+          model: workflow.fixModel.model === "default" ? undefined : workflow.fixModel.model,
+          effort: workflow.fixModel.reasoningEffort,
+        });
+      } catch (error) {
+        if (error instanceof AmbiguousPromptDispatchError) return;
+        throw error;
+      }
+      await this.assertFence(workflow.id, token);
       request.state = "sent";
       await this.save(workflow, token);
     }
@@ -477,8 +636,9 @@ export class MultiReviewService {
       request.state = "sent";
       await this.save(workflow, token);
     }
-    await this.resolveUnattendedInteractions(provider, session.providerSessionId);
+    await this.resolveUnattendedInteractions(workflow, token, provider, session.providerSessionId);
     const status = await provider.status(session.providerSessionId);
+    await this.assertFence(workflow.id, token);
     if (status === "running" || status === "blocked") return;
     if (status === "error" || status === "missing") {
       throw new Error(status === "missing"
@@ -486,6 +646,7 @@ export class MultiReviewService {
         : "The consolidation session failed");
     }
     const result = await provider.structured<unknown>(session.providerSessionId, request.requestId);
+    await this.assertFence(workflow.id, token);
     if (!result) {
       request.idleResultPolls = (request.idleResultPolls ?? 0) + 1;
       await this.save(workflow, token);
@@ -527,11 +688,14 @@ export class MultiReviewService {
   }
 
   private async resolveUnattendedInteractions(
+    workflow: MultiReviewWorkflow,
+    token: string,
     provider: BuildPipelineProvider,
     providerSessionId: string,
   ): Promise<void> {
     if (!provider.interactions) return;
     const snapshot = await provider.interactions.listPendingInteractions(providerSessionId);
+    await this.assertFence(workflow.id, token);
     for (const request of snapshot.requests) {
       const action = request.kind === "question" || request.kind === "mcp-form"
         || request.kind === "elicitation" || request.kind === "terminal-selection"
@@ -544,10 +708,12 @@ export class MultiReviewService {
         action,
         resolvedAt: Date.now(),
       });
+      await this.assertFence(workflow.id, token);
     }
   }
 
   private async fail(workflowId: string, error: unknown): Promise<void> {
+    if (error instanceof ControllerFenceError) return;
     const controlled = await this.loadControlled(workflowId).catch(() => null);
     if (!controlled) return;
     const { workflow, token } = controlled;
@@ -574,6 +740,7 @@ export class MultiReviewService {
   private async release(workflow: MultiReviewWorkflow, token: string): Promise<void> {
     await this.storage.releaseMultiReviewController(workflow.id, this.ownerId, token)
       .catch(() => undefined);
+    this.leases.delete(workflow.id);
     const keys = new Set([
       ...workflow.reviewers.map((reviewer) => this.providerKey(workflow, reviewer)),
       this.providerKey(workflow, workflow.fixModel),
@@ -587,6 +754,28 @@ export class MultiReviewService {
       this.providers.delete(key);
       await provider?.dispose?.();
     }));
+  }
+
+  private async assertFence(workflowId: string, token: string): Promise<void> {
+    if (!await this.storage.validateMultiReviewController(workflowId, this.ownerId, token)) {
+      this.leases.delete(workflowId);
+      throw new ControllerFenceError();
+    }
+  }
+
+  private async renewLeases(): Promise<void> {
+    if (this.stopped) return;
+    for (const [workflowId, lease] of this.leases) {
+      const claimed = await this.storage.claimMultiReviewController(
+        workflowId, this.ownerId, this.controllerLeaseMs(),
+      ).catch(() => null);
+      if (!claimed?.granted || claimed.token !== lease.token) this.leases.delete(workflowId);
+      else this.leases.set(workflowId, { token: claimed.token, expiresAt: claimed.expiresAt });
+    }
+  }
+
+  private controllerLeaseMs(): number {
+    return this.options.controllerLeaseMs ?? CONTROLLER_LEASE_MS;
   }
 
   private providerKey(
@@ -646,5 +835,12 @@ export class MultiReviewService {
       agent, baseUrl: `http://127.0.0.1:${result.hostPort}`,
       authToken: result.authToken,
     };
+  }
+}
+
+class ControllerFenceError extends Error {
+  constructor() {
+    super("Multi review controller lease was lost");
+    this.name = "ControllerFenceError";
   }
 }

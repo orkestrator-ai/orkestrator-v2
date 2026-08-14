@@ -87,6 +87,7 @@ export interface MultiReviewWorkflow {
     createdAt: string;
     idleResultPolls?: number;
   };
+  cancellingSince?: string;
   error?: string;
   createdAt: string;
   updatedAt: string;
@@ -228,7 +229,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     || !hasOnlyKeys(value, [
       "version", "controller", "controllerFence", "id", "environmentId", "projectId",
       "targetBranch", "reviewInstruction", "reviewers", "fixModel", "fixSession", "phase",
-      "consolidatedReport", "fixResult", "activeRequest", "error", "createdAt", "updatedAt",
+      "consolidatedReport", "fixResult", "activeRequest", "cancellingSince", "error", "createdAt", "updatedAt",
       "backendRevision",
     ])
     || value.version !== MULTI_REVIEW_WORKFLOW_VERSION
@@ -251,6 +252,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     || (value.controllerFence !== undefined && !nonBlank(value.controllerFence))
     || (value.fixSession !== undefined && !isFixSession(value.fixSession))
     || (value.activeRequest !== undefined && !isActiveRequest(value.activeRequest))
+    || !optionalDate(value.cancellingSince)
     || (value.fixResult !== undefined && !isFixResult(value.fixResult))
     || !optionalString(value.error, 4_096)
     || (value.consolidatedReport !== undefined
@@ -287,6 +289,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     const activeRequest = value.activeRequest;
     if (!isActiveRequest(activeRequest) || activeRequest.kind !== "fix") return false;
   }
+  if ((value.phase === "cancelling") !== (typeof value.cancellingSince === "string")) return false;
   return true;
 }
 

@@ -74,4 +74,22 @@ describe("multi review protocol", () => {
       createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(), backendRevision: 1,
     })).toBe(false);
   });
+
+  test("requires a cancellation timestamp exactly while cancellation is active", () => {
+    const workflow = {
+      version: MULTI_REVIEW_WORKFLOW_VERSION,
+      controller: "backend",
+      id: "workflow-cancel", environmentId: "env-1", projectId: "project-1",
+      targetBranch: "main",
+      reviewers: [{ id: "reviewer-1", agent: "claude", model: "opus", status: "running" }],
+      fixModel: { agent: "codex", model: "gpt-5.6" },
+      phase: "cancelling",
+      cancellingSince: new Date(0).toISOString(),
+      createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
+      backendRevision: 2,
+    };
+    expect(isMultiReviewWorkflow(workflow)).toBe(true);
+    expect(isMultiReviewWorkflow({ ...workflow, cancellingSince: undefined })).toBe(false);
+    expect(isMultiReviewWorkflow({ ...workflow, phase: "reviewing" })).toBe(false);
+  });
 });

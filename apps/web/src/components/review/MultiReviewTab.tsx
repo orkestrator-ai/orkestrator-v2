@@ -96,6 +96,8 @@ export function MultiReviewTab({
 
   const busy = workflow.phase === "reviewing" || workflow.phase === "consolidating"
     || workflow.phase === "fixing" || workflow.phase === "cancelling";
+  const canCancel = workflow.phase !== "completed" && workflow.phase !== "cancelled"
+    && workflow.phase !== "cancelling";
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -164,9 +166,10 @@ export function MultiReviewTab({
             <RefreshCw className="mr-2 size-4" />Retry failed stage
           </Button>
         )}
-        {busy && workflow.phase !== "cancelling" && (
+        {canCancel && (
           <Button variant="outline" disabled={pending} onClick={() => void run(() => commands.cancel(workflow.id))}>
-            <Square className="mr-2 size-4" />Cancel
+            <Square className="mr-2 size-4" />
+            {workflow.phase === "ready" || workflow.phase === "failed" ? "Abandon" : "Cancel"}
           </Button>
         )}
         {workflow.phase === "ready" && (

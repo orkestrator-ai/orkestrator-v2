@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
@@ -102,5 +102,42 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       hydrateWorkflow={hydrate}
     />);
     await waitFor(() => expect(hydrate).toHaveBeenCalledTimes(2));
+  });
+
+  test("lets users abandon ready and failed workflows", async () => {
+    const ready = readyWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+    const cancelled = { ...ready, phase: "cancelled" as const, backendRevision: 8 };
+    const cancel = mock(async () => cancelled);
+    const view = render(<MultiReviewTab
+      data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+      isActive
+      hydrateWorkflow={mock(async () => ready)}
+      commands={{
+        address: mock(async () => ready),
+        retry: mock(async () => ready),
+        cancel,
+      }}
+    />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Abandon" }));
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith(ready.id));
+
+    const failed = { ...ready, phase: "failed" as const, backendRevision: 9, error: "offline" };
+    act(() => {
+      useMultiReviewStore.setState({ workflows: new Map([[ready.id, failed]]) });
+    });
+    view.rerender(<MultiReviewTab
+      data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+      isActive
+      hydrateWorkflow={mock(async () => failed)}
+      commands={{
+        address: mock(async () => failed),
+        retry: mock(async () => failed),
+        cancel,
+      }}
+    />);
+    expect(screen.getByRole("button", { name: "Abandon" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry failed stage" })).toBeTruthy();
   });
 });

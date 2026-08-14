@@ -865,6 +865,42 @@ function normalizeProviderRateLimits(value: unknown): NativeAgentRateLimitWindow
   });
 }
 
+/**
+ * Accept a runtime summary a bridge already reports in neutral form.
+ *
+ * Claude's and Codex's summaries are assembled here from provider-shaped
+ * responses; the ACP bridge has to normalize its own because only it can see
+ * the vendor `_meta` the counts come from. Every field stays optional so a
+ * bridge that knows one fact is not forced to invent the rest.
+ */
+function normalizeProviderRuntimeSummary(
+  value: unknown,
+): NativeAgentRuntimeSummary | undefined {
+  const raw = asRecord(value);
+  if (!raw) return undefined;
+  const summary: NativeAgentRuntimeSummary = {};
+  const counts = [
+    "mcpServers",
+    "plugins",
+    "commands",
+    "skills",
+    "hooks",
+    "lspServers",
+    "formatters",
+    "todos",
+    "files",
+  ] as const;
+  for (const key of counts) {
+    const candidate = raw[key];
+    if (typeof candidate === "number" && Number.isSafeInteger(candidate) && candidate >= 0) {
+      summary[key] = Math.min(candidate, 10_000);
+    }
+  }
+  if (typeof raw.state === "string" && raw.state) summary.state = raw.state.slice(0, 64);
+  if (typeof raw.version === "string" && raw.version) summary.version = raw.version.slice(0, 64);
+  return Object.keys(summary).length > 0 ? summary : undefined;
+}
+
 function providerInventoryCount(value: unknown): number {
   if (Array.isArray(value)) return Math.min(value.length, 10_000);
   const data = asRecord(value)?.data;
@@ -2501,6 +2537,8 @@ class HttpBridgeProvider implements BuildPipelineProvider {
           `${this.agent} returned a malformed interactive snapshot`,
         );
       }
+      const contextUsage = normalizeProviderContextUsage(payload?.contextUsage);
+      const runtime = normalizeProviderRuntimeSummary(payload?.runtime);
       return {
         status,
         messages,
@@ -2509,6 +2547,8 @@ class HttpBridgeProvider implements BuildPipelineProvider {
           : {}),
         composer: composer as unknown as NativeAgentComposerState,
         providerRevision: providerRevision as number,
+        ...(contextUsage ? { contextUsage } : {}),
+        ...(runtime ? { runtime } : {}),
         ...(typeof providerError === "string" ? { error: providerError } : {}),
       };
     }

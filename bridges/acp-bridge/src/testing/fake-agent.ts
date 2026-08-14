@@ -121,6 +121,8 @@ lines.on("line", (line) => {
             ? { promptCapabilities: { image: process.env.FAKE_ACP_IMAGE_CAPABILITY === "true" } }
             : {}),
         },
+        // Where Grok states its build. Standard ACP `agentInfo` is read too.
+        _meta: { agentVersion: "9.9.9" },
       },
     });
     return;
@@ -769,6 +771,83 @@ lines.on("line", (line) => {
         },
       });
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    // A turn that reports everything the agent info panel can show: the MCP
+    // inventory and command list as notifications, then the same token counts
+    // Grok repeats across a session notification and the prompt result.
+    if (prompt.startsWith("USAGE")) {
+      write({
+        jsonrpc: "2.0",
+        method: "_x.ai/mcp/servers_updated",
+        params: {
+          mcpServers: [
+            { name: "context7", command: "npx", args: ["-y", "@upstash/context7-mcp", "--api-key", "secret"] },
+            { name: "playwright", command: "npx", args: ["-y", "@playwright/mcp"] },
+          ],
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "available_commands_update",
+            availableCommands: [
+              { name: "review", description: "Review changes" },
+              { name: "commit", description: "Commit changes" },
+              { name: "test", description: "Run tests" },
+            ],
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Counted." } },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "_x.ai/session_notification",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "response_completed",
+            // Only this carrier reports the cache split, and it spells the
+            // fields differently from the two that follow.
+            usage: { input_tokens: 9_751, output_tokens: 36, cache_read_input_tokens: 5_888 },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "_x.ai/session_notification",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "turn_completed",
+            usage: {
+              inputTokens: 15_639,
+              outputTokens: 36,
+              totalTokens: 15_675,
+              reasoningTokens: 31,
+              apiDurationMs: 1_448,
+            },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          stopReason: "end_turn",
+          _meta: { totalTokens: 15_675, usage: { inputTokens: 15_639, outputTokens: 36 } },
+        },
+      });
       return;
     }
     if (prompt.startsWith("TOOLS")) {

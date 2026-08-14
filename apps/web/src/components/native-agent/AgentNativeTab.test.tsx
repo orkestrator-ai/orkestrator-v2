@@ -53,6 +53,9 @@ const ensureNativeAgentSessionMock = mock(async (input: {
   agent: input.agent,
 }));
 const listNativeAgentResumableSessionsMock = mock(async () => []);
+const getAgentHandoffMock = mock(
+  async (_handoffId: string): Promise<unknown> => null,
+);
 const performNativeAgentSessionActionMock = mock(async (_input: {
   agent: string;
   action: { kind: string; text?: string };
@@ -139,6 +142,7 @@ mock.module("@/lib/backend", () => ({
   adoptNativeAgentSession: adoptNativeAgentSessionMock,
   ensureNativeAgentSession: ensureNativeAgentSessionMock,
   listNativeAgentResumableSessions: listNativeAgentResumableSessionsMock,
+  getAgentHandoff: getAgentHandoffMock,
   dispatchNativeAgentIntent: dispatchNativeAgentIntentMock,
   retryNativeAgentDispatch: retryNativeAgentDispatchMock,
   renameEnvironmentFromPrompt: renameEnvironmentFromPromptMock,
@@ -188,6 +192,7 @@ afterEach(() => {
   adoptNativeAgentSessionMock.mockClear();
   ensureNativeAgentSessionMock.mockClear();
   listNativeAgentResumableSessionsMock.mockClear();
+  getAgentHandoffMock.mockClear();
   dispatchNativeAgentIntentMock.mockClear();
   retryNativeAgentDispatchMock.mockClear();
   renameEnvironmentFromPromptMock.mockReset();
@@ -787,6 +792,24 @@ describe("AgentNativeTab", () => {
     }));
     expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
     await waitFor(() => expect(adoptNativeAgentSessionMock).toHaveBeenCalledTimes(1));
+  });
+
+  test.each([...AGENT_PLATFORMS])("loads a transferred conversation for a %s tab", async (platform) => {
+    // The destination side used to gate on the three legacy providers, so a
+    // Cursor or Grok tab silently dropped the transfer it was opened to carry
+    // and never even asked for it.
+    render(
+      <AgentNativeTab
+        tabId={`tab-handoff-${platform}`}
+        data={identity(platform)}
+        isActive
+        agentHandoffId={`handoff-into-${platform}`}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(getAgentHandoffMock).toHaveBeenCalledWith(`handoff-into-${platform}`),
+    );
   });
 
   test("renders a mismatch notice instead of throwing on an unknown platform", async () => {

@@ -324,6 +324,74 @@ describe("ACP bridge", () => {
     ]);
   });
 
+  test("reports token usage and runtime inventory, and rehydrates them after restart", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const first = await spawnBridge({ stateDirectory });
+    const created = await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ clientSessionKey: "env-usage:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    type UsageSnapshot = {
+      status: string;
+      contextUsage?: Record<string, unknown>;
+      runtime?: Record<string, unknown>;
+    };
+    const readSession = async (base: string, headers: Record<string, string>) =>
+      await nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as UsageSnapshot;
+
+    const before = await readSession(first.base, first.headers);
+    // Nothing has run, so there is no measurement to report — as opposed to a
+    // measurement of zero, which would render as a populated usage meter.
+    expect(before.contextUsage).toBeUndefined();
+    expect(before.runtime).toMatchObject({ state: "idle", version: "9.9.9" });
+
+    expect((await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ prompt: "USAGE: count the tokens" }),
+    })).status).toBe(202);
+
+    const session = await waitFor(
+      () => readSession(first.base, first.headers),
+      (value) => value.status === "idle" && value.contextUsage !== undefined,
+    );
+    expect(session.contextUsage).toMatchObject({
+      usedTokens: 15_675,
+      inputTokens: 15_639,
+      outputTokens: 36,
+      // Only `response_completed` reported the cache split. A later, sparser
+      // carrier for the same turn must not drop it.
+      cacheReadTokens: 5_888,
+      reasoningTokens: 31,
+      apiDurationMs: 1_448,
+      source: "provider",
+    });
+    expect(session.contextUsage?.durationMs).toBeGreaterThanOrEqual(0);
+    expect(session.contextUsage).not.toHaveProperty("costUsd");
+    expect(session.runtime).toMatchObject({
+      mcpServers: 2,
+      commands: 3,
+      version: "9.9.9",
+      state: "idle",
+    });
+
+    first.child.kill("SIGTERM");
+    await Bun.sleep(200);
+    const second = await spawnBridge({ stateDirectory });
+    const restored = await readSession(second.base, second.headers);
+    expect(restored.contextUsage).toMatchObject({
+      usedTokens: 15_675,
+      cacheReadTokens: 5_888,
+      source: "provider",
+    });
+    // The command list belongs to the session and survives with it; the agent
+    // version and MCP inventory come from a handshake this process has not had.
+    expect(restored.runtime).toMatchObject({ commands: 3 });
+  });
+
   test("normalizes ACP tool calls, upserts updates, and rehydrates them after restart", async () => {
     const stateDirectory = await temporaryDirectory();
     const first = await spawnBridge({ stateDirectory });

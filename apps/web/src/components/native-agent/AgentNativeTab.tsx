@@ -742,12 +742,8 @@ function SharedNativeAgentController({
     [projection?.messages],
   );
   const handoff = useAgentHandoff(
-    platform === "claude" || platform === "codex" || platform === "opencode"
-      ? agentHandoffId
-      : undefined,
-    platform === "claude" || platform === "codex" || platform === "opencode"
-      ? platform
-      : "claude",
+    agentHandoffId,
+    platform,
     data.environmentId,
     normalizedMessages,
     consumedAgentHandoffId,

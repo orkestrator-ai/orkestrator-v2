@@ -4964,6 +4964,68 @@ describe("HTTP build pipeline provider (ACP)", () => {
     expect(requests[0]?.url).toBe("http://cursor.test/session/create");
   });
 
+  test("passes the ACP bridge's usage and runtime through to the projection", async () => {
+    const { provider } = httpProvider(() => Response.json({
+      status: "idle",
+      messages: [],
+      revision: 4,
+      composer: { models: [], modes: [], fastModeEnabled: null, fastModeAvailable: false },
+      contextUsage: {
+        usedTokens: 15_675,
+        inputTokens: 15_639,
+        outputTokens: 36,
+        cacheReadTokens: 5_888,
+        reasoningTokens: 31,
+        apiDurationMs: 1_448,
+        durationMs: 3_925,
+        modelId: "grok-4.6",
+        source: "provider",
+        updatedAt: "2026-08-14T18:25:46.435Z",
+      },
+      runtime: {
+        mcpServers: 1,
+        commands: 41,
+        version: "1.0.3",
+        state: "idle",
+        // Not part of the summary contract, and must not reach the renderer.
+        secretPath: "/Users/someone/.grok/auth.json",
+      },
+    }), cursorConnection);
+
+    const snapshot = await provider.interactiveSnapshot!("cursor-1");
+
+    expect(snapshot.contextUsage).toMatchObject({
+      usedTokens: 15_675,
+      cacheReadTokens: 5_888,
+      apiDurationMs: 1_448,
+      modelId: "grok-4.6",
+      source: "provider",
+    });
+    expect(snapshot.runtime).toEqual({
+      mcpServers: 1,
+      commands: 41,
+      version: "1.0.3",
+      state: "idle",
+    });
+  });
+
+  test("omits ACP usage and runtime the bridge did not report", async () => {
+    // Cursor reports no token counts at all. The panel must be told nothing
+    // rather than be handed a zeroed meter to render.
+    const { provider } = httpProvider(() => Response.json({
+      status: "idle",
+      messages: [],
+      revision: 1,
+      composer: { models: [], modes: [], fastModeEnabled: null, fastModeAvailable: false },
+      runtime: {},
+    }), cursorConnection);
+
+    const snapshot = await provider.interactiveSnapshot!("cursor-1");
+
+    expect(snapshot.contextUsage).toBeUndefined();
+    expect(snapshot.runtime).toBeUndefined();
+  });
+
   test("forwards ACP composer options on session creation and prompt dispatch", async () => {
     const { provider, requests } = httpProvider((url) =>
       url.endsWith("/session/create")

@@ -164,6 +164,7 @@ export function applyConfigOptionUpdate(
                 ? current.composer.selectedReasoningId
                 : model.defaultReasoningId,
               reasoningEfforts: model.reasoning?.map((option) => ({ value: option.id })),
+              totalContextTokens: model.contextWindow,
             },
           })),
         }
@@ -532,6 +533,7 @@ function composerFromGrokModels(
         : entry.reasoningEffort ?? reasoning[0]?.id,
       supportsSpeed: fastSibling || Boolean(fastOption),
       supportsMode: Object.keys(availableModeIds).length > 0,
+      ...(entry.contextWindow === undefined ? {} : { contextWindow: entry.contextWindow }),
     };
   });
   const selected = models.find((model) => model.id === catalog.currentModelId) ?? models[0];
@@ -692,6 +694,8 @@ interface GrokModelEntry {
   description?: string;
   reasoningEffort?: string;
   reasoningEfforts: string[];
+  /** `_meta.totalContextTokens`; the only context-window size Grok advertises. */
+  contextWindow?: number;
 }
 
 interface GrokModelCatalog {
@@ -729,12 +733,14 @@ function parseGrokModelCatalog(value: unknown): GrokModelCatalog {
           return [effort];
         })
       : [];
+    const contextWindow = positiveInteger(meta.totalContextTokens);
     return [{
       modelId,
       name: typeof candidate.name === "string" ? candidate.name : modelId,
       ...(typeof candidate.description === "string" ? { description: candidate.description } : {}),
       ...(typeof meta.reasoningEffort === "string" ? { reasoningEffort: meta.reasoningEffort } : {}),
       reasoningEfforts,
+      ...(contextWindow === undefined ? {} : { contextWindow }),
     }];
   });
   return {
@@ -795,6 +801,8 @@ function parsePersistedComposer(
       candidate.supportsSpeed !== undefined && typeof candidate.supportsSpeed !== "boolean"
       || candidate.supportsMode !== undefined && typeof candidate.supportsMode !== "boolean"
     ) return null;
+    const contextWindow = positiveInteger(candidate.contextWindow);
+    if (candidate.contextWindow !== undefined && contextWindow === undefined) return null;
     models.push({
       platform: provider,
       id,
@@ -805,6 +813,7 @@ function parsePersistedComposer(
       ...(defaultReasoningId ? { defaultReasoningId } : {}),
       ...(typeof candidate.supportsSpeed === "boolean" ? { supportsSpeed: candidate.supportsSpeed } : {}),
       ...(typeof candidate.supportsMode === "boolean" ? { supportsMode: candidate.supportsMode } : {}),
+      ...(contextWindow === undefined ? {} : { contextWindow }),
     });
   }
 
@@ -969,6 +978,15 @@ function firstString(...values: unknown[]): string | undefined {
 
 function boundedString(value: unknown, maximumBytes: number): string | undefined {
   return typeof value === "string" && value.length > 0 && Buffer.byteLength(value) <= maximumBytes
+    ? value
+    : undefined;
+}
+
+/** Vendor token counts, kept sane enough that a garbage value cannot render. */
+function positiveInteger(value: unknown): number | undefined {
+  return typeof value === "number"
+    && Number.isSafeInteger(value)
+    && value > 0
     ? value
     : undefined;
 }

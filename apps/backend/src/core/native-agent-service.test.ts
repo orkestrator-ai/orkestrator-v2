@@ -777,6 +777,35 @@ describe("NativeAgentService", () => {
     });
   });
 
+  test("projects a terminal turn failure through the status fallback", async () => {
+    const detail = "Selected model is at capacity. Please try a different model.";
+    const stub = createProviderStub("codex", {
+      status: async () => {
+        throw new ProviderSessionFailedError("codex", detail);
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-terminal-projection-fallback-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-terminal-projection",
+      };
+      await service.ensureSession(identity);
+
+      const projection = await service.getProjection(identity);
+
+      expect(stub.status).toHaveBeenCalledWith("provider-session");
+      expect(projection).toMatchObject({
+        connection: "connected",
+        turn: { phase: "error", error: detail },
+        messages: [{ role: "system", content: detail }],
+      });
+    });
+  });
+
   test("adopts a session whose last turn failed rather than calling it missing", async () => {
     const stub = createProviderStub("codex", {
       status: async () => {
@@ -2196,6 +2225,59 @@ describe("NativeAgentService", () => {
         eventualOutcome: "expired",
       });
       expect(internals(service).trackedInteractions.size).toBe(0);
+    });
+  });
+
+  test("settles an empty interaction snapshot from a terminal turn without backoff", async () => {
+    let pending = true;
+    const { provider, status } = createProviderStub("codex", {
+      status: async () => {
+        throw new ProviderSessionFailedError("codex", "usage limit reached");
+      },
+      interactions: {
+        listPendingInteractions: async () => pending
+          ? pendingInteractionSnapshot(10_000, ["question"])
+          : { version: AGENT_INTERACTION_CONTRACT_VERSION, revision: 2, requests: [] },
+        resolveInteraction: async () => {
+          throw new Error("observe-only must never resolve");
+        },
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-interaction-terminal-status-",
+      provider: async () => provider,
+      now: () => 10_000,
+      interactionMonitorMode: "observe-only",
+    }, async ({ storage, service }) => {
+      const logicalSessionKey = "looped-review:workflow:terminal-status:Review";
+      const key = nativeAgentSessionStorageKey(
+        "env-1",
+        "codex",
+        logicalSessionKey,
+      );
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey,
+        providerSessionId: "provider-session",
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+      await service.reconcileAgentInteractions();
+      pending = false;
+
+      const warnings = await captureWarnings(() => service.reconcileAgentInteractions());
+
+      expect(warnings).toEqual([]);
+      expect(status).toHaveBeenCalledTimes(1);
+      expect(service.getInteractionObservations()[0]).toMatchObject({
+        providerState: "error",
+        eventualOutcome: "withdrawn",
+      });
+      expect(internals(service).trackedInteractions.size).toBe(0);
+      expect(internals(service).interactionAttempts.has(key)).toBe(false);
+      expect(internals(service).interactionRetryAt.has(key)).toBe(false);
     });
   });
 
@@ -4406,6 +4488,49 @@ describe("NativeAgentService", () => {
         agentActivitySources: { "native-agent": { state: expectedState } },
       });
       expect(await storage.getNativeAgentSession(key)).not.toBeNull();
+    });
+  });
+
+  test("maps a terminal turn failure onto idle activity without retry backoff", async () => {
+    const { provider, status, activity, activityBatch } = createProviderStub(
+      "codex",
+      {
+        status: async () => {
+          throw new ProviderSessionFailedError("codex", "usage limit reached");
+        },
+      },
+    );
+    await withService({
+      prefix: "orkestrator-native-activity-terminal-status-",
+      provider: async () => provider,
+    }, async ({ storage, service }) => {
+      const key = nativeAgentSessionStorageKey("env-1", "codex", "tab-1");
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "tab-1",
+        providerSessionId: "provider-1",
+      });
+      await storage.setEnvironmentAgentActivity(
+        "env-1",
+        "working",
+        new Date().toISOString(),
+        "native-agent",
+      );
+
+      const warnings = await captureWarnings(() => service.reconcileAgentActivity());
+
+      expect(warnings).toEqual([]);
+      expect(activity).toBeUndefined();
+      expect(activityBatch).toBeUndefined();
+      expect(status).toHaveBeenCalledWith("provider-1");
+      expect(await storage.getEnvironment("env-1")).toMatchObject({
+        agentActivitySources: { "native-agent": { state: "idle" } },
+      });
+      expect(await storage.getNativeAgentSession(key)).not.toBeNull();
+      expect(internals(service).activityAttempts.size).toBe(0);
+      expect(internals(service).activityRetryAt.size).toBe(0);
     });
   });
 
@@ -7137,6 +7262,43 @@ describe("NativeAgentService", () => {
         });
         expect(internals(service).queueRetryAt.get(queueKey))
           .toBeGreaterThan(Date.now());
+      });
+    });
+
+    test("backs off a terminal session error as provider status data", async () => {
+      const stub = createProviderStub("codex", {
+        status: async () => {
+          throw new ProviderSessionFailedError("codex", "usage limit reached");
+        },
+      });
+      await withService({
+        prefix: "orkestrator-native-drain-terminal-status-",
+        provider: async () => stub.provider,
+      }, async ({ storage, service }) => {
+        const queueKey = "codex\u0000env-env-1:tab-1";
+        await storage.savePromptQueue(queueKey, "env-1", [
+          { id: "row-1", text: "Do it" },
+        ]);
+
+        for (let attempt = 1; attempt < 5; attempt += 1) {
+          await internals(service).drainPromptQueues();
+          expect(internals(service).queueAttempts.get(queueKey)).toBe(attempt);
+          internals(service).queueRetryAt.delete(queueKey);
+        }
+        const warnings = await captureWarnings(() =>
+          internals(service).drainPromptQueues()
+        );
+
+        expect(warnings.join(" ")).toContain("provider session is error");
+        expect(warnings.join(" ")).not.toContain("ProviderSessionFailedError");
+        expect(stub.send).not.toHaveBeenCalled();
+        expect(stub.dispose).not.toHaveBeenCalled();
+        expect(await storage.getPromptQueue(queueKey)).toMatchObject({
+          messages: [{ id: "row-1" }],
+        });
+        expect((await storage.getPromptQueue(queueKey))?.dispatchError).toBeUndefined();
+        expect(internals(service).queueAttempts.get(queueKey)).toBe(5);
+        expect(internals(service).queueRetryAt.get(queueKey)).toBeGreaterThan(Date.now());
       });
     });
 

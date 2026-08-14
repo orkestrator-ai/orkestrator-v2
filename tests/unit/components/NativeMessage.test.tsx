@@ -1473,6 +1473,71 @@ describe("NativeMessage", () => {
     expect(screen.queryByText("+new fallback")).toBeNull();
   });
 
+  test("falls back to before and after when the provider diff is an empty string", () => {
+    // An empty `diff` is not a provider asserting "nothing changed" — it is a
+    // patch field the provider never filled in. Treating it as authoritative
+    // renders a blank body under a header that still claims +1/-1.
+    const message: NativeMessageType = {
+      id: "msg-edit-empty-diff",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Edit",
+          toolState: "success",
+          toolDiff: {
+            filePath: "/workspace/src/empty.ts",
+            diff: "",
+            before: "old empty",
+            after: "new empty",
+          },
+        },
+      ],
+    };
+
+    render(
+      <TerminalContextHarness>
+        <NativeMessage message={message} />
+      </TerminalContextHarness>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /edit empty\.ts/i }));
+
+    expect(screen.getByText("-old empty")).toBeTruthy();
+    expect(screen.getByText("+new empty")).toBeTruthy();
+  });
+
+  test("renders a non-edit tool carrying only an empty diff as a generic tool row", () => {
+    // `hasRenderableDiff` gates the edit treatment. An empty diff string must
+    // not pull a search tool into the diff renderer.
+    const message: NativeMessageType = {
+      id: "msg-search-empty-diff",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Search for references",
+          toolName: "search",
+          toolState: "success",
+          toolDiff: { filePath: "/workspace/src/looked-at.ts", diff: "" },
+        },
+      ],
+    };
+
+    render(
+      <TerminalContextHarness>
+        <NativeMessage message={message} />
+      </TerminalContextHarness>,
+    );
+
+    expect(screen.queryByRole("button", { name: /edit looked-at\.ts/i })).toBeNull();
+    expect(screen.getByText(/^search$/i)).toBeTruthy();
+  });
+
   test("keeps edit diffs in step with toolDiff's values, not its identity", () => {
     // The diff memos are keyed on the fields they read rather than on
     // `toolDiff`'s identity, because normalization rebuilds every part object

@@ -501,6 +501,10 @@ describe("ACP bridge", () => {
       (value) => value.status === "idle",
     );
 
+    // Every nullable field is gone: no stale title, name, args, output or diff
+    // survives. The state is the one exception — clearing it to `null` left the
+    // tool with no terminal status, so ending the turn settled it as unfinished
+    // rather than leaving it indeterminate forever.
     const cleared = session.messages[1]?.parts.find((part) => part.toolUseId === "clear-1");
     expect(cleared).toEqual({
       type: "tool-invocation",
@@ -508,6 +512,8 @@ describe("ACP bridge", () => {
       sourcePartId: "tool:clear-1",
       sourceMessageId: expect.any(String),
       toolUseId: "clear-1",
+      toolState: "failure",
+      toolError: "Tool call ended without a result",
     });
   });
 
@@ -610,9 +616,11 @@ describe("ACP bridge", () => {
     ]);
     expect(session.messages[1]?.parts[0]).toMatchObject({
       toolUseId: "lead-1",
-      toolState: "pending",
       toolName: "plan",
       toolArgs: { goal: "ship it" },
+      // The agent ended the turn without ever completing this tool, so it is
+      // settled rather than left spinning.
+      toolState: "failure",
     });
   });
 
@@ -648,7 +656,9 @@ describe("ACP bridge", () => {
     expect((big?.toolOutput as string).endsWith("\n… tool output truncated")).toBe(true);
     const toolDiff = big?.toolDiff as Record<string, unknown> | undefined;
     expect(toolDiff).toMatchObject({ filePath: "huge.ts", additions: 1, deletions: 1 });
-    expect(Buffer.byteLength(toolDiff?.diff as string)).toBe(1024 * 1024);
+    // Bounded, and the cut is announced rather than silently dropping the tail.
+    expect(Buffer.byteLength(toolDiff?.diff as string)).toBeLessThanOrEqual(1024 * 1024);
+    expect((toolDiff?.diff as string).endsWith("\n… file diff truncated")).toBe(true);
     expect(toolDiff?.diff).toEqual(expect.stringContaining("-old\n+new"));
     expect(toolDiff?.before).toBeUndefined();
     expect(toolDiff?.after).toBeUndefined();
@@ -860,6 +870,235 @@ describe("ACP bridge", () => {
       toolUseId: "ok-1",
       toolState: "success",
     }]);
+  });
+
+  test("settles a tool left in flight when a live turn ends, without a restart", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-hang" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "HANGTOOL: abandon a tool" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    // The in-flight tool settles even though this bridge process never reloaded
+    // persisted state — the turn ending is what resolves it.
+    const abandoned = session.messages[1]?.parts.find((part) => part.toolUseId === "hang-1");
+    expect(abandoned).toMatchObject({
+      toolState: "failure",
+      toolError: "Tool call ended without a result",
+    });
+    // A tool that already reported a terminal state is left exactly as it was.
+    const finished = session.messages[1]?.parts.find((part) => part.toolUseId === "hang-done");
+    expect(finished).toMatchObject({ toolState: "success" });
+    expect(finished?.toolError).toBeUndefined();
+  });
+
+  test("settles a tool left in flight when the agent process dies mid-turn", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-crash" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "DIETOOL: die mid-turn" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "error",
+    );
+
+    expect(session.messages[1]?.parts.find((part) => part.toolUseId === "crash-1")).toMatchObject({
+      toolState: "failure",
+      toolError: "Tool call ended without a result",
+    });
+  });
+
+  test("keeps a known tool state when an update carries an unrecognized status", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-odd" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "ODDSTATUS: send a future status" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    // The unknown status left `pending` intact rather than erasing the state, so
+    // the end-of-turn settle could still recognise the tool as unfinished.
+    expect(session.messages[1]?.parts.find((part) => part.toolUseId === "odd-1")).toMatchObject({
+      toolState: "failure",
+      toolError: "Tool call ended without a result",
+    });
+  });
+
+  test("renders a placeholder when both file states exceed the inline limit", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-huge" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "HUGEEDIT: rewrite an oversized file" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    const tool = session.messages[1]?.parts.find((part) => part.toolUseId === "hugeedit-1");
+    const diff = tool?.toolDiff as Record<string, unknown> | undefined;
+    expect(diff?.diff).toBe(
+      "--- oversized.ts\n+++ oversized.ts\n@@ diff omitted: file state exceeded display limit @@",
+    );
+    expect(diff).toMatchObject({ filePath: "oversized.ts" });
+    // Neither the file contents nor counts we cannot derive are retained.
+    expect(diff?.before).toBeUndefined();
+    expect(diff?.after).toBeUndefined();
+    expect(diff?.additions).toBeUndefined();
+    expect(diff?.deletions).toBeUndefined();
+  });
+
+  test("omits aggregate counts when any file diff has no countable stats", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-mixed" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "MIXEDSTATS: one countable, one not" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    const tool = session.messages[1]?.parts.find((part) => part.toolUseId === "mixed-1");
+    const diff = tool?.toolDiff as Record<string, unknown> | undefined;
+    // A partial sum would understate the change, so no counts are reported at
+    // all — but both files' renderings still appear.
+    expect(diff?.additions).toBeUndefined();
+    expect(diff?.deletions).toBeUndefined();
+    expect(diff?.diff).toContain("-before");
+    expect(diff?.diff).toContain("+after");
+    expect(diff?.diff).toContain("@@ diff omitted: file state exceeded display limit @@");
+  });
+
+  test("falls back to a bounded block diff when an edit exceeds the search distance", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-wide" }),
+    }).then((response) => response.json()) as { id: string };
+
+    const startedAt = Date.now();
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "WIDEEDIT: rewrite every line" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    // The unbounded search spent ~150ms of blocked read loop and ~340MB of heap
+    // on an input this shape before discarding the result.
+    expect(Date.now() - startedAt).toBeLessThan(3_000);
+
+    const tool = session.messages[1]?.parts.find((part) => part.toolUseId === "wide-1");
+    const diff = tool?.toolDiff as Record<string, unknown> | undefined;
+    expect(diff).toMatchObject({ filePath: "src/wide.ts", additions: 4000, deletions: 4000 });
+    const rendered = diff?.diff as string;
+    // Shared prefix and suffix survive as context; everything between them is
+    // one removed block followed by one added block.
+    expect(rendered).toContain(" const keep = true;");
+    expect(rendered).toContain(" export {};");
+    expect(rendered.indexOf("-const before_0 = 0;")).toBeLessThan(rendered.indexOf("+const after_0 = 0;"));
+    expect(rendered).toContain("-const before_3999 = 3999;");
+    expect(rendered).toContain("+const after_3999 = 7998;");
+  });
+
+  test("ignores an empty supplied diff and renders the file states instead", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-empty" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "EMPTYDIFF: unfilled diff field" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    const tool = session.messages[1]?.parts.find((part) => part.toolUseId === "empty-1");
+    const diff = tool?.toolDiff as Record<string, unknown> | undefined;
+    expect(diff).toMatchObject({ filePath: "src/empty.ts", additions: 1, deletions: 1 });
+    expect(diff?.diff).toContain("-const value = 1;");
+    expect(diff?.diff).toContain("+const value = 2;");
   });
 
   test("deduplicates session creation and prompt dispatch by durable keys", async () => {

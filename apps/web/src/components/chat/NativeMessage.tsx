@@ -577,6 +577,20 @@ function ToolPart({
   );
 }
 
+/**
+ * True when `toolDiff` carries diff content worth rendering with the edit
+ * treatment.
+ *
+ * A present-but-empty `diff` string carries no information — a provider that
+ * surfaces an unfilled patch field emits one — so it must not count, and must
+ * not suppress the before/after fallback the way a real diff does.
+ */
+function hasRenderableDiff(toolDiff?: ToolDiffMetadata): boolean {
+  return Boolean(toolDiff?.diff)
+    || toolDiff?.before !== undefined
+    || toolDiff?.after !== undefined;
+}
+
 /** Parse unified diff output into lines with +/- indicators */
 function parseDiffLines(
   output: string,
@@ -745,9 +759,10 @@ function EditToolPart({
   const diffLines = useMemo(() => {
     // A provider-supplied diff is authoritative even when it contains no
     // additions or removals. Falling through to before/after in that case would
-    // turn an unchanged whole-file state into a synthetic full replacement.
-    if (toolDiff?.diff !== undefined) {
-      return parseDiffLines(toolDiff.diff);
+    // turn an unchanged whole-file state into a synthetic full replacement. An
+    // empty diff string is not such a case — it says nothing at all.
+    if (diffSource) {
+      return parseDiffLines(diffSource);
     }
 
     // Then try parsing from output (if it's in diff format)
@@ -1740,10 +1755,7 @@ function MessagePart({
       // ACP identifies file mutations through diff content as well as tool kind.
       // Render any part carrying an actual diff with the edit treatment, while a
       // location-only hint on read/search tools remains a generic tool row.
-      const hasDisplayableDiff = part.toolDiff?.diff !== undefined
-        || part.toolDiff?.before !== undefined
-        || part.toolDiff?.after !== undefined;
-      if (isEditTool(part.toolName) || hasDisplayableDiff) {
+      if (isEditTool(part.toolName) || hasRenderableDiff(part.toolDiff)) {
         return (
           <EditToolPart
             expansionKey={toolExpansionKey}

@@ -401,6 +401,206 @@ lines.on("line", (line) => {
       }
       return;
     }
+    if (prompt.startsWith("HANGTOOL")) {
+      // Ends the turn with a tool still in flight. ACP has no cancelled tool
+      // status, so this is what an interrupted or abandoned tool looks like.
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "hang-1",
+            title: "Run a long job",
+            kind: "execute",
+            status: "in_progress",
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "hang-done",
+            title: "Already finished",
+            kind: "read",
+            status: "completed",
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "cancelled" } });
+      return;
+    }
+    if (prompt.startsWith("DIETOOL")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "crash-1",
+            title: "Work that never lands",
+            kind: "execute",
+            status: "in_progress",
+          },
+        },
+      });
+      // Die mid-turn without answering the prompt: the bridge learns about the
+      // orphaned tool only through the child's close handler.
+      setTimeout(() => process.exit(1), 10);
+      return;
+    }
+    if (prompt.startsWith("ODDSTATUS")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "odd-1",
+            title: "Tool with a future status",
+            kind: "execute",
+            status: "in_progress",
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "odd-1",
+            // A status no current protocol revision defines. It must not erase
+            // the state the tool already had.
+            status: "cancelled",
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("HUGEEDIT")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "hugeedit-1",
+            title: "Rewrite an oversized file",
+            kind: "edit",
+            status: "completed",
+            // Both sides exceed the inline limit and the agent supplies no diff
+            // of its own, so nothing can be rendered but a placeholder.
+            content: [{
+              type: "diff",
+              path: "oversized.ts",
+              oldText: "o".repeat(300 * 1024),
+              newText: "n".repeat(300 * 1024),
+            }],
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("MIXEDSTATS")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "mixed-1",
+            title: "Edit two files, one uncountable",
+            kind: "edit",
+            status: "completed",
+            content: [
+              {
+                type: "diff",
+                path: "src/counted.ts",
+                oldText: "before",
+                newText: "after",
+              },
+              {
+                // No newText and an oversized oldText: nothing to count and
+                // nothing to render but a placeholder.
+                type: "diff",
+                path: "src/uncounted.ts",
+                oldText: "x".repeat(300 * 1024),
+              },
+            ],
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("WIDEEDIT")) {
+      // More changed lines than the Myers search is allowed to explore, but well
+      // inside the inline byte limit, so the bounded fallback has to produce it.
+      const oldLines = Array.from({ length: 4000 }, (_, index) => `const before_${index} = ${index};`);
+      const newLines = Array.from({ length: 4000 }, (_, index) => `const after_${index} = ${index * 2};`);
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "wide-1",
+            title: "Rewrite every line",
+            kind: "edit",
+            status: "completed",
+            content: [{
+              type: "diff",
+              path: "src/wide.ts",
+              oldText: ["const keep = true;", ...oldLines, "export {};"].join("\n"),
+              newText: ["const keep = true;", ...newLines, "export {};"].join("\n"),
+            }],
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("EMPTYDIFF")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "empty-1",
+            title: "Edit with an unfilled diff field",
+            kind: "edit",
+            status: "completed",
+            content: [{
+              type: "diff",
+              path: "src/empty.ts",
+              oldText: "const value = 1;",
+              newText: "const value = 2;",
+              // Present but never filled in. It says nothing, so it must not
+              // shadow oldText/newText.
+              diff: "",
+            }],
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
     if (prompt.startsWith("TOOLS")) {
       write({
         jsonrpc: "2.0",

@@ -63,6 +63,13 @@ interface AcpToolSourceState {
   rawOutput?: string;
   contentDiffs: BridgeToolDiff[];
   locationPath?: string;
+  /**
+   * Serialized size of the rendered part the last time it was charged against
+   * `uncheckedTranscriptBytes`. Tool parts are patched in place, so charging the
+   * whole part on every update would re-bill a 1MiB diff per streaming frame and
+   * force a full transcript re-serialization each time. Only the delta is new.
+   */
+  chargedBytes?: number;
 }
 
 type BridgeMessagePart = BridgeTextPart | BridgeToolPart;
@@ -161,6 +168,8 @@ const MAX_TOOL_ID_BYTES = 512;
 const MAX_TOOL_NAME_BYTES = 256;
 const MAX_TOOL_TITLE_BYTES = 4 * 1024;
 const MAX_TOOL_PATH_BYTES = 16 * 1024;
+/** Bounds both the time and the retained memory of `diffFileLines`. */
+const MAX_DIFF_EDIT_DISTANCE = 512;
 const MAX_SESSIONS = parseBoundedInteger(process.env.ACP_MAX_SESSIONS, 256, 1, 256);
 const MAX_APPROVALS_PER_SESSION = 64;
 const MAX_STRUCTURED_RESULTS = 4;
@@ -492,6 +501,8 @@ function attachChild(state: SessionState, child: AcpProcess): void {
     state.child = null;
     state.status = "error";
     state.error = error.message;
+    // The agent is gone, so nothing will ever complete the tools it had open.
+    reconcileStaleToolParts(state);
     state.revision += 1;
     schedulePersist();
   };
@@ -712,7 +723,9 @@ function applyToolCallUpdate(
   renderAcpToolSource(part, source);
 
   state.revision += 1;
-  state.uncheckedTranscriptBytes += Buffer.byteLength(JSON.stringify(part));
+  const serializedBytes = Buffer.byteLength(JSON.stringify(part));
+  state.uncheckedTranscriptBytes += Math.max(0, serializedBytes - (source.chargedBytes ?? 0));
+  source.chargedBytes = serializedBytes;
   const transcriptTruncated = state.messages.length > MAX_MESSAGES
     || state.uncheckedTranscriptBytes >= TRANSCRIPT_CHECK_INTERVAL_BYTES
     ? boundTranscript(state)
@@ -744,7 +757,13 @@ function applyAcpToolSourcePatch(source: AcpToolSourceState, update: JsonObject)
     }
   }
   if ("status" in update) {
-    source.toolState = mapAcpToolState(update.status);
+    // `null` is ACP's explicit "clear this field". An unrecognised status — a
+    // value a future protocol revision adds — is not: dropping the state there
+    // would leave a part that renders no state at all and that
+    // `reconcileStaleToolParts` can never settle. Keep what we already knew.
+    const mapped = mapAcpToolState(update.status);
+    if (mapped !== undefined) source.toolState = mapped;
+    else if (update.status === null) source.toolState = undefined;
   }
   if ("content" in update) {
     source.contentOutput = toolCallContentText(update.content);
@@ -887,15 +906,24 @@ function normalizeAcpContentDiff(value: JsonObject): BridgeToolDiff | undefined 
   const rawAfter = typeof value.newText === "string" ? value.newText : undefined;
   const keepInline = Buffer.byteLength(rawBefore ?? "") <= MAX_TOOL_INLINE_FILE_BYTES
     && Buffer.byteLength(rawAfter ?? "") <= MAX_TOOL_INLINE_FILE_BYTES;
-  const rawSuppliedDiff = typeof value.diff === "string" ? value.diff : undefined;
-  const suppliedDiff = boundedString(rawSuppliedDiff, MAX_TOOL_DIFF_BYTES);
-  const generated = keepInline && rawAfter !== undefined
+  // An empty `diff` string carries no information, so it must not suppress the
+  // oldText/newText rendering the way a real one does — hence the truthy check
+  // rather than a `typeof` guard alone. Truncation is announced, like every
+  // other bounded display field; a silent cut reads as a complete diff.
+  const rawSuppliedDiff = typeof value.diff === "string" && value.diff ? value.diff : undefined;
+  const suppliedDiff = rawSuppliedDiff === undefined
+    ? undefined
+    : truncateDisplayText(rawSuppliedDiff, MAX_TOOL_DIFF_BYTES, "\n… file diff truncated");
+  // Only generated when it will actually be used: `createDisplayDiff` is
+  // whole-file work, and computing it just to drop it in favour of a supplied
+  // diff was the most expensive no-op on the read loop.
+  const generated = suppliedDiff === undefined && keepInline && rawAfter !== undefined
     ? createDisplayDiff(filePath, rawBefore, rawAfter)
     : undefined;
   const diff = suppliedDiff ?? generated?.diff ?? (filePath
     ? `--- ${safeDiffPath(filePath)}\n+++ ${safeDiffPath(filePath)}\n@@ diff omitted: file state exceeded display limit @@`
     : undefined);
-  const stats = rawSuppliedDiff
+  const stats = rawSuppliedDiff !== undefined
     ? countUnifiedDiffLines(rawSuppliedDiff)
     : generated;
   if (!filePath && rawBefore === undefined && rawAfter === undefined && diff === undefined) {
@@ -985,7 +1013,15 @@ function fileLines(value: string): string[] {
 }
 
 function diffFileLines(before: string[], after: string[]): DisplayDiffLine[] {
-  const maximumSteps = before.length + after.length;
+  // `trace` retains one frontier per edit distance, each holding O(distance)
+  // entries, so this search costs O(distance²) in *memory* as well as time. The
+  // work counter alone bounded only the latter: a full rewrite of a 256KiB file
+  // reached ~4M retained Map entries (~340MB, ~150ms of blocked read loop)
+  // before it fired, and then discarded all of it for the fallback anyway.
+  // Capping the distance bounds both — 512 keeps an optimal diff for edits up to
+  // 512 changed lines at ~24MB and <10ms, and anything larger renders as one
+  // replaced block, which is what a rewrite that size looks like regardless.
+  const maximumSteps = Math.min(before.length + after.length, MAX_DIFF_EDIT_DISTANCE);
   let frontier = new Map<number, number>([[1, 0]]);
   const trace: Array<Map<number, number>> = [];
   let work = 0;
@@ -1376,12 +1412,16 @@ async function route(
         state: state.outputTruncated ? "failed" : "completed",
         acceptedAt: state.promptJournal.get(requestId)?.acceptedAt ?? Date.now(),
       });
+      // The turn is over. A tool still in flight here was cancelled or abandoned
+      // by the agent — ACP has no status for that, so settle it explicitly.
+      reconcileStaleToolParts(state);
       state.currentTurnOutput = null;
       state.revision += 1;
       schedulePersist();
     }, (error: unknown) => {
       state.status = "error";
       state.error = error instanceof Error ? error.message : String(error);
+      reconcileStaleToolParts(state);
       if (requestId) setPromptJournal(state, {
         requestId,
         state: "failed",
@@ -1708,12 +1748,29 @@ async function loadPersistedState(): Promise<void> {
   }
 }
 
+/**
+ * Settles every tool part a finished turn left in flight.
+ *
+ * ACP has no cancelled tool status, so an interrupted turn, a failed prompt and
+ * a crashed agent all just stop sending updates. Without this the part keeps the
+ * state it had and the tab renders a spinner for the rest of the session. Any
+ * state that is not terminal is settled, not only `pending`, so a part left
+ * stateless by an unrecognised status is caught too.
+ *
+ * Every live caller bumps the revision for its own status change already, so
+ * this reports nothing back.
+ */
 function reconcileStaleToolParts(state: SessionState): void {
   for (const message of state.messages) {
     for (const part of message.parts) {
-      if (part.type !== "tool-invocation" || part.toolState !== "pending") continue;
+      if (part.type !== "tool-invocation") continue;
+      if (part.toolState === "success" || part.toolState === "failure") continue;
       part.toolState = "failure";
       part.toolError = part.toolError ?? "Tool call ended without a result";
+      // Keep the render source in step. A late update carrying no status of its
+      // own would otherwise re-render this part straight back to `pending`.
+      const source = acpToolSourceStates.get(part);
+      if (source) source.toolState = "failure";
     }
   }
 }

@@ -845,6 +845,61 @@ describe("NativeAgentService", () => {
     });
   });
 
+  test("keeps persisted session options ahead of provider composer defaults", async () => {
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        composer: {
+          models: [],
+          fastModeEnabled: false,
+          fastModeAvailable: false,
+          modes: [{ id: "build", label: "Build" }],
+          executionProfiles: [
+            { id: "default", label: "Default" },
+            { id: "reviewer", label: "Reviewer" },
+          ],
+          selectedExecutionProfileId: "default",
+          includeLocalSettings: false,
+          promptSuggestionsEnabled: false,
+        },
+      }),
+    });
+    await withService({
+      prefix: "orkestrator-native-projection-session-options-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "env-env-1:tab-session-options",
+      };
+      await service.ensureSession(identity);
+
+      const updated = await service.updateProjectionControls({
+        ...identity,
+        update: {
+          executionProfileId: "reviewer",
+          includeLocalSettings: true,
+          promptSuggestions: true,
+        },
+      });
+
+      expect(updated?.composer).toMatchObject({
+        selectedExecutionProfileId: "reviewer",
+        includeLocalSettings: true,
+        promptSuggestionsEnabled: true,
+      });
+      await expect(service.getProjection(identity)).resolves.toMatchObject({
+        composer: {
+          selectedExecutionProfileId: "reviewer",
+          includeLocalSettings: true,
+          promptSuggestionsEnabled: true,
+        },
+      });
+    });
+  });
+
   test("projects bounded slash commands and caches discovery independently of transcript refresh", async () => {
     let now = 1_000;
     const stub = createProviderStub("claude", {

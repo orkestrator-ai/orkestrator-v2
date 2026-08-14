@@ -1,6 +1,6 @@
 {
   "name": "codex-bridge",
-  "version": "2.8.3",
+  "version": "2.9.0",
   "description": "Bridge server for Codex SDK integration with Orkestrator AI",
   "type": "module",
   "main": "dist/index.js",

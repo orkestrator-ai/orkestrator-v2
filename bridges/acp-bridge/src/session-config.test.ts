@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  applyConfigOptionUpdate,
   applyCurrentModeUpdate,
   applyGrokCatalogUpdate,
   applyGrokModelChange,
@@ -282,6 +283,26 @@ describe("planComposerApply", () => {
     ]);
   });
 
+  test("re-sends a retained model option when the catalogue changed the active model", () => {
+    const initial = normalizeAcpSessionConfig("cursor", cursorSessionResult());
+    const refreshed = applyGrokCatalogUpdate("cursor", initial, {
+      currentModelId: "composer-2.5",
+      models: [
+        { modelId: "grok-4.6", name: "Cursor Grok 4.6" },
+        { modelId: "composer-2.5", name: "Composer 2.5" },
+      ],
+    });
+
+    expect(refreshed.composer.selectedModelId).toBe("composer-2.5");
+    expect(refreshed.wire.configOptions[0]?.currentValue).toBe("grok-4.6");
+    expect(planComposerApply("sess", refreshed, { modelId: "grok-4.6" })).toEqual([
+      {
+        method: "session/set_config_option",
+        params: { sessionId: "sess", configId: "model", value: "grok-4.6" },
+      },
+    ]);
+  });
+
   test("uses session/set_model with reasoningEffort for Grok", () => {
     const normalized = normalizeAcpSessionConfig("grok", {
       models: {
@@ -319,6 +340,53 @@ describe("planComposerApply", () => {
 });
 
 describe("session config updates", () => {
+  test("replaces reconstructed reasoning choices with a live Cursor option update", () => {
+    const initial = normalizeAcpSessionConfig("cursor", cursorSessionResult());
+    const next = applyConfigOptionUpdate("cursor", initial, {
+      configOptions: [
+        {
+          id: "model",
+          category: "model",
+          type: "select",
+          currentValue: "grok-4.6",
+          options: [
+            { value: "grok-4.6", name: "Cursor Grok 4.6" },
+            { value: "composer-2.5", name: "Composer 2.5" },
+          ],
+        },
+        {
+          id: "effort",
+          category: "thought_level",
+          type: "select",
+          currentValue: "low",
+          options: [
+            { value: "low", name: "Minimum" },
+            { value: "high", name: "Maximum" },
+          ],
+        },
+        {
+          id: "fast",
+          category: "model_config",
+          type: "select",
+          currentValue: "false",
+          options: [{ value: "false", name: "Off" }, { value: "true", name: "Fast" }],
+        },
+      ],
+    });
+
+    expect(next.composer.selectedReasoningId).toBe("low");
+    expect(next.composer.models[0]?.reasoning).toEqual([
+      { id: "low", label: "Minimum" },
+      { id: "high", label: "Maximum" },
+    ]);
+    expect(planComposerApply("sess", next, { reasoningId: "high" })).toEqual([
+      {
+        method: "session/set_config_option",
+        params: { sessionId: "sess", configId: "effort", value: "high" },
+      },
+    ]);
+  });
+
   test("maps a current_mode_update onto Build/Plan", () => {
     const normalized = normalizeAcpSessionConfig("cursor", {
       modes: {

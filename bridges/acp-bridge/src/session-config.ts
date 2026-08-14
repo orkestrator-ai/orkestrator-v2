@@ -316,13 +316,16 @@ export function planComposerApply(
     });
   }
 
-  // Whether the config-option surface has already carried the change. A stale
-  // option list that no longer holds the requested id emits nothing, and that
-  // must still fall through to `session/set_model` rather than drop the change.
+  // Whether the config-option surface will carry the change. Catalogue updates
+  // can move the active model without refreshing an option's `currentValue`, so
+  // the composer snapshot — not that retained value — decides whether a change
+  // is still required. A stale option list that lacks the requested id must
+  // still fall through to `session/set_model` rather than drop the change.
   let modelSentAsOption = false;
   let reasoningSentAsOption = false;
 
-  if (modelOption && patch.modelId && patch.modelId !== optionCurrentString(modelOption)) {
+  if (modelOption && patch.modelId
+    && patch.modelId !== current.composer.selectedModelId) {
     const value = resolveSelectValue(modelOption, patch.modelId);
     if (value !== undefined) {
       calls.push({
@@ -331,12 +334,10 @@ export function planComposerApply(
       });
       modelSentAsOption = true;
     }
-  } else if (modelOption && patch.modelId) {
-    modelSentAsOption = true;
   }
 
   if (thoughtOption && patch.reasoningId
-    && patch.reasoningId !== optionCurrentString(thoughtOption)) {
+    && patch.reasoningId !== current.composer.selectedReasoningId) {
     const value = resolveSelectValue(thoughtOption, patch.reasoningId);
     if (value !== undefined) {
       calls.push({
@@ -345,8 +346,6 @@ export function planComposerApply(
       });
       reasoningSentAsOption = true;
     }
-  } else if (thoughtOption && patch.reasoningId) {
-    reasoningSentAsOption = true;
   }
 
   if (fastOption && patch.fastMode !== undefined
@@ -511,7 +510,11 @@ function composerFromGrokModels(
   const fastOption = selectFastOption(configOptions);
   const models = catalog.models.map((entry): AgentModel => {
     const own = entry.reasoningEfforts.map((id) => reasoningOption(id));
-    const reasoning = own.length > 0 ? own : shared.options;
+    // A live config option is Cursor's authoritative reasoning surface. The
+    // catalogue metadata may have been reconstructed from an older composer
+    // snapshot by `applyConfigOptionUpdate`, so allowing it to win here would
+    // freeze obsolete values and discard the option's vendor-provided labels.
+    const reasoning = shared.options.length > 0 ? shared.options : own;
     const fastSibling = catalog.models.some((candidate) => (
       candidate.modelId !== entry.modelId
       && sameModelFamily(candidate.modelId, entry.modelId)
@@ -524,7 +527,9 @@ function composerFromGrokModels(
       description: entry.description,
       providerLabel: PLATFORM_LABEL[provider],
       reasoning: reasoning.length > 0 ? reasoning : undefined,
-      defaultReasoningId: entry.reasoningEffort ?? reasoning[0]?.id,
+      defaultReasoningId: shared.options.length > 0
+        ? shared.selectedId ?? reasoning[0]?.id
+        : entry.reasoningEffort ?? reasoning[0]?.id,
       supportsSpeed: fastSibling || Boolean(fastOption),
       supportsMode: Object.keys(availableModeIds).length > 0,
     };

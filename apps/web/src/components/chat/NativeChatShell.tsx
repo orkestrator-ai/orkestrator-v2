@@ -63,7 +63,7 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
   blockingCards?: ReactNode;
   /** Extra pinned content below the blocking cards, e.g. Codex's plan card. */
   pinnedAccessory?: ReactNode;
-  /** Bottom spacer height class; widen when a tall accessory is pinned. */
+  /** Bottom spacer fallback used until the compose dock has a measurable height. */
   bottomSpacerClassName?: string;
   /**
    * Per-message hover actions, e.g. "fork from here".
@@ -307,22 +307,22 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
                 </div>
               )}
               {/*
-                Blocking cards are pinned over the transcript, so the spacer has
-                to clear them too — otherwise the prompt covers the very messages
-                the user needs to read in order to answer it.
+                The dock floats over the transcript, so its full live height must
+                be reserved here. That keeps a growing composer — plus any pinned
+                cards — from covering the last messages.
               */}
               <div
                 data-testid="transcript-bottom-spacer"
                 className={cn(
                   "shrink-0",
-                  !hasPinnedContent
-                    ? bottomSpacerClassName
-                    : measuredDockHeight === null
+                  measuredDockHeight === null
+                    ? hasPinnedContent
                       ? "h-80"
-                      : undefined,
+                      : bottomSpacerClassName
+                    : undefined,
                 )}
                 style={
-                  hasPinnedContent && measuredDockHeight !== null
+                  measuredDockHeight !== null
                     ? { height: measuredDockHeight }
                     : undefined
                 }

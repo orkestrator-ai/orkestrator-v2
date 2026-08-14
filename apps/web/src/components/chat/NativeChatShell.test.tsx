@@ -129,6 +129,28 @@ describe("NativeChatShell", () => {
     expect(spacer.style.height).toBe("735px");
   });
 
+  test("tracks composer growth even when the dock has no pinned content", () => {
+    render(<NativeChatShell {...shellProps()} />);
+
+    const dock = screen.getByTestId("compose-dock");
+    const spacer = screen.getByTestId("transcript-bottom-spacer");
+    dock.getBoundingClientRect = () => ({ height: 148 }) as DOMRect;
+
+    act(() => {
+      resizeCallback?.([], resizeObserver!);
+    });
+    expect(spacer.style.height).toBe("148px");
+    expect(spacer.className).not.toContain("h-32");
+
+    // A multiline draft makes the dock taller. The transcript must gain the
+    // same clearance so its last line can still scroll above the composer.
+    dock.getBoundingClientRect = () => ({ height: 336 }) as DOMRect;
+    act(() => {
+      resizeCallback?.([], resizeObserver!);
+    });
+    expect(spacer.style.height).toBe("336px");
+  });
+
   test("shows a desync warning while already at the bottom without another accessory", () => {
     render(<NativeChatShell {...shellProps()} desynced />);
 
@@ -275,7 +297,7 @@ describe("NativeChatShell", () => {
     expect(spacer.style.height).toBe("420px");
   });
 
-  test("retains the configured spacer when there is no pinned content", () => {
+  test("uses the configured spacer before an unpinned dock can be measured", () => {
     render(
       <NativeChatShell
         {...shellProps()}
@@ -305,8 +327,8 @@ describe("NativeChatShell", () => {
       resizeCallback?.([], resizeObserver!);
     });
 
-    expect(spacer.className).toContain("h-32");
-    expect(spacer.style.height).toBe("");
+    expect(spacer.className).not.toContain("h-32");
+    expect(spacer.style.height).toBe("500px");
     expect(dock.querySelector(".max-h-\\[60vh\\]")).toBeNull();
   });
 

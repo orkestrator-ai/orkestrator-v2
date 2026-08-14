@@ -324,7 +324,7 @@ describe("ACP bridge", () => {
     ]);
   });
 
-  test("reports token usage and runtime inventory, and rehydrates them after restart", async () => {
+  test("keeps usage scoped to one turn and rehydrates the latest turn after restart", async () => {
     const stateDirectory = await temporaryDirectory();
     const first = await spawnBridge({ stateDirectory });
     const created = await nativeFetch(`${first.base}/session/create`, {
@@ -378,15 +378,39 @@ describe("ACP bridge", () => {
       state: "idle",
     });
 
+    expect((await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ prompt: "USAGE_SPARSE: count the next turn" }),
+    })).status).toBe(202);
+
+    const sparseSession = await waitFor(
+      () => readSession(first.base, first.headers),
+      (value) => value.status === "idle" && value.contextUsage?.usedTokens === 222,
+    );
+    expect(sparseSession.contextUsage).toMatchObject({
+      usedTokens: 222,
+      inputTokens: 200,
+      outputTokens: 22,
+      source: "provider",
+    });
+    expect(sparseSession.contextUsage).not.toHaveProperty("cacheReadTokens");
+    expect(sparseSession.contextUsage).not.toHaveProperty("reasoningTokens");
+    expect(sparseSession.contextUsage).not.toHaveProperty("apiDurationMs");
+
     first.child.kill("SIGTERM");
     await Bun.sleep(200);
     const second = await spawnBridge({ stateDirectory });
     const restored = await readSession(second.base, second.headers);
     expect(restored.contextUsage).toMatchObject({
-      usedTokens: 15_675,
-      cacheReadTokens: 5_888,
+      usedTokens: 222,
+      inputTokens: 200,
+      outputTokens: 22,
       source: "provider",
     });
+    expect(restored.contextUsage).not.toHaveProperty("cacheReadTokens");
+    expect(restored.contextUsage).not.toHaveProperty("reasoningTokens");
+    expect(restored.contextUsage).not.toHaveProperty("apiDurationMs");
     // The command list belongs to the session and survives with it; the agent
     // version and MCP inventory come from a handshake this process has not had.
     expect(restored.runtime).toMatchObject({ commands: 3 });

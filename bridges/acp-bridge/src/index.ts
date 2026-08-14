@@ -158,6 +158,8 @@ interface SessionState {
    * has something authoritative to show after a bridge restart.
    */
   usage?: PersistedUsage;
+  /** Usage carriers collected for the in-flight turn. Never persisted. */
+  currentTurnUsage?: AcpTurnUsage;
   /** Wall clock of the in-flight turn, used for the elapsed metric. */
   turnStartedAt?: number;
   /** `available_commands_update` size; both agents advertise their commands. */
@@ -1655,6 +1657,7 @@ async function route(
     state.error = undefined;
     state.outputTruncated = false;
     state.turnStartedAt = Date.now();
+    state.currentTurnUsage = {};
     state.currentTurnOutput = schema ? "" : null;
     state.revision += 1;
     boundTranscript(state);
@@ -1684,6 +1687,7 @@ async function route(
       // read before `turnStartedAt` is cleared and the elapsed time is lost.
       recordTurnUsage(state, isObject(result) ? result._meta : undefined);
       state.turnStartedAt = undefined;
+      state.currentTurnUsage = undefined;
       if (schema && requestId) {
         const output = state.currentTurnOutput?.trim() ?? "";
         if (Buffer.byteLength(output) > MAX_STRUCTURED_RESULT_BYTES) {
@@ -1719,6 +1723,7 @@ async function route(
       state.status = "error";
       state.error = error instanceof Error ? error.message : String(error);
       state.turnStartedAt = undefined;
+      state.currentTurnUsage = undefined;
       reconcileStaleToolParts(state);
       if (requestId) setPromptJournal(state, {
         requestId,
@@ -2002,12 +2007,16 @@ function applyVendorUpdate(state: SessionState, method: string, params: JsonObje
 function recordTurnUsage(state: SessionState, payload: unknown): void {
   const turn = parseAcpTurnUsage(payload);
   if (!turn) return;
+  const accumulatedTurn = state.turnStartedAt === undefined
+    ? { ...(state.usage?.turn ?? {}), ...turn }
+    : { ...(state.currentTurnUsage ?? {}), ...turn };
+  if (state.turnStartedAt !== undefined) state.currentTurnUsage = accumulatedTurn;
   const durationMs = state.turnStartedAt === undefined
     ? state.usage?.durationMs
     : Math.max(0, Date.now() - state.turnStartedAt);
   const modelId = state.sessionConfig.composer.selectedModelId;
   state.usage = {
-    turn: { ...(state.usage?.turn ?? {}), ...turn },
+    turn: accumulatedTurn,
     ...(modelId ? { modelId } : {}),
     ...(durationMs === undefined ? {} : { durationMs }),
     updatedAt: new Date().toISOString(),

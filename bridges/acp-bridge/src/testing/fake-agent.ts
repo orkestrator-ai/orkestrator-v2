@@ -773,6 +773,39 @@ lines.on("line", (line) => {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }
+    // A later turn that intentionally omits the optional breakdown from the
+    // full USAGE carrier below. Its missing fields must stay missing instead of
+    // leaking forward from an earlier turn.
+    if (prompt.startsWith("USAGE_SPARSE")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Counted again." } },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "_x.ai/session_notification",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "turn_completed",
+            usage: { inputTokens: 200, outputTokens: 22, totalTokens: 222 },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          stopReason: "end_turn",
+          _meta: { totalTokens: 222, usage: { inputTokens: 200, outputTokens: 22 } },
+        },
+      });
+      return;
+    }
     // A turn that reports everything the agent info panel can show: the MCP
     // inventory and command list as notifications, then the same token counts
     // Grok repeats across a session notification and the prompt result.

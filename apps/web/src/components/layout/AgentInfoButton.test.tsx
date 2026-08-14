@@ -4156,6 +4156,33 @@ describe("AgentInfoButton ACP agents", () => {
     expect(screen.queryByText("MCP")).toBeNull();
   });
 
+  test("shows token metrics without inventing a context window", () => {
+    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("grok", {
+      composer: {
+        models: [],
+        fastModeEnabled: null,
+        fastModeAvailable: false,
+        modes: [],
+        selectedModelId: "grok-4.6",
+      },
+      contextUsage: {
+        usedTokens: 222,
+        inputTokens: 200,
+        outputTokens: 22,
+        source: "provider",
+      },
+    }));
+
+    render(<AgentInfoButton activeTab={acpTab("grok")} />);
+    open();
+
+    expect(metricValue("Input")).toBe("200");
+    expect(metricValue("Output")).toBe("22");
+    expect(screen.queryByText("Context")).toBeNull();
+    expect(popover().textContent).not.toContain("available");
+    expect(popover().textContent).toContain("Provider reported");
+  });
+
   test("hides the provider actions an ACP agent cannot perform, but offers the transfer", () => {
     useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
 

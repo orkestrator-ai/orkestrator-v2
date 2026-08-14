@@ -543,12 +543,17 @@ function AgentRuntimePanel({
   );
 }
 
+type AgentInfoUsageSnapshot = Omit<ContextUsageSnapshot, "totalTokens" | "percentUsed"> & {
+  totalTokens?: number;
+  percentUsed?: number;
+};
+
 function UsagePanel({
   usage,
   modelId,
   rateLimits,
 }: {
-  usage: ContextUsageSnapshot | undefined;
+  usage: AgentInfoUsageSnapshot | undefined;
   modelId: string | undefined;
   /** Claude reports these independently of context occupancy. */
   rateLimits?: AgentRateLimitWindow[];
@@ -575,32 +580,40 @@ function UsagePanel({
   }
 
   const used = Math.max(0, usage.usedTokens);
-  const total = Math.max(0, usage.totalTokens);
-  const remaining = Math.max(0, total - used);
+  const contextWindow = usage.totalTokens !== undefined
+    && Number.isFinite(usage.totalTokens)
+    && usage.percentUsed !== undefined
+    && Number.isFinite(usage.percentUsed)
+    ? {
+        total: Math.max(0, usage.totalTokens),
+        percentUsed: usage.percentUsed,
+        remaining: Math.max(0, Math.max(0, usage.totalTokens) - used),
+      }
+    : null;
 
   return (
     <div className="space-y-4">
-      <div>
+      {contextWindow ? <div>
         <div className="mb-2 flex items-end justify-between gap-3">
           <div>
             <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
               Context
             </div>
             <div className="mt-1 font-mono text-xl tabular-nums text-foreground">
-              {usage.percentUsed.toFixed(usage.percentUsed >= 10 ? 0 : 1)}%
+              {contextWindow.percentUsed.toFixed(contextWindow.percentUsed >= 10 ? 0 : 1)}%
             </div>
           </div>
           <div className="text-right font-mono text-xs tabular-nums text-muted-foreground">
-            <div>{formatTokenCount(used)} / {formatTokenCount(total)}</div>
-            <div>{formatTokenCount(remaining)} available</div>
+            <div>{formatTokenCount(used)} / {formatTokenCount(contextWindow.total)}</div>
+            <div>{formatTokenCount(contextWindow.remaining)} available</div>
           </div>
         </div>
         <Progress
-          value={usage.percentUsed}
-          aria-label={`${usage.percentUsed.toFixed(0)} percent of context used`}
+          value={contextWindow.percentUsed}
+          aria-label={`${contextWindow.percentUsed.toFixed(0)} percent of context used`}
           className="h-1.5"
         />
-      </div>
+      </div> : null}
 
       <div className="grid grid-cols-2 gap-x-3 gap-y-4">
         {usage.inputTokens !== undefined ? (
@@ -955,7 +968,20 @@ export function AgentInfoButton({
       : undefined,
   );
 
-  const usage = (
+  const neutralContextUsage = neutralProjection?.contextUsage;
+  const neutralMaximumTokens = neutralContextUsage?.maximumTokens;
+  const neutralUsage: AgentInfoUsageSnapshot | undefined = neutralContextUsage ? {
+    ...neutralContextUsage,
+    usedTokens: neutralContextUsage.usedTokens,
+    ...(neutralMaximumTokens !== undefined
+      && Number.isFinite(neutralMaximumTokens)
+      && neutralMaximumTokens > 0 ? {
+      totalTokens: neutralMaximumTokens,
+      percentUsed: neutralContextUsage.percentage
+        ?? neutralContextUsage.usedTokens / neutralMaximumTokens * 100,
+    } : {}),
+  } : undefined;
+  const usage: AgentInfoUsageSnapshot | undefined = (
     activeSession?.provider === "claude"
       ? claudeUsage
       : activeSession?.provider === "opencode"
@@ -963,17 +989,7 @@ export function AgentInfoButton({
         : activeSession?.provider === "codex"
           ? codexUsage
           : undefined
-  ) ?? (neutralProjection?.contextUsage ? {
-      ...neutralProjection.contextUsage,
-      usedTokens: neutralProjection.contextUsage.usedTokens,
-      totalTokens: neutralProjection.contextUsage.maximumTokens
-        ?? neutralProjection.contextUsage.usedTokens,
-      percentUsed: neutralProjection.contextUsage.percentage
-        ?? (neutralProjection.contextUsage.maximumTokens
-          ? neutralProjection.contextUsage.usedTokens
-            / neutralProjection.contextUsage.maximumTokens * 100
-          : 0),
-    } : undefined);
+  ) ?? neutralUsage;
   const neutralRateLimits = neutralProjection?.rateLimits
     ?? neutralProjection?.contextUsage?.rateLimits;
   const liveClaudeTasks = neutralProjection?.backgroundTasks

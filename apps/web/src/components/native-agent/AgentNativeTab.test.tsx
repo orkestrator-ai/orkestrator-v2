@@ -1037,6 +1037,7 @@ describe("AgentNativeTab", () => {
       messages?: NativeMessage[];
       recoverableDispatch?: NativeAgentSessionProjection["recoverableDispatch"];
       composer?: Partial<NonNullable<NativeAgentSessionProjection["composer"]>>;
+      contextUsage?: NativeAgentSessionProjection["contextUsage"];
     } = {}) {
       getNativeAgentProjectionMock.mockImplementation(async (input) => ({
         platform: input.agent,
@@ -1059,6 +1060,7 @@ describe("AgentNativeTab", () => {
         ...(overrides.suggestedPrompt
           ? { suggestedPrompt: overrides.suggestedPrompt }
           : {}),
+        ...(overrides.contextUsage ? { contextUsage: overrides.contextUsage } : {}),
         interactions: [],
         composerControls: [],
         composer: {
@@ -1104,6 +1106,21 @@ describe("AgentNativeTab", () => {
         generation: "test-generation",
       }));
     }
+
+    test("does not render a context wheel when the provider reports no maximum", async () => {
+      seedProjection({
+        contextUsage: {
+          usedTokens: 222,
+          inputTokens: 200,
+          outputTokens: 22,
+          source: "provider",
+        },
+      });
+      render(<AgentNativeTab tabId="tab-unbounded-usage" data={identity("grok")} isActive />);
+
+      expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /Context window/ })).toBeNull();
+    });
 
     test("routes a running-turn /steer to the session action instead of the queue", async () => {
       seedProjection({ phase: "running", actions: { steer: true } });

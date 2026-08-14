@@ -1486,9 +1486,16 @@ function appendBounded(current: string, addition: string, maximumBytes: number):
   if (Buffer.byteLength(addition) <= remaining) return { value: current + addition, truncated: false };
   const marker = "\n[output truncated by Orkestrator]";
   const markerBytes = Buffer.byteLength(marker);
-  const usable = Math.max(0, remaining - markerBytes);
+  // Truncation is no longer fatal for an interactive turn, so the marker is
+  // part of the correctness contract rather than optional decoration. A prior
+  // stream chunk can leave fewer free bytes than the marker needs; reserve its
+  // space from the already-buffered prefix in that case instead of silently
+  // dropping this chunk and presenting the shortened response as complete.
+  const contentLimit = Math.max(0, maximumBytes - markerBytes);
+  const prefix = truncateUtf8(current, contentLimit);
+  const usable = Math.max(0, contentLimit - Buffer.byteLength(prefix));
   return {
-    value: current + truncateUtf8(addition, usable) + (remaining >= markerBytes ? marker : ""),
+    value: prefix + truncateUtf8(addition, usable) + truncateUtf8(marker, maximumBytes),
     truncated: true,
   };
 }
@@ -1497,7 +1504,11 @@ function truncateUtf8(value: string, maximumBytes: number): string {
   if (maximumBytes <= 0) return "";
   const encoded = Buffer.from(value);
   if (encoded.length <= maximumBytes) return value;
-  return new TextDecoder("utf-8", { fatal: false }).decode(encoded.subarray(0, maximumBytes));
+  // Back up over continuation bytes so decoding cannot replace a partial code
+  // point with U+FFFD (three bytes) and accidentally exceed the byte cap.
+  let end = maximumBytes;
+  while (end > 0 && (encoded[end]! & 0b1100_0000) === 0b1000_0000) end -= 1;
+  return encoded.subarray(0, end).toString("utf8");
 }
 
 function boundTranscript(state: SessionState): boolean {

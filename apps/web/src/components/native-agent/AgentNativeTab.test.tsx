@@ -1107,7 +1107,7 @@ describe("AgentNativeTab", () => {
       }));
     }
 
-    test("does not render a context wheel when the provider reports no maximum", async () => {
+    test("renders an unavailable context wheel when the provider reports no maximum", async () => {
       seedProjection({
         contextUsage: {
           usedTokens: 222,
@@ -1119,7 +1119,9 @@ describe("AgentNativeTab", () => {
       render(<AgentNativeTab tabId="tab-unbounded-usage" data={identity("grok")} isActive />);
 
       expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
-      expect(screen.queryByRole("button", { name: /Context window/ })).toBeNull();
+      expect(screen.getByRole("button", {
+        name: "Context window usage unavailable",
+      })).toBeTruthy();
     });
 
     test("renders the context wheel from the percentage the provider reported", async () => {

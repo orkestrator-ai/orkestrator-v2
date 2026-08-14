@@ -985,6 +985,45 @@ describe("ACP bridge", () => {
     expect(Buffer.byteLength(JSON.stringify(tool))).toBeLessThan(1024);
   });
 
+  test("renders separated changes and file boundaries as correctly positioned hunks", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-multi-hunk" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "MULTIHUNK: touch the boundaries and middle" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    const tool = session.messages[1]?.parts.find((part) => part.toolUseId === "multi-hunk-1");
+    const diff = (tool?.toolDiff as { diff?: string } | undefined)?.diff ?? "";
+    expect(diff.match(/^@@/gm)).toEqual([
+      "@@",
+      "@@",
+      "@@",
+    ]);
+    expect(diff).toContain("@@ -1,4 +1,4 @@");
+    expect(diff).toContain("@@ -7,7 +7,7 @@");
+    expect(diff).toContain("@@ -17,4 +17,4 @@");
+    expect(diff).toContain("-line 1\n+line 1 changed");
+    expect(diff).toContain("-line 10\n+line 10 changed");
+    expect(diff).toContain("-line 20\n+line 20 changed");
+    expect(diff).not.toContain(" line 5");
+    expect(diff).not.toContain(" line 15");
+  });
+
   test("normalizes terminal and text tool content in protocol order", async () => {
     const { base, headers } = await spawnBridge();
     const created = await nativeFetch(`${base}/session/create`, {
@@ -1130,6 +1169,61 @@ describe("ACP bridge", () => {
     expect(session.messages[1]?.parts.slice(1).every((part) => part.type === "tool-invocation"))
       .toBe(true);
     expect(session.messages[1]?.parts.at(-1)).toMatchObject({ toolUseId: "many-512" });
+  });
+
+  test("bounds an aggregate interactive transcript and preserves its trim across restart", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const first = await spawnBridge({ stateDirectory });
+    const created = await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-transcript-overflow" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ prompt: "TRANSCRIPTOVERFLOW: fill the display budget" }),
+    });
+    const read = async (base: string, headers: Record<string, string>) =>
+      await nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as {
+          status: string;
+          error?: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        };
+    const bounded = await waitFor(
+      () => read(first.base, first.headers),
+      (value) => value.status === "idle",
+    );
+
+    const assistant = bounded.messages.at(-1)!;
+    expect(bounded.error).toBeUndefined();
+    expect(Buffer.byteLength(JSON.stringify(bounded.messages))).toBeLessThanOrEqual(8 * 1024 * 1024);
+    expect(assistant.parts.length).toBeLessThan(18);
+    expect(assistant.parts[0]).toMatchObject({
+      type: "text",
+      content: expect.stringContaining("Earlier steps in this response were dropped"),
+    });
+    expect(assistant.parts.at(-1)).toMatchObject({ toolUseId: "large-17", toolState: "success" });
+    const retainedToolIds = assistant.parts.flatMap((part) =>
+      typeof part.toolUseId === "string" ? [part.toolUseId] : []
+    );
+
+    await stopChild(first.child);
+    const second = await spawnBridge({ stateDirectory });
+    const restored = await read(second.base, second.headers);
+    const restoredAssistant = restored.messages.at(-1)!;
+    expect(restored.status).toBe("idle");
+    expect(restored.error).toBeUndefined();
+    expect(Buffer.byteLength(JSON.stringify(restored.messages))).toBeLessThanOrEqual(8 * 1024 * 1024);
+    expect(restoredAssistant.parts[0]).toMatchObject({
+      type: "text",
+      content: expect.stringContaining("Earlier steps in this response were dropped"),
+    });
+    expect(restoredAssistant.parts.flatMap((part) =>
+      typeof part.toolUseId === "string" ? [part.toolUseId] : []
+    )).toEqual(retainedToolIds);
   });
 
   test("fails a structured turn when its parts exhaust the per-message limit", async () => {
@@ -1931,6 +2025,36 @@ describe("ACP bridge", () => {
     expect(Buffer.byteLength(JSON.stringify(session.messages))).toBeLessThan(8 * 1024 * 1024);
     // Bounded, and the cut is announced in the transcript the user reads.
     expect(session.messages[1]?.content.endsWith("[output truncated by Orkestrator]")).toBe(true);
+  });
+
+  test("announces overflow when earlier stream chunks leave no room for the marker", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "STREAMOVERFLOW: cross the cap in two chunks" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ content: string; parts: Array<{ type: string; content: string }> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    const assistant = session.messages[1]!;
+    const textPart = assistant.parts.find((part) => part.type === "text")!;
+    expect(session.error).toBeUndefined();
+    expect(Buffer.byteLength(assistant.content)).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(Buffer.byteLength(textPart.content)).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(assistant.content.endsWith("[output truncated by Orkestrator]")).toBe(true);
+    expect(textPart.content.endsWith("[output truncated by Orkestrator]")).toBe(true);
+    expect(assistant.content).not.toContain("�");
+    expect(textPart.content).not.toContain("�");
   });
 
   test("fails an oversized structured turn rather than parsing a cut answer", async () => {

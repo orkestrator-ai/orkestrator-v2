@@ -290,6 +290,30 @@ lines.on("line", (line) => {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }
+    if (prompt.startsWith("STREAMOVERFLOW")) {
+      // Real agents stream in many chunks. Leave one byte under the message cap
+      // before crossing it so the bridge has to reclaim already-buffered text
+      // to make the truncation marker visible. Put a multi-byte code point over
+      // the reclaimed boundary so the shortened prefix must remain valid UTF-8.
+      const maximumBytes = 2 * 1024 * 1024;
+      const markerBytes = Buffer.byteLength("\n[output truncated by Orkestrator]");
+      const contentLimit = maximumBytes - markerBytes;
+      const first = "x".repeat(contentLimit - 1)
+        + "🙂"
+        + "y".repeat(markerBytes - Buffer.byteLength("🙂"));
+      for (const text of [first, "yz"]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
+          },
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
     if (prompt.startsWith("TOOLSFIRST")) {
       write({
         jsonrpc: "2.0",
@@ -583,6 +607,29 @@ lines.on("line", (line) => {
       }
       return;
     }
+    if (prompt.startsWith("TRANSCRIPTOVERFLOW")) {
+      // Individually valid parts whose combined rendered transcript crosses the
+      // 8 MiB budget. Each update is terminal so persistence/reload can verify
+      // trimming without stale-tool reconciliation changing the snapshot.
+      for (let index = 0; index < 18; index += 1) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `large-${index}`,
+              kind: "read",
+              status: "completed",
+              rawOutput: `${index}:`.padEnd(520 * 1024, "x"),
+            },
+          },
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
     if (prompt.startsWith("HANGTOOL")) {
       // Ends the turn with a tool still in flight. ACP has no cancelled tool
       // status, so this is what an interrupted or abandoned tool looks like.
@@ -750,6 +797,34 @@ lines.on("line", (line) => {
               newText: lines
                 .map((line, index) => index === 2500 ? `${line} // touched` : line)
                 .join("\n"),
+            }],
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("MULTIHUNK")) {
+      const oldLines = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`);
+      const newLines = oldLines.map((line, index) =>
+        index === 0 || index === 9 || index === 19 ? `${line} changed` : line
+      );
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "multi-hunk-1",
+            title: "Edit three distant lines",
+            kind: "edit",
+            status: "completed",
+            content: [{
+              type: "diff",
+              path: "src/boundaries.ts",
+              oldText: oldLines.join("\n"),
+              newText: newLines.join("\n"),
             }],
           },
         },

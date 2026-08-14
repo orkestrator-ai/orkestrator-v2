@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Square } from "lucide-react";
 import {
   adoptNativeAgentSession,
   awaitBridgeReady,
@@ -22,7 +21,8 @@ import {
 } from "@/lib/acp-client";
 import type { NativeAgentData } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { NativeComposeBar } from "@/components/chat/NativeComposeBar";
+import type { MentionableInputRef } from "@/components/chat/MentionableInput";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import {
@@ -34,6 +34,7 @@ import { NativeChatShell } from "@/components/chat/NativeChatShell";
 import { useVirtuosoScrollState } from "@/hooks";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import { normalizeNativeMessages } from "@/lib/chat/native-message-adapters";
+import type { FileMention } from "@/types";
 
 // A reconnect runs the full readiness handshake, which for a container
 // environment performs Docker work in the backend. The first failure recovers
@@ -41,6 +42,12 @@ import { normalizeNativeMessages } from "@/lib/chat/native-message-adapters";
 // keeps failing must not drive one handshake per poll.
 const RECONNECT_BASE_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 8_000;
+
+// ACP has no file-mention picker yet: this tab renders no mention menu and
+// never calls `insertMention`, so the compose bar's mention list is always
+// empty. A stable constant keeps `MentionableInput`'s content-sync effect from
+// seeing a new array identity on every render.
+const NO_MENTIONS: FileMention[] = [];
 
 function reconnectDelayMs(attempt: number): number {
   if (attempt <= 0) return 0;
@@ -87,6 +94,13 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
   const sentInitialPrompt = useRef(false);
   const pendingManualRequest = useRef<{ prompt: string; requestId: string } | null>(null);
   const dispatchingPrompt = useRef(false);
+  const inputRef = useRef<MentionableInputRef>(null);
+  const inputContainerRef = useRef<HTMLDivElement>(null);
+  // Sending disables the compose input, and a disabled contenteditable is not
+  // focusable, so the browser drops the caret. Restore it when the dispatch
+  // settles, but only when the composer is what held focus in the first place:
+  // a mouse click on Send, or a dialog opened mid-flight, must keep its focus.
+  const restoreComposerFocus = useRef(false);
   const updateTabNativeSessionId = usePaneLayoutStore((state) => state.updateTabNativeSessionId);
   const clearTabInitialPrompt = usePaneLayoutStore((state) => state.clearTabInitialPrompt);
   const setPendingPrompt = useAcpPendingPromptStore((state) => state.setPendingPrompt);
@@ -247,6 +261,11 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
       ?? (pending?.prompt === prompt ? pending.requestId : crypto.randomUUID());
     if (!fixedRequestId) pendingManualRequest.current = { prompt, requestId };
     dispatchingPrompt.current = true;
+    restoreComposerFocus.current = Boolean(
+      inputContainerRef.current
+      && document.activeElement
+      && inputContainerRef.current.contains(document.activeElement),
+    );
     setDispatching(true);
     setDraft("");
     try {
@@ -310,6 +329,14 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
     setPendingPrompt,
     setPendingPromptNaming,
   ]);
+
+  // Runs after the render that re-enables the input, which is the earliest
+  // point a contenteditable is focusable again.
+  useEffect(() => {
+    if (dispatching || !restoreComposerFocus.current) return;
+    restoreComposerFocus.current = false;
+    inputRef.current?.focus();
+  }, [dispatching]);
 
   useEffect(() => {
     if (backendOwnsStartupPrompt && initialPrompt) {
@@ -428,28 +455,37 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
         </div>
       ) : null}
       composer={
-        <div className="mx-auto mb-4 mt-2 w-[calc(100%_-_0.75rem)] shrink-0 rounded-2xl border border-border/70 bg-zinc-900/90 p-3 shadow-xl shadow-black/20 sm:w-[min(calc(100%_-_2rem),56rem)]">
-          <Textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void submit(draft);
-              }
-            }}
-            placeholder={`Message ${label}`}
-            className="min-h-14 resize-none border-0 bg-transparent px-1 py-2 shadow-none focus-visible:ring-0"
-            disabled={!session}
-          />
-          <div className="flex items-center justify-end pt-1">
-            {session?.status === "running" ? (
-              <Button size="icon" variant="ghost" className="h-8 w-8 rounded-full bg-destructive/10 text-destructive hover:bg-destructive/20" aria-label="Stop" onClick={() => client && void cancelAcpPrompt(client, session.id)}><Square className="h-4 w-4 fill-current" /></Button>
-            ) : (
-              <Button size="icon" variant="ghost" className="h-8 w-8 rounded-full bg-muted hover:bg-muted/80" aria-label="Send" disabled={!draft.trim() || !session || dispatching || pendingPrompt?.isNaming === true} onClick={() => void submit(draft)}><ArrowUp className="h-4 w-4" /></Button>
-            )}
-          </div>
-        </div>
+        <NativeComposeBar
+          testId="acp-native-compose-bar"
+          attachments={[]}
+          onRemoveAttachment={() => undefined}
+          inputRef={inputRef}
+          inputContainerRef={inputContainerRef}
+          text={draft}
+          mentions={NO_MENTIONS}
+          onTextAndMentionsChange={(text) => setDraft(text)}
+          onCursorPositionChange={() => undefined}
+          onKeyDown={(event) => {
+            // MentionableInput owns the IME guard and never forwards an Enter
+            // that is confirming a composition, so re-checking it here would
+            // only risk drifting from the authoritative test.
+            if (event.key !== "Enter" || event.shiftKey) return;
+            event.preventDefault();
+            void submit(draft);
+          }}
+          placeholder={`Message ${label}`}
+          disabled={!session}
+          isSending={dispatching}
+          isLoading={session?.status === "running"}
+          primaryControls={null}
+          onStop={() => client && session
+            ? cancelAcpPrompt(client, session.id)
+            : undefined}
+          showSendButton={session?.status !== "running"}
+          sendDisabled={!session || dispatching || pendingPrompt?.isNaming === true || !draft.trim()}
+          sendTitle="Send"
+          onSend={() => void submit(draft)}
+        />
       }
     />
   );

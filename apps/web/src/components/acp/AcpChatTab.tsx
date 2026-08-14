@@ -25,6 +25,10 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import {
+  transcriptHasUserMessage,
+  useAcpPendingPromptStore,
+} from "@/stores/acpPendingPromptStore";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
 import { useVirtuosoScrollState } from "@/hooks";
@@ -65,10 +69,12 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
   // component stays mounted while hidden, so no later activation re-runs the
   // effect and submit is a no-op without a client and session.
   const [connectNonce, setConnectNonce] = useState(0);
-  // Local-only until the first prompt is in the ACP snapshot. The prompt must
-  // wait for the git branch rename; the snapshot has no row for either yet.
-  const [optimisticPrompt, setOptimisticPrompt] = useState<string | null>(null);
-  const [isNamingEnvironment, setIsNamingEnvironment] = useState(false);
+  // Mirrors `dispatchingPrompt` for render. The ref is what `submit` reads to
+  // reject re-entry; without a reactive copy the composer would keep offering
+  // a Send that silently does nothing for the whole rename. It is per-instance,
+  // so the composer also consults the store-backed naming flag, which a tab
+  // remounted mid-rename can still see.
+  const [dispatching, setDispatching] = useState(false);
   // A bridge restart changes its port and/or bearer credential. Direct ACP
   // polling is intentionally renderer-owned, so a failed request must retire
   // that client and re-run the authoritative backend readiness handshake.
@@ -83,6 +89,9 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
   const dispatchingPrompt = useRef(false);
   const updateTabNativeSessionId = usePaneLayoutStore((state) => state.updateTabNativeSessionId);
   const clearTabInitialPrompt = usePaneLayoutStore((state) => state.clearTabInitialPrompt);
+  const setPendingPrompt = useAcpPendingPromptStore((state) => state.setPendingPrompt);
+  const setPendingPromptNaming = useAcpPendingPromptStore((state) => state.setPendingPromptNaming);
+  const clearPendingPrompt = useAcpPendingPromptStore((state) => state.clearPendingPrompt);
   const backendOwnsStartupPrompt = useEnvironmentStore((state) => {
     if (tabId !== "startup-agent") return false;
     const environment = state.getEnvironmentById(data.environmentId);
@@ -91,6 +100,9 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
   });
   const label = data.platform === "cursor" ? "Cursor Agent" : "Grok Build";
   const sessionKey = `env-${data.environmentId}:${tabId}`;
+  // Store-backed rather than component state so switching environments during
+  // the rename does not erase the prompt the backend is still working on.
+  const pendingPrompt = useAcpPendingPromptStore((state) => state.pending.get(sessionKey));
   const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
     isActive,
     persistKey: sessionKey,
@@ -235,6 +247,7 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
       ?? (pending?.prompt === prompt ? pending.requestId : crypto.randomUUID());
     if (!fixedRequestId) pendingManualRequest.current = { prompt, requestId };
     dispatchingPrompt.current = true;
+    setDispatching(true);
     setDraft("");
     try {
       // Rename a default timestamp environment (including its git branch)
@@ -243,14 +256,17 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
       if (session.messages.length === 0 && session.baseIndex === 0) {
         const environment = useEnvironmentStore.getState().getEnvironmentById(data.environmentId);
         if (environment && isDefaultTimestampEnvironmentName(environment.name)) {
-          setOptimisticPrompt(prompt);
-          setIsNamingEnvironment(true);
+          setPendingPrompt(sessionKey, {
+            text: prompt,
+            createdAt: new Date().toISOString(),
+            isNaming: true,
+          });
           try {
             await renameEnvironmentFromPrompt(data.environmentId, prompt);
           } catch (error) {
             console.warn("[AcpChatTab] Failed to rename environment from prompt:", error);
           }
-          setIsNamingEnvironment(false);
+          setPendingPromptNaming(sessionKey, false);
         }
       }
       await dispatchNativeAgentPrompt({
@@ -263,19 +279,37 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
         prompt,
         requestId,
       });
+      // Deliberately not the point at which the local prompt is dropped. This
+      // refresh is a no-op whenever a poll is already in flight, and that poll
+      // was issued before the dispatch, so its window cannot contain the
+      // prompt. An effect retires the local copy once the transcript echoes it.
       await refresh();
       if (!fixedRequestId) pendingManualRequest.current = null;
       return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       setDraft(prompt);
+      // The dispatch definitively did not land, so there is no echo coming and
+      // the text belongs back in the composer rather than in the transcript.
+      clearPendingPrompt(sessionKey);
       return false;
     } finally {
-      setIsNamingEnvironment(false);
-      setOptimisticPrompt(null);
+      setPendingPromptNaming(sessionKey, false);
       dispatchingPrompt.current = false;
+      setDispatching(false);
     }
-  }, [client, data.environmentId, data.platform, label, refresh, session, sessionKey]);
+  }, [
+    clearPendingPrompt,
+    client,
+    data.environmentId,
+    data.platform,
+    label,
+    refresh,
+    session,
+    sessionKey,
+    setPendingPrompt,
+    setPendingPromptNaming,
+  ]);
 
   useEffect(() => {
     if (backendOwnsStartupPrompt && initialPrompt) {
@@ -300,29 +334,39 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
     tabId,
   ]);
 
+  // The authoritative transcript has taken over, so the local copy has done its
+  // job. Retiring it here rather than when `submit` returns is what keeps the
+  // prompt on screen across a skipped refresh, an unmount, or a slow bridge.
+  const transcriptEchoedPrompt = transcriptHasUserMessage(session);
+  useEffect(() => {
+    if (pendingPrompt && transcriptEchoedPrompt) clearPendingPrompt(sessionKey);
+  }, [clearPendingPrompt, pendingPrompt, sessionKey, transcriptEchoedPrompt]);
+
   const messages = useMemo<NativeMessage[]>(() => {
     const transcript = normalizeNativeMessages(session?.messages ?? []);
-    if (!optimisticPrompt) return transcript;
+    // Suppressed as soon as the echo lands so the two never render together in
+    // the frame before the effect above clears the store entry.
+    if (!pendingPrompt || transcriptEchoedPrompt) return transcript;
     const local: NativeMessage[] = [
       {
-        id: "optimistic-naming-prompt",
+        id: "optimistic-acp-first-prompt",
         role: "user",
-        content: optimisticPrompt,
-        parts: [{ type: "text", content: optimisticPrompt }],
-        createdAt: new Date().toISOString(),
+        content: pendingPrompt.text,
+        parts: [{ type: "text", content: pendingPrompt.text }],
+        createdAt: pendingPrompt.createdAt,
       },
     ];
-    if (isNamingEnvironment) {
+    if (pendingPrompt.isNaming) {
       local.push({
-        id: "system-naming-environment",
+        id: "system-acp-naming-environment",
         role: "system",
         content: "Naming environment...",
         parts: [{ type: "text", content: "Naming environment..." }],
-        createdAt: new Date().toISOString(),
+        createdAt: pendingPrompt.createdAt,
       });
     }
     return [...transcript, ...local];
-  }, [data.platform, isNamingEnvironment, optimisticPrompt, session?.messages]);
+  }, [pendingPrompt, session?.messages, transcriptEchoedPrompt]);
 
   // An explicit retry is a fresh start: drop any backed-off attempt so the
   // user's click reconnects now rather than waiting out the current delay,
@@ -351,7 +395,7 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
       errorMessage={error}
       onRetry={retry}
       messages={messages}
-      isLoading={session?.status === "running" || isNamingEnvironment}
+      isLoading={session?.status === "running" || pendingPrompt?.isNaming === true}
       elapsedSeconds={null}
       finalElapsedSeconds={null}
       centerCompose={false}
@@ -402,7 +446,7 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
             {session?.status === "running" ? (
               <Button size="icon" variant="ghost" className="h-8 w-8 rounded-full bg-destructive/10 text-destructive hover:bg-destructive/20" aria-label="Stop" onClick={() => client && void cancelAcpPrompt(client, session.id)}><Square className="h-4 w-4 fill-current" /></Button>
             ) : (
-              <Button size="icon" variant="ghost" className="h-8 w-8 rounded-full bg-muted hover:bg-muted/80" aria-label="Send" disabled={!draft.trim() || !session} onClick={() => void submit(draft)}><ArrowUp className="h-4 w-4" /></Button>
+              <Button size="icon" variant="ghost" className="h-8 w-8 rounded-full bg-muted hover:bg-muted/80" aria-label="Send" disabled={!draft.trim() || !session || dispatching || pendingPrompt?.isNaming === true} onClick={() => void submit(draft)}><ArrowUp className="h-4 w-4" /></Button>
             )}
           </div>
         </div>

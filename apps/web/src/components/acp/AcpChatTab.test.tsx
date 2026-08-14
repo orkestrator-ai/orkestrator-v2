@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import type { AcpApproval, AcpMessageWindow, AcpSessionSnapshot } from "@/lib/acp-client";
 // The merge is pure and is the contract under test in several cases below, so
@@ -19,7 +19,11 @@ const awaitBridgeReady = mock(async () => ({ status: "ready" as const, port: 409
 const ensureNativeAgentSession = mock(async () => ({ providerSessionId: "new-session" }));
 const adoptNativeAgentSession = mock(async () => ({ providerSessionId: "persisted-session" }));
 const dispatchNativeAgentPrompt = mock(async () => ({ providerSessionId: "persisted-session" }));
-const renameEnvironmentFromPrompt = mock(async () => undefined);
+// Typed from the real signature in `@/lib/backend` rather than inferred from
+// this body: `mock(async () => undefined)` infers `Promise<undefined>`, which
+// then rejects every `Promise<void>` override and fails `tsc` — invisibly,
+// because `bun test` does not typecheck.
+const renameEnvironmentFromPrompt = mock(async (): Promise<void> => {});
 const getEnvironmentById = mock((_id: string): { name: string } | undefined => undefined);
 const environmentStore = { getEnvironmentById };
 const useEnvironmentStore = Object.assign(
@@ -112,6 +116,7 @@ mock.module("@/stores/environmentStore", () => ({
 }));
 
 import { AcpChatTab } from "./AcpChatTab";
+import { useAcpPendingPromptStore } from "@/stores/acpPendingPromptStore";
 
 const data = {
   platform: "cursor" as const,
@@ -138,8 +143,11 @@ beforeEach(() => {
   awaitBridgeReady.mockImplementation(async () => ({ status: "ready" as const, port: 4099, authToken: "token" }));
   adoptNativeAgentSession.mockImplementation(async () => ({ providerSessionId: "persisted-session" }));
   dispatchNativeAgentPrompt.mockImplementation(async () => ({ providerSessionId: "persisted-session" }));
-  renameEnvironmentFromPrompt.mockImplementation(async () => undefined);
+  renameEnvironmentFromPrompt.mockImplementation(async () => {});
   getEnvironmentById.mockImplementation(() => undefined);
+  // Real store, so the store-backed pending prompt is exercised end to end.
+  // It outlives the component by design, so each test starts from empty.
+  useAcpPendingPromptStore.setState({ pending: new Map() });
   getAcpSession.mockImplementation(async () => ({
     id: "persisted-session",
     provider: "cursor" as const,
@@ -159,6 +167,19 @@ beforeEach(() => {
 });
 
 afterEach(cleanup);
+
+/**
+ * Drains the microtask queue and one macrotask turn.
+ *
+ * Several assertions below are about what `submit` has *not* done by the time
+ * it settles, so they need the whole continuation — including its `finally` —
+ * to have run before they read the DOM.
+ */
+async function settle(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
 
 describe("AcpChatTab", () => {
   test("adopts and rehydrates the session persisted in pane data", async () => {
@@ -765,5 +786,161 @@ describe("AcpChatTab", () => {
       prompt: "Set up the environment for release automation",
       requestId: "initial-prompt:environment-1:tab-1",
     }));
+  });
+
+  test("keeps the first prompt on screen when the post-dispatch refresh reads a stale window", async () => {
+    getEnvironmentById.mockImplementation(() => ({ name: "20260814-004236" }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const compose = await screen.findByPlaceholderText("Message Cursor Agent");
+    fireEvent.change(compose, { target: { value: "Trace the stale window" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    // The default window mock returns no messages, which is exactly what a poll
+    // issued before the dispatch reports — and what `refresh` returns outright
+    // when it is skipped because an earlier poll is still in flight. Retiring
+    // the local row on the dispatch returning would blank the message here.
+    await waitFor(() => expect(getAcpMessageWindow).toHaveBeenCalled());
+    await settle();
+
+    expect(screen.getByText("Trace the stale window")).toBeTruthy();
+    expect(useAcpPendingPromptStore.getState().pending.get("env-environment-1:tab-1")).toEqual({
+      text: "Trace the stale window",
+      createdAt: expect.any(String),
+      isNaming: false,
+    });
+  });
+
+  test("retires the local copy once the transcript echoes the prompt", async () => {
+    getEnvironmentById.mockImplementation(() => ({ name: "20260814-004236" }));
+    getAcpMessageWindow.mockImplementation(async (_client, _sessionId, fromIndex) => ({
+      messages: [{
+        id: "message-1",
+        role: "user" as const,
+        content: "Ship the echo",
+        parts: [{ type: "text" as const, content: "Ship the echo" }],
+        createdAt: "2026-08-14T00:00:00.000Z",
+      }],
+      baseIndex: fromIndex,
+      totalMessages: fromIndex + 1,
+      revision: 2,
+      status: "idle" as const,
+    }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const compose = await screen.findByPlaceholderText("Message Cursor Agent");
+    fireEvent.change(compose, { target: { value: "Ship the echo" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(useAcpPendingPromptStore.getState().pending.size).toBe(0));
+    await settle();
+    // The authoritative row replaced the local one rather than joining it.
+    expect(screen.getAllByText("Ship the echo").length).toBe(1);
+  });
+
+  test("keeps the pending first prompt across an unmount while the rename runs", async () => {
+    getEnvironmentById.mockImplementation(() => ({ name: "20260814-004236" }));
+    let resolveRename: (() => void) | undefined;
+    renameEnvironmentFromPrompt.mockImplementation(
+      () => new Promise<void>((resolve) => {
+        resolveRename = resolve;
+      }),
+    );
+
+    const first = render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const compose = await screen.findByPlaceholderText("Message Cursor Agent");
+    fireEvent.change(compose, { target: { value: "Rename across the switch" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Rename across the switch")).toBeTruthy();
+
+    // Switching to another environment unmounts the tab. The rename and the
+    // dispatch it gates are backend work, so neither may be abandoned, and the
+    // prompt has to still be there when the user comes back.
+    first.unmount();
+    resolveRename?.();
+    await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "Rename across the switch" }),
+    ));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    expect(await screen.findByText("Rename across the switch")).toBeTruthy();
+    expect(screen.queryByText("Naming environment...")).toBeNull();
+  });
+
+  test("disables Send while the rename gates the first prompt", async () => {
+    getEnvironmentById.mockImplementation(() => ({ name: "20260814-004236" }));
+    let resolveRename: (() => void) | undefined;
+    renameEnvironmentFromPrompt.mockImplementation(
+      () => new Promise<void>((resolve) => {
+        resolveRename = resolve;
+      }),
+    );
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const compose = await screen.findByPlaceholderText("Message Cursor Agent");
+    fireEvent.change(compose, { target: { value: "Audit the naming gate" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Naming environment...")).toBeTruthy();
+
+    // The rename is a backend round trip, so this window is seconds long. An
+    // enabled Send here is a lie: `submit` rejects it on its re-entry guard and
+    // says nothing.
+    fireEvent.change(compose, { target: { value: "A second thought" } });
+    expect(screen.getByRole("button", { name: "Send" }).hasAttribute("disabled")).toBe(true);
+
+    resolveRename?.();
+    await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(
+      screen.getByRole("button", { name: "Send" }).hasAttribute("disabled"),
+    ).toBe(false));
+  });
+
+  test("does not rename when the transcript window starts past the first message", async () => {
+    getEnvironmentById.mockImplementation(() => ({ name: "20260814-004236" }));
+    // An empty window over an evicted history: the session has run before even
+    // though it currently holds no rows, so its name is not up for grabs.
+    getAcpSession.mockImplementation(async () => ({
+      id: "persisted-session",
+      provider: "cursor" as const,
+      status: "idle" as const,
+      messages: [],
+      baseIndex: 4,
+      revision: 6,
+    }));
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const compose = await screen.findByPlaceholderText("Message Cursor Agent");
+    fireEvent.change(compose, { target: { value: "Continue after eviction" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalled());
+    expect(renameEnvironmentFromPrompt).not.toHaveBeenCalled();
+  });
+
+  test("returns the prompt to the composer and renames only once when the first dispatch fails", async () => {
+    getEnvironmentById.mockImplementation(() => ({ name: "20260814-004236" }));
+    renameEnvironmentFromPrompt.mockImplementation(async () => {
+      // The rename is what the retry's guard reads, so it is the reason a
+      // second attempt must not rename again.
+      getEnvironmentById.mockImplementation(() => ({ name: "billing-export" }));
+    });
+    dispatchNativeAgentPrompt.mockImplementationOnce(async () => {
+      throw new Error("bridge unavailable");
+    });
+
+    render(<AcpChatTab tabId="tab-1" data={data} isActive={false} />);
+    const compose = await screen.findByPlaceholderText("Message Cursor Agent") as HTMLTextAreaElement;
+    fireEvent.change(compose, { target: { value: "Implement the billing export" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    // No echo is coming for a dispatch that never landed, so the local row is
+    // dropped and the text goes back to the composer instead of stranding it.
+    await waitFor(() => expect(screen.getByText("bridge unavailable")).toBeTruthy());
+    await waitFor(() => expect(useAcpPendingPromptStore.getState().pending.size).toBe(0));
+    expect(compose.value).toBe("Implement the billing export");
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(dispatchNativeAgentPrompt).toHaveBeenCalledTimes(2));
+    expect(renameEnvironmentFromPrompt).toHaveBeenCalledTimes(1);
   });
 });

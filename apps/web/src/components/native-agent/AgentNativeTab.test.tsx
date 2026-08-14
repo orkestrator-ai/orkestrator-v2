@@ -4,7 +4,7 @@
  * Every provider exercises the shared authoritative-projection path.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import type { NativeAgentSessionProjection, NativeAgentTabData } from "@orkestrator/protocol/native-agent";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
@@ -1160,6 +1160,44 @@ describe("AgentNativeTab", () => {
       expect(screen.queryByText("Provider default")).toBeNull();
       expect(screen.queryByText("Local settings")).toBeNull();
       expect(screen.queryByText("Suggestions")).toBeNull();
+    });
+
+    test("uses a projection updated by the separate settings surface for the next prompt", async () => {
+      seedProjection({
+        composer: {
+          executionProfiles: [{ id: "reviewer", label: "Reviewer" }],
+          includeLocalSettings: false,
+          promptSuggestionsEnabled: false,
+        },
+      });
+      const tabId = "tab-external-settings";
+      const sessionKey = createSessionKey("env-1", tabId);
+      render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+      const input = await screen.findByRole("textbox");
+      const initial = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+
+      act(() => {
+        useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+          ...initial,
+          revision: initial.revision + 1,
+          composer: {
+            ...initial.composer!,
+            selectedExecutionProfileId: "reviewer",
+            includeLocalSettings: true,
+            promptSuggestionsEnabled: true,
+          },
+        });
+      });
+      fireEvent.input(input, { target: { textContent: "use the new settings" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalled());
+      expect(dispatchNativeAgentIntentMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        prompt: "use the new settings",
+        subAgent: "reviewer",
+        includeLocalSettings: true,
+        promptSuggestions: true,
+      });
     });
 
     test("offers to load earlier messages when the transcript is windowed", async () => {

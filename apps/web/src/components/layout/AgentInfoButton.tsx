@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -88,7 +89,10 @@ import {
   normalizeNativeMessages,
 } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
-import type { NativeAgentRuntimeSummary } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentControlUpdate,
+  NativeAgentRuntimeSummary,
+} from "@orkestrator/protocol/native-agent";
 
 interface AgentInfoButtonProps {
   activeTab: TabInfo | null;
@@ -104,6 +108,11 @@ interface SessionActionState {
 interface SessionValueState<T> {
   sessionIdentity: string | null;
   value: T;
+}
+
+interface ControlUpdateState {
+  actionId: number;
+  sessionIdentity: string;
 }
 
 interface CodexSteerRetry {
@@ -664,9 +673,14 @@ export function AgentInfoButton({
     sessionIdentity: null,
     value: false,
   });
+  const [controlUpdateState, setControlUpdateState] = useState<ControlUpdateState | null>(
+    null,
+  );
   const triggerRef = useRef<HTMLButtonElement>(null);
   const restoreFocusRef = useRef(false);
   const actionIdRef = useRef(0);
+  const controlUpdateIdRef = useRef(0);
+  const controlUpdateInFlightRef = useRef<ControlUpdateState | null>(null);
   const shareVersionRef = useRef(0);
   const codexSteerRetryRef = useRef<CodexSteerRetry | null>(null);
   const activeSession = useMemo(
@@ -679,6 +693,61 @@ export function AgentInfoButton({
   const neutralProjection = useNativeAgentProjectionStore((state) =>
     activeSession ? state.projections.get(activeSession.sessionKey) : undefined,
   );
+  const neutralControlUpdatePending = controlUpdateState?.sessionIdentity
+    === activeSession?.sessionKey;
+  const updateNeutralControls = useCallback(async (update: NativeAgentControlUpdate) => {
+    const session = activeSession;
+    if (!session) return;
+    if (controlUpdateInFlightRef.current?.sessionIdentity === session.sessionKey) return;
+
+    const pending = {
+      actionId: ++controlUpdateIdRef.current,
+      sessionIdentity: session.sessionKey,
+    };
+    controlUpdateInFlightRef.current = pending;
+    setControlUpdateState(pending);
+    const startingProjection = useNativeAgentProjectionStore
+      .getState().projections.get(session.sessionKey);
+    try {
+      const next = await updateNativeAgentControls({
+        environmentId: session.environmentId,
+        agent: session.provider,
+        logicalSessionKey: session.sessionKey,
+        update,
+      });
+      if (!next) throw new Error(`${session.providerLabel} session is unavailable`);
+      const projectionState = useNativeAgentProjectionStore.getState();
+      const current = projectionState.projections.get(session.sessionKey);
+      const currentReplacedSession = current?.sessionId && next.sessionId
+        && current.sessionId !== next.sessionId;
+      const currentSupersededGeneration = startingProjection
+        && current
+        && current.generation !== startingProjection.generation
+        && next.generation === startingProjection.generation;
+      const currentHasNewerRevision = current
+        && current.generation === next.generation
+        && current.revision > next.revision;
+      if (
+        !currentReplacedSession
+        && !currentSupersededGeneration
+        && !currentHasNewerRevision
+      ) {
+        projectionState.setProjection(session.sessionKey, next);
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : `Failed to update ${session.providerLabel} settings`,
+      );
+    } finally {
+      if (controlUpdateInFlightRef.current?.actionId === pending.actionId) {
+        controlUpdateInFlightRef.current = null;
+      }
+      setControlUpdateState((current) =>
+        current?.actionId === pending.actionId ? null : current);
+    }
+  }, [activeSession]);
   const neutralMessages = useMemo(
     () => normalizeNativeMessages(
       (neutralProjection?.messages ?? []) as NativeMessage[],
@@ -1469,18 +1538,14 @@ export function AgentInfoButton({
                       Execution profile
                     </div>
                     <select
+                      disabled={neutralControlUpdatePending}
                       value={neutralProjection?.composer?.selectedExecutionProfileId
                         ?? (activeSession.provider === "claude" ? claudeAgent : openCodeAgent)
                         ?? ""}
                       onChange={(event) => {
                         const value = event.target.value || undefined;
                         if (neutralProjection) {
-                          void updateNativeAgentControls({
-                            environmentId: activeSession.environmentId,
-                            agent: activeSession.provider,
-                            logicalSessionKey: activeSession.sessionKey,
-                            update: { executionProfileId: value ?? null },
-                          });
+                          void updateNeutralControls({ executionProfileId: value ?? null });
                           return;
                         }
                         if (activeSession.provider === "claude") {
@@ -1539,15 +1604,11 @@ export function AgentInfoButton({
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
                     <input
                       type="checkbox"
+                      disabled={neutralControlUpdatePending}
                       checked={neutralProjection?.composer?.includeLocalSettings ?? includeLocalSettings}
                       onChange={(event) => {
                         if (neutralProjection) {
-                          void updateNativeAgentControls({
-                            environmentId: activeSession.environmentId,
-                            agent: activeSession.provider,
-                            logicalSessionKey: activeSession.sessionKey,
-                            update: { includeLocalSettings: event.target.checked },
-                          });
+                          void updateNeutralControls({ includeLocalSettings: event.target.checked });
                         } else useClaudeStore.getState().setIncludeLocalSettings(
                           activeSession.sessionKey,
                           event.target.checked,
@@ -1559,15 +1620,11 @@ export function AgentInfoButton({
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
                     <input
                       type="checkbox"
+                      disabled={neutralControlUpdatePending}
                       checked={neutralProjection?.composer?.promptSuggestionsEnabled ?? promptSuggestionOptIn}
                       onChange={(event) => {
                         if (neutralProjection) {
-                          void updateNativeAgentControls({
-                            environmentId: activeSession.environmentId,
-                            agent: activeSession.provider,
-                            logicalSessionKey: activeSession.sessionKey,
-                            update: { promptSuggestions: event.target.checked },
-                          });
+                          void updateNeutralControls({ promptSuggestions: event.target.checked });
                         } else useClaudeStore.getState().setPromptSuggestionOptIn(
                           activeSession.sessionKey,
                           event.target.checked,

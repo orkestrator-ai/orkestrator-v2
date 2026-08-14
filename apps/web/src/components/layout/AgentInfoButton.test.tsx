@@ -1627,6 +1627,51 @@ describe("AgentInfoButton Codex runtime panel", () => {
 });
 
 describe("AgentInfoButton Claude session options", () => {
+  function neutralClaudeProjection(
+    composer: Partial<NonNullable<NativeAgentSessionProjection["composer"]>> = {},
+  ): NativeAgentSessionProjection {
+    return {
+      platform: "claude",
+      environmentId: ENVIRONMENT_ID,
+      sessionId: "claude-session-1",
+      connection: "connected",
+      turn: { phase: "idle" },
+      messages: [],
+      interactions: [],
+      composerControls: [],
+      composer: {
+        models: [],
+        fastModeEnabled: false,
+        fastModeAvailable: false,
+        modes: [],
+        executionProfiles: [{ id: "reviewer", label: "Reviewer" }],
+        includeLocalSettings: false,
+        promptSuggestionsEnabled: false,
+        ...composer,
+      },
+      capabilities: {
+        attachments: { files: true, images: true },
+        queue: true,
+        resume: true,
+        fork: true,
+        slashCommands: true,
+        backgroundTasks: false,
+        composer: {
+          provider: true,
+          model: true,
+          reasoning: true,
+          speed: false,
+          mode: true,
+          executionProfile: true,
+          localSettings: true,
+          promptSuggestions: true,
+        },
+      },
+      revision: 1,
+      generation: "test-generation",
+    };
+  }
+
   function seedClaude(extra: Record<string, unknown> = {}) {
     useClaudeStore.setState({
       clients: new Map([[ENVIRONMENT_ID, CLAUDE_CLIENT]]),
@@ -1680,6 +1725,146 @@ describe("AgentInfoButton Claude session options", () => {
     expect(useClaudeStore.getState().includeLocalSettings.get(CLAUDE_KEY)).toBe(true);
     expect(useClaudeStore.getState().promptSuggestionOptIn.get(CLAUDE_KEY)).toBe(true);
     expect((screen.getAllByRole("checkbox")[0] as HTMLInputElement).checked).toBe(true);
+  });
+
+  test("applies a provider-neutral execution profile and locks controls while pending", async () => {
+    const initial = neutralClaudeProjection();
+    const updated = neutralClaudeProjection({ selectedExecutionProfileId: "reviewer" });
+    let releaseUpdate!: (projection: NativeAgentSessionProjection) => void;
+    const pendingUpdate = new Promise<NativeAgentSessionProjection>((resolve) => {
+      releaseUpdate = resolve;
+    });
+    nativeInvokeMock.mockImplementation(async (command: string) =>
+      command === "update_native_agent_controls" ? pendingUpdate : undefined);
+    useNativeAgentProjectionStore.getState().setProjection(CLAUDE_KEY, initial);
+
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+    const select = screen.getByLabelText("Execution profile") as HTMLSelectElement;
+    const checkboxes = screen.getAllByRole("checkbox") as HTMLInputElement[];
+
+    fireEvent.change(select, { target: { value: "reviewer" } });
+
+    expect(select.disabled).toBe(true);
+    expect(checkboxes.every((checkbox) => checkbox.disabled)).toBe(true);
+    expect(nativeInvokeMock).toHaveBeenCalledWith(
+      "update_native_agent_controls",
+      {
+        environmentId: ENVIRONMENT_ID,
+        agent: "claude",
+        logicalSessionKey: CLAUDE_KEY,
+        update: { executionProfileId: "reviewer" },
+      },
+    );
+
+    releaseUpdate(updated);
+    await waitFor(() => expect(
+      useNativeAgentProjectionStore.getState().projections.get(CLAUDE_KEY),
+    ).toBe(updated));
+    expect(select.value).toBe("reviewer");
+    expect(select.disabled).toBe(false);
+    expect(checkboxes.every((checkbox) => !checkbox.disabled)).toBe(true);
+  });
+
+  test("does not replace a newer projection with a stale control response", async () => {
+    const initial = neutralClaudeProjection();
+    const staleResponse = {
+      ...neutralClaudeProjection({ selectedExecutionProfileId: "reviewer" }),
+      revision: 2,
+    };
+    const newerProjection = {
+      ...neutralClaudeProjection({
+        includeLocalSettings: true,
+        promptSuggestionsEnabled: true,
+      }),
+      revision: 3,
+    };
+    let releaseUpdate!: (projection: NativeAgentSessionProjection) => void;
+    const pendingUpdate = new Promise<NativeAgentSessionProjection>((resolve) => {
+      releaseUpdate = resolve;
+    });
+    nativeInvokeMock.mockImplementation(async (command: string) =>
+      command === "update_native_agent_controls" ? pendingUpdate : undefined);
+    useNativeAgentProjectionStore.getState().setProjection(CLAUDE_KEY, initial);
+
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+    const select = screen.getByLabelText("Execution profile") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "reviewer" } });
+
+    act(() => {
+      useNativeAgentProjectionStore.getState().setProjection(CLAUDE_KEY, newerProjection);
+    });
+    releaseUpdate(staleResponse);
+
+    await waitFor(() => expect(select.disabled).toBe(false));
+    expect(useNativeAgentProjectionStore.getState().projections.get(CLAUDE_KEY))
+      .toBe(newerProjection);
+  });
+
+  test("applies both provider-neutral Claude session toggles", async () => {
+    const initial = neutralClaudeProjection();
+    useNativeAgentProjectionStore.getState().setProjection(CLAUDE_KEY, initial);
+    nativeInvokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command !== "update_native_agent_controls") return undefined;
+      const current = useNativeAgentProjectionStore.getState().projections.get(CLAUDE_KEY)!;
+      const update = args?.update as {
+        includeLocalSettings?: boolean;
+        promptSuggestions?: boolean;
+      };
+      return {
+        ...current,
+        revision: current.revision + 1,
+        composer: {
+          ...current.composer!,
+          ...(update.includeLocalSettings === undefined
+            ? {} : { includeLocalSettings: update.includeLocalSettings }),
+          ...(update.promptSuggestions === undefined
+            ? {} : { promptSuggestionsEnabled: update.promptSuggestions }),
+        },
+      };
+    });
+
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+    const [localSettings, suggestions] = screen.getAllByRole("checkbox") as HTMLInputElement[];
+
+    fireEvent.click(localSettings!);
+    await waitFor(() => expect(localSettings!.checked).toBe(true));
+    fireEvent.click(suggestions!);
+    await waitFor(() => expect(suggestions!.checked).toBe(true));
+
+    expect(nativeInvokeMock).toHaveBeenNthCalledWith(
+      1,
+      "update_native_agent_controls",
+      expect.objectContaining({ update: { includeLocalSettings: true } }),
+    );
+    expect(nativeInvokeMock).toHaveBeenNthCalledWith(
+      2,
+      "update_native_agent_controls",
+      expect.objectContaining({ update: { promptSuggestions: true } }),
+    );
+  });
+
+  test("reports a provider-neutral control failure and keeps canonical state", async () => {
+    const initial = neutralClaudeProjection();
+    useNativeAgentProjectionStore.getState().setProjection(CLAUDE_KEY, initial);
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "update_native_agent_controls") {
+        throw new Error("settings unavailable");
+      }
+      return undefined;
+    });
+
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+    const localSettings = screen.getAllByRole("checkbox")[0] as HTMLInputElement;
+    fireEvent.click(localSettings);
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith("settings unavailable"));
+    expect(useNativeAgentProjectionStore.getState().projections.get(CLAUDE_KEY)).toBe(initial);
+    expect(localSettings.checked).toBe(false);
+    expect(localSettings.disabled).toBe(false);
   });
 
   test("neither checkbox is offered for a non-Claude provider", () => {

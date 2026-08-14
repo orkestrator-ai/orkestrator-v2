@@ -11280,6 +11280,7 @@ exit 0
           require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({
             provider: process.env.ACP_PROVIDER ?? "",
             agentPath: process.env.ACP_AGENT_PATH ?? "",
+            approveProjectMcps: process.env.ACP_APPROVE_PROJECT_MCPS ?? "",
             stateDir: process.env.ACP_STATE_DIR ?? "",
             hostname: process.env.HOSTNAME ?? "",
             hasToken: Boolean(process.env.ACP_BRIDGE_TOKEN),
@@ -11353,6 +11354,7 @@ exit 0
         const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as Record<string, unknown>;
         expect(marker.provider).toBe(provider);
         expect(marker.agentPath).toBe(managedAgentPath);
+        expect(marker.approveProjectMcps).toBe("0");
         expect(marker.hasToken).toBe(true);
         expect(marker.hasCursorApiKey).toBe(provider === "cursor");
         expect(marker.cursorApiKeyFingerprint).toBe(
@@ -13301,6 +13303,29 @@ exit 0
           expect(execLog).toContain(`export ACP_STATE_DIR=/tmp/orkestrator-acp-state/${provider}`);
           expect(execLog).toContain("export HOSTNAME=0.0.0.0");
           expect(execLog).toContain(`setsid bun /opt/acp-bridge/dist/index.js --provider=${provider}`);
+          if (provider === "cursor") {
+            expect(execLog).toContain("export ACP_APPROVE_PROJECT_MCPS=1");
+          } else {
+            expect(execLog).not.toContain("ACP_APPROVE_PROJECT_MCPS");
+          }
+          // The launch script is assembled by interpolation, and several
+          // branches expand to nothing for a non-Cursor provider. Parse the
+          // exact text with the same interpreter the container runs it under
+          // (`docker exec ... bash -lc`), so an interpolation that produces
+          // broken shell fails here rather than as a silent startup failure
+          // inside a container. `-n` parses without executing.
+          const detachedExec = execLog.slice(execLog.indexOf("exec -d "));
+          const scriptStart = detachedExec.indexOf(" bash -lc ") + " bash -lc ".length;
+          const setsidLine = detachedExec.indexOf(
+            `setsid bun /opt/acp-bridge/dist/index.js --provider=${provider}`,
+            scriptStart,
+          );
+          const scriptEnd = detachedExec.indexOf("2>&1 &", setsidLine) + "2>&1 &".length;
+          expect(setsidLine).toBeGreaterThan(scriptStart);
+          const launchScript = detachedExec.slice(scriptStart, scriptEnd);
+          const parsed = Bun.spawnSync(["bash", "-n", "-c", launchScript]);
+          expect(parsed.stderr.toString()).toBe("");
+          expect(parsed.exitCode).toBe(0);
           // The token is written under a restrictive umask, never echoed.
           expect(execLog).toContain("umask 077");
           expect(execLog).not.toContain(cursorApiKey ?? "configured-container-cursor-key");

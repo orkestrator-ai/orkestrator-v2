@@ -916,6 +916,51 @@ test("MultiReviewService keeps reviewing and consolidates when another reviewer 
   });
 });
 
+test("MultiReviewService aborts a reviewer session that fails mid-turn while the workflow continues", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  // Reviewer 1's first post-dispatch status poll throws, as a transport error
+  // while its turn may still be executing would.
+  provider.statusError = new Error("The reviewer session could not be polled");
+  await withService("env-mid-turn-failure", provider, async ({ service, start, snapshot }) => {
+    const started = await start([
+      { agent: "claude", model: "opus" },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await service.advanceNow(started.id);
+
+    const current = await snapshot(started.id);
+    expect(current?.reviewers[0]).toMatchObject({
+      model: "opus",
+      status: "failed",
+      error: "The reviewer session could not be polled",
+    });
+    // The session id survives so the read-only transcript stays reachable.
+    expect(current?.reviewers[0]?.providerSessionId).toBe("session-1");
+    expect(current?.reviewers[1]).toMatchObject({ model: "sonnet", status: "running" });
+
+    // The failed turn was aborted before the pass moved on; no healthy session
+    // or the later consolidation session may be aborted.
+    expect(provider.aborted).toEqual(["session-1"]);
+
+    // The healthy reviewer still completes and the workflow consolidates.
+    provider.statusValue = "idle";
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+
+    const ready = await snapshot(started.id);
+    expect(ready?.phase).toBe("ready");
+    expect(ready?.reviewers.map((reviewer) => reviewer.status)).toEqual([
+      "failed",
+      "completed",
+    ]);
+    expect(ready?.consolidatedReport).toBeDefined();
+    expect(provider.aborted).toEqual(["session-1"]);
+  });
+});
+
 test("MultiReviewService fails overall when no reviewer produces a valid report", async () => {
   const provider = new Provider();
   provider.statusOverrides.set("session-1", "error");

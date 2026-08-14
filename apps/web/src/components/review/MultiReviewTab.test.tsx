@@ -9,6 +9,7 @@ import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { MultiReviewTab } from "./MultiReviewTab";
 import {
   MultiReviewReviewerTab,
+  REFRESH_INTERVAL_MS,
   toMultiReviewReviewerMessages,
 } from "./MultiReviewReviewerTab";
 
@@ -370,5 +371,46 @@ describe("MultiReviewReviewerTab", () => {
       window.setInterval = originalSetInterval;
       window.clearInterval = originalClearInterval;
     }
+  });
+
+  test("shows a transcript read failure in the read-only view", async () => {
+    const loadTranscript = mock(async () => {
+      throw new Error("Multi review workflow not found: multi-1");
+    });
+
+    render(<MultiReviewReviewerTab
+      data={{
+        environmentId: "env-1", workflowId: "multi-1", reviewerId: "reviewer-1", isLocal: true,
+      }}
+      isActive
+      loadTranscript={loadTranscript}
+    />);
+
+    expect(await screen.findByText(/Multi review workflow not found: multi-1/)).toBeTruthy();
+  });
+
+  test("stops polling a transcript whose workflow no longer exists", async () => {
+    let calls = 0;
+    const loadTranscript = mock(async () => {
+      calls += 1;
+      throw new Error("Multi review workflow not found: multi-1");
+    });
+
+    render(<MultiReviewReviewerTab
+      data={{
+        environmentId: "env-1", workflowId: "multi-1", reviewerId: "reviewer-1", isLocal: true,
+      }}
+      isActive
+      loadTranscript={loadTranscript}
+    />);
+
+    expect(await screen.findByText(/Multi review workflow not found: multi-1/)).toBeTruthy();
+    await waitFor(() => expect(calls).toBeGreaterThanOrEqual(2));
+    const callsAtSettlement = calls;
+
+    // A gone workflow must tear the poll down: no transcript request may fire
+    // during a full interval period after the error is shown.
+    await new Promise((resolve) => setTimeout(resolve, REFRESH_INTERVAL_MS + 500));
+    expect(calls).toBe(callsAtSettlement);
   });
 });

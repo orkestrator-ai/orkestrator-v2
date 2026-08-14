@@ -20,7 +20,7 @@ import { toPipelineTranscript } from "@/components/build-pipeline/pipeline-trans
  * on this read-only progress view for a materially cheaper steady state; the
  * backend caps the response and a status change refreshes immediately.
  */
-const REFRESH_INTERVAL_MS = 4_000;
+export const REFRESH_INTERVAL_MS = 4_000;
 
 const AGENT_LABELS = {
   claude: "Claude",
@@ -29,6 +29,18 @@ const AGENT_LABELS = {
   grok: "Grok",
   opencode: "OpenCode",
 } as const;
+
+/**
+ * The backend answers a deleted workflow or reviewer in band with these
+ * messages. They are terminal for this read-only view: a transient error keeps
+ * the poll running so the tab can recover, but a gone workflow would poll
+ * forever.
+ */
+function isGoneError(reason: unknown): boolean {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  return message.includes("Multi review workflow not found")
+    || message.includes("Multi review reviewer not found");
+}
 
 interface MultiReviewReviewerTabProps {
   data: MultiReviewTabData & { reviewerId: string };
@@ -91,13 +103,14 @@ export function MultiReviewReviewerTab({
   useEffect(() => {
     if (!isActive) return;
     void refresh();
-    if (snapshot && snapshot.status !== "running" && snapshot.status !== "pending") return;
+    const gone = error !== null && isGoneError(error);
+    if (gone || (snapshot && snapshot.status !== "running" && snapshot.status !== "pending")) return;
     const interval = window.setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
     return () => {
       window.clearInterval(interval);
       requestGeneration.current += 1;
     };
-  }, [isActive, refresh, snapshot?.status]);
+  }, [isActive, refresh, snapshot?.status, error]);
 
   const messages = useMemo(() => {
     if (!snapshot) return [];

@@ -641,6 +641,14 @@ export class MultiReviewService {
         // A reviewer is one independent input to the consolidated result. Keep
         // its failure local so the remaining reviewers can still produce a
         // valid report for the workflow.
+        // The failure may have been raised while the provider turn was still
+        // executing. Abort the session best-effort so that turn cannot keep
+        // running through consolidation and the fix stage; the session id is
+        // kept so the read-only transcript stays reachable and a later retry
+        // can abort again without harm.
+        if (reviewer.providerSessionId) {
+          await this.abandonSession(workflow, reviewer, reviewer.providerSessionId);
+        }
         reviewer.status = "failed";
         reviewer.error = errorMessage(error).slice(0, 4_096);
         delete reviewer.idleResultPolls;

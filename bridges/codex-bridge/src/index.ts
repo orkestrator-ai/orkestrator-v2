@@ -1187,8 +1187,15 @@ app.post("/session/:id/prompt", async (c) => {
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   const requestId = typeof body.requestId === "string" ? body.requestId.trim() : "";
   const outputSchema = body.outputSchema;
-  const attachments = Array.isArray(body.attachments)
-    ? body.attachments
+  const rawAttachments = Array.isArray(body.attachments) ? body.attachments : [];
+  if (rawAttachments.some((entry: unknown) =>
+    typeof (entry as PromptAttachmentInput | null)?.path !== "string"
+    || (entry as PromptAttachmentInput).type !== "image"
+  )) {
+    return c.json({ error: "Codex supports image attachments only" }, 400);
+  }
+  const attachments = rawAttachments.length > 0
+    ? rawAttachments
         .map((entry: unknown) => {
           if (
             typeof (entry as PromptAttachmentInput | null)?.path === "string"

@@ -11,6 +11,8 @@ export interface NativeComposeDraft {
   platform?: AgentPlatform;
   modelId?: string;
   reasoningId?: string;
+  /** Stable while one prompt may be between rename and provider acknowledgement. */
+  requestId?: string;
   fastMode: boolean;
   mode: AgentConversationMode;
 }
@@ -58,6 +60,7 @@ function persistedDraftMetadata(draft: NativeComposeDraft): Readonly<Record<stri
     ...(draft.platform ? { platform: draft.platform } : {}),
     ...(draft.modelId ? { modelId: draft.modelId } : {}),
     ...(draft.reasoningId ? { reasoningId: draft.reasoningId } : {}),
+    ...(draft.requestId ? { requestId: draft.requestId } : {}),
     fastMode: draft.fastMode,
     mode: draft.mode,
   });
@@ -78,10 +81,13 @@ function restoreDraftMetadata(value: unknown): Partial<NativeComposeDraft> | und
   const reasoningId = typeof metadata.reasoningId === "string" && metadata.reasoningId.length <= 256
     ? metadata.reasoningId
     : undefined;
+  const requestId = typeof metadata.requestId === "string" && metadata.requestId.length <= 200
+    ? metadata.requestId
+    : undefined;
   const fastMode = typeof metadata.fastMode === "boolean" ? metadata.fastMode : undefined;
   const mode = metadata.mode === "build" || metadata.mode === "plan" ? metadata.mode : undefined;
   if (!platform && !modelId && !reasoningId && fastMode === undefined && !mode) return undefined;
-  return { platform, modelId, reasoningId, fastMode, mode };
+  return { platform, modelId, reasoningId, requestId, fastMode, mode };
 }
 
 export function nativeComposeDraft(
@@ -95,7 +101,13 @@ export const useNativeComposeStore = create<NativeComposeState>()((set) => ({
   drafts: new Map(),
   updateDraft: (sessionKey, update) => set((state) => {
     const drafts = new Map(state.drafts);
-    drafts.set(sessionKey, { ...EMPTY_DRAFT, ...drafts.get(sessionKey), ...update });
+    const existing = drafts.get(sessionKey);
+    const contentChanged = update.text !== undefined
+      || update.mentions !== undefined
+      || update.attachments !== undefined;
+    const next = { ...EMPTY_DRAFT, ...existing, ...update };
+    if (contentChanged && update.requestId === undefined) delete next.requestId;
+    drafts.set(sessionKey, next);
     return { drafts };
   }),
   clearDraft: (sessionKey) => set((state) => {

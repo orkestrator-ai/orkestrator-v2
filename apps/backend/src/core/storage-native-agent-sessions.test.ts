@@ -736,6 +736,143 @@ describe("StorageService native agent sessions", () => {
     });
   });
 
+  test("preserves the first ambiguous dispatch and rejects a competing request", async () => {
+    await withStorage(async (first) => {
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
+      const pendingA = {
+        requestId: "request-a",
+        prompt: "first prompt",
+        attachments: [{
+          type: "file" as const,
+          path: "/workspace/first.txt",
+          dataUrl: "data:text/plain;base64,Zmlyc3Q=",
+        }],
+        createdAt: new Date(1).toISOString(),
+      };
+      await expect(first.dispatchNativeAgentPromptOnce(
+        input.key,
+        pendingA.requestId,
+        async () => { throw new Error("acknowledgement lost"); },
+        pendingA,
+      )).rejects.toThrow("acknowledgement lost");
+
+      const competingDispatch = mock(async () => undefined);
+      await expect(first.dispatchNativeAgentPromptOnce(
+        input.key,
+        "request-b",
+        competingDispatch,
+        {
+          requestId: "request-b",
+          prompt: "second prompt",
+          createdAt: new Date(2).toISOString(),
+        },
+      )).rejects.toThrow("request-a is still awaiting recovery");
+      expect(competingDispatch).not.toHaveBeenCalled();
+      expect((await first.getNativeAgentSession(input.key))?.pendingDispatch)
+        .toEqual(pendingA);
+    });
+  });
+
+  test("scrubs resolved and invalidated dispatch content from every retained backup", async () => {
+    await withStorage(async (first) => {
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
+      const file = path.join(first.getDataDir(), "native-agent-sessions.json");
+      const allNativeSessionFiles = async () => Promise.all(
+        (await fs.readdir(first.getDataDir()))
+          .filter((name) => name.startsWith("native-agent-sessions.json"))
+          .map((name) => fs.readFile(path.join(first.getDataDir(), name), "utf8")),
+      );
+
+      const acceptedSecret = "ACCEPTED-PROMPT-AND-ATTACHMENT-CONTENT";
+      await first.dispatchNativeAgentPromptOnce(
+        input.key,
+        "accepted",
+        async () => undefined,
+        {
+          requestId: "accepted",
+          prompt: acceptedSecret,
+          attachments: [{
+            type: "image",
+            path: "/workspace/accepted.png",
+            dataUrl: `data:image/png;base64,${acceptedSecret}`,
+          }],
+          createdAt: new Date(1).toISOString(),
+        },
+      );
+      expect((await allNativeSessionFiles()).join("\n")).not.toContain(acceptedSecret);
+
+      const clearedSecret = "CLEARED-PROMPT-CONTENT";
+      await expect(first.dispatchNativeAgentPromptOnce(
+        input.key,
+        "cleared",
+        async () => { throw new Error("ambiguous"); },
+        {
+          requestId: "cleared",
+          prompt: clearedSecret,
+          createdAt: new Date(2).toISOString(),
+        },
+      )).rejects.toThrow("ambiguous");
+      expect(await first.clearPendingNativeAgentDispatch(input.key, "cleared")).toBe(true);
+      expect((await allNativeSessionFiles()).join("\n")).not.toContain(clearedSecret);
+
+      const invalidatedSecret = "INVALIDATED-PROMPT-CONTENT";
+      await expect(first.dispatchNativeAgentPromptOnce(
+        input.key,
+        "invalidated",
+        async () => { throw new Error("ambiguous"); },
+        {
+          requestId: "invalidated",
+          prompt: invalidatedSecret,
+          createdAt: new Date(3).toISOString(),
+        },
+      )).rejects.toThrow("ambiguous");
+      expect(await first.invalidateNativeAgentSession(input.key, "provider-session")).toBe(true);
+      expect((await allNativeSessionFiles()).join("\n")).not.toContain(invalidatedSecret);
+      expect(await fs.readFile(file, "utf8")).not.toContain(input.key);
+    });
+  });
+
+  test("bounds pending dispatches before provider I/O and round-trips accepted records", async () => {
+    await withStorage(async (first) => {
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
+      const dispatch = mock(async () => undefined);
+      await expect(first.dispatchNativeAgentPromptOnce(
+        input.key,
+        "oversized",
+        dispatch,
+        {
+          requestId: "oversized",
+          prompt: "x".repeat(32 * 1024 * 1024),
+          createdAt: new Date(1).toISOString(),
+        },
+      )).rejects.toThrow("exceeds the 32 MB limit");
+      expect(dispatch).not.toHaveBeenCalled();
+      expect((await first.getNativeAgentSession(input.key))?.pendingDispatch).toBeUndefined();
+
+      const recoverable = {
+        requestId: "recoverable",
+        prompt: "round-trip prompt",
+        schema: { type: "object" },
+        attachments: [{
+          type: "image" as const,
+          path: "/workspace/round-trip.png",
+          dataUrl: "data:image/png;base64,cG5n",
+        }],
+        createdAt: new Date(2).toISOString(),
+      };
+      await expect(first.dispatchNativeAgentPromptOnce(
+        input.key,
+        recoverable.requestId,
+        async () => { throw new Error("ambiguous"); },
+        recoverable,
+      )).rejects.toThrow("ambiguous");
+      const restarted = new StorageService(first.getDataDir());
+      await restarted.init();
+      expect((await restarted.getNativeAgentSession(input.key))?.pendingDispatch)
+        .toEqual(recoverable);
+    });
+  });
+
   test("persists recovery notices without journaling and clears them on dispatch", async () => {
     await withStorage(async (first) => {
       await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
@@ -783,6 +920,11 @@ describe("StorageService native agent sessions", () => {
       const adopted = await first.adoptNativeAgentSession({
         ...input,
         providerSessionId: "provider-old",
+        controls: {
+          modelId: "old-model",
+          mode: "build",
+          includeLocalSettings: false,
+        },
       });
       expect((await first.adoptNativeAgentSession({
         ...input,
@@ -807,9 +949,22 @@ describe("StorageService native agent sessions", () => {
         ...input,
         providerSessionId: "provider-new",
         expectedProviderSessionId: "provider-old",
+        controls: {
+          modelId: "new-model",
+          executionProfileId: "reviewer",
+          includeLocalSettings: true,
+          promptSuggestions: true,
+        },
       });
       expect(replaced.providerSessionId).toBe("provider-new");
       expect(replaced.dispatchedRequestIds).toBeUndefined();
+      expect(replaced.controls).toEqual({
+        modelId: "new-model",
+        mode: "build",
+        executionProfileId: "reviewer",
+        includeLocalSettings: true,
+        promptSuggestions: true,
+      });
     });
   });
 

@@ -98,6 +98,7 @@ export const nativeAgentAdapters: Readonly<
     label: "Codex",
     capabilities: {
       ...richCapabilities,
+      attachments: { files: false, images: true },
       actions: { compact: true, steer: true, review: true },
     },
   },

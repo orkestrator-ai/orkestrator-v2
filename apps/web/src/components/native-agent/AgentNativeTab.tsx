@@ -607,9 +607,11 @@ function SharedNativeAgentController({
   const [planTransitionPending, setPlanTransitionPending] = useState(false);
   const [suggestionDismissPending, setSuggestionDismissPending] = useState(false);
   const [namingEnvironment, setNamingEnvironment] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [dismissedPlanReviewId, setDismissedPlanReviewId] = useState<string | null>(null);
   const forkLatchRef = useRef(false);
+  const submitInFlightRef = useRef(false);
   /** Last session action whose delivery the provider could not confirm. */
   const ambiguousActionRef = useRef<{
     kind: string;
@@ -852,7 +854,7 @@ function SharedNativeAgentController({
     }
   }, []);
   const phase = projection?.turn.phase;
-  const settingsLocked = phase !== "idle" && phase !== "error";
+  const settingsLocked = isSubmitting || (phase !== "idle" && phase !== "error");
   const isRunning = phase === "running";
   const isTurnActive = phase === "running" || phase === "recovering" || phase === "cancelling";
   /*
@@ -876,7 +878,8 @@ function SharedNativeAgentController({
     || (isRunning && !canQueue)
     || phase === "cancelling"
     || phase === "recovering"
-    || phase === "blocked";
+    || phase === "blocked"
+    || isSubmitting;
   const queuedMessages = useMemo(
     () => (projection?.queue?.items ?? []).flatMap((candidate) => {
       if (!candidate || typeof candidate !== "object") return [];
@@ -917,6 +920,7 @@ function SharedNativeAgentController({
           submittedAttachments.map(({ name, path }) => ({ name, path })),
         );
     if (!userPrompt) return false;
+    if (submitInFlightRef.current) return false;
     if (
       handoff.pendingHistory
       && isProviderSlashCommand(
@@ -948,7 +952,8 @@ function SharedNativeAgentController({
         return false;
       }
       setSendError(null);
-      clearDraft(sessionKey);
+      submitInFlightRef.current = true;
+      setIsSubmitting(true);
       /*
        * An unconfirmed action may already have reached the provider. Resending
        * the same text reuses its request id so the provider deduplicates it,
@@ -956,9 +961,11 @@ function SharedNativeAgentController({
        */
       const ambiguous = ambiguousActionRef.current;
       const actionRequestId = requestId
+        ?? draft.requestId
         ?? (ambiguous?.kind === sessionAction.kind && ambiguous.text === sessionAction.text
           ? ambiguous.requestId
           : crypto.randomUUID());
+      updateDraft(sessionKey, { requestId: actionRequestId });
       try {
         const outcome = await performAction({
           kind: sessionAction.kind,
@@ -969,6 +976,7 @@ function SharedNativeAgentController({
           ? { kind: sessionAction.kind, text: sessionAction.text, requestId: actionRequestId }
           : null;
         if (outcome.outcome === "applied") {
+          clearDraft(sessionKey);
           discardProvisionalDraft();
           toast.success(`Sent to the active ${label} turn`);
           return true;
@@ -980,12 +988,25 @@ function SharedNativeAgentController({
             : `${label} is no longer running a turn to steer.`);
       } catch (error) {
         setSendError(error instanceof Error ? error.message : String(error));
+      } finally {
+        submitInFlightRef.current = false;
+        setIsSubmitting(false);
       }
-      updateDraft(sessionKey, { text, mentions: draft.mentions });
+      updateDraft(sessionKey, {
+        text,
+        mentions: draft.mentions,
+        requestId: actionRequestId,
+      });
       return false;
     }
     const prompt = prependAgentHandoffHistory(handoff.pendingHistory, userPrompt);
     if (!prompt || sendLocked || isDispatching) return false;
+    submitInFlightRef.current = true;
+    setIsSubmitting(true);
+    const dispatchRequestId = canQueue
+      ? undefined
+      : requestId ?? draft.requestId ?? crypto.randomUUID();
+    if (dispatchRequestId) updateDraft(sessionKey, { requestId: dispatchRequestId });
     setSendError(null);
     setOptimisticPrompt({
       text: userPrompt,
@@ -993,7 +1014,6 @@ function SharedNativeAgentController({
       attachments: submittedAttachments,
       createdAt: new Date().toISOString(),
     });
-    clearDraft(sessionKey);
     if (
       (projection?.messages.length ?? 0) === 0
       && environment
@@ -1014,7 +1034,7 @@ function SharedNativeAgentController({
       }
     }
     const options = {
-      requestId,
+      requestId: dispatchRequestId,
       model: composer?.selectedModelId,
       reasoningEffort: composer?.selectedReasoningId,
       mode: composer?.selectedModeId,
@@ -1041,12 +1061,14 @@ function SharedNativeAgentController({
       if (canQueue) {
         await enqueue(prompt, options);
         setOptimisticPrompt(null);
+        clearDraft(sessionKey);
         discardProvisionalDraft();
         if (agentHandoffId) clearTabAgentHandoff(tabId, data.environmentId);
         return true;
       }
       const outcome = await send(prompt, options);
       if (outcome.outcome === "accepted") {
+        clearDraft(sessionKey);
         discardProvisionalDraft();
         if (agentHandoffId) clearTabAgentHandoff(tabId, data.environmentId);
         return true;
@@ -1061,6 +1083,8 @@ function SharedNativeAgentController({
       setOptimisticPrompt(null);
       setSendError(error instanceof Error ? error.message : String(error));
     } finally {
+      submitInFlightRef.current = false;
+      setIsSubmitting(false);
       if (restoreComposerFocus) {
         queueMicrotask(() => inputRef.current?.focus());
       }
@@ -1069,6 +1093,7 @@ function SharedNativeAgentController({
       text,
       mentions: draft.mentions,
       attachments: submittedAttachments,
+      ...(dispatchRequestId ? { requestId: dispatchRequestId } : {}),
     });
     return false;
   }, [
@@ -1087,10 +1112,12 @@ function SharedNativeAgentController({
     discardProvisionalDraft,
     draft.attachments,
     draft.mentions,
+    draft.requestId,
     environment,
     enqueue,
     handoff.pendingHistory,
     isDispatching,
+    isSubmitting,
     isRunning,
     label,
     performAction,
@@ -1627,6 +1654,9 @@ function SharedNativeAgentController({
               reasoningId: composer?.selectedReasoningId,
               fastMode: composer?.fastModeEnabled ?? undefined,
               mode: composer?.selectedModeId,
+              executionProfileId: composer?.selectedExecutionProfileId,
+              includeLocalSettings: composer?.includeLocalSettings,
+              promptSuggestions: composer?.promptSuggestionsEnabled,
             }).then(() => {
               clearPersistedVirtuosoState(sessionKey);
               scrollToBottom();
@@ -1669,8 +1699,8 @@ function SharedNativeAgentController({
             void submit(draft.text);
           }}
           placeholder={`Message ${label}`}
-          disabled={!projection}
-          isSending={isDispatching}
+          disabled={!projection || isSubmitting}
+          isSending={isDispatching || isSubmitting}
           isLoading={isTurnActive}
           menus={fileMentionMenuOpen ? (
               <FileMentionMenu

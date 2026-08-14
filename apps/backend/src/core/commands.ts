@@ -11674,6 +11674,7 @@ export function createCommandRegistry(
         args.logicalSessionKey,
         "logicalSessionKey",
       ),
+      requestId: asNonBlankString(args.requestId, "requestId"),
     });
   });
 

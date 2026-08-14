@@ -16,8 +16,8 @@ authoritative projection and sends provider-neutral intents.
 | Milestone | Result | Evidence |
 | --- | --- | --- |
 | R0 · Parity contract | Complete | The protocol and adapter registry cover attachments, queue, resume, fork, slash commands, interactions, controls, context, notices and background tasks. Provider and shared-controller tests exercise the normalized contracts. |
-| R1 · Backend projection core | Complete | `NativeAgentService` owns a bounded reconstructible projection cache, monotonic revisions/generations/cursors, provider snapshot refresh and `native-agent-session` resource invalidation. |
-| R2 · Shared state machine | Complete | `useNativeAgentSession` reads the full projection, refreshes on mount/activation/resource events, and exposes neutral send, stop, queue, interaction, control, resume, fork, background-task and suggestion intents. |
+| R1 · Backend projection core | Complete | `NativeAgentService` owns a bounded reconstructible projection cache, serializes concurrent reads, invalidates in-flight reads across provider replacement, and emits monotonic revisions/generations/cursors without polling tab-facing bridge routes in the background. |
+| R2 · Shared state machine | Complete | `useNativeAgentSession` reads the full projection, refreshes only while active or from active-tab resource events, fences stale reads across mutations, and exposes neutral send, stop, queue, interaction, control, resume, fork, background-task and suggestion intents. |
 | R3 · ACP | Complete | Cursor and Grok use the shared controller; ACP snapshot/window/approval handling is normalized below React; `AcpChatTab` is deleted. |
 | R4 · Codex | Complete | Semantic phases, generation/revision state, controls, interactions, context, plan review, queue, resume and fork are projected; the renderer background reconciler and Codex controller/composer are deleted. |
 | R5 · Claude | Complete | Messages, plan mode, interactions, suggestions and background tasks are authoritative projection fields; Claude controller/composer are deleted. |

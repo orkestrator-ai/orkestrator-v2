@@ -435,6 +435,7 @@ async function resizeKanbanImage(rawBytes: Buffer): Promise<Buffer> {
 }
 
 const MAX_JSON_BACKUPS = 5;
+const MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES = 32 * 1024 * 1024;
 const MAX_SESSIONS_PER_ENVIRONMENT = 20;
 
 const DEFAULT_ALLOWED_DOMAINS = [
@@ -902,7 +903,7 @@ function isPersistedNativeAgentSession(
         && (() => {
           try {
             return Buffer.byteLength(JSON.stringify(value.pendingDispatch), "utf8")
-              <= 32 * 1024 * 1024;
+              <= MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES;
           } catch {
             return false;
           }
@@ -2795,15 +2796,23 @@ export class StorageService {
     filePath: string,
     keep: (storedId: string, record: unknown) => boolean,
   ): Promise<void> {
+    await this.transformSensitiveJsonBackups(filePath, (parsed) => Object.fromEntries(
+      Object.entries(parsed).filter(([storedId, record]) => keep(storedId, record)),
+    ));
+  }
+
+  /** Rewrites every retained sensitive backup while preserving its record shape. */
+  private async transformSensitiveJsonBackups(
+    filePath: string,
+    transform: (records: Record<string, unknown>) => Record<string, unknown>,
+  ): Promise<void> {
     for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
       const backup = this.backupPath(filePath, index);
       if (!await exists(backup)) continue;
       try {
         const parsed = JSON.parse(await fs.readFile(backup, "utf8")) as Record<string, unknown>;
         if (!isRecord(parsed)) throw new Error("Backup is not a record");
-        const sanitized = Object.fromEntries(
-          Object.entries(parsed).filter(([storedId, record]) => keep(storedId, record)),
-        );
+        const sanitized = transform(parsed);
         await this.writeAtomic(
           backup,
           `${JSON.stringify(sanitized, null, 2)}\n`,
@@ -2815,6 +2824,22 @@ export class StorageService {
         await fs.rm(backup, { force: true });
       }
     }
+  }
+
+  private async scrubPendingNativeAgentDispatchBackups(
+    key: string,
+    requestId: string,
+  ): Promise<void> {
+    await this.transformSensitiveJsonBackups(this.nativeAgentSessionsFile(), (records) => {
+      const stored = records[key];
+      if (!isRecord(stored)) return records;
+      const pending = stored.pendingDispatch;
+      if (!isRecord(pending) || pending.requestId !== requestId) return records;
+      return {
+        ...records,
+        [key]: { ...stored, pendingDispatch: undefined },
+      };
+    });
   }
 
   async loadProjects(): Promise<Project[]> {
@@ -5255,7 +5280,9 @@ export class StorageService {
           ? {
               origin: existing.origin,
               interactionPolicy: existing.interactionPolicy,
-              controls: existing.controls ?? input.controls,
+              controls: input.controls
+                ? { ...existing.controls, ...input.controls }
+                : existing.controls,
             }
           : interactionMetadata),
         version: NATIVE_AGENT_SESSION_VERSION,
@@ -5264,6 +5291,12 @@ export class StorageService {
       };
       sessions[input.key] = saved;
       await this.saveNativeAgentSessions(sessions, opaque);
+      if (existing?.pendingDispatch) {
+        await this.scrubPendingNativeAgentDispatchBackups(
+          input.key,
+          existing.pendingDispatch.requestId,
+        );
+      }
       this.announce("native-agent-session", input.environmentId);
       return saved;
     });
@@ -5316,6 +5349,10 @@ export class StorageService {
       }
       delete sessions[key];
       await this.saveNativeAgentSessions(sessions, opaque);
+      await this.scrubSensitiveJsonBackups(
+        this.nativeAgentSessionsFile(),
+        (storedKey) => storedKey !== key,
+      );
       this.announce("native-agent-session", existing.environmentId);
       return true;
     });
@@ -5383,17 +5420,40 @@ export class StorageService {
     if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
       throw new Error("Native agent dispatch key must not be blank");
     }
+    if (pendingDispatch) {
+      let serialized: string;
+      try {
+        serialized = JSON.stringify(pendingDispatch);
+      } catch {
+        throw new Error("Pending native agent dispatch must be JSON serializable");
+      }
+      if (
+        Buffer.byteLength(serialized, "utf8")
+          > MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES
+      ) {
+        throw new Error("Pending native agent dispatch exceeds the 32 MB limit");
+      }
+    }
     return this.enqueueNativeAgentSessionMutation(async () => {
       const loaded = await this.loadNativeAgentSessions();
       const { sessions, opaque, migrated } = loaded;
       this.assertReadableNativeAgentSession(loaded, key);
       let session = sessions[key];
       if (!session) throw new Error("Native agent session was not found");
+      if (
+        session.pendingDispatch
+        && session.pendingDispatch.requestId !== requestId
+      ) {
+        throw new Error(
+          `Native agent dispatch ${session.pendingDispatch.requestId} is still awaiting recovery`,
+        );
+      }
       if (session.dispatchedRequestIds?.includes(requestId)) {
         if (session.pendingDispatch?.requestId === requestId) {
           session = { ...session, pendingDispatch: undefined, updatedAt: nowIso() };
           sessions[key] = session;
           await this.saveNativeAgentSessions(sessions, opaque);
+          await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
         }
         if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return { session, dispatched: false };
@@ -5437,6 +5497,7 @@ export class StorageService {
         };
         sessions[key] = updated;
         await this.saveNativeAgentSessions(sessions, opaque);
+        await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
         this.announce("native-agent-session", session.environmentId);
         return { session: updated, dispatched: false };
       }
@@ -5453,6 +5514,7 @@ export class StorageService {
       };
       sessions[key] = updated;
       await this.saveNativeAgentSessions(sessions, opaque);
+      await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
       this.announce("native-agent-session", session.environmentId);
       return { session: updated, dispatched: true };
     });
@@ -5480,6 +5542,7 @@ export class StorageService {
         updatedAt: nowIso(),
       };
       await this.saveNativeAgentSessions(sessions, opaque);
+      await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
       this.announce("native-agent-session", session.environmentId);
       return true;
     });

@@ -75,6 +75,19 @@ const retryNativeAgentDispatchMock = mock(async () => ({
   outcome: "accepted" as const,
   requestId: "recoverable-1",
 }));
+const renameEnvironmentFromPromptMock = mock(async () => {});
+const resumeNativeAgentSessionMock = mock(async (input: {
+  agent: NativeAgentTabData["platform"];
+  environmentId: string;
+  providerSessionId: string;
+}) => ({
+  ...(await defaultProjection({
+    agent: input.agent!,
+    environmentId: input.environmentId,
+  })),
+  sessionId: input.providerSessionId,
+  generation: `resumed:${input.providerSessionId}`,
+}));
 const stopNativeAgentSessionMock = mock(async () => getNativeAgentProjectionMock({
   agent: "claude",
   environmentId: "env-1",
@@ -128,6 +141,8 @@ mock.module("@/lib/backend", () => ({
   listNativeAgentResumableSessions: listNativeAgentResumableSessionsMock,
   dispatchNativeAgentIntent: dispatchNativeAgentIntentMock,
   retryNativeAgentDispatch: retryNativeAgentDispatchMock,
+  renameEnvironmentFromPrompt: renameEnvironmentFromPromptMock,
+  resumeNativeAgentSession: resumeNativeAgentSessionMock,
   stopNativeAgentSession: stopNativeAgentSessionMock,
   getFileTree: async () => [],
   getLocalFileTree: async () => [],
@@ -145,6 +160,7 @@ mock.module("@/lib/pane-layout-persistence", () => ({
 }));
 
 const { AgentNativeTab } = await import("./AgentNativeTab");
+const { useNativeAgentSession } = await import("@/hooks/useNativeAgentSession");
 
 beforeEach(() => {
   useEnvironmentStore.setState({
@@ -174,6 +190,9 @@ afterEach(() => {
   listNativeAgentResumableSessionsMock.mockClear();
   dispatchNativeAgentIntentMock.mockClear();
   retryNativeAgentDispatchMock.mockClear();
+  renameEnvironmentFromPromptMock.mockReset();
+  renameEnvironmentFromPromptMock.mockImplementation(async () => {});
+  resumeNativeAgentSessionMock.mockClear();
   stopNativeAgentSessionMock.mockClear();
   performNativeAgentSessionActionMock.mockClear();
   enqueuePromptQueueMessageMock.mockClear();
@@ -227,6 +246,23 @@ function PaneBackedAgentNativeTab({ tabId = "tab-resume" }: { tabId?: string }) 
       initialConversationMode={tab?.initialConversationMode}
       initialFastMode={tab?.initialFastMode}
     />
+  );
+}
+
+function NativeSessionHarness() {
+  const session = useNativeAgentSession<NativeMessage>({
+    platform: "claude",
+    environmentId: "env-1",
+    tabId: "tab-hook-race",
+    initialProviderSessionId: "session-a",
+    isActive: true,
+  });
+  return (
+    <div>
+      <output data-testid="hook-session-id">{session.projection?.sessionId}</output>
+      <button type="button" onClick={() => { void session.refresh(); }}>Refresh</button>
+      <button type="button" onClick={() => { void session.resume("session-b"); }}>Resume B</button>
+    </div>
   );
 }
 
@@ -538,6 +574,58 @@ describe("AgentNativeTab", () => {
     expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined();
   });
 
+  test("keeps a first prompt durable and non-reentrant while environment rename is pending", async () => {
+    let releaseRename!: () => void;
+    const renameGate = new Promise<void>((resolve) => { releaseRename = resolve; });
+    renameEnvironmentFromPromptMock.mockImplementationOnce(async () => renameGate);
+    useEnvironmentStore.setState({
+      environments: [{
+        id: "env-1",
+        projectId: "project-1",
+        name: "20260415-123456",
+        order: 0,
+        setupPhase: "ready",
+      } as never],
+    });
+    const tabId = "tab-rename-durable";
+    const sessionKey = createSessionKey("env-1", tabId);
+    const view = render(
+      <AgentNativeTab tabId={tabId} data={identity("claude")} isActive />,
+    );
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Keep this first prompt" } });
+    const sendButton = await screen.findByTitle("Send");
+    fireEvent.click(sendButton);
+
+    await waitFor(() => expect(renameEnvironmentFromPromptMock).toHaveBeenCalledTimes(1));
+    const pendingDraft = useNativeComposeStore.getState().drafts.get(sessionKey);
+    expect(pendingDraft?.text).toBe("Keep this first prompt");
+    expect(pendingDraft?.requestId).toMatch(/\S/);
+    await waitFor(() => expect(screen.queryByTitle("Send")).toBeNull());
+    expect(input.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+
+    view.unmount();
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text)
+      .toBe("Keep this first prompt");
+    const remounted = render(
+      <AgentNativeTab tabId={tabId} data={identity("claude")} isActive />,
+    );
+    expect((await screen.findByRole("textbox")).textContent).toBe("Keep this first prompt");
+    remounted.unmount();
+
+    const stableRequestId = pendingDraft!.requestId;
+    releaseRename();
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0]).toMatchObject({
+      prompt: "Keep this first prompt",
+      requestId: stableRequestId,
+    });
+    await waitFor(() => expect(useNativeComposeStore.getState().drafts.get(sessionKey))
+      .toBeUndefined());
+  });
+
   test("retries a failed resume provider-lock save before opening the provider dialog", async () => {
     const tabId = "tab-retry-resume";
     seedUnassignedPane(tabId);
@@ -657,6 +745,43 @@ describe("AgentNativeTab", () => {
     ));
   });
 
+  test("does not read or touch a provider projection while its tab is inactive", async () => {
+    render(<AgentNativeTab tabId="tab-inactive" data={identity("codex")} isActive={false} />);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
+    expect(adoptNativeAgentSessionMock).not.toHaveBeenCalled();
+  });
+
+  test("does not let a stale projection refresh undo a resumed session", async () => {
+    let resolveStale!: (projection: NativeAgentSessionProjection<NativeMessage>) => void;
+    const staleProjection = new Promise<NativeAgentSessionProjection<NativeMessage>>(
+      (resolve) => { resolveStale = resolve; },
+    );
+    getNativeAgentProjectionMock
+      .mockImplementationOnce(defaultProjection)
+      .mockImplementationOnce(async () => staleProjection)
+      .mockImplementation(defaultProjection);
+
+    render(<NativeSessionHarness />);
+    await waitFor(() => expect(screen.getByTestId("hook-session-id").textContent)
+      .toBe("claude-session"));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button", { name: "Resume B" }));
+    await waitFor(() => expect(screen.getByTestId("hook-session-id").textContent)
+      .toBe("session-b"));
+
+    resolveStale({
+      ...(await defaultProjection({ agent: "claude", environmentId: "env-1" })),
+      sessionId: "session-a",
+      generation: "stale-session-a",
+      revision: 999,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(screen.getByTestId("hook-session-id").textContent).toBe("session-b");
+  });
+
   test("restores review follow-up, manual refresh, notices, and Escape stop in the shared tab", async () => {
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       platform: input.agent,
@@ -754,6 +879,7 @@ describe("AgentNativeTab", () => {
       promptSuggestions?: boolean;
       messages?: NativeMessage[];
       recoverableDispatch?: NativeAgentSessionProjection["recoverableDispatch"];
+      composer?: Partial<NonNullable<NativeAgentSessionProjection["composer"]>>;
     } = {}) {
       getNativeAgentProjectionMock.mockImplementation(async (input) => ({
         platform: input.agent,
@@ -796,6 +922,7 @@ describe("AgentNativeTab", () => {
           ...(overrides.promptSuggestions === undefined
             ? {}
             : { promptSuggestionsEnabled: overrides.promptSuggestions }),
+          ...overrides.composer,
         },
         capabilities: {
           attachments: { files: true, images: true },
@@ -968,6 +1095,45 @@ describe("AgentNativeTab", () => {
       expect(within(dialog).getByText(/Running/)).toBeTruthy();
     });
 
+    test("passes the complete composer control set when resuming", async () => {
+      seedProjection({
+        messages: [],
+        composer: {
+          selectedModelId: "model-a",
+          selectedReasoningId: "high",
+          selectedModeId: "plan",
+          fastModeEnabled: true,
+          selectedExecutionProfileId: "reviewer",
+          includeLocalSettings: true,
+          promptSuggestionsEnabled: true,
+        },
+      });
+      listNativeAgentResumableSessionsMock.mockImplementation(async () => [{
+        sessionId: "older-session",
+        title: "Earlier work",
+        updatedAt: "2026-08-01T00:00:00.000Z",
+      }] as never);
+      render(<AgentNativeTab tabId="tab-resume-controls" data={identity("claude")} isActive />);
+
+      fireEvent.click((await screen.findAllByRole("button", { name: /Resume Session/ }))[0]!);
+      const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
+      fireEvent.click(within(dialog).getByRole("button", { name: /Earlier work/ }));
+      await waitFor(() => expect(resumeNativeAgentSessionMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerSessionId: "older-session",
+          controls: {
+            modelId: "model-a",
+            reasoningId: "high",
+            mode: "plan",
+            fastMode: true,
+            executionProfileId: "reviewer",
+            includeLocalSettings: true,
+            promptSuggestions: true,
+          },
+        }),
+      ));
+    });
+
     test("dismisses an accepted suggestion for any provider that tracks them", async () => {
       seedProjection({ suggestedPrompt: "Run the tests", promptSuggestions: true });
       render(<AgentNativeTab tabId="tab-suggest" data={identity("claude")} isActive />);
@@ -993,6 +1159,7 @@ describe("AgentNativeTab", () => {
         environmentId: "env-1",
         agent: "codex",
         logicalSessionKey: createSessionKey("env-1", "tab-recoverable"),
+        requestId: "recoverable-1",
       }));
     });
   });

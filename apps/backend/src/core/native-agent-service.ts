@@ -128,6 +128,7 @@ export interface AdoptNativeAgentSessionInput
   extends EnsureNativeAgentSessionInput {
   providerSessionId: string;
   expectedProviderSessionId?: string;
+  controls?: NativeAgentControlUpdate;
 }
 
 export interface NativeAgentProjectionInput {
@@ -161,7 +162,6 @@ type NativeAgentProjectionCacheEntry = {
   projection: NativeAgentSessionProjection;
   fingerprint: string;
   generation: string;
-  nextRefreshAt: number;
 };
 
 function isValidInteractionMetadata(input: {
@@ -268,8 +268,6 @@ const INTERACTION_MONITOR_DEFAULT_PER_ENVIRONMENT = 8;
 const INTERACTION_MONITOR_DEFAULT_MAX_RETRIES = 5;
 const INTERACTION_MONITOR_DEFAULT_RETRY_BASE_MS = 1_000;
 const NATIVE_PROJECTION_CACHE_LIMIT = 1_024;
-const NATIVE_PROJECTION_ACTIVE_REFRESH_MS = 350;
-const NATIVE_PROJECTION_IDLE_REFRESH_MS = 1_500;
 const NATIVE_PROJECTION_MAX_MESSAGES = 512;
 /**
  * Ceiling for an explicitly expanded transcript window.
@@ -344,6 +342,7 @@ function nativeCapabilities(agent: BuildPipelineAgent): NativeAgentCapabilities 
   }
   return {
     ...RICH_NATIVE_CAPABILITIES,
+    attachments: { files: false, images: true },
     actions: { compact: true, steer: true, review: true },
   };
 }
@@ -580,6 +579,13 @@ export class NativeAgentService {
   private readonly interactionAttempts = new Map<string, number>();
   private readonly monitoredInteractionSessionKeys = new Set<string>();
   private readonly observedInteractionRevisions = new Map<string, number>();
+  /** Serializes projection reads so late provider responses cannot roll state back. */
+  private readonly projectionRefreshes = new Map<
+    string,
+    Promise<NativeAgentSessionProjection | null>
+  >();
+  /** Invalidates an in-flight read when a logical tab changes provider identity. */
+  private readonly projectionEpochs = new Map<string, number>();
   /** Round-robin offsets keep bounded scans from permanently favouring old sessions. */
   private readonly interactionSelectionCursors = new Map<string, number>();
   private interactionGlobalSelectionCursor = 0;
@@ -589,8 +595,6 @@ export class NativeAgentService {
   private interactionRevisionReconciliations = 0;
   private interactionMonitorAdoptionEnabled = true;
   private launchTimer: ReturnType<typeof setInterval> | null = null;
-  private projectionTimer: ReturnType<typeof setInterval> | null = null;
-  private projectionScan: Promise<void> | null = null;
   private interactionTimer: ReturnType<typeof setInterval> | null = null;
   private initialization: Promise<void> | null = null;
   private stopped = false;
@@ -631,15 +635,6 @@ export class NativeAgentService {
       void this.trackScan(this.drainPromptQueues()).catch(() => undefined);
     }, 2_000);
     this.launchTimer.unref?.();
-    this.projectionTimer = setInterval(() => {
-      if (this.stopped || this.projectionScan) return;
-      const scan = this.reconcileProjectionCache().finally(() => {
-        if (this.projectionScan === scan) this.projectionScan = null;
-      });
-      this.projectionScan = scan;
-      void scan.catch(() => undefined);
-    }, NATIVE_PROJECTION_ACTIVE_REFRESH_MS);
-    this.projectionTimer.unref?.();
     if (this.options.interactionMonitorMode === "observe-only") {
       await this.reconcileAgentInteractions().catch(() => undefined);
       if (this.stopped) return;
@@ -755,7 +750,7 @@ export class NativeAgentService {
       providerSessionId: input.providerSessionId,
       origin: input.origin,
       interactionPolicy: input.interactionPolicy,
-      controls: controlsFromSessionInput(input),
+      controls: input.controls ?? controlsFromSessionInput(input),
       expectedProviderSessionId: input.expectedProviderSessionId,
     });
     void this.reconcileAgentInteractions().catch(() => undefined);
@@ -853,9 +848,12 @@ export class NativeAgentService {
   }
 
   async retryRecoverableDispatch(
-    input: NativeAgentProjectionInput,
+    input: NativeAgentProjectionInput & { requestId: string },
   ): Promise<NativeAgentDispatchOutcome> {
     this.assertProjectionInput(input);
+    if (!nonBlank(input.requestId)) {
+      throw new Error("Recoverable native agent request ID must not be blank");
+    }
     const key = nativeAgentSessionStorageKey(
       input.environmentId,
       input.agent,
@@ -867,6 +865,12 @@ export class NativeAgentService {
       return {
         outcome: "rejected",
         error: "There is no recoverable dispatch for this session",
+      };
+    }
+    if (pending.requestId !== input.requestId) {
+      return {
+        outcome: "rejected",
+        error: "The recoverable dispatch changed; refresh before retrying",
       };
     }
     return this.dispatchIntent({
@@ -979,6 +983,7 @@ export class NativeAgentService {
       input.logicalSessionKey,
     );
     const existing = await this.storage.getNativeAgentSession(key);
+    this.invalidateProjection(key);
     const resumedId = await provider.resumeSession(
       input.providerSessionId,
       input.controls,
@@ -987,12 +992,12 @@ export class NativeAgentService {
       ...input,
       providerSessionId: resumedId,
       expectedProviderSessionId: existing?.providerSessionId,
+      controls: input.controls,
       model: input.controls?.modelId,
       reasoningEffort: input.controls?.reasoningId,
       sessionMode: input.controls?.mode,
       fastMode: input.controls?.fastMode,
     });
-    this.projectionCache.delete(key);
     return this.refreshProjection(input, true);
   }
 
@@ -1038,7 +1043,7 @@ export class NativeAgentService {
       resolved.session.providerSessionId,
       input.action,
     );
-    this.projectionCache.delete(resolved.key);
+    this.invalidateProjection(resolved.key);
     return outcome;
   }
 
@@ -1358,7 +1363,12 @@ export class NativeAgentService {
     }
   }
 
-  private async refreshProjection(
+  private invalidateProjection(key: string): void {
+    this.projectionCache.delete(key);
+    this.projectionEpochs.set(key, (this.projectionEpochs.get(key) ?? 0) + 1);
+  }
+
+  private refreshProjection(
     input: NativeAgentProjectionInput,
     force: boolean,
   ): Promise<NativeAgentSessionProjection | null> {
@@ -1367,6 +1377,26 @@ export class NativeAgentService {
       input.agent,
       input.logicalSessionKey,
     );
+    const previousRefresh = this.projectionRefreshes.get(key);
+    const operation = (async () => {
+      if (previousRefresh) await previousRefresh.catch(() => undefined);
+      const epoch = this.projectionEpochs.get(key) ?? 0;
+      return this.refreshProjectionOnce(input, force, key, epoch);
+    })();
+    this.projectionRefreshes.set(key, operation);
+    return operation.finally(() => {
+      if (this.projectionRefreshes.get(key) === operation) {
+        this.projectionRefreshes.delete(key);
+      }
+    });
+  }
+
+  private async refreshProjectionOnce(
+    input: NativeAgentProjectionInput,
+    force: boolean,
+    key: string,
+    epoch: number,
+  ): Promise<NativeAgentSessionProjection | null> {
     const previous = this.projectionCache.get(key);
     const messageLimit = this.resolveMessageLimit(
       input.messageLimit,
@@ -1376,7 +1406,6 @@ export class NativeAgentService {
     if (
       !force
       && previous
-      && previous.nextRefreshAt > this.now()
       && previous.input.messageLimit === messageLimit
     ) {
       return previous.projection;
@@ -1385,7 +1414,9 @@ export class NativeAgentService {
     try {
       const resolved = await this.resolveProjectionSession(input);
       if (!resolved) {
-        this.projectionCache.delete(key);
+        if ((this.projectionEpochs.get(key) ?? 0) === epoch) {
+          this.projectionCache.delete(key);
+        }
         return null;
       }
       const providerCacheKey = `${input.environmentId}\0${input.agent}`;
@@ -1572,7 +1603,7 @@ export class NativeAgentService {
           ? undefined
           : String(snapshot.providerRevision),
       };
-      return this.commitProjection(key, windowed, projection, generation);
+      return this.commitProjection(key, windowed, projection, generation, epoch);
     } catch (error) {
       const projection: NativeAgentSessionProjection = {
         ...(previous?.projection ?? {
@@ -1597,7 +1628,7 @@ export class NativeAgentService {
         revision: 0,
         generation,
       };
-      return this.commitProjection(key, windowed, projection, generation);
+      return this.commitProjection(key, windowed, projection, generation, epoch);
     }
   }
 
@@ -1606,25 +1637,22 @@ export class NativeAgentService {
     input: NativeAgentProjectionInput,
     candidate: NativeAgentSessionProjection,
     generation: string,
-  ): NativeAgentSessionProjection {
+    epoch: number,
+  ): NativeAgentSessionProjection | null {
+    if ((this.projectionEpochs.get(key) ?? 0) !== epoch) {
+      return this.projectionCache.get(key)?.projection ?? null;
+    }
     const previous = this.projectionCache.get(key);
     const fingerprint = JSON.stringify({
       ...candidate,
       revision: 0,
       cursor: candidate.cursor,
     });
-    const interval = candidate.turn.phase === "running"
-      || candidate.turn.phase === "blocked"
-      || candidate.turn.phase === "cancelling"
-      || candidate.turn.phase === "recovering"
-      ? NATIVE_PROJECTION_ACTIVE_REFRESH_MS
-      : NATIVE_PROJECTION_IDLE_REFRESH_MS;
     if (
       previous
       && previous.generation === generation
       && previous.fingerprint === fingerprint
     ) {
-      previous.nextRefreshAt = this.now() + interval;
       return previous.projection;
     }
     const revision = previous?.generation === generation
@@ -1638,29 +1666,16 @@ export class NativeAgentService {
     };
     if (!previous && this.projectionCache.size >= NATIVE_PROJECTION_CACHE_LIMIT) {
       const oldest = this.projectionCache.keys().next().value as string | undefined;
-      if (oldest) this.projectionCache.delete(oldest);
+      if (oldest) this.invalidateProjection(oldest);
     }
     this.projectionCache.set(key, {
       input: { ...input },
       projection,
       fingerprint,
       generation,
-      nextRefreshAt: this.now() + interval,
     });
     this.storage.announceNativeAgentSessionProjection(input.environmentId);
     return projection;
-  }
-
-  private async reconcileProjectionCache(): Promise<void> {
-    const due = [...this.projectionCache.values()]
-      .filter((entry) => entry.nextRefreshAt <= this.now());
-    for (let index = 0; index < due.length; index += ACTIVITY_STATUS_CONCURRENCY) {
-      await Promise.allSettled(
-        due.slice(index, index + ACTIVITY_STATUS_CONCURRENCY).map((entry) =>
-          this.refreshProjection(entry.input, true)
-        ),
-      );
-    }
   }
 
   async dispatchPrompt(
@@ -1868,10 +1883,7 @@ export class NativeAgentService {
     this.launchTimer = null;
     if (this.interactionTimer) clearInterval(this.interactionTimer);
     this.interactionTimer = null;
-    if (this.projectionTimer) clearInterval(this.projectionTimer);
-    this.projectionTimer = null;
-    if (this.projectionScan) await this.projectionScan.catch(() => undefined);
-    this.projectionScan = null;
+    await Promise.allSettled([...this.projectionRefreshes.values()]);
     await Promise.allSettled([...this.scanTasks]);
     while (
       this.launchTasks.size > 0
@@ -1895,6 +1907,8 @@ export class NativeAgentService {
     this.modelCatalogCache.clear();
     this.slashCommandCache.clear();
     this.projectionCache.clear();
+    this.projectionRefreshes.clear();
+    this.projectionEpochs.clear();
   }
 
   /**

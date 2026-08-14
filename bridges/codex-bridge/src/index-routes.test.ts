@@ -511,7 +511,7 @@ describe("session detail route outcomes", () => {
     }]);
   });
 
-  test("filters prompt attachments and maps runtime success and failure", async () => {
+  test("accepts images, rejects unsupported files, and maps runtime failures", async () => {
     const calls: unknown[] = [];
     let outcome: unknown = {
       ok: true,
@@ -538,8 +538,6 @@ describe("session detail route outcomes", () => {
               dataUrl: "data:image/png;base64,AA==",
               filename: "image.png",
             },
-            { type: "text", path: "/tmp/ignored.txt" },
-            null,
           ],
         });
         expect(accepted.status).toBe(202);
@@ -547,6 +545,17 @@ describe("session detail route outcomes", () => {
           status: "processing",
           requestId: "request-1",
         });
+
+        const unsupported = await jsonRequest("/session/session-1/prompt", "POST", {
+          prompt: "read this file",
+          requestId: "request-file",
+          attachments: [{ type: "file", path: "/tmp/input.txt" }],
+        });
+        expect(unsupported.status).toBe(400);
+        expect(await unsupported.json()).toEqual({
+          error: "Codex supports image attachments only",
+        });
+        expect(calls).toHaveLength(1);
 
         outcome = { ok: false, status: 503, error: "Codex unavailable" };
         const failed = await jsonRequest("/session/session-1/prompt", "POST", {

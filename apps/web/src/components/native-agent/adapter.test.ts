@@ -31,6 +31,10 @@ describe("native agent adapter registry", () => {
   test("publishes provider differences as capabilities", () => {
     expect(getNativeAgentAdapter("claude").capabilities.backgroundTasks).toBe(true);
     expect(getNativeAgentAdapter("codex").capabilities.resume).toBe(true);
+    expect(getNativeAgentAdapter("codex").capabilities.attachments).toEqual({
+      files: false,
+      images: true,
+    });
     expect(getNativeAgentAdapter("cursor").capabilities.composer.model).toBe(true);
     expect(getNativeAgentAdapter("grok").capabilities.composer.reasoning).toBe(true);
     expect(getNativeAgentAdapter("cursor").capabilities.attachments.files).toBe(false);

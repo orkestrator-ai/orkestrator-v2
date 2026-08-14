@@ -2289,6 +2289,7 @@ export async function retryNativeAgentDispatch(input: {
   environmentId: string;
   agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
   logicalSessionKey: string;
+  requestId: string;
 }): Promise<NativeAgentDispatchOutcome> {
   return invoke<NativeAgentDispatchOutcome>(
     "retry_native_agent_dispatch",

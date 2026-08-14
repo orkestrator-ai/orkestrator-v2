@@ -33,6 +33,10 @@ PaneLeafContainer
 - Resource events are invalidation hints. Mount, activation, generation change
   and revision discontinuity all reconcile through a complete authoritative
   snapshot.
+- Only the active renderer tab refreshes tab-facing bridge snapshots. The
+  backend never polls `/session/:id`, `/status` or `/messages` from a background
+  cache reconciler, so inactive Codex sessions can detach and inactive Claude
+  transcripts can evict normally.
 - A tab unmount never means cancellation. Backend timers, provider sessions,
   prompt queues, pending interactions and OpenCode recovery continue without a
   mounted React tree.
@@ -106,13 +110,15 @@ Behavior that is shared rather than per-provider, decided by capability:
   activity in the backend, with provider-reported status and transcript size.
 - The transcript is a bounded window. When older messages exist, the transcript
   says so and offers to load them; the expanded window is resent on every read
-  so a reconnect or a background refresh cannot silently collapse it.
+  so a reconnect or foreground refresh cannot silently collapse it.
 
 Assigned prompt drafts remain namespaced by platform and logical tab, including
 the legacy persistence keys. Before the first send, an unassigned tab uses one
 stable `agent-native` record containing its text, attachments, selected
 platform, model, reasoning, speed and mode; a reload therefore cannot restore
-the text under a different default provider. Attachments are restored only on
+the text under a different default provider. A prompt that is waiting for the
+first environment rename also persists its stable request id, so a remounted
+tab can retry without creating a duplicate provider turn. Attachments are restored only on
 platforms that can consume them. Keyboard submission restores the editor
 focus; mouse submission leaves focus on the clicked control.
 

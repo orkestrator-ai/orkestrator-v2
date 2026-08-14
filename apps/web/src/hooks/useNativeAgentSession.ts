@@ -41,6 +41,8 @@ import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionSto
 const DEFAULT_MESSAGE_WINDOW = 512;
 /** Mirrors the backend ceiling, so the button stops offering what it would clamp. */
 const MAX_MESSAGE_WINDOW = 4_096;
+const ACTIVE_PROJECTION_REFRESH_MS = 500;
+const IDLE_PROJECTION_REFRESH_MS = 1_500;
 
 interface UseNativeAgentSessionOptions {
   platform: AgentPlatform;
@@ -121,6 +123,8 @@ export function useNativeAgentSession<TMessage = unknown>({
   const [messageLimit, setMessageLimit] = useState<number | undefined>(undefined);
   const projectionRef = useRef<NativeAgentSessionProjection<TMessage> | null>(null);
   const refreshSequenceRef = useRef(0);
+  const projectionOperationEpochRef = useRef(0);
+  const backgroundRefreshInFlightRef = useRef(false);
   const pendingDispatchRef = useRef<{
     prompt: string;
     requestId: string;
@@ -141,6 +145,12 @@ export function useNativeAgentSession<TMessage = unknown>({
     () => ({ environmentId, agent: platform, logicalSessionKey: sessionKey }),
     [environmentId, platform, sessionKey],
   );
+
+  const beginProjectionMutation = useCallback(() => {
+    projectionOperationEpochRef.current += 1;
+    refreshSequenceRef.current += 1;
+    return projectionOperationEpochRef.current;
+  }, []);
 
   const applyProjection = useCallback((next: NativeAgentSessionProjection<TMessage> | null) => {
     if (!next) {
@@ -170,9 +180,15 @@ export function useNativeAgentSession<TMessage = unknown>({
     }
   }, [environmentId, sessionKey, tabId, updateTabNativeSessionId]);
 
-  const refresh = useCallback(async (_options?: { manual?: boolean }) => {
+  const refresh = useCallback(async (options?: { manual?: boolean }) => {
     if (!enabled) return null;
+    const background = options?.manual === false;
+    if (background && backgroundRefreshInFlightRef.current) {
+      return projectionRef.current;
+    }
+    if (background) backgroundRefreshInFlightRef.current = true;
     const sequence = ++refreshSequenceRef.current;
+    const operationEpoch = projectionOperationEpochRef.current;
     setIsRefreshing(true);
     try {
       const next = await getNativeAgentProjection<TMessage>({
@@ -181,18 +197,28 @@ export function useNativeAgentSession<TMessage = unknown>({
         // a generation change, or a refresh triggered by another tab.
         ...(messageLimit === undefined ? {} : { messageLimit }),
       });
-      if (sequence === refreshSequenceRef.current) {
+      if (
+        sequence === refreshSequenceRef.current
+        && operationEpoch === projectionOperationEpochRef.current
+      ) {
         applyProjection(next);
         setRuntimeError(null);
       }
       return next;
     } catch (error) {
-      if (sequence === refreshSequenceRef.current) {
+      if (
+        sequence === refreshSequenceRef.current
+        && operationEpoch === projectionOperationEpochRef.current
+      ) {
         setRuntimeError(error instanceof Error ? error.message : String(error));
       }
       return null;
     } finally {
-      if (sequence === refreshSequenceRef.current) setIsRefreshing(false);
+      if (background) backgroundRefreshInFlightRef.current = false;
+      if (
+        sequence === refreshSequenceRef.current
+        && operationEpoch === projectionOperationEpochRef.current
+      ) setIsRefreshing(false);
     }
   }, [applyProjection, enabled, identity, messageLimit]);
 
@@ -259,33 +285,39 @@ export function useNativeAgentSession<TMessage = unknown>({
   ]);
 
   useEffect(() => {
-    if (!enabled) {
+    if (!enabled || !isActive) {
       setIsRefreshing(false);
       return;
     }
-    let cancelled = false;
-    void connect().then((next) => {
-      if (cancelled || !next) return;
-      applyProjection(next);
-    });
-    return () => { cancelled = true; };
-  }, [applyProjection, connect, enabled]);
+    void connect().then(() => undefined);
+  }, [connect, enabled, isActive]);
 
   useEffect(() => {
     const unsubscribeChange = onResourceChanged(
       "native-agent-session",
-      ({ id }) => { if (enabled && id === environmentId) void refresh(); },
+      ({ id }) => { if (enabled && isActive && id === environmentId) void refresh(); },
     );
-    const unsubscribeResync = onResourceResync(() => { if (enabled) void refresh(); });
+    const unsubscribeResync = onResourceResync(() => {
+      if (enabled && isActive) void refresh();
+    });
     return () => {
       unsubscribeChange();
       unsubscribeResync();
     };
-  }, [enabled, environmentId, refresh]);
+  }, [enabled, environmentId, isActive, refresh]);
 
   useEffect(() => {
-    if (enabled && isActive) void refresh();
-  }, [enabled, isActive, refresh]);
+    if (!enabled || !isActive) return;
+    const active = runtimeProjection?.turn.phase === "running"
+      || runtimeProjection?.turn.phase === "blocked"
+      || runtimeProjection?.turn.phase === "cancelling"
+      || runtimeProjection?.turn.phase === "recovering";
+    const timer = window.setInterval(
+      () => { void refresh({ manual: false }); },
+      active ? ACTIVE_PROJECTION_REFRESH_MS : IDLE_PROJECTION_REFRESH_MS,
+    );
+    return () => window.clearInterval(timer);
+  }, [enabled, isActive, refresh, runtimeProjection?.turn.phase]);
 
   const send = useCallback(async (
     prompt: string,
@@ -297,6 +329,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     const requestId = options.requestId
       ?? (pending?.prompt === text ? pending.requestId : crypto.randomUUID());
     pendingDispatchRef.current = { prompt: text, requestId };
+    beginProjectionMutation();
     setIsDispatching(true);
     try {
       const outcome = await dispatchNativeAgentIntent({
@@ -334,12 +367,13 @@ export function useNativeAgentSession<TMessage = unknown>({
     } finally {
       setIsDispatching(false);
     }
-  }, [identity, platform, refresh, sessionKey]);
+  }, [beginProjectionMutation, identity, platform, refresh, sessionKey]);
 
   const stop = useCallback(async () => {
+    const operationEpoch = beginProjectionMutation();
     const stoppedSessionId = projectionRef.current?.sessionId;
     const next = await stopNativeAgentSession<TMessage>(identity);
-    applyProjection(next);
+    if (operationEpoch === projectionOperationEpochRef.current) applyProjection(next);
     if (stoppedSessionId) {
       useNativeAgentProjectionStore.getState().markTurnStopped(
         sessionKey,
@@ -347,28 +381,31 @@ export function useNativeAgentSession<TMessage = unknown>({
       );
     }
     return next;
-  }, [applyProjection, identity, sessionKey]);
+  }, [applyProjection, beginProjectionMutation, identity, sessionKey]);
 
   const stopBackgroundTask = useCallback(async (taskId: string) => {
+    const operationEpoch = beginProjectionMutation();
     const next = await stopNativeAgentBackgroundTask<TMessage>({
       ...identity,
       taskId,
     });
-    applyProjection(next);
+    if (operationEpoch === projectionOperationEpochRef.current) applyProjection(next);
     return next;
-  }, [applyProjection, identity]);
+  }, [applyProjection, beginProjectionMutation, identity]);
 
   const dismissSuggestedPrompt = useCallback(async () => {
+    const operationEpoch = beginProjectionMutation();
     const next = await dismissNativeAgentSuggestedPrompt<TMessage>(identity);
-    applyProjection(next);
+    if (operationEpoch === projectionOperationEpochRef.current) applyProjection(next);
     return next;
-  }, [applyProjection, identity]);
+  }, [applyProjection, beginProjectionMutation, identity]);
 
   const updateControls = useCallback(async (update: NativeAgentControlUpdate) => {
+    const operationEpoch = beginProjectionMutation();
     const next = await updateNativeAgentControls<TMessage>({ ...identity, update });
-    applyProjection(next);
+    if (operationEpoch === projectionOperationEpochRef.current) applyProjection(next);
     return next;
-  }, [applyProjection, identity]);
+  }, [applyProjection, beginProjectionMutation, identity]);
 
   const resolveInteraction = useCallback(async (
     interactionId: string,
@@ -430,16 +467,21 @@ export function useNativeAgentSession<TMessage = unknown>({
     return refresh();
   }, [queueKey, refresh]);
   const retryRecoverableDispatch = useCallback(async () => {
+    const requestId = projectionRef.current?.recoverableDispatch?.requestId;
+    if (!requestId) {
+      return { outcome: "rejected" as const, error: "There is no recoverable dispatch" };
+    }
+    beginProjectionMutation();
     setIsDispatching(true);
     try {
-      const outcome = await retryNativeAgentDispatch(identity);
+      const outcome = await retryNativeAgentDispatch({ ...identity, requestId });
       if (outcome.outcome !== "unknown") pendingDispatchRef.current = null;
       await refresh();
       return outcome;
     } finally {
       setIsDispatching(false);
     }
-  }, [identity, refresh]);
+  }, [beginProjectionMutation, identity, refresh]);
   const listResumable = useCallback(
     () => listNativeAgentResumableSessions(identity),
     [identity],
@@ -448,14 +490,15 @@ export function useNativeAgentSession<TMessage = unknown>({
     providerSessionId: string,
     controls?: NativeAgentControlUpdate,
   ) => {
+    const operationEpoch = beginProjectionMutation();
     const next = await resumeNativeAgentSession<TMessage>({
       ...identity,
       providerSessionId,
       controls,
     });
-    applyProjection(next);
+    if (operationEpoch === projectionOperationEpochRef.current) applyProjection(next);
     return next;
-  }, [applyProjection, identity]);
+  }, [applyProjection, beginProjectionMutation, identity]);
   const fork = useCallback(
     (messageId?: string) => forkNativeAgentSession({ ...identity, messageId }),
     [identity],
@@ -469,10 +512,11 @@ export function useNativeAgentSession<TMessage = unknown>({
     [identity, refresh],
   );
   const refreshModels = useCallback(async () => {
+    const operationEpoch = beginProjectionMutation();
     const next = await refreshNativeAgentModels<TMessage>(identity);
-    applyProjection(next);
+    if (operationEpoch === projectionOperationEpochRef.current) applyProjection(next);
     return next;
-  }, [applyProjection, identity]);
+  }, [applyProjection, beginProjectionMutation, identity]);
   /**
    * Widen the transcript window, then reconcile.
    *
@@ -487,11 +531,16 @@ export function useNativeAgentSession<TMessage = unknown>({
     const next = Math.min(current * 2, MAX_MESSAGE_WINDOW);
     if (next <= current) return projectionRef.current;
     setMessageLimit(next);
+    const sequence = ++refreshSequenceRef.current;
+    const operationEpoch = projectionOperationEpochRef.current;
     const projection = await getNativeAgentProjection<TMessage>({
       ...identity,
       messageLimit: next,
     });
-    applyProjection(projection);
+    if (
+      sequence === refreshSequenceRef.current
+      && operationEpoch === projectionOperationEpochRef.current
+    ) applyProjection(projection);
     return projection;
   }, [applyProjection, identity, messageLimit]);
 

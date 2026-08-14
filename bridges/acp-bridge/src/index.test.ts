@@ -416,6 +416,56 @@ describe("ACP bridge", () => {
     expect(restored.runtime).toMatchObject({ commands: 3 });
   });
 
+  test("merges a usage carrier that arrives after its turn already resolved", async () => {
+    const bridge = await spawnBridge({ stateDirectory: await temporaryDirectory() });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-usage-late:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    const readSession = async () =>
+      await nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as {
+          status: string;
+          contextUsage?: Record<string, unknown>;
+        };
+
+    expect((await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "USAGE_LATE: report after the fact" }),
+    })).status).toBe(202);
+
+    // The prompt result is the only carrier this turn has while it is running,
+    // so the reasoning split is genuinely absent at this point rather than
+    // merely unobserved.
+    const settled = await waitFor(
+      readSession,
+      (value) => value.status === "idle" && value.contextUsage?.usedTokens === 900,
+    );
+    expect(settled.contextUsage).not.toHaveProperty("reasoningTokens");
+    const settledDurationMs = settled.contextUsage?.durationMs;
+    expect(settledDurationMs).toBeGreaterThanOrEqual(0);
+
+    const late = await waitFor(
+      readSession,
+      (value) => value.contextUsage?.reasoningTokens === 77,
+    );
+    // The carrier belongs to the turn that just ended, so it fills that turn's
+    // gap instead of being dropped or opening a new snapshot.
+    expect(late.contextUsage).toMatchObject({
+      usedTokens: 900,
+      inputTokens: 850,
+      outputTokens: 50,
+      reasoningTokens: 77,
+      source: "provider",
+    });
+    // No turn was in flight, so the elapsed time must be carried over rather
+    // than measured again from a clock this turn no longer owns.
+    expect(late.contextUsage?.durationMs).toBe(settledDurationMs);
+  });
+
   test("normalizes ACP tool calls, upserts updates, and rehydrates them after restart", async () => {
     const stateDirectory = await temporaryDirectory();
     const first = await spawnBridge({ stateDirectory });

@@ -1122,6 +1122,37 @@ describe("AgentNativeTab", () => {
       expect(screen.queryByRole("button", { name: /Context window/ })).toBeNull();
     });
 
+    test("renders the context wheel from the percentage the provider reported", async () => {
+      seedProjection({
+        contextUsage: {
+          usedTokens: 15_675,
+          maximumTokens: 500_000,
+          // Deliberately not 3%: the provider's own figure must win over the
+          // ratio this component could derive from the two token counts.
+          percentage: 42,
+          source: "provider",
+        },
+      });
+      render(<AgentNativeTab tabId="tab-bounded-usage" data={identity("grok")} isActive />);
+
+      expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Context window 42% used" })).toBeTruthy();
+    });
+
+    test("derives the context wheel percentage when the provider reports only a maximum", async () => {
+      seedProjection({
+        contextUsage: {
+          usedTokens: 15_675,
+          maximumTokens: 500_000,
+          source: "provider",
+        },
+      });
+      render(<AgentNativeTab tabId="tab-derived-usage" data={identity("grok")} isActive />);
+
+      expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Context window 3% used" })).toBeTruthy();
+    });
+
     test("routes a running-turn /steer to the session action instead of the queue", async () => {
       seedProjection({ phase: "running", actions: { steer: true } });
       render(<AgentNativeTab tabId="tab-steer" data={identity("codex")} isActive />);

@@ -4128,6 +4128,20 @@ describe("AgentInfoButton ACP agents", () => {
     open();
 
     expect(screen.getByRole("heading", { name: "Grok Build" })).toBeTruthy();
+    // The bridge reports no window of its own; the backend joins the selected
+    // model's `contextWindow` onto the snapshot, so a Grok session that has one
+    // must render the same meter the first-party providers do.
+    expect(screen.getByText("Context")).toBeTruthy();
+    expect(screen.getByText("3.1%")).toBeTruthy();
+    expect(
+      screen.getByText((_content, element) => element?.textContent === "16k / 500k"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText((_content, element) => element?.textContent === "484k available"),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("progressbar", { name: "3 percent of context used" }),
+    ).toBeTruthy();
     expect(metricValue("Input")).toBe("16k");
     expect(metricValue("Output")).toBe("36");
     expect(metricValue("Cache read")).toBe("5.9k");
@@ -4178,8 +4192,17 @@ describe("AgentInfoButton ACP agents", () => {
 
     expect(metricValue("Input")).toBe("200");
     expect(metricValue("Output")).toBe("22");
+    // Assert the meter's own elements rather than the word "available": the
+    // runtime panel below renders "state unavailable"/"version unavailable" for
+    // an agent that reports neither, so a substring match there would pass or
+    // fail for reasons that have nothing to do with the context window.
     expect(screen.queryByText("Context")).toBeNull();
-    expect(popover().textContent).not.toContain("available");
+    expect(
+      screen.queryByRole("progressbar", { name: /percent of context used/ }),
+    ).toBeNull();
+    expect(
+      screen.queryAllByText((_content, element) => /^\S+ available$/.test(element?.textContent ?? "")),
+    ).toHaveLength(0);
     expect(popover().textContent).toContain("Provider reported");
   });
 

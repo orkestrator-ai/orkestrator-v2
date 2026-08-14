@@ -806,6 +806,44 @@ lines.on("line", (line) => {
       });
       return;
     }
+    // A turn whose last usage carrier arrives *after* the prompt result has
+    // already resolved, which is the only way an agent can report tokens while
+    // the bridge has no turn in flight. The late field must still land on the
+    // turn it describes rather than being dropped.
+    if (prompt.startsWith("USAGE_LATE")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Counted late." } },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          stopReason: "end_turn",
+          _meta: { totalTokens: 900, usage: { inputTokens: 850, outputTokens: 50 } },
+        },
+      });
+      setTimeout(() => {
+        write({
+          jsonrpc: "2.0",
+          method: "_x.ai/session_notification",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "turn_completed",
+              usage: { reasoningTokens: 77 },
+            },
+          },
+        });
+        // Long enough that a caller polling every 20ms reliably observes the
+        // turn settle first, so the test can assert both halves of the merge.
+      }, 250);
+      return;
+    }
     // A turn that reports everything the agent info panel can show: the MCP
     // inventory and command list as notifications, then the same token counts
     // Grok repeats across a session notification and the prompt result.

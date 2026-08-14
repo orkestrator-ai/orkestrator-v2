@@ -31,6 +31,9 @@ const claudeConnection: BridgeConnection = {
   requestTimeoutMs: 25,
 };
 
+/** Mirrors `MAX_BODY_BYTES` in `bridges/acp-bridge/src/index.ts`. */
+const ACP_BRIDGE_MAX_BODY_BYTES = 2 * 1024 * 1024;
+
 type RequestRecord = {
   url: string;
   init: RequestInit;
@@ -4999,6 +5002,58 @@ describe("HTTP build pipeline provider (ACP)", () => {
       reasoningEffort: "medium",
       mode: "build",
     });
+  });
+
+  test("stages and forwards image attachments to the ACP prompt route", async () => {
+    const { provider, requests } = httpProvider((url) =>
+      url.endsWith("/session/create")
+        ? Response.json({ sessionId: "cursor-1" })
+        : Response.json({ accepted: true }, { status: 202 }), cursorConnection);
+
+    await provider.createSession("build", "Cursor");
+    // Both ACP agents read inline image content blocks, so an attachment is
+    // dispatched like any other provider's rather than refused here.
+    await provider.send("cursor-1", "Look at this", {
+      requestId: "request-1",
+      attachments: [{ type: "image", path: "/workspace/shot.png", filename: "shot.png" }],
+      images: [{ filename: "pasted.png", data: "AA==" }],
+    });
+
+    // Exact, not partial: the staged `dataUrl` must be gone. The ACP bridge
+    // reads the workspace file itself and ignores it, and its request body is
+    // capped, so forwarding a copy only costs that budget.
+    expect(JSON.parse(String(requests[1]?.init.body)).attachments).toEqual([
+      { type: "image", path: "/workspace/shot.png", filename: "shot.png" },
+      {
+        type: "image",
+        path: "/workspace/.orkestrator/initial-prompt/pasted.png",
+        filename: "pasted.png",
+      },
+    ]);
+  });
+
+  test("keeps a staged image out of the ACP prompt body", async () => {
+    const { provider, requests } = httpProvider((url) =>
+      url.endsWith("/session/create")
+        ? Response.json({ sessionId: "cursor-1" })
+        : Response.json({ accepted: true }, { status: 202 }), cursorConnection);
+
+    await provider.createSession("build", "Cursor");
+    // 3MB of image data: inside the ACP bridge's 8MB per-image ceiling, and far
+    // outside its request-body limit if the data URL travelled alongside the
+    // path. A screenshot this size used to come back as a terminal HTTP 413.
+    await provider.send("cursor-1", "Look at this", {
+      requestId: "request-1",
+      images: [{ filename: "pasted.png", data: "A".repeat(4 * 1024 * 1024) }],
+    });
+
+    const body = String(requests[1]?.init.body);
+    expect(Buffer.byteLength(body)).toBeLessThan(ACP_BRIDGE_MAX_BODY_BYTES);
+    expect(JSON.parse(body).attachments).toEqual([{
+      type: "image",
+      path: "/workspace/.orkestrator/initial-prompt/pasted.png",
+      filename: "pasted.png",
+    }]);
   });
 
   test("surfaces the bounded ACP session-creation error detail", async () => {

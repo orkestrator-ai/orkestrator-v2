@@ -4,7 +4,7 @@ import { createServer } from "node:net";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 // The repository-wide test preload installs a browser-like fetch for UI tests.
@@ -13,6 +13,11 @@ const here = dirname(fileURLToPath(import.meta.url));
 const nativeFetch = Bun.fetch;
 const children = new Set<ChildProcessWithoutNullStreams>();
 const temporaryDirectories = new Set<string>();
+/** Smallest valid PNG, so attachment tests exercise real image bytes. */
+const ONE_PIXEL_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64",
+);
 
 afterEach(async () => {
   for (const child of children) child.kill("SIGTERM");
@@ -2229,5 +2234,195 @@ describe("ACP bridge", () => {
     const catalog = await nativeFetch(`${base}/global/models`, { headers })
       .then((response) => response.json()) as { models: Array<{ id: string }> };
     expect(catalog.models.map((model) => model.id)).toContain("grok-next");
+  });
+
+  for (const acpProvider of ["cursor", "grok"] as const) {
+    test(`sends and rehydrates workspace images for ${acpProvider}`, async () => {
+      const workspace = await temporaryDirectory();
+      const stateDirectory = await temporaryDirectory();
+      const blocksFile = resolve(workspace, "prompt-blocks.log");
+      const filename = "screen #1?.png";
+      const imagePath = resolve(workspace, filename);
+      await fs.writeFile(imagePath, ONE_PIXEL_PNG);
+      const bridgeEnv = {
+        ACP_PROVIDER: acpProvider,
+        CWD: workspace,
+        FAKE_ACP_PROMPT_BLOCKS_FILE: blocksFile,
+        // Grok currently understates this capability but accepts the standard
+        // image block; keep that compatibility case explicit in the harness.
+        FAKE_ACP_IMAGE_CAPABILITY: acpProvider === "cursor" ? "true" : "false",
+      };
+      const first = await spawnBridge({ stateDirectory, env: bridgeEnv });
+      const created = await nativeFetch(`${first.base}/session/create`, {
+        method: "POST",
+        headers: first.headers,
+      }).then((response) => response.json()) as { id: string };
+
+      const dispatched = await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers: first.headers,
+        body: JSON.stringify({
+          prompt: "DIRECT:describe it",
+          requestId: "image-1",
+          // Relative to the workspace, as a renderer pick from the file tree is.
+          attachments: [{ type: "image", path: filename, filename }],
+        }),
+      });
+      expect(dispatched.status).toBe(202);
+      await waitFor(
+        () => nativeFetch(`${first.base}/session/${created.id}`, { headers: first.headers })
+          .then((response) => response.json()) as Promise<{ status: string }>,
+        (session) => session.status === "idle",
+      );
+
+      const blocks = JSON.parse((await fs.readFile(blocksFile, "utf8")).trim()) as Array<{
+        type: string;
+        text?: string;
+        mimeType?: string;
+        data?: string;
+      }>;
+      expect(blocks[0]).toMatchObject({ type: "text", text: "DIRECT:describe it" });
+      // The bytes must reach the model natively; a path in the prompt text only
+      // works if the agent happens to open it, and neither agent reads images
+      // through its own file tools.
+      expect(blocks[1]).toEqual({
+        type: "image",
+        mimeType: "image/png",
+        data: ONE_PIXEL_PNG.toString("base64"),
+      });
+
+      const transcript = await nativeFetch(`${first.base}/session/${created.id}`, {
+        headers: first.headers,
+      }).then((response) => response.json()) as {
+        messages: Array<{ role: string; parts: Array<Record<string, unknown>> }>;
+      };
+      const user = transcript.messages.find((message) => message.role === "user");
+      const filePart = user?.parts.find((part) => part.type === "file");
+      // The encoded basename is pinned literally rather than recomputed with
+      // `pathToFileURL`: restating the implementation would still pass against
+      // the `file://${path}` template this replaced, which leaves `#` parsing as
+      // a fragment and resolves the preview to the wrong file or none at all.
+      // Only the temporary directory is derived, since it varies per run.
+      expect(filePart).toEqual({
+        type: "file",
+        content: filename,
+        fileUrl: `${pathToFileURL(workspace).href}/screen%20%231%3F.png`,
+        sourcePartId: expect.any(String),
+        sourceMessageId: expect.any(String),
+      });
+
+      await stopChild(first.child);
+      const restarted = await spawnBridge({ stateDirectory, env: bridgeEnv });
+      const restored = await nativeFetch(`${restarted.base}/session/${created.id}`, {
+        headers: restarted.headers,
+      }).then((response) => response.json()) as {
+        messages: Array<{ role: string; parts: Array<Record<string, unknown>> }>;
+      };
+      expect(restored.messages.find((message) => message.role === "user")?.parts)
+        .toContainEqual(filePart);
+    });
+  }
+
+  test("dispatches an image-only prompt and indexes every attachment part", async () => {
+    const workspace = await temporaryDirectory();
+    const blocksFile = resolve(workspace, "prompt-blocks.log");
+    await fs.writeFile(resolve(workspace, "first.png"), ONE_PIXEL_PNG);
+    await fs.writeFile(resolve(workspace, "second.png"), ONE_PIXEL_PNG);
+    const { base, headers } = await spawnBridge({ env: {
+      CWD: workspace,
+      FAKE_ACP_PROMPT_BLOCKS_FILE: blocksFile,
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    const dispatched = await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        // Attaching a picture with no message at all is a normal send, so an
+        // empty prompt with attachments must not be refused as an empty turn.
+        prompt: "",
+        requestId: "image-only-1",
+        attachments: [
+          { type: "image", path: "first.png", filename: "first.png" },
+          { type: "image", path: "second.png", filename: "second.png" },
+        ],
+      }),
+    });
+    expect(dispatched.status).toBe(202);
+    await waitFor(
+      () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{ status: string }>,
+      (session) => session.status === "idle",
+    );
+
+    const blocks = JSON.parse((await fs.readFile(blocksFile, "utf8")).trim()) as Array<{
+      type: string;
+    }>;
+    // No empty text block: an agent handed `{ type: "text", text: "" }` can read
+    // it as an instruction, and both agents accept an image-only prompt.
+    expect(blocks.map((block) => block.type)).toEqual(["image", "image"]);
+
+    const user = await nativeFetch(`${base}/session/${created.id}`, { headers })
+      .then((response) => response.json())
+      .then((session) => (session as {
+        messages: Array<{ role: string; content: string; parts: Array<Record<string, unknown>> }>;
+      }).messages.find((message) => message.role === "user"));
+    expect(user?.content).toBe("");
+    expect(user?.parts.map((part) => part.type)).toEqual(["file", "file"]);
+    expect(user?.parts.map((part) => part.content)).toEqual(["first.png", "second.png"]);
+    // Part ids stay one-based across the attachments so the second image cannot
+    // reuse the id the text part would have taken.
+    const messageId = user?.parts[0]?.sourceMessageId;
+    expect(typeof messageId).toBe("string");
+    expect(user?.parts.map((part) => part.sourcePartId))
+      .toEqual([`${messageId}:1`, `${messageId}:2`]);
+  });
+
+  test("refuses attachments the bridge cannot safely read and leaves the turn dispatchable", async () => {
+    const workspace = await temporaryDirectory();
+    const outside = await temporaryDirectory();
+    const blocksFile = resolve(workspace, "prompt-blocks.log");
+    await fs.writeFile(resolve(outside, "secret.png"), ONE_PIXEL_PNG);
+    await fs.writeFile(resolve(workspace, "notes.txt"), "not an image");
+    const { base, headers } = await spawnBridge({ env: {
+      CWD: workspace,
+      FAKE_ACP_PROMPT_BLOCKS_FILE: blocksFile,
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+    const send = (attachment: unknown) => nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: "DIRECT:describe it",
+        requestId: "rejected-1",
+        attachments: [attachment],
+      }),
+    });
+
+    const escaped = await send({ type: "image", path: resolve(outside, "secret.png") });
+    expect(escaped.status).toBe(400);
+    expect(await escaped.json()).toMatchObject({
+      error: expect.stringContaining("workspace") as never,
+    });
+
+    const notAnImage = await send({ type: "image", path: "notes.txt" });
+    expect(notAnImage.status).toBe(400);
+
+    const notAnAttachment = await send({ type: "file", path: "notes.txt" });
+    expect(notAnAttachment.status).toBe(400);
+
+    // A rejected attachment never started a turn, so the same requestId must
+    // still be dispatchable rather than parked as an accepted prompt.
+    await fs.writeFile(resolve(workspace, "ok.png"), ONE_PIXEL_PNG);
+    const accepted = await send({ type: "image", path: "ok.png" });
+    expect(accepted.status).toBe(202);
+    await waitFor(
+      () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{ status: string }>,
+      (session) => session.status === "idle",
+    );
+    expect((await fs.readFile(blocksFile, "utf8")).trim().split("\n")).toHaveLength(1);
   });
 });

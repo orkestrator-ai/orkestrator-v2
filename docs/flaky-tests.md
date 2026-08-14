@@ -10,6 +10,50 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `Electron tmux backend command registration` aggregate launch/cleanup failures (`tests/unit/electron/tmux-backend.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-full-tests-acp-image-fixes.log`
+- **Worker configuration:** The root and agent-support group ran `bun test ./tests ./e2e/agent-testing/artifact-sanitizer.test.ts ./test-fixtures/agent-project/server.test.ts --parallel=4` while the workspace, bridge, and protocol-lockfile groups ran concurrently.
+- **Failure:** Five cases failed in one stateful owning file: `writes an owner-only agent MCP config and includes it in a local Claude launch` timed out after 5,000 ms (5,002.60 ms); `does not create an agent MCP config when Claude lacks the launch flag` then requested a connection the fixture declares unreachable (344.24 ms); `serializes stop behind an in-flight start so no tmux session is orphaned` timed out waiting for its condition (2,006.39 ms); `keeps per-environment hook state under the shared runtime root and removes it on stop` reached a missing fake Claude executable (621.98 ms); and `environment teardown kills live sessions, restores settings and removes the runtime root` found no fake tmux log (1,675.57 ms).
+- **Suite counts:** Root and agent-support group: 3,640 total, 3,632 passed, 1 skipped, 7 failed, and 2 between-test errors. The other two root failures are recorded separately below.
+- **Isolated rerun:** `set -o pipefail; bun test ./tests/unit/electron/tmux-backend.test.ts 2>&1 | tee /tmp/orkestrator-tmux-backend-isolated-acp-image-fixes.log` -> 173 passed, 0 failed, 615 assertions in 74.19 seconds; all five affected cases passed.
+- **Hypothesis:** The first failure is a bare five-second timeout in a process-heavy fixture while four aggregate groups compete for process startup. Because the file shares fake runtime/module state across its lifecycle tests, interruption of that first case's cleanup plausibly caused the four later missing-runtime and ordering failures; the complete file rebuilt and cleaned every fixture successfully in a fresh isolated process. No product code touched by the ACP image change appears in these stacks.
+
+## `download-claude.sh > downloads, extracts, probes, and cleans up on Darwin/x86_64` (`tests/unit/download-scripts.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-full-tests-acp-image-fixes.log`
+- **Worker configuration:** The root and agent-support group used four Bun workers while the workspace, bridge, and protocol-lockfile groups ran concurrently.
+- **Failure:** `this test timed out after 15000ms` (duration: 15,772.04 ms).
+- **Suite counts:** Root and agent-support group: 3,640 total, 3,632 passed, 1 skipped, 7 failed, and 2 between-test errors.
+- **Isolated rerun:** `set -o pipefail; bun test ./tests/unit/download-scripts.test.ts 2>&1 | tee /tmp/orkestrator-download-scripts-isolated-acp-image-fixes.log` -> 33 passed, 0 failed, 158 assertions in 27.11 seconds; the affected case passed in 3,951.34 ms.
+- **Hypothesis:** The case launches a shell download/extract/probe harness and exceeded only its outer wall-clock budget during a run with several other process-heavy groups. Its functional assertions completed more than eleven seconds inside that budget in isolation; no download or toolchain code changed in this work.
+
+## `NativeMessage > derives image mime types from the container attachment extension` (`tests/unit/components/NativeMessage.test.tsx`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-full-tests-acp-image-fixes.log`
+- **Worker configuration:** The root and agent-support group used four Bun workers while the workspace, bridge, and protocol-lockfile groups ran concurrently.
+- **Failure:** The asynchronous two-preview case failed after 13,950.37 ms. Bun's retained failure payload expanded the React fiber/DOM object rather than preserving a concise matcher message.
+- **Suite counts:** Root and agent-support group: 3,640 total, 3,632 passed, 1 skipped, 7 failed, and 2 between-test errors.
+- **Isolated rerun:** `set -o pipefail; bun test ./tests/unit/components/NativeMessage.test.tsx 2>&1 | tee /tmp/orkestrator-native-message-isolated-acp-image-fixes.log` -> 93 passed, 0 failed, 296 assertions in 1.81 seconds; the affected case passed in 43.01 ms.
+- **Hypothesis:** The case opens one asynchronous image preview, closes it through React, then opens a second. The same transitions completed immediately in a clean process, while the aggregate run was already experiencing severe process and renderer scheduling contention. The reviewed ACP fix changes bridge URL creation only; this root-level renderer test uses fixed `/workspace/...` paths and did not execute that code.
+
+## `Codex session titles > rejects spawn, nonzero, signal, and invalid-output failures and cleans temporary state` (`bridges/codex-bridge/src/session-titles.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-full-tests-acp-image-fixes.log`
+- **Worker configuration:** The bridge group ran `bun test bridges --parallel=2` while the workspace, root, and protocol-lockfile groups ran concurrently.
+- **Failure:** `this test timed out after 5000ms` (duration: 6,205.38 ms).
+- **Suite counts:** Bridge group: 2,394 total, 2,382 passed, 11 skipped, and 1 failed.
+- **Isolated rerun:** `set -o pipefail; bun test ./bridges/codex-bridge/src/session-titles.test.ts 2>&1 | tee /tmp/orkestrator-session-titles-isolated-acp-image-fixes.log` -> 17 passed, 0 failed, 90 assertions in 6.70 seconds; the affected case passed in 1,918.92 ms.
+- **Hypothesis:** The case intentionally exercises several child-process failure modes under one five-second outer budget. It exceeded that budget only while the bridge and root process-heavy suites overlapped and completed well inside it when isolated; neither session-title code nor its tests changed in this work.
+
 ## `Electron tmux backend command registration` timeout cluster (`tests/unit/electron/tmux-backend.test.ts`)
 
 - **Status:** open

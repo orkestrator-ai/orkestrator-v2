@@ -115,7 +115,12 @@ lines.on("line", (line) => {
         protocolVersion: 1,
         // Agents that cannot resume a rollout must be rejected rather than
         // silently reattached to a session they have never heard of.
-        agentCapabilities: { loadSession: process.env.FAKE_ACP_NO_LOAD_SESSION !== "1" },
+        agentCapabilities: {
+          loadSession: process.env.FAKE_ACP_NO_LOAD_SESSION !== "1",
+          ...(process.env.FAKE_ACP_IMAGE_CAPABILITY
+            ? { promptCapabilities: { image: process.env.FAKE_ACP_IMAGE_CAPABILITY === "true" } }
+            : {}),
+        },
       },
     });
     return;
@@ -234,6 +239,20 @@ lines.on("line", (line) => {
     const prompt = typeof params?.prompt?.[0]?.text === "string" ? params.prompt[0].text : "";
     if (process.env.FAKE_ACP_COUNTER_FILE) {
       appendFileSync(process.env.FAKE_ACP_COUNTER_FILE, "prompt\n");
+    }
+    if (process.env.FAKE_ACP_PROMPT_BLOCKS_FILE) {
+      appendFileSync(
+        process.env.FAKE_ACP_PROMPT_BLOCKS_FILE,
+        `${JSON.stringify(params?.prompt ?? [])}\n`,
+      );
+    }
+    // An image-only prompt carries no text block, so none of the keyword
+    // branches below can match it. Ending the turn is what a real agent does;
+    // falling through would park it on a permission request and hide whatever
+    // blocks the bridge actually sent.
+    if (!params?.prompt?.some((block) => typeof block.text === "string")) {
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
     }
     if (prompt.startsWith("DIRECT:")) {
       write({

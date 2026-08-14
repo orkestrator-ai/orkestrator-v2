@@ -55,6 +55,28 @@ export interface AgentModelRef {
 
 export type AgentConversationMode = "build" | "plan";
 
+/**
+ * Provider-neutral composer snapshot. ACP adapters normalize vendor wire
+ * (`configOptions`, `models._meta`, `session/set_model`) into this shape before
+ * any renderer or backend catalog consumer sees it.
+ */
+export interface NativeAgentComposerState {
+  models: AgentModel[];
+  selectedModelId?: string;
+  selectedReasoningId?: string;
+  fastModeEnabled: boolean | null;
+  fastModeAvailable: boolean;
+  selectedModeId?: AgentConversationMode;
+  modes: Array<{ id: AgentConversationMode; label: string }>;
+}
+
+export const EMPTY_NATIVE_AGENT_COMPOSER_STATE: NativeAgentComposerState = {
+  models: [],
+  fastModeEnabled: null,
+  fastModeAvailable: false,
+  modes: [],
+};
+
 export type NativeAgentConnectionState = "connecting" | "connected" | "error";
 
 /**

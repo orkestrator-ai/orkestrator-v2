@@ -8,6 +8,21 @@ import {
   parseParentPid,
   startParentWatchdog,
 } from "@orkestrator/protocol/parent-watchdog";
+import type { NativeAgentComposerState } from "@orkestrator/protocol/native-agent";
+import {
+  applyConfigOptionUpdate,
+  applyCurrentModeUpdate,
+  applyGrokCatalogUpdate,
+  applyGrokModelChange,
+  emptyComposerState,
+  mergeComposerCatalog,
+  normalizeAcpSessionConfig,
+  parsePersistedAcpSessionConfig,
+  parsePersistedComposerState,
+  planComposerApply,
+  type AcpComposerPatch,
+  type AcpNormalizedSessionConfig,
+} from "./session-config.js";
 
 type Provider = "cursor" | "grok";
 type JsonObject = Record<string, unknown>;
@@ -98,6 +113,11 @@ interface SessionState {
   /** Messages evicted from the front, so absolute indices stay stable. */
   droppedMessages: number;
   /**
+   * Vendor ACP wire (configOptions, Grok models._meta, Cursor modes) lives on
+   * `sessionConfig.wire` only. Public HTTP snapshots expose `composer`.
+   */
+  sessionConfig: AcpNormalizedSessionConfig;
+  /**
    * A turn that has been accepted but not yet handed to the agent. Transient
    * and deliberately not persisted: a bridge restart resolves the same question
    * through the prompt journal, which records an unfinished turn as ambiguous.
@@ -125,6 +145,8 @@ interface PersistedSession {
   revision: number;
   structured: Array<[string, unknown]>;
   promptJournal: PromptJournalEntry[];
+  composer?: NativeAgentComposerState;
+  sessionConfig?: AcpNormalizedSessionConfig;
 }
 
 interface PersistedState {
@@ -153,6 +175,13 @@ let anonymousSessionCreations = 0;
 let persistenceTail = Promise.resolve();
 let persistenceScheduled = false;
 let shuttingDown = false;
+let catalogCache: NativeAgentComposerState | null = null;
+let catalogProbe: Promise<NativeAgentComposerState> | null = null;
+
+interface AcpSpawnOptions {
+  model?: string;
+  effort?: string;
+}
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_LINE_BYTES = 4 * 1024 * 1024;
@@ -197,12 +226,13 @@ class AcpProcess {
   #closed = false;
   #stdoutBuffer = Buffer.alloc(0);
   onUpdate: (params: JsonObject) => void = () => undefined;
+  onVendor: (method: string, params: JsonObject) => void = () => undefined;
   onPermission: (id: number, params: JsonObject) => void = (id) => {
     this.respond(id, { outcome: { outcome: "cancelled" } });
   };
   onClose: (error: Error) => void = () => undefined;
 
-  constructor() {
+  constructor(spawnOptions: AcpSpawnOptions = {}) {
     // Both agents expose their permissive command setting as a global flag, so
     // keep it before the ACP subcommand.
     //
@@ -226,8 +256,19 @@ class AcpProcess {
     // in; `startLocalServerUnlocked` pins it to "0" after inheriting the
     // parent environment for exactly that reason.
     const args = provider === "cursor"
-      ? ["--force", ...(approveProjectMcps ? ["--approve-mcps"] : []), "acp"]
-      : ["--always-approve", "agent", "stdio"];
+      ? [
+          "--force",
+          ...(approveProjectMcps ? ["--approve-mcps"] : []),
+          ...(spawnOptions.model ? ["--model", spawnOptions.model] : []),
+          "acp",
+        ]
+      : [
+          "--always-approve",
+          "agent",
+          ...(spawnOptions.model ? ["--model", spawnOptions.model] : []),
+          ...(spawnOptions.effort ? ["--reasoning-effort", spawnOptions.effort] : []),
+          "stdio",
+        ];
     this.child = spawn(executable, args, {
       cwd: workingDirectory,
       env: process.env,
@@ -259,6 +300,8 @@ class AcpProcess {
       clientCapabilities: {
         fs: { readTextFile: false, writeTextFile: false },
         terminal: false,
+        session: { configOptions: { boolean: {} } },
+        _meta: { parameterizedModelPicker: true },
       },
       clientInfo: { name: "orkestrator", title: "Orkestrator", version: "1.0.0" },
     }, RPC_TIMEOUT_MS, signal);
@@ -385,8 +428,16 @@ class AcpProcess {
       return;
     }
     if (typeof message.id === "number" && typeof message.method === "string") {
+      const params = isObject(message.params) ? message.params : {};
       if (message.method === "session/request_permission") {
-        this.onPermission(message.id, isObject(message.params) ? message.params : {});
+        this.onPermission(message.id, params);
+      } else if (isVendorModelUpdate(message.method, params)) {
+        // A model update carries state this bridge does support, so answer it
+        // even when the vendor chose the request form over a notification.
+        // Everything else is genuinely unimplemented and must say so rather
+        // than acknowledge a capability we do not have.
+        this.onVendor(message.method, params);
+        this.respond(message.id, {});
       } else {
         this.#write({
           jsonrpc: "2.0",
@@ -398,6 +449,11 @@ class AcpProcess {
     }
     if (message.method === "session/update" && isObject(message.params)) {
       this.onUpdate(message.params);
+      return;
+    }
+    if (typeof message.method === "string") {
+      const params = isObject(message.params) ? message.params : {};
+      if (isVendorModelUpdate(message.method, params)) this.onVendor(message.method, params);
     }
   }
 
@@ -418,7 +474,11 @@ function activeSessionReservations(): number {
   return sessions.size + sessionCreations.size + anonymousSessionCreations;
 }
 
-async function createSession(clientSessionKey?: string, signal?: AbortSignal): Promise<SessionState> {
+async function createSession(
+  clientSessionKey?: string,
+  signal?: AbortSignal,
+  spawnOptions: AcpSpawnOptions & AcpComposerPatch = {},
+): Promise<SessionState> {
   if (clientSessionKey) {
     const existingId = clientSessionKeys.get(clientSessionKey);
     if (existingId) {
@@ -430,7 +490,7 @@ async function createSession(clientSessionKey?: string, signal?: AbortSignal): P
   }
   if (activeSessionReservations() >= MAX_SESSIONS) throw new HttpError(429, "ACP session limit reached");
 
-  const operation = createSessionReserved(clientSessionKey, signal);
+  const operation = createSessionReserved(clientSessionKey, signal, spawnOptions);
   if (clientSessionKey) sessionCreations.set(clientSessionKey, operation);
   else anonymousSessionCreations += 1;
   try {
@@ -444,8 +504,12 @@ async function createSession(clientSessionKey?: string, signal?: AbortSignal): P
   }
 }
 
-async function createSessionReserved(clientSessionKey?: string, signal?: AbortSignal): Promise<SessionState> {
-  const child = new AcpProcess();
+async function createSessionReserved(
+  clientSessionKey?: string,
+  signal?: AbortSignal,
+  spawnOptions: AcpSpawnOptions & AcpComposerPatch = {},
+): Promise<SessionState> {
+  const child = new AcpProcess({ model: spawnOptions.model, effort: spawnOptions.effort ?? spawnOptions.reasoningId });
   try {
     await child.initialize(signal);
     const created = await child.request(
@@ -458,6 +522,8 @@ async function createSessionReserved(clientSessionKey?: string, signal?: AbortSi
       throw new Error(`${provider} returned an invalid ACP session`);
     }
     const id = randomBytes(16).toString("hex");
+    const sessionConfig = normalizeAcpSessionConfig(provider, created);
+    rememberCatalog(sessionConfig.composer);
     const state: SessionState = {
       id,
       ...(clientSessionKey ? { clientSessionKey } : {}),
@@ -473,13 +539,30 @@ async function createSessionReserved(clientSessionKey?: string, signal?: AbortSi
       uncheckedTranscriptBytes: 0,
       currentTurnOutput: null,
       droppedMessages: 0,
-      dispatching: false,
+      sessionConfig,
+      // The session is reachable from `sessions` before its initial
+      // configuration finishes, so hold the same claim the config and prompt
+      // routes take rather than leaving a window where both see it idle.
+      dispatching: true,
     };
     attachChild(state, child);
     sessions.set(id, state);
     if (clientSessionKey) clientSessionKeys.set(clientSessionKey, id);
-    await persistState();
-    return state;
+    try {
+      const patch = composerPatchFromSpawn(spawnOptions);
+      if (patch) await applyComposerPatch(state, patch, signal);
+      await persistState();
+      state.dispatching = false;
+      return state;
+    } catch (error) {
+      state.dispatching = false;
+      if (sessions.get(id) === state) sessions.delete(id);
+      if (clientSessionKey && clientSessionKeys.get(clientSessionKey) === id) {
+        clientSessionKeys.delete(clientSessionKey);
+      }
+      clearApprovals(state);
+      throw error;
+    }
   } catch (error) {
     await child.close();
     throw error;
@@ -489,6 +572,14 @@ async function createSessionReserved(clientSessionKey?: string, signal?: AbortSi
 function attachChild(state: SessionState, child: AcpProcess): void {
   state.child = child;
   child.onUpdate = (params) => applySessionUpdate(state, params);
+  child.onVendor = (method, params) => {
+    // Same generation rule as `onClose` below: a superseded child can emit long
+    // after a replacement attached, and letting it rewrite `sessionConfig`
+    // would point the live session — and the process-wide catalogue — at a
+    // catalogue the attached agent never advertised.
+    if (state.child !== child || sessions.get(state.id) !== state) return;
+    applyVendorUpdate(state, method, params);
+  };
   child.onPermission = (requestId, params) => parkPermission(state, requestId, params);
   child.onClose = (error) => {
     // Only the currently attached child owns this session's approvals. A
@@ -520,12 +611,22 @@ async function ensureSessionProcess(state: SessionState, signal?: AbortSignal): 
       throw new HttpError(410, `${provider} cannot reload persisted ACP sessions`);
     }
     attachChild(state, child);
-    await child.request("session/load", {
+    const loaded = await child.request("session/load", {
       cwd: workingDirectory,
       additionalDirectories: [],
       mcpServers: [],
       sessionId: state.acpSessionId,
     }, RPC_TIMEOUT_MS, signal);
+    if (isObject(loaded)) {
+      const sessionConfig = normalizeAcpSessionConfig(provider, {
+        ...loaded,
+        sessionId: state.acpSessionId,
+      });
+      if (sessionConfig.composer.models.length > 0 || sessionConfig.composer.modes.length > 0) {
+        state.sessionConfig = sessionConfig;
+        rememberCatalog(sessionConfig.composer);
+      }
+    }
     state.status = "idle";
     state.error = undefined;
     state.revision += 1;
@@ -601,13 +702,34 @@ function permissionTitle(params: JsonObject): string {
 }
 
 function applySessionUpdate(state: SessionState, params: JsonObject): void {
-  if (params.sessionId !== state.acpSessionId || !isObject(params.update) || state.outputTruncated) return;
+  if (params.sessionId !== state.acpSessionId || !isObject(params.update)) return;
   const update = params.update;
   const kind = typeof update.sessionUpdate === "string"
     ? update.sessionUpdate
     : typeof update.type === "string"
       ? update.type
       : "";
+  if (kind === "config_option_update") {
+    state.sessionConfig = applyConfigOptionUpdate(provider, state.sessionConfig, update);
+    rememberCatalog(state.sessionConfig.composer);
+    state.revision += 1;
+    schedulePersist();
+    return;
+  }
+  if (kind === "current_mode_update") {
+    const modeId = typeof update.currentModeId === "string"
+      ? update.currentModeId
+      : typeof update.modeId === "string"
+        ? update.modeId
+        : "";
+    if (modeId) {
+      state.sessionConfig = applyCurrentModeUpdate(state.sessionConfig, modeId);
+      state.revision += 1;
+      schedulePersist();
+    }
+    return;
+  }
+  if (state.outputTruncated) return;
   if (kind === "tool_call" || kind === "tool_call_update") {
     applyToolCallUpdate(state, update, kind === "tool_call");
     return;
@@ -1197,6 +1319,7 @@ function publicSession(state: SessionState): JsonObject {
     baseIndex: state.droppedMessages,
     revision: state.revision,
     sessionId: state.id,
+    composer: state.sessionConfig.composer,
   };
 }
 
@@ -1217,6 +1340,7 @@ function messageWindow(state: SessionState, fromIndex: number | null): JsonObjec
     revision: state.revision,
     status: state.status,
     error: state.error,
+    composer: state.sessionConfig.composer,
   };
 }
 
@@ -1269,6 +1393,10 @@ async function route(
   if (url.pathname === "/global/auth-check" && request.method === "GET") {
     return json(response, 200, { ok: true });
   }
+  if (url.pathname === "/global/models" && request.method === "GET") {
+    const models = await listNormalizedModels(clientSignal);
+    return json(response, 200, { models });
+  }
   if (url.pathname === "/session/create" && request.method === "POST") {
     const body = await readJson(request);
     const rawClientSessionKey = typeof body.clientSessionKey === "string" ? body.clientSessionKey.trim() : "";
@@ -1276,10 +1404,15 @@ async function route(
       return json(response, 400, { error: "clientSessionKey is too long" });
     }
     const clientSessionKey = rawClientSessionKey || undefined;
-    const state = await createSession(clientSessionKey || undefined, clientSignal);
+    const spawnOptions = parseComposerPatch(body) ?? {};
+    const state = await createSession(clientSessionKey, clientSignal, {
+      ...spawnOptions,
+      model: spawnOptions.modelId,
+      effort: spawnOptions.reasoningId,
+    });
     return json(response, 201, publicSession(state));
   }
-  const match = /^\/session\/([^/]+)(?:\/(messages|status|activity|prompt|cancel|abort|structured-output|interactions|approvals(?:\/[^/]+)?))?$/.exec(url.pathname);
+  const match = /^\/session\/([^/]+)(?:\/(messages|status|activity|prompt|cancel|abort|structured-output|interactions|config|approvals(?:\/[^/]+)?))?$/.exec(url.pathname);
   if (!match) return json(response, 404, { error: "Not found" });
   const state = sessions.get(match[1]!);
   if (!state) {
@@ -1291,7 +1424,36 @@ async function route(
   if (action === "messages" && request.method === "GET") {
     return json(response, 200, messageWindow(state, parseFromIndex(url.searchParams.get("fromIndex"))));
   }
-  if (action === "status" && request.method === "GET") return json(response, 200, { status: state.status, error: state.error, revision: state.revision });
+  if (action === "status" && request.method === "GET") {
+    return json(response, 200, {
+      status: state.status,
+      error: state.error,
+      revision: state.revision,
+      composer: state.sessionConfig.composer,
+    });
+  }
+  if (action === "config" && request.method === "GET") {
+    return json(response, 200, state.sessionConfig.composer);
+  }
+  if (action === "config" && request.method === "POST") {
+    const body = await readJson(request);
+    // Claim before the first await, exactly as the prompt route does.
+    // `applyComposerPatch` yields on `ensureSessionProcess` and again on every
+    // RPC, so a bare check would let a second config POST — or a prompt —
+    // through and both would plan against the same stale `sessionConfig`.
+    if (state.status === "running" || state.dispatching) {
+      return json(response, 409, { error: "Session is already running" });
+    }
+    const patch = parseComposerPatch(body);
+    if (!patch) return json(response, 200, state.sessionConfig.composer);
+    state.dispatching = true;
+    try {
+      await applyComposerPatch(state, patch, clientSignal);
+    } finally {
+      state.dispatching = false;
+    }
+    return json(response, 200, state.sessionConfig.composer);
+  }
   if (action === "activity" && request.method === "GET") return json(response, 200, { activity: state.status === "running" ? "working" : "idle" });
   if (action === "approvals" && request.method === "GET") return json(response, 200, { approvals: publicApprovals(state), revision: state.revision });
   if (action === "interactions" && request.method === "GET") return json(response, 200, { interactions: [], revision: state.revision });
@@ -1352,6 +1514,8 @@ async function route(
     let child: AcpProcess;
     try {
       child = await ensureSessionProcess(state, clientSignal);
+      const promptPatch = parseComposerPatch(body);
+      if (promptPatch) await applyComposerPatch(state, promptPatch, clientSignal);
     } catch (error) {
       // The turn definitely did not run, so release the claim and let the
       // caller retry with the same requestId.
@@ -1590,6 +1754,173 @@ class HttpError extends Error {
   }
 }
 
+function isVendorModelUpdate(method: string, params: JsonObject): boolean {
+  if (method === "x.ai/models/update" || method === "_x.ai/models/update" || method === "cursor/models/update") {
+    return true;
+  }
+  if (method !== "x.ai/session/update" && method !== "_x.ai/session/update" && method !== "cursor/session/update") {
+    return false;
+  }
+  const update = isObject(params.update) ? params.update : params;
+  return update.sessionUpdate === "model_changed" || update.sessionUpdate === "models_update";
+}
+
+function rememberCatalog(composer: NativeAgentComposerState): void {
+  if (composer.models.length === 0 && composer.modes.length === 0) return;
+  catalogCache = composer;
+}
+
+function composerPatchFromSpawn(options: AcpSpawnOptions & AcpComposerPatch): AcpComposerPatch | undefined {
+  const patch: AcpComposerPatch = {};
+  if (options.modelId || options.model) patch.modelId = options.modelId ?? options.model;
+  if (options.reasoningId || options.effort) patch.reasoningId = options.reasoningId ?? options.effort;
+  if (options.fastMode !== undefined) patch.fastMode = options.fastMode;
+  if (options.mode) patch.mode = options.mode;
+  return Object.keys(patch).length > 0 ? patch : undefined;
+}
+
+function parseComposerPatch(body: JsonObject): AcpComposerPatch | undefined {
+  const mode = body.mode === "plan" || body.mode === "build" ? body.mode : undefined;
+  const modelId = typeof body.modelId === "string"
+    ? body.modelId.trim()
+    : typeof body.model === "string"
+      ? body.model.trim()
+      : "";
+  const reasoningId = typeof body.reasoningId === "string"
+    ? body.reasoningId.trim()
+    : typeof body.reasoningEffort === "string"
+      ? body.reasoningEffort.trim()
+      : "";
+  const patch: AcpComposerPatch = {
+    ...(modelId ? { modelId } : {}),
+    ...(reasoningId ? { reasoningId } : {}),
+    ...(typeof body.fastMode === "boolean" ? { fastMode: body.fastMode } : {}),
+    ...(mode ? { mode } : {}),
+  };
+  return Object.keys(patch).length > 0 ? patch : undefined;
+}
+
+async function applyComposerPatch(
+  state: SessionState,
+  patch: AcpComposerPatch,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (!patch.modelId && !patch.reasoningId && patch.fastMode === undefined && !patch.mode) return;
+  const child = await ensureSessionProcess(state, signal);
+  const calls = planComposerApply(state.acpSessionId, state.sessionConfig, patch);
+  for (const call of calls) {
+    const result = await child.request(call.method, call.params, RPC_TIMEOUT_MS, signal);
+    if (call.method === "session/set_config_option") {
+      state.sessionConfig = applyConfigOptionUpdate(
+        provider,
+        state.sessionConfig,
+        isObject(result) ? result : {},
+      );
+    } else if (call.method === "session/set_mode") {
+      state.sessionConfig = applyCurrentModeUpdate(state.sessionConfig, call.params.modeId);
+    } else if (call.method === "session/set_model") {
+      const meta = isObject(result) && isObject(result._meta) ? result._meta : {};
+      const model = isObject(meta.model) ? meta.model : {};
+      state.sessionConfig = applyGrokModelChange(provider, state.sessionConfig, {
+        model_id: typeof model.Ok === "string" ? model.Ok : call.params.modelId,
+        reasoning_effort: call.params._meta?.reasoningEffort,
+      });
+    }
+  }
+  rememberCatalog(state.sessionConfig.composer);
+  state.revision += 1;
+  await persistState();
+}
+
+function applyVendorUpdate(state: SessionState, method: string, params: JsonObject): void {
+  const update = isObject(params.update) ? params.update : params;
+  const kind = typeof update.sessionUpdate === "string" ? update.sessionUpdate : "";
+  if (method.endsWith("/models/update") || kind === "models_update") {
+    state.sessionConfig = applyGrokCatalogUpdate(provider, state.sessionConfig, update);
+    rememberCatalog(state.sessionConfig.composer);
+    state.revision += 1;
+    schedulePersist();
+  } else if (kind === "model_changed") {
+    state.sessionConfig = applyGrokModelChange(provider, state.sessionConfig, update);
+    rememberCatalog(state.sessionConfig.composer);
+    state.revision += 1;
+    schedulePersist();
+  }
+}
+
+async function listNormalizedModels(signal?: AbortSignal): Promise<NativeAgentComposerState["models"]> {
+  const live = mergeComposerCatalog(provider, [
+    ...(catalogCache ? [catalogCache] : []),
+    ...[...sessions.values()].map((state) => state.sessionConfig.composer),
+  ]);
+  if (live.length > 0) return live;
+  try {
+    const probed = await probeCatalog(signal);
+    return probed.models;
+  } catch {
+    return [];
+  }
+}
+
+async function probeCatalog(signal?: AbortSignal): Promise<NativeAgentComposerState> {
+  if (catalogCache && catalogCache.models.length > 0) return catalogCache;
+  if (catalogProbe) return catalogProbe;
+  catalogProbe = (async () => {
+    const child = new AcpProcess();
+    try {
+      await child.initialize(signal);
+      const created = await child.request(
+        "session/new",
+        { cwd: workingDirectory, additionalDirectories: [], mcpServers: [] },
+        RPC_TIMEOUT_MS,
+        signal,
+      );
+      const sessionConfig = normalizeAcpSessionConfig(provider, created);
+      rememberCatalog(sessionConfig.composer);
+      if (isObject(created) && typeof created.sessionId === "string") {
+        child.notify("session/cancel", { sessionId: created.sessionId });
+      }
+      return sessionConfig.composer;
+    } finally {
+      await child.close();
+      catalogProbe = null;
+    }
+  })();
+  return catalogProbe;
+}
+
+/**
+ * Composer configuration is a cache in front of the agent's own catalogue: the
+ * next `session/load` re-normalizes it. Malformed configuration therefore
+ * resets *that* session's composer and nothing else. Throwing here would take
+ * out the whole state file — every other session's transcript and, worse, its
+ * prompt journal, which is what keeps a resubmitted requestId from dispatching
+ * twice.
+ */
+function restoreSessionConfig(candidate: JsonObject): AcpNormalizedSessionConfig {
+  if (candidate.sessionConfig !== undefined) {
+    const restored = parsePersistedAcpSessionConfig(provider, candidate.sessionConfig);
+    if (restored) return restored;
+    console.warn("[acp-bridge] Resetting a malformed persisted session config");
+    return emptySessionConfig();
+  }
+  if (candidate.composer !== undefined) {
+    const composer = parsePersistedComposerState(provider, candidate.composer);
+    if (composer) return { ...emptySessionConfig(), composer };
+    console.warn("[acp-bridge] Resetting a malformed persisted composer state");
+  }
+  return emptySessionConfig();
+}
+
+function emptySessionConfig(): AcpNormalizedSessionConfig {
+  // `emptyComposerState()` rather than a spread of the shared constant: a
+  // shallow copy would alias its `models` and `modes` arrays across sessions.
+  return {
+    composer: emptyComposerState(),
+    wire: { configOptions: [], availableModeIds: {}, usesSetModel: false },
+  };
+}
+
 function persistedSnapshot(): PersistedState {
   return {
     version: 3,
@@ -1608,6 +1939,8 @@ function persistedSnapshot(): PersistedState {
       promptJournal: [...state.promptJournal.values()].map((entry) =>
         entry.state === "accepted" ? { ...entry, state: "ambiguous" as const } : entry
       ),
+      sessionConfig: state.sessionConfig,
+      composer: state.sessionConfig.composer,
     })),
   };
 }
@@ -1726,6 +2059,7 @@ async function loadPersistedState(): Promise<void> {
       uncheckedTranscriptBytes: 0,
       currentTurnOutput: null,
       droppedMessages: 0,
+      sessionConfig: restoreSessionConfig(candidate),
       dispatching: false,
     };
     if (Array.isArray(candidate.promptJournal)) {
@@ -1743,6 +2077,7 @@ async function loadPersistedState(): Promise<void> {
     }
     boundTranscript(state);
     reconcileStaleToolParts(state);
+    rememberCatalog(state.sessionConfig.composer);
     sessions.set(state.id, state);
     if (state.clientSessionKey) clientSessionKeys.set(state.clientSessionKey, state.id);
   }

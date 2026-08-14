@@ -169,6 +169,13 @@ function UnassignedNativeAgentComposer({
   const { favorites, enabledPlatforms, toggleFavorite } = useAgentModelFavorites();
   const [resumePlatformDialogOpen, setResumePlatformDialogOpen] = useState(false);
   const [models, setModels] = useState<AgentModel[]>([]);
+  const platform = draft.platform ?? defaultPlatform;
+  const selectedAdapter = findNativeAgentAdapter(platform);
+  // The catalogue is environment-scoped and already carries every platform, so
+  // it must not be refetched when the platform draft changes: `platformModels`
+  // filters it client-side. Re-running here would clear the list and re-issue a
+  // command that probes both ACP bridges, flashing "No models available" on
+  // every switch.
   useEffect(() => {
     let cancelled = false;
     setModels([]);
@@ -181,8 +188,6 @@ function UnassignedNativeAgentComposer({
       });
     return () => { cancelled = true; };
   }, [environmentId]);
-  const platform = draft.platform ?? defaultPlatform;
-  const selectedAdapter = findNativeAgentAdapter(platform);
   const fileSearch = useFileSearch(containerId, worktreePath);
   const {
     isMenuOpen: fileMentionMenuOpen,
@@ -197,7 +202,8 @@ function UnassignedNativeAgentComposer({
   const platformModels = models.filter((model) => model.platform === platform);
   const selectedModel = models.find((model) => model.id === draft.modelId && model.platform === platform)
     ?? platformModels[0];
-  const canConfigureModel = platform !== "cursor" && platform !== "grok";
+  const canConfigureReasoning = selectedAdapter?.capabilities.composer.reasoning === true;
+  const canConfigureMode = selectedAdapter?.capabilities.composer.mode === true;
   const selectedReasoningId = draft.reasoningId ?? selectedModel?.defaultReasoningId;
   const selectedReasoningLabel = selectedModel?.reasoning?.find(
     (option) => option.id === selectedReasoningId,
@@ -328,7 +334,7 @@ function UnassignedNativeAgentComposer({
                 onPlatformChange={(next) => updateDraft(sessionKey, { platform: next, modelId: undefined, reasoningId: undefined })}
                 onToggleFavorite={toggleFavorite}
                 selectedModelId={selectedModel?.id}
-                selectedModelLabel={selectedModel?.label ?? (canConfigureModel ? "No models available" : "Automatic")}
+                selectedModelLabel={selectedModel?.label ?? "No models available"}
                 onModelChange={(modelId) => {
                   // Platform selection is applied synchronously by the picker
                   // before model selection. Read it back from the neutral draft so
@@ -348,7 +354,7 @@ function UnassignedNativeAgentComposer({
                 reasoningOptions={selectedModel?.reasoning ?? []}
                 selectedReasoningId={selectedReasoningId}
                 selectedReasoningLabel={selectedReasoningLabel}
-                onReasoningChange={canConfigureModel ? (reasoningId) => updateDraft(sessionKey, { reasoningId }) : undefined}
+                onReasoningChange={canConfigureReasoning ? (reasoningId) => updateDraft(sessionKey, { reasoningId }) : undefined}
                 fastModeEnabled={draft.fastMode}
                 fastModeAvailable={selectedModel?.supportsSpeed === true}
                 onFastModeChange={(fastMode) => updateDraft(sessionKey, { fastMode })}
@@ -360,7 +366,7 @@ function UnassignedNativeAgentComposer({
                     type="button"
                     variant="ghost"
                     size="sm"
-                    disabled={disabled || !canConfigureModel}
+                    disabled={disabled || !canConfigureMode}
                     aria-label="Conversation mode"
                     className="h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground"
                   >
@@ -466,6 +472,8 @@ export const AgentNativeTab = memo(function AgentNativeTab(
         initialPrompt: prompt,
         initialAgentModel: options.modelId,
         initialReasoningEffort: options.reasoningId,
+        initialConversationMode: options.mode,
+        initialFastMode: options.fastMode,
       },
     );
     if (!lockedPlatform) {

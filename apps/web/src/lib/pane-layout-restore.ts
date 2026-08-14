@@ -98,12 +98,18 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
   // model rehydrates the tab with it instead of silently falling back to the
   // configured default. The consumer clears them via `clearTabInitialAgentOptions`
   // once applied, so a restored value is by definition still unconsumed.
+  const initialConversationMode: "plan" | "build" | undefined =
+    value.initialConversationMode === "plan" || value.initialConversationMode === "build"
+      ? value.initialConversationMode
+      : undefined;
   const common = {
     id,
     displayTitle: optionalString(value.displayTitle),
     isReviewTab: optionalBoolean(value.isReviewTab),
     initialAgentModel: optionalString(value.initialAgentModel),
     initialReasoningEffort: optionalString(value.initialReasoningEffort),
+    initialConversationMode,
+    initialFastMode: optionalBoolean(value.initialFastMode),
     agentHandoffId: nonEmptyString(value.agentHandoffId) ?? undefined,
     consumedAgentHandoffId: nonEmptyString(value.consumedAgentHandoffId) ?? undefined,
   };

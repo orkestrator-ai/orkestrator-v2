@@ -14,6 +14,8 @@ export interface AgentNativeTabProps {
   isReviewTab?: boolean;
   initialAgentModel?: string;
   initialReasoningEffort?: string;
+  initialConversationMode?: "build" | "plan";
+  initialFastMode?: boolean;
   agentHandoffId?: string;
   consumedAgentHandoffId?: string;
   refreshRequestId?: number;
@@ -48,10 +50,10 @@ function acpAdapter(
       backgroundTasks: false,
       composer: {
         provider: true,
-        model: false,
-        reasoning: false,
-        speed: false,
-        mode: false,
+        model: true,
+        reasoning: true,
+        speed: true,
+        mode: true,
       },
     },
     loadController: async () => {
@@ -63,6 +65,10 @@ function acpAdapter(
             data={props.data as AgentNativeTabProps["data"] & { platform: "cursor" | "grok" }}
             isActive={props.isActive}
             initialPrompt={props.initialPrompt}
+            initialAgentModel={props.initialAgentModel}
+            initialReasoningEffort={props.initialReasoningEffort}
+            initialConversationMode={props.initialConversationMode}
+            initialFastMode={props.initialFastMode}
           />
         );
       };

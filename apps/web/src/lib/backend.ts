@@ -82,6 +82,7 @@ import {
   type ResourceRevisionManifest,
   type ResourceRevisionMap,
 } from "@orkestrator/protocol/resource-events";
+import type { AgentModel } from "@orkestrator/protocol/native-agent";
 
 /** PR detection result containing URL, state, and merge conflict status */
 export interface PrDetectionResult {
@@ -435,6 +436,14 @@ export interface AgentModelCatalogCache {
   codex?: {
     updatedAt: string;
     models: CodexModel[];
+  };
+  cursor?: {
+    updatedAt: string;
+    models: AgentModel[];
+  };
+  grok?: {
+    updatedAt: string;
+    models: AgentModel[];
   };
 }
 
@@ -2017,6 +2026,7 @@ export async function ensureNativeAgentSession(input: {
    * changes — a phase-derived read-only session would fail that round.
    */
   sessionMode?: "plan" | "build";
+  fastMode?: boolean;
 }): Promise<PersistedNativeAgentSession> {
   return invoke<PersistedNativeAgentSession>(
     "ensure_native_agent_session",
@@ -2084,6 +2094,8 @@ export async function dispatchNativeAgentPrompt(input: {
   requestId: string;
   images?: Array<{ filename: string; data: string }>;
   schema?: Record<string, unknown>;
+  mode?: "plan" | "build";
+  fastMode?: boolean;
 }): Promise<PersistedNativeAgentSession> {
   return invoke<PersistedNativeAgentSession>(
     "dispatch_native_agent_prompt",

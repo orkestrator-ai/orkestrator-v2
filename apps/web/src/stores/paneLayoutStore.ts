@@ -49,6 +49,8 @@ interface NativePlatformLockOptions {
   initialPrompt?: string;
   initialAgentModel?: string;
   initialReasoningEffort?: string;
+  initialConversationMode?: "build" | "plan";
+  initialFastMode?: boolean;
 }
 
 export type PaneLayoutHydrationStatus = "pending" | "done";
@@ -952,6 +954,8 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
               ...tab,
               initialAgentModel: undefined,
               initialReasoningEffort: undefined,
+              initialConversationMode: undefined,
+              initialFastMode: undefined,
             }
           : tab
       ),
@@ -1055,6 +1059,12 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
               : {}),
             ...(initialOptions.initialReasoningEffort !== undefined
               ? { initialReasoningEffort: initialOptions.initialReasoningEffort }
+              : {}),
+            ...(initialOptions.initialConversationMode !== undefined
+              ? { initialConversationMode: initialOptions.initialConversationMode }
+              : {}),
+            ...(initialOptions.initialFastMode !== undefined
+              ? { initialFastMode: initialOptions.initialFastMode }
               : {}),
           }
         : candidate),

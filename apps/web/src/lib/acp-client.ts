@@ -1,3 +1,5 @@
+import type { NativeAgentComposerState } from "@orkestrator/protocol/native-agent";
+import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
 import { resolveGatewayLoopbackBaseUrl } from "./gateway-url";
 import type { NativeMessage } from "./chat/native-message-types";
 
@@ -14,6 +16,7 @@ export interface AcpSessionSnapshot {
   /** Absolute index of `messages[0]`; advances as the bridge evicts history. */
   baseIndex: number;
   revision: number;
+  composer: NativeAgentComposerState;
 }
 
 /** An incremental slice of the transcript, anchored to an absolute index. */
@@ -24,6 +27,7 @@ export interface AcpMessageWindow {
   revision: number;
   status: "idle" | "running" | "error";
   error?: string;
+  composer?: NativeAgentComposerState;
 }
 
 export interface AcpApproval {
@@ -67,7 +71,8 @@ export function createAcpSession(client: AcpClient): Promise<AcpSessionSnapshot>
 }
 
 export function getAcpSession(client: AcpClient, sessionId: string): Promise<AcpSessionSnapshot> {
-  return request(client, `/session/${encodeURIComponent(sessionId)}`);
+  return request<AcpSessionSnapshot>(client, `/session/${encodeURIComponent(sessionId)}`)
+    .then((session) => ({ ...session, composer: normalizeAcpComposer(session.composer) }));
 }
 
 /**
@@ -80,10 +85,13 @@ export function getAcpMessageWindow(
   sessionId: string,
   fromIndex: number,
 ): Promise<AcpMessageWindow> {
-  return request(
+  return request<AcpMessageWindow>(
     client,
     `/session/${encodeURIComponent(sessionId)}/messages?fromIndex=${Math.max(0, Math.trunc(fromIndex))}`,
-  );
+    // A window is an incremental update, so an absent or unusable `composer`
+    // means "no news" — a bridge old enough not to send one must not blank the
+    // caller's picker. Only a full snapshot substitutes the empty composer.
+  ).then((window) => ({ ...window, composer: optionalAcpComposer(window.composer) }));
 }
 
 /**
@@ -110,6 +118,42 @@ export function sendAcpPrompt(client: AcpClient, sessionId: string, prompt: stri
     method: "POST",
     body: JSON.stringify({ prompt }),
   });
+}
+
+export function getAcpModels(client: AcpClient): Promise<NativeAgentComposerState["models"]> {
+  return request<{ models?: NativeAgentComposerState["models"] }>(client, "/global/models")
+    .then((response) => Array.isArray(response.models) ? response.models : []);
+}
+
+export function setAcpSessionConfig(
+  client: AcpClient,
+  sessionId: string,
+  patch: {
+    modelId?: string;
+    reasoningId?: string;
+    fastMode?: boolean;
+    mode?: "build" | "plan";
+  },
+): Promise<NativeAgentComposerState> {
+  return request<NativeAgentComposerState>(client, `/session/${encodeURIComponent(sessionId)}/config`, {
+    method: "POST",
+    body: JSON.stringify(patch),
+  }).then((composer) => normalizeAcpComposer(composer));
+}
+
+export function normalizeAcpComposer(
+  value: NativeAgentComposerState | undefined | null,
+): NativeAgentComposerState {
+  return optionalAcpComposer(value)
+    ?? { ...EMPTY_NATIVE_AGENT_COMPOSER_STATE, models: [], modes: [] };
+}
+
+/** `undefined` when there is nothing usable, so callers can keep what they hold. */
+export function optionalAcpComposer(
+  value: NativeAgentComposerState | undefined | null,
+): NativeAgentComposerState | undefined {
+  if (!value || !Array.isArray(value.models) || !Array.isArray(value.modes)) return undefined;
+  return value;
 }
 
 export function cancelAcpPrompt(client: AcpClient, sessionId: string): Promise<void> {

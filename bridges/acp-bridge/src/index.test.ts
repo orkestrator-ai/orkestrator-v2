@@ -1143,6 +1143,155 @@ describe("ACP bridge", () => {
     expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toEqual(["prompt"]);
   });
 
+  test("rolls back a keyed session when initial configuration fails", async () => {
+    const directory = await temporaryDirectory();
+    const failureFile = resolve(directory, "config-failed.log");
+    const lifecycleFile = resolve(directory, "config-lifecycle.log");
+    const bridge = await spawnBridge({ env: {
+      FAKE_ACP_FAIL_CONFIG_ONCE_FILE: failureFile,
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+      ACP_MAX_SESSIONS: "1",
+    } });
+    const create = () => nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({
+        clientSessionKey: "env-1:configured-tab",
+        reasoningId: "high",
+      }),
+    });
+
+    const failed = await create();
+    expect(failed.status).toBe(500);
+    expect(await failed.json()).toMatchObject({ error: "fake configuration failure" });
+
+    const retried = await create();
+    expect(retried.status).toBe(201);
+    expect(await retried.json()).toMatchObject({
+      composer: { selectedReasoningId: "high" },
+    });
+    await waitFor(
+      () => fs.readFile(lifecycleFile, "utf8").catch(() => ""),
+      (contents) => (contents.match(/^start:/gm)?.length ?? 0) === 2,
+    );
+  });
+
+  test("rejects unsupported vendor requests instead of acknowledging them", async () => {
+    const directory = await temporaryDirectory();
+    const responseFile = resolve(directory, "vendor-response.log");
+    const bridge = await spawnBridge({ env: { FAKE_ACP_VENDOR_REQUEST_FILE: responseFile } });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+    });
+    expect(created.status).toBe(201);
+    const response = await waitFor(
+      () => fs.readFile(responseFile, "utf8").then((value) => JSON.parse(value.trim())).catch(() => null) as Promise<Record<string, unknown> | null>,
+      Boolean,
+    );
+    expect(response).toMatchObject({
+      id: 901,
+      error: { code: -32601, message: "Unsupported ACP client method: x.ai/ask_user_question" },
+    });
+    expect(response).not.toHaveProperty("result");
+  });
+
+  test("applies a vendor model update delivered as a request, not just a notification", async () => {
+    const directory = await temporaryDirectory();
+    const responseFile = resolve(directory, "vendor-model-response.log");
+    const { base, headers } = await spawnBridge({ env: {
+      ACP_PROVIDER: "grok",
+      FAKE_ACP_VENDOR_MODEL_REQUEST_FILE: responseFile,
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+    const dispatched = await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "DIRECT:update models", requestId: "model-update-request" }),
+    });
+    expect(dispatched.status).toBe(202);
+
+    // Rejecting unsupported vendor requests must not also reject the ones this
+    // bridge does implement: the update carries real catalogue state.
+    const response = await waitFor(
+      () => fs.readFile(responseFile, "utf8")
+        .then((value) => JSON.parse(value.trim()))
+        .catch(() => null) as Promise<Record<string, unknown> | null>,
+      Boolean,
+    );
+    expect(response).toMatchObject({ id: 902, result: {} });
+    expect(response).not.toHaveProperty("error");
+
+    const session = await waitFor(
+      () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((value) => value.json()) as Promise<{
+          composer: { selectedModelId?: string; models: Array<{ id: string }> };
+        }>,
+      (value) => value.composer.models.some((model) => model.id === "grok-next"),
+    );
+    expect(session.composer.selectedModelId).toBe("grok-next");
+  });
+
+  test("rejects a second composer patch that races one already applying", async () => {
+    const directory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "config-race-lifecycle.log");
+    const { base, headers } = await spawnBridge({ env: {
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    // `applyComposerPatch` yields on every RPC. Without a claim taken before
+    // the first await, both patches plan against the same stale sessionConfig
+    // and the loser silently overwrites the winner's result.
+    const patch = (modelId: string) => nativeFetch(`${base}/session/${created.id}/config`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ modelId }),
+    });
+    const [first, second] = await Promise.all([patch("gpt-5.5"), patch("composer-2.5")]);
+    const statuses = [first.status, second.status].sort();
+    expect(statuses).toEqual([200, 409]);
+
+    const winner = first.status === 200 ? "gpt-5.5" : "composer-2.5";
+    const config = await nativeFetch(`${base}/session/${created.id}/config`, { headers })
+      .then((response) => response.json()) as { selectedModelId?: string };
+    expect(config.selectedModelId).toBe(winner);
+  });
+
+  test("rejects a prompt that races an in-flight composer patch", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    const [config, prompt] = await Promise.all([
+      nativeFetch(`${base}/session/${created.id}/config`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ modelId: "gpt-5.5" }),
+      }),
+      nativeFetch(`${base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: "hello", requestId: "race-1" }),
+      }),
+    ]);
+    // Whichever request the server reads first claims the session; the point is
+    // that they can never both proceed, because a composer patch and a turn
+    // would otherwise interleave their RPCs on one agent.
+    expect([config.status, prompt.status].filter((status) => status === 409)).toHaveLength(1);
+    if (prompt.status === 409) {
+      // The refused turn was never journaled, so the same requestId can retry.
+      const retried = await nativeFetch(`${base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: "hello", requestId: "race-1" }),
+      });
+      expect(retried.status).toBe(202);
+    }
+  });
+
   test("times out hung initialization and rejects malformed agent output", async () => {
     const hung = await spawnBridge({ env: { FAKE_ACP_HANG_INITIALIZE: "1", ACP_RPC_TIMEOUT_MS: "30" } });
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -1614,7 +1763,10 @@ describe("ACP bridge", () => {
     ]);
     const statuses = [first.status, second.status].sort();
     expect(statuses).toEqual([202, 409]);
-    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toEqual(["prompt"]);
+    await waitFor(
+      () => fs.readFile(counterFile, "utf8").catch(() => ""),
+      (contents) => contents.trim() === "prompt",
+    );
   });
 
   test("keeps live approvals when a superseded agent process exits", async () => {
@@ -1751,6 +1903,95 @@ describe("ACP bridge", () => {
     expect(await fs.readFile(stateFile, "utf8")).not.toBe("{ this is not json");
   });
 
+  test("restores a normalized composer across a bridge restart", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const stateFile = resolve(stateDirectory, "state.json");
+    const seeded = await spawnBridge({ stateDirectory });
+    const created = await nativeFetch(`${seeded.base}/session/create`, {
+      method: "POST",
+      headers: seeded.headers,
+      body: JSON.stringify({ clientSessionKey: "env-1:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+    await waitFor(() => fs.readFile(stateFile, "utf8").catch(() => ""), Boolean);
+    await stopChild(seeded.child);
+
+    // The persisted-state validator is deliberately strict, so a healthy
+    // round-trip has to be asserted too: a validator stricter than the
+    // normalizer that produced the state would silently reset every composer.
+    const restarted = await spawnBridge({ stateDirectory });
+    const restored = await nativeFetch(`${restarted.base}/session/${created.id}`, {
+      headers: restarted.headers,
+    }).then((response) => response.json()) as {
+      composer: {
+        models: Array<{ id: string }>;
+        selectedModelId?: string;
+        selectedReasoningId?: string;
+        modes: Array<{ id: string }>;
+      };
+    };
+    expect(restored.composer.models.map((model) => model.id)).toEqual(["composer-2.5", "gpt-5.5"]);
+    expect(restored.composer.selectedModelId).toBe("composer-2.5");
+    expect(restored.composer.selectedReasoningId).toBe("medium");
+    expect(restored.composer.modes.map((mode) => mode.id)).toEqual(["build", "plan"]);
+    expect((await fs.readdir(stateDirectory)).some((entry) => entry.includes("corrupt"))).toBe(false);
+  });
+
+  test("resets one malformed composer without discarding its sibling sessions", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const stateFile = resolve(stateDirectory, "state.json");
+    const seeded = await spawnBridge({ stateDirectory });
+    const [healthy, damaged] = await Promise.all([
+      nativeFetch(`${seeded.base}/session/create`, {
+        method: "POST",
+        headers: seeded.headers,
+        body: JSON.stringify({ clientSessionKey: "env-1:healthy" }),
+      }).then((response) => response.json()) as Promise<{ id: string }>,
+      nativeFetch(`${seeded.base}/session/create`, {
+        method: "POST",
+        headers: seeded.headers,
+        body: JSON.stringify({ clientSessionKey: "env-1:damaged" }),
+      }).then((response) => response.json()) as Promise<{ id: string }>,
+    ]);
+    await waitFor(
+      () => fs.readFile(stateFile, "utf8").catch(() => ""),
+      (contents) => contents.includes(healthy.id) && contents.includes(damaged.id),
+    );
+    await stopChild(seeded.child);
+
+    const persisted = JSON.parse(await fs.readFile(stateFile, "utf8")) as {
+      sessions: Array<{ id: string; sessionConfig?: unknown; composer?: unknown }>;
+    };
+    const target = persisted.sessions.find((session) => session.id === damaged.id)!;
+    target.sessionConfig = { composer: {}, wire: {} };
+    delete target.composer;
+    await fs.writeFile(stateFile, JSON.stringify(persisted));
+
+    // Composer configuration is a cache the next session/load rebuilds. Losing
+    // it must not take the transcript, the client-key mapping or the prompt
+    // journal of every *other* session with it.
+    const restarted = await spawnBridge({ stateDirectory });
+    const survivor = await nativeFetch(`${restarted.base}/session/${healthy.id}`, {
+      headers: restarted.headers,
+    });
+    expect(survivor.status).toBe(200);
+    expect((await survivor.json() as { composer: { models: unknown[] } }).composer.models)
+      .toHaveLength(2);
+    const reset = await nativeFetch(`${restarted.base}/session/${damaged.id}`, {
+      headers: restarted.headers,
+    });
+    expect(reset.status).toBe(200);
+    expect(await reset.json()).toMatchObject({ composer: { models: [], modes: [] } });
+    // Nothing was quarantined: the file itself was never unreadable.
+    expect((await fs.readdir(stateDirectory)).some((entry) => entry.includes("corrupt"))).toBe(false);
+    // The damaged session kept its durable identity, so its key still resolves.
+    const rebound = await nativeFetch(`${restarted.base}/session/create`, {
+      method: "POST",
+      headers: restarted.headers,
+      body: JSON.stringify({ clientSessionKey: "env-1:damaged" }),
+    });
+    expect(await rebound.json()).toMatchObject({ id: damaged.id });
+  });
+
   test("starts clean when the state file belongs to another provider", async () => {
     const stateDirectory = await temporaryDirectory();
     await fs.writeFile(
@@ -1870,5 +2111,123 @@ describe("ACP bridge", () => {
         .find((persisted) => persisted.id === "session-v1")
         ?.messages[1]?.parts.map((part) => part.type),
     ).toEqual(["thinking", "text"]);
+  });
+
+  test("normalizes Cursor ACP config into composer state and applies patches", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({}),
+    });
+    expect(created.status).toBe(201);
+    const session = await created.json() as {
+      id: string;
+      composer: {
+        models: Array<{ id: string; label: string; platform: string }>;
+        selectedModelId?: string;
+        selectedReasoningId?: string;
+        fastModeAvailable: boolean;
+        selectedModeId?: string;
+        modes: Array<{ id: string }>;
+      };
+    };
+    expect(session.composer.models.map((model) => model.id)).toEqual(["composer-2.5", "gpt-5.5"]);
+    expect(session.composer.models[0]).toMatchObject({
+      platform: "cursor",
+      label: "Composer 2.5",
+    });
+    expect(session.composer.selectedModelId).toBe("composer-2.5");
+    expect(session.composer.selectedReasoningId).toBe("medium");
+    expect(session.composer.fastModeAvailable).toBe(true);
+    expect(session.composer.selectedModeId).toBe("build");
+    expect(JSON.stringify(session)).not.toContain("configOptions");
+    expect(JSON.stringify(session)).not.toContain("_meta");
+
+    const catalog = await nativeFetch(`${base}/global/models`, { headers })
+      .then((response) => response.json()) as { models: Array<{ id: string }> };
+    expect(catalog.models.map((model) => model.id)).toEqual(["composer-2.5", "gpt-5.5"]);
+
+    const updated = await nativeFetch(`${base}/session/${session.id}/config`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        modelId: "gpt-5.5",
+        reasoningId: "high",
+        fastMode: true,
+        mode: "plan",
+      }),
+    });
+    expect(updated.status).toBe(200);
+    const composer = await updated.json() as {
+      selectedModelId?: string;
+      selectedReasoningId?: string;
+      fastModeEnabled: boolean | null;
+      selectedModeId?: string;
+    };
+    expect(composer.selectedModelId).toBe("gpt-5.5");
+    expect(composer.selectedReasoningId).toBe("high");
+    expect(composer.fastModeEnabled).toBe(true);
+    expect(composer.selectedModeId).toBe("plan");
+  });
+
+  test("normalizes Grok ACP models and reasoning without leaking vendor wire", async () => {
+    const { base, headers } = await spawnBridge({ env: { ACP_PROVIDER: "grok" } });
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({}),
+    });
+    expect(created.status).toBe(201);
+    const session = await created.json() as {
+      id: string;
+      composer: {
+        models: Array<{ id: string; reasoning?: Array<{ id: string; label: string }> }>;
+        selectedModelId?: string;
+        selectedReasoningId?: string;
+      };
+    };
+    expect(session.composer.selectedModelId).toBe("grok-build");
+    expect(session.composer.selectedReasoningId).toBe("high");
+    expect(session.composer.models[0]?.reasoning?.map((option) => option.id)).toEqual(["low", "high", "xhigh"]);
+    expect(JSON.stringify(session)).not.toContain("reasoningEfforts");
+
+    const updated = await nativeFetch(`${base}/session/${session.id}/config`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ reasoningId: "low" }),
+    });
+    expect(updated.status).toBe(200);
+    const composer = await updated.json() as { selectedReasoningId?: string };
+    expect(composer.selectedReasoningId).toBe("low");
+  });
+
+  test("applies Grok vendor catalogue updates to session and global snapshots", async () => {
+    const { base, headers } = await spawnBridge({ env: {
+      ACP_PROVIDER: "grok",
+      FAKE_ACP_EMIT_MODEL_UPDATE: "1",
+    } });
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+    }).then((response) => response.json()) as { id: string };
+    const dispatched = await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "DIRECT:update models", requestId: "model-update" }),
+    });
+    expect(dispatched.status).toBe(202);
+
+    const session = await waitFor(
+      () => nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) => response.json()) as Promise<{
+        status: string;
+        composer: { selectedModelId?: string; models: Array<{ id: string }> };
+      }>,
+      (value) => value.status === "idle" && value.composer.models.some((model) => model.id === "grok-next"),
+    );
+    expect(session.composer.selectedModelId).toBe("grok-next");
+    const catalog = await nativeFetch(`${base}/global/models`, { headers })
+      .then((response) => response.json()) as { models: Array<{ id: string }> };
+    expect(catalog.models.map((model) => model.id)).toContain("grok-next");
   });
 });

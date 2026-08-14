@@ -111,6 +111,21 @@ describe("native agent model catalogue command", () => {
         reasoningEfforts: ["medium", "high"],
         defaultReasoningEffort: "high",
       }]);
+      await storage.cacheAgentModelCatalog("cursor", [{
+        platform: "cursor",
+        id: "composer-cached",
+        label: "Composer Cached",
+        providerLabel: "Cursor",
+        supportsSpeed: true,
+        supportsMode: true,
+      }]);
+      await storage.cacheAgentModelCatalog("grok", [{
+        platform: "grok",
+        id: "grok-cached",
+        label: "Grok Cached",
+        providerLabel: "Grok",
+        supportsMode: true,
+      }]);
       await storage.cacheOpenCodeModelCatalog("proj-1", [
         { id: "opencode/a", name: "OpenCode A", provider: "opencode" },
         { id: "opencode-go/b", name: "OpenCode Go B", provider: "opencode-go" },
@@ -134,8 +149,10 @@ describe("native agent model catalogue command", () => {
         "gpt-codex",
         "opencode-go/b",
         "opencode/a",
+        "composer-cached",
+        "grok-cached",
       ]);
-      expect(models.slice(2).map((model) => model.providerLabel)).toEqual([
+      expect(models.slice(2, 4).map((model) => model.providerLabel)).toEqual([
         "OpenCode/opencode-go",
         "OpenCode/opencode",
       ]);

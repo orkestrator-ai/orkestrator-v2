@@ -4668,6 +4668,46 @@ describe("HTTP build pipeline provider (ACP)", () => {
     expect(requests[0]?.url).toBe("http://cursor.test/session/create");
   });
 
+  test("forwards ACP composer options on session creation and prompt dispatch", async () => {
+    const { provider, requests } = httpProvider((url) =>
+      url.endsWith("/session/create")
+        ? Response.json({ sessionId: "cursor-1" })
+        : Response.json({ accepted: true }, { status: 202 }), cursorConnection);
+
+    await provider.createSession("build", "Configured Cursor", {
+      clientSessionKey: "env-1:tab-1",
+      model: "composer-2.5",
+      effort: "high",
+      mode: "plan",
+      fastMode: true,
+    });
+    await provider.send("cursor-1", "Do the work", {
+      requestId: "request-1",
+      model: "gpt-5.5",
+      effort: "medium",
+      mode: "build",
+      fastMode: false,
+    });
+
+    expect(JSON.parse(String(requests[0]?.init.body))).toEqual({
+      title: "Configured Cursor",
+      clientSessionKey: "env-1:tab-1",
+      model: "composer-2.5",
+      reasoningEffort: "high",
+      mode: "plan",
+      fastMode: true,
+    });
+    expect(requests[1]?.url).toBe("http://cursor.test/session/cursor-1/prompt");
+    expect(JSON.parse(String(requests[1]?.init.body))).toEqual({
+      prompt: "Do the work",
+      requestId: "request-1",
+      fastMode: false,
+      model: "gpt-5.5",
+      reasoningEffort: "medium",
+      mode: "build",
+    });
+  });
+
   test("surfaces the bounded ACP session-creation error detail", async () => {
     const { provider } = httpProvider(
       () => Response.json(

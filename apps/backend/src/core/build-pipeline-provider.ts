@@ -292,6 +292,8 @@ export interface ProviderCreateSessionOptions {
    */
   model?: string;
   effort?: string;
+  /** Cursor/Grok ACP speed toggle; ignored by other providers. */
+  fastMode?: boolean;
   /** Durable interaction metadata supplied by the owning workflow. */
   interaction?: ProviderSessionRegistration;
 }
@@ -988,7 +990,16 @@ class HttpBridgeProvider implements BuildPipelineProvider {
               mode,
               clientSessionKey,
             }
-          : { title: label, clientSessionKey }),
+          : this.agent === "cursor" || this.agent === "grok"
+            ? {
+                title: label,
+                clientSessionKey,
+                model: options.model ?? this.connection.model,
+                reasoningEffort: options.effort ?? this.connection.effort,
+                mode,
+                ...(typeof options.fastMode === "boolean" ? { fastMode: options.fastMode } : {}),
+              }
+            : { title: label, clientSessionKey }),
       },
       this.fetchImpl,
     );
@@ -1042,7 +1053,14 @@ class HttpBridgeProvider implements BuildPipelineProvider {
                   permissionMode:
                     options.mode === "plan" ? "plan" : "bypassPermissions",
                 }
-              : { fastMode: options.fastMode }),
+              : this.agent === "cursor" || this.agent === "grok"
+                ? {
+                    fastMode: options.fastMode,
+                    model: options.model ?? this.connection.model,
+                    reasoningEffort: options.effort ?? this.connection.effort,
+                    mode: options.mode,
+                  }
+                : { fastMode: options.fastMode }),
           }),
         },
         this.fetchImpl,

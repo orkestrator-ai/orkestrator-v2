@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { AcpSessionSnapshot } from "@/lib/acp-client";
+import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
 import {
   transcriptHasUserMessage,
   useAcpPendingPromptStore,
@@ -12,6 +13,7 @@ function snapshot(roles: Array<"user" | "assistant">): AcpSessionSnapshot {
     status: "idle",
     baseIndex: 0,
     revision: 1,
+    composer: EMPTY_NATIVE_AGENT_COMPOSER_STATE,
     messages: roles.map((role, index) => ({
       id: `message-${index}`,
       role,

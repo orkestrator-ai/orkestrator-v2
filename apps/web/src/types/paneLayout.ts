@@ -138,6 +138,10 @@ export interface TabInfo {
   initialAgentModel?: string;
   /** One-shot reasoning effort or provider variant selected at creation. */
   initialReasoningEffort?: string;
+  /** One-shot Build/Plan selection applied when the agent tab is locked. */
+  initialConversationMode?: "build" | "plan";
+  /** One-shot fast-mode selection applied when the agent tab is locked. */
+  initialFastMode?: boolean;
   /**
    * Durable provider-to-provider conversation handoff rendered ahead of this
    * tab's native transcript. The pane layout stores only this small reference;

@@ -77,6 +77,8 @@ export interface EnsureNativeAgentSessionInput {
    * Codex session would make that round fail.
    */
   sessionMode?: ProviderExecutionMode;
+  /** Cursor/Grok ACP speed toggle applied at session create. */
+  fastMode?: boolean;
 }
 
 export interface DispatchNativeAgentPromptInput
@@ -2679,6 +2681,7 @@ export class NativeAgentService {
         model: input.model,
         effort: input.reasoningEffort,
         mode: input.sessionMode,
+        fastMode: input.fastMode,
         interaction: {
           origin: input.origin ?? "interactive-native",
           interactionPolicy: input.interactionPolicy

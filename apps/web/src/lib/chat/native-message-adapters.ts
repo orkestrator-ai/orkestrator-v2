@@ -12,6 +12,7 @@ import type {
   NativeTaskGroupPart,
   NativeToolGroupPart,
 } from "./native-message-types";
+import { parseLocalFilePathFromUrl } from "./file-url";
 import type { AcpMessage } from "@/lib/acp-client";
 
 interface AttachmentTag {
@@ -390,6 +391,23 @@ export function findPreviousNativeMessage<TMessage extends NativeMessage>(
  */
 const normalizedNativeMessageCache = new WeakMap<NativeMessage, NativeMessage>();
 
+/**
+ * The file a file part points at, independent of how the provider spelled it.
+ *
+ * The structured part and the XML wrapper describe the same attachment with
+ * different strings — `file:///w/a.png` against `/w/a.png`, or a bare
+ * `a.png` content against a fully qualified URL — so comparing the raw fields
+ * would render the same image twice. A `data:` URL carries no identity beyond
+ * its own bytes, so those fall back to the part's content.
+ */
+function fileAttachmentIdentity(part: NativeFilePart): string {
+  const fileUrl = part.fileUrl;
+  if (fileUrl && !fileUrl.startsWith("data:")) {
+    return parseLocalFilePathFromUrl(fileUrl) ?? fileUrl;
+  }
+  return parseLocalFilePathFromUrl(part.content) ?? part.content;
+}
+
 function normalizeNativeUserAttachments(message: NativeMessage): NativeMessage {
   if (message.role !== "user") return message;
 
@@ -425,7 +443,7 @@ function normalizeNativeUserAttachments(message: NativeMessage): NativeMessage {
 
   // Some providers project a structured file part as well as echoing the XML
   // wrapper. Keep the first copy so initial-prompt images never render twice,
-  // but merge the original filename when only the XML copy retained it.
+  // and merge the fields only one spelling carried.
   const fileIndexes = new Map<string, number>();
   const dedupedParts: NativeMessagePart[] = [];
   for (const part of nextParts) {
@@ -433,7 +451,7 @@ function normalizeNativeUserAttachments(message: NativeMessage): NativeMessage {
       dedupedParts.push(part);
       continue;
     }
-    const identity = `${part.content}\0${part.fileUrl ?? ""}`;
+    const identity = fileAttachmentIdentity(part);
     const existingIndex = fileIndexes.get(identity);
     if (existingIndex === undefined) {
       fileIndexes.set(identity, dedupedParts.length);
@@ -442,9 +460,14 @@ function normalizeNativeUserAttachments(message: NativeMessage): NativeMessage {
     }
 
     const existing = dedupedParts[existingIndex];
-    if (existing?.type === "file" && !existing.filename && part.filename) {
-      dedupedParts[existingIndex] = { ...existing, filename: part.filename };
-    }
+    if (existing?.type !== "file") continue;
+    // The structured copy is usually the one missing a filename, and the XML
+    // copy is usually the one missing a usable URL, so neither is complete on
+    // its own.
+    const merged: NativeFilePart = { ...existing };
+    if (!merged.filename && part.filename) merged.filename = part.filename;
+    if (!merged.fileUrl && part.fileUrl) merged.fileUrl = part.fileUrl;
+    dedupedParts[existingIndex] = merged;
   }
   nextParts = dedupedParts;
 

@@ -20,6 +20,7 @@ mock.module("@/lib/backend", () => ({
 }));
 
 import { NativeMessage } from "../../../apps/web/src/components/chat/NativeMessage";
+import { clearImagePreviewCache } from "../../../apps/web/src/lib/chat/image-preview-cache";
 import { normalizeClaudeMessagesForDisplay } from "../../../apps/web/src/lib/chat/native-message-adapters";
 import { useMessagePartExpansionStore } from "../../../apps/web/src/stores/messagePartExpansionStore";
 
@@ -62,6 +63,9 @@ describe("NativeMessage", () => {
     cleanup();
     // Thinking expansion outlives unmount by design, so clear it between tests.
     useMessagePartExpansionStore.getState().reset();
+    // So does the preview cache; a cached image would otherwise suppress the
+    // backend read a later case asserts on.
+    clearImagePreviewCache();
     mockOpenInBrowser.mockReset();
     mockOpenInBrowser.mockImplementation(async () => {});
     mockReadFileBase64.mockReset();
@@ -2760,6 +2764,81 @@ describe("NativeMessage", () => {
     expect(mockReadFileBase64).toHaveBeenCalledTimes(1);
     expect(screen.getByAltText("Thumbnail: eager.png").getAttribute("src"))
       .toBe("data:image/png;base64,eager-base64");
+  });
+
+  test("leaves an assistant image part as a compact chip and does not read it", async () => {
+    const message: NativeMessageType = {
+      id: "msg-assistant-image-chip",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "file", content: "/tmp/assistant-shot.png" }],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    const attachment = screen.getByRole("button", {
+      name: "Open full image: assistant-shot.png",
+    });
+    // Only surfaces that eagerly load get the thumbnail tile; without this the
+    // chip becomes a large card that never fills in.
+    expect(getClassTokens(attachment)).toContain("inline-flex");
+    expect(getClassTokens(attachment)).not.toContain("w-40");
+    expect(screen.queryByAltText("Thumbnail: assistant-shot.png")).toBeNull();
+    // The eager effect runs during render, so a missing call here is decisive.
+    expect(mockReadFileBase64).not.toHaveBeenCalled();
+
+    fireEvent.click(attachment);
+    expect(await screen.findByAltText("assistant-shot.png")).toBeTruthy();
+    expect(mockReadFileBase64).toHaveBeenCalledTimes(1);
+  });
+
+  test("reuses a decoded preview when a virtualized row remounts", async () => {
+    const message: NativeMessageType = {
+      id: "msg-preview-cache-remount",
+      role: "user",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "file", content: "/tmp/remounted.png" }],
+    };
+
+    const first = render(<NativeMessage message={message} />);
+    expect(await screen.findByAltText("Thumbnail: remounted.png")).toBeTruthy();
+    expect(mockReadFileBase64).toHaveBeenCalledTimes(1);
+
+    first.unmount();
+    render(<NativeMessage message={message} />);
+
+    // Painted from the cache on the first render, with no second backend read.
+    expect(screen.getByAltText("Thumbnail: remounted.png").getAttribute("src"))
+      .toBe("data:image/png;base64,image-base64");
+    expect(mockReadFileBase64).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps preview caches for the same path in different containers apart", async () => {
+    const message: NativeMessageType = {
+      id: "msg-preview-cache-container",
+      role: "user",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "file", content: "workspace/shared.png" }],
+    };
+
+    const first = render(
+      <NativeMessage message={message} containerId="container-1" />,
+    );
+    expect(await screen.findByAltText("Thumbnail: shared.png")).toBeTruthy();
+    expect(mockReadContainerFileBase64).toHaveBeenCalledTimes(1);
+
+    first.unmount();
+    mockReadContainerFileBase64.mockImplementation(async () => "second-container-base64");
+    render(<NativeMessage message={message} containerId="container-2" />);
+
+    await waitFor(() =>
+      expect(screen.getByAltText("Thumbnail: shared.png").getAttribute("src"))
+        .toBe("data:image/png;base64,second-container-base64"),
+    );
+    expect(mockReadContainerFileBase64).toHaveBeenCalledTimes(2);
   });
 
   test("shows the error state when an image read rejects with a non-Error value", async () => {

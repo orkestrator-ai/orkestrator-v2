@@ -1297,6 +1297,118 @@ describe("native message adapters", () => {
     }]);
   });
 
+  test("decodes numeric attribute entities and leaves undecodable ones verbatim", () => {
+    const attachments = [
+      // Decimal, uppercase hex, and lowercase hex all round-trip.
+      '<attachment type="image" path="/w/o&#39;brien&#X2F;a.png" filename="o&#39;brien&#x2f;a.png" />',
+      // Above the Unicode maximum, so there is no character to decode it to.
+      '<attachment type="image" path="/w/b&#x110000;.png" filename="b&#x110000;.png" />',
+      // A single-pass decode must not re-scan its own output into a new entity.
+      '<attachment type="image" path="/w/c&amp;lt;.png" filename="c&amp;lt;.png" />',
+    ].join("");
+    const content = `Look\n<attached-files>${attachments}</attached-files>`;
+
+    const { attachments: parsed } = parseNativeAttachmentsFromContent(content);
+
+    expect(parsed.map((part) => part.content)).toEqual([
+      "/w/o'brien/a.png",
+      "/w/b&#x110000;.png",
+      "/w/c&lt;.png",
+    ]);
+    expect(parsed.map((part) => part.filename)).toEqual([
+      "o'brien/a.png",
+      "b&#x110000;.png",
+      "c&lt;.png",
+    ]);
+  });
+
+  test("deduplicates an attachment a provider spelled as a file URL", () => {
+    const rawContent = [
+      "Inspect this",
+      '<attached-files><attachment type="image" path="/workspace/staged a.png" filename="original-a.png" /></attached-files>',
+    ].join("\n");
+    const message: NativeMessage = {
+      id: "native-file-url-initial-prompt",
+      role: "user",
+      content: rawContent,
+      createdAt: "2026-08-14T18:00:00.000Z",
+      parts: [
+        { type: "text", content: rawContent },
+        // OpenCode names the part by filename and carries the location in a
+        // percent-encoded file URL, so neither field matches the XML copy.
+        {
+          type: "file",
+          content: "staged a.png",
+          fileUrl: "file:///workspace/staged%20a.png",
+        },
+      ],
+    };
+
+    const normalized = normalizeNativeMessage(message);
+
+    // One part, not two: comparing the raw fields would have missed that these
+    // are the same file. The XML copy sits earlier in the message, so it is the
+    // one kept.
+    expect(normalized.parts.filter((part) => part.type === "file")).toEqual([{
+      type: "file",
+      content: "/workspace/staged a.png",
+      fileUrl: "/workspace/staged a.png",
+      filename: "original-a.png",
+    }]);
+  });
+
+  test("fills in a file URL the structured copy was missing", () => {
+    const rawContent = [
+      "Inspect this",
+      '<attached-files><attachment type="image" path="/workspace/a.png" filename="a.png" /></attached-files>',
+    ].join("\n");
+    const message: NativeMessage = {
+      id: "native-missing-file-url",
+      role: "user",
+      content: rawContent,
+      createdAt: "2026-08-14T18:00:00.000Z",
+      parts: [
+        { type: "text", content: rawContent },
+        { type: "file", content: "/workspace/a.png" },
+      ],
+    };
+
+    const normalized = normalizeNativeMessage(message);
+
+    // Without the merged URL the kept copy would never render as an image.
+    expect(normalized.parts.filter((part) => part.type === "file")).toEqual([{
+      type: "file",
+      content: "/workspace/a.png",
+      fileUrl: "/workspace/a.png",
+      filename: "a.png",
+    }]);
+  });
+
+  test("keeps two attachments that only share a filename apart", () => {
+    const rawContent = [
+      "Compare",
+      "<attached-files>"
+      + '<attachment type="image" path="/workspace/one/shot.png" filename="shot.png" />'
+      + '<attachment type="image" path="/workspace/two/shot.png" filename="shot.png" />'
+      + "</attached-files>",
+    ].join("\n");
+    const message: NativeMessage = {
+      id: "native-same-filename",
+      role: "user",
+      content: rawContent,
+      createdAt: "2026-08-14T18:00:00.000Z",
+      parts: [{ type: "text", content: rawContent }],
+    };
+
+    const normalized = normalizeNativeMessage(message);
+
+    expect(
+      normalized.parts
+        .filter((part) => part.type === "file")
+        .map((part) => part.content),
+    ).toEqual(["/workspace/one/shot.png", "/workspace/two/shot.png"]);
+  });
+
   test("leaves malformed attachment blocks in message text", () => {
     const content =
       'Keep this <attached-files><attachment type="image" path="/workspace/a.png" />';

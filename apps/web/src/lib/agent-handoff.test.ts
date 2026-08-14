@@ -795,6 +795,7 @@ describe("agent handoff validation and tool counting", () => {
       { type: "tool-invocation", content: "c", toolDiff: "not-an-object" },
       { type: "tool-invocation", content: "c", toolName: 7 },
       { type: "file", content: "c", fileUrl: [] },
+      { type: "file", content: "c", filename: 9 },
       { type: "subagent", content: "c", subagentName: 1 },
     ]) {
       const candidate = {

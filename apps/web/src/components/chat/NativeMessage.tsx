@@ -71,6 +71,12 @@ import {
   messageHasVisibleContent,
   normalizeNativeMessage,
 } from "@/lib/chat/native-message-adapters";
+import { parseLocalFilePathFromUrl } from "@/lib/chat/file-url";
+import {
+  imagePreviewCacheKey,
+  readImagePreviewCache,
+  writeImagePreviewCache,
+} from "@/lib/chat/image-preview-cache";
 import { writeText } from "@/lib/native/clipboard";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 
@@ -1022,29 +1028,6 @@ function isRemoteImageUrl(fileUrl?: string): boolean {
   return typeof fileUrl === "string" && /^https?:\/\//i.test(fileUrl);
 }
 
-function parseLocalFilePathFromUrl(fileUrl: string): string | null {
-  if (!fileUrl.startsWith("file://")) return null;
-
-  try {
-    const parsed = new URL(fileUrl);
-    const pathname = decodeURIComponent(parsed.pathname);
-
-    // UNC paths (e.g. file://server/share/path)
-    if (parsed.host) {
-      return `//${parsed.host}${pathname}`;
-    }
-
-    // Windows absolute paths are represented as /C:/path in file URLs.
-    if (/^\/[a-z]:\//i.test(pathname)) {
-      return pathname.slice(1);
-    }
-
-    return pathname;
-  } catch {
-    return null;
-  }
-}
-
 function getSafeContainerRelativePath(path: string): string | null {
   if (!path || path.includes("\0") || path.includes("\n") || path.includes("\r")) {
     return null;
@@ -1086,18 +1069,27 @@ function FilePart({
   containerId?: string;
   eagerPreview?: boolean;
 }) {
+  const cacheKey = imagePreviewCacheKey(containerId, path, fileUrl);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [imageSrc, setImageSrc] = useState<string | null>(null);
+  const [imageSrc, setImageSrc] = useState<string | null>(
+    () => readImagePreviewCache(cacheKey),
+  );
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const imageLoadRef = useRef<Promise<string | null> | null>(null);
 
   const displayName = filename || path.split(/[\\/]/).pop() || path || "file";
   const isImage = isImageReference(fileUrl) || isImageReference(path);
+  // Only the thumbnail-bearing surface gets the tile chrome. A part that is
+  // never eagerly loaded would otherwise sit as an empty card until clicked.
+  const showThumbnailTile = isImage && eagerPreview;
 
   const loadImage = useCallback((): Promise<string | null> => {
     if (!isImage) return Promise.resolve(null);
     if (imageLoadRef.current) return imageLoadRef.current;
+
+    const cached = readImagePreviewCache(cacheKey);
+    if (cached) return Promise.resolve(cached);
 
     setLoading(true);
     setLoadError(false);
@@ -1124,7 +1116,9 @@ function FilePart({
 
           const base64 = await readContainerFileBase64(containerId, relativePath);
           const mimeType = getMimeType(containerPath);
-          return `data:${mimeType};base64,${base64}`;
+          const dataUrl = `data:${mimeType};base64,${base64}`;
+          writeImagePreviewCache(cacheKey, dataUrl);
+          return dataUrl;
         }
 
         const filePath = localFilePath ?? (path.startsWith("/") ? path : null);
@@ -1135,7 +1129,9 @@ function FilePart({
 
         const base64 = await readFileBase64(filePath);
         const mimeType = getMimeType(filePath);
-        return `data:${mimeType};base64,${base64}`;
+        const dataUrl = `data:${mimeType};base64,${base64}`;
+        writeImagePreviewCache(cacheKey, dataUrl);
+        return dataUrl;
       } catch (err) {
         console.error("[NativeMessage] Failed to load image preview:", err, {
           path,
@@ -1153,7 +1149,7 @@ function FilePart({
       }
     });
     return request;
-  }, [isImage, path, fileUrl, containerId]);
+  }, [cacheKey, isImage, path, fileUrl, containerId]);
 
   useEffect(() => {
     if (!eagerPreview || !isImage || imageSrc || isRemoteImageUrl(fileUrl)) return;
@@ -1190,28 +1186,37 @@ function FilePart({
         aria-busy={isImage ? loading : undefined}
         className={cn(
           "text-xs my-0 rounded-md border transition-colors",
+          showThumbnailTile
+            ? "group relative block w-40 overflow-hidden bg-muted/50 border-border hover:border-foreground/25 cursor-zoom-in"
+            : "inline-flex items-center gap-1.5 py-1.5 px-2.5",
+          !showThumbnailTile && (isImage
+            ? "bg-muted/50 border-border hover:bg-muted hover:border-border/80 cursor-zoom-in"
+            : "bg-muted/30 border-border/50 cursor-default"),
           isImage
-            ? "group relative block w-40 overflow-hidden bg-muted/50 border-border hover:border-foreground/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background cursor-zoom-in"
-            : "inline-flex items-center gap-1.5 py-1.5 px-2.5 bg-muted/30 border-border/50 cursor-default",
+            && "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           loading && "opacity-50",
         )}
       >
-        {isImage && imageSrc ? (
+        {showThumbnailTile && imageSrc ? (
           <img
             src={imageSrc}
             alt={`Thumbnail: ${displayName}`}
             className="h-24 w-full bg-black/10 object-cover transition-transform duration-200 group-hover:scale-[1.02]"
           />
-        ) : isImage ? (
+        ) : showThumbnailTile ? (
           <span className="flex h-24 w-full items-center justify-center bg-muted/40">
             <ImageIcon className="size-5 text-muted-foreground" />
           </span>
+        ) : isImage ? (
+          <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" />
         ) : (
           <FileText className="w-3.5 h-3.5 text-muted-foreground" />
         )}
         <span className={cn(
           "font-mono truncate text-muted-foreground",
-          isImage ? "block border-t border-border/60 px-2 py-1.5 text-left" : "max-w-[240px]",
+          showThumbnailTile
+            ? "block border-t border-border/60 px-2 py-1.5 text-left"
+            : "max-w-[240px]",
         )}>
           {displayName}
         </span>
@@ -1219,7 +1224,7 @@ function FilePart({
         {loadError && (
           <span className={cn(
             "text-destructive text-[10px]",
-            isImage && "absolute right-1.5 top-1.5 rounded bg-background/90 px-1.5 py-0.5",
+            showThumbnailTile && "absolute right-1.5 top-1.5 rounded bg-background/90 px-1.5 py-0.5",
           )}>
             preview unavailable
           </span>

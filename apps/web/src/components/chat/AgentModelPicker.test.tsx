@@ -573,6 +573,34 @@ describe("AgentModelPicker", () => {
     expect(onModelChange).toHaveBeenCalledWith("shared");
   });
 
+  test("uses an atomic model selection callback for cross-platform choices", () => {
+    setMobileViewport(false);
+    const onPlatformChange = mock(() => {});
+    const onModelSelect = mock(() => {});
+    const { onModelChange } = renderPicker({
+      models: [
+        { platform: "codex", id: "codex-model", label: "Codex model" },
+        { platform: "opencode", id: "opencode-model", label: "OpenCode model" },
+      ],
+      enabledPlatforms: ["codex", "opencode"],
+      favorites: [{ platform: "opencode", modelId: "opencode-model" }],
+      selectedPlatform: "codex",
+      selectedModelId: "codex-model",
+      onPlatformChange,
+      onModelSelect,
+    });
+
+    fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
+    fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /OpenCode model/ }));
+
+    expect(onModelSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ platform: "opencode", id: "opencode-model" }),
+    );
+    expect(onPlatformChange).not.toHaveBeenCalled();
+    expect(onModelChange).not.toHaveBeenCalled();
+  });
+
   test("keeps provider choices visible but disables non-selected providers after lock", () => {
     setMobileViewport(false);
     renderPicker({

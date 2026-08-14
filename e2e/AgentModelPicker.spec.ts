@@ -5,7 +5,7 @@ test("short mobile viewports keep every picker view reachable", async ({
 }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile layout only");
   await page.setViewportSize({ width: 390, height: 360 });
-  await page.goto("/native-model-picker");
+  await page.goto("/agent-model-picker");
   await page.getByTitle("Choose model, reasoning, and speed").click();
 
   const picker = page.locator("[data-native-model-picker]");
@@ -46,7 +46,7 @@ test("desktop picker scrolls model and reasoning columns independently", async (
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop layout only");
   await page.setViewportSize({ width: 1024, height: 480 });
-  await page.goto("/native-model-picker");
+  await page.goto("/agent-model-picker");
   await page.getByTitle("Choose model, reasoning, and speed").click();
 
   const picker = page.locator("[data-native-model-picker]");

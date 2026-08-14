@@ -1,4 +1,4 @@
-import { StrictMode, useState } from "react";
+import { StrictMode, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "../../apps/web/src/index.css";
 import {
@@ -6,11 +6,15 @@ import {
   type ClaudeOptions,
 } from "../../apps/web/src/components/environments/CreateEnvironmentDialog";
 import { BrowserTab } from "../../apps/web/src/components/browser/BrowserTab";
-import { CodexComposeBar } from "../../apps/web/src/components/codex/CodexComposeBar";
+import {
+  NativeComposeBar,
+} from "../../apps/web/src/components/chat/NativeComposeBar";
+import { QueuedPromptsDialog } from "../../apps/web/src/components/chat/QueuedPromptsDialog";
 import { AgentThinkingIndicator } from "../../apps/web/src/components/chat/AgentThinkingIndicator";
 import { MessageShell } from "../../apps/web/src/components/chat/MessageShell";
 import { MentionableInput } from "../../apps/web/src/components/chat/MentionableInput";
-import { NativeModelPicker } from "../../apps/web/src/components/chat/NativeModelPicker";
+import { AgentModelPicker } from "../../apps/web/src/components/chat/AgentModelPicker";
+import type { MentionableInputRef } from "../../apps/web/src/components/chat/MentionableInput";
 import {
   COMPOSE_MAX_INPUT_HEIGHT,
   COMPOSE_MIN_INPUT_HEIGHT,
@@ -91,68 +95,112 @@ function BrowserFixture() {
   );
 }
 
-function CodexComposeFixture() {
+const queuedComposePrompts = Array.from({ length: 123 }, (_, index) => ({
+  id: `queued-${index + 1}`,
+  text: `Queued prompt ${index + 1}`,
+}));
+
+/**
+ * The native composer as an agent tab assembles it: `NativeComposeBar` owns the
+ * layout and the secondary controls, while the primary slot carries whatever
+ * the agent contributes — here the unified `AgentModelPicker`.
+ */
+function NativeComposeFixture() {
   const [fastModeEnabled, setFastModeEnabled] = useState(false);
   const [sentCount, setSentCount] = useState(0);
+  const [queueOpen, setQueueOpen] = useState(false);
+  const [text, setText] = useState("");
+  const inputRef = useRef<MentionableInputRef | null>(null);
+  const inputContainerRef = useRef<HTMLDivElement | null>(null);
 
   return (
     <main className="min-h-screen bg-background pt-4 text-foreground">
-      <section data-testid="codex-compose-fixture" className="w-full">
-        <CodexComposeBar
-          environmentId="codex-compose-fixture"
-          sessionKey="codex-compose-fixture-session"
-          models={[{
-            id: "long-model",
-            name: "A deliberately long Codex model name for narrow viewport coverage",
-            reasoningEfforts: ["medium", "high"],
-          }]}
-          selectedMode="build"
-          selectedModel="long-model"
-          selectedReasoningEffort="high"
-          fastModeEnabled={fastModeEnabled}
-          queueLength={123}
+      <section data-testid="native-compose-fixture" className="w-full">
+        <NativeComposeBar
+          attachments={[]}
+          onRemoveAttachment={() => {}}
+          inputRef={inputRef}
+          inputContainerRef={inputContainerRef}
+          text={text}
+          mentions={[]}
+          onTextAndMentionsChange={(nextText) => setText(nextText)}
+          onCursorPositionChange={() => {}}
+          onKeyDown={() => {}}
+          placeholder="Send a message"
+          queue={{ length: 123, onOpen: () => setQueueOpen(true) }}
           showAddressAll
+          onAddressAll={async () => setSentCount((count) => count + 1)}
           onSend={async () => setSentCount((count) => count + 1)}
-          onQueue={() => {}}
           onStop={async () => {}}
-          onModeChange={() => {}}
-          onModelChange={() => {}}
-          onReasoningEffortChange={() => {}}
-          onFastModeChange={setFastModeEnabled}
+          primaryControls={(
+            <AgentModelPicker
+              models={[{
+                platform: "codex",
+                id: "long-model",
+                label: "A deliberately long Codex model name for narrow viewport coverage",
+              }]}
+              enabledPlatforms={["codex"]}
+              selectedPlatform="codex"
+              selectedModelId="long-model"
+              selectedModelLabel="A deliberately long Codex model name for narrow viewport coverage"
+              onModelChange={() => {}}
+              reasoningOptions={[
+                { id: "medium", label: "Medium" },
+                { id: "high", label: "High" },
+              ]}
+              selectedReasoningId="high"
+              selectedReasoningLabel="High"
+              onReasoningChange={() => {}}
+              fastModeEnabled={fastModeEnabled}
+              fastModeAvailable
+              onFastModeChange={setFastModeEnabled}
+            />
+          )}
         />
-        <output data-testid="codex-send-count">{sentCount}</output>
+        <output data-testid="native-send-count">{sentCount}</output>
       </section>
+      <QueuedPromptsDialog
+        open={queueOpen}
+        onOpenChange={setQueueOpen}
+        messages={queuedComposePrompts}
+        onEdit={() => {}}
+        onMove={() => {}}
+        onRemove={() => {}}
+      />
     </main>
   );
 }
 
-const nativePickerModels = Array.from({ length: 8 }, (_, index) => ({
+const agentPickerModels = Array.from({ length: 8 }, (_, index) => ({
+  platform: "codex" as const,
   id: `fixture-model-${index + 1}`,
   label: `Fixture model ${index + 1}`,
   description: `Description for fixture model ${index + 1}`,
 }));
 
-const nativePickerReasoningOptions = Array.from({ length: 12 }, (_, index) => ({
+const agentPickerReasoningOptions = Array.from({ length: 12 }, (_, index) => ({
   id: `fixture-effort-${index + 1}`,
   label: `Fixture effort ${index + 1}`,
   description: `A detailed explanation for fixture reasoning effort ${index + 1}`,
 }));
 
-function NativeModelPickerFixture() {
-  const [modelId, setModelId] = useState(nativePickerModels[0]!.id);
-  const [reasoningId, setReasoningId] = useState(nativePickerReasoningOptions[0]!.id);
+function AgentModelPickerFixture() {
+  const [modelId, setModelId] = useState(agentPickerModels[0]!.id);
+  const [reasoningId, setReasoningId] = useState(agentPickerReasoningOptions[0]!.id);
   const [fastMode, setFastMode] = useState(false);
-  const model = nativePickerModels.find((entry) => entry.id === modelId)!;
-  const reasoning = nativePickerReasoningOptions.find((entry) => entry.id === reasoningId)!;
+  const model = agentPickerModels.find((entry) => entry.id === modelId)!;
+  const reasoning = agentPickerReasoningOptions.find((entry) => entry.id === reasoningId)!;
 
   return (
     <main className="h-screen overflow-hidden bg-background p-4 text-foreground">
-      <NativeModelPicker
-        models={nativePickerModels}
+      <AgentModelPicker
+        models={agentPickerModels}
+        enabledPlatforms={["codex"]}
+        selectedPlatform="codex"
         selectedModelId={modelId}
         selectedModelLabel={model.label}
         onModelChange={setModelId}
-        reasoningOptions={nativePickerReasoningOptions}
+        reasoningOptions={agentPickerReasoningOptions}
         selectedReasoningId={reasoningId}
         selectedReasoningLabel={reasoning.label}
         onReasoningChange={setReasoningId}
@@ -208,7 +256,7 @@ function ReviewLaunchDialogFixture() {
       <ReviewLaunchDialog
         open={open}
         onOpenChange={setOpen}
-        defaultTabType="claude-native"
+        defaultTabType="claude"
         catalog={reviewModelCatalog}
         onConfirm={(nextSelection) => {
           setSelection(nextSelection);
@@ -512,8 +560,8 @@ function DiffViewerFixture() {
 function fixtureForPath() {
   if (window.location.pathname === "/browser") return <BrowserFixture />;
   if (window.location.pathname === "/diff-viewer") return <DiffViewerFixture />;
-  if (window.location.pathname === "/codex-compose") return <CodexComposeFixture />;
-  if (window.location.pathname === "/native-model-picker") return <NativeModelPickerFixture />;
+  if (window.location.pathname === "/native-compose") return <NativeComposeFixture />;
+  if (window.location.pathname === "/agent-model-picker") return <AgentModelPickerFixture />;
   if (window.location.pathname === "/mobile-shell") return <MobileAppShellFixture />;
   if (window.location.pathname === "/path-truncation") return <PathTruncationFixture />;
   if (window.location.pathname === "/review-launch") return <ReviewLaunchDialogFixture />;

@@ -4,46 +4,58 @@ function panelContaining(page: Page, child: Locator): Locator {
   return page.locator('[data-slot="tabs-content"]').filter({ has: child });
 }
 
-async function expectCompactAgentConfigurationAt(page: Page, width: number) {
-  await page.setViewportSize({ width, height: 900 });
+const ENABLED_PLATFORMS = ["claude", "codex", "opencode"] as const;
 
-  const dialog = page.getByRole("dialog");
-  const agentGroup = page.getByRole("radiogroup", { name: "Default Agent" });
-  const agentButtons = agentGroup.getByRole("radio");
-  const model = page.locator("#agent-model");
-  const reasoningEffort = page.locator("#agent-reasoning-effort");
-  const [dialogBox, agentBox, modelBox, reasoningBox, buttonBoxes] = await Promise.all([
-    dialog.boundingBox(),
-    agentGroup.boundingBox(),
-    model.boundingBox(),
-    reasoningEffort.boundingBox(),
-    agentButtons.evaluateAll((buttons) =>
-      buttons.map((button) => {
-        const box = button.getBoundingClientRect();
-        return { width: box.width };
-      }),
-    ),
-  ]);
-
-  expect(dialogBox).not.toBeNull();
-  expect(agentBox).not.toBeNull();
-  expect(modelBox).not.toBeNull();
-  expect(reasoningBox).not.toBeNull();
-  expect(buttonBoxes).toHaveLength(3);
-
-  const buttonWidth = buttonBoxes.reduce((total, button) => total + button.width, 0);
-  // Three 2rem buttons plus the control's gaps, padding, and border should fit
-  // tightly. The former stretched 10rem control is intentionally too wide.
-  expect(agentBox!.width).toBeGreaterThanOrEqual(buttonWidth);
-  expect(agentBox!.width).toBeLessThanOrEqual(buttonWidth + 20);
-  expect(agentBox!.x + agentBox!.width).toBeLessThanOrEqual(modelBox!.x);
-  expect(modelBox!.x + modelBox!.width).toBeLessThanOrEqual(reasoningBox!.x);
-  expect(reasoningBox!.x + reasoningBox!.width).toBeLessThanOrEqual(
-    dialogBox!.x + dialogBox!.width,
-  );
+async function expectNoHorizontalOverflow(page: Page) {
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
   ).toBe(true);
+}
+
+/**
+ * The agent, model and reasoning choices are one `AgentModelPicker` trigger, so
+ * the row can no longer overlap itself. What is still worth pinning is that the
+ * trigger stays inside the dialog and that its menu — which asks for 46rem on a
+ * wide viewport — stays inside a narrow one.
+ */
+async function expectAgentPickerFitsAt(page: Page, width: number) {
+  await page.setViewportSize({ width, height: 900 });
+
+  const dialog = page.getByRole("dialog");
+  const picker = page.locator("#agent-model");
+  await expect(picker).toBeVisible();
+
+  const [dialogBox, pickerBox] = await Promise.all([
+    dialog.boundingBox(),
+    picker.boundingBox(),
+  ]);
+  expect(dialogBox).not.toBeNull();
+  expect(pickerBox).not.toBeNull();
+  expect(pickerBox!.x).toBeGreaterThanOrEqual(dialogBox!.x);
+  expect(pickerBox!.x + pickerBox!.width).toBeLessThanOrEqual(
+    dialogBox!.x + dialogBox!.width,
+  );
+  await expectNoHorizontalOverflow(page);
+
+  await picker.click();
+  const menu = page.locator("[data-native-model-picker]");
+  await expect(menu).toBeVisible();
+
+  // Agent choice moved onto the picker's platform rail, so every enabled
+  // platform must still be reachable from here.
+  for (const platform of ENABLED_PLATFORMS) {
+    await expect(menu.getByRole("button", { name: `${platform} models` })).toBeVisible();
+  }
+  await expect(menu.locator("[data-native-model-list]")).toBeVisible();
+
+  const menuBox = await menu.boundingBox();
+  expect(menuBox).not.toBeNull();
+  expect(menuBox!.x).toBeGreaterThanOrEqual(0);
+  expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(width);
+  await expectNoHorizontalOverflow(page);
+
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
 }
 
 test("mobile sections have one visible panel, preserve values, and stay within the viewport", async ({
@@ -197,12 +209,46 @@ test("desktop hides the mobile tablist while exposing every configuration sectio
   await expect(setupPanel).toHaveCSS("animation-name", "none");
 });
 
-test("desktop shrink-wraps the agent selector without overlapping adjacent controls", async ({
+test("desktop keeps the unified agent picker and its menu inside a narrow viewport", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop project only");
   await page.goto("/");
 
-  await expectCompactAgentConfigurationAt(page, 700);
-  await expectCompactAgentConfigurationAt(page, 640);
+  await expectAgentPickerFitsAt(page, 700);
+  await expectAgentPickerFitsAt(page, 640);
+});
+
+test("desktop lays the picker's model and reasoning columns out side by side", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop project only");
+  await page.goto("/");
+  await page.setViewportSize({ width: 1024, height: 900 });
+
+  const picker = page.locator("#agent-model");
+  await picker.click();
+  const menu = page.locator("[data-native-model-picker]");
+  await expect(menu).toBeVisible();
+
+  const models = menu.getByRole("group", { name: "Models" });
+  // Claude's default catalog entry carries reasoning efforts, so the column is
+  // present on first open; it is hidden only for a model that supports none.
+  const reasoning = menu.getByRole("group", { name: "Reasoning" });
+  await expect(models).toBeVisible();
+  await expect(reasoning).toBeVisible();
+
+  const [menuBox, modelsBox, reasoningBox] = await Promise.all([
+    menu.boundingBox(),
+    models.boundingBox(),
+    reasoning.boundingBox(),
+  ]);
+  expect(menuBox).not.toBeNull();
+  expect(modelsBox).not.toBeNull();
+  expect(reasoningBox).not.toBeNull();
+  expect(modelsBox!.x + modelsBox!.width).toBeLessThanOrEqual(reasoningBox!.x);
+  expect(reasoningBox!.x + reasoningBox!.width).toBeLessThanOrEqual(
+    menuBox!.x + menuBox!.width,
+  );
+  await expectNoHorizontalOverflow(page);
 });

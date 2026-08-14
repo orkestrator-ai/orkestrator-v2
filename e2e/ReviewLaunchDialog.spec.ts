@@ -52,8 +52,10 @@ test("short mobile viewports scroll configuration while keeping actions visible"
 
   await confirmButton.click();
   await expect(dialog).toBeHidden();
+  // `ReviewTabType` is `AgentPlatform` now; the native mode lives in the option
+  // label ("Claude Native"), not in the value, so the tab type is plain `claude`.
   await expect(page.getByTestId("review-launch-selection"))
-    .toHaveText("claude-native|claude-sonnet|default");
+    .toHaveText("claude|claude-sonnet|default");
 });
 
 test("provider choices follow native radio keyboard behavior", async ({

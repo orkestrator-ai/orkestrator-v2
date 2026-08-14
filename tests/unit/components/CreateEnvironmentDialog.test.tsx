@@ -49,6 +49,41 @@ function rgbaBuffer(width: number, height: number): Uint8Array {
   return new Uint8Array(width * height * 4);
 }
 
+const AGENT_MODEL_PICKER_NAME = "Agent, model and reasoning";
+
+function getAgentModelPicker() {
+  return screen.getByRole("combobox", { name: AGENT_MODEL_PICKER_NAME });
+}
+
+function openAgentModelPicker() {
+  const picker = getAgentModelPicker();
+  if (picker.getAttribute("aria-expanded") !== "true") {
+    fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
+  }
+  return picker;
+}
+
+async function selectAgentPlatform(label: "Claude" | "Codex" | "OpenCode") {
+  openAgentModelPicker();
+  fireEvent.click(
+    await screen.findByRole("button", { name: `${label.toLowerCase()} models` }),
+  );
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+  await waitFor(() =>
+    expect(getAgentModelPicker().getAttribute("aria-expanded")).toBe("false"),
+  );
+}
+
+async function selectAgentModel(name: string | RegExp) {
+  openAgentModelPicker();
+  fireEvent.click(await screen.findByRole("menuitemradio", { name }));
+}
+
+async function selectReasoning(name: string) {
+  openAgentModelPicker();
+  fireEvent.click(await screen.findByRole("menuitemradio", { name }));
+}
+
 describe("resolveAgentDefaults", () => {
   beforeEach(() => {
     cleanup();
@@ -261,13 +296,9 @@ describe("resolveAgentDefaults", () => {
         name: "Create Ork (Environment) - Orkestrator",
       }),
     ).toBeTruthy();
-    expect(
-      screen.getAllByRole("radio").map((control) => control.getAttribute("aria-label")),
-    ).toEqual(["Claude", "Codex", "OpenCode"]);
-    expect(screen.getByRole("combobox", { name: "Model" })).toBeTruthy();
-    expect(
-      screen.getByRole("combobox", { name: "Reasoning effort" }),
-    ).toBeTruthy();
+    expect(screen.queryByRole("radiogroup", { name: "Default Agent" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Reasoning effort" })).toBeNull();
+    expect(getAgentModelPicker()).toBeTruthy();
     expect(
       (screen.getByRole("checkbox", { name: "Use TUI" }) as HTMLButtonElement)
         .getAttribute("data-state"),
@@ -683,7 +714,7 @@ describe("resolveAgentDefaults", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("radio", { name: "Codex" }));
+    await selectAgentPlatform("Codex");
     fireEvent.click(screen.getByRole("checkbox", { name: "Use TUI" }));
     fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
       target: { value: "Review the migration plan" },
@@ -711,15 +742,9 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("radio", { name: "Codex" }));
-    fireEvent.click(screen.getByRole("combobox", { name: "Model" }));
-    fireEvent.click(
-      await screen.findByRole("option", { name: "GPT-5.4-Mini" }),
-    );
-    fireEvent.click(
-      screen.getByRole("combobox", { name: "Reasoning effort" }),
-    );
-    fireEvent.click(await screen.findByRole("option", { name: "High" }));
+    await selectAgentPlatform("Codex");
+    await selectAgentModel(/GPT-5\.4-Mini/);
+    await selectReasoning("High");
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => {
@@ -729,6 +754,122 @@ describe("resolveAgentDefaults", () => {
           model: "gpt-5.4-mini",
           reasoningEffort: "high",
         }),
+      );
+    });
+  });
+
+  test("keeps a still-supported effort when switching models within one agent", async () => {
+    // The cross-agent branch re-derives the effort from the target agent's
+    // defaults. The same-agent branch must instead keep what the user chose,
+    // which only shows up when the new model still supports it.
+    useCodexStore.setState({
+      models: [
+        {
+          id: "codex-a",
+          name: "Codex A",
+          description: "First",
+          reasoningEfforts: ["medium", "high"],
+        },
+        {
+          id: "codex-b",
+          name: "Codex B",
+          description: "Second",
+          reasoningEfforts: ["medium", "high"],
+        },
+      ],
+    });
+    const config = structuredClone(defaultConfig);
+    config.global.defaultAgent = "codex";
+    config.global.codexModel = "codex-a";
+    // Deliberately different from the effort the user picks below, so falling
+    // back to the agent's configured default is distinguishable from keeping
+    // the user's choice.
+    config.global.codexReasoningEffort = "medium";
+    useConfigStore.setState({ config });
+    const onCreate = mock(async () => {});
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+      />,
+    );
+
+    expect(getAgentModelPicker().textContent).toContain("Codex A");
+    expect(getAgentModelPicker().textContent).toContain("Medium");
+
+    await selectReasoning("High");
+    await waitFor(() =>
+      expect(getAgentModelPicker().textContent).toContain("High")
+    );
+
+    await selectAgentModel(/Codex B/);
+
+    await waitFor(() => {
+      expect(getAgentModelPicker().textContent).toContain("Codex B");
+      expect(getAgentModelPicker().textContent).toContain("High");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentType: "codex",
+          model: "codex-b",
+          reasoningEffort: "high",
+        }),
+      );
+    });
+  });
+
+  test("keeps the chosen model when the already-selected agent is picked again", async () => {
+    // Selecting a platform resets that agent's model to its configured default.
+    // Re-selecting the agent already in use is not a change and must not throw
+    // away a model the user picked after opening the dialog.
+    useCodexStore.setState({
+      models: [
+        {
+          id: "codex-a",
+          name: "Codex A",
+          description: "First",
+          reasoningEfforts: [],
+        },
+        {
+          id: "codex-b",
+          name: "Codex B",
+          description: "Second",
+          reasoningEfforts: [],
+        },
+      ],
+    });
+    const config = structuredClone(defaultConfig);
+    config.global.defaultAgent = "codex";
+    config.global.codexModel = "codex-a";
+    useConfigStore.setState({ config });
+    const onCreate = mock(async () => {});
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+      />,
+    );
+
+    await selectAgentModel(/Codex B/);
+    await waitFor(() =>
+      expect(getAgentModelPicker().textContent).toContain("Codex B")
+    );
+
+    await selectAgentPlatform("Codex");
+
+    expect(getAgentModelPicker().textContent).toContain("Codex B");
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ agentType: "codex", model: "codex-b" }),
       );
     });
   });
@@ -754,7 +895,7 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("radio", { name: "OpenCode" }));
+    await selectAgentPlatform("OpenCode");
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => {
@@ -777,9 +918,8 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("radio", { name: "Claude" }));
-    fireEvent.click(screen.getByRole("combobox", { name: "Model" }));
-    fireEvent.click(await screen.findByRole("option", { name: "Default (recommended)" }));
+    await selectAgentPlatform("Claude");
+    await selectAgentModel(/Default \(recommended\)/);
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => {
@@ -799,9 +939,8 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("radio", { name: "Codex" }));
-    fireEvent.click(screen.getByRole("combobox", { name: "Reasoning effort" }));
-    fireEvent.click(await screen.findByRole("option", { name: "Default" }));
+    await selectAgentPlatform("Codex");
+    await selectReasoning("Default");
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => {
@@ -811,7 +950,7 @@ describe("resolveAgentDefaults", () => {
     });
   });
 
-  test("disables the reasoning effort select when the model supports none", async () => {
+  test("omits reasoning choices when the selected model supports none", async () => {
     useOpenCodeStore.setState({ models: new Map() });
     render(
       <CreateEnvironmentDialog
@@ -821,17 +960,15 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("radio", { name: "OpenCode" }));
-    await waitFor(() => {
-      expect(
-        screen.getByRole("combobox", { name: "Reasoning effort" })
-          .hasAttribute("disabled"),
-      ).toBe(true);
-    });
-    // The model select stays usable — only the dependent control is disabled.
-    expect(
-      screen.getByRole("combobox", { name: "Model" }).hasAttribute("disabled"),
-    ).toBe(false);
+    await selectAgentPlatform("OpenCode");
+    expect(getAgentModelPicker().hasAttribute("disabled")).toBe(false);
+    openAgentModelPicker();
+    expect(screen.queryByRole("group", { name: "Reasoning" })).toBeNull();
+    expect(screen.getByPlaceholderText("Search models...")).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await waitFor(() =>
+      expect(getAgentModelPicker().getAttribute("aria-expanded")).toBe("false"),
+    );
   });
 
   test("honors project mode defaults in the checkbox and submission", async () => {
@@ -898,7 +1035,7 @@ describe("resolveAgentDefaults", () => {
     );
 
     expect(
-      screen.getByRole("combobox", { name: "Reasoning effort" }).textContent,
+      getAgentModelPicker().textContent,
     ).toContain("High");
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() =>
@@ -944,7 +1081,7 @@ describe("resolveAgentDefaults", () => {
       />,
     );
     expect(
-      screen.getByRole("combobox", { name: "Reasoning effort" }).textContent,
+      getAgentModelPicker().textContent,
     ).toContain("Medium");
 
     unmount();
@@ -959,7 +1096,7 @@ describe("resolveAgentDefaults", () => {
       />,
     );
     expect(
-      screen.getByRole("combobox", { name: "Reasoning effort" }).textContent,
+      getAgentModelPicker().textContent,
     ).toContain("Default");
   });
 
@@ -1000,11 +1137,11 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    expect(screen.getByRole("combobox", { name: "Model" }).textContent).toContain("Model B");
+    expect(getAgentModelPicker().textContent).toContain("Model B");
     expect(
-      screen.getByRole("combobox", { name: "Reasoning effort" }).textContent,
+      getAgentModelPicker().textContent,
     ).toContain("Deep");
-    fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+    fireEvent.pointerDown(getAgentModelPicker(), {
       button: 0,
       ctrlKey: false,
     });
@@ -1080,26 +1217,25 @@ describe("resolveAgentDefaults", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      expect(getAgentModelPicker().textContent)
         .toContain("Durable Model A");
-      expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
+      expect(getAgentModelPicker().textContent)
         .toContain("Fast");
     });
 
-    fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+    fireEvent.pointerDown(getAgentModelPicker(), {
       button: 0,
       ctrlKey: false,
     });
     fireEvent.click(
       await screen.findByRole("menuitemradio", { name: /Durable Model B/ }),
     );
-    expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+    expect(getAgentModelPicker().textContent)
       .toContain("Durable Model B");
-    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
+    expect(getAgentModelPicker().textContent)
       .toContain("Default");
 
-    fireEvent.click(screen.getByRole("combobox", { name: "Reasoning effort" }));
-    fireEvent.click(await screen.findByRole("option", { name: "Deep" }));
+    await selectReasoning("Deep");
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => {
@@ -1147,12 +1283,12 @@ describe("resolveAgentDefaults", () => {
         projectId="favorite-project"
       />,
     );
-    fireEvent.click(screen.getByRole("radio", { name: "OpenCode" }));
+    await selectAgentPlatform("OpenCode");
     await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      expect(getAgentModelPicker().textContent)
         .toContain("Model A")
     );
-    fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+    fireEvent.pointerDown(getAgentModelPicker(), {
       button: 0,
       ctrlKey: false,
     });
@@ -1162,6 +1298,75 @@ describe("resolveAgentDefaults", () => {
     expect(options).toHaveLength(2);
     expect(options[0]?.textContent).toContain("Model B");
     expect(options[1]?.textContent).toContain("Model A");
+  });
+
+  test("preserves the target agent effort when selecting a cross-platform favorite", async () => {
+    useOpenCodeStore.setState({
+      models: new Map([
+        ["existing-env", [{
+          id: "provider/source",
+          name: "OpenCode Source",
+          provider: "Provider",
+          variants: ["deep"],
+        }]],
+      ]),
+    });
+    useCodexStore.setState({
+      models: [{
+        id: "codex-favorite",
+        name: "Codex Favorite",
+        description: "Favorite",
+        reasoningEfforts: ["high"],
+      }],
+    });
+    const config = structuredClone(defaultConfig);
+    config.global.defaultAgent = "opencode";
+    config.global.opencodeModel = "provider/source";
+    config.global.codexModel = "codex-favorite";
+    config.global.codexReasoningEffort = "high";
+    config.global.favoriteModels = [{ platform: "codex", modelId: "codex-favorite" }];
+    config.repositories["cross-platform"] = {
+      defaultBranch: "main",
+      prBaseBranch: "main",
+      defaultAgent: "opencode",
+      defaultModel: "provider/source",
+      defaultEffort: "deep",
+    };
+    useConfigStore.setState({ config });
+    const onCreate = mock(async () => {});
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+        projectId="cross-platform"
+      />,
+    );
+
+    expect(getAgentModelPicker().textContent).toContain("OpenCode Source");
+    expect(getAgentModelPicker().textContent).toContain("Deep");
+    openAgentModelPicker();
+    fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
+    fireEvent.click(
+      await screen.findByRole("menuitemradio", { name: /Codex Favorite/ }),
+    );
+
+    await waitFor(() => {
+      expect(getAgentModelPicker().textContent).toContain("Codex Favorite");
+      expect(getAgentModelPicker().textContent).toContain("High");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentType: "codex",
+          model: "codex-favorite",
+          reasoningEffort: "high",
+        }),
+      );
+    });
   });
 
   test("prefers a live OpenCode catalog over the durable project cache", async () => {
@@ -1206,12 +1411,12 @@ describe("resolveAgentDefaults", () => {
         projectId="live-project"
       />,
     );
-    fireEvent.click(screen.getByRole("radio", { name: "OpenCode" }));
+    await selectAgentPlatform("OpenCode");
     await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      expect(getAgentModelPicker().textContent)
         .toContain("Live Model")
     );
-    fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+    fireEvent.pointerDown(getAgentModelPicker(), {
       button: 0,
       ctrlKey: false,
     });
@@ -1234,7 +1439,7 @@ describe("resolveAgentDefaults", () => {
         onCreate={mock(async () => {})}
       />,
     );
-    fireEvent.click(screen.getByRole("radio", { name: "OpenCode" }));
+    await selectAgentPlatform("OpenCode");
     expect(invokeMock).not.toHaveBeenCalledWith("get_opencode_model_preferences");
     expect(invokeMock).not.toHaveBeenCalledWith(
       "get_opencode_model_catalog_cache",
@@ -1278,10 +1483,10 @@ describe("resolveAgentDefaults", () => {
     const { rerender } = render(
       <CreateEnvironmentDialog {...props} projectId="project-a" />,
     );
-    fireEvent.click(screen.getByRole("radio", { name: "OpenCode" }));
+    await selectAgentPlatform("OpenCode");
     rerender(<CreateEnvironmentDialog {...props} projectId="project-b" />);
     await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      expect(getAgentModelPicker().textContent)
         .toContain("Project B Model")
     );
 
@@ -1299,7 +1504,7 @@ describe("resolveAgentDefaults", () => {
       });
       await projectA.promise;
     });
-    expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+    expect(getAgentModelPicker().textContent)
       .toContain("Project B Model");
   });
 
@@ -1341,16 +1546,16 @@ describe("resolveAgentDefaults", () => {
     const { rerender } = render(
       <CreateEnvironmentDialog open {...props} />,
     );
-    fireEvent.click(screen.getByRole("radio", { name: "OpenCode" }));
+    await selectAgentPlatform("OpenCode");
     await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      expect(getAgentModelPicker().textContent)
         .toContain("Old Cached Model")
     );
 
     rerender(<CreateEnvironmentDialog open={false} {...props} />);
     rerender(<CreateEnvironmentDialog open {...props} />);
     await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      expect(getAgentModelPicker().textContent)
         .not.toContain("Old Cached Model")
     );
   });
@@ -1393,9 +1598,9 @@ describe("resolveAgentDefaults", () => {
         projectId="current-project"
       />,
     );
-    fireEvent.click(screen.getByRole("radio", { name: "OpenCode" }));
+    await selectAgentPlatform("OpenCode");
     await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      expect(getAgentModelPicker().textContent)
         .not.toContain("Wrong Project Model")
     );
     expect(invokeMock).toHaveBeenCalledWith(
@@ -1448,12 +1653,12 @@ describe("resolveAgentDefaults", () => {
       />,
     );
     await waitFor(() => {
-      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      expect(getAgentModelPicker().textContent)
         .toContain("configured/missing-model");
-      expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
+      expect(getAgentModelPicker().textContent)
         .toContain("Turbo");
     });
-    fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+    fireEvent.pointerDown(getAgentModelPicker(), {
       button: 0,
       ctrlKey: false,
     });
@@ -1521,9 +1726,9 @@ describe("resolveAgentDefaults", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      expect(getAgentModelPicker().textContent)
         .toContain("Configured Model");
-      expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
+      expect(getAgentModelPicker().textContent)
         .toContain("Turbo");
     });
   });
@@ -1564,10 +1769,10 @@ describe("resolveAgentDefaults", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      expect(getAgentModelPicker().textContent)
         .toContain("Durable Model A")
     );
-    fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+    fireEvent.pointerDown(getAgentModelPicker(), {
       button: 0,
       ctrlKey: false,
     });
@@ -1618,10 +1823,10 @@ describe("resolveAgentDefaults", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      expect(getAgentModelPicker().textContent)
         .toContain("Durable Model A")
     );
-    fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+    fireEvent.pointerDown(getAgentModelPicker(), {
       button: 0,
       ctrlKey: false,
     });
@@ -1662,7 +1867,7 @@ describe("resolveAgentDefaults", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      expect(getAgentModelPicker().textContent)
         .toContain("provider/configured")
     );
 
@@ -1683,7 +1888,7 @@ describe("resolveAgentDefaults", () => {
     // Still valid in the arriving catalogue, so the choice survives — now
     // rendered with the catalogue's friendly name rather than the raw id.
     await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      expect(getAgentModelPicker().textContent)
         .toContain("Configured")
     );
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
@@ -1725,10 +1930,9 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("combobox", { name: "Model" }));
-    fireEvent.click(await screen.findByRole("option", { name: "Codex Low" }));
+    await selectAgentModel(/Codex Low/);
     expect(
-      screen.getByRole("combobox", { name: "Reasoning effort" }).textContent,
+      getAgentModelPicker().textContent,
     ).toContain("Default");
 
     await act(async () => {
@@ -1742,9 +1946,9 @@ describe("resolveAgentDefaults", () => {
       });
     });
     await waitFor(() => {
-      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      expect(getAgentModelPicker().textContent)
         .toContain("Codex Refreshed");
-      expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
+      expect(getAgentModelPicker().textContent)
         .toContain("Default");
     });
   });
@@ -1797,7 +2001,7 @@ describe("resolveAgentDefaults", () => {
         />,
       );
 
-      fireEvent.click(screen.getByRole("radio", { name: agentLabel }));
+      await selectAgentPlatform(agentLabel);
       const useTui = screen.getByRole("checkbox", { name: "Use TUI" });
       const isTerminal = useTui.getAttribute("data-state") === "checked";
       if ((selectedMode === "Terminal") !== isTerminal) {

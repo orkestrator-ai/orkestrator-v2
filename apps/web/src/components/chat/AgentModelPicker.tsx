@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, RefreshCw, Star, Zap } from "lucide-react";
 import {
   DropdownMenu,
@@ -27,6 +27,16 @@ interface AgentModelPickerProps {
   favorites?: AgentModelRef[];
   onPlatformChange?: (platform: AgentPlatform) => void;
   onToggleFavorite?: (model: AgentModel) => void;
+  /**
+   * Applies a chosen model and its platform in one update.
+   *
+   * A consumer whose model list is derived from the selected platform cannot
+   * use `onPlatformChange` + `onModelChange`: the platform handler runs first
+   * and the model handler then validates the new id against the *previous*
+   * platform's catalog. Supplying this instead replaces both calls with a
+   * single atomic one.
+   */
+  onModelSelect?: (model: AgentModel) => void;
   selectedModelId?: string;
   selectedModelLabel: string;
   onModelChange: (modelId: string) => void;
@@ -70,15 +80,14 @@ function ModelItems({
   selectedModelId,
   selectedPlatform,
   disabled,
-  onModelChange,
-  onPlatformChange,
+  onSelect,
   emptyLabel = "No models available",
   favorites = [],
   onToggleFavorite,
 }: Pick<
   AgentModelPickerProps,
-  "models" | "selectedModelId" | "selectedPlatform" | "disabled" | "onModelChange" | "onPlatformChange" | "favorites" | "onToggleFavorite"
-> & { emptyLabel?: string }) {
+  "models" | "selectedModelId" | "selectedPlatform" | "disabled" | "favorites" | "onToggleFavorite"
+> & { emptyLabel?: string; onSelect: (model: AgentModel) => void }) {
   const favoriteKeys = new Set(favorites.map((favorite) => `${favorite.platform}:${favorite.modelId}`));
   const selectedModelKey = selectedModelId
     ? `${selectedPlatform ?? models.find((model) => model.id === selectedModelId)?.platform}:${selectedModelId}`
@@ -95,8 +104,7 @@ function ModelItems({
           (candidate) => `${candidate.platform}:${candidate.id}` === modelKey,
         );
         if (!model) return;
-        onPlatformChange?.(model.platform);
-        onModelChange(model.id);
+        onSelect(model);
       }}
     >
       {models.map((model) => {
@@ -229,6 +237,7 @@ export function AgentModelPicker({
   favorites = [],
   onPlatformChange,
   onToggleFavorite,
+  onModelSelect,
   selectedModelId,
   selectedModelLabel,
   onModelChange,
@@ -263,6 +272,19 @@ export function AgentModelPicker({
   useEffect(() => {
     if (selectedPlatform) setCatalogView(selectedPlatform);
   }, [selectedPlatform]);
+  // The one place that decides how a model choice reaches the consumer, so the
+  // rendered lists cannot disagree about it.
+  const commitModelSelection = useCallback(
+    (model: AgentModel) => {
+      if (onModelSelect) {
+        onModelSelect(model);
+        return;
+      }
+      onPlatformChange?.(model.platform);
+      onModelChange(model.id);
+    },
+    [onModelChange, onModelSelect, onPlatformChange],
+  );
   const visibleModels = useMemo(() => {
     const byKey = new Map(models.map((model) => [`${model.platform}:${model.id}`, model]));
     const ordered = catalogView === "favorites"
@@ -558,8 +580,7 @@ export function AgentModelPicker({
                 selectedModelId={selectedModelId}
                 selectedPlatform={selectedPlatform}
                 disabled={disabled}
-                onModelChange={onModelChange}
-                onPlatformChange={onPlatformChange}
+                onSelect={commitModelSelection}
                 emptyLabel={normalizedSearch ? "No matches" : "No models available"}
                 favorites={favorites}
                 onToggleFavorite={onToggleFavorite}
@@ -703,8 +724,7 @@ export function AgentModelPicker({
                   selectedModelId={selectedModelId}
                   selectedPlatform={selectedPlatform}
                   disabled={disabled}
-                  onModelChange={onModelChange}
-                  onPlatformChange={onPlatformChange}
+                  onSelect={commitModelSelection}
                   emptyLabel={models.length > 0 ? "No matches" : "No models available"}
                   favorites={favorites}
                   onToggleFavorite={onToggleFavorite}

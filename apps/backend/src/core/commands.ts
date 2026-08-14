@@ -9834,7 +9834,7 @@ export function createCommandRegistry(
         ? await peekContainerAgentBridge(environment.containerId, "opencode")
         : null;
     const liveOpenCodeModels = context.nativeAgents && runningOpenCodeBridge
-      ? await context.nativeAgents.listProjectionModels({
+      ? await context.nativeAgents.listModelCatalogForCache({
           environmentId: id,
           agent: "opencode",
           logicalSessionKey: `model-catalog:${id}`,

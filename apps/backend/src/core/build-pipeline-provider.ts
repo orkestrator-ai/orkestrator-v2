@@ -501,6 +501,13 @@ export interface BuildPipelineProvider {
 export interface NativeAgentRuntimeProvider extends BuildPipelineProvider {
   /** Live, bounded model discovery for launch surfaces without a session yet. */
   modelCatalog?(): Promise<AgentModel[]>;
+  /**
+   * Backend-only bounded discovery for the durable OpenCode cache. Unlike
+   * `modelCatalog`, this retains an unfiltered bounded source catalogue so a
+   * later allowlist expansion can work before another bridge is started. It
+   * must never be returned directly to a renderer.
+   */
+  rawModelCatalog?(): Promise<AgentModel[]>;
   interactiveSnapshot?(sessionId: string): Promise<ProviderInteractiveSnapshot>;
   updateInteractiveControls?(
     sessionId: string,
@@ -3495,10 +3502,11 @@ class OpenCodeProvider implements BuildPipelineProvider {
     ) => Promise<unknown>).call(owner, parameters, this.requestOptions());
   }
 
-  private async readComposerCatalog(): Promise<
+  private async readComposerCatalog(
+    allowedProviders: readonly string[],
+  ): Promise<
     ReturnType<typeof normalizeOpenCodeComposerCatalog>
   > {
-    const allowedProviders = await this.openCodeModelProviders();
     const providersKey = openCodeModelProvidersKey(allowedProviders);
     if (
       this.catalogMetadata
@@ -3549,7 +3557,16 @@ class OpenCodeProvider implements BuildPipelineProvider {
   }
 
   async modelCatalog(): Promise<AgentModel[]> {
-    return (await this.readComposerCatalog()).models;
+    return (await this.readComposerCatalog(
+      await this.openCodeModelProviders(),
+    )).models;
+  }
+
+  async rawModelCatalog(): Promise<AgentModel[]> {
+    // The empty allowlist has the documented provider-filter meaning of
+    // unrestricted, while `normalizeOpenCodeComposerCatalog` still enforces
+    // its provider/model bounds before this reaches persistent storage.
+    return (await this.readComposerCatalog([])).models;
   }
 
   private async monitorRequests(): Promise<void> {
@@ -4732,9 +4749,8 @@ class OpenCodeProvider implements BuildPipelineProvider {
     // Resolved before the cache is consulted: this entry carries a catalogue
     // filtered against a specific allowlist, and a settings edit must invalidate
     // it here as well as in `readComposerCatalog`.
-    const providersKey = openCodeModelProvidersKey(
-      await this.openCodeModelProviders(),
-    );
+    const allowedProviders = await this.openCodeModelProviders();
+    const providersKey = openCodeModelProvidersKey(allowedProviders);
     const cached = this.interactiveMetadata.get(sessionId);
     if (
       cached
@@ -4754,7 +4770,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
       this.optionalSdkCall("session", "todo", { sessionID: sessionId, directory }),
       this.optionalSdkCall("session", "diff", { sessionID: sessionId, directory }),
       this.optionalSdkCall("session", "get", { sessionID: sessionId, directory }),
-      this.readComposerCatalog(),
+      this.readComposerCatalog(allowedProviders),
     ]);
     const data = (index: number, fallback: unknown): unknown => {
       const result = results[index];

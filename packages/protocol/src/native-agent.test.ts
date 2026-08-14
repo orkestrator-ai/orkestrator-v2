@@ -34,6 +34,15 @@ describe("opencode model provider allowlist", () => {
     expect(isSelectableOpenCodeProvider("hpc-ai", [])).toBe(true);
   });
 
+  test("falls back to the managed defaults for a nonempty unusable list", () => {
+    for (const value of [[""], ["  ", null], [42, {}]]) {
+      expect(normalizeOpenCodeModelProviders(value)).toEqual([
+        "opencode",
+        "opencode-go",
+      ]);
+    }
+  });
+
   test("lowercases, trims, and dedupes stored ids", () => {
     expect(normalizeOpenCodeModelProviders([
       "  OpenCode ",

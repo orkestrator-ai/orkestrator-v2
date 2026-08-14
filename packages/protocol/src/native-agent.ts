@@ -86,6 +86,10 @@ export function openCodeModelProviderId(modelId: string): string {
  */
 export function normalizeOpenCodeModelProviders(value: unknown): string[] {
   if (!Array.isArray(value)) return [...DEFAULT_OPENCODE_MODEL_PROVIDERS];
+  // An empty array is the user's explicit opt-in to OpenCode's full catalogue.
+  // A non-empty array that normalizes to nothing is malformed config, not that
+  // opt-in, and must retain the managed default rather than fail open.
+  if (value.length === 0) return [];
   const providers: string[] = [];
   const seen = new Set<string>();
   for (const entry of value) {
@@ -98,7 +102,9 @@ export function normalizeOpenCodeModelProviders(value: unknown): string[] {
     providers.push(id);
     if (providers.length >= MAX_OPENCODE_MODEL_PROVIDERS) break;
   }
-  return providers;
+  return providers.length > 0
+    ? providers
+    : [...DEFAULT_OPENCODE_MODEL_PROVIDERS];
 }
 
 /**

@@ -4028,6 +4028,44 @@ describe("OpenCode build pipeline provider", () => {
     }
   });
 
+  test("keeps the bounded raw catalogue available for durable cache refreshes", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: {
+        list: mock(async () => ({
+          data: {
+            providers: [
+              {
+                id: "opencode",
+                name: "OpenCode",
+                models: { "claude-sonnet-5": { name: "Claude Sonnet 5" } },
+              },
+              {
+                id: "openrouter",
+                name: "OpenRouter",
+                models: { "kimi-k2.5": { name: "Kimi K2.5" } },
+              },
+            ],
+          },
+        })),
+      },
+    });
+    const provider = openCodeActivityProvider(fake, {
+      resolveOpenCodeModelProviders: () => ["opencode"],
+    });
+    try {
+      await expect(provider.modelCatalog?.()).resolves.toEqual([
+        expect.objectContaining({ id: "opencode/claude-sonnet-5" }),
+      ]);
+      await expect(provider.rawModelCatalog?.()).resolves.toEqual([
+        expect.objectContaining({ id: "opencode/claude-sonnet-5" }),
+        expect.objectContaining({ id: "openrouter/kimi-k2.5" }),
+      ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("treats an empty allowlist as unrestricted", async () => {
     const fake = openCodeFake();
     Object.assign(fake.client as object, {

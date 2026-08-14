@@ -510,7 +510,9 @@ describe("direct backend command registry coverage", () => {
       })),
     });
     (context as unknown as { nativeAgents: unknown }).nativeAgents = {
-      listProjectionModels: mock(async () => liveModels),
+      // The real service uses the provider's backend-only raw catalogue here;
+      // picker responses remain filtered below in the command.
+      listModelCatalogForCache: mock(async () => liveModels),
     };
 
     const health = await startHealthServer();

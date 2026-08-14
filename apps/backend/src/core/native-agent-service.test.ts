@@ -16,6 +16,7 @@ import {
   createBuildPipelineProvider,
   AmbiguousPromptDispatchError,
   PromptRejectedError,
+  ProviderSessionFailedError,
   ProviderUnavailableError,
   type BridgeConnection,
   type BuildPipelineProvider,
@@ -722,6 +723,76 @@ describe("NativeAgentService", () => {
       expect(resolved).not.toBeNull();
       expect(resolved).toMatchObject({ turn: { phase: "idle" } });
       expect(cache.has(evictedKey)).toBe(true);
+    });
+  });
+
+  test("keeps an at-capacity session usable so a new model can continue it", async () => {
+    // Codex answers a turn it could not run with a terminal session error. The
+    // thread, rollout and config all survive it, and the fix is to pick another
+    // model and send again — so neither the liveness probe nor the dispatch may
+    // treat the previous turn's failure as a dead session.
+    const stub = createProviderStub("codex", {
+      status: async () => {
+        throw new ProviderSessionFailedError(
+          "codex",
+          "Selected model is at capacity. Please try a different model.",
+        );
+      },
+      interactiveSnapshot: async () => ({
+        status: "error",
+        messages: [],
+        error: "Selected model is at capacity. Please try a different model.",
+      }),
+    });
+    await withService({
+      prefix: "orkestrator-native-at-capacity-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-capacity",
+      };
+      const created = await service.ensureSession({ ...identity, model: "gpt-5.6-sol" });
+
+      const reused = await service.ensureSession({ ...identity, model: "gpt-5.6-luna" });
+      expect(reused.providerSessionId).toBe(created.providerSessionId);
+      expect(stub.createSession).toHaveBeenCalledTimes(1);
+
+      await service.dispatchPrompt({
+        ...identity,
+        prompt: "Please continue",
+        requestId: "request-after-capacity",
+        model: "gpt-5.6-luna",
+      });
+      expect(stub.send).toHaveBeenCalledTimes(1);
+      expect(stub.send.mock.calls[0]?.[1]).toBe("Please continue");
+
+      // The failure is still reported — it just no longer blocks the composer.
+      const projection = await service.getProjection(identity);
+      expect(projection?.turn).toMatchObject({
+        phase: "error",
+        error: "Selected model is at capacity. Please try a different model.",
+      });
+    });
+  });
+
+  test("adopts a session whose last turn failed rather than calling it missing", async () => {
+    const stub = createProviderStub("codex", {
+      status: async () => {
+        throw new ProviderSessionFailedError("codex", "usage limit reached");
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-adopt-failed-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      await expect(service.adoptSession({
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "env-env-1:tab-adopt-failed",
+        providerSessionId: "provider-existing",
+      })).resolves.toMatchObject({ providerSessionId: "provider-existing" });
     });
   });
 

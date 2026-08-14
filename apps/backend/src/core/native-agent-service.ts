@@ -53,6 +53,7 @@ import {
   createBuildPipelineProvider,
   PromptRejectedError,
   ProviderUnavailableError,
+  readProviderStatus,
   type BridgeConnection,
   type NativeAgentRuntimeProvider,
   type ProviderInteractionObservationEvent,
@@ -674,7 +675,18 @@ export class NativeAgentService {
         interactionPolicy: existing.interactionPolicy,
         phase: input.phase,
       });
-      const status = await provider.status(existing.providerSessionId);
+      /*
+       * Liveness only. A session whose last turn ended in a terminal error —
+       * "Selected model is at capacity", a usage limit, a transport fault — is
+       * still a live session with an intact rollout, and the user's next move is
+       * usually to change model and continue. Letting that error escape here
+       * failed every later ensure/dispatch on the *previous* turn's failure, so
+       * the tab could never send the message that would have cleared it.
+       */
+      const { status } = await readProviderStatus(
+        provider,
+        existing.providerSessionId,
+      );
       await this.assertEnvironmentLive(input.environmentId);
       if (status !== "missing") {
         void this.reconcileAgentInteractions().catch(() => undefined);
@@ -738,7 +750,9 @@ export class NativeAgentService {
           : INTERACTIVE_AGENT_INTERACTION_POLICY),
       phase: input.phase,
     });
-    const status = await provider.status(input.providerSessionId);
+    // Same liveness-only rule as ensureSession: a failed last turn is not a
+    // missing session, and adopting one must still succeed.
+    const { status } = await readProviderStatus(provider, input.providerSessionId);
     await this.assertEnvironmentLive(input.environmentId);
     if (status === "missing") {
       throw new Error("Native agent provider session was not found");
@@ -1444,7 +1458,13 @@ export class NativeAgentService {
             resolved.session.providerSessionId,
           )
         : {
-            status: await resolved.provider.status(resolved.session.providerSessionId),
+            // A terminal turn error belongs in the projection as `error` plus
+            // its detail, not as a thrown read that would report the whole
+            // runtime as unreachable.
+            ...await readProviderStatus(
+              resolved.provider,
+              resolved.session.providerSessionId,
+            ),
             messages: await resolved.provider.messages(resolved.session.providerSessionId),
           };
       if (snapshot.providerGeneration !== undefined) {
@@ -2530,7 +2550,11 @@ export class NativeAgentService {
               snapshot.requests.length > 0 ? "blocked" : "idle";
             if (snapshot.requests.length === 0) {
               try {
-                providerState = await provider.status(session.providerSessionId);
+                // A terminal turn error is an observation, not a read fault:
+                // it settles the withdrawn cards as `error` without putting the
+                // whole interaction scan into retry backoff.
+                providerState =
+                  (await readProviderStatus(provider, session.providerSessionId)).status;
               } catch (error) {
                 // The empty authoritative snapshot already proves withdrawal;
                 // a failed auxiliary status read must not preserve stale cards.
@@ -2711,13 +2735,14 @@ export class NativeAgentService {
               ? batchedActivity.get(session.providerSessionId)
               : provider.activity
                 ? await provider.activity(session.providerSessionId)
-                : await provider.status(session.providerSessionId).then((status) =>
-                    status === "missing"
-                      ? "missing"
-                      : status === "running"
-                        ? "working"
-                        : status === "blocked" ? "waiting" : "idle"
-                  );
+                : await readProviderStatus(provider, session.providerSessionId)
+                    .then(({ status }) =>
+                      status === "missing"
+                        ? "missing"
+                        : status === "running"
+                          ? "working"
+                          : status === "blocked" ? "waiting" : "idle"
+                    );
             if (!activity) {
               throw new ProviderUnavailableError(
                 `Provider activity snapshot omitted ${session.providerSessionId}`,
@@ -3376,7 +3401,10 @@ export class NativeAgentService {
       reasoningEffort: this.queueReasoningEffort(head),
     });
     await this.assertEnvironmentLive(queue.environmentId);
-    const status = await provider.status(session.providerSessionId);
+    // Read as data: a failed last turn must defer with a bounded backoff and a
+    // reason, not escape as a throw that the outer handler can only report as
+    // an anonymous drain fault.
+    const { status } = await readProviderStatus(provider, session.providerSessionId);
     await this.assertEnvironmentLive(queue.environmentId);
     if (status === "running" || status === "blocked") return;
     if (status !== "idle") {

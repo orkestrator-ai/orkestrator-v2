@@ -424,15 +424,29 @@ function normalizeNativeUserAttachments(message: NativeMessage): NativeMessage {
   }
 
   // Some providers project a structured file part as well as echoing the XML
-  // wrapper. Keep the first copy so initial-prompt images never render twice.
-  const seenFiles = new Set<string>();
-  nextParts = nextParts.filter((part) => {
-    if (part.type !== "file") return true;
+  // wrapper. Keep the first copy so initial-prompt images never render twice,
+  // but merge the original filename when only the XML copy retained it.
+  const fileIndexes = new Map<string, number>();
+  const dedupedParts: NativeMessagePart[] = [];
+  for (const part of nextParts) {
+    if (part.type !== "file") {
+      dedupedParts.push(part);
+      continue;
+    }
     const identity = `${part.content}\0${part.fileUrl ?? ""}`;
-    if (seenFiles.has(identity)) return false;
-    seenFiles.add(identity);
-    return true;
-  });
+    const existingIndex = fileIndexes.get(identity);
+    if (existingIndex === undefined) {
+      fileIndexes.set(identity, dedupedParts.length);
+      dedupedParts.push(part);
+      continue;
+    }
+
+    const existing = dedupedParts[existingIndex];
+    if (existing?.type === "file" && !existing.filename && part.filename) {
+      dedupedParts[existingIndex] = { ...existing, filename: part.filename };
+    }
+  }
+  nextParts = dedupedParts;
 
   return {
     ...message,

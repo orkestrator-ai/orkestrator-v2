@@ -3,6 +3,7 @@ import {
   memo,
   useCallback,
   useContext,
+  useRef,
   useState,
   useMemo,
   useEffect,
@@ -1017,6 +1018,10 @@ function isImageReference(pathOrUrl?: string): boolean {
   ].some((ext) => lower.includes(ext));
 }
 
+function isRemoteImageUrl(fileUrl?: string): boolean {
+  return typeof fileUrl === "string" && /^https?:\/\//i.test(fileUrl);
+}
+
 function parseLocalFilePathFromUrl(fileUrl: string): string | null {
   if (!fileUrl.startsWith("file://")) return null;
 
@@ -1085,62 +1090,73 @@ function FilePart({
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  const imageLoadRef = useRef<Promise<string | null> | null>(null);
 
   const displayName = filename || path.split(/[\\/]/).pop() || path || "file";
   const isImage = isImageReference(fileUrl) || isImageReference(path);
 
-  const loadImage = useCallback(async () => {
-    if (!isImage) return null;
+  const loadImage = useCallback((): Promise<string | null> => {
+    if (!isImage) return Promise.resolve(null);
+    if (imageLoadRef.current) return imageLoadRef.current;
+
     setLoading(true);
     setLoadError(false);
-    try {
-      if (fileUrl?.startsWith("data:image/")) {
-        return fileUrl;
-      }
-
-      if (fileUrl?.startsWith("http://") || fileUrl?.startsWith("https://")) {
-        return fileUrl;
-      }
-
-      const localFilePath = fileUrl?.startsWith("file://")
-        ? parseLocalFilePathFromUrl(fileUrl)
-        : null;
-
-      if (containerId) {
-        const containerPath = localFilePath ?? path;
-        const relativePath = getSafeContainerRelativePath(containerPath);
-        if (!relativePath) {
-          throw new Error("Unsafe container image path");
+    const request = (async () => {
+      try {
+        if (fileUrl?.startsWith("data:image/")) {
+          return fileUrl;
         }
 
-        const base64 = await readContainerFileBase64(containerId, relativePath);
-        const mimeType = getMimeType(containerPath);
+        if (isRemoteImageUrl(fileUrl)) {
+          return fileUrl ?? null;
+        }
+
+        const localFilePath = fileUrl?.startsWith("file://")
+          ? parseLocalFilePathFromUrl(fileUrl)
+          : null;
+
+        if (containerId) {
+          const containerPath = localFilePath ?? path;
+          const relativePath = getSafeContainerRelativePath(containerPath);
+          if (!relativePath) {
+            throw new Error("Unsafe container image path");
+          }
+
+          const base64 = await readContainerFileBase64(containerId, relativePath);
+          const mimeType = getMimeType(containerPath);
+          return `data:${mimeType};base64,${base64}`;
+        }
+
+        const filePath = localFilePath ?? (path.startsWith("/") ? path : null);
+
+        if (!filePath) {
+          throw new Error("No readable local image path available");
+        }
+
+        const base64 = await readFileBase64(filePath);
+        const mimeType = getMimeType(filePath);
         return `data:${mimeType};base64,${base64}`;
+      } catch (err) {
+        console.error("[NativeMessage] Failed to load image preview:", err, {
+          path,
+          fileUrl,
+        });
+        setLoadError(true);
+        return null;
       }
-
-      const filePath = localFilePath ?? (path.startsWith("/") ? path : null);
-
-      if (!filePath) {
-        throw new Error("No readable local image path available");
+    })();
+    imageLoadRef.current = request;
+    void request.finally(() => {
+      if (imageLoadRef.current === request) {
+        imageLoadRef.current = null;
+        setLoading(false);
       }
-
-      const base64 = await readFileBase64(filePath);
-      const mimeType = getMimeType(filePath);
-      return `data:${mimeType};base64,${base64}`;
-    } catch (err) {
-      console.error("[NativeMessage] Failed to load image preview:", err, {
-        path,
-        fileUrl,
-      });
-      setLoadError(true);
-      return null;
-    } finally {
-      setLoading(false);
-    }
+    });
+    return request;
   }, [isImage, path, fileUrl, containerId]);
 
   useEffect(() => {
-    if (!eagerPreview || !isImage || imageSrc) return;
+    if (!eagerPreview || !isImage || imageSrc || isRemoteImageUrl(fileUrl)) return;
     let cancelled = false;
 
     void loadImage().then((source) => {
@@ -1150,7 +1166,7 @@ function FilePart({
     return () => {
       cancelled = true;
     };
-  }, [eagerPreview, imageSrc, isImage, loadImage]);
+  }, [eagerPreview, fileUrl, imageSrc, isImage, loadImage]);
 
   const handleClick = useCallback(async () => {
     if (!isImage) return;

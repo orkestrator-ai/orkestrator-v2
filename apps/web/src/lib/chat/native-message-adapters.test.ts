@@ -1267,10 +1267,10 @@ describe("native message adapters", () => {
     ]);
   });
 
-  test("does not duplicate a structured file part beside initial-prompt XML", () => {
+  test("deduplicates a structured file part and preserves the XML filename", () => {
     const rawContent = [
       "Inspect this",
-      '<attached-files><attachment type="image" path="/workspace/a.png" filename="a.png" /></attached-files>',
+      '<attached-files><attachment type="image" path="/workspace/generated-a.png" filename="original-a.png" /></attached-files>',
     ].join("\n");
     const message: NativeMessage = {
       id: "native-structured-initial-prompt",
@@ -1279,13 +1279,22 @@ describe("native message adapters", () => {
       createdAt: "2026-08-14T18:00:00.000Z",
       parts: [
         { type: "text", content: rawContent },
-        { type: "file", content: "/workspace/a.png", fileUrl: "/workspace/a.png" },
+        {
+          type: "file",
+          content: "/workspace/generated-a.png",
+          fileUrl: "/workspace/generated-a.png",
+        },
       ],
     };
 
     const normalized = normalizeNativeMessage(message);
 
-    expect(normalized.parts.filter((part) => part.type === "file")).toHaveLength(1);
+    expect(normalized.parts.filter((part) => part.type === "file")).toEqual([{
+      type: "file",
+      content: "/workspace/generated-a.png",
+      fileUrl: "/workspace/generated-a.png",
+      filename: "original-a.png",
+    }]);
   });
 
   test("leaves malformed attachment blocks in message text", () => {

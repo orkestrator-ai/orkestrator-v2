@@ -49,6 +49,8 @@ interface BridgeMessage {
   content: string;
   parts: BridgeMessagePart[];
   createdAt: string;
+  /** Model selected when this assistant response began. */
+  modelId?: string;
 }
 
 interface BridgeTextPart {
@@ -812,17 +814,7 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
   if (kind !== "agent_message_chunk" && kind !== "agent_thought_chunk") return;
   const text = contentText(update.content);
   if (!text) return;
-  let message = state.messages.at(-1);
-  if (!message || message.role !== "assistant" || state.status !== "running") {
-    message = {
-      id: randomBytes(12).toString("hex"),
-      role: "assistant",
-      content: "",
-      parts: [],
-      createdAt: new Date().toISOString(),
-    };
-    state.messages.push(message);
-  }
+  const message = currentAssistantMessage(state);
   const partType = kind === "agent_thought_chunk" ? "thinking" : "text";
   const previous = message.parts.at(-1);
   if (previous?.type !== partType && message.parts.length >= MAX_PARTS_PER_MESSAGE) {
@@ -1011,12 +1003,14 @@ function setOptionalPartField<TKey extends keyof BridgeToolPart>(
 function currentAssistantMessage(state: SessionState): BridgeMessage {
   let message = state.messages.at(-1);
   if (!message || message.role !== "assistant" || state.status !== "running") {
+    const modelId = state.sessionConfig.composer.selectedModelId?.trim();
     message = {
       id: randomBytes(12).toString("hex"),
       role: "assistant",
       content: "",
       parts: [],
       createdAt: new Date().toISOString(),
+      ...(modelId ? { modelId: truncateUtf8(modelId, 1_024) } : {}),
     };
     state.messages.push(message);
   }
@@ -2377,6 +2371,9 @@ function normalizeBridgeMessage(value: unknown): BridgeMessage | null {
         return normalized ? [normalized] : [];
       }),
     createdAt: value.createdAt.slice(0, 64),
+    ...(typeof value.modelId === "string" && value.modelId.trim()
+      ? { modelId: truncateUtf8(value.modelId.trim(), 1_024) }
+      : {}),
   };
 }
 

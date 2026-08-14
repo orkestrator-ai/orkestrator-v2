@@ -324,6 +324,71 @@ describe("ACP bridge", () => {
     ]);
   });
 
+  for (const { provider, modelId } of [
+    { provider: "cursor", modelId: "gpt-5.5" },
+    { provider: "grok", modelId: "grok-composer-2.5-fast" },
+  ] as const) {
+    test(`attributes ${provider} assistant messages to the selected model across restart`, async () => {
+      const stateDirectory = await temporaryDirectory();
+      const first = await spawnBridge({
+        stateDirectory,
+        env: { ACP_PROVIDER: provider },
+      });
+      const created = await nativeFetch(`${first.base}/session/create`, {
+        method: "POST",
+        headers: first.headers,
+        body: JSON.stringify({ clientSessionKey: `env-model:${provider}` }),
+      }).then((response) => response.json()) as { id: string };
+
+      const dispatched = await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers: first.headers,
+        body: JSON.stringify({
+          prompt: "DIRECT:model attribution",
+          requestId: `model-attribution-${provider}`,
+          modelId,
+        }),
+      });
+      expect(dispatched.status).toBe(202);
+
+      const session = await waitFor(
+        () => nativeFetch(`${first.base}/session/${created.id}`, { headers: first.headers })
+          .then((response) => response.json()) as Promise<{
+            status: string;
+            messages: Array<{ role: string; modelId?: string }>;
+          }>,
+        (value) => value.status === "idle",
+      );
+      expect(session.messages.find((message) => message.role === "assistant")?.modelId)
+        .toBe(modelId);
+
+      await waitFor(
+        () => fs.readFile(resolve(stateDirectory, "state.json"), "utf8")
+          .then((contents) => JSON.parse(contents) as {
+            sessions: Array<{ messages: Array<{ role: string; modelId?: string }> }>;
+          }),
+        (value) => value.sessions.some((persisted) =>
+          persisted.messages.some((message) =>
+            message.role === "assistant" && message.modelId === modelId
+          )
+        ),
+      );
+      await stopChild(first.child);
+
+      const restarted = await spawnBridge({
+        stateDirectory,
+        env: { ACP_PROVIDER: provider },
+      });
+      const restored = await nativeFetch(`${restarted.base}/session/${created.id}`, {
+        headers: restarted.headers,
+      }).then((response) => response.json()) as {
+        messages: Array<{ role: string; modelId?: string }>;
+      };
+      expect(restored.messages.find((message) => message.role === "assistant")?.modelId)
+        .toBe(modelId);
+    });
+  }
+
   test("keeps usage scoped to one turn and rehydrates the latest turn after restart", async () => {
     const stateDirectory = await temporaryDirectory();
     const first = await spawnBridge({ stateDirectory });

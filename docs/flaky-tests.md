@@ -91,6 +91,18 @@ history rather than two partial ones.
 - **Fix:** Split the initial-open and close-button focus behaviors into separate tests so each transition has an independent lifecycle and budget without weakening either assertion.
 - **Verification:** The owning file is stress-tested after the split and the subsequent aggregate result is recorded in this change's validation handoff.
 
+## `MultiReviewService keeps a provider alive while a transcript read overlaps fix execution` (`apps/backend/src/core/multi-review-service.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-full-tests4.log`
+- **Worker configuration:** the backend workspace package ran `bun test src tests --parallel` while the other workspace, root, bridge, and protocol-lockfile groups ran concurrently.
+- **Failure:** `expect(received).toBe(expected)` at `multi-review-service.test.ts:278` — expected `2` disposals, received `1` (duration: 132.84 ms). Line 278 is the second disposal assertion, made after the blocked status call is released and the run reaches `completed`.
+- **Suite counts:** the aggregate's only failure; every other group passed. Observed in three of five consecutive full runs on 2026-08-14 and absent from the other two.
+- **Isolated rerun:** `bun test --cwd apps/backend src/core/multi-review-service.test.ts` -> 31 passed, 1 failed on the first attempt, then five consecutive repetitions of the same command failed once and passed four times (32 passed, 0 failed).
+- **Not caused by the change under review:** reproduced on a clean tree with the working change stashed (`git stash push --include-untracked`), which failed the same assertion at 128.45 ms.
+- **Hypothesis:** the test waits for `phase === "completed"` and then asserts the disposal count, but reaching `completed` and disposing the provider are separate steps. When the scheduler runs the snapshot poll between them the count is still at its previous value. The assertion likely needs to wait on the disposal itself rather than on the phase that precedes it.
+
 ## `StorageService prompt queues > live lease timer restores and announces a sole claimed head` (`apps/backend/src/core/storage-prompt-queues.test.ts`)
 
 - **Status:** open

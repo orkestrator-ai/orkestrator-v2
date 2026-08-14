@@ -324,6 +324,148 @@ describe("ACP bridge", () => {
     ]);
   });
 
+  test("keeps usage scoped to one turn and rehydrates the latest turn after restart", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const first = await spawnBridge({ stateDirectory });
+    const created = await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ clientSessionKey: "env-usage:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    type UsageSnapshot = {
+      status: string;
+      contextUsage?: Record<string, unknown>;
+      runtime?: Record<string, unknown>;
+    };
+    const readSession = async (base: string, headers: Record<string, string>) =>
+      await nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as UsageSnapshot;
+
+    const before = await readSession(first.base, first.headers);
+    // Nothing has run, so there is no measurement to report — as opposed to a
+    // measurement of zero, which would render as a populated usage meter.
+    expect(before.contextUsage).toBeUndefined();
+    expect(before.runtime).toMatchObject({ state: "idle", version: "9.9.9" });
+
+    expect((await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ prompt: "USAGE: count the tokens" }),
+    })).status).toBe(202);
+
+    const session = await waitFor(
+      () => readSession(first.base, first.headers),
+      (value) => value.status === "idle" && value.contextUsage !== undefined,
+    );
+    expect(session.contextUsage).toMatchObject({
+      usedTokens: 15_675,
+      inputTokens: 15_639,
+      outputTokens: 36,
+      // Only `response_completed` reported the cache split. A later, sparser
+      // carrier for the same turn must not drop it.
+      cacheReadTokens: 5_888,
+      reasoningTokens: 31,
+      apiDurationMs: 1_448,
+      source: "provider",
+    });
+    expect(session.contextUsage?.durationMs).toBeGreaterThanOrEqual(0);
+    expect(session.contextUsage).not.toHaveProperty("costUsd");
+    expect(session.runtime).toMatchObject({
+      mcpServers: 2,
+      commands: 3,
+      version: "9.9.9",
+      state: "idle",
+    });
+
+    expect((await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ prompt: "USAGE_SPARSE: count the next turn" }),
+    })).status).toBe(202);
+
+    const sparseSession = await waitFor(
+      () => readSession(first.base, first.headers),
+      (value) => value.status === "idle" && value.contextUsage?.usedTokens === 222,
+    );
+    expect(sparseSession.contextUsage).toMatchObject({
+      usedTokens: 222,
+      inputTokens: 200,
+      outputTokens: 22,
+      source: "provider",
+    });
+    expect(sparseSession.contextUsage).not.toHaveProperty("cacheReadTokens");
+    expect(sparseSession.contextUsage).not.toHaveProperty("reasoningTokens");
+    expect(sparseSession.contextUsage).not.toHaveProperty("apiDurationMs");
+
+    first.child.kill("SIGTERM");
+    await Bun.sleep(200);
+    const second = await spawnBridge({ stateDirectory });
+    const restored = await readSession(second.base, second.headers);
+    expect(restored.contextUsage).toMatchObject({
+      usedTokens: 222,
+      inputTokens: 200,
+      outputTokens: 22,
+      source: "provider",
+    });
+    expect(restored.contextUsage).not.toHaveProperty("cacheReadTokens");
+    expect(restored.contextUsage).not.toHaveProperty("reasoningTokens");
+    expect(restored.contextUsage).not.toHaveProperty("apiDurationMs");
+    // The command list belongs to the session and survives with it; the agent
+    // version and MCP inventory come from a handshake this process has not had.
+    expect(restored.runtime).toMatchObject({ commands: 3 });
+  });
+
+  test("merges a usage carrier that arrives after its turn already resolved", async () => {
+    const bridge = await spawnBridge({ stateDirectory: await temporaryDirectory() });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-usage-late:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    const readSession = async () =>
+      await nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as {
+          status: string;
+          contextUsage?: Record<string, unknown>;
+        };
+
+    expect((await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "USAGE_LATE: report after the fact" }),
+    })).status).toBe(202);
+
+    // The prompt result is the only carrier this turn has while it is running,
+    // so the reasoning split is genuinely absent at this point rather than
+    // merely unobserved.
+    const settled = await waitFor(
+      readSession,
+      (value) => value.status === "idle" && value.contextUsage?.usedTokens === 900,
+    );
+    expect(settled.contextUsage).not.toHaveProperty("reasoningTokens");
+    const settledDurationMs = settled.contextUsage?.durationMs;
+    expect(settledDurationMs).toBeGreaterThanOrEqual(0);
+
+    const late = await waitFor(
+      readSession,
+      (value) => value.contextUsage?.reasoningTokens === 77,
+    );
+    // The carrier belongs to the turn that just ended, so it fills that turn's
+    // gap instead of being dropped or opening a new snapshot.
+    expect(late.contextUsage).toMatchObject({
+      usedTokens: 900,
+      inputTokens: 850,
+      outputTokens: 50,
+      reasoningTokens: 77,
+      source: "provider",
+    });
+    // No turn was in flight, so the elapsed time must be carried over rather
+    // than measured again from a clock this turn no longer owns.
+    expect(late.contextUsage?.durationMs).toBe(settledDurationMs);
+  });
+
   test("normalizes ACP tool calls, upserts updates, and rehydrates them after restart", async () => {
     const stateDirectory = await temporaryDirectory();
     const first = await spawnBridge({ stateDirectory });

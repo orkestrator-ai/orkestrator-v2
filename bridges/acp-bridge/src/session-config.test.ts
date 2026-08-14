@@ -24,7 +24,11 @@ function grokConfig() {
       availableModels: [{
         modelId: "grok-build",
         name: "Grok Build",
-        _meta: { reasoningEffort: "high", reasoningEfforts: [{ value: "low" }, { value: "high" }] },
+        _meta: {
+          reasoningEffort: "high",
+          reasoningEfforts: [{ value: "low" }, { value: "high" }],
+          totalContextTokens: 500_000,
+        },
       }],
     },
   });
@@ -205,6 +209,25 @@ describe("normalizeAcpSessionConfig", () => {
     expect(composer.models[0]?.reasoning?.map((option) => option.id)).toEqual(["low", "high", "xhigh"]);
     expect(composer.models[0]?.reasoning?.find((option) => option.id === "xhigh")?.label).toBe("Extra high");
     expect(composer.models[1]?.id).toBe("grok-composer-2.5-fast");
+  });
+
+  test("reads the Grok context window so the usage meter has a denominator", () => {
+    const { composer } = normalizeAcpSessionConfig("grok", {
+      models: {
+        currentModelId: "grok-4.6",
+        availableModels: [
+          { modelId: "grok-4.6", name: "Grok 4.6", _meta: { totalContextTokens: 500_000 } },
+          { modelId: "grok-4.5", name: "Grok 4.5", _meta: { totalContextTokens: "500000" } },
+          { modelId: "grok-4.4", name: "Grok 4.4" },
+        ],
+      },
+    });
+
+    expect(composer.models[0]?.contextWindow).toBe(500_000);
+    // A string is not a token count. Cursor advertises no window at all, and
+    // both cases must leave the meter unbounded rather than guess one.
+    expect(composer.models[1]?.contextWindow).toBeUndefined();
+    expect(composer.models[2]?.contextWindow).toBeUndefined();
   });
 });
 

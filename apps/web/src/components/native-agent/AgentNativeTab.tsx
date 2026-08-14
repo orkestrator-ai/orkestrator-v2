@@ -742,12 +742,8 @@ function SharedNativeAgentController({
     [projection?.messages],
   );
   const handoff = useAgentHandoff(
-    platform === "claude" || platform === "codex" || platform === "opencode"
-      ? agentHandoffId
-      : undefined,
-    platform === "claude" || platform === "codex" || platform === "opencode"
-      ? platform
-      : "claude",
+    agentHandoffId,
+    platform,
     data.environmentId,
     normalizedMessages,
     consumedAgentHandoffId,
@@ -1480,6 +1476,19 @@ function SharedNativeAgentController({
   const errorMessage = sendError ?? runtimeError ?? projection?.turn.error ?? null;
   const connectionState = projection?.connection
     ?? (isRefreshing ? "connecting" as const : "error" as const);
+  const contextUsage = projection?.contextUsage;
+  const maximumTokens = contextUsage?.maximumTokens;
+  const composeContextUsage = contextUsage
+    && maximumTokens !== undefined
+    && Number.isFinite(maximumTokens)
+    && maximumTokens > 0
+    ? {
+        usedTokens: contextUsage.usedTokens,
+        totalTokens: maximumTokens,
+        percentUsed: contextUsage.percentage
+          ?? Math.min(100, contextUsage.usedTokens / maximumTokens * 100),
+      }
+    : null;
 
   if (setupPending) {
     return (
@@ -1852,16 +1861,7 @@ function SharedNativeAgentController({
             isReviewTab && projection && !isTurnActive && messages.length > 0,
           )}
           onAddressAll={async () => { await submit(ADDRESS_ALL_REVIEW_PROMPT); }}
-          contextUsage={projection?.contextUsage ? {
-            usedTokens: projection.contextUsage.usedTokens,
-            totalTokens: projection.contextUsage.maximumTokens
-              ?? projection.contextUsage.usedTokens,
-            percentUsed: projection.contextUsage.percentage
-              ?? (projection.contextUsage.maximumTokens
-                ? Math.min(100, projection.contextUsage.usedTokens
-                  / projection.contextUsage.maximumTokens * 100)
-                : 0),
-          } : null}
+          contextUsage={composeContextUsage}
           queue={projection?.queue ? {
             length: queuedMessages.length,
             error: projection.queue.blocked

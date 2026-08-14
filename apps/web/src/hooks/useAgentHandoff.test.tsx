@@ -265,6 +265,38 @@ describe("useAgentHandoff", () => {
     });
   });
 
+  test("imports a transfer addressed to an ACP agent", async () => {
+    const snapshot = handoff("handoff-cursor", { destinationProvider: "cursor" });
+    mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
+
+    const { result } = renderHook(() =>
+      useAgentHandoff("handoff-cursor", "cursor", "env-1", [])
+    );
+
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    expect(result.current.error).toBeNull();
+    expect(result.current.handoff?.destinationProvider).toBe("cursor");
+    expect(result.current.displayMessages.map(({ content }) => content)).toEqual([
+      "Continue the work",
+      expect.stringContaining("Continued in Cursor from Claude"),
+    ]);
+    // Nothing has been sent yet, so the history still rides the first prompt.
+    expect(result.current.pendingHistory).toBe(snapshot.bootstrapPrompt);
+  });
+
+  test("rejects a transfer addressed to a different ACP agent", async () => {
+    const snapshot = handoff("handoff-grok", { destinationProvider: "grok" });
+    mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
+
+    const { result } = renderHook(() =>
+      useAgentHandoff("handoff-grok", "cursor", "env-1", [])
+    );
+
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    expect(result.current.handoff).toBeNull();
+    expect(result.current.error).toBe("This transfer belongs to another agent.");
+  });
+
   test("rejects a handoff intended for another provider", async () => {
     const snapshot = handoff("handoff-provider");
     mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));

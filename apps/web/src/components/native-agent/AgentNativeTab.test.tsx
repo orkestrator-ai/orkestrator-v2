@@ -53,6 +53,9 @@ const ensureNativeAgentSessionMock = mock(async (input: {
   agent: input.agent,
 }));
 const listNativeAgentResumableSessionsMock = mock(async () => []);
+const getAgentHandoffMock = mock(
+  async (_handoffId: string): Promise<unknown> => null,
+);
 const performNativeAgentSessionActionMock = mock(async (_input: {
   agent: string;
   action: { kind: string; text?: string };
@@ -139,6 +142,7 @@ mock.module("@/lib/backend", () => ({
   adoptNativeAgentSession: adoptNativeAgentSessionMock,
   ensureNativeAgentSession: ensureNativeAgentSessionMock,
   listNativeAgentResumableSessions: listNativeAgentResumableSessionsMock,
+  getAgentHandoff: getAgentHandoffMock,
   dispatchNativeAgentIntent: dispatchNativeAgentIntentMock,
   retryNativeAgentDispatch: retryNativeAgentDispatchMock,
   renameEnvironmentFromPrompt: renameEnvironmentFromPromptMock,
@@ -188,6 +192,7 @@ afterEach(() => {
   adoptNativeAgentSessionMock.mockClear();
   ensureNativeAgentSessionMock.mockClear();
   listNativeAgentResumableSessionsMock.mockClear();
+  getAgentHandoffMock.mockClear();
   dispatchNativeAgentIntentMock.mockClear();
   retryNativeAgentDispatchMock.mockClear();
   renameEnvironmentFromPromptMock.mockReset();
@@ -789,6 +794,24 @@ describe("AgentNativeTab", () => {
     await waitFor(() => expect(adoptNativeAgentSessionMock).toHaveBeenCalledTimes(1));
   });
 
+  test.each([...AGENT_PLATFORMS])("loads a transferred conversation for a %s tab", async (platform) => {
+    // The destination side used to gate on the three legacy providers, so a
+    // Cursor or Grok tab silently dropped the transfer it was opened to carry
+    // and never even asked for it.
+    render(
+      <AgentNativeTab
+        tabId={`tab-handoff-${platform}`}
+        data={identity(platform)}
+        isActive
+        agentHandoffId={`handoff-into-${platform}`}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(getAgentHandoffMock).toHaveBeenCalledWith(`handoff-into-${platform}`),
+    );
+  });
+
   test("renders a mismatch notice instead of throwing on an unknown platform", async () => {
     // A persisted record can name a platform this build does not ship. Failing
     // here would throw out of the pane and take its sibling tabs down with it.
@@ -1014,6 +1037,7 @@ describe("AgentNativeTab", () => {
       messages?: NativeMessage[];
       recoverableDispatch?: NativeAgentSessionProjection["recoverableDispatch"];
       composer?: Partial<NonNullable<NativeAgentSessionProjection["composer"]>>;
+      contextUsage?: NativeAgentSessionProjection["contextUsage"];
     } = {}) {
       getNativeAgentProjectionMock.mockImplementation(async (input) => ({
         platform: input.agent,
@@ -1036,6 +1060,7 @@ describe("AgentNativeTab", () => {
         ...(overrides.suggestedPrompt
           ? { suggestedPrompt: overrides.suggestedPrompt }
           : {}),
+        ...(overrides.contextUsage ? { contextUsage: overrides.contextUsage } : {}),
         interactions: [],
         composerControls: [],
         composer: {
@@ -1081,6 +1106,52 @@ describe("AgentNativeTab", () => {
         generation: "test-generation",
       }));
     }
+
+    test("does not render a context wheel when the provider reports no maximum", async () => {
+      seedProjection({
+        contextUsage: {
+          usedTokens: 222,
+          inputTokens: 200,
+          outputTokens: 22,
+          source: "provider",
+        },
+      });
+      render(<AgentNativeTab tabId="tab-unbounded-usage" data={identity("grok")} isActive />);
+
+      expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /Context window/ })).toBeNull();
+    });
+
+    test("renders the context wheel from the percentage the provider reported", async () => {
+      seedProjection({
+        contextUsage: {
+          usedTokens: 15_675,
+          maximumTokens: 500_000,
+          // Deliberately not 3%: the provider's own figure must win over the
+          // ratio this component could derive from the two token counts.
+          percentage: 42,
+          source: "provider",
+        },
+      });
+      render(<AgentNativeTab tabId="tab-bounded-usage" data={identity("grok")} isActive />);
+
+      expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Context window 42% used" })).toBeTruthy();
+    });
+
+    test("derives the context wheel percentage when the provider reports only a maximum", async () => {
+      seedProjection({
+        contextUsage: {
+          usedTokens: 15_675,
+          maximumTokens: 500_000,
+          source: "provider",
+        },
+      });
+      render(<AgentNativeTab tabId="tab-derived-usage" data={identity("grok")} isActive />);
+
+      expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Context window 3% used" })).toBeTruthy();
+    });
 
     test("routes a running-turn /steer to the session action instead of the queue", async () => {
       seedProjection({ phase: "running", actions: { steer: true } });

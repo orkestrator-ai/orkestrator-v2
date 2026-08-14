@@ -3283,18 +3283,42 @@ export class NativeAgentService {
     queueKey: string,
     reason: string,
     requestId?: string,
+    park?: {
+      /**
+       * Reserve the queue head so an exhausted deferral can park it even though
+       * no dispatch ever claimed it. Only for conditions the drain itself can
+       * never clear; a transient one must keep retrying instead.
+       */
+      reserveHead?: boolean;
+      /** Persisted for the user; `reason` is what reaches the log. */
+      message?: string;
+    },
   ): Promise<void> {
     const attempts = (this.queueAttempts.get(queueKey) ?? 0) + 1;
     this.queueAttempts.set(queueKey, attempts);
     if (attempts >= MAX_QUEUE_DISPATCH_ATTEMPTS) {
-      // The key and the reason are safe to log; the prompt itself never is.
+      // The key and the reason are safe to log; the prompt itself never is, and
+      // neither is provider-authored detail — that is persisted, not logged.
       console.warn(
         `[native-agent] Prompt queue ${queueKey} has failed ${attempts} times: ${reason}`,
       );
-      if (requestId !== undefined) {
+      // A head no dispatch ever reserved has no request id, so the park path a
+      // failed dispatch uses could not run: the prompt was neither sent nor
+      // failed and the queue stalled at the backoff ceiling with nothing shown
+      // to the user. Reserving it here gives that path its identity.
+      const parkedRequestId = requestId
+        ?? (park?.reserveHead
+          ? (await this.storage.reservePromptQueueHeadForDispatch(queueKey))
+            ?.requestId
+          : undefined);
+      if (parkedRequestId !== undefined) {
         this.queueAttempts.delete(queueKey);
         this.queueRetryAt.delete(queueKey);
-        await this.storage.failPromptQueueDispatch(queueKey, requestId, reason);
+        await this.storage.failPromptQueueDispatch(
+          queueKey,
+          parkedRequestId,
+          park?.message ?? reason,
+        );
         return;
       }
     }
@@ -3404,7 +3428,10 @@ export class NativeAgentService {
     // Read as data: a failed last turn must defer with a bounded backoff and a
     // reason, not escape as a throw that the outer handler can only report as
     // an anonymous drain fault.
-    const { status } = await readProviderStatus(provider, session.providerSessionId);
+    const { status, error: statusDetail } = await readProviderStatus(
+      provider,
+      session.providerSessionId,
+    );
     await this.assertEnvironmentLive(queue.environmentId);
     if (status === "running" || status === "blocked") return;
     if (status !== "idle") {
@@ -3412,6 +3439,24 @@ export class NativeAgentService {
         queueKey,
         `provider session is ${status}`,
         queue.inFlight?.requestId,
+        {
+          /*
+           * A terminal turn error is sticky until the next turn runs, and the
+           * drain is the only thing that would have run it — so retrying can
+           * never clear this on its own. Deferring alone left the prompt
+           * neither sent nor failed and told the user nothing. Park it instead:
+           * the composer shows the provider's own explanation and the existing
+           * retry control resends it once the model is changed. Auto-sending
+           * here would be worse than silence, because an at-capacity model
+           * fails every queued prompt in turn and burns the whole queue.
+           */
+          reserveHead: true,
+          message: statusDetail
+            ? `The ${agent} session failed before this prompt was sent: ${
+              statusDetail.slice(0, 500)
+            }`
+            : `The ${agent} session is ${status}; the queued prompt was not sent.`,
+        },
       );
       return;
     }

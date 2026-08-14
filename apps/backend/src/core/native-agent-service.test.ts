@@ -767,6 +767,9 @@ describe("NativeAgentService", () => {
       });
       expect(stub.send).toHaveBeenCalledTimes(1);
       expect(stub.send.mock.calls[0]?.[1]).toBe("Please continue");
+      // The point of reusing the session is that the *replacement* model runs.
+      // Reuse alone would still be broken if the new model were dropped here.
+      expect(stub.send.mock.calls[0]?.[2]).toMatchObject({ model: "gpt-5.6-luna" });
 
       // The failure is still reported — it just no longer blocks the composer.
       const projection = await service.getProjection(identity);
@@ -7283,6 +7286,14 @@ describe("NativeAgentService", () => {
         for (let attempt = 1; attempt < 5; attempt += 1) {
           await internals(service).drainPromptQueues();
           expect(internals(service).queueAttempts.get(queueKey)).toBe(attempt);
+          // The prompt is held, not burned: an at-capacity model would fail
+          // every queued prompt in turn if the drain sent them anyway.
+          expect(stub.send).not.toHaveBeenCalled();
+          expect(await storage.getPromptQueue(queueKey)).toMatchObject({
+            messages: [{ id: "row-1" }],
+          });
+          expect((await storage.getPromptQueue(queueKey))?.dispatchError)
+            .toBeUndefined();
           internals(service).queueRetryAt.delete(queueKey);
         }
         const warnings = await captureWarnings(() =>
@@ -7291,14 +7302,67 @@ describe("NativeAgentService", () => {
 
         expect(warnings.join(" ")).toContain("provider session is error");
         expect(warnings.join(" ")).not.toContain("ProviderSessionFailedError");
+        // Provider-authored detail is persisted for the user, never logged.
+        expect(warnings.join(" ")).not.toContain("usage limit reached");
         expect(stub.send).not.toHaveBeenCalled();
         expect(stub.dispose).not.toHaveBeenCalled();
-        expect(await storage.getPromptQueue(queueKey)).toMatchObject({
-          messages: [{ id: "row-1" }],
+        // Parked, not silently stalled. The drain is the only thing that would
+        // have run the turn that clears a sticky terminal status, so deferring
+        // forever left the prompt neither sent nor failed, and told the user
+        // nothing.
+        const parked = await storage.getPromptQueue(queueKey);
+        expect(parked).toMatchObject({ messages: [{ id: "row-1" }] });
+        expect(parked?.inFlight).toBeUndefined();
+        expect(parked?.dispatchError).toMatchObject({
+          requestId: "row-1",
+          messageId: "row-1",
+          message:
+            "The codex session failed before this prompt was sent: usage limit reached",
         });
-        expect((await storage.getPromptQueue(queueKey))?.dispatchError).toBeUndefined();
-        expect(internals(service).queueAttempts.get(queueKey)).toBe(5);
-        expect(internals(service).queueRetryAt.get(queueKey)).toBeGreaterThan(Date.now());
+        expect(internals(service).queueAttempts.has(queueKey)).toBe(false);
+        expect(internals(service).queueRetryAt.has(queueKey)).toBe(false);
+
+        // The park is a latch, not a loop: a further sweep must not re-read the
+        // provider or park a second time, and the retry control clears it.
+        stub.status.mockClear();
+        await internals(service).drainPromptQueues();
+        expect(stub.status).not.toHaveBeenCalled();
+
+        await storage.retryPromptQueueDispatch(queueKey);
+        expect((await storage.getPromptQueue(queueKey))?.dispatchError)
+          .toBeUndefined();
+      });
+    });
+
+    test("parks a terminal session error reported without a detail", async () => {
+      // The bridge reports `error` with no explanation, so `status()` returns it
+      // instead of throwing. The queued prompt must still park, not stall.
+      const stub = createProviderStub("codex", {
+        status: async () => "error" as ProviderStatus,
+      });
+      await withService({
+        prefix: "orkestrator-native-drain-bare-error-",
+        provider: async () => stub.provider,
+      }, async ({ storage, service }) => {
+        // Same key shape as its siblings: agent and logical session key joined
+        // by a NUL.
+        const queueKey = ["codex", "env-env-1:tab-1"].join(String.fromCharCode(0));
+        await storage.savePromptQueue(queueKey, "env-1", [
+          { id: "row-1", text: "Do it" },
+        ]);
+
+        for (let attempt = 1; attempt < 5; attempt += 1) {
+          await internals(service).drainPromptQueues();
+          internals(service).queueRetryAt.delete(queueKey);
+        }
+        await captureWarnings(() => internals(service).drainPromptQueues());
+
+        expect(stub.send).not.toHaveBeenCalled();
+        expect((await storage.getPromptQueue(queueKey))?.dispatchError)
+          .toMatchObject({
+            messageId: "row-1",
+            message: "The codex session is error; the queued prompt was not sent.",
+          });
       });
     });
 

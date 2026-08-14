@@ -1675,6 +1675,18 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     }
   }
 
+  /**
+   * Read the session's lifecycle state.
+   *
+   * The failed-turn contract is split, so read it before branching on the
+   * result: a terminal turn error is delivered as a `ProviderSessionFailedError`
+   * **throw** when the bridge supplied a detail, and returned as `"error"` only
+   * when it did not. A caller that branches on `status === "error"` therefore
+   * reaches that branch exactly when the provider declined to explain itself —
+   * which is backwards. Any such caller must read through `readProviderStatus`,
+   * which turns the throw back into `{ status: "error", error }` so the branch
+   * fires either way and the detail is available to it.
+   */
   async status(sessionId: string): Promise<ProviderStatus> {
     const path = this.agent === "claude"
       ? `/session/${encodeURIComponent(sessionId)}`

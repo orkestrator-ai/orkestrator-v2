@@ -112,6 +112,7 @@ history rather than two partial ones.
 - **Failure:** The queue had recovered the expired sole claim and reached revision 3, but `events` was still `[]` instead of containing the expected `{ resource: "prompt-queue", id: "e1" }` announcement (duration: 44.42 ms).
 - **Suite counts:** Backend package: 1,647 total, 1,646 passed, 1 failed across 55 files. The aggregate also had one separate deterministic root-suite failure from the reviewed activity-source change.
 - **Isolated rerun:** `bun test --cwd apps/backend src/core/storage-prompt-queues.test.ts` -> 57 passed, 0 failed, 197 assertions in 1.87 seconds; the target passed in 51.94 ms.
+- **Recurrence (session-liveness review, 2026-08-14):** `set -o pipefail; bun test --cwd apps/backend src tests --parallel` at `c4ce823fb218e0f858115c0e0ada81203998c10a` failed identically — `expect(received).toContainEqual(expected)` with `Expected to contain: ObjectContaining { resource: "prompt-queue", id: "e1" }` and `Received: []` at `storage-prompt-queues.test.ts:366:22` (duration: 83.60 ms). Backend package: 1,696 total, 1,695 passed, 1 failed across 55 files. The immediate isolated rerun, `bun test --cwd apps/backend ./src/core/storage-prompt-queues.test.ts`, passed all 57 tests. A preceding backend run at the same head passed this test and failed a different one in the same package, so the two alternate rather than compound. Evidence: `/tmp/rev-backend-tests-c4ce823f.log`, `/tmp/rev-isolated-storage-prompt-queues.log`.
 - **Hypothesis:** The test uses a 25 ms real-time lease, clears claim-announcement events immediately after the claim call, and then polls the durable queue separately from the listener. Under aggregate scheduling, lease recovery can race that reset/observation boundary even though the recovered queue state is correct. A deterministic clock or explicit recovery boundary should be evaluated before changing the product timer.
 
 ## `MultiReviewReviewerTab > keeps the transcript full-height and does not overlap slow refreshes` (`apps/web/src/components/review/MultiReviewTab.test.tsx`)
@@ -640,6 +641,7 @@ history rather than two partial ones.
 - **Suite counts:** root group 3,634 passed, 1 skipped, 4 failed, 3 errors across 143 files in 237.95 s.
 - **Isolated rerun:** `bun test ./tests/unit/electron/commands-process-coverage.test.ts --parallel` -> 59 passed, 0 failed in 1.30 s; the whole file costs a fraction of this one test's aggregate budget. Evidence: `/tmp/ork-fix-process-isolated.log`.
 - **Recurrence:** the same test also timed out at 5,004.51 ms in the preceding aggregate run at commit `cb520049`, so unlike the `tmux-backend.test.ts` entry above this one has repeated identically across two runs.
+- **Recurrence (session-liveness review, 2026-08-14):** timed out again at 5,000.87 ms under `set -o pipefail; bun test ./tests --parallel` at `36a4d95cc7b56e8ae1c725670d932e8a2bdd8299` on an 18-worker macOS host. Root group: 3,645 total, 3,638 passed, 1 skipped, 6 failed, 4 errors across 143 files in 212.53 s. The immediate isolated rerun passed all 59 tests. That is three identical timeouts across three separate aggregate runs, which strengthens the contention reading rather than an intermittent one. Evidence: `/tmp/rev-root-tests.log`, `/tmp/rev-isolated-commands-process-coverage.log`.
 - **Hypothesis (not confirmed):** the test asserts that browser/file-manager/editor launches happen without a shell, so it waits on spawned child processes; under a loaded 18-worker run those spawns are contending with every other suite's children. The 1.30 s isolated cost makes an outright hang unlikely. Whether the wait is on process spawn or on a fake-binary lookup has not been established.
 - **Clean rerun of the whole group:** a later `bun test ./tests --parallel` on the same host and branch reported 3,638 passed, 1 skipped, 0 failed in 118.36 s — half the wall time of the failing run (237.95 s) and with this test passing, which is consistent with contention rather than a defect in the test.
 - **Next step:** instrument which awaited spawn is outstanding at timeout before changing the budget, since a raised budget would hide a genuine spawn regression here.
@@ -808,3 +810,38 @@ Post-fix stress verification:
 - **Suite counts:** Bridges: 2,383 total, 2,371 passed, 11 skipped, 1 failed across 67 files.
 - **Isolated rerun:** `bun test ./bridges/codex-bridge/src/messages/coalescer.test.ts --parallel` -> 9 passed, 0 failed, 23 assertions in 268 ms; the target passed in 78.26 ms.
 - **Hypothesis:** The test coordinates multiple real elapsed-time intervals and observed one additional publish only under aggregate scheduling. A deterministic scheduler or callback boundary should be evaluated if it recurs; the available evidence does not establish a production coalescing defect.
+
+## `Files panel components > FilesPanel confirms actions and keeps failed actions open for retry` (`tests/unit/components/FilesPanel.test.tsx`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun test ./tests --parallel 2>&1 | tee /tmp/rev-root-tests.log` at `36a4d95cc7b56e8ae1c725670d932e8a2bdd8299` on an 18-worker macOS host
+- **Worker configuration:** Root-only suite, `--parallel` (18 workers), run on its own rather than inside `bun run test`.
+- **Failure:** the test exceeded Bun's 5,000 ms budget (reported duration 5,090.23 ms) with no assertion message.
+- **Suite counts:** Root group: 3,645 total, 3,638 passed, 1 skipped, 6 failed, 4 between-test errors across 143 files in 212.53 s.
+- **Isolated rerun:** `bun test ./tests/unit/components/FilesPanel.test.tsx --parallel` -> 22 passed, 0 failed, exit 0. Evidence: `/tmp/rev-isolated-filespanel.log`.
+- **Hypothesis:** A bare timeout with no assertion text, in a happy-dom component test that drives a confirm-then-retry flow across several awaited state transitions. Nothing establishes which await was outstanding, and the whole owning file costs a fraction of this one test's aggregate budget in isolation, so contention is the leading reading. Instrument the outstanding transition before raising the budget — a raised budget would hide a genuine regression in the retry path.
+
+## `web-public install.sh > uses the installed bun when the install leaves no bunx` (`tests/unit/install-script.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun test ./tests --parallel 2>&1 | tee /tmp/rev-root-tests.log` at `36a4d95cc7b56e8ae1c725670d932e8a2bdd8299` on an 18-worker macOS host
+- **Worker configuration:** Root-only suite, `--parallel` (18 workers).
+- **Failure:** timed out after 5,000 ms (reported duration 5,000.60 ms), and additionally reported `Expected: 0 / Received: 143` at `install-script.test.ts:161:29` — a non-zero shell exit from the script under test alongside the timeout.
+- **Suite counts:** Root group: 3,645 total, 3,638 passed, 1 skipped, 6 failed, 4 between-test errors across 143 files in 212.53 s.
+- **Isolated rerun:** `bun test ./tests/unit/install-script.test.ts --parallel` -> 11 passed, 0 failed, exit 0. Evidence: `/tmp/rev-isolated-install-script.log`.
+- **Related:** a different case in the same file, `runs on both supported platforms`, is recorded separately above with two timeouts of its own. Both cases shell out to the real install script, so the file — not either individual case — is the likely unit of contention.
+- **Hypothesis:** `143` is `128 + 15`, the conventional shell encoding of SIGTERM, which is consistent with the harness killing the spawned script when the 5,000 ms budget expired rather than with the script genuinely failing. On that reading the exit-code assertion is a downstream symptom of the timeout, not a second defect. This has not been confirmed by capturing the signal directly, and should be before the assertion is changed.
+
+## `standalone backend service > drains an active local server process tree before exiting` (`apps/backend/tests/standalone.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun test --cwd apps/backend src tests --parallel 2>&1 | tee /tmp/rev-backend-tests-cwd.log`, at or immediately after `c4ce823fb218e0f858115c0e0ada81203998c10a`
+- **Worker configuration:** Backend package only, `bun test src tests --parallel`, run on its own rather than inside `bun run test`.
+- **Failure:** timed out after 5,000 ms (reported duration 5,001.55 ms) with no assertion message.
+- **Suite counts:** Backend package: 1,696 total, 1,695 passed, 1 failed across 55 files in 37.02 s.
+- **Isolated rerun:** `bun test --cwd apps/backend ./tests/standalone.test.ts` -> 8 passed, 0 failed in 35.48 s. Evidence: `/tmp/rev-isolated-standalone.log`.
+- **Related:** a different case in the same file, `exits without a leftover listener when environment-managed Serve setup fails`, is recorded separately above. Both cases boot a real backend process and wait on its shutdown.
+- **Hypothesis:** The test spawns a real local server process tree and waits for the drain to complete. The isolated file takes 35.48 s for 8 tests, so this suite is already near the budget per case without contention; a parallel backend run adds process-startup competition on top. A later run of the same command at the same head passed this case and failed a different backend test instead, which is consistent with a shared-resource race rather than a defect in the drain itself. Establish whether the outstanding wait is on process exit or on port release before adjusting the budget.

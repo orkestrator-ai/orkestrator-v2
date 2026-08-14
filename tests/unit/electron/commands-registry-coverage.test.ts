@@ -333,6 +333,24 @@ describe("direct backend command registry coverage", () => {
     expect(await commandLogContents()).toContain("docker logs --tail 200 assigned-container");
   });
 
+  test("the ownership wrapper costs nothing outside an agent-test profile", async () => {
+    // The wrapper sits in front of *every* command carrying a containerId,
+    // including ones the renderer polls. Without the strict-mode guard each of
+    // those would pay for an extra `docker inspect` round trip in production.
+    const context = contextWithStorage({});
+    expect(context.strictDockerOwner).toBeFalsy();
+
+    await expect(invoke(
+      "get_container_logs",
+      { containerId: "foreign-container" },
+      context,
+    )).resolves.toBe("");
+
+    const log = await commandLogContents();
+    expect(log).not.toContain("docker inspect");
+    expect(log).toContain("docker logs --tail 200 foreign-container");
+  });
+
   test("stops each bridge, reports authenticated OpenCode health, and delegates model caching", async () => {
     const cached = {
       schemaVersion: 2,

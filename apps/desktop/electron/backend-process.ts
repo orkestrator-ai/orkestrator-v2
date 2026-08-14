@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline";
 import { spawn, type ChildProcess } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 
@@ -22,6 +23,14 @@ const AGENT_TEST_SAFE_ENV_NAMES = new Set([
   "BUN_INSTALL",
   "CI",
   "COLORTERM",
+  // Where the Docker daemon is, not who may talk to it. Stripping these sends
+  // every `docker` call to the built-in default context, which is wrong for
+  // Colima, Rancher Desktop, rootless Podman, a remote daemon, and Docker
+  // Desktop without the default-socket shim.
+  "DOCKER_CERT_PATH",
+  "DOCKER_CONTEXT",
+  "DOCKER_HOST",
+  "DOCKER_TLS_VERIFY",
   "FORCE_COLOR",
   "LANG",
   "LOGNAME",
@@ -50,6 +59,54 @@ function retainSafeAgentTestEnvironment(env: NodeJS.ProcessEnv): void {
   for (const name of Object.keys(env)) {
     if (!AGENT_TEST_SAFE_ENV_NAMES.has(name) && !name.startsWith("LC_")) delete env[name];
   }
+}
+
+/** Isolated replacement for `~/.docker`, pointed at by `DOCKER_CONFIG`. */
+export function agentTestDockerConfigDir(isolatedCredentialRoot: string): string {
+  return path.join(isolatedCredentialRoot, "docker-disabled");
+}
+
+export function hostDockerConfigDir(
+  parentEnv: NodeJS.ProcessEnv = process.env,
+  homeDir = os.homedir(),
+): string {
+  return parentEnv.DOCKER_CONFIG?.trim() || path.join(homeDir, ".docker");
+}
+
+/**
+ * Give the isolated `DOCKER_CONFIG` enough of the host's configuration to reach
+ * the same daemon, and nothing more.
+ *
+ * `contexts/` and `currentContext` are topology: without them the CLI silently
+ * falls back to the built-in `unix:///var/run/docker.sock`, which is not where
+ * Colima, Rancher Desktop, or Docker Desktop without the default-socket shim
+ * listen. `auths`, `credsStore`, and every other key are credentials and stay
+ * behind — that is the point of the isolated directory.
+ *
+ * Best-effort: a profile whose Docker configuration cannot be read still starts,
+ * it just falls back to the default context the way it did before.
+ */
+export async function seedAgentTestDockerConfig(options: {
+  isolatedCredentialRoot: string;
+  sourceDir: string;
+}): Promise<void> {
+  const target = agentTestDockerConfigDir(options.isolatedCredentialRoot);
+  await mkdir(target, { recursive: true, mode: 0o700 });
+  await cp(path.join(options.sourceDir, "contexts"), path.join(target, "contexts"), {
+    recursive: true,
+    force: true,
+  }).catch(() => undefined);
+  const parsed = await readFile(path.join(options.sourceDir, "config.json"), "utf8")
+    .then((contents) => JSON.parse(contents) as unknown)
+    .catch(() => null);
+  const currentContext = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? (parsed as { currentContext?: unknown }).currentContext
+    : undefined;
+  await writeFile(
+    path.join(target, "config.json"),
+    `${JSON.stringify(typeof currentContext === "string" && currentContext ? { currentContext } : {}, null, 2)}\n`,
+    { mode: 0o600 },
+  );
 }
 
 export function getBrowserGatewayStatus(info: GatewayStartInfo | null) {
@@ -116,7 +173,7 @@ export function createBackendProcessEnvironment(
       env.GH_CONFIG_DIR = path.join(runtime.isolatedCredentialRoot, "github-disabled");
       env.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : "/dev/null";
       env.NPM_CONFIG_USERCONFIG = path.join(runtime.isolatedCredentialRoot, "npmrc-disabled");
-      env.DOCKER_CONFIG = path.join(runtime.isolatedCredentialRoot, "docker-disabled");
+      env.DOCKER_CONFIG = agentTestDockerConfigDir(runtime.isolatedCredentialRoot);
       env.AWS_CONFIG_FILE = path.join(runtime.isolatedCredentialRoot, "aws", "config");
       env.AWS_SHARED_CREDENTIALS_FILE = path.join(runtime.isolatedCredentialRoot, "aws", "credentials");
       env.AWS_EC2_METADATA_DISABLED = "true";
@@ -362,6 +419,7 @@ export class BackendProcess {
     if (options.credentialSources?.length) args.push("--credential-source", options.credentialSources.join(","));
 
     // Isolate desktop startup from any remote-service configuration in the parent shell.
+    const isolatedCredentialRoot = path.join(options.dataDir, "agent-credentials");
     const env = createBackendProcessEnvironment(
       process.env,
       options.isDev,
@@ -370,9 +428,17 @@ export class BackendProcess {
       options.runtimeFlavor ? {
         flavor: options.runtimeFlavor,
         credentialSources: options.credentialSources,
-        isolatedCredentialRoot: path.join(options.dataDir, "agent-credentials"),
+        isolatedCredentialRoot,
       } : undefined,
     );
+    if (options.runtimeFlavor === "agent-test") {
+      await seedAgentTestDockerConfig({
+        isolatedCredentialRoot,
+        sourceDir: hostDockerConfigDir(process.env),
+      }).catch((error: unknown) => {
+        console.warn("[Desktop] Could not seed the isolated Docker context; falling back to the default context:", error);
+      });
+    }
     const child = spawn(bun, args, { env, stdio: ["ignore", "pipe", "pipe"] });
     this.child = child;
     child.stderr?.on("data", (chunk) => process.stderr.write(`[Backend] ${chunk}`));

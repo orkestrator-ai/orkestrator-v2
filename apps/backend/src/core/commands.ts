@@ -4210,13 +4210,37 @@ async function inspectDockerContainerIdentity(containerId: string): Promise<{
   return { owner: owner.trim(), status: parseDockerStatus(status) };
 }
 
+/**
+ * Docker reports a container the daemon has never heard of, or has already
+ * removed, as `no such object`. That is categorically different from a daemon
+ * that could not be reached: the first is a definite answer, the second is no
+ * answer at all.
+ */
+function isMissingDockerObjectError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /no such (object|container)/i.test(message);
+}
+
 async function assertDockerContainerOwned(
   containerId: string,
   context: Pick<CommandContext, "storage" | "strictDockerOwner">,
 ): Promise<void> {
   if (!context.strictDockerOwner) return;
   const owner = dockerOwnerNamespace(context.storage.getDataDir());
-  const identity = await inspectDockerContainerIdentity(containerId);
+  let identity: { owner: string; status: EnvironmentStatus };
+  try {
+    identity = await inspectDockerContainerIdentity(containerId);
+  } catch (error) {
+    // A container the daemon has already forgotten belongs to nobody, so there
+    // is nothing here to protect. Refusing would strand the environment: an
+    // errored environment is exempt from status reconciliation, so its stale
+    // `containerId` never clears, and `recreate`/`delete` — the user's repair
+    // actions for exactly this state — would fail identically on every retry.
+    // Any other failure is an unreachable daemon, which is not evidence of
+    // ownership and must still refuse.
+    if (isMissingDockerObjectError(error)) return;
+    throw error;
+  }
   if (identity.owner !== owner) {
     throw new Error("Refusing Docker operation on a container not owned by this development profile");
   }
@@ -4365,13 +4389,12 @@ async function syncStoredEnvironmentStatus(
       }
       return environment;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (/no such (object|container)/i.test(message)) {
+      if (isMissingDockerObjectError(error)) {
         return storage.updateEnvironment(environment.id, { status: "stopped", containerId: null });
       }
       console.warn("[environment-status] Preserving container state after strict ownership probe failed", {
         environmentId: environment.id,
-        message,
+        message: error instanceof Error ? error.message : String(error),
       });
       return environment;
     }
@@ -4384,13 +4407,12 @@ async function syncStoredEnvironmentStatus(
     }
     return environment;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/no such (object|container)/i.test(message)) {
+    if (isMissingDockerObjectError(error)) {
       return storage.updateEnvironment(environment.id, { status: "stopped", containerId: null });
     }
     console.warn("[environment-status] Preserving container state after transient Docker error", {
       environmentId: environment.id,
-      message,
+      message: error instanceof Error ? error.message : String(error),
     });
     return environment;
   }

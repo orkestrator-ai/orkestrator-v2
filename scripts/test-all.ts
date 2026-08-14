@@ -298,7 +298,15 @@ export async function runAllTests(
 
 export async function main(
   overrides: Partial<TestAllDependencies> = {},
-  exit: (status: number) => void = (status) => process.exit(status),
+  // Not `process.exit`. Every group's output is buffered and printed in one
+  // block, and a pipe — which is what the documented `| tee` workflow makes
+  // stdout — accepts that write asynchronously. `process.exit` tears the
+  // process down mid-flush, truncating the failing group's output at whatever
+  // fits in the pipe buffer, which is precisely the text that explains the
+  // failure. Setting the code lets the runtime drain stdout and exit on its own.
+  exit: (status: number) => void = (status) => {
+    process.exitCode = status;
+  },
 ): Promise<void> {
   const status = await runAllTests(overrides);
   if (status !== 0) {

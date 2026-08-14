@@ -131,7 +131,11 @@ describe("monorepo orchestration scripts", () => {
     expect(source).toContain('args: ["run", "codex:protocol:check"]');
     expect(source).toContain('args: ["scripts/test-ios.ts"]');
     expect(source).toContain('dependencies.platform === "darwin"');
-    expect(source).toContain("process.exit(status)");
+    // Never `process.exit`: it kills the process while the buffered group
+    // output is still draining into the pipe that `| tee` creates, truncating
+    // the failing group's log at the pipe buffer.
+    expect(source).toContain("process.exitCode = status");
+    expect(source).not.toContain("process.exit(status)");
     // A signal-terminated group (null status) must count as a failure.
     expect(source).toContain("result.status ?? 1");
   });
@@ -153,6 +157,24 @@ describe("monorepo orchestration scripts", () => {
       const scripts = (JSON.parse(read(bridge)) as { scripts?: Record<string, string> }).scripts ?? {};
       expect(scripts.test).toBeUndefined();
     }
+  });
+
+  test("the component e2e project never claims the agent-testing suite", () => {
+    // `testMatch: "*.spec.ts"` expands to `**/*.spec.ts`, and `include:
+    // ["**/*.ts"]` is just as greedy. Both would otherwise sweep in
+    // e2e/agent-testing, whose specs drive a real profile's Electron and backend
+    // stack through their own configs and whose tests need Bun types the shared
+    // project deliberately does not load.
+    const playwright = read("e2e/playwright.config.ts");
+    expect(playwright).toContain('testIgnore: "agent-testing/**"');
+
+    const shared = JSON.parse(read("e2e/tsconfig.json")) as { exclude?: string[] };
+    expect(shared.exclude).toContain("agent-testing");
+
+    const agentTesting = JSON.parse(read("e2e/agent-testing/tsconfig.json")) as {
+      compilerOptions?: { types?: string[] };
+    };
+    expect(agentTesting.compilerOptions?.types).toContain("bun");
   });
 
   test("test runners are configured to run test files in parallel", () => {

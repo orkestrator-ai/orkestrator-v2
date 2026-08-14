@@ -1,6 +1,5 @@
 import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 const GATEWAY_COOKIE = "orkestrator_gateway_auth";
@@ -32,7 +31,11 @@ async function sanitizeRegularFile(filePath: string, secrets: readonly string[])
 }
 
 async function sanitizeTraceArchive(archivePath: string, secrets: readonly string[]): Promise<void> {
-  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "ork-agent-trace-"));
+  // Staged beside the archive rather than under os.tmpdir(): `rename` cannot
+  // cross a filesystem boundary, and on Linux the temp directory is routinely a
+  // separate tmpfs mount from the checkout. An EXDEV there would leave the
+  // original, unredacted trace exactly where a developer would pick it up.
+  const temporaryRoot = await mkdtemp(`${archivePath}.redact-`);
   const unpacked = path.join(temporaryRoot, "trace");
   const replacement = path.join(temporaryRoot, "trace.zip");
   try {
@@ -45,6 +48,13 @@ async function sanitizeTraceArchive(archivePath: string, secrets: readonly strin
     });
     if (zip.status !== 0) throw new Error("Unable to repack a redacted agent-test trace");
     await rename(replacement, archivePath);
+  } catch (error) {
+    // The redacted replacement could not be installed, so the archive still on
+    // disk is the unredacted one. Destroying evidence is the lesser harm: the
+    // teardown rethrows, so the run fails loudly rather than silently shipping
+    // a trace containing the gateway session cookie.
+    await rm(archivePath, { force: true }).catch(() => undefined);
+    throw error;
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }

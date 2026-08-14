@@ -16729,6 +16729,234 @@ exit 0
     expect(environment.containerId).toBe("foreign-container");
   });
 
+  test("strict lifecycle commands still repair an environment whose container is already gone", async () => {
+    // An errored environment is exempt from status reconciliation, so its stale
+    // containerId never clears on its own. If the ownership probe treated "no
+    // such object" as a refusal, recreate and delete — the only repair actions
+    // for this state — would fail identically on every retry, forever.
+    const recreatable = createEnvironment({
+      id: "env-vanished-recreate",
+      environmentType: "containerized",
+      containerId: "vanished-container",
+      status: "error",
+      lifecycleError: ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.runtimeUnavailable,
+    });
+    const deletable = createEnvironment({
+      id: "env-vanished-delete",
+      environmentType: "containerized",
+      containerId: "vanished-container",
+      status: "error",
+      lifecycleError: ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.runtimeUnavailable,
+    });
+    const { context } = createContext([recreatable, deletable]);
+    context.strictDockerOwner = true;
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "inspect" ]; then
+  printf 'error: no such object: %s\\n' "$4" >&2
+  exit 1
+fi
+if [ "$1" = "create" ]; then
+  exit 42
+fi
+exit 0
+`, async ({ all }) => {
+      await expect(commands.get("delete_environment")?.(
+        { environmentId: deletable.id },
+        context,
+      )).resolves.toBeUndefined();
+
+      // Recreate goes on to provision a fresh container, which this fake fails
+      // at `create`. The regression under test is only that it got that far
+      // rather than being refused by the ownership probe.
+      const recreateFailure = await commands.get("recreate_environment")?.(
+        { environmentId: recreatable.id },
+        context,
+      ).then(() => null, (error: unknown) => String(error));
+      expect(recreateFailure ?? "").not.toContain("not owned by this development profile");
+
+      const log = await fs.readFile(all, "utf8");
+      expect(log.match(/inspect -f/g)).toHaveLength(2);
+      expect(log).toContain("rm -f vanished-container");
+    });
+  });
+
+  test("agent-test container mounts come from the isolated profile paths, not the host home", async () => {
+    const environment = createEnvironment({
+      id: "env-agent-test-mounts",
+      environmentType: "containerized",
+      worktreePath: undefined,
+      containerId: null,
+      status: "stopped",
+      networkAccessMode: "full",
+    });
+    const { context } = createContext(environment);
+    context.runtimeFlavor = "agent-test";
+    context.credentialSources = new Set(["claude", "codex", "opencode"]);
+    const commands = createCommandRegistry();
+    const saved = {
+      CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+      CODEX_HOME: process.env.CODEX_HOME,
+      XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+      XDG_DATA_HOME: process.env.XDG_DATA_HOME,
+      XDG_STATE_HOME: process.env.XDG_STATE_HOME,
+      ORKESTRATOR_AGENT_TEST_HOST_HOME: process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME,
+    };
+
+    try {
+      await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "create" ]; then
+  exit 42
+fi
+exit 0
+`, async ({ all, home }) => {
+        const isolated = path.join(home, "isolated");
+        const hostHome = path.join(home, "host-home");
+        const claudeConfigDir = path.join(isolated, "claude");
+        const codexHome = path.join(isolated, "codex");
+        const xdgConfigHome = path.join(isolated, "xdg-config");
+        const xdgDataHome = path.join(isolated, "xdg-data");
+        const xdgStateHome = path.join(isolated, "xdg-state");
+        for (const directory of [
+          claudeConfigDir,
+          codexHome,
+          path.join(xdgConfigHome, "opencode"),
+          path.join(xdgDataHome, "opencode"),
+          path.join(xdgStateHome, "opencode"),
+          hostHome,
+          // Decoys: the developer's real agent homes, which `withFakeDocker`
+          // points $HOME at. An agent-test container must never mount these.
+          path.join(home, ".claude"),
+          path.join(home, ".codex"),
+          path.join(home, ".config", "opencode"),
+        ]) await fs.mkdir(directory, { recursive: true });
+        await fs.writeFile(path.join(hostHome, ".claude.json"), "{}");
+        await fs.writeFile(path.join(home, ".claude.json"), "{}");
+
+        process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
+        process.env.CODEX_HOME = codexHome;
+        process.env.XDG_CONFIG_HOME = xdgConfigHome;
+        process.env.XDG_DATA_HOME = xdgDataHome;
+        process.env.XDG_STATE_HOME = xdgStateHome;
+        process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
+
+        await commands.get("provision_environment")?.(
+          { environmentId: environment.id },
+          context,
+        ).catch(() => undefined);
+
+        const log = await fs.readFile(all, "utf8");
+        expect(log).toContain(`-v ${claudeConfigDir}:/claude-config:ro`);
+        expect(log).toContain(`-v ${codexHome}:/codex-home:ro`);
+        expect(log).toContain(`-v ${path.join(xdgConfigHome, "opencode")}:/opencode-config:ro`);
+        expect(log).toContain(`-v ${path.join(xdgDataHome, "opencode")}:/opencode-data:ro`);
+        expect(log).toContain(`-v ${path.join(xdgStateHome, "opencode")}:/opencode-state:ro`);
+        // `.claude.json` has no CLAUDE_CONFIG_DIR equivalent, so it is the one
+        // path resolved against the recorded host home rather than an env var.
+        expect(log).toContain(`-v ${path.join(hostHome, ".claude.json")}:/claude-config.json:ro`);
+
+        expect(log).not.toContain(`${path.join(home, ".claude")}:/claude-config`);
+        expect(log).not.toContain(`${path.join(home, ".codex")}:`);
+        expect(log).not.toContain(`${path.join(home, ".config", "opencode")}:`);
+        expect(log).not.toContain(`${path.join(home, ".claude.json")}:`);
+        // Cursor, Grok, and the host gitconfig have no allow-list entry at all.
+        expect(log).not.toContain("/cursor-config");
+        expect(log).not.toContain("/grok-config");
+        expect(log).not.toContain("/tmp/gitconfig");
+      });
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
+  test("agent-test containers omit the credential sources the profile did not allow", async () => {
+    const environment = createEnvironment({
+      id: "env-agent-test-denied-mounts",
+      environmentType: "containerized",
+      worktreePath: undefined,
+      containerId: null,
+      status: "stopped",
+      networkAccessMode: "full",
+    });
+    const { context } = createContext(environment);
+    context.runtimeFlavor = "agent-test";
+    context.credentialSources = new Set(["codex"]);
+    const commands = createCommandRegistry();
+    const savedCodexHome = process.env.CODEX_HOME;
+    const savedClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+
+    try {
+      await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "create" ]; then
+  exit 42
+fi
+exit 0
+`, async ({ all, home }) => {
+        const codexHome = path.join(home, "isolated", "codex");
+        const claudeConfigDir = path.join(home, "isolated", "claude");
+        await fs.mkdir(codexHome, { recursive: true });
+        await fs.mkdir(claudeConfigDir, { recursive: true });
+        process.env.CODEX_HOME = codexHome;
+        process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
+
+        await commands.get("provision_environment")?.(
+          { environmentId: environment.id },
+          context,
+        ).catch(() => undefined);
+
+        const log = await fs.readFile(all, "utf8");
+        expect(log).toContain(`-v ${codexHome}:/codex-home:ro`);
+        // The Claude directory exists and is readable; only the profile's
+        // credential-source list keeps it out of the container.
+        expect(log).not.toContain("/claude-config");
+        expect(log).not.toContain("/opencode-config");
+      });
+    } finally {
+      if (savedCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = savedCodexHome;
+      if (savedClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = savedClaudeConfigDir;
+    }
+  });
+
+  test("an unreachable Docker daemon is not evidence of ownership", async () => {
+    // "no such object" is a definite answer; a daemon that cannot be reached is
+    // no answer at all, and must never be read as permission to proceed.
+    const environment = createEnvironment({
+      id: "env-daemon-down",
+      environmentType: "containerized",
+      containerId: "unreachable-container",
+      status: "running",
+    });
+    const { context, updates } = createContext(environment);
+    context.strictDockerOwner = true;
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "inspect" ]; then
+  printf 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock.\\n' >&2
+  exit 1
+fi
+exit 0
+`, async ({ all }) => {
+      await expect(commands.get("stop_environment")?.(
+        { environmentId: environment.id },
+        context,
+      )).rejects.toThrow("Cannot connect to the Docker daemon");
+
+      expect(await fs.readFile(all, "utf8")).not.toContain("stop unreachable-container");
+    });
+    expect(updates).toHaveLength(0);
+  });
+
   test("stopping a local environment also stops its bridge processes", async () => {
     const worktreePath = await createTempDir("ork-electron-stop-local-");
     const environment = createEnvironment({

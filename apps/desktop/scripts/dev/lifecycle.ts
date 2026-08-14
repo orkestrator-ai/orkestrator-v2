@@ -108,6 +108,8 @@ type RuntimeProcessControl = {
   matches: typeof processMatches;
   signal: (pid: number, signal: NodeJS.Signals, processGroup: boolean) => void;
   sleep: (milliseconds: number) => Promise<void>;
+  /** Injectable so the escalation deadlines can be tested without waiting them out. */
+  now?: () => number;
 };
 
 const defaultRuntimeProcessControl: RuntimeProcessControl = {
@@ -157,8 +159,9 @@ async function waitForTrackedRuntimeExit(
   timeoutMs: number,
   control: RuntimeProcessControl,
 ): Promise<RuntimeProcessName[]> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const now = control.now ?? Date.now;
+  const deadline = now() + timeoutMs;
+  while (now() < deadline) {
     const live = controlledLiveness(status, control);
     const survivors = RUNTIME_PROCESS_NAMES.filter((name) => live[name]);
     if (survivors.length === 0) return [];
@@ -191,6 +194,18 @@ export async function stopTrackedRuntimeProcesses(
   return survivors;
 }
 
+/**
+ * Tracked processes still alive without their launcher. Restarting over these
+ * would leave a second Vite/Electron/backend trio bound to the same profile
+ * directory, with only the newer one recorded in the status manifest.
+ */
+export function orphanedRuntimeProcesses(
+  live: Record<RuntimeProcessName, boolean> | null,
+): RuntimeProcessName[] {
+  if (!live || live.launcher) return [];
+  return RUNTIME_PROCESS_NAMES.filter((name) => live[name]);
+}
+
 export function stoppedRuntimeStatusIfUnchanged(
   original: RuntimeStatusManifest,
   latest: RuntimeStatusManifest | null,
@@ -217,9 +232,7 @@ export async function startDevelopment(args: DevArguments, flavor: "development"
     printHumanStatus(existingStatus, existingLive);
     return;
   }
-  const orphaned = existingLive
-    ? Object.entries(existingLive).filter(([, live]) => live).map(([name]) => name)
-    : [];
+  const orphaned = orphanedRuntimeProcesses(existingLive);
   if (orphaned.length > 0) {
     throw new Error(
       `Profile ${existingProfile.id} has surviving processes without its launcher: ${orphaned.join(", ")}. Run bun run dev:stop before restarting.`,

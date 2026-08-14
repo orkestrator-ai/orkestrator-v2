@@ -403,6 +403,25 @@ describe("scripts/test-all.ts", () => {
     expect(exitStatuses).toEqual([13]);
   });
 
+  test("the default exit path sets a status instead of tearing the process down", async () => {
+    // Every group's output is printed as one buffered block, and a pipe — which
+    // is what the documented `| tee` workflow makes stdout — accepts that write
+    // asynchronously. `process.exit` would kill the process mid-flush and
+    // truncate the failing group's output at the pipe buffer, discarding the
+    // only text that explains why the run failed.
+    const previousExitCode = process.exitCode;
+    try {
+      const { dependencies } = createDependencies({ statusByName: { [ROOT]: 13 } });
+      await main(dependencies);
+      expect(process.exitCode).toBe(13);
+    } finally {
+      // `undefined` does not clear it in Bun, and leaving 13 behind would fail
+      // this file's own run. Bun tracks test failures itself, so restoring 0 as
+      // the "no status yet" value cannot mask one.
+      process.exitCode = previousExitCode ?? 0;
+    }
+  });
+
   test("CLI entrypoint returns normally after successful suites", async () => {
     const { dependencies } = createDependencies();
     const exitStatuses: number[] = [];

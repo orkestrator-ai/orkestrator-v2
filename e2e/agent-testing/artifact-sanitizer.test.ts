@@ -43,4 +43,42 @@ describe("agent-test artifact sanitizer", () => {
     expect(trace).not.toContain(session);
     expect(trace).toContain("orkestrator_gateway_auth=[REDACTED]");
   });
+
+  test("stages the redacted trace beside the original so the swap cannot cross filesystems", async () => {
+    // `rename` fails with EXDEV across mount points, and on Linux the temp
+    // directory is routinely a separate tmpfs from the checkout. Staging beside
+    // the archive is what keeps the swap on one filesystem.
+    const root = await mkdtemp(path.join(os.tmpdir(), "ork-agent-staging-"));
+    temporaryDirectories.push(root);
+    const traceSource = await mkdtemp(path.join(os.tmpdir(), "ork-agent-staging-source-"));
+    temporaryDirectories.push(traceSource);
+    await writeFile(path.join(traceSource, "trace.network"), "cookie: orkestrator_gateway_auth=leaked\n");
+    const archive = path.join(root, "trace.zip");
+    expect(spawnSync("zip", ["-q", "-r", archive, "."], { cwd: traceSource }).status).toBe(0);
+
+    await sanitizeAgentTestingArtifacts(root, []);
+
+    const unpacked = await mkdtemp(path.join(os.tmpdir(), "ork-agent-staging-check-"));
+    temporaryDirectories.push(unpacked);
+    expect(spawnSync("unzip", ["-qq", archive, "-d", unpacked]).status).toBe(0);
+    expect(await readFile(path.join(unpacked, "trace.network"), "utf8"))
+      .toContain("orkestrator_gateway_auth=[REDACTED]");
+    // No staging directory survives next to the archive it redacted.
+    expect(spawnSync("ls", [root], { encoding: "utf8" }).stdout.trim()).toBe("trace.zip");
+  });
+
+  test("destroys an archive it could not redact rather than leaving the original", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ork-agent-unredactable-"));
+    temporaryDirectories.push(root);
+    const archive = path.join(root, "trace.zip");
+    // Not a zip at all, so unpacking fails and the redacted replacement can
+    // never be installed. The file still on disk is the unredacted one.
+    await writeFile(archive, "cookie: orkestrator_gateway_auth=leaked\n");
+
+    await expect(sanitizeAgentTestingArtifacts(root, [])).rejects.toThrow(
+      "Unable to unpack an agent-test trace for redaction",
+    );
+
+    await expect(readFile(archive, "utf8")).rejects.toThrow();
+  });
 });

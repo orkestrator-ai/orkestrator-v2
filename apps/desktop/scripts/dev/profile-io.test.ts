@@ -5,10 +5,28 @@ import path from "node:path";
 
 import { parseRuntimeStatusManifest, resolveRuntimeProfile, statusManifestPath } from "../../electron/runtime-profile.js";
 import { atomicWriteJson, initializeProfile, processMatches, processStartTime, readAndValidateSentinel, reserveLoopbackPorts } from "./profile-io.js";
-import { stoppedRuntimeStatusIfUnchanged, stopTrackedRuntimeProcesses } from "./lifecycle.js";
+import { orphanedRuntimeProcesses, stoppedRuntimeStatusIfUnchanged, stopTrackedRuntimeProcesses } from "./lifecycle.js";
 
 const directories: string[] = [];
 afterEach(async () => Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))));
+
+function runtimeStatus() {
+  return {
+    version: 1 as const,
+    status: "ready" as const,
+    profile: "qa",
+    flavor: "agent-test" as const,
+    dataDir: "/tmp/data",
+    electronTitle: "Orkestrator AI — DEV [qa]",
+    rendererUrl: "http://127.0.0.1:1",
+    logDir: "/tmp/logs",
+    statusPath: "/tmp/status.json",
+    startedAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+    pids: { launcher: 11, vite: 22, electron: 33, backend: 44 },
+    processStartTimes: { launcher: 1, vite: 2, electron: 3, backend: 4 },
+  };
+}
 
 describe("development profile lifecycle primitives", () => {
   test("creates owner-only profile metadata and a matching sentinel", async () => {
@@ -39,21 +57,7 @@ describe("development profile lifecycle primitives", () => {
   test("stops surviving detached processes when the launcher is already dead", async () => {
     const active = new Set([22, 33, 44]);
     const signals: Array<{ pid: number; signal: NodeJS.Signals; processGroup: boolean }> = [];
-    const status = {
-      version: 1 as const,
-      status: "ready" as const,
-      profile: "qa",
-      flavor: "agent-test" as const,
-      dataDir: "/tmp/data",
-      electronTitle: "Orkestrator AI — DEV [qa]",
-      rendererUrl: "http://127.0.0.1:1",
-      logDir: "/tmp/logs",
-      statusPath: "/tmp/status.json",
-      startedAt: new Date(0).toISOString(),
-      updatedAt: new Date(0).toISOString(),
-      pids: { launcher: 11, vite: 22, electron: 33, backend: 44 },
-      processStartTimes: { launcher: 1, vite: 2, electron: 3, backend: 4 },
-    };
+    const status = runtimeStatus();
 
     await expect(stopTrackedRuntimeProcesses(status, {
       matches: (pid) => Boolean(pid && active.has(pid)),
@@ -72,22 +76,56 @@ describe("development profile lifecycle primitives", () => {
     expect(active.size).toBe(0);
   });
 
+  test("stops at the launcher when its shutdown takes the whole tree with it", async () => {
+    // The launcher's own SIGTERM handler kills the Vite and Electron groups, so
+    // signalling every tracked PID as well would be redundant at best and, once
+    // those PIDs are recycled, aimed at something else entirely.
+    const active = new Set([11, 22, 33, 44]);
+    const signals: Array<{ pid: number; signal: NodeJS.Signals; processGroup: boolean }> = [];
+
+    await expect(stopTrackedRuntimeProcesses(runtimeStatus(), {
+      matches: (pid) => Boolean(pid && active.has(pid)),
+      signal: (pid, signal, processGroup) => {
+        signals.push({ pid, signal, processGroup });
+        if (pid === 11) active.clear();
+      },
+      sleep: async () => undefined,
+    })).resolves.toEqual([]);
+
+    expect(signals).toEqual([{ pid: 11, signal: "SIGTERM", processGroup: false }]);
+  });
+
+  test("escalates to SIGKILL and reports whatever outlives it", async () => {
+    const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    let clock = 0;
+    // Nothing ever exits: SIGTERM to the launcher, then SIGTERM to all four,
+    // then SIGKILL to the four survivors, and the caller learns every name.
+    // The clock is driven by the sleep stub so the 5s/5s/2s deadlines are
+    // exercised without spending twelve real seconds on them.
+    await expect(stopTrackedRuntimeProcesses(runtimeStatus(), {
+      matches: (pid) => Boolean(pid),
+      signal: (pid, signal) => void signals.push({ pid, signal }),
+      sleep: async (milliseconds) => void (clock += milliseconds),
+      now: () => clock,
+    })).resolves.toEqual(["launcher", "vite", "electron", "backend"]);
+
+    expect(signals.filter((entry) => entry.signal === "SIGTERM").map((entry) => entry.pid))
+      .toEqual([11, 11, 22, 33, 44]);
+    expect(signals.filter((entry) => entry.signal === "SIGKILL").map((entry) => entry.pid))
+      .toEqual([11, 22, 33, 44]);
+  });
+
+  test("treats surviving processes without a launcher as orphans that block a restart", () => {
+    const live = { launcher: false, vite: true, electron: false, backend: true };
+    expect(orphanedRuntimeProcesses(live)).toEqual(["vite", "backend"]);
+    // A live launcher owns them, so `dev` reports "already running" instead.
+    expect(orphanedRuntimeProcesses({ ...live, launcher: true })).toEqual([]);
+    expect(orphanedRuntimeProcesses({ launcher: false, vite: false, electron: false, backend: false })).toEqual([]);
+    expect(orphanedRuntimeProcesses(null)).toEqual([]);
+  });
+
   test("marks only the process snapshot it stopped as stopped", () => {
-    const original = {
-      version: 1 as const,
-      status: "ready" as const,
-      profile: "qa",
-      flavor: "agent-test" as const,
-      dataDir: "/tmp/data",
-      electronTitle: "Orkestrator AI — DEV [qa]",
-      rendererUrl: "http://127.0.0.1:1",
-      logDir: "/tmp/logs",
-      statusPath: "/tmp/status.json",
-      startedAt: new Date(0).toISOString(),
-      updatedAt: new Date(0).toISOString(),
-      pids: { launcher: 11, vite: 22, electron: 33, backend: 44 },
-      processStartTimes: { launcher: 1, vite: 2, electron: 3, backend: 4 },
-    };
+    const original = runtimeStatus();
     const stopped = stoppedRuntimeStatusIfUnchanged(original, original, "2026-08-14T12:00:00.000Z");
     expect(stopped?.status).toBe("stopped");
     expect(stopped?.updatedAt).toBe("2026-08-14T12:00:00.000Z");

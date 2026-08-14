@@ -167,6 +167,10 @@ session.get("/list", async (c) => {
       status: s.status,
       createdAt: s.createdAt.toISOString(),
       lastActivity: s.lastActivity.toISOString(),
+      // Lets the shared resume picker say how much conversation a session
+      // holds without reading any of it. A session reconciled from disk may
+      // not have hydrated its transcript yet, which is "unknown", not zero.
+      ...(Array.isArray(s.messages) ? { messageCount: s.messages.length } : {}),
     })),
   };
 

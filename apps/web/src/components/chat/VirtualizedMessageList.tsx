@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 
 interface VirtuosoListContext {
   footer?: ReactNode;
+  header?: ReactNode;
   emptyState?: ReactNode;
 }
 
@@ -32,6 +33,8 @@ interface VirtualizedMessageListProps<TMessage> {
    */
   resolvePreviousMessage?: (messages: readonly TMessage[], index: number) => TMessage | null;
   footer?: ReactNode;
+  /** Rendered above the first message, e.g. "load earlier messages". */
+  header?: ReactNode;
   emptyState?: ReactNode;
   scrollProps: {
     followOutput: (isAtBottom: boolean) => "auto" | false;
@@ -115,6 +118,11 @@ function StableFooter({ context }: { context?: VirtuosoListContext }) {
   return <FooterWrapper>{context.footer}</FooterWrapper>;
 }
 
+function StableHeader({ context }: { context?: VirtuosoListContext }) {
+  if (!context?.header) return null;
+  return <FooterWrapper>{context.header}</FooterWrapper>;
+}
+
 function StableEmptyPlaceholder({ context }: { context?: VirtuosoListContext }) {
   if (!context?.emptyState) return null;
   return <EmptyPlaceholderWrapper>{context.emptyState}</EmptyPlaceholderWrapper>;
@@ -126,6 +134,7 @@ export function VirtualizedMessageList<TMessage>({
   renderMessage,
   resolvePreviousMessage,
   footer,
+  header,
   emptyState,
   scrollProps,
   virtuosoRef,
@@ -136,20 +145,22 @@ export function VirtualizedMessageList<TMessage>({
   const matchHighlightName = `agent-chat-find-match-${findInstanceId}`;
   const currentHighlightName = `agent-chat-find-current-${findInstanceId}`;
   const context = useMemo<VirtuosoListContext>(
-    () => ({ footer, emptyState }),
-    [footer, emptyState]
+    () => ({ footer, header, emptyState }),
+    [footer, header, emptyState]
   );
 
   // Only recreate the components object when component presence changes (not content).
   // This keeps component identity stable across re-renders.
   const hasFooter = !!footer;
+  const hasHeader = !!header;
   const hasEmptyState = !!emptyState;
   const components = useMemo(
     () => ({
       Footer: hasFooter ? StableFooter : undefined,
+      Header: hasHeader ? StableHeader : undefined,
       EmptyPlaceholder: hasEmptyState ? StableEmptyPlaceholder : undefined,
     }),
-    [hasFooter, hasEmptyState]
+    [hasFooter, hasHeader, hasEmptyState]
   );
 
   const handleFindNavigate = useCallback(

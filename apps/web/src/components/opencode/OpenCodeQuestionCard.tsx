@@ -60,7 +60,7 @@ export function OpenCodeQuestionCard({
   const handleDismiss = useCallback(async () => {
     const result = await rejectQuestion(client, question.id);
     if (result === "applied" || result === "gone") {
-      // The loading state is cleared by SSE events in OpenCodeChatTab.
+      // The owning controller clears the loading state from provider events.
       removePendingQuestion(question.id);
       return true;
     }

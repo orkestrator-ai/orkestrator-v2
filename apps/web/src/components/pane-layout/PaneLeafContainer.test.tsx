@@ -4,21 +4,15 @@ import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneLeaf } from "@/types/paneLayout";
-import * as realClaudeChatTab from "@/components/claude/ClaudeChatTab";
 import * as realClaudeTmuxChatTab from "@/components/claude/ClaudeTmuxChatTab";
-import * as realCodexChatTab from "@/components/codex/CodexChatTab";
-import * as realOpenCodeChatTab from "@/components/opencode/OpenCodeChatTab";
-import * as realAcpChatTab from "@/components/acp/AcpChatTab";
+import * as realNativeAgent from "@/components/native-agent";
 import * as realBrowserTab from "@/components/browser/BrowserTab";
 import * as realLoopedReviewTab from "@/components/review/LoopedReviewTab";
 import * as realFileViewerTab from "@/components/terminal/FileViewerTab";
 import * as realBuildChatTab from "@/components/build-pipeline/BuildChatTab";
 
-const realClaudeChatTabSnapshot = { ...realClaudeChatTab };
 const realClaudeTmuxChatTabSnapshot = { ...realClaudeTmuxChatTab };
-const realCodexChatTabSnapshot = { ...realCodexChatTab };
-const realOpenCodeChatTabSnapshot = { ...realOpenCodeChatTab };
-const realAcpChatTabSnapshot = { ...realAcpChatTab };
+const realNativeAgentSnapshot = { ...realNativeAgent };
 const realBrowserTabSnapshot = { ...realBrowserTab };
 const realLoopedReviewTabSnapshot = { ...realLoopedReviewTab };
 const realFileViewerTabSnapshot = { ...realFileViewerTab };
@@ -80,44 +74,6 @@ mock.module("./DropZoneOverlay", () => ({
   DropZoneOverlay: () => null,
 }));
 
-// Stub the chat tabs so PaneLeafContainer rendering doesn't pull in real
-// stores or backend invoke. These are *for this file only* — see CLAUDE.md
-// guidance on local mock.module usage.
-mock.module("@/components/claude/ClaudeChatTab", () => ({
-  ClaudeChatTab: ({
-    tabId,
-    isReviewTab,
-    initialAgentModel,
-    initialReasoningEffort,
-    agentHandoffId,
-    consumedAgentHandoffId,
-    refreshRequestId,
-    ownsGlobalShortcuts,
-  }: {
-    tabId: string;
-    isReviewTab?: boolean;
-    initialAgentModel?: string;
-    initialReasoningEffort?: string;
-    agentHandoffId?: string;
-    consumedAgentHandoffId?: string;
-    refreshRequestId?: number;
-    ownsGlobalShortcuts?: boolean;
-  }) => (
-    <div
-      data-agent-model={initialAgentModel}
-      data-agent-handoff-id={agentHandoffId}
-      data-consumed-agent-handoff-id={consumedAgentHandoffId}
-      data-reasoning-effort={initialReasoningEffort}
-      data-refresh-request-id={refreshRequestId}
-      data-review-tab={String(Boolean(isReviewTab))}
-      data-owns-global-shortcuts={String(Boolean(ownsGlobalShortcuts))}
-      data-testid="claude-tab"
-    >
-      claude:{tabId}
-    </div>
-  ),
-}));
-
 mock.module("@/components/claude/ClaudeTmuxChatTab", () => ({
   ClaudeTmuxChatTab: ({
     tabId,
@@ -147,91 +103,35 @@ mock.module("@/components/claude/ClaudeTmuxChatTab", () => ({
   ),
 }));
 
-mock.module("@/components/codex/CodexChatTab", () => ({
-  CodexChatTab: ({
-    tabId,
-    isReviewTab,
-    initialAgentModel,
-    initialReasoningEffort,
-    agentHandoffId,
-    consumedAgentHandoffId,
-    refreshRequestId,
-    ownsGlobalShortcuts,
-  }: {
-    tabId: string;
-    isReviewTab?: boolean;
-    initialAgentModel?: string;
-    initialReasoningEffort?: string;
-    agentHandoffId?: string;
-    consumedAgentHandoffId?: string;
-    refreshRequestId?: number;
-    ownsGlobalShortcuts?: boolean;
-  }) => (
-    <div
-      data-agent-model={initialAgentModel}
-      data-agent-handoff-id={agentHandoffId}
-      data-consumed-agent-handoff-id={consumedAgentHandoffId}
-      data-reasoning-effort={initialReasoningEffort}
-      data-refresh-request-id={refreshRequestId}
-      data-review-tab={String(Boolean(isReviewTab))}
-      data-owns-global-shortcuts={String(Boolean(ownsGlobalShortcuts))}
-      data-testid="codex-tab"
-    >
-      codex:{tabId}
-    </div>
-  ),
-}));
-
-mock.module("@/components/opencode/OpenCodeChatTab", () => ({
-  OpenCodeChatTab: ({
-    tabId,
-    isReviewTab,
-    initialAgentModel,
-    initialReasoningEffort,
-    agentHandoffId,
-    consumedAgentHandoffId,
-    refreshRequestId,
-    ownsGlobalShortcuts,
-  }: {
-    tabId: string;
-    isReviewTab?: boolean;
-    initialAgentModel?: string;
-    initialReasoningEffort?: string;
-    agentHandoffId?: string;
-    consumedAgentHandoffId?: string;
-    refreshRequestId?: number;
-    ownsGlobalShortcuts?: boolean;
-  }) => (
-    <div
-      data-agent-model={initialAgentModel}
-      data-agent-handoff-id={agentHandoffId}
-      data-consumed-agent-handoff-id={consumedAgentHandoffId}
-      data-reasoning-effort={initialReasoningEffort}
-      data-refresh-request-id={refreshRequestId}
-      data-review-tab={String(Boolean(isReviewTab))}
-      data-owns-global-shortcuts={String(Boolean(ownsGlobalShortcuts))}
-      data-testid="opencode-tab"
-    >
-      opencode:{tabId}
-    </div>
-  ),
-}));
-
-mock.module("@/components/acp/AcpChatTab", () => ({
-  AcpChatTab: ({
+mock.module("@/components/native-agent", () => ({
+  AgentNativeTab: ({
     tabId,
     data,
     isActive,
     initialPrompt,
+    isReviewTab,
+    initialAgentModel,
+    initialReasoningEffort,
+    agentHandoffId,
+    consumedAgentHandoffId,
+    refreshRequestId,
+    ownsGlobalShortcuts,
   }: {
     tabId: string;
     data: {
-      platform: "cursor" | "grok";
+      platform: "claude" | "codex" | "opencode" | "cursor" | "grok";
       environmentId: string;
       sessionId?: string;
     };
     isActive: boolean;
     initialPrompt?: string;
+    isReviewTab?: boolean;
+    initialAgentModel?: string;
+    initialReasoningEffort?: string;
+    agentHandoffId?: string;
+    consumedAgentHandoffId?: string;
+    refreshRequestId?: number;
+    ownsGlobalShortcuts?: boolean;
   }) => (
     <div
       data-testid={`${data.platform}-tab`}
@@ -240,6 +140,13 @@ mock.module("@/components/acp/AcpChatTab", () => ({
       data-session-id={data.sessionId}
       data-active={String(isActive)}
       data-initial-prompt={initialPrompt}
+      data-agent-model={initialAgentModel}
+      data-agent-handoff-id={agentHandoffId}
+      data-consumed-agent-handoff-id={consumedAgentHandoffId}
+      data-reasoning-effort={initialReasoningEffort}
+      data-refresh-request-id={refreshRequestId}
+      data-review-tab={String(Boolean(isReviewTab))}
+      data-owns-global-shortcuts={String(Boolean(ownsGlobalShortcuts))}
     />
   ),
 }));
@@ -348,25 +255,10 @@ const { PaneLeafContainer } = await import("./PaneLeafContainer");
 describe("PaneLeafContainer", () => {
   afterAll(() => {
     mock.module(
-      "@/components/claude/ClaudeChatTab",
-      () => realClaudeChatTabSnapshot,
-    );
-    mock.module(
       "@/components/claude/ClaudeTmuxChatTab",
       () => realClaudeTmuxChatTabSnapshot,
     );
-    mock.module(
-      "@/components/codex/CodexChatTab",
-      () => realCodexChatTabSnapshot,
-    );
-    mock.module(
-      "@/components/opencode/OpenCodeChatTab",
-      () => realOpenCodeChatTabSnapshot,
-    );
-    mock.module(
-      "@/components/acp/AcpChatTab",
-      () => realAcpChatTabSnapshot,
-    );
+    mock.module("@/components/native-agent", () => realNativeAgentSnapshot);
     mock.module(
       "@/components/browser/BrowserTab",
       () => realBrowserTabSnapshot,

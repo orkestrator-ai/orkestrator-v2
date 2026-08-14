@@ -14,10 +14,12 @@ interface NativeComposeDraftState<TMention, TAttachment> {
   draftText: Map<string, string>;
   draftMentions: Map<string, TMention[]>;
   attachments: Map<string, TAttachment[]>;
+  draftMetadata?: Map<string, unknown>;
   setDraftText: (sessionKey: string, text: string) => void;
   setDraftMentions: (sessionKey: string, mentions: TMention[]) => void;
   clearAttachments: (sessionKey: string) => void;
   addAttachment: (sessionKey: string, attachment: TAttachment) => void;
+  setDraftMetadata?: (sessionKey: string, metadata: unknown) => void;
 }
 
 interface NativeComposeDraftStore<TMention, TAttachment> {
@@ -34,9 +36,17 @@ interface PersistedNativeComposeDraft {
   text: string;
   mentions: unknown[];
   attachments: unknown[];
+  metadata?: unknown;
 }
 
-type NativeDraftNamespace = "claude" | "claude-tmux" | "codex" | "opencode";
+type NativeDraftNamespace =
+  | "claude"
+  | "claude-tmux"
+  | "codex"
+  | "opencode"
+  | "cursor"
+  | "grok"
+  | "agent-native";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -65,8 +75,32 @@ function isPersistedAttachment(
   ) {
     return false;
   }
+  if (namespace === "cursor" || namespace === "grok") return false;
   if (namespace === "codex") return value.type === "image";
   return value.type === "file" || value.type === "image";
+}
+
+/**
+ * Resolve which provider's attachment rules a stored draft must satisfy.
+ *
+ * The shared `agent-native` record belongs to a tab that has not been assigned
+ * yet, so its own namespace says nothing about what the selected agent accepts.
+ * The persisted platform does, and restoring an attachment the agent refuses
+ * would fail the next send rather than being dropped by the bridge.
+ */
+function effectiveAttachmentNamespace(
+  namespace: NativeDraftNamespace,
+  metadata: unknown,
+): NativeDraftNamespace {
+  if (namespace !== "agent-native") return namespace;
+  const platform = isRecord(metadata) ? metadata.platform : undefined;
+  return platform === "claude"
+    || platform === "codex"
+    || platform === "opencode"
+    || platform === "cursor"
+    || platform === "grok"
+    ? platform
+    : namespace;
 }
 
 function readDraft<TMention, TAttachment>(
@@ -77,13 +111,17 @@ function readDraft<TMention, TAttachment>(
     text: state.draftText.get(sessionKey) ?? "",
     mentions: state.draftMentions.get(sessionKey) ?? [],
     attachments: state.attachments.get(sessionKey) ?? [],
+    ...(state.draftMetadata?.has(sessionKey)
+      ? { metadata: state.draftMetadata.get(sessionKey) }
+      : {}),
   };
 }
 
 function isEmptyDraft(draft: PersistedNativeComposeDraft): boolean {
   return draft.text.length === 0
     && draft.mentions.length === 0
-    && draft.attachments.length === 0;
+    && draft.attachments.length === 0
+    && draft.metadata === undefined;
 }
 
 /**
@@ -163,12 +201,15 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
       const priorMentions = previous.draftMentions.get(sessionKey);
       const currentAttachments = state.attachments.get(sessionKey);
       const priorAttachments = previous.attachments.get(sessionKey);
+      const currentMetadata = state.draftMetadata?.get(sessionKey);
+      const priorMetadata = previous.draftMetadata?.get(sessionKey);
       if (
         applyingHydration
         || (
           currentText === priorText
           && currentMentions === priorMentions
           && currentAttachments === priorAttachments
+          && currentMetadata === priorMetadata
         )
       ) {
         return;
@@ -194,8 +235,12 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
           return;
         }
         const mentions = value.mentions.filter(isPersistedFileMention);
+        const attachmentNamespace = effectiveAttachmentNamespace(
+          namespace,
+          value.metadata,
+        );
         const attachments = value.attachments.filter((attachment) =>
-          isPersistedAttachment(namespace, attachment)
+          isPersistedAttachment(attachmentNamespace, attachment)
         );
         applyingHydration = true;
         try {
@@ -204,6 +249,9 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
           state.clearAttachments(sessionKey);
           for (const attachment of attachments) {
             state.addAttachment(sessionKey, attachment as TAttachment);
+          }
+          if (value.metadata !== undefined) {
+            state.setDraftMetadata?.(sessionKey, value.metadata);
           }
         } finally {
           applyingHydration = false;

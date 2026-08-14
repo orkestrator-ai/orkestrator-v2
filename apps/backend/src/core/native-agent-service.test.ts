@@ -14,18 +14,22 @@ import {
 } from "@orkestrator/protocol/agent-interactions";
 import {
   createBuildPipelineProvider,
+  AmbiguousPromptDispatchError,
   PromptRejectedError,
   ProviderUnavailableError,
   type BridgeConnection,
   type BuildPipelineProvider,
+  type NativeAgentRuntimeProvider,
   type ProviderSendOptions,
   type ProviderActivityState,
+  type ProviderInteractiveSnapshot,
   type AgentInteractionProviderCapability,
   type ProviderStatus,
 } from "./build-pipeline-provider.js";
 import type { Environment } from "./models.js";
 import {
   isAgentTurnEndTransition,
+  NATIVE_PROJECTION_CACHE_LIMIT,
   NativeAgentService,
   nativeAgentSessionStorageKey,
   type AgentInteractionObservation,
@@ -74,6 +78,14 @@ function createProviderStub(
     ) => Promise<Map<string, ProviderActivityState>>;
     interactions?: AgentInteractionProviderCapability;
     messages?: (sessionId: string) => Promise<unknown[]>;
+    interactiveSnapshot?: (
+      sessionId: string,
+    ) => Promise<ProviderInteractiveSnapshot>;
+    abort?: (sessionId: string) => Promise<void>;
+    stopBackgroundTask?: NativeAgentRuntimeProvider["stopBackgroundTask"];
+    dismissSuggestedPrompt?: NativeAgentRuntimeProvider["dismissSuggestedPrompt"];
+    updateInteractiveControls?: NativeAgentRuntimeProvider["updateInteractiveControls"];
+    slashCommands?: NativeAgentRuntimeProvider["slashCommands"];
   } = {},
 ) {
   const createSession = mock(
@@ -87,6 +99,22 @@ function createProviderStub(
     : undefined;
   const registerSession = mock((_sessionId: string) => undefined);
   const dispose = mock(async () => undefined);
+  const abort = mock(behaviour.abort ?? (async () => undefined));
+  const stopBackgroundTask = behaviour.stopBackgroundTask
+    ? mock(behaviour.stopBackgroundTask)
+    : undefined;
+  const dismissSuggestedPrompt = behaviour.dismissSuggestedPrompt
+    ? mock(behaviour.dismissSuggestedPrompt)
+    : undefined;
+  const interactiveSnapshot = behaviour.interactiveSnapshot
+    ? mock(behaviour.interactiveSnapshot)
+    : undefined;
+  const updateInteractiveControls = behaviour.updateInteractiveControls
+    ? mock(behaviour.updateInteractiveControls)
+    : undefined;
+  const slashCommands = behaviour.slashCommands
+    ? mock(behaviour.slashCommands)
+    : undefined;
   const provider = {
     agent,
     createSession,
@@ -97,10 +125,15 @@ function createProviderStub(
     activityBatch,
     interactions: behaviour.interactions,
     messages: behaviour.messages ?? (async () => []),
+    interactiveSnapshot,
+    updateInteractiveControls,
+    slashCommands,
     structured: async () => null,
-    abort: async () => undefined,
+    abort,
+    stopBackgroundTask,
+    dismissSuggestedPrompt,
     dispose,
-  } as unknown as BuildPipelineProvider;
+  } as unknown as NativeAgentRuntimeProvider;
   return {
     provider,
     createSession,
@@ -109,6 +142,12 @@ function createProviderStub(
     status,
     activity,
     activityBatch,
+    abort,
+    stopBackgroundTask,
+    dismissSuggestedPrompt,
+    interactiveSnapshot,
+    updateInteractiveControls,
+    slashCommands,
     dispose,
   };
 }
@@ -186,6 +225,9 @@ function internals(service: NativeAgentService) {
     observedInteractionRevisions: Map<string, number>;
     interactionSelectionCursors: Map<string, number>;
     interactionRevisionReconciliations: number;
+    projectionCache: Map<string, unknown>;
+    projectionEpochs: Map<string, number>;
+    projectionRefreshes: Map<string, Promise<unknown>>;
     launchTimer: ReturnType<typeof setInterval> | null;
     interactionTimer: ReturnType<typeof setInterval> | null;
   };
@@ -425,6 +467,720 @@ function activePipeline(
 }
 
 describe("NativeAgentService", () => {
+  test("projects authoritative interactive state with stable revisions and inactive refresh", async () => {
+    let now = 10_000;
+    let providerRevision = 4;
+    let status: ProviderStatus = "idle";
+    const interactiveSnapshot = async (): Promise<ProviderInteractiveSnapshot> => ({
+      status,
+      providerRevision,
+      title: "Projected session",
+      shareUrl: "https://share.example/session",
+      controls: { mode: "plan" },
+      messages: [{
+        id: "message-1",
+        role: "assistant",
+        content: "Ready",
+        parts: [{ type: "text", text: "Ready" }],
+        createdAt: "2026-08-14T10:00:00.000Z",
+      }],
+      composer: {
+        models: [{ platform: "cursor", id: "cursor/default", label: "Default" }],
+        selectedModelId: "cursor/default",
+        fastModeEnabled: false,
+        fastModeAvailable: true,
+        selectedModeId: "build",
+        modes: [
+          { id: "build", label: "Build" },
+          { id: "plan", label: "Plan" },
+        ],
+      },
+    });
+    const stub = createProviderStub("cursor", { interactiveSnapshot });
+    await withService({
+      prefix: "orkestrator-native-projection-",
+      provider: async () => stub.provider,
+      now: () => now,
+    }, async ({ service }) => {
+      await service.ensureSession({
+        environmentId: "env-1",
+        agent: "cursor",
+        logicalSessionKey: "env-env-1:tab-1",
+        sessionMode: "build",
+      });
+
+      const first = await service.getProjection({
+        environmentId: "env-1",
+        agent: "cursor",
+        logicalSessionKey: "env-env-1:tab-1",
+      });
+      expect(first).toMatchObject({
+        platform: "cursor",
+        connection: "connected",
+        turn: { phase: "idle" },
+        revision: 1,
+        generation: "in-process:cursor",
+        title: "Projected session",
+        shareUrl: "https://share.example/session",
+        cursor: "in-process:cursor:1",
+        messages: [{ id: "message-1", content: "Ready" }],
+        composer: { selectedModelId: "cursor/default", selectedModeId: "plan" },
+      });
+      expect(first?.composerControls.map((control) => control.id)).toEqual([
+        "model",
+        "speed",
+        "mode",
+      ]);
+
+      const unchanged = await service.getProjection({
+        environmentId: "env-1",
+        agent: "cursor",
+        logicalSessionKey: "env-env-1:tab-1",
+      });
+      expect(unchanged).toBe(first);
+
+      status = "running";
+      providerRevision = 5;
+      now += 2_000;
+      const refreshed = await service.getProjection({
+        environmentId: "env-1",
+        agent: "cursor",
+        logicalSessionKey: "env-env-1:tab-1",
+      });
+      expect(refreshed).toMatchObject({
+        turn: { phase: "running" },
+        revision: 2,
+        cursor: "in-process:cursor:2",
+      });
+      expect(stub.interactiveSnapshot).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  test("renders provider terminal states as uniform durable transcript rows", async () => {
+    const stub = createProviderStub("opencode", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        notices: [{ kind: "stopped", message: "Query stopped by user." }],
+      }),
+    });
+    await withService({
+      prefix: "orkestrator-native-terminal-row-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "opencode" as const,
+        logicalSessionKey: "env-env-1:tab-terminal",
+      };
+      await service.ensureSession(identity);
+      const projection = await service.getProjection(identity);
+      expect(projection?.messages).toEqual([expect.objectContaining({
+        role: "system",
+        content: "Query stopped by user.",
+      })]);
+      expect(projection?.notices).toBeUndefined();
+    });
+  });
+
+  test("does not poll tab-facing projection routes without a foreground reader", async () => {
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+    });
+    await withService({
+      prefix: "orkestrator-native-no-background-projection-poll-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-inactive",
+      };
+      await service.init();
+      await service.ensureSession(identity);
+      await service.getProjection(identity);
+      expect(stub.interactiveSnapshot).toHaveBeenCalledTimes(1);
+      await new Promise((resolve) => setTimeout(resolve, 425));
+      expect(stub.interactiveSnapshot).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  test("serializes projection reads and preserves the newest expanded window", async () => {
+    let releaseFirst!: () => void;
+    let signalFirst!: () => void;
+    const firstEntered = new Promise<void>((resolve) => { signalFirst = resolve; });
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let activeReads = 0;
+    let maxActiveReads = 0;
+    let call = 0;
+    const messages = Array.from({ length: 700 }, (_, index) => ({
+      id: `message-${index}`,
+      role: "assistant" as const,
+      content: `message ${index}`,
+      parts: [],
+      createdAt: new Date(index).toISOString(),
+    }));
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => {
+        call += 1;
+        activeReads += 1;
+        maxActiveReads = Math.max(maxActiveReads, activeReads);
+        try {
+          if (call === 1) {
+            signalFirst();
+            await firstGate;
+            return { status: "idle" as const, messages: messages.slice(-512) };
+          }
+          return { status: "running" as const, messages };
+        } finally {
+          activeReads -= 1;
+        }
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-serialized-projections-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "env-env-1:tab-race",
+      };
+      await service.ensureSession(identity);
+      const first = service.getProjection(identity);
+      await firstEntered;
+      const second = service.getProjection({ ...identity, messageLimit: 1_024 });
+      await Promise.resolve();
+      expect(stub.interactiveSnapshot).toHaveBeenCalledTimes(1);
+      releaseFirst();
+      await expect(first).resolves.toMatchObject({ turn: { phase: "idle" } });
+      const newest = await second;
+      expect(maxActiveReads).toBe(1);
+      expect(newest).toMatchObject({
+        turn: { phase: "running" },
+        messageWindow: { limit: 1_024, truncated: false },
+      });
+      expect(newest?.messages).toHaveLength(700);
+    });
+  });
+
+  test("evicting the oldest cache entry does not fence a read in flight for it", async () => {
+    let releaseSlow!: () => void;
+    let signalSlow!: () => void;
+    const slowEntered = new Promise<void>((resolve) => { signalSlow = resolve; });
+    const slowGate = new Promise<void>((resolve) => { releaseSlow = resolve; });
+    let call = 0;
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => {
+        call += 1;
+        // Only the second read of the evicted tab is held open; the first
+        // populates the cache and the third belongs to the new tab.
+        if (call === 2) {
+          signalSlow();
+          await slowGate;
+        }
+        return { status: "idle", messages: [] };
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-eviction-fence-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const evicted = {
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "env-env-1:tab-evicted",
+      };
+      const fresh = { ...evicted, logicalSessionKey: "env-env-1:tab-fresh" };
+      await service.ensureSession(evicted);
+      await service.ensureSession(fresh);
+      // Cached first, so it is the oldest key the capacity sweep will drop.
+      expect(await service.getProjection(evicted)).not.toBeNull();
+
+      const cache = internals(service).projectionCache;
+      const evictedKey = nativeAgentSessionStorageKey(
+        evicted.environmentId,
+        evicted.agent,
+        evicted.logicalSessionKey,
+      );
+      expect([...cache.keys()][0]).toBe(evictedKey);
+      while (cache.size < NATIVE_PROJECTION_CACHE_LIMIT) {
+        cache.set(`filler:${cache.size}`, cache.get(evictedKey)!);
+      }
+
+      const held = service.getProjection(evicted);
+      await slowEntered;
+      // Committing a new key now trips the capacity sweep and drops the tab
+      // whose read is still outstanding.
+      expect(await service.getProjection(fresh)).not.toBeNull();
+      expect(cache.has(evictedKey)).toBe(false);
+
+      releaseSlow();
+      // Capacity eviction is not an identity change, so the outstanding read
+      // still commits rather than reporting the session as missing.
+      const resolved = await held;
+      expect(resolved).not.toBeNull();
+      expect(resolved).toMatchObject({ turn: { phase: "idle" } });
+      expect(cache.has(evictedKey)).toBe(true);
+    });
+  });
+
+  test("reclaims projection epochs once a key is neither cached nor being read", async () => {
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+    });
+    await withService({
+      prefix: "orkestrator-native-epoch-bound-",
+      provider: async () => stub.provider,
+    }, async ({ service, storage }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-epoch",
+      };
+      const key = nativeAgentSessionStorageKey(
+        identity.environmentId,
+        identity.agent,
+        identity.logicalSessionKey,
+      );
+      const session = await service.ensureSession(identity);
+      await service.getProjection(identity);
+
+      // A session action changes the tab's identity and so records an epoch.
+      await service.performProjectionAction({ ...identity, action: { kind: "compact" } })
+        .catch(() => undefined);
+      await service.getProjection(identity);
+      const epochs = internals(service).projectionEpochs;
+      expect(epochs.size).toBeLessThanOrEqual(
+        internals(service).projectionCache.size
+          + internals(service).projectionRefreshes.size,
+      );
+
+      // Once the session is gone the projection resolves to nothing, the cache
+      // entry goes with it, and the epoch must not outlive either.
+      await storage.invalidateNativeAgentSession(key, session.providerSessionId);
+      await expect(service.getProjection(identity)).resolves.toBeNull();
+      expect(internals(service).projectionCache.has(key)).toBe(false);
+      expect(epochs.has(key)).toBe(false);
+    });
+  });
+
+  test("resumes with complete controls and discards an in-flight old-session projection", async () => {
+    let releaseOld!: () => void;
+    let signalOld!: () => void;
+    const oldEntered = new Promise<void>((resolve) => { signalOld = resolve; });
+    const oldGate = new Promise<void>((resolve) => { releaseOld = resolve; });
+    let snapshotCall = 0;
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async (sessionId) => {
+        snapshotCall += 1;
+        if (snapshotCall === 1) {
+          signalOld();
+          await oldGate;
+        }
+        return {
+          status: "idle",
+          messages: [{
+            id: `message-${sessionId}`,
+            role: "assistant",
+            content: sessionId,
+            parts: [],
+            createdAt: new Date(0).toISOString(),
+          }],
+        };
+      },
+    });
+    const resumeSession = mock(async () => "provider-resumed");
+    (stub.provider as NativeAgentRuntimeProvider).resumeSession = resumeSession;
+    await withService({
+      prefix: "orkestrator-native-resume-controls-",
+      provider: async () => stub.provider,
+    }, async ({ service, storage }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "env-env-1:tab-resume-controls",
+      };
+      await service.ensureSession({
+        ...identity,
+        model: "old-model",
+        sessionMode: "build",
+      });
+      const stale = service.getProjection(identity);
+      await oldEntered;
+      const controls = {
+        modelId: "new-model",
+        reasoningId: "high",
+        mode: "plan" as const,
+        fastMode: true,
+        executionProfileId: "reviewer",
+        includeLocalSettings: true,
+        promptSuggestions: true,
+      };
+      const resumed = service.resumeProjectionSession({
+        ...identity,
+        providerSessionId: "provider-resumed",
+        controls,
+      });
+      await waitForCondition(() => resumeSession.mock.calls.length === 1);
+      releaseOld();
+      /*
+       * The fenced read must not become the cached authoritative state, but it
+       * must not report `null` either: that is reserved for "this tab resolves
+       * to no provider session", and a caller without its own fence would read
+       * an ordinary resume as a deleted session. It is handed back uncommitted
+       * at revision 0 instead.
+       */
+      const fenced = await stale;
+      expect(fenced).not.toBeNull();
+      expect(fenced).toMatchObject({ revision: 0 });
+      await expect(resumed).resolves.toMatchObject({ sessionId: "provider-resumed" });
+      expect(resumeSession).toHaveBeenCalledWith("provider-resumed", controls);
+      const key = nativeAgentSessionStorageKey(
+        identity.environmentId,
+        identity.agent,
+        identity.logicalSessionKey,
+      );
+      expect((await storage.getNativeAgentSession(key))?.controls).toEqual(controls);
+    });
+  });
+
+  test("projects bounded slash commands and caches discovery independently of transcript refresh", async () => {
+    let now = 1_000;
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        composer: {
+          models: [{ platform: "claude", id: "sonnet", label: "Sonnet" }],
+          selectedModelId: "sonnet",
+          fastModeEnabled: false,
+          fastModeAvailable: false,
+          selectedModeId: "build",
+          modes: [{ id: "build", label: "Build" }],
+        },
+      }),
+      slashCommands: async () => [{
+        name: "/review",
+        description: "Review the current changes",
+        argumentHint: "[focus]",
+      }],
+    });
+    await withService({
+      prefix: "orkestrator-native-projection-slash-",
+      provider: async () => stub.provider,
+      now: () => now,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "env-env-1:tab-slash",
+      };
+      await service.ensureSession(identity);
+      const first = await service.getProjection(identity);
+      expect(first?.slashCommands).toEqual([{
+        name: "/review",
+        description: "Review the current changes",
+        argumentHint: "[focus]",
+      }]);
+      await service.getProjection(identity);
+      expect(stub.slashCommands).toHaveBeenCalledTimes(1);
+
+      now += 30_001;
+      await service.getProjection(identity);
+      expect(stub.slashCommands).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  test("advertises runtime session-action commands beside provider discovery", async () => {
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+      slashCommands: async () => [{ name: "/review", description: "Review changes" }],
+    });
+    await withService({
+      prefix: "orkestrator-native-projection-actions-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-actions",
+      };
+      await service.ensureSession(identity);
+      const projection = await service.getProjection(identity);
+      // `/steer` is performed by the runtime rather than the model, so it has
+      // to be advertised by whoever knows the capability — not by a tab.
+      expect(projection?.slashCommands?.map((command) => command.name))
+        .toEqual(["/review", "/steer"]);
+      expect(projection?.capabilities.attachments).toEqual({
+        files: false,
+        images: true,
+      });
+    });
+  });
+
+  test("orders resumable sessions by most recent activity", async () => {
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+    });
+    (stub.provider as { listResumableSessions?: unknown }).listResumableSessions =
+      async () => [
+        { sessionId: "older", updatedAt: "2026-08-01T00:00:00.000Z" },
+        { sessionId: "undated" },
+        { sessionId: "newest", updatedAt: "2026-08-14T00:00:00.000Z", status: "running" as const },
+      ];
+    await withService({
+      prefix: "orkestrator-native-projection-resume-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "env-env-1:tab-resume",
+      };
+      await service.ensureSession(identity);
+      const entries = await service.listProjectionResumableSessions(identity);
+      // Providers return their own order; the picker must not have to know
+      // which field each provider sorts on. Undated entries sink.
+      expect(entries.map((entry) => entry.sessionId))
+        .toEqual(["newest", "older", "undated"]);
+      expect(entries[0]?.status).toBe("running");
+    });
+  });
+
+  test("windows a long transcript and reports that it was truncated", async () => {
+    const messages = Array.from({ length: 600 }, (_, index) => ({
+      id: `message-${index}`,
+      role: "assistant" as const,
+      content: `line ${index}`,
+      parts: [],
+      createdAt: "2026-08-14T10:00:00.000Z",
+    }));
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => ({ status: "idle", messages }),
+    });
+    await withService({
+      prefix: "orkestrator-native-projection-window-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "env-env-1:tab-window",
+      };
+      await service.ensureSession(identity);
+      const bounded = await service.getProjection(identity);
+      expect(bounded?.messages).toHaveLength(512);
+      expect(bounded?.messageWindow).toEqual({ limit: 512, truncated: true });
+
+      const expanded = await service.getProjection({ ...identity, messageLimit: 1_024 });
+      expect(expanded?.messages).toHaveLength(600);
+      expect(expanded?.messageWindow).toEqual({ limit: 1_024, truncated: false });
+
+      // A caller that asks for nothing — the reconciler, the info panel —
+      // inherits the expanded window instead of collapsing the tab's view.
+      const inherited = await service.getProjection(identity);
+      expect(inherited?.messages).toHaveLength(600);
+    });
+  });
+
+  test("projects pending interactions and routes neutral stop, controls, and resolution", async () => {
+    const resolveInteraction = mock(async () => ({
+      result: "applied" as const,
+      interactionId: "interaction-0",
+      sessionId: "provider-session",
+      revision: 2,
+    }));
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({
+        status: "running",
+        messages: [],
+        composer: {
+          models: [{ platform: "codex", id: "gpt-5", label: "GPT-5" }],
+          selectedModelId: "gpt-5",
+          fastModeEnabled: false,
+          fastModeAvailable: true,
+          selectedModeId: "build",
+          modes: [{ id: "build", label: "Build" }],
+        },
+      }),
+      interactions: {
+        listPendingInteractions: async () => pendingInteractionSnapshot(10_000, ["permission"]),
+        resolveInteraction,
+      },
+      updateInteractiveControls: async () => undefined,
+    });
+    await withService({
+      prefix: "orkestrator-native-projection-intents-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      await service.ensureSession({
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "env-env-1:tab-1",
+      });
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-1",
+      };
+      const blocked = await service.getProjection(identity);
+      expect(blocked).toMatchObject({
+        turn: { phase: "blocked" },
+        interactions: [{ id: "interaction-0", kind: "permission" }],
+      });
+
+      await service.updateProjectionControls({
+        ...identity,
+        update: { modelId: "gpt-5", fastMode: true },
+      });
+      expect(stub.updateInteractiveControls).toHaveBeenCalledWith(
+        "provider-session",
+        { modelId: "gpt-5", fastMode: true },
+      );
+
+      const resolution = {
+        version: AGENT_INTERACTION_CONTRACT_VERSION,
+        interactionId: "interaction-0",
+        sessionId: "provider-session",
+        action: "decline" as const,
+        resolvedAt: 10_001,
+      };
+      await service.resolveProjectionInteraction({
+        ...identity,
+        interactionId: "interaction-0",
+        resolution,
+      });
+      expect(resolveInteraction).toHaveBeenCalledWith(
+        "provider-session",
+        "interaction-0",
+        resolution,
+      );
+
+      await service.stopProjectionSession(identity);
+      expect(stub.abort).toHaveBeenCalledWith("provider-session");
+    });
+  });
+
+  test("routes neutral background-task and suggested-prompt intents", async () => {
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        backgroundTasks: [],
+      }),
+      stopBackgroundTask: async () => undefined,
+      dismissSuggestedPrompt: async () => undefined,
+    });
+    await withService({
+      prefix: "orkestrator-native-claude-parity-intents-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "env-env-1:tab-1",
+      };
+      await service.ensureSession(identity);
+      await service.stopProjectionBackgroundTask({ ...identity, taskId: "task/1" });
+      await service.dismissProjectionSuggestedPrompt(identity);
+      expect(stub.stopBackgroundTask).toHaveBeenCalledWith("provider-session", "task/1");
+      expect(stub.dismissSuggestedPrompt).toHaveBeenCalledWith("provider-session");
+    });
+  });
+
+  test("classifies accepted, rejected, and ambiguous dispatch intents", async () => {
+    let result: "accepted" | "rejected" | "unknown" = "accepted";
+    const stub = createProviderStub("cursor", {
+      send: async () => {
+        if (result === "rejected") throw new PromptRejectedError("No input");
+        if (result === "unknown") {
+          throw new AmbiguousPromptDispatchError("Response was lost");
+        }
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-dispatch-outcomes-",
+      provider: async () => stub.provider,
+    }, async ({ service, storage }) => {
+      const base = {
+        environmentId: "env-1",
+        agent: "cursor" as const,
+        logicalSessionKey: "env-env-1:tab-1",
+        prompt: "Do the work",
+        attachments: [{
+          type: "file" as const,
+          path: "/workspace/review.txt",
+          dataUrl: "data:text/plain;base64,cmV2aWV3",
+        }],
+        schema: { type: "object" },
+        mode: "plan" as const,
+        model: "cursor/model",
+        reasoningEffort: "high",
+      };
+      await expect(service.dispatchIntent({
+        ...base,
+        requestId: "accepted-1",
+      })).resolves.toEqual({ outcome: "accepted", requestId: "accepted-1" });
+
+      result = "rejected";
+      await expect(service.dispatchIntent({
+        ...base,
+        requestId: "rejected-1",
+      })).resolves.toEqual({ outcome: "rejected", error: "No input" });
+
+      result = "unknown";
+      await expect(service.dispatchIntent({
+        ...base,
+        requestId: "unknown-1",
+      })).resolves.toEqual({
+        outcome: "unknown",
+        requestId: "unknown-1",
+        error: "Response was lost",
+      });
+
+      const key = nativeAgentSessionStorageKey(
+        base.environmentId,
+        base.agent,
+        base.logicalSessionKey,
+      );
+      expect((await storage.getNativeAgentSession(key))?.pendingDispatch).toMatchObject({
+        requestId: "unknown-1",
+        prompt: "Do the work",
+        attachments: base.attachments,
+        schema: base.schema,
+        mode: "plan",
+        model: "cursor/model",
+        reasoningEffort: "high",
+      });
+      await expect(service.getProjection(base)).resolves.toMatchObject({
+        recoverableDispatch: { requestId: "unknown-1" },
+      });
+
+      result = "accepted";
+      const sendsBeforeStaleRetry = stub.send.mock.calls.length;
+      await expect(service.retryRecoverableDispatch({
+        ...base,
+        requestId: "stale-request",
+      })).resolves.toEqual({
+        outcome: "rejected",
+        error: "The recoverable dispatch changed; refresh before retrying",
+      });
+      expect(stub.send).toHaveBeenCalledTimes(sendsBeforeStaleRetry);
+      await expect(service.retryRecoverableDispatch({
+        ...base,
+        requestId: "unknown-1",
+      })).resolves.toEqual({
+        outcome: "accepted",
+        requestId: "unknown-1",
+      });
+      expect(stub.send.mock.calls.at(-1)?.[2]).toMatchObject({
+        requestId: "unknown-1",
+      });
+      expect((await storage.getNativeAgentSession(key))?.pendingDispatch).toBeUndefined();
+    });
+  });
+
   test("observe-only monitoring survives without a renderer and never responds", async () => {
     let now = 10_000;
     let snapshot = pendingInteractionSnapshot(now);

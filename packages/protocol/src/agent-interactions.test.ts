@@ -421,6 +421,29 @@ describe("answers and resolutions", () => {
     }, value)).toBe(false);
   });
 
+  test("allows bounded revision feedback only when declining a plan", () => {
+    const plan = request("plan-approval");
+    plan.presentation.questions = [];
+    const feedbackResolution = {
+      version: AGENT_INTERACTION_CONTRACT_VERSION,
+      interactionId: plan.id,
+      sessionId: plan.sessionId,
+      action: "decline" as const,
+      feedback: "Add rollback steps",
+      resolvedAt: plan.createdAt,
+    };
+    expect(isAgentInteractionResolution(feedbackResolution, plan)).toBe(true);
+    expect(isAgentInteractionResolution(feedbackResolution, request("permission"))).toBe(false);
+    expect(isAgentInteractionResolution({
+      ...feedbackResolution,
+      action: "cancel",
+    }, plan)).toBe(false);
+    expect(isAgentInteractionResolution({
+      ...feedbackResolution,
+      feedback: "x".repeat(AGENT_INTERACTION_LIMITS.maxTextLength + 1),
+    }, plan)).toBe(false);
+  });
+
   test("enforces free-text and answer count bounds", () => {
     const value = request();
     expect(isAgentInteractionAnswer({

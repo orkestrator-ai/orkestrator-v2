@@ -96,6 +96,8 @@ export const openCodeQuestionDraftKey = (sessionId: string, requestId: string) =
   scopedDraftKey("opencode-question", sessionId, requestId);
 export const codexInteractionDraftKey = (sessionKey: string, interactionId: string) =>
   scopedDraftKey("codex-interaction", sessionKey, interactionId);
+export const nativeAgentInteractionDraftKey = (sessionId: string, interactionId: string) =>
+  scopedDraftKey("native-agent-interaction", sessionId, interactionId);
 export const tmuxQuestionDraftKey = (sessionKey: string, eventId: string) =>
   scopedDraftKey("tmux-question", sessionKey, eventId);
 export const tmuxPlanDraftKey = (sessionKey: string, eventId: string) =>

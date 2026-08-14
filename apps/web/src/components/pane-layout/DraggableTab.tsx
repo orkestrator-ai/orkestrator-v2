@@ -18,6 +18,7 @@ import { useSessionStore } from "@/stores/sessionStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
+import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { createSessionKey } from "@/lib/utils";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
@@ -114,8 +115,21 @@ export function DraggableTab({
   const session = Array.from(sessions.values()).find((s) => s.tabId === tab.id);
   const nativeAgentData = getNativeAgentData(tab);
 
-  // Agent-assigned session titles. All three native agents populate these, so
-  // all three label their tab with the session name once the agent picks one.
+  /*
+   * Agent-assigned session title.
+   *
+   * The neutral projection is the source for every native provider — including
+   * Cursor and Grok, which never had a store of their own. The provider stores
+   * below remain as a fallback for surfaces that still write them (tmux), so a
+   * tab keeps its label if a projection has not been read yet.
+   */
+  const projectionSessionTitle = useNativeAgentProjectionStore((state) =>
+    nativeAgentData
+      ? state.projections.get(
+          createSessionKey(nativeAgentData.environmentId, tab.id),
+        )?.title
+      : undefined,
+  );
   const claudeSessionTitle = useClaudeStore((state) => {
     if (nativeAgentData?.platform !== "claude") return undefined;
     return state.sessions.get(
@@ -136,8 +150,10 @@ export function DraggableTab({
       createSessionKey(nativeAgentData.environmentId, tab.id),
     )?.title;
   });
-  const nativeSessionTitle =
-    claudeSessionTitle ?? codexSessionTitle ?? openCodeSessionTitle;
+  const nativeSessionTitle = projectionSessionTitle
+    ?? claudeSessionTitle
+    ?? codexSessionTitle
+    ?? openCodeSessionTitle;
   const workflowTitle = getWorkflowTabTitle(tab);
 
   // Get build pipeline title for claude-build tabs

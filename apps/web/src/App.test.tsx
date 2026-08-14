@@ -36,7 +36,6 @@ import * as realErrors from "@/components/errors";
 import * as realAlertDialog from "@/components/ui/alert-dialog";
 import * as realButton from "@/components/ui/button";
 import * as realPrMonitorService from "@/hooks/usePrMonitorService";
-import * as realCodexBackgroundSync from "@/hooks/useCodexBackgroundSync";
 import * as realGlobalActivityMonitor from "@/hooks/useGlobalActivityMonitor";
 import * as realHooks from "@/hooks";
 import * as realBackend from "@/lib/backend";
@@ -56,7 +55,6 @@ const realErrorsSnapshot = { ...realErrors };
 const realAlertDialogSnapshot = { ...realAlertDialog };
 const realButtonSnapshot = { ...realButton };
 const realPrMonitorServiceSnapshot = { ...realPrMonitorService };
-const realCodexBackgroundSyncSnapshot = { ...realCodexBackgroundSync };
 const realGlobalActivityMonitorSnapshot = { ...realGlobalActivityMonitor };
 const realHooksSnapshot = { ...realHooks };
 const realBackendSnapshot = { ...realBackend };
@@ -69,7 +67,6 @@ const mockStartEnvironment = mock(async () => {});
 const mockCreateEnvironment = mock(async () => makeEnvironment("created", "project-1"));
 const mockUpdateEnvironment = mock(() => {});
 const mockUseEnvironmentLifecycleService = mock(() => {});
-const mockUseCodexBackgroundSync = mock(() => {});
 const mockExit = mock(async () => {});
 const mockListen = listen as ReturnType<typeof mock>;
 type AppEventCallback = (event: { payload: any }) => void;
@@ -205,9 +202,6 @@ mock.module("@/hooks/usePrMonitorService", () => ({
   usePrMonitorService: () => {},
 }));
 
-mock.module("@/hooks/useCodexBackgroundSync", () => ({
-  useCodexBackgroundSync: mockUseCodexBackgroundSync,
-}));
 
 mock.module("@/hooks/useGlobalActivityMonitor", () => ({
   useGlobalActivityMonitor: () => {},
@@ -443,7 +437,6 @@ function resetAppMocks() {
   mockCreateEnvironment.mockImplementation(async () => makeEnvironment("created", "project-1"));
   mockUpdateEnvironment.mockClear();
   mockUseEnvironmentLifecycleService.mockClear();
-  mockUseCodexBackgroundSync.mockClear();
   projectLauncherProps = null;
   mockExit.mockClear();
   mockCheckDocker.mockClear();
@@ -515,7 +508,6 @@ afterAll(() => {
   mock.module("@/components/ui/alert-dialog", () => realAlertDialogSnapshot);
   mock.module("@/components/ui/button", () => realButtonSnapshot);
   mock.module("@/hooks/usePrMonitorService", () => realPrMonitorServiceSnapshot);
-  mock.module("@/hooks/useCodexBackgroundSync", () => realCodexBackgroundSyncSnapshot);
   mock.module("@/hooks/useGlobalActivityMonitor", () => realGlobalActivityMonitorSnapshot);
   mock.module("@/hooks", () => realHooksSnapshot);
   mock.module("@/lib/backend", () => realBackendSnapshot);
@@ -563,7 +555,6 @@ describe("App background processing mounts", () => {
 
     render(<App />);
 
-    expect(mockUseCodexBackgroundSync).toHaveBeenCalledTimes(1);
   });
 
   test("keeps a live container available when its setup phase failed", async () => {

@@ -590,6 +590,8 @@ export interface SessionListResponse {
     status: "idle" | "running" | "error";
     createdAt: string;
     lastActivity: string;
+    /** Transcript size, for the resume picker's trailing detail. */
+    messageCount?: number;
   }>;
 }
 

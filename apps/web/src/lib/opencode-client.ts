@@ -2030,7 +2030,7 @@ function splitModelIdOnFirstSlash(
  *
  * A bare id with no slash is deliberately sent as *both* halves, which is the
  * long-standing behaviour of this path — the server resolves it. The store's
- * `"default"` sentinel never reaches here: `OpenCodeChatTab` maps it to
+ * `"default"` sentinel never reaches here: the native-agent runtime maps it to
  * `undefined` before calling, so this helper only ever sees a real id.
  */
 function toOpenCodeModelRef(model: string): { providerID: string; modelID: string } {

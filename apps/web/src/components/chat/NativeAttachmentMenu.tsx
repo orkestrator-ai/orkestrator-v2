@@ -5,7 +5,7 @@ import {
   useState,
   type KeyboardEvent,
 } from "react";
-import { FileText, Image as ImageIcon, Loader2, Plus, Search } from "lucide-react";
+import { AtSign, FileText, Image as ImageIcon, Loader2, Plus, Search } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -58,11 +58,17 @@ export interface WorkspaceAttachment {
 interface NativeAttachmentMenuProps {
   disabled?: boolean;
   fileSearch: NativeAttachmentFileSearch;
-  onSelectFile: (file: FileCandidate) => void;
+  /** Adds the file to the prompt as an attachment. Omit when unsupported. */
+  onSelectFile?: (file: FileCandidate) => void;
+  /** Inserts an `@path` mention at the cursor. Omit when unsupported. */
+  onMentionFile?: (file: FileCandidate) => void;
   onCloseAutoFocus?: () => void;
   fileActionLabel?: string;
   filePickerTitle?: string;
   filePickerDescription?: string;
+  mentionActionLabel?: string;
+  mentionPickerTitle?: string;
+  mentionPickerDescription?: string;
 }
 
 interface WorkspaceFilePickerDialogProps {
@@ -314,19 +320,28 @@ export function NativeAttachmentMenu({
   disabled = false,
   fileSearch,
   onSelectFile,
+  onMentionFile,
   onCloseAutoFocus,
   fileActionLabel = "Attach file from workspace",
   filePickerTitle = "Attach workspace file",
   filePickerDescription = "Search this environment and add a file to the current prompt.",
+  mentionActionLabel = "Mention file from workspace",
+  mentionPickerTitle = "Mention workspace file",
+  mentionPickerDescription = "Search this environment and mention a file in the current prompt.",
 }: NativeAttachmentMenuProps) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [filePickerOpen, setFilePickerOpen] = useState(false);
+  const [picker, setPicker] = useState<"attach" | "mention" | null>(null);
 
   useEffect(() => {
     if (!disabled) return;
     setMenuOpen(false);
-    setFilePickerOpen(false);
+    setPicker(null);
   }, [disabled]);
+
+  const openPicker = (kind: "attach" | "mention") => {
+    setMenuOpen(false);
+    setPicker(kind);
+  };
 
   return (
     <>
@@ -348,17 +363,36 @@ export function NativeAttachmentMenu({
           collisionPadding={8}
           className="w-64"
         >
-          <DropdownMenuItem
-            disabled={!fileSearch.isAvailable}
-            onSelect={(event) => {
-              event.preventDefault();
-              setMenuOpen(false);
-              setFilePickerOpen(true);
-            }}
-          >
-            <FileText />
-            {fileActionLabel}
-          </DropdownMenuItem>
+          {/*
+            Attaching and mentioning are different acts — one hands the file's
+            contents to the agent, the other points at a path — and every agent
+            that can do one can do the other. They are listed side by side so no
+            provider has to pick a single meaning for the same menu entry.
+          */}
+          {onSelectFile ? (
+            <DropdownMenuItem
+              disabled={!fileSearch.isAvailable}
+              onSelect={(event) => {
+                event.preventDefault();
+                openPicker("attach");
+              }}
+            >
+              <FileText />
+              {fileActionLabel}
+            </DropdownMenuItem>
+          ) : null}
+          {onMentionFile ? (
+            <DropdownMenuItem
+              disabled={!fileSearch.isAvailable}
+              onSelect={(event) => {
+                event.preventDefault();
+                openPicker("mention");
+              }}
+            >
+              <AtSign />
+              {mentionActionLabel}
+            </DropdownMenuItem>
+          ) : null}
           <DropdownMenuItem disabled>
             <ImageIcon />
             Paste image into the input
@@ -368,13 +402,17 @@ export function NativeAttachmentMenu({
       </DropdownMenu>
 
       <WorkspaceFilePickerDialog
-        open={filePickerOpen}
-        onOpenChange={setFilePickerOpen}
+        open={picker !== null}
+        onOpenChange={(open) => setPicker(open ? picker : null)}
         fileSearch={fileSearch}
-        onSelectFile={onSelectFile}
+        onSelectFile={picker === "mention" && onMentionFile
+          ? onMentionFile
+          : onSelectFile ?? onMentionFile ?? (() => undefined)}
         onCloseAutoFocus={onCloseAutoFocus}
-        title={filePickerTitle}
-        description={filePickerDescription}
+        title={picker === "mention" ? mentionPickerTitle : filePickerTitle}
+        description={picker === "mention"
+          ? mentionPickerDescription
+          : filePickerDescription}
       />
     </>
   );

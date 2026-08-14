@@ -32,6 +32,27 @@ import {
   type AgentInteractionResolution,
   type AgentInteractionSnapshot,
 } from "@orkestrator/protocol/agent-interactions";
+import type {
+  AgentModel,
+  NativeAgentBackgroundTaskSummary,
+  NativeAgentComposerState,
+  NativeAgentControlUpdate,
+  NativeAgentContextUsage,
+  NativeAgentNotice,
+  NativeAgentRateLimitWindow,
+  NativeAgentResumeEntry,
+  NativeAgentRuntimeSummary,
+  NativeAgentForkOutcome,
+  NativeAgentSessionAction,
+  NativeAgentSessionActionOutcome,
+  NativeAgentSlashCommand,
+  NativeAgentTurnPhase,
+} from "@orkestrator/protocol/native-agent";
+import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
+import {
+  parseLeadingSlashCommand,
+  type ParsedSlashCommand,
+} from "@orkestrator/protocol/agent-slash-commands";
 import {
   mimeTypeForFilename,
   promptAttachmentUrl,
@@ -85,6 +106,52 @@ export interface AgentInteractionProviderCapability {
 const PROVIDER_ACTIVITY_STATES: readonly ProviderActivityState[] = [
   ...AGENT_ACTIVITY_STATES,
   "missing",
+];
+
+const CLAUDE_BUILT_IN_SLASH_COMMANDS: readonly NativeAgentSlashCommand[] = [
+  { name: "/clear", description: "Clear conversation history" },
+  { name: "/compact", description: "Compact conversation to reduce tokens" },
+  { name: "/context", description: "Show current context" },
+  { name: "/cost", description: "Show token usage and cost" },
+  { name: "/doctor", description: "Check system health" },
+  { name: "/goal", description: "Set, view, or clear a completion goal" },
+  { name: "/help", description: "Show available commands" },
+  { name: "/init", description: "Re-initialize the session" },
+  { name: "/logout", description: "Log out of Claude" },
+  { name: "/memory", description: "Show memory usage" },
+  { name: "/model", description: "Show or change model" },
+  { name: "/permissions", description: "Manage permissions" },
+  { name: "/review", description: "Review recent changes" },
+  { name: "/status", description: "Show session status" },
+  { name: "/vim", description: "Toggle vim mode" },
+];
+
+/**
+ * OpenCode's documented built-in commands.
+ *
+ * `/command` only returns *configurable* commands (project, global, skills), so
+ * without this merge the menu silently lost everything a TUI user knows. The
+ * list lived in the renderer until consolidation; it belongs here, beside the
+ * Claude list, because command discovery is provider knowledge.
+ */
+const OPENCODE_BUILT_IN_SLASH_COMMANDS: readonly NativeAgentSlashCommand[] = [
+  { name: "/compact", description: "Compact the current session" },
+  { name: "/connect", description: "Add a provider" },
+  { name: "/details", description: "Toggle tool execution details" },
+  { name: "/editor", description: "Open an external editor" },
+  { name: "/exit", description: "Exit OpenCode" },
+  { name: "/export", description: "Export current conversation" },
+  { name: "/help", description: "Show help" },
+  { name: "/init", description: "Create or update AGENTS.md" },
+  { name: "/models", description: "List available models" },
+  { name: "/new", description: "Start a new session" },
+  { name: "/redo", description: "Redo the previously undone message" },
+  { name: "/sessions", description: "List and switch sessions" },
+  { name: "/share", description: "Share current session" },
+  { name: "/themes", description: "List available themes" },
+  { name: "/thinking", description: "Toggle reasoning visibility" },
+  { name: "/undo", description: "Undo the last message" },
+  { name: "/unshare", description: "Unshare current session" },
 ];
 
 // Shared by every backend workflow/provider instance. The scope includes the
@@ -331,6 +398,44 @@ export interface ProviderSendOptions {
   /** Overrides the connection default for this prompt only. */
   model?: string;
   effort?: string;
+  /**
+   * Let a submission that names one of the provider's own slash commands run
+   * as that command.
+   *
+   * Set for interactive composer dispatch only. Workflow prompts are authored
+   * by Orkestrator and must reach the model exactly as written, even when they
+   * happen to begin with a slash.
+   */
+  allowProviderCommands?: boolean;
+}
+
+/**
+ * Provider-neutral interactive read used by the native-agent runtime.
+ * Provider payloads are normalized before this boundary; renderer clients
+ * never receive bridge coordinates, credentials, sparse patches, or SDK
+ * response envelopes.
+ */
+export interface ProviderInteractiveSnapshot {
+  status: ProviderStatus;
+  messages: unknown[];
+  title?: string;
+  /** `null` is an authoritative unshared state; absent means unknown. */
+  shareUrl?: string | null;
+  composer?: NativeAgentComposerState;
+  /** Provider-reported current controls, authoritative over persisted defaults. */
+  controls?: NativeAgentControlUpdate;
+  providerRevision?: number;
+  providerGeneration?: string | number;
+  phase?: NativeAgentTurnPhase;
+  turnStartedAt?: number;
+  contextUsage?: NativeAgentContextUsage;
+  rateLimits?: NativeAgentRateLimitWindow[];
+  runtime?: NativeAgentRuntimeSummary;
+  notices?: NativeAgentNotice[];
+  backgroundTasks?: NativeAgentBackgroundTaskSummary[];
+  suggestedPrompt?: string;
+  completionBlockedByBackgroundTasks?: boolean;
+  error?: string;
 }
 
 export interface BuildPipelineProvider {
@@ -380,6 +485,38 @@ export interface BuildPipelineProvider {
   ): Promise<StructuredOutputResult<T> | null>;
   abort(sessionId: string): Promise<void>;
   dispose?(): Promise<void> | void;
+}
+
+/**
+ * Interactive, provider-neutral session surface consumed by NativeAgentService.
+ * Build-pipeline callers retain the deliberately smaller interface above.
+ */
+export interface NativeAgentRuntimeProvider extends BuildPipelineProvider {
+  /** Live, bounded model discovery for launch surfaces without a session yet. */
+  modelCatalog?(): Promise<AgentModel[]>;
+  interactiveSnapshot?(sessionId: string): Promise<ProviderInteractiveSnapshot>;
+  updateInteractiveControls?(
+    sessionId: string,
+    update: NativeAgentControlUpdate,
+  ): Promise<NativeAgentComposerState | undefined>;
+  listResumableSessions?(): Promise<NativeAgentResumeEntry[]>;
+  resumeSession?(
+    sessionId: string,
+    controls?: NativeAgentControlUpdate,
+  ): Promise<string>;
+  forkSession?(
+    sessionId: string,
+    messageId?: string,
+  ): Promise<NativeAgentForkOutcome>;
+  slashCommands?(): Promise<NativeAgentSlashCommand[]>;
+  /** Drop provider-side model/command caches so the next read re-discovers. */
+  refreshCatalog?(): Promise<void> | void;
+  stopBackgroundTask?(sessionId: string, taskId: string): Promise<void>;
+  dismissSuggestedPrompt?(sessionId: string): Promise<void>;
+  performSessionAction?(
+    sessionId: string,
+    action: NativeAgentSessionAction,
+  ): Promise<NativeAgentSessionActionOutcome>;
 }
 
 type BridgeConnection = {
@@ -443,9 +580,14 @@ const MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS =
 const MAX_OPENCODE_EXISTENCE_SNAPSHOT_BYTES = 4 * 1024 * 1024;
 const DEFAULT_OPENCODE_EXISTENCE_CACHE_TTL_MS = 10_000;
 const OPENCODE_EXISTENCE_PROBE_CONCURRENCY = 8;
+const OPENCODE_SUBAGENT_MAX_SESSIONS = 16;
+const OPENCODE_SUBAGENT_MESSAGE_LIMIT = OPEN_CODE_MESSAGE_HISTORY_LIMIT;
+const OPENCODE_SUBAGENT_FETCH_CONCURRENCY = 4;
 const MCP_FORM_CONTENT_QUESTION_ID = "mcp-form-content";
 const MAX_RENDERED_FILE_CHANGES = 48;
 const MAX_RENDERED_FILE_CHANGE_TEXT_LENGTH = 256;
+const INTERACTIVE_RUNTIME_METADATA_TTL_MS = 30_000;
+const OPENCODE_COMMAND_NAME_TTL_MS = 30_000;
 
 function setBoundedMapEntry<K, V>(
   map: Map<K, V>,
@@ -476,6 +618,286 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function openCodeCatalogProviders(value: unknown): Record<string, unknown>[] {
+  const catalog = asRecord(value);
+  const raw = catalog?.all ?? catalog?.providers;
+  if (Array.isArray(raw)) {
+    return raw.flatMap((candidate) => {
+      const provider = asRecord(candidate);
+      return provider ? [provider] : [];
+    });
+  }
+  const providers = asRecord(raw);
+  if (!providers) return [];
+  return Object.entries(providers).flatMap(([id, candidate]) => {
+    const provider = asRecord(candidate);
+    return provider ? [{ id, ...provider }] : [];
+  });
+}
+
+function openCodeProviderModels(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((candidate) => {
+      const model = asRecord(candidate);
+      return model ? [model] : [];
+    });
+  }
+  const models = asRecord(value);
+  if (!models) return [];
+  return Object.entries(models).flatMap(([id, candidate]) => {
+    const model = asRecord(candidate);
+    return model ? [{ id, ...model }] : [];
+  });
+}
+
+function openCodeCatalogDefault(value: unknown): {
+  modelId?: string;
+  reasoningId?: string;
+} {
+  const catalog = asRecord(value);
+  const defaults = asRecord(catalog?.default);
+  if (!defaults) return {};
+  const nested = asRecord(defaults.model);
+  const providerId = nonEmptyString(nested?.providerID)
+    ?? nonEmptyString(defaults.providerID)
+    ?? nonEmptyString(defaults.provider);
+  const modelId = nonEmptyString(nested?.modelID)
+    ?? nonEmptyString(defaults.modelID)
+    ?? (typeof defaults.model === "string" ? defaults.model : null);
+  const qualified = modelId?.includes("/")
+    ? modelId
+    : providerId && modelId
+      ? `${providerId}/${modelId}`
+      : undefined;
+  return {
+    ...(qualified ? { modelId: qualified } : {}),
+    ...(nonEmptyString(nested?.variant) ?? nonEmptyString(defaults.variant)
+      ? {
+          reasoningId: nonEmptyString(nested?.variant)
+            ?? nonEmptyString(defaults.variant)
+            ?? undefined,
+        }
+      : {}),
+  };
+}
+
+function normalizeOpenCodeComposerCatalog(value: unknown): {
+  models: AgentModel[];
+  selectedModelId?: string;
+  selectedReasoningId?: string;
+} {
+  const models: AgentModel[] = [];
+  for (const provider of openCodeCatalogProviders(value).slice(0, 128)) {
+    const providerId = nonEmptyString(provider.id);
+    if (!providerId) continue;
+    for (const model of openCodeProviderModels(provider.models).slice(0, 512)) {
+      const localId = nonEmptyString(model.id);
+      if (!localId) continue;
+      const variants = asRecord(model.variants);
+      const reasoning = variants
+        ? Object.entries(variants).flatMap(([id, candidate]) => {
+            const variant = asRecord(candidate);
+            return variant?.disabled === true
+              ? []
+              : [{ id, label: id.replace(/[-_]+/g, " ").replace(/^\w/, (letter) => letter.toUpperCase()) }];
+          }).slice(0, 64)
+        : [];
+      const limit = asRecord(model.limit);
+      const capabilities = asRecord(model.capabilities);
+      const input = asRecord(capabilities?.input);
+      const contextWindow = [
+        limit?.context,
+        model.contextWindow,
+        model.context_window,
+      ].find((candidate) => typeof candidate === "number"
+        && Number.isSafeInteger(candidate)
+        && candidate > 0) as number | undefined;
+      models.push({
+        platform: "opencode",
+        id: `${providerId}/${localId}`,
+        label: nonEmptyString(model.name) ?? localId,
+        providerLabel: nonEmptyString(provider.name) ?? providerId,
+        reasoning: [
+          { id: "default", label: "Default" },
+          ...reasoning,
+        ],
+        defaultReasoningId: "default",
+        supportsSpeed: false,
+        supportsMode: true,
+        ...(contextWindow ? { contextWindow } : {}),
+        ...(typeof input?.image === "boolean"
+          ? { supportsImageInput: input.image }
+          : typeof model.attachment === "boolean"
+            ? { supportsImageInput: model.attachment }
+            : {}),
+      });
+      if (models.length >= 512) break;
+    }
+    if (models.length >= 512) break;
+  }
+  const defaults = openCodeCatalogDefault(value);
+  return {
+    models,
+    ...(defaults.modelId ? { selectedModelId: defaults.modelId } : {}),
+    ...(defaults.reasoningId
+      ? { selectedReasoningId: defaults.reasoningId }
+      : {}),
+  };
+}
+
+function normalizeProviderContextUsage(
+  value: unknown,
+): NativeAgentContextUsage | undefined {
+  const raw = asRecord(value);
+  if (!raw) return undefined;
+  const usedTokens = typeof raw.usedTokens === "number" && Number.isFinite(raw.usedTokens)
+    ? Math.max(0, raw.usedTokens)
+    : undefined;
+  const maximumTokens = typeof raw.totalTokens === "number" && Number.isFinite(raw.totalTokens)
+    ? Math.max(0, raw.totalTokens)
+    : typeof raw.maximumTokens === "number" && Number.isFinite(raw.maximumTokens)
+      ? Math.max(0, raw.maximumTokens)
+      : undefined;
+  const percentage = typeof raw.percentUsed === "number" && Number.isFinite(raw.percentUsed)
+    ? Math.max(0, Math.min(100, raw.percentUsed))
+    : typeof raw.percentage === "number" && Number.isFinite(raw.percentage)
+      ? Math.max(0, Math.min(100, raw.percentage))
+      : undefined;
+  if (usedTokens === undefined) return undefined;
+  const usage: NativeAgentContextUsage = {
+    usedTokens,
+    ...(maximumTokens === undefined ? {} : { maximumTokens }),
+    ...(percentage === undefined ? {} : { percentage }),
+  };
+  const optionalNumbers = [
+    "inputTokens",
+    "outputTokens",
+    "cacheReadTokens",
+    "cacheWriteTokens",
+    "reasoningTokens",
+    "lastTurnTokens",
+    "sessionTokens",
+    "costUsd",
+    "durationMs",
+    "apiDurationMs",
+    "permissionDenials",
+    "linesAdded",
+    "linesRemoved",
+  ] as const;
+  for (const key of optionalNumbers) {
+    const candidate = raw[key];
+    if (typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0) {
+      usage[key] = candidate;
+    }
+  }
+  if (typeof raw.modelId === "string") usage.modelId = raw.modelId.slice(0, 256);
+  if (typeof raw.updatedAt === "string" && Number.isFinite(Date.parse(raw.updatedAt))) {
+    usage.updatedAt = raw.updatedAt;
+  }
+  if (typeof raw.estimated === "boolean") usage.estimated = raw.estimated;
+  if (
+    raw.source === "claude"
+    || raw.source === "opencode"
+    || raw.source === "codex"
+    || raw.source === "heuristic"
+    || raw.source === "provider"
+  ) usage.source = raw.source;
+  const rateLimits = normalizeProviderRateLimits(raw.rateLimits);
+  if (rateLimits.length > 0) usage.rateLimits = rateLimits;
+  const credits = asRecord(raw.credits);
+  if (credits) {
+    const normalized = {
+      ...(typeof credits.hasCredits === "boolean" ? { hasCredits: credits.hasCredits } : {}),
+      ...(typeof credits.unlimited === "boolean" ? { unlimited: credits.unlimited } : {}),
+      ...(typeof credits.balance === "string" ? { balance: credits.balance.slice(0, 64) } : {}),
+    };
+    if (Object.keys(normalized).length > 0) usage.credits = normalized;
+  }
+  if (Array.isArray(raw.contextCategories)) {
+    const categories = raw.contextCategories.slice(0, 64).flatMap((candidate) => {
+      const category = asRecord(candidate);
+      if (
+        !category
+        || typeof category.name !== "string"
+        || typeof category.tokens !== "number"
+        || !Number.isFinite(category.tokens)
+        || category.tokens < 0
+      ) return [];
+      return [{
+        name: category.name.slice(0, 128),
+        tokens: category.tokens,
+        ...(typeof category.color === "string" ? { color: category.color.slice(0, 64) } : {}),
+      }];
+    });
+    if (categories.length > 0) usage.contextCategories = categories;
+  }
+  return usage;
+}
+
+function normalizeProviderRateLimits(value: unknown): NativeAgentRateLimitWindow[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 16).flatMap((candidate) => {
+    const limit = asRecord(candidate);
+    if (!limit || typeof limit.label !== "string" || limit.label.length === 0) return [];
+    const usedPercent = typeof limit.usedPercent === "number"
+      && Number.isFinite(limit.usedPercent)
+      && limit.usedPercent >= 0
+      && limit.usedPercent <= 100
+      ? limit.usedPercent
+      : undefined;
+    const windowMinutes = typeof limit.windowMinutes === "number"
+      && Number.isFinite(limit.windowMinutes)
+      && limit.windowMinutes >= 0
+      ? limit.windowMinutes
+      : undefined;
+    const resetsAt = typeof limit.resetsAt === "string"
+      && Number.isFinite(Date.parse(limit.resetsAt))
+      ? limit.resetsAt
+      : undefined;
+    return [{
+      label: limit.label.slice(0, 128),
+      ...(usedPercent === undefined ? {} : { usedPercent }),
+      ...(windowMinutes === undefined ? {} : { windowMinutes }),
+      ...(resetsAt === undefined ? {} : { resetsAt }),
+    }];
+  });
+}
+
+function providerInventoryCount(value: unknown): number {
+  if (Array.isArray(value)) return Math.min(value.length, 10_000);
+  const data = asRecord(value)?.data;
+  if (Array.isArray(data)) {
+    return Math.min(10_000, data.reduce((count, entry) => {
+      const item = asRecord(entry);
+      const nested = item?.skills ?? item?.hooks ?? item?.servers;
+      return count + (Array.isArray(nested) ? nested.length : 1);
+    }, 0));
+  }
+  return Math.min(
+    10_000,
+    Object.keys(asRecord(value) ?? {}).filter((key) => key !== "error").length,
+  );
+}
+
+function normalizeClaudeBackgroundTasks(
+  value: unknown,
+): NativeAgentBackgroundTaskSummary[] | undefined {
+  const tasks = asRecord(value);
+  if (!tasks) return undefined;
+  const allowed = new Set(["pending", "running", "completed", "failed", "killed", "paused"]);
+  return Object.entries(tasks).slice(0, 256).flatMap(([id, raw]) => {
+    const task = asRecord(raw);
+    if (!task || !allowed.has(String(task.status))) return [];
+    return [{
+      id,
+      status: task.status as NativeAgentBackgroundTaskSummary["status"],
+      ...(typeof task.description === "string"
+        ? { description: task.description.slice(0, 1_000) }
+        : {}),
+    }];
+  });
 }
 
 function boundedText(
@@ -948,6 +1370,11 @@ class HttpBridgeProvider implements BuildPipelineProvider {
    * do have to be reconciled against the bridge.
    */
   private readonly codexModes = new Map<string, ProviderExecutionMode>();
+  private readonly interactiveMetadata = new Map<string, {
+    expiresAt: number;
+    executionProfiles?: NativeAgentComposerState["executionProfiles"];
+    runtime?: NativeAgentRuntimeSummary;
+  }>();
 
   constructor(
     private readonly connection: BridgeConnection,
@@ -1482,6 +1909,10 @@ class HttpBridgeProvider implements BuildPipelineProvider {
         questions: [],
         confirmLabel: "Approve",
         declineLabel: "Deny",
+        confirmDisabled: !actionable,
+        ...(request.supportsApproveForSession === true
+          ? { approveForSessionLabel: "Approve for session" }
+          : {}),
       },
       createdAt: requestedAt as number,
       updatedAt: requestedAt as number,
@@ -1490,6 +1921,74 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     const identity = this.providerInteractionIds.get(mapped.id);
     if (identity) identity.actionable = actionable;
     return mapped;
+  }
+
+  private mapAcpApproval(sessionId: string, raw: unknown): AgentInteractionRequest {
+    const request = asRecord(raw);
+    // Older ACP bridges exposed the same approval envelope as Codex. Keep the
+    // read boundary compatible while normalizing both generations to the
+    // shared interaction contract.
+    if (nonEmptyString(request?.approvalId)) {
+      return this.mapCodexApproval(sessionId, raw);
+    }
+    const providerRequestId = nonEmptyString(request?.id);
+    const title = nonEmptyString(request?.title);
+    const options = request?.options;
+    if (
+      !request
+      || !providerRequestId
+      || !title
+      || !Array.isArray(options)
+      || options.length === 0
+      || options.length > AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion
+    ) {
+      throw new ProviderUnavailableError(`${this.agent} returned a malformed approval`);
+    }
+    const id = this.normalizedId(sessionId, providerRequestId, "approval");
+    const createdAt = Number.isSafeInteger(request.requestedAt)
+      ? request.requestedAt as number
+      : this.interactionTracker.firstSeen(id);
+    const expiresAt = Number.isSafeInteger(request.expiresAt)
+      ? request.expiresAt as number
+      : createdAt + AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
+    return this.interactionRequest(sessionId, providerRequestId, "approval", {
+      kind: "permission",
+      presentation: {
+        title: boundedText(title, "Approval requested"),
+        questions: [{
+          id: "decision",
+          prompt: "Choose how the agent should proceed",
+          required: true,
+          multiple: false,
+          secret: false,
+          allowFreeText: false,
+          options: options.map((entry, optionIndex) => {
+            const option = asRecord(entry);
+            const optionId = nonEmptyString(option?.optionId);
+            const label = nonEmptyString(option?.name);
+            if (!option || !optionId || !label) {
+              throw new ProviderUnavailableError(
+                `${this.agent} returned a malformed approval option`,
+              );
+            }
+            return {
+              id: opaqueOptionId(0, optionIndex),
+              label: boundedText(label, label),
+              providerValue: boundedText(
+                optionId,
+                optionId,
+                AGENT_INTERACTION_LIMITS.maxProviderValueLength,
+              ),
+            };
+          }),
+        }],
+        confirmLabel: "Continue",
+        declineLabel: "Deny",
+      },
+      createdAt,
+      updatedAt: createdAt,
+      expiresAt,
+    });
   }
 
   private mapCodexInteraction(sessionId: string, raw: unknown): AgentInteractionRequest {
@@ -1587,7 +2086,10 @@ class HttpBridgeProvider implements BuildPipelineProvider {
           ? undefined
           : truncatedText(question.header, "Question"),
         required: true,
-        multiple: true,
+        // request_user_input serializes every answer as an array, but each
+        // Codex option list is mutually exclusive. Wire shape is not choice
+        // semantics; normalize that distinction before the shared UI.
+        multiple: false,
         secret: question?.isSecret === true,
         allowFreeText: question?.isOther === true || options.length === 0,
         options: options.map((entry, optionIndex) => {
@@ -1668,6 +2170,14 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       for (const request of secondRequests) {
         mapRequest(request, (raw) => this.mapClaudeApproval(sessionId, raw));
       }
+    } else if (this.agent === "cursor" || this.agent === "grok") {
+      for (const request of firstRequests) {
+        mapRequest(request, (raw) => this.mapAcpApproval(sessionId, raw));
+      }
+      // ACP currently has no second interaction family. Keep reading the
+      // endpoint so a future bridge can add one without losing requests, but
+      // reject non-empty unknown payloads instead of pretending they vanished.
+      if (secondRequests.length > 0) droppedRequests += secondRequests.length;
     } else {
       for (const request of firstRequests) {
         mapRequest(request, (raw) => this.mapCodexApproval(sessionId, raw));
@@ -1721,7 +2231,10 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     if (!identity) {
       return outcome("stale", sessionId, interactionId, snapshot.revision);
     }
-    if (resolution.action === "answer" && identity.actionable === false) {
+    if (
+      (resolution.action === "answer" || resolution.action === "approve-for-session")
+      && identity.actionable === false
+    ) {
       return outcome("rejected", sessionId, interactionId, snapshot.revision);
     }
     this.resolvingInteractions.add(interactionId);
@@ -1821,7 +2334,44 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       return {
         path: `${base}/plan-approvals/${encodeURIComponent(providerRequestId)}/respond`,
         method: "POST",
-        body: JSON.stringify({ approved: resolution.action === "answer" }),
+        body: JSON.stringify({
+          approved: resolution.action === "answer",
+          ...(resolution.feedback ? { feedback: resolution.feedback } : {}),
+        }),
+      };
+    }
+
+    if (this.agent === "cursor" || this.agent === "grok") {
+      if (request.kind !== "permission") {
+        throw new ProviderUnavailableError("ACP returned an unsupported interaction kind");
+      }
+      if (request.presentation.questions.length === 0) {
+        return {
+          path: `${base}/approvals/${encodeURIComponent(providerRequestId)}`,
+          method: "POST",
+          body: JSON.stringify({
+            decision: resolution.action === "answer" ? "approve" : "deny",
+          }),
+        };
+      }
+      const answer = resolution.action === "answer"
+        ? resolution.answer?.answers.find((candidate) =>
+            candidate.questionId === request.presentation.questions[0]?.id
+          )
+        : undefined;
+      const selectedId = answer?.optionIds?.[0];
+      const providerValue = selectedId === undefined
+        ? undefined
+        : request.presentation.questions[0]?.options.find(
+            (option) => option.id === selectedId,
+          )?.providerValue;
+      if (resolution.action === "answer" && !providerValue) {
+        throw new ProviderUnavailableError("ACP approval option is missing");
+      }
+      return {
+        path: `${base}/approvals/${encodeURIComponent(providerRequestId)}`,
+        method: "POST",
+        body: JSON.stringify(providerValue ? { optionId: providerValue } : {}),
       };
     }
 
@@ -1836,6 +2386,8 @@ class HttpBridgeProvider implements BuildPipelineProvider {
         body: JSON.stringify({
           decision: resolution.action === "answer"
             ? "approve"
+            : resolution.action === "approve-for-session"
+              ? "approve-for-session"
             : resolution.action === "cancel" ? "cancel" : "deny",
         }),
       };
@@ -1893,6 +2445,592 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     return Array.isArray(body.messages) ? body.messages : [];
   }
 
+  async interactiveSnapshot(
+    sessionId: string,
+  ): Promise<ProviderInteractiveSnapshot> {
+    if (this.agent === "cursor" || this.agent === "grok") {
+      const response = await bridgeFetch(
+        this.connection,
+        `/session/${encodeURIComponent(sessionId)}`,
+        {},
+        this.fetchImpl,
+      );
+      if (response.status === 404) return { status: "missing", messages: [] };
+      assertOk(response, `${this.agent} interactive snapshot`);
+      const payload = asRecord(await boundedJson(
+        response,
+        `${this.agent} interactive snapshot`,
+        { remaining: 8 * 1024 * 1024 },
+      ));
+      const status = payload?.status;
+      const messages = payload?.messages;
+      const composer = asRecord(payload?.composer);
+      const providerRevision = payload?.revision;
+      const providerError = payload?.error;
+      if (
+        (status !== "idle" && status !== "running" && status !== "error")
+        || !Array.isArray(messages)
+        || !Number.isSafeInteger(providerRevision)
+        || !composer
+        || !Array.isArray(composer.models)
+        || !Array.isArray(composer.modes)
+      ) {
+        throw new ProviderUnavailableError(
+          `${this.agent} returned a malformed interactive snapshot`,
+        );
+      }
+      return {
+        status,
+        messages,
+        ...(typeof payload?.title === "string" && payload.title.trim()
+          ? { title: payload.title.trim() }
+          : {}),
+        composer: composer as unknown as NativeAgentComposerState,
+        providerRevision: providerRevision as number,
+        ...(typeof providerError === "string" ? { error: providerError } : {}),
+      };
+    }
+
+    const sessionPath = this.agent === "codex"
+      ? `/session/${encodeURIComponent(sessionId)}/status`
+      : `/session/${encodeURIComponent(sessionId)}`;
+    const cachedMetadata = this.interactiveMetadata.get(sessionId);
+    const refreshMetadata = !cachedMetadata || cachedMetadata.expiresAt <= Date.now();
+    const [sessionResponse, messages, configResponse, initResponse, runtimeResponse] = await Promise.all([
+      bridgeFetch(this.connection, sessionPath, {}, this.fetchImpl),
+      this.messages(sessionId),
+      this.agent === "codex"
+        ? bridgeFetch(
+            this.connection,
+            `/session/${encodeURIComponent(sessionId)}/config`,
+            {},
+            this.fetchImpl,
+          )
+        : Promise.resolve(undefined),
+      this.agent === "claude" && refreshMetadata
+        ? bridgeFetch(
+            this.connection,
+            `/session/${encodeURIComponent(sessionId)}/init`,
+            {},
+            this.fetchImpl,
+          )
+        : Promise.resolve(undefined),
+      this.agent === "codex" && refreshMetadata
+        ? bridgeFetch(
+            this.connection,
+            `/session/${encodeURIComponent(sessionId)}/runtime-health`,
+            {},
+            this.fetchImpl,
+          )
+        : Promise.resolve(undefined),
+    ]);
+    if (sessionResponse.status === 404) return { status: "missing", messages: [] };
+    assertOk(sessionResponse, `${this.agent} interactive session read`);
+    const payload = asRecord(await boundedJson(
+      sessionResponse,
+      `${this.agent} interactive session read`,
+      { remaining: 512 * 1024 },
+    ));
+    const status = payload?.status;
+    if (!payload || (status !== "idle" && status !== "running" && status !== "error")) {
+      throw new ProviderUnavailableError(
+        `${this.agent} returned a malformed interactive session`,
+      );
+    }
+    if (this.agent === "codex") {
+      if (!configResponse) {
+        throw new ProviderUnavailableError("Codex interactive config response is missing");
+      }
+      assertOk(configResponse, "Codex interactive config read");
+      const config = asRecord(await boundedJson(
+        configResponse,
+        "Codex interactive config read",
+        { remaining: 128 * 1024 },
+      ));
+      const rawPhase = payload?.phase;
+      let runtime: NativeAgentRuntimeSummary | undefined = cachedMetadata?.runtime;
+      if (runtimeResponse?.ok) {
+        const health = asRecord(await boundedJson(
+          runtimeResponse,
+          "Codex runtime health read",
+          { remaining: 512 * 1024 },
+        ));
+        if (health) {
+          const engine = asRecord(health.engine);
+          const groupedNotices = new Map<string, number>();
+          if (Array.isArray(health.notices)) {
+            for (const candidate of health.notices.slice(-128)) {
+              const message = asRecord(candidate)?.message;
+              if (typeof message !== "string" || message.length === 0) continue;
+              const bounded = message.slice(0, 1_000);
+              groupedNotices.set(bounded, (groupedNotices.get(bounded) ?? 0) + 1);
+            }
+          }
+          runtime = {
+            mcpServers: providerInventoryCount(health.mcp),
+            skills: providerInventoryCount(health.skills),
+            hooks: providerInventoryCount(health.hooks),
+            ...(typeof engine?.state === "string" ? { state: engine.state.slice(0, 64) } : {}),
+            ...(typeof engine?.codexVersion === "string"
+              ? { version: engine.codexVersion.slice(0, 64) }
+              : {}),
+            ...(groupedNotices.size > 0
+              ? {
+                  notices: [...groupedNotices.entries()].slice(-5).map(([message, count]) => ({
+                    message,
+                    ...(count > 1 ? { count } : {}),
+                  })),
+                }
+              : {}),
+          };
+        }
+      }
+      if (refreshMetadata) {
+        setBoundedMapEntry(this.interactiveMetadata, sessionId, {
+          expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+          ...(runtime ? { runtime } : {}),
+        }, MAX_TRACKED_INTERACTION_SESSIONS);
+      }
+      const phase: NativeAgentTurnPhase | undefined = rawPhase === "cancelling"
+        ? "cancelling"
+        : rawPhase === "recovering" || rawPhase === "starting"
+          ? "recovering"
+          : rawPhase === "failed"
+            ? "error"
+            : rawPhase === "running"
+              ? "running"
+              : rawPhase === "idle"
+                ? "idle"
+                : undefined;
+      return {
+        status,
+        messages,
+        ...(typeof payload.title === "string" && payload.title.trim()
+          ? { title: payload.title.trim() }
+          : {}),
+        controls: {
+          ...(typeof config?.model === "string" ? { modelId: config.model } : {}),
+          ...(typeof config?.modelReasoningEffort === "string"
+            ? { reasoningId: config.modelReasoningEffort }
+            : {}),
+          ...(config?.mode === "build" || config?.mode === "plan"
+            ? { mode: config.mode }
+            : {}),
+          ...(typeof config?.fastMode === "boolean"
+            ? { fastMode: config.fastMode }
+            : {}),
+        },
+        ...(phase ? { phase } : {}),
+        ...(typeof payload.turnStartedAt === "string"
+          && Number.isFinite(Date.parse(payload.turnStartedAt))
+          ? { turnStartedAt: Date.parse(payload.turnStartedAt) }
+          : {}),
+        ...(Number.isSafeInteger(payload.messageRevision)
+          ? { providerRevision: payload.messageRevision as number }
+          : {}),
+        ...(Number.isSafeInteger(payload.engineGeneration)
+          ? { providerGeneration: payload.engineGeneration as number }
+          : {}),
+        ...(normalizeProviderContextUsage(payload.contextUsage)
+          ? { contextUsage: normalizeProviderContextUsage(payload.contextUsage) }
+          : {}),
+        ...(runtime ? { runtime } : {}),
+        ...(typeof payload.error === "string" ? { error: payload.error } : {}),
+      };
+    }
+    let executionProfiles: NativeAgentComposerState["executionProfiles"] =
+      cachedMetadata?.executionProfiles;
+    let runtime: NativeAgentRuntimeSummary | undefined = cachedMetadata?.runtime;
+    if (initResponse?.ok) {
+      const initPayload = asRecord(await boundedJson(
+        initResponse,
+        "Claude init read",
+        { remaining: 256 * 1024 },
+      ));
+      const initData = asRecord(initPayload?.initData);
+      runtime = {
+        mcpServers: Array.isArray(initData?.mcpServers) ? initData.mcpServers.length : 0,
+        plugins: Array.isArray(initData?.plugins) ? initData.plugins.length : 0,
+        commands: Array.isArray(initData?.slashCommands) ? initData.slashCommands.length : 0,
+      };
+      if (Array.isArray(initData?.agents)) {
+        executionProfiles = initData.agents.slice(0, 128).flatMap((candidate) => {
+          const agent = asRecord(candidate);
+          const name = nonEmptyString(agent?.name);
+          if (!name) return [];
+          return [{
+            id: name,
+            label: name,
+            ...(typeof agent?.description === "string" ? { description: agent.description } : {}),
+            ...(typeof agent?.model === "string" ? { modelId: agent.model } : {}),
+          }];
+        });
+      }
+    }
+    if (refreshMetadata) {
+      setBoundedMapEntry(this.interactiveMetadata, sessionId, {
+        expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+        ...(executionProfiles ? { executionProfiles } : {}),
+        ...(runtime ? { runtime } : {}),
+      }, MAX_TRACKED_INTERACTION_SESSIONS);
+    }
+    return {
+      status,
+      messages,
+      ...(typeof payload.title === "string" && payload.title.trim()
+        ? { title: payload.title.trim() }
+        : {}),
+      composer: {
+        ...EMPTY_NATIVE_AGENT_COMPOSER_STATE,
+        ...(executionProfiles?.length ? { executionProfiles } : {}),
+      },
+      ...(typeof payload.planMode === "boolean"
+        ? { controls: { mode: payload.planMode ? "plan" : "build" } }
+        : {}),
+      ...(typeof payload.turnStartedAt === "number" && Number.isFinite(payload.turnStartedAt)
+        ? { turnStartedAt: payload.turnStartedAt }
+        : {}),
+      ...(normalizeProviderContextUsage(payload.contextUsage)
+        ? { contextUsage: normalizeProviderContextUsage(payload.contextUsage) }
+        : {}),
+      ...(normalizeProviderRateLimits(payload.rateLimits).length > 0
+        ? { rateLimits: normalizeProviderRateLimits(payload.rateLimits) }
+        : {}),
+      ...(runtime ? { runtime } : {}),
+      ...(normalizeClaudeBackgroundTasks(payload.backgroundTasks)
+        ? { backgroundTasks: normalizeClaudeBackgroundTasks(payload.backgroundTasks) }
+        : {}),
+      ...(typeof payload.promptSuggestion === "string"
+        ? { suggestedPrompt: payload.promptSuggestion.slice(0, 4_000) }
+        : {}),
+      ...(typeof payload.completionBlockedByBackgroundTasks === "boolean"
+        ? { completionBlockedByBackgroundTasks: payload.completionBlockedByBackgroundTasks }
+        : {}),
+      ...(typeof payload.error === "string" ? { error: payload.error } : {}),
+    };
+  }
+
+  async updateInteractiveControls(
+    sessionId: string,
+    update: NativeAgentControlUpdate,
+  ): Promise<NativeAgentComposerState | undefined> {
+    if (this.agent === "claude") {
+      if (update.mode === undefined) return undefined;
+      const response = await bridgeFetch(
+        this.connection,
+        `/session/${encodeURIComponent(sessionId)}/preferences`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ planMode: update.mode === "plan" }),
+        },
+        this.fetchImpl,
+      );
+      assertOk(response, "Claude session preference update");
+      return undefined;
+    }
+    if (this.agent === "codex") {
+      const response = await bridgeFetch(
+        this.connection,
+        `/session/${encodeURIComponent(sessionId)}/config`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            ...(update.modelId ? { model: update.modelId } : {}),
+            ...(update.reasoningId ? { modelReasoningEffort: update.reasoningId } : {}),
+            ...(update.mode ? { mode: update.mode } : {}),
+            ...(update.fastMode === undefined ? {} : { fastMode: update.fastMode }),
+          }),
+        },
+        this.fetchImpl,
+      );
+      assertOk(response, "Codex session config update");
+      return undefined;
+    }
+    if (this.agent !== "cursor" && this.agent !== "grok") return undefined;
+    const response = await bridgeFetch(
+      this.connection,
+      `/session/${encodeURIComponent(sessionId)}/config`,
+      { method: "POST", body: JSON.stringify(update) },
+      this.fetchImpl,
+    );
+    await assertOkWithErrorDetail(response, `${this.agent} config update`);
+    const composer = asRecord(await boundedJson(
+      response,
+      `${this.agent} config update`,
+    ));
+    if (!composer || !Array.isArray(composer.models) || !Array.isArray(composer.modes)) {
+      throw new ProviderUnavailableError(`${this.agent} returned a malformed composer`);
+    }
+    return composer as unknown as NativeAgentComposerState;
+  }
+
+  refreshCatalog(): void {
+    // Execution profiles and runtime inventory are discovered alongside models,
+    // so an explicit refresh has to drop them too or the picker re-renders the
+    // same stale list it was asked to replace.
+    this.interactiveMetadata.clear();
+  }
+
+  async listResumableSessions(): Promise<NativeAgentResumeEntry[]> {
+    if (this.agent === "cursor" || this.agent === "grok") return [];
+    const response = await bridgeFetch(
+      this.connection,
+      "/session/list",
+      {},
+      this.fetchImpl,
+    );
+    assertOk(response, `${this.agent} resumable session list`);
+    const payload = asRecord(await boundedJson(
+      response,
+      `${this.agent} resumable session list`,
+      { remaining: 2 * 1024 * 1024 },
+    ));
+    if (!payload || !Array.isArray(payload.sessions)) {
+      throw new ProviderUnavailableError(`${this.agent} returned a malformed session list`);
+    }
+    return payload.sessions.slice(0, 512).flatMap((candidate) => {
+      const session = asRecord(candidate);
+      const id = nonEmptyString(session?.id);
+      if (!id) return [];
+      const createdAt = nonEmptyString(session?.createdAt);
+      const updatedAt = nonEmptyString(session?.updatedAt)
+        ?? nonEmptyString(session?.lastActivity);
+      const status = session?.status === "running"
+        || session?.status === "error"
+        || session?.status === "idle"
+        ? session.status
+        : undefined;
+      const messageCount = Number.isSafeInteger(session?.messageCount)
+        ? session!.messageCount as number
+        : undefined;
+      return [{
+        sessionId: id,
+        ...(typeof session?.title === "string" ? { title: session.title } : {}),
+        ...(createdAt && Number.isFinite(Date.parse(createdAt)) ? { createdAt } : {}),
+        ...(updatedAt && Number.isFinite(Date.parse(updatedAt)) ? { updatedAt } : {}),
+        ...(status ? { status } : {}),
+        ...(messageCount === undefined
+          ? {}
+          : { detail: `${messageCount} message${messageCount === 1 ? "" : "s"}` }),
+      }];
+    });
+  }
+
+  async slashCommands(): Promise<NativeAgentSlashCommand[]> {
+    if (this.agent === "cursor" || this.agent === "grok") return [];
+    const response = await bridgeFetch(
+      this.connection,
+      this.agent === "codex" ? "/global/slash-commands" : "/plugins/commands",
+      {},
+      this.fetchImpl,
+    );
+    assertOk(response, `${this.agent} slash command list`);
+    const payload = asRecord(await boundedJson(
+      response,
+      `${this.agent} slash command list`,
+      { remaining: 512 * 1024 },
+    ));
+    const commands = new Map<string, NativeAgentSlashCommand>(
+      this.agent === "claude"
+        ? CLAUDE_BUILT_IN_SLASH_COMMANDS.map((command) => [command.name, command])
+        : [],
+    );
+    if (!payload || !Array.isArray(payload.commands)) return [...commands.values()];
+    for (const candidate of payload.commands.slice(0, 512)) {
+      const command = typeof candidate === "string" ? { name: candidate } : asRecord(candidate);
+      const rawName = nonEmptyString(command?.name);
+      if (!rawName) continue;
+      const name = rawName.startsWith("/") ? rawName : `/${rawName}`;
+      commands.set(name, {
+        name: name.slice(0, 256),
+        ...(typeof command?.description === "string"
+          ? { description: command.description.slice(0, 1_000) }
+          : {}),
+        ...(typeof command?.argumentHint === "string"
+          ? { argumentHint: command.argumentHint.slice(0, 512) }
+          : {}),
+      });
+    }
+    return [...commands.values()].slice(0, 512);
+  }
+
+  async stopBackgroundTask(sessionId: string, taskId: string): Promise<void> {
+    if (this.agent !== "claude") {
+      throw new PromptRejectedError(`${this.agent} does not support background tasks`);
+    }
+    const response = await bridgeFetch(
+      this.connection,
+      `/session/${encodeURIComponent(sessionId)}/tasks/${encodeURIComponent(taskId)}/stop`,
+      { method: "POST" },
+      this.fetchImpl,
+    );
+    await assertOkWithErrorDetail(response, "Claude background task stop");
+  }
+
+  async dismissSuggestedPrompt(sessionId: string): Promise<void> {
+    if (this.agent !== "claude") {
+      throw new PromptRejectedError(`${this.agent} does not support prompt suggestions`);
+    }
+    const response = await bridgeFetch(
+      this.connection,
+      `/session/${encodeURIComponent(sessionId)}/prompt-suggestion`,
+      { method: "DELETE" },
+      this.fetchImpl,
+    );
+    if (response.status !== 404) {
+      await assertOkWithErrorDetail(response, "Claude prompt suggestion dismissal");
+    }
+  }
+
+  async resumeSession(
+    sessionId: string,
+    controls?: NativeAgentControlUpdate,
+  ): Promise<string> {
+    if (this.agent === "cursor" || this.agent === "grok") {
+      throw new PromptRejectedError(`${this.agent} does not support session resume`);
+    }
+    if (this.agent === "claude") {
+      const response = await bridgeFetch(
+        this.connection,
+        `/session/${encodeURIComponent(sessionId)}`,
+        {},
+        this.fetchImpl,
+      );
+      assertOk(response, "Claude session resume");
+      return sessionId;
+    }
+    const response = await bridgeFetch(
+      this.connection,
+      "/session/resume",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          threadId: sessionId,
+          ...(controls?.modelId ? { model: controls.modelId } : {}),
+          ...(controls?.reasoningId
+            ? { modelReasoningEffort: controls.reasoningId }
+            : {}),
+          ...(controls?.mode ? { mode: controls.mode } : {}),
+          ...(controls?.fastMode === undefined
+            ? {} : { fastMode: controls.fastMode }),
+        }),
+      },
+      this.fetchImpl,
+    );
+    assertOk(response, "Codex session resume");
+    const payload = asRecord(await boundedJson(response, "Codex session resume"));
+    const resumedId = nonEmptyString(payload?.sessionId);
+    if (!resumedId) throw new ProviderUnavailableError("Codex returned a malformed resumed session");
+    return resumedId;
+  }
+
+  async forkSession(
+    sessionId: string,
+    messageId?: string,
+  ): Promise<NativeAgentForkOutcome> {
+    if (this.agent === "cursor" || this.agent === "grok") {
+      throw new PromptRejectedError(`${this.agent} does not support session forks`);
+    }
+    const response = await bridgeFetch(
+      this.connection,
+      `/session/${encodeURIComponent(sessionId)}/fork`,
+      {
+        method: "POST",
+        body: JSON.stringify(this.agent === "codex"
+          ? { lastMessageId: messageId }
+          : { upToMessageId: messageId }),
+      },
+      this.fetchImpl,
+    );
+    await assertOkWithErrorDetail(response, `${this.agent} session fork`);
+    const payload = asRecord(await boundedJson(response, `${this.agent} session fork`));
+    const forkedId = nonEmptyString(payload?.sessionId);
+    if (!forkedId) throw new ProviderUnavailableError(`${this.agent} returned a malformed fork`);
+    return {
+      sessionId: forkedId,
+      ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
+    };
+  }
+
+  async performSessionAction(
+    sessionId: string,
+    action: NativeAgentSessionAction,
+  ): Promise<NativeAgentSessionActionOutcome> {
+    if (this.agent === "cursor" || this.agent === "grok") {
+      throw new PromptRejectedError(`${this.agent} does not support session actions`);
+    }
+    const base = `/session/${encodeURIComponent(sessionId)}`;
+    if (action.kind === "compact") {
+      const response = await bridgeFetch(
+        this.connection,
+        `${base}/compact`,
+        { method: "POST" },
+        this.fetchImpl,
+      );
+      await assertOkWithErrorDetail(response, `${this.agent} session compaction`);
+      return { outcome: "applied" };
+    }
+    if (this.agent === "claude" && action.kind === "rewind-files") {
+      const response = await bridgeFetch(
+        this.connection,
+        `${base}/rewind`,
+        {
+          method: "POST",
+          body: JSON.stringify({ messageId: action.messageId, dryRun: action.dryRun === true }),
+        },
+        this.fetchImpl,
+      );
+      await assertOkWithErrorDetail(response, "Claude file rewind");
+      return {
+        outcome: "applied",
+        preview: await boundedJson(response, "Claude file rewind", { remaining: 512 * 1024 }),
+      };
+    }
+    if (this.agent === "codex" && action.kind === "review") {
+      const response = await bridgeFetch(
+        this.connection,
+        `${base}/review`,
+        { method: "POST", body: JSON.stringify({ type: "uncommittedChanges" }) },
+        this.fetchImpl,
+      );
+      await assertOkWithErrorDetail(response, "Codex native review");
+      return { outcome: "applied" };
+    }
+    if (this.agent === "codex" && action.kind === "steer") {
+      const statusResponse = await bridgeFetch(this.connection, `${base}/status`, {}, this.fetchImpl);
+      if (statusResponse.status === 404) throw new PromptRejectedError("Codex session was not found");
+      await assertOkWithErrorDetail(statusResponse, "Codex steer status read");
+      const status = asRecord(await boundedJson(statusResponse, "Codex steer status read"));
+      if (status?.status !== "running") return { outcome: "idle" };
+      const turnId = nonEmptyString(status.turnId);
+      if (!turnId) return { outcome: "unknown", requestId: action.requestId };
+      let response: Response;
+      try {
+        response = await bridgeFetch(
+          this.connection,
+          `${base}/steer`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              input: action.text,
+              requestId: action.requestId,
+              expectedTurnId: turnId,
+            }),
+          },
+          this.fetchImpl,
+        );
+      } catch {
+        return { outcome: "unknown", requestId: action.requestId };
+      }
+      const payload = asRecord(await boundedJson(response, "Codex steer response").catch(() => ({})));
+      if (payload?.outcome === "unknown") return { outcome: "unknown", requestId: action.requestId };
+      if (response.status === 409) return { outcome: "mismatch" };
+      await assertOkWithErrorDetail(response, "Codex steer");
+      return { outcome: "applied" };
+    }
+    throw new PromptRejectedError(`${this.agent} does not support ${action.kind}`);
+  }
+
   async structured<T>(
     sessionId: string,
     requestId: string,
@@ -1919,6 +3057,269 @@ class HttpBridgeProvider implements BuildPipelineProvider {
   }
 }
 
+function stringifyOpenCodeToolValue(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "string") return value.slice(0, 200_000);
+  try {
+    return JSON.stringify(value, null, 2).slice(0, 200_000);
+  } catch {
+    return "[unserializable tool value]";
+  }
+}
+
+function openCodeRecordString(
+  value: unknown,
+  ...keys: string[]
+): string | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  for (const key of keys) {
+    const candidate = nonEmptyString(record[key]);
+    if (candidate) return candidate.trim();
+  }
+  return undefined;
+}
+
+function openCodeTaskEnvelope(output: string | undefined): {
+  sessionId?: string;
+  state?: "running" | "completed" | "error";
+} {
+  if (!output) return {};
+  const match = output.match(
+    /<task\s+id=["']([^"']+)["'](?:\s+state=["'](running|completed|error)["'])?/i,
+  );
+  return match
+    ? {
+        sessionId: match[1],
+        state: match[2]?.toLowerCase() as "running" | "completed" | "error" | undefined,
+      }
+    : {};
+}
+
+function collectNormalizedOpenCodeSubagentIds(
+  messages: readonly Record<string, unknown>[],
+): string[] {
+  const ids = new Set<string>();
+  const visit = (parts: unknown, depth: number) => {
+    if (!Array.isArray(parts) || depth > 8) return;
+    for (const candidate of parts) {
+      const part = asRecord(candidate);
+      if (!part) continue;
+      const id = nonEmptyString(part.subagentId);
+      if (part.type === "subagent" && id) ids.add(id);
+      visit(part.subagentActions, depth + 1);
+    }
+  };
+  for (const message of messages) visit(message.parts, 0);
+  return [...ids];
+}
+
+function collectRawOpenCodeSubagentIds(messages: readonly unknown[]): string[] {
+  const ids = new Set<string>();
+  for (const candidate of messages) {
+    const envelope = asRecord(candidate);
+    if (!Array.isArray(envelope?.parts)) continue;
+    for (const rawPart of envelope.parts) {
+      const part = asRecord(rawPart);
+      const state = asRecord(part?.state);
+      const toolName = nonEmptyString(part?.tool)?.toLowerCase();
+      if (toolName !== "task" && toolName !== "agent") continue;
+      const metadata = asRecord(state?.metadata) ?? asRecord(part?.metadata);
+      const id = openCodeRecordString(metadata, "sessionId", "sessionID", "jobId")
+        ?? openCodeTaskEnvelope(stringifyOpenCodeToolValue(state?.output)).sessionId;
+      if (id) ids.add(id);
+    }
+  }
+  return [...ids];
+}
+
+function hydrateNormalizedOpenCodeSubagents(
+  messages: readonly Record<string, unknown>[],
+  childMessages: ReadonlyMap<string, readonly Record<string, unknown>[]>,
+): Record<string, unknown>[] {
+  const countTools = (parts: readonly Record<string, unknown>[]): number =>
+    parts.reduce((count, part) =>
+      count
+      + (part.type === "tool-invocation" ? 1 : 0)
+      + (Array.isArray(part.subagentActions)
+        ? countTools(part.subagentActions.flatMap((entry) => {
+            const record = asRecord(entry);
+            return record ? [record] : [];
+          }))
+        : 0), 0);
+  const hydrateParts = (
+    rawParts: unknown,
+    ancestry: ReadonlySet<string>,
+  ): Record<string, unknown>[] => {
+    if (!Array.isArray(rawParts)) return [];
+    return rawParts.flatMap((candidate) => {
+      const part = asRecord(candidate);
+      if (!part) return [];
+      const id = part.type === "subagent" ? nonEmptyString(part.subagentId) : null;
+      if (!id || ancestry.has(id)) return [{ ...part }];
+      const transcript = childMessages.get(id);
+      if (!transcript) return [{ ...part }];
+      const nextAncestry = new Set(ancestry);
+      nextAncestry.add(id);
+      const actions = transcript.flatMap((message) =>
+        message.role === "assistant"
+          ? hydrateParts(message.parts, nextAncestry)
+          : [],
+      );
+      return [{
+        ...part,
+        subagentActions: actions,
+        subagentActionCount: countTools(actions),
+      }];
+    });
+  };
+  return messages.map((message) => ({
+    ...message,
+    parts: hydrateParts(message.parts, new Set()),
+  }));
+}
+
+function normalizeOpenCodeInteractiveMessage(
+  value: unknown,
+  index: number,
+): Record<string, unknown> | null {
+  const envelope = asRecord(value);
+  const info = asRecord(envelope?.info);
+  if (!envelope || !info) return null;
+  const role = info.role === "user" || info.role === "assistant" || info.role === "system"
+    ? info.role
+    : "assistant";
+  const messageId = nonEmptyString(info.id) ?? `opencode-message-${index}`;
+  const rawCreatedAt = asRecord(info.time)?.created;
+  const createdAt = typeof rawCreatedAt === "number" && Number.isFinite(rawCreatedAt)
+    ? new Date(rawCreatedAt).toISOString()
+    : typeof rawCreatedAt === "string" && Number.isFinite(Date.parse(rawCreatedAt))
+      ? new Date(rawCreatedAt).toISOString()
+      : "1970-01-01T00:00:00.000Z";
+  const parts: Record<string, unknown>[] = [];
+  let content = "";
+  for (const candidate of Array.isArray(envelope.parts) ? envelope.parts.slice(0, 2_048) : []) {
+    const part = asRecord(candidate);
+    if (!part) continue;
+    const source = {
+      ...(typeof part.id === "string" ? { sourcePartId: part.id } : {}),
+      ...(typeof part.messageID === "string" ? { sourceMessageId: part.messageID } : {}),
+    };
+    if (part.type === "text" && typeof part.text === "string") {
+      parts.push({ type: "text", content: part.text, ...source });
+      content += part.text;
+      continue;
+    }
+    if (part.type === "reasoning" && typeof part.text === "string") {
+      const reasoning = part.text.replace(/^\s*\*\*/, "").replace(/\*\*\s*$/, "");
+      if (reasoning.trim()) parts.push({ type: "thinking", content: reasoning, ...source });
+      continue;
+    }
+    if (part.type === "file") {
+      const path = nonEmptyString(part.filename) ?? nonEmptyString(part.url) ?? "Attached file";
+      parts.push({
+        type: "file",
+        content: path,
+        ...(typeof part.url === "string" ? { fileUrl: part.url } : {}),
+        ...source,
+      });
+      continue;
+    }
+    if (part.type !== "tool") continue;
+    const state = asRecord(part.state);
+    const toolName = nonEmptyString(part.tool) ?? "Unknown tool";
+    const rawStatus = state?.status;
+    const toolState = rawStatus === "completed"
+      ? "success"
+      : rawStatus === "error"
+        ? "failure"
+        : rawStatus === "pending" || rawStatus === "running"
+          ? "pending"
+          : undefined;
+    const isSubagent = toolName.toLowerCase() === "task"
+      || toolName.toLowerCase() === "agent";
+    const input = asRecord(state?.input) ?? undefined;
+    const toolOutput = stringifyOpenCodeToolValue(state?.output);
+    const taskEnvelope = isSubagent ? openCodeTaskEnvelope(toolOutput) : {};
+    const metadata = asRecord(state?.metadata) ?? asRecord(part.metadata);
+    const subagentId = isSubagent
+      ? openCodeRecordString(metadata, "sessionId", "sessionID", "jobId")
+        ?? taskEnvelope.sessionId
+      : undefined;
+    const subagentName = isSubagent
+      ? openCodeRecordString(input, "description")
+        ?? (typeof state?.title === "string" ? state.title : toolName)
+      : undefined;
+    const subagentRole = isSubagent
+      ? openCodeRecordString(input, "subagent_type", "agent")
+      : undefined;
+    const subagentPrompt = isSubagent
+      ? openCodeRecordString(input, "prompt")
+      : undefined;
+    const normalizedToolState = taskEnvelope.state === "running"
+      ? "pending"
+      : taskEnvelope.state === "completed"
+        ? "success"
+        : taskEnvelope.state === "error" ? "failure" : toolState;
+    parts.push({
+      type: isSubagent ? "subagent" : "tool-invocation",
+      content: typeof state?.title === "string" ? state.title : toolName,
+      toolName,
+      ...(input ? { toolArgs: input } : {}),
+      ...(normalizedToolState ? { toolState: normalizedToolState } : {}),
+      ...(typeof state?.title === "string" ? { toolTitle: state.title } : {}),
+      ...(toolOutput === undefined ? {} : { toolOutput }),
+      ...(state?.error === undefined
+        ? {} : { toolError: stringifyOpenCodeToolValue(state.error) }),
+      ...(isSubagent ? {
+        ...(subagentId ? { subagentId } : {}),
+        ...(subagentName ? { subagentName } : {}),
+        ...(subagentRole ? { subagentRole } : {}),
+        ...(subagentPrompt ? { subagentPrompt } : {}),
+        subagentActions: [],
+        subagentActionCount: 0,
+      } : {}),
+      ...source,
+    });
+  }
+  const providerId = nonEmptyString(info.providerID);
+  const modelId = nonEmptyString(info.modelID);
+  return {
+    id: messageId,
+    role,
+    content,
+    parts,
+    createdAt,
+    ...(role === "assistant" && modelId
+      ? { modelId: providerId ? `${providerId}/${modelId}` : modelId }
+      : {}),
+  };
+}
+
+function normalizeOpenCodeTerminalState(value: unknown): {
+  kind: "error" | "stopped";
+  message: string;
+} | null {
+  const info = asRecord(asRecord(value)?.info);
+  if (!info || info.error === undefined || info.error === null) return null;
+  const error = asRecord(info.error);
+  const name = nonEmptyString(error?.name);
+  if (name === "MessageAbortedError") {
+    return { kind: "stopped", message: "Query stopped by user." };
+  }
+  const data = asRecord(error?.data);
+  const detail = typeof info.error === "string"
+    ? info.error
+    : nonEmptyString(data?.message)
+      ?? nonEmptyString(error?.message)
+      ?? name
+      ?? "OpenCode session failed";
+  return {
+    kind: "error",
+    message: boundedText(detail, "OpenCode session failed"),
+  };
+}
+
 class OpenCodeProvider implements BuildPipelineProvider {
   readonly agent = "opencode" as const;
   private readonly client: OpencodeClient;
@@ -1943,6 +3344,21 @@ class OpenCodeProvider implements BuildPipelineProvider {
   private readonly existenceCacheTtlMs: number;
   private readonly sessionExistenceCache = new Map<string, number>();
   private readonly sessionExistenceRetryAt = new Map<string, number>();
+  private readonly interactiveMetadata = new Map<string, {
+    expiresAt: number;
+    executionProfiles: NonNullable<NativeAgentComposerState["executionProfiles"]>;
+    runtime: NativeAgentRuntimeSummary;
+    models: AgentModel[];
+    selectedModelId?: string;
+    selectedReasoningId?: string;
+    title?: string;
+    shareUrl?: string | null;
+  }>();
+  private catalogMetadata: {
+    expiresAt: number;
+    catalog: ReturnType<typeof normalizeOpenCodeComposerCatalog>;
+  } | null = null;
+  private commandNames: { names: Set<string>; expiresAt: number } | null = null;
   private sessionListCache: {
     snapshot: OpenCodeExistenceSnapshot;
     expiresAt: number;
@@ -2014,6 +3430,47 @@ class OpenCodeProvider implements BuildPipelineProvider {
       // The reconnect loop will try again. Registration must stay synchronous
       // so restoring a pipeline does not block on an external service.
     });
+  }
+
+  private async optionalSdkCall(
+    namespace: string,
+    method: string,
+    parameters: Record<string, unknown>,
+  ): Promise<unknown> {
+    const owner = asRecord(asRecord(this.client)?.[namespace]);
+    const operation = owner?.[method];
+    if (typeof operation !== "function") return { data: {} };
+    return (operation as (
+      parameters: Record<string, unknown>,
+      options: unknown,
+    ) => Promise<unknown>).call(owner, parameters, this.requestOptions());
+  }
+
+  private async readComposerCatalog(): Promise<
+    ReturnType<typeof normalizeOpenCodeComposerCatalog>
+  > {
+    if (this.catalogMetadata && this.catalogMetadata.expiresAt > Date.now()) {
+      return this.catalogMetadata.catalog;
+    }
+    const [providerResult, fallbackResult] = await Promise.allSettled([
+      this.optionalSdkCall("provider", "list", {}),
+      this.optionalSdkCall("config", "providers", {}),
+    ]);
+    const payload = (result: PromiseSettledResult<unknown>): unknown =>
+      result.status === "fulfilled" ? asRecord(result.value)?.data ?? {} : {};
+    const live = normalizeOpenCodeComposerCatalog(payload(providerResult));
+    const catalog = live.models.length > 0
+      ? live
+      : normalizeOpenCodeComposerCatalog(payload(fallbackResult));
+    this.catalogMetadata = {
+      expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+      catalog,
+    };
+    return catalog;
+  }
+
+  async modelCatalog(): Promise<AgentModel[]> {
+    return (await this.readComposerCatalog()).models;
   }
 
   private async monitorRequests(): Promise<void> {
@@ -2275,6 +3732,13 @@ class OpenCodeProvider implements BuildPipelineProvider {
       });
     }
     const modelParts = (options.model ?? this.connection.model)?.split("/");
+    // A submission that names one of OpenCode's commands runs as that command
+    // rather than as prompt text the model has to interpret. Only interactive
+    // dispatch opts in: a workflow prompt that happens to start with a slash
+    // must keep reaching the model verbatim.
+    const command = options.allowProviderCommands
+      ? await this.resolveProviderCommand(shapedPrompt)
+      : null;
     // Validate before any provider I/O. A local failure is definitive and must
     // not be retried as though the prompt might have reached OpenCode.
     openCodeRequestMarker(options.requestId);
@@ -2304,17 +3768,35 @@ class OpenCodeProvider implements BuildPipelineProvider {
       );
       let response;
       try {
-        response = await this.client.session.promptAsync({
-          sessionID: sessionId,
-          directory: this.connection.directory,
-          messageID,
-          parts: parts as never,
-          model: modelParts && modelParts.length > 1
-            ? { providerID: modelParts[0]!, modelID: modelParts.slice(1).join("/") }
-            : undefined,
-          agent: options.executionAgent ?? options.mode ?? "build",
-          variant: options.effort ?? this.connection.effort,
-        }, this.requestOptions());
+        response = command
+          ? await this.client.session.command({
+            sessionID: sessionId,
+            directory: this.connection.directory,
+            messageID,
+            command: command.name.replace(/^\//, ""),
+            // `arguments` is a *required* field on the server's command request
+            // body, so a bare `/init` must still send an empty string. Passing
+            // `undefined` drops the key in `JSON.stringify` and the server
+            // answers 400, which the caller reads as a failed dispatch.
+            arguments: command.arguments ?? "",
+            model: options.model ?? this.connection.model,
+            agent: options.executionAgent ?? options.mode,
+            variant: options.effort ?? this.connection.effort,
+            // Text became the command name and its arguments; only the files
+            // survive as parts.
+            parts: parts.filter((part) => part.type === "file") as never,
+          }, this.requestOptions())
+          : await this.client.session.promptAsync({
+            sessionID: sessionId,
+            directory: this.connection.directory,
+            messageID,
+            parts: parts as never,
+            model: modelParts && modelParts.length > 1
+              ? { providerID: modelParts[0]!, modelID: modelParts.slice(1).join("/") }
+              : undefined,
+            agent: options.executionAgent ?? options.mode ?? "build",
+            variant: options.effort ?? this.connection.effort,
+          }, this.requestOptions());
       } catch (error) {
         // The request may have reached OpenCode before the response was lost.
         // The reservation keeps the same ID until transcript reconciliation.
@@ -2825,6 +4307,9 @@ class OpenCodeProvider implements BuildPipelineProvider {
     const permission = nonEmptyString(request?.permission)
       ?? nonEmptyString(request?.action);
     const patterns = boundedStringArray(request?.patterns, "permission patterns");
+    const alwaysPatterns = request?.always === undefined
+      ? []
+      : boundedStringArray(request.always, "permission always patterns");
     if (!providerRequestId || rawSessionId !== sessionId || !permission) {
       throw new ProviderUnavailableError("OpenCode returned a malformed permission request");
     }
@@ -2855,6 +4340,9 @@ class OpenCodeProvider implements BuildPipelineProvider {
         ]),
         questions: [],
         confirmLabel: "Approve once",
+        ...(actionable && alwaysPatterns.length > 0
+          ? { approveForSessionLabel: "Always allow" }
+          : {}),
         declineLabel: "Deny",
       },
       createdAt,
@@ -2943,7 +4431,10 @@ class OpenCodeProvider implements BuildPipelineProvider {
     if (!identity) {
       return outcome("stale", sessionId, interactionId, snapshot.revision);
     }
-    if (resolution.action === "answer" && identity.actionable === false) {
+    if (
+      (resolution.action === "answer" || resolution.action === "approve-for-session")
+      && identity.actionable === false
+    ) {
       return outcome("rejected", sessionId, interactionId, snapshot.revision);
     }
     const providerRequestId = identity.providerRequestId;
@@ -2981,7 +4472,9 @@ class OpenCodeProvider implements BuildPipelineProvider {
           response = await this.client.permission.reply({
             requestID: providerRequestId,
             directory: this.connection.directory,
-            reply: resolution.action === "answer" ? "once" : "reject",
+            reply: resolution.action === "approve-for-session"
+              ? "always"
+              : resolution.action === "answer" ? "once" : "reject",
           }, this.requestOptions());
         }
         assertSdkResponse(response, "OpenCode interaction response");
@@ -3040,6 +4533,447 @@ class OpenCodeProvider implements BuildPipelineProvider {
         cause: error,
       });
     }
+  }
+
+  async interactiveSnapshot(
+    sessionId: string,
+  ): Promise<ProviderInteractiveSnapshot> {
+    const [status, rawMessages, metadata] = await Promise.all([
+      this.status(sessionId),
+      this.messages(sessionId, { limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT }),
+      this.readInteractiveMetadata(sessionId),
+    ]);
+    const normalizedMessages = rawMessages.flatMap((message, index) => {
+      const normalized = normalizeOpenCodeInteractiveMessage(message, index);
+      return normalized ? [normalized] : [];
+    });
+    const messages = await this.hydrateSubagentTranscripts(
+      normalizedMessages,
+      collectRawOpenCodeSubagentIds(rawMessages),
+    );
+    // OpenCode persists terminal errors on the final assistant message rather
+    // than in its lifecycle snapshot. Normalize that provider detail here so
+    // the shared projection can render the same durable terminal row for every
+    // provider, including aborts initiated outside this renderer.
+    const terminal = normalizeOpenCodeTerminalState(
+      [...rawMessages].reverse().find((candidate) =>
+        Boolean(asRecord(asRecord(candidate)?.info))
+      ),
+    );
+    const usageTurns = rawMessages.flatMap((message) => {
+      const info = asRecord(asRecord(message)?.info);
+      const tokens = asRecord(info?.tokens);
+      if (!tokens) return [];
+      const number = (value: unknown) =>
+        typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+      const inputTokens = number(tokens.input);
+      const outputTokens = number(tokens.output);
+      const reasoningTokens = number(tokens.reasoning);
+      const cache = asRecord(tokens.cache);
+      const cacheReadTokens = number(cache?.read);
+      const cacheWriteTokens = number(cache?.write);
+      const reportedTotal = number(tokens.total);
+      const usedTokens = reportedTotal > 0
+        ? reportedTotal
+        : inputTokens + outputTokens + cacheReadTokens;
+      if (usedTokens <= 0) return [];
+      const time = asRecord(info?.time);
+      const created = number(time?.created);
+      const completed = number(time?.completed);
+      const providerId = nonEmptyString(info?.providerID);
+      const modelId = nonEmptyString(info?.modelID);
+      return [{
+        usedTokens,
+        inputTokens,
+        outputTokens,
+        reasoningTokens,
+        cacheReadTokens,
+        cacheWriteTokens,
+        costUsd: number(info?.cost),
+        durationMs: completed >= created ? completed - created : 0,
+        ...(modelId ? { modelId: providerId ? `${providerId}/${modelId}` : modelId } : {}),
+      }];
+    });
+    const latestTurn = usageTurns.at(-1);
+    const latestUsage: NativeAgentContextUsage | undefined = latestTurn
+      ? usageTurns.reduce<NativeAgentContextUsage>((usage, turn) => ({
+          ...usage,
+          inputTokens: (usage.inputTokens ?? 0) + turn.inputTokens,
+          outputTokens: (usage.outputTokens ?? 0) + turn.outputTokens,
+          reasoningTokens: (usage.reasoningTokens ?? 0) + turn.reasoningTokens,
+          cacheReadTokens: (usage.cacheReadTokens ?? 0) + turn.cacheReadTokens,
+          cacheWriteTokens: (usage.cacheWriteTokens ?? 0) + turn.cacheWriteTokens,
+          sessionTokens: (usage.sessionTokens ?? 0)
+            + turn.inputTokens + turn.outputTokens + turn.cacheReadTokens + turn.cacheWriteTokens,
+          costUsd: (usage.costUsd ?? 0) + turn.costUsd,
+          durationMs: (usage.durationMs ?? 0) + turn.durationMs,
+        }), {
+          usedTokens: latestTurn.usedTokens,
+          lastTurnTokens: latestTurn.usedTokens,
+          ...(latestTurn.modelId ? { modelId: latestTurn.modelId } : {}),
+          estimated: false,
+          source: "opencode",
+          updatedAt: new Date().toISOString(),
+        })
+      : undefined;
+    return {
+      status: terminal?.kind === "error" ? "error" : status,
+      messages,
+      ...(metadata.title ? { title: metadata.title } : {}),
+      ...(metadata.shareUrl === undefined ? {} : { shareUrl: metadata.shareUrl }),
+      composer: {
+        ...EMPTY_NATIVE_AGENT_COMPOSER_STATE,
+        models: metadata.models,
+        ...(metadata.selectedModelId
+          ? { selectedModelId: metadata.selectedModelId }
+          : {}),
+        ...(metadata.selectedReasoningId
+          ? { selectedReasoningId: metadata.selectedReasoningId }
+          : {}),
+        executionProfiles: metadata.executionProfiles,
+      },
+      ...(latestUsage ? { contextUsage: latestUsage } : {}),
+      runtime: metadata.runtime,
+      ...(terminal ? { notices: [terminal] } : {}),
+      ...(terminal?.kind === "error"
+        ? { phase: "error" as const, error: terminal.message }
+        : {}),
+    };
+  }
+
+  private async readInteractiveMetadata(sessionId: string): Promise<{
+    executionProfiles: NonNullable<NativeAgentComposerState["executionProfiles"]>;
+    runtime: NativeAgentRuntimeSummary;
+    models: AgentModel[];
+    selectedModelId?: string;
+    selectedReasoningId?: string;
+    title?: string;
+    shareUrl?: string | null;
+  }> {
+    const cached = this.interactiveMetadata.get(sessionId);
+    if (cached && cached.expiresAt > Date.now()) return cached;
+
+    const directory = this.connection.directory;
+    const results = await Promise.allSettled([
+      this.optionalSdkCall("app", "agents", { directory }),
+      this.optionalSdkCall("app", "skills", { directory }),
+      this.optionalSdkCall("mcp", "status", { directory }),
+      this.optionalSdkCall("lsp", "status", { directory }),
+      this.optionalSdkCall("formatter", "status", { directory }),
+      this.optionalSdkCall("session", "todo", { sessionID: sessionId, directory }),
+      this.optionalSdkCall("session", "diff", { sessionID: sessionId, directory }),
+      this.optionalSdkCall("session", "get", { sessionID: sessionId, directory }),
+      this.readComposerCatalog(),
+    ]);
+    const data = (index: number, fallback: unknown): unknown => {
+      const result = results[index];
+      return result?.status === "fulfilled"
+        ? asRecord(result.value)?.data ?? fallback
+        : fallback;
+    };
+    const agents = data(0, []);
+    const executionProfiles = (Array.isArray(agents) ? agents : [])
+      .slice(0, 128)
+      .flatMap((candidate) => {
+        const agent = asRecord(candidate);
+        const name = nonEmptyString(agent?.name);
+        if (!name || agent?.hidden === true || agent?.mode === "subagent") return [];
+        const model = asRecord(agent?.model);
+        const providerId = nonEmptyString(model?.providerID);
+        const modelId = nonEmptyString(model?.modelID);
+        return [{
+          id: name,
+          label: name,
+          ...(typeof agent?.description === "string"
+            ? { description: agent.description.slice(0, 1_000) }
+            : {}),
+          ...(providerId && modelId ? { modelId: `${providerId}/${modelId}` } : {}),
+        }];
+      });
+    const runtime: NativeAgentRuntimeSummary = {
+      skills: providerInventoryCount(data(1, [])),
+      mcpServers: providerInventoryCount(data(2, {})),
+      lspServers: providerInventoryCount(data(3, [])),
+      formatters: providerInventoryCount(data(4, [])),
+      todos: providerInventoryCount(data(5, [])),
+      files: providerInventoryCount(data(6, [])),
+    };
+    const sessionResult = results[7];
+    const sessionData = sessionResult?.status === "fulfilled"
+      ? asRecord(asRecord(sessionResult.value)?.data)
+      : undefined;
+    const title = nonEmptyString(sessionData?.title);
+    const shareUrl = sessionResult?.status === "fulfilled"
+      ? nonEmptyString(asRecord(sessionData?.share)?.url) ?? null
+      : undefined;
+    const catalogResult = results[8];
+    const catalog = catalogResult?.status === "fulfilled"
+      ? catalogResult.value
+      : { models: [] };
+    const entry = {
+      expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+      executionProfiles,
+      runtime,
+      models: catalog.models,
+      ...(title ? { title } : {}),
+      ...(shareUrl === undefined ? {} : { shareUrl }),
+      ...(catalog.selectedModelId
+        ? { selectedModelId: catalog.selectedModelId }
+        : {}),
+      ...(catalog.selectedReasoningId
+        ? { selectedReasoningId: catalog.selectedReasoningId }
+        : {}),
+    };
+    setBoundedMapEntry(
+      this.interactiveMetadata,
+      sessionId,
+      entry,
+      MAX_TRACKED_INTERACTION_SESSIONS,
+    );
+    return entry;
+  }
+
+  private async hydrateSubagentTranscripts(
+    rootMessages: Record<string, unknown>[],
+    rootSubagentIds: readonly string[],
+  ): Promise<Record<string, unknown>[]> {
+    const queued = [...new Set([
+      ...rootSubagentIds,
+      ...collectNormalizedOpenCodeSubagentIds(rootMessages),
+    ])]
+      .slice(0, OPENCODE_SUBAGENT_MAX_SESSIONS);
+    if (queued.length === 0) return rootMessages;
+    const seen = new Set<string>();
+    const children = new Map<string, Record<string, unknown>[]>();
+    while (queued.length > 0 && seen.size < OPENCODE_SUBAGENT_MAX_SESSIONS) {
+      const batch: string[] = [];
+      while (
+        queued.length > 0
+        && batch.length < OPENCODE_SUBAGENT_FETCH_CONCURRENCY
+        && seen.size + batch.length < OPENCODE_SUBAGENT_MAX_SESSIONS
+      ) {
+        const candidate = queued.shift();
+        if (candidate && !seen.has(candidate) && !batch.includes(candidate)) {
+          batch.push(candidate);
+        }
+      }
+      if (batch.length === 0) continue;
+      const results = await Promise.allSettled(batch.map(async (childSessionId) => {
+        const raw = await this.messages(childSessionId, {
+          limit: OPENCODE_SUBAGENT_MESSAGE_LIMIT,
+        });
+        const messages = raw.flatMap((message, index) => {
+          const normalized = normalizeOpenCodeInteractiveMessage(message, index);
+          return normalized ? [normalized] : [];
+        });
+        return { messages, nestedIds: collectRawOpenCodeSubagentIds(raw) };
+      }));
+      for (let index = 0; index < batch.length; index += 1) {
+        const childSessionId = batch[index]!;
+        seen.add(childSessionId);
+        const result = results[index];
+        if (result?.status !== "fulfilled") continue;
+        children.set(childSessionId, result.value.messages);
+        for (const nestedId of new Set([
+          ...result.value.nestedIds,
+          ...collectNormalizedOpenCodeSubagentIds(result.value.messages),
+        ])) {
+          if (
+            !seen.has(nestedId)
+            && !queued.includes(nestedId)
+            && seen.size + queued.length < OPENCODE_SUBAGENT_MAX_SESSIONS
+          ) queued.push(nestedId);
+        }
+      }
+    }
+    return hydrateNormalizedOpenCodeSubagents(rootMessages, children);
+  }
+
+  async listResumableSessions(): Promise<NativeAgentResumeEntry[]> {
+    const response = await this.client.session.list(
+      {
+        directory: this.connection.directory,
+        limit: MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS,
+      },
+      this.requestOptions(),
+    );
+    assertSdkResponse(response, "OpenCode resumable session list");
+    if (!Array.isArray(response.data)) return [];
+    return response.data.slice(0, 512).flatMap((candidate) => {
+      const session = asRecord(candidate);
+      const id = nonEmptyString(session?.id);
+      if (!id) return [];
+      const time = asRecord(session?.time);
+      const toIso = (value: unknown) => {
+        const date = typeof value === "number" || typeof value === "string"
+          ? new Date(value)
+          : null;
+        return date && !Number.isNaN(date.getTime()) ? date.toISOString() : undefined;
+      };
+      const createdAt = toIso(time?.created);
+      const updatedAt = toIso(time?.updated);
+      return [{
+        sessionId: id,
+        ...(typeof session?.title === "string" ? { title: session.title } : {}),
+        ...(createdAt ? { createdAt } : {}),
+        ...(updatedAt ? { updatedAt } : {}),
+      }];
+    });
+  }
+
+  refreshCatalog(): void {
+    this.catalogMetadata = null;
+    this.commandNames = null;
+    this.interactiveMetadata.clear();
+  }
+
+  /**
+   * Match a submission against the commands this runtime can execute.
+   *
+   * Discovery is only attempted for text that actually starts with a slash, and
+   * the result is cached, so an ordinary prompt never pays for a command list.
+   * A discovery failure resolves to "not a command": sending the text to the
+   * model is recoverable, refusing the user's prompt is not.
+   */
+  private async resolveProviderCommand(
+    prompt: string,
+  ): Promise<ParsedSlashCommand | null> {
+    const parsed = parseLeadingSlashCommand(prompt);
+    if (!parsed) return null;
+    let names = this.commandNames && this.commandNames.expiresAt > this.now()
+      ? this.commandNames.names
+      : null;
+    if (!names) {
+      try {
+        names = new Set(
+          (await this.slashCommands()).map((command) => command.name.toLowerCase()),
+        );
+        this.commandNames = {
+          names,
+          expiresAt: this.now() + OPENCODE_COMMAND_NAME_TTL_MS,
+        };
+      } catch {
+        return null;
+      }
+    }
+    return names.has(parsed.name) ? parsed : null;
+  }
+
+  async slashCommands(): Promise<NativeAgentSlashCommand[]> {
+    const responses = await Promise.allSettled([
+      this.client.command.list({}, this.requestOptions()),
+      this.client.command.list(
+        { directory: this.connection.directory },
+        this.requestOptions(),
+      ),
+    ]);
+    const commands = new Map<string, NativeAgentSlashCommand>(
+      OPENCODE_BUILT_IN_SLASH_COMMANDS.map((command) => [command.name, command]),
+    );
+    for (const settled of responses) {
+      if (settled.status !== "fulfilled" || !Array.isArray(settled.value.data)) continue;
+      for (const candidate of settled.value.data.slice(0, 512)) {
+        const command = asRecord(candidate);
+        const rawName = nonEmptyString(command?.name);
+        if (!rawName) continue;
+        const name = rawName.startsWith("/") ? rawName : `/${rawName}`;
+        commands.set(name, {
+          name,
+          ...(typeof command?.description === "string"
+            ? { description: command.description.slice(0, 1_000) }
+            : {}),
+          ...(Array.isArray(command?.hints) && typeof command.hints[0] === "string"
+            ? { argumentHint: command.hints[0].slice(0, 512) }
+            : {}),
+        });
+      }
+    }
+    return [...commands.values()].slice(0, 512);
+  }
+
+  async resumeSession(sessionId: string): Promise<string> {
+    const status = await this.status(sessionId);
+    if (status === "missing") throw new PromptRejectedError("OpenCode session was not found");
+    this.rememberExistingSession(sessionId);
+    return sessionId;
+  }
+
+  async forkSession(
+    sessionId: string,
+    messageId?: string,
+  ): Promise<NativeAgentForkOutcome> {
+    const response = await this.client.session.fork({
+      sessionID: sessionId,
+      directory: this.connection.directory,
+      ...(messageId ? { messageID: messageId } : {}),
+    }, this.requestOptions());
+    assertSdkResponse(response, "OpenCode session fork");
+    const forked = asRecord(response.data);
+    const forkedId = nonEmptyString(forked?.id);
+    if (!forkedId) throw new ProviderUnavailableError("OpenCode returned a malformed fork");
+    this.rememberExistingSession(forkedId);
+    return {
+      sessionId: forkedId,
+      ...(typeof forked?.title === "string" ? { title: forked.title } : {}),
+    };
+  }
+
+  async performSessionAction(
+    sessionId: string,
+    action: NativeAgentSessionAction,
+  ): Promise<NativeAgentSessionActionOutcome> {
+    try {
+      if (action.kind === "compact") {
+        const model = action.modelId?.trim();
+        const split = model && model !== "default" ? model.indexOf("/") : -1;
+        await this.client.session.summarize({
+          sessionID: sessionId,
+          ...(split > 0 ? {
+            providerID: model!.slice(0, split),
+            modelID: model!.slice(split + 1),
+          } : {}),
+          auto: false,
+        }, { ...this.requestOptions(), throwOnError: true });
+        return { outcome: "applied" };
+      }
+      if (action.kind === "undo") {
+        await this.client.session.revert({
+          sessionID: sessionId,
+          ...(action.messageId ? { messageID: action.messageId } : {}),
+        }, { ...this.requestOptions(), throwOnError: true });
+        return { outcome: "applied" };
+      }
+      if (action.kind === "redo") {
+        await this.client.session.unrevert(
+          { sessionID: sessionId },
+          { ...this.requestOptions(), throwOnError: true },
+        );
+        return { outcome: "applied" };
+      }
+      if (action.kind === "share") {
+        const response = await this.client.session.share(
+          { sessionID: sessionId },
+          { ...this.requestOptions(), throwOnError: true },
+        );
+        const share = asRecord(asRecord(response.data)?.share);
+        this.interactiveMetadata.delete(sessionId);
+        return {
+          outcome: "applied",
+          ...(typeof share?.url === "string" ? { shareUrl: share.url } : {}),
+        };
+      }
+      if (action.kind === "unshare") {
+        await this.client.session.unshare(
+          { sessionID: sessionId },
+          { ...this.requestOptions(), throwOnError: true },
+        );
+        this.interactiveMetadata.delete(sessionId);
+        return { outcome: "applied" };
+      }
+    } catch (error) {
+      throw new ProviderUnavailableError(`OpenCode ${action.kind} failed`, { cause: error });
+    }
+    throw new PromptRejectedError(`OpenCode does not support ${action.kind}`);
   }
 
   async structured<T>(
@@ -3207,7 +5141,7 @@ function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
 export function createBuildPipelineProvider(
   connection: BridgeConnection,
   dependencies: ProviderDependencies = {},
-): BuildPipelineProvider {
+): NativeAgentRuntimeProvider {
   return connection.agent === "opencode"
     ? new OpenCodeProvider(connection, dependencies)
     : new HttpBridgeProvider(

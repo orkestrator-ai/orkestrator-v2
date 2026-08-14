@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, RefreshCw, Star, Zap } from "lucide-react";
 import {
   DropdownMenu,
@@ -251,6 +251,9 @@ export function AgentModelPicker({
     () => enabledPlatforms ?? Array.from(new Set(models.map((model) => model.platform))),
     [enabledPlatforms, models],
   );
+  useEffect(() => {
+    if (selectedPlatform) setCatalogView(selectedPlatform);
+  }, [selectedPlatform]);
   const visibleModels = useMemo(() => {
     const byKey = new Map(models.map((model) => [`${model.platform}:${model.id}`, model]));
     const ordered = catalogView === "favorites"

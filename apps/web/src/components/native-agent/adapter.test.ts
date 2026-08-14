@@ -13,14 +13,28 @@ describe("native agent adapter registry", () => {
       const adapter = getNativeAgentAdapter(platform);
       expect(adapter.platform).toBe(platform);
       expect(adapter.label.length).toBeGreaterThan(0);
-      expect(typeof adapter.loadController).toBe("function");
       expect(adapter.capabilities.composer).toBeDefined();
+    }
+  });
+
+  test("keeps every provider registry entry metadata-only", () => {
+    for (const platform of AGENT_PLATFORMS) {
+      const adapter = getNativeAgentAdapter(platform);
+      expect(Object.keys(adapter).sort()).toEqual([
+        "capabilities",
+        "label",
+        "platform",
+      ]);
     }
   });
 
   test("publishes provider differences as capabilities", () => {
     expect(getNativeAgentAdapter("claude").capabilities.backgroundTasks).toBe(true);
     expect(getNativeAgentAdapter("codex").capabilities.resume).toBe(true);
+    expect(getNativeAgentAdapter("codex").capabilities.attachments).toEqual({
+      files: false,
+      images: true,
+    });
     expect(getNativeAgentAdapter("cursor").capabilities.composer.model).toBe(true);
     expect(getNativeAgentAdapter("grok").capabilities.composer.reasoning).toBe(true);
     expect(getNativeAgentAdapter("cursor").capabilities.attachments.files).toBe(false);

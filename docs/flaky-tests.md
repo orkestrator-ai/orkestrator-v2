@@ -34,6 +34,31 @@ history rather than two partial ones.
 - **Fix:** Resolve and await the controlled transcript request inside asynchronous `act()`, then wait for the instrumented active-request count to reach zero and assert its maximum remained one. The existing rendering test continues to cover the report UI separately.
 - **Verification:** Ten consecutive owning-file repetitions passed with zero failures. The subsequent aggregate result is recorded in this change's validation handoff.
 
+## `EnvironmentSettingsDialog > uses top agent tabs and shows MCP servers, plugins, and skills for each agent` (`tests/unit/components/EnvironmentSettingsDialog.test.tsx`)
+
+- **Status:** resolved
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-review-full-tests.log`
+- **Worker configuration:** the root and agent-support group ran as `bun test ./tests ./e2e/agent-testing ./apps/desktop/electron ./apps/desktop/scripts/dev --parallel=4` (`4x PARALLEL`).
+- **Failure:** `expect(received).toEqual(expected)` at `EnvironmentSettingsDialog.test.tsx:304` — expected `["Claude", "Codex", "OpenCode"]`, received those plus `"Rendered"` and `"Raw"` (duration: 15.27 ms).
+- **Suite counts:** root and agent-support group: 3,639 total, 3,637 passed, 1 skipped, 1 failed; the workspace, bridges, and codex protocol lockfile groups passed.
+- **Isolated rerun:** `bun test tests/unit/components/EnvironmentSettingsDialog.test.tsx` -> 20 passed, 0 failed in 471 ms.
+- **Root cause:** the assertion used the document-wide `screen.getAllByRole("tab")`, so it matched every element with `role="tab"` in the worker's shared happy-dom document, not only the dialog's own tablist. `"Rendered"` and `"Raw"` are the view tabs rendered by
+  `apps/web/src/components/markdown/MarkdownEditorTab.tsx`; a sibling file that ran earlier in the same worker left them mounted. The leak is pre-existing, but the native-agent consolidation deleted ten large test files, which redistributed files across workers and paired this file with a leaking neighbour for the first time.
+- **Fix:** scope the query to `screen.getByRole("tablist", { name: "Agent extensions" })` so the assertion can only observe this dialog's tabs. The `aria-label` was already present on the `TabsList`.
+- **Verification:** `bun test tests/unit/components/EnvironmentSettingsDialog.test.tsx` and a full `bun run test` after the fix; see the run recorded alongside the native-agent projection changes.
+
+## `agent-test artifact sanitizer > stages the redacted trace beside the original so the swap cannot cross filesystems` (`e2e/agent-testing/artifact-sanitizer.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-fix-full-tests.log`
+- **Worker configuration:** the root and agent-support group ran as `bun test ./tests ./e2e/agent-testing ./apps/desktop/electron ./apps/desktop/scripts/dev --parallel=4` (`4x PARALLEL`).
+- **Failure:** expected the staged archive basename to be `trace.zip`, but received an empty string (duration: 27.44 ms).
+- **Suite counts:** root and agent-support group: 3,639 total, 3,637 passed, 1 skipped, 1 failed; the other validation groups passed.
+- **Isolated rerun:** `bun test ./e2e/agent-testing/artifact-sanitizer.test.ts` -> 3 passed, 0 failed in 91 ms.
+- **Hypothesis:** the owning file passes from a clean process, so the failure depends on aggregate execution state or scheduling. The available assertion does not identify which shared condition produced the empty basename; no more specific root cause is established yet.
+
 ## Unattributable `bun run test` failure — aggregate output truncated on exit (`scripts/test-all.ts`)
 
 - **Status:** resolved
@@ -49,7 +74,7 @@ history rather than two partial ones.
 
 ## `BuildChatTab agent messaging > disables the send button and shows progress while a send is in flight` (`apps/web/src/components/build-pipeline/BuildChatTab.test.tsx`)
 
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-13; recurred 2026-08-14
 - **Original command:** `bun test src --parallel` from `apps/web`.
 - **Worker configuration:** Bun's default parallel worker pool for the complete web package, run alongside the root suite during native-agent consolidation verification.
@@ -57,8 +82,12 @@ history rather than two partial ones.
 - **Failure:** `(fail) BuildChatTab agent messaging > disables the send button and shows progress while a send is in flight [6090.90ms]`. The filtered aggregate log did not retain a narrower assertion message; the duration exceeded Bun's five-second default test budget.
 - **Suite counts:** 5,548 tests across 227 files; 5,546 passed, 1 skipped, and 1 failed in 21.24 seconds.
 - **Isolated rerun:** `bun test src/components/build-pipeline/BuildChatTab.test.tsx` from `apps/web` -> 75 passed, 0 failed, 230 assertions in 3.54 seconds; the affected test passed in 2,718.90 ms.
-- **Hypothesis:** The case holds a mocked backend send promise, waits for the in-flight render, releases it, then waits for the spinner to disappear. It already consumes more than half of Bun's outer budget in isolation, so worker scheduling and React commit latency under the aggregate pool can exhaust that budget even when both controlled transitions occur correctly. A deterministic signal for the two React commits, or a narrowly increased outer budget, should be evaluated before changing product behavior.
 - **Recurrence (Codex user-echo follow-up, 2026-08-14):** `bun run test` ran the web package as `bun test src --parallel=2` alongside the other aggregate groups. The case timed out after 5,000 ms (reported duration 5,085.96 ms); the web package reported 5,644 passed, 1 skipped, and 2 failed across 5,647 tests, while the full aggregate reported 14,072 passed, 13 skipped, and 2 failed across 14,087 tests. The immediate isolated rerun, `bun test ./src/components/build-pipeline/BuildChatTab.test.tsx` from `apps/web`, passed all 75 tests with 230 assertions in 4.25 seconds; the affected case passed in 3,061.64 ms. This is the same timeout shape as the original observation and does not touch the Codex files changed by the follow-up.
+- **Recurrence (2026-08-14):** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-native-consolidation-full-tests.log` reproduced the same five-second timeout while the web package ran with Bun's 18-worker parallel pool inside the four-group aggregate. The web suite reported 4,911 passed, 1 skipped, and 1 failed across 224 files; the target duration was 5,640.01 ms. The immediate isolated rerun, `bun test ./src/components/build-pipeline/BuildChatTab.test.tsx --parallel` from `apps/web`, passed all 75 tests with 230 assertions in 3.61 seconds; the target passed in 2,680.68 ms. Evidence: `/tmp/orkestrator-build-chat-tab-isolated-after-aggregate.log`.
+- **Recurrence (2026-08-14, native-agent final gate):** `/tmp/orkestrator-native-consolidation-full-tests-rerun.log` reproduced the same timeout at 5,843.17 ms with the same 4,911 pass, 1 skip, 1 fail web-package result. The root, bridge, and protocol-lockfile groups all remained green.
+- **Root cause:** The test used two polling `waitFor` calls around transitions that it already controlled exactly. Under aggregate worker load, scheduling those polls could exhaust Bun's five-second outer budget even though the mocked backend promise and both React transitions were behaving correctly.
+- **Fix:** Assert the synchronous in-flight render immediately after the click, then release the controlled promise inside async `act` and assert the settled render after React has flushed. No product timeout or implementation behavior changed.
+- **Verification:** `bun test ./src/components/build-pipeline/BuildChatTab.test.tsx --rerun-each 3` passed all 225 executions with 687 assertions in 1.79 seconds; the affected test completed in 2.93 ms on the third run. Evidence: `/tmp/orkestrator-build-chat-tab-flake-fix-stress.log`.
 
 ## `authoritative resync > converges renderer collections through the real command boundary after a backend restart` (`apps/web/src/lib/store-resource-sync.test.ts`)
 
@@ -73,14 +102,30 @@ history rather than two partial ones.
 
 ## `web-public install.sh > runs on both supported platforms` (`tests/unit/install-script.test.ts`)
 
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-13
 - **Original command:** `bun test tests --parallel`
 - **Worker configuration:** Bun's default parallel worker pool for the root group, run on its own (no other test group running concurrently).
 - **Failure:** `(fail) web-public install.sh > runs on both supported platforms [5001.03ms]` — `this test timed out after 5000ms`. The suite reported 2 failures for that run; the other was the deterministic `packages/cli` release-version drift, which is unrelated. The same command was run four times in total on the same commit: three runs reported `3900 pass, 1 skip, 1 fail` (the version drift alone) in 109.9s–111.9s, and one reported `2 fail`, so the observed rate is roughly one in four.
 - **Suite counts:** Failing run: 2 fail across 3902 tests in 148 files. Passing runs: 3900 pass, 1 skip, 1 fail, 16906 expect() calls, 3902 tests across 148 files.
 - **Isolated rerun:** `bun test tests/unit/install-script.test.ts` -> 10 pass, 0 fail, 25 assertions in 2.38 seconds.
-- **Hypothesis:** The test shells out to the real `install.sh` twice in sequence (once per simulated platform) inside a single 5-second Bun timeout, and each invocation spawns a shell plus stubbed `bunx`/`bun` launchers from a temporary PATH. Two spawn round-trips leave little headroom, so the case is sensitive to process-startup latency under a loaded worker pool. Nothing in the test is order- or state-dependent; the isolated rerun completed both platforms in well under the budget. Raising the timeout for this case, or asserting the two platforms in separate tests, would each remove the coupling.
+- **Recurrence (2026-08-14):** `set -o pipefail; bun test ./tests --parallel 2>&1 | tee /tmp/orkestrator-root-tests-native-consolidation.log` again timed out at 5,001.03 ms. The root suite reported 3,631 passed, 1 skipped, and 2 failed across 143 files; the other failure was the separate runtime-copy timeout below. An immediate isolated rerun passed all 10 tests with 25 assertions in 4.43 seconds; the target completed in 734.37 ms. Evidence: `/tmp/orkestrator-install-script-isolated.log`.
+- **Root cause:** The case coupled two independent process-spawning platform checks to one five-second outer budget. Under root-suite worker contention, the combined shell and stub-launcher startup latency could exhaust that shared budget even though each supported platform behaved correctly.
+- **Fix:** Give Darwin and Linux independent test cases and independent budgets. Both still execute the real installer harness and retain the same exit-code assertion.
+- **Verification:** `bun test ./tests/unit/install-script.test.ts --test-name-pattern 'runs on supported platform' --rerun-each 10` passed 20/20 platform cases in 7.04 seconds. The final `bun run test` aggregate passed the root group with 3,638 tests and no failures. Evidence: `/tmp/orkestrator-install-script-flake-fix-stress.log` and `/tmp/orkestrator-native-consolidation-full-final.log`.
+
+## `container runtime environment wiring > Codex configuration copy inspection failures warn and skip the entry` (`tests/unit/runtime-env-wiring.test.ts`)
+
+- **Status:** resolved
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun test ./tests --parallel 2>&1 | tee /tmp/orkestrator-root-tests-native-consolidation.log`
+- **Worker configuration:** Bun's 18-worker parallel pool for the root group.
+- **Failure:** `this test timed out after 5000ms` at 5,508.54 ms.
+- **Suite counts:** 3,634 total, 3,631 passed, 1 skipped, and 2 failed across 143 files; the other failure was the install-script flake above.
+- **Isolated rerun:** `bun test ./tests/unit/runtime-env-wiring.test.ts` -> 53 passed, 0 failed, 419 assertions in 5.87 seconds; the affected test passed in 1,194.03 ms. Evidence: `/tmp/orkestrator-runtime-env-wiring-isolated.log`.
+- **Root cause:** The case deliberately launches four complete shell harnesses to force independent `wc`, `find`, `du`, and malformed-output inspection failures. The default five-second outer test budget covered all four processes together and was exhausted under aggregate process-startup contention; each fail-closed assertion passed in isolation.
+- **Fix:** Give this multi-process integration case a 15-second outer budget. The production commands, failure behavior, and every copy-rejection assertion are unchanged.
+- **Verification:** `bun test ./tests/unit/runtime-env-wiring.test.ts --test-name-pattern 'Codex configuration copy inspection failures' --rerun-each 10` passed 10/10 in 7.13 seconds, with individual executions at 690.82-734.65 ms. The final `bun run test` aggregate passed the root group with 3,638 tests and no failures. Evidence: `/tmp/orkestrator-runtime-copy-flake-fix-stress.log` and `/tmp/orkestrator-native-consolidation-full-final.log`.
 
 ## `orkestrator CLI package` built-artifact checks (`packages/cli/tests/cli.test.ts`)
 

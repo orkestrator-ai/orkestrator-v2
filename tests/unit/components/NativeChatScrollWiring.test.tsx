@@ -5,11 +5,11 @@ import * as realHooks from "@/hooks";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
-import { useCodexStore } from "@/stores/codexStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import * as realBackend from "@/lib/backend";
 
 const realHooksSnapshot = { ...realHooks };
+const realBackendSnapshot = { ...realBackend };
 /** Whether the hook reports the transcript as pinned to its tail. */
 let isAtBottom = true;
 const scrollToBottomMock = mock(() => {});
@@ -36,10 +36,47 @@ mock.module("@/hooks", () => ({
   clearPersistedVirtuosoState: () => {},
 }));
 
-const { ClaudeChatTab } = await import("@/components/claude/ClaudeChatTab");
+mock.module("@/lib/backend", () => ({
+  ...realBackendSnapshot,
+  adoptNativeAgentSession: async (input: { providerSessionId: string }) => ({
+    providerSessionId: input.providerSessionId,
+  }),
+  getNativeAgentProjection: async (input: {
+    agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+    environmentId: string;
+  }) => ({
+    platform: input.agent,
+    environmentId: input.environmentId,
+    sessionId: `${input.agent}-session`,
+    connection: "connected" as const,
+    turn: { phase: "idle" as const },
+    messages: [],
+    interactions: [],
+    composerControls: [],
+    capabilities: {
+      attachments: { files: false, images: false },
+      queue: false,
+      resume: false,
+      fork: false,
+      slashCommands: false,
+      backgroundTasks: false,
+      composer: {
+        provider: true,
+        model: true,
+        reasoning: true,
+        speed: true,
+        mode: true,
+      },
+    },
+    revision: 1,
+    generation: "test",
+  }),
+  getFileTree: async () => [],
+  getLocalFileTree: async () => [],
+}));
+
+const { AgentNativeTab } = await import("@/components/native-agent/AgentNativeTab");
 const { ClaudeTmuxChatTab } = await import("@/components/claude/ClaudeTmuxChatTab");
-const { CodexChatTab } = await import("@/components/codex/CodexChatTab");
-const { OpenCodeChatTab } = await import("@/components/opencode/OpenCodeChatTab");
 const { BuildChatTab } = await import("@/components/build-pipeline/BuildChatTab");
 
 const buildPipeline: BuildPipeline = {
@@ -83,6 +120,7 @@ const buildPipeline: BuildPipeline = {
 describe("native chat scroll wiring", () => {
   afterAll(() => {
     mock.module("@/hooks", () => realHooksSnapshot);
+    mock.module("@/lib/backend", () => realBackendSnapshot);
   });
 
   beforeEach(() => {
@@ -111,22 +149,6 @@ describe("native chat scroll wiring", () => {
       draftText: new Map(),
       attachments: new Map(),
     });
-    useCodexStore.setState({
-      clients: new Map(),
-      sessions: new Map(),
-      messageQueue: new Map(),
-      draftText: new Map(),
-      attachments: new Map(),
-    });
-    useOpenCodeStore.setState({
-      clients: new Map(),
-      sessions: new Map(),
-      pendingQuestions: new Map(),
-      pendingPermissions: new Map(),
-      messageQueue: new Map(),
-      draftText: new Map(),
-      attachments: new Map(),
-    });
     useClaudeTmuxStore.setState({
       tabs: new Map(),
       attachments: new Map(),
@@ -138,56 +160,30 @@ describe("native chat scroll wiring", () => {
     useBuildPipelineStore.setState({ pipelines: new Map() });
   });
 
-  test("Claude native passes its environmentId to the Virtuoso scroll hook", () => {
-    render(
-      <ClaudeChatTab
-        tabId="tab-claude"
-        data={{ environmentId: "env-claude", containerId: "container-1" }}
-        isActive={false}
-      />,
-    );
+  test.each(["claude", "codex", "opencode", "cursor", "grok"] as const)(
+    "%s native passes its environmentId to the shared Virtuoso scroll hook",
+    (platform) => {
+      render(
+        <AgentNativeTab
+          tabId={`tab-${platform}`}
+          data={{
+            platform,
+            environmentId: `env-${platform}`,
+            containerId: "container-1",
+            sessionId: `${platform}-session`,
+          }}
+          isActive={false}
+        />,
+      );
 
-    expect(useVirtuosoScrollStateMock).toHaveBeenCalledWith({
-      isActive: false,
-      persistKey: "env-env-claude:tab-claude",
-      environmentId: "env-claude",
-      stickToBottomOnActivation: true,
-    });
-  });
-
-  test("Codex native passes its environmentId to the Virtuoso scroll hook", () => {
-    render(
-      <CodexChatTab
-        tabId="tab-codex"
-        data={{ environmentId: "env-codex", containerId: "container-1" }}
-        isActive={false}
-      />,
-    );
-
-    expect(useVirtuosoScrollStateMock).toHaveBeenCalledWith({
-      isActive: false,
-      persistKey: "env-env-codex:tab-codex",
-      environmentId: "env-codex",
-      stickToBottomOnActivation: true,
-    });
-  });
-
-  test("OpenCode native passes its environmentId to the Virtuoso scroll hook", () => {
-    render(
-      <OpenCodeChatTab
-        tabId="tab-opencode"
-        data={{ environmentId: "env-opencode", containerId: "container-1" }}
-        isActive={false}
-      />,
-    );
-
-    expect(useVirtuosoScrollStateMock).toHaveBeenCalledWith({
-      isActive: false,
-      persistKey: "env-env-opencode:tab-opencode",
-      environmentId: "env-opencode",
-      stickToBottomOnActivation: true,
-    });
-  });
+      expect(useVirtuosoScrollStateMock).toHaveBeenCalledWith({
+        isActive: false,
+        persistKey: `env-env-${platform}:tab-${platform}`,
+        environmentId: `env-${platform}`,
+        stickToBottomOnActivation: true,
+      });
+    },
+  );
 
   test("Claude tmux passes its environmentId to the Virtuoso scroll hook", () => {
     render(

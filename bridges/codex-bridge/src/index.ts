@@ -1187,30 +1187,24 @@ app.post("/session/:id/prompt", async (c) => {
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   const requestId = typeof body.requestId === "string" ? body.requestId.trim() : "";
   const outputSchema = body.outputSchema;
-  const attachments = Array.isArray(body.attachments)
-    ? body.attachments
-        .map((entry: unknown) => {
-          if (
-            typeof (entry as PromptAttachmentInput | null)?.path === "string"
-            && ((entry as PromptAttachmentInput).type === "image")
-          ) {
-            return {
-              type: "image" as const,
-              path: (entry as PromptAttachmentInput).path,
-              dataUrl:
-                typeof (entry as PromptAttachmentInput).dataUrl === "string"
-                  ? (entry as PromptAttachmentInput).dataUrl
-                  : undefined,
-              filename:
-                typeof (entry as PromptAttachmentInput).filename === "string"
-                  ? (entry as PromptAttachmentInput).filename
-                  : undefined,
-            };
-          }
-          return null;
-        })
-        .filter((entry: PromptAttachmentInput | null): entry is PromptAttachmentInput => entry !== null)
-    : [];
+  const rawAttachments = Array.isArray(body.attachments) ? body.attachments : [];
+  if (rawAttachments.some((entry: unknown) =>
+    typeof (entry as PromptAttachmentInput | null)?.path !== "string"
+    || (entry as PromptAttachmentInput).type !== "image"
+  )) {
+    return c.json({ error: "Codex supports image attachments only" }, 400);
+  }
+  // Every surviving entry is already a well-formed image: the guard above
+  // refuses the request outright rather than dropping what it cannot send.
+  const attachments = rawAttachments.map((entry: unknown) => {
+    const input = entry as PromptAttachmentInput;
+    return {
+      type: "image" as const,
+      path: input.path,
+      dataUrl: typeof input.dataUrl === "string" ? input.dataUrl : undefined,
+      filename: typeof input.filename === "string" ? input.filename : undefined,
+    };
+  });
 
   if (!prompt && attachments.length === 0) {
     return c.json({ error: "Prompt or image attachment is required" }, 400);

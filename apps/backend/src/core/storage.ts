@@ -96,6 +96,7 @@ import type {
   PersistedMultiReviewWorkflow,
   PersistedBuildPipeline,
   PersistedNativeAgentSession,
+  PersistedNativeAgentPendingDispatch,
   PersistedComposeDraft,
   PersistedFileDraft,
   PersistedPromptQueue,
@@ -434,6 +435,7 @@ async function resizeKanbanImage(rawBytes: Buffer): Promise<Buffer> {
 }
 
 const MAX_JSON_BACKUPS = 5;
+const MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES = 32 * 1024 * 1024;
 const MAX_SESSIONS_PER_ENVIRONMENT = 20;
 
 const DEFAULT_ALLOWED_DOMAINS = [
@@ -822,11 +824,90 @@ function isPersistedNativeAgentSession(
     )
     && isAgentInteractionPolicy(value.interactionPolicy)
     && (
+      value.controls === undefined
+      || (
+        isRecord(value.controls)
+        && Object.keys(value.controls).every((key) =>
+          key === "modelId"
+          || key === "reasoningId"
+          || key === "fastMode"
+          || key === "mode"
+          || key === "executionProfileId"
+          || key === "includeLocalSettings"
+          || key === "promptSuggestions"
+        )
+        && (value.controls.modelId === undefined || isNonBlankString(value.controls.modelId))
+        && (value.controls.reasoningId === undefined || isNonBlankString(value.controls.reasoningId))
+        && (value.controls.fastMode === undefined || typeof value.controls.fastMode === "boolean")
+        && (value.controls.executionProfileId === undefined || value.controls.executionProfileId === null || isNonBlankString(value.controls.executionProfileId))
+        && (value.controls.includeLocalSettings === undefined || typeof value.controls.includeLocalSettings === "boolean")
+        && (value.controls.promptSuggestions === undefined || typeof value.controls.promptSuggestions === "boolean")
+        && (
+          value.controls.mode === undefined
+          || value.controls.mode === "build"
+          || value.controls.mode === "plan"
+        )
+      )
+    )
+    && (
       value.dispatchedRequestIds === undefined
       || (
         Array.isArray(value.dispatchedRequestIds)
         && value.dispatchedRequestIds.length <= 1_000
         && value.dispatchedRequestIds.every(isNonBlankString)
+      )
+    )
+    && (
+      value.pendingDispatch === undefined
+      || (
+        isRecord(value.pendingDispatch)
+        && isNonBlankString(value.pendingDispatch.requestId)
+        && isNonBlankString(value.pendingDispatch.prompt)
+        && typeof value.pendingDispatch.createdAt === "string"
+        && Number.isFinite(Date.parse(value.pendingDispatch.createdAt))
+        && (value.pendingDispatch.model === undefined || isNonBlankString(value.pendingDispatch.model))
+        && (value.pendingDispatch.reasoningEffort === undefined || isNonBlankString(value.pendingDispatch.reasoningEffort))
+        && (value.pendingDispatch.mode === undefined || value.pendingDispatch.mode === "plan" || value.pendingDispatch.mode === "build")
+        && (value.pendingDispatch.fastMode === undefined || typeof value.pendingDispatch.fastMode === "boolean")
+        && (value.pendingDispatch.subAgent === undefined || isNonBlankString(value.pendingDispatch.subAgent))
+        && (value.pendingDispatch.executionAgent === undefined || isNonBlankString(value.pendingDispatch.executionAgent))
+        && (value.pendingDispatch.includeLocalSettings === undefined || typeof value.pendingDispatch.includeLocalSettings === "boolean")
+        && (value.pendingDispatch.promptSuggestions === undefined || typeof value.pendingDispatch.promptSuggestions === "boolean")
+        && (value.pendingDispatch.schema === undefined || isRecord(value.pendingDispatch.schema))
+        && (
+          value.pendingDispatch.images === undefined
+          || (
+            Array.isArray(value.pendingDispatch.images)
+            && value.pendingDispatch.images.length <= 64
+            && value.pendingDispatch.images.every((image) =>
+              isRecord(image)
+              && isNonBlankString(image.filename)
+              && isNonBlankString(image.data)
+            )
+          )
+        )
+        && (
+          value.pendingDispatch.attachments === undefined
+          || (
+            Array.isArray(value.pendingDispatch.attachments)
+            && value.pendingDispatch.attachments.length <= 64
+            && value.pendingDispatch.attachments.every((attachment) =>
+              isRecord(attachment)
+              && (attachment.type === "image" || attachment.type === "file")
+              && isNonBlankString(attachment.path)
+              && (attachment.dataUrl === undefined || typeof attachment.dataUrl === "string")
+              && (attachment.filename === undefined || typeof attachment.filename === "string")
+            )
+          )
+        )
+        && (() => {
+          try {
+            return Buffer.byteLength(JSON.stringify(value.pendingDispatch), "utf8")
+              <= MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES;
+          } catch {
+            return false;
+          }
+        })()
       )
     )
     && (
@@ -1764,6 +1845,9 @@ function normalizeOpenCodeModelCatalogEntries(
         ? { outputCost: nonNegativeNumber(candidate.outputCost) }
         : {}),
       ...(contextWindow !== undefined ? { contextWindow } : {}),
+      ...(typeof candidate.supportsImageInput === "boolean"
+        ? { supportsImageInput: candidate.supportsImageInput }
+        : {}),
     };
     const duplicates = byId.get(id) ?? [];
     duplicates.push(normalized);
@@ -1960,6 +2044,18 @@ export class StorageService {
       // A broken client transport must never fail the mutation that succeeded.
       console.error("[Storage] Resource change listener threw:", error);
     }
+  }
+
+  /**
+   * Publish a changed provider-authoritative native-session projection.
+   *
+   * Unlike the durable identity record, transcript and turn state live in the
+   * provider. The native runtime first commits the new bounded projection to
+   * its cache and only then calls this method, preserving the same
+   * announce-after-commit ordering as file-backed resources.
+   */
+  announceNativeAgentSessionProjection(environmentId: string): void {
+    this.announce("native-agent-session", environmentId);
   }
 
   getDataDir(): string {
@@ -2700,15 +2796,23 @@ export class StorageService {
     filePath: string,
     keep: (storedId: string, record: unknown) => boolean,
   ): Promise<void> {
+    await this.transformSensitiveJsonBackups(filePath, (parsed) => Object.fromEntries(
+      Object.entries(parsed).filter(([storedId, record]) => keep(storedId, record)),
+    ));
+  }
+
+  /** Rewrites every retained sensitive backup while preserving its record shape. */
+  private async transformSensitiveJsonBackups(
+    filePath: string,
+    transform: (records: Record<string, unknown>) => Record<string, unknown>,
+  ): Promise<void> {
     for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
       const backup = this.backupPath(filePath, index);
       if (!await exists(backup)) continue;
       try {
         const parsed = JSON.parse(await fs.readFile(backup, "utf8")) as Record<string, unknown>;
         if (!isRecord(parsed)) throw new Error("Backup is not a record");
-        const sanitized = Object.fromEntries(
-          Object.entries(parsed).filter(([storedId, record]) => keep(storedId, record)),
-        );
+        const sanitized = transform(parsed);
         await this.writeAtomic(
           backup,
           `${JSON.stringify(sanitized, null, 2)}\n`,
@@ -2720,6 +2824,22 @@ export class StorageService {
         await fs.rm(backup, { force: true });
       }
     }
+  }
+
+  private async scrubPendingNativeAgentDispatchBackups(
+    key: string,
+    requestId: string,
+  ): Promise<void> {
+    await this.transformSensitiveJsonBackups(this.nativeAgentSessionsFile(), (records) => {
+      const stored = records[key];
+      if (!isRecord(stored)) return records;
+      const pending = stored.pendingDispatch;
+      if (!isRecord(pending) || pending.requestId !== requestId) return records;
+      return {
+        ...records,
+        [key]: { ...stored, pendingDispatch: undefined },
+      };
+    });
   }
 
   async loadProjects(): Promise<Project[]> {
@@ -5023,7 +5143,7 @@ export class StorageService {
       "key" | "environmentId" | "agent" | "logicalSessionKey"
     > & Partial<Pick<
       PersistedNativeAgentSession,
-      "origin" | "interactionPolicy"
+      "origin" | "interactionPolicy" | "controls"
     >>,
     createProviderSession: () => Promise<string>,
   ): Promise<PersistedNativeAgentSession> {
@@ -5098,7 +5218,7 @@ export class StorageService {
       | "providerSessionId"
     > & Partial<Pick<
       PersistedNativeAgentSession,
-      "origin" | "interactionPolicy"
+      "origin" | "interactionPolicy" | "controls"
     >> & { expectedProviderSessionId?: string },
   ): Promise<PersistedNativeAgentSession> {
     const interactionMetadata = resolveNativeAgentInteractionMetadata(input);
@@ -5139,6 +5259,30 @@ export class StorageService {
           throw new Error("Native agent session key collision");
         }
         if (existing.providerSessionId === input.providerSessionId) {
+          /*
+           * Resuming in place still reaches the provider with new controls, so
+           * returning early without recording them would leave storage
+           * disagreeing with the live session and reconstruct the tab with the
+           * old model/mode after a restart. Only the controls can change here:
+           * the provider session, identity and dispatch records are unchanged.
+           */
+          const controls = input.controls
+            ? { ...existing.controls, ...input.controls }
+            : existing.controls;
+          if (
+            input.controls
+            && JSON.stringify(controls) !== JSON.stringify(existing.controls)
+          ) {
+            const updated: PersistedNativeAgentSession = {
+              ...existing,
+              controls,
+              updatedAt: nowIso(),
+            };
+            sessions[input.key] = updated;
+            await this.saveNativeAgentSessions(sessions, opaque);
+            this.announce("native-agent-session", input.environmentId);
+            return updated;
+          }
           if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
           return existing;
         }
@@ -5160,6 +5304,9 @@ export class StorageService {
           ? {
               origin: existing.origin,
               interactionPolicy: existing.interactionPolicy,
+              controls: input.controls
+                ? { ...existing.controls, ...input.controls }
+                : existing.controls,
             }
           : interactionMetadata),
         version: NATIVE_AGENT_SESSION_VERSION,
@@ -5168,8 +5315,43 @@ export class StorageService {
       };
       sessions[input.key] = saved;
       await this.saveNativeAgentSessions(sessions, opaque);
+      if (existing?.pendingDispatch) {
+        await this.scrubPendingNativeAgentDispatchBackups(
+          input.key,
+          existing.pendingDispatch.requestId,
+        );
+      }
       this.announce("native-agent-session", input.environmentId);
       return saved;
+    });
+  }
+
+  async updateNativeAgentSessionControls(
+    key: string,
+    expectedProviderSessionId: string,
+    update: import("@orkestrator/protocol/native-agent").NativeAgentControlUpdate,
+  ): Promise<PersistedNativeAgentSession> {
+    if (!isNonBlankString(key) || !isNonBlankString(expectedProviderSessionId)) {
+      throw new Error("Native agent control update identity is invalid");
+    }
+    return this.enqueueNativeAgentSessionMutation(async () => {
+      const loaded = await this.loadNativeAgentSessions();
+      const { sessions, opaque } = loaded;
+      this.assertReadableNativeAgentSession(loaded, key);
+      const existing = sessions[key];
+      if (!existing || existing.providerSessionId !== expectedProviderSessionId) {
+        throw new Error("Native agent control update target is stale");
+      }
+      const controls = { ...existing.controls, ...update };
+      const updated: PersistedNativeAgentSession = {
+        ...existing,
+        controls,
+        updatedAt: nowIso(),
+      };
+      sessions[key] = updated;
+      await this.saveNativeAgentSessions(sessions, opaque);
+      this.announce("native-agent-session", existing.environmentId);
+      return updated;
     });
   }
 
@@ -5191,6 +5373,10 @@ export class StorageService {
       }
       delete sessions[key];
       await this.saveNativeAgentSessions(sessions, opaque);
+      await this.scrubSensitiveJsonBackups(
+        this.nativeAgentSessionsFile(),
+        (storedKey) => storedKey !== key,
+      );
       this.announce("native-agent-session", existing.environmentId);
       return true;
     });
@@ -5250,6 +5436,7 @@ export class StorageService {
       openCodeIncompleteTurnNotice?:
         PersistedNativeAgentSession["openCodeIncompleteTurnNotice"] | null;
     }>,
+    pendingDispatch?: PersistedNativeAgentPendingDispatch,
   ): Promise<{
     session: PersistedNativeAgentSession;
     dispatched: boolean;
@@ -5257,15 +5444,58 @@ export class StorageService {
     if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
       throw new Error("Native agent dispatch key must not be blank");
     }
+    if (pendingDispatch) {
+      let serialized: string;
+      try {
+        serialized = JSON.stringify(pendingDispatch);
+      } catch {
+        throw new Error("Pending native agent dispatch must be JSON serializable");
+      }
+      if (
+        Buffer.byteLength(serialized, "utf8")
+          > MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES
+      ) {
+        throw new Error("Pending native agent dispatch exceeds the 32 MB limit");
+      }
+    }
     return this.enqueueNativeAgentSessionMutation(async () => {
       const loaded = await this.loadNativeAgentSessions();
       const { sessions, opaque, migrated } = loaded;
       this.assertReadableNativeAgentSession(loaded, key);
-      const session = sessions[key];
+      let session = sessions[key];
       if (!session) throw new Error("Native agent session was not found");
+      if (
+        session.pendingDispatch
+        && session.pendingDispatch.requestId !== requestId
+      ) {
+        throw new Error(
+          `Native agent dispatch ${session.pendingDispatch.requestId} is still awaiting recovery`,
+        );
+      }
       if (session.dispatchedRequestIds?.includes(requestId)) {
+        if (session.pendingDispatch?.requestId === requestId) {
+          session = { ...session, pendingDispatch: undefined, updatedAt: nowIso() };
+          sessions[key] = session;
+          await this.saveNativeAgentSessions(sessions, opaque);
+          await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
+        }
         if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return { session, dispatched: false };
+      }
+
+      if (pendingDispatch) {
+        if (pendingDispatch.requestId !== requestId) {
+          throw new Error("Pending native agent dispatch request ID mismatch");
+        }
+        session = {
+          ...session,
+          pendingDispatch,
+          updatedAt: nowIso(),
+        };
+        sessions[key] = session;
+        // Persist before touching the provider. A crash or lost acknowledgement
+        // can then replay this exact request through the same idempotency key.
+        await this.saveNativeAgentSessions(sessions, opaque);
       }
 
       // Keep the cross-process lock until the provider has acknowledged this
@@ -5280,6 +5510,7 @@ export class StorageService {
         }
         const updated: PersistedNativeAgentSession = {
           ...session,
+          pendingDispatch: undefined,
           ...(outcome.openCodeIncompleteTurnNotice === null
             ? { openCodeIncompleteTurnNotice: undefined }
             : {
@@ -5290,6 +5521,7 @@ export class StorageService {
         };
         sessions[key] = updated;
         await this.saveNativeAgentSessions(sessions, opaque);
+        await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
         this.announce("native-agent-session", session.environmentId);
         return { session: updated, dispatched: false };
       }
@@ -5297,6 +5529,7 @@ export class StorageService {
         ...session,
         // Any successfully accepted prompt supersedes a prior recovery notice.
         openCodeIncompleteTurnNotice: undefined,
+        pendingDispatch: undefined,
         dispatchedRequestIds: [
           ...(session.dispatchedRequestIds ?? []).slice(-999),
           requestId,
@@ -5305,8 +5538,37 @@ export class StorageService {
       };
       sessions[key] = updated;
       await this.saveNativeAgentSessions(sessions, opaque);
+      await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
       this.announce("native-agent-session", session.environmentId);
       return { session: updated, dispatched: true };
+    });
+  }
+
+  async clearPendingNativeAgentDispatch(
+    key: string,
+    requestId: string,
+  ): Promise<boolean> {
+    if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
+      throw new Error("Pending native agent dispatch identity must not be blank");
+    }
+    return this.enqueueNativeAgentSessionMutation(async () => {
+      const loaded = await this.loadNativeAgentSessions();
+      const { sessions, opaque, migrated } = loaded;
+      this.assertReadableNativeAgentSession(loaded, key);
+      const session = sessions[key];
+      if (!session || session.pendingDispatch?.requestId !== requestId) {
+        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
+        return false;
+      }
+      sessions[key] = {
+        ...session,
+        pendingDispatch: undefined,
+        updatedAt: nowIso(),
+      };
+      await this.saveNativeAgentSessions(sessions, opaque);
+      await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
+      this.announce("native-agent-session", session.environmentId);
+      return true;
     });
   }
 

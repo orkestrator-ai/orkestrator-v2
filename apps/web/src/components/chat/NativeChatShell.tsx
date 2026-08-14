@@ -26,6 +26,8 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
   agentLabel: string;
   /** Only the focused chat pane owns global keyboard shortcuts. */
   isActive: boolean;
+  /** Split panes can both be active; only the focused pane owns find shortcuts. */
+  ownsGlobalShortcuts?: boolean;
   /**
    * Container the environment runs in, when Dockerised.
    *
@@ -63,7 +65,9 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
   blockingCards?: ReactNode;
   /** Extra pinned content below the blocking cards, e.g. Codex's plan card. */
   pinnedAccessory?: ReactNode;
-  /** Bottom spacer fallback used until the compose dock has a measurable height. */
+  /** Rendered above the oldest message, e.g. "load earlier messages". */
+  transcriptHeader?: ReactNode;
+  /** Bottom spacer height class; widen when a tall accessory is pinned. */
   bottomSpacerClassName?: string;
   /**
    * Per-message hover actions, e.g. "fork from here".
@@ -112,6 +116,7 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
 export function NativeChatShell<TMessage extends NativeMessageType>({
   agentLabel,
   isActive,
+  ownsGlobalShortcuts,
   containerId,
   agentExpansionScope,
   connectionState,
@@ -126,6 +131,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   finalElapsedSeconds,
   blockingCards,
   pinnedAccessory,
+  transcriptHeader,
   bottomSpacerClassName = "h-32",
   messageActions,
   resolveModelLabel,
@@ -262,6 +268,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
               resolveModelLabel={resolveModelLabel}
             />
           )}
+          header={transcriptHeader}
           emptyState={
             !centerCompose ? (
               <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-3 text-muted-foreground">
@@ -333,7 +340,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
           scrollProps={scrollProps}
           virtuosoRef={virtuosoRef}
           find={{
-            isActive,
+            isActive: ownsGlobalShortcuts ?? isActive,
             getSearchText: getNativeMessageSearchText,
           }}
         />

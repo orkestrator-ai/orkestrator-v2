@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import type { OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import type { TaskSnapshotImage } from "@orkestrator/protocol/build-pipeline";
 import {
@@ -311,6 +311,30 @@ describe("HTTP build pipeline provider", () => {
         dataUrl: "data:image/webp;base64,AA==",
       }],
     });
+  });
+
+  test("projects Claude's authoritative plan mode in the interactive snapshot", async () => {
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      return Response.json({ status: "idle", planMode: true });
+    });
+
+    await expect(provider.interactiveSnapshot?.("session-1")).resolves.toMatchObject({
+      status: "idle",
+      controls: { mode: "plan" },
+    });
+  });
+
+  test("routes Claude background-task stop and prompt-suggestion dismissal", async () => {
+    const { provider, requests } = httpProvider(() => new Response(null, { status: 204 }));
+
+    await provider.stopBackgroundTask?.("session/1", "task/1");
+    await provider.dismissSuggestedPrompt?.("session/1");
+
+    expect(requests.map((request) => [request.url, request.init.method])).toEqual([
+      ["http://claude.test/session/session%2F1/tasks/task%2F1/stop", "POST"],
+      ["http://claude.test/session/session%2F1/prompt-suggestion", "DELETE"],
+    ]);
   });
 
   test.each([
@@ -679,9 +703,12 @@ describe("provider-neutral interaction adapters", () => {
     await expect(provider.interactions!.resolveInteraction(
       "session-1",
       approval.id,
-      declineResolution(approval),
+      { ...declineResolution(approval), feedback: "Add rollback steps" },
     )).resolves.toMatchObject({ result: "applied" });
-    expect(upstream[1]!.body).toEqual({ approved: false });
+    expect(upstream[1]!.body).toEqual({
+      approved: false,
+      feedback: "Add rollback steps",
+    });
     await expect(provider.interactions!.resolveInteraction(
       "session-1",
       approval.id,
@@ -891,6 +918,7 @@ describe("provider-neutral interaction adapters", () => {
         cwd: "/workspace",
         networkHost: "registry.npmjs.org",
         actionable: true,
+        supportsApproveForSession: true,
       },
       {
         approvalId: "file-1",
@@ -964,13 +992,26 @@ describe("provider-neutral interaction adapters", () => {
     expect(first.requests[0]!.presentation.body).toContain("Reason: Needs package metadata");
     expect(first.requests[0]!.presentation.body).toContain("Command: bun install");
     expect(first.requests[0]!.presentation.body).toContain("Network host: registry.npmjs.org");
+    expect(first.requests[0]!.presentation.approveForSessionLabel)
+      .toBe("Approve for session");
     expect(first.requests[1]!.presentation.body).toContain("Change: update: /workspace/a.ts");
     expect(first.requests[2]!.presentation.body).toContain("Permissions: network");
     expect(first.requests[3]!.presentation.questions).toHaveLength(1);
     expect(first.requests[3]!.presentation.questions[0]!.description)
       .toContain('"region"');
 
-    for (const approval of first.requests.slice(0, 3)) {
+    await expect(provider.interactions!.resolveInteraction(
+      "session-1",
+      first.requests[0]!.id,
+      {
+        version: AGENT_INTERACTION_CONTRACT_VERSION,
+        interactionId: first.requests[0]!.id,
+        sessionId: first.requests[0]!.sessionId,
+        action: "approve-for-session",
+        resolvedAt: Math.max(Date.now(), first.requests[0]!.createdAt),
+      },
+    )).resolves.toMatchObject({ result: "applied" });
+    for (const approval of first.requests.slice(1, 3)) {
       await expect(provider.interactions!.resolveInteraction(
         "session-1",
         approval!.id,
@@ -993,7 +1034,7 @@ describe("provider-neutral interaction adapters", () => {
     )).resolves.toMatchObject({ result: "applied" });
 
     expect(responses).toEqual([
-      { id: "command-1", body: { decision: "approve" } },
+      { id: "command-1", body: { decision: "approve-for-session" } },
       { id: "file-1", body: { decision: "approve" } },
       { id: "permission-1", body: { decision: "approve" } },
       { id: "form-1", body: { action: "accept", content: { region: "eu-west-1" } } },
@@ -1295,14 +1336,21 @@ describe("provider-neutral interaction adapters", () => {
       expect(permission.presentation.body).toContain("Permission: edit");
       expect(permission.presentation.body).toContain("Resource: src/**");
       expect(permission.presentation.body).toContain("Resource: package.json");
+      expect(permission.presentation.approveForSessionLabel).toBe("Always allow");
       await expect(provider.interactions!.resolveInteraction(
         "owned-session",
         permission.id,
-        answerResolution(permission),
+        {
+          version: AGENT_INTERACTION_CONTRACT_VERSION,
+          interactionId: permission.id,
+          sessionId: permission.sessionId,
+          action: "approve-for-session",
+          resolvedAt: Math.max(Date.now(), permission.createdAt),
+        },
       )).resolves.toMatchObject({ result: "applied" });
       expect(fake.permissionReplies[0]).toMatchObject({
         requestID: "permission-1",
-        reply: "once",
+        reply: "always",
       });
     } finally {
       await provider.dispose?.();
@@ -3697,6 +3745,137 @@ describe("OpenCode build pipeline provider", () => {
     }
   });
 
+  test("hydrates bounded OpenCode child-session transcripts in the authoritative snapshot", async () => {
+    const fake = openCodeFake();
+    fake.setMessagesHandler(async (parameters) => {
+      if (parameters?.sessionID === "child-session") {
+        return { data: [{
+          info: {
+            id: "child-message",
+            role: "assistant",
+            time: { created: 2 },
+          },
+          parts: [{ id: "child-text", type: "text", text: "Child finished" }],
+        }] };
+      }
+      return { data: [{
+        info: {
+          id: "root-message",
+          role: "assistant",
+          time: { created: 1 },
+        },
+        parts: [{
+          id: "task-part",
+          type: "tool",
+          tool: "task",
+          state: {
+            status: "completed",
+            title: "Inspect files",
+            input: { description: "Inspect files", agent: "explore" },
+            metadata: { sessionId: "child-session" },
+          },
+        }],
+      }] };
+    });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      const snapshot = await provider.interactiveSnapshot?.("owned-session");
+      expect(fake.messageCalls).toEqual([
+        { sessionID: "owned-session", limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
+        { sessionID: "child-session", limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
+      ]);
+      expect(snapshot?.messages).toEqual([expect.objectContaining({
+        id: "root-message",
+        parts: [expect.objectContaining({
+          type: "subagent",
+          subagentId: "child-session",
+          subagentName: "Inspect files",
+          subagentRole: "explore",
+          subagentActions: [expect.objectContaining({
+            type: "text",
+            content: "Child finished",
+          })],
+          subagentActionCount: 0,
+        })],
+      })]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("projects and caches the live OpenCode model catalog with session metadata", async () => {
+    const fake = openCodeFake();
+    const providerList = mock(async () => ({
+      data: {
+        providers: [{
+          id: "anthropic",
+          name: "Anthropic",
+          models: {
+            "claude-sonnet": {
+              name: "Claude Sonnet",
+              variants: {
+                high: {},
+                disabled: { disabled: true },
+              },
+              limit: { context: 200_000 },
+              capabilities: { input: { image: true } },
+            },
+          },
+        }],
+        default: {
+          providerID: "anthropic",
+          modelID: "claude-sonnet",
+          variant: "high",
+        },
+      },
+    }));
+    Object.assign(fake.client as object, { provider: { list: providerList } });
+    fake.setSessionGetResponse("owned-session", {
+      data: {
+        id: "owned-session",
+        directory: "/workspace",
+        title: "Shared investigation",
+        share: { url: "https://share.opencode.test/live" },
+      },
+    });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      await expect(provider.modelCatalog?.()).resolves.toEqual([{
+        platform: "opencode",
+        id: "anthropic/claude-sonnet",
+        label: "Claude Sonnet",
+        providerLabel: "Anthropic",
+        reasoning: [
+          { id: "default", label: "Default" },
+          { id: "high", label: "High" },
+        ],
+        defaultReasoningId: "default",
+        supportsSpeed: false,
+        supportsMode: true,
+        contextWindow: 200_000,
+        supportsImageInput: true,
+      }]);
+      const snapshot = await provider.interactiveSnapshot?.("owned-session");
+      expect(snapshot).toMatchObject({
+        title: "Shared investigation",
+        shareUrl: "https://share.opencode.test/live",
+        composer: {
+          selectedModelId: "anthropic/claude-sonnet",
+          selectedReasoningId: "high",
+          models: [{
+            id: "anthropic/claude-sonnet",
+            contextWindow: 200_000,
+            supportsImageInput: true,
+          }],
+        },
+      });
+      await provider.modelCatalog?.();
+      expect(providerList).toHaveBeenCalledTimes(1);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("maps OpenCode status and prompt error envelopes", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);
@@ -4187,6 +4366,59 @@ describe("HTTP build pipeline provider (codex)", () => {
     // Claude answers status from /session/:id; codex has a dedicated route, and
     // asking the wrong one returns a body with no status at all.
     expect(requests[0]!.url).toBe("http://codex.test/session/codex-1/status");
+  });
+
+  test("projects Codex's authoritative session config in the interactive snapshot", async () => {
+    const { provider, requests } = httpProvider((url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      if (url.endsWith("/config")) {
+        return Response.json({
+          model: "gpt-5.6",
+          modelReasoningEffort: "high",
+          mode: "plan",
+          fastMode: true,
+          durable: true,
+        });
+      }
+      if (url.endsWith("/runtime-health")) {
+        return Response.json({
+          engine: { state: "ready", codexVersion: "0.145.0" },
+          mcp: { data: [{ name: "docs" }] },
+          skills: { data: [{ skills: [{ name: "review" }] }] },
+          hooks: { data: [{ hooks: [{ eventName: "preTurn" }] }] },
+          notices: [{ message: "Using fallback config" }],
+        });
+      }
+      return Response.json({
+        status: "idle",
+        phase: "idle",
+        engineGeneration: 2,
+        messageRevision: 7,
+      });
+    }, codexConnection);
+
+    await expect(provider.interactiveSnapshot?.("codex-1")).resolves.toMatchObject({
+      status: "idle",
+      controls: {
+        modelId: "gpt-5.6",
+        reasoningId: "high",
+        mode: "plan",
+        fastMode: true,
+      },
+      runtime: {
+        mcpServers: 1,
+        skills: 1,
+        hooks: 1,
+        state: "ready",
+        version: "0.145.0",
+      },
+    });
+    expect(requests.map((request) => request.url)).toEqual([
+      "http://codex.test/session/codex-1/status",
+      "http://codex.test/session/codex-1/messages",
+      "http://codex.test/session/codex-1/config",
+      "http://codex.test/session/codex-1/runtime-health",
+    ]);
   });
 
   test("sends codex attachments as data URLs without claude-only options", async () => {

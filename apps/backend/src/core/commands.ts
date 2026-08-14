@@ -186,11 +186,14 @@ import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import type {
   AgentModel,
   AgentReasoningOption,
+  NativeAgentControlUpdate,
+  NativeAgentSessionAction,
 } from "@orkestrator/protocol/native-agent";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import { isTabTeardownKind } from "@orkestrator/protocol/tab-teardown";
 import {
   nativeAgentSessionStorageKey,
+  type DispatchNativeAgentPromptInput,
   type NativeAgentService,
 } from "./native-agent-service.js";
 import type { LoopedReviewService } from "./looped-review-service.js";
@@ -1302,6 +1305,136 @@ function asNonBlankString(value: unknown, name: string): string {
   return normalized;
 }
 
+function asDispatchNativeAgentPromptInput(
+  args: JsonRecord,
+): DispatchNativeAgentPromptInput {
+  const agent = asString(args.agent, "agent") as import("./models.js").NativeAgentProvider;
+  return {
+    environmentId: asNonBlankString(args.environmentId, "environmentId"),
+    agent,
+    logicalSessionKey: asNonBlankString(
+      args.logicalSessionKey,
+      "logicalSessionKey",
+    ),
+    origin: asOptionalAgentInteractionOrigin(args.origin),
+    interactionPolicy: asOptionalAgentInteractionPolicy(args.interactionPolicy),
+    title: typeof args.title === "string" ? args.title : undefined,
+    model: typeof args.model === "string" ? args.model : undefined,
+    reasoningEffort:
+      typeof args.reasoningEffort === "string"
+        ? args.reasoningEffort
+        : undefined,
+    phase:
+      typeof args.phase === "string"
+        ? args.phase as import("@orkestrator/protocol/build-pipeline").PipelineSessionPhase
+        : undefined,
+    prompt: asNonBlankString(args.prompt, "prompt"),
+    requestId: asNonBlankString(args.requestId, "requestId"),
+    images: Array.isArray(args.images)
+      ? assertValidPromptImages(args.images)
+      : undefined,
+    attachments: Array.isArray(args.attachments)
+      ? assertValidPromptAttachments(args.attachments)
+      : undefined,
+    schema:
+      args.schema
+      && typeof args.schema === "object"
+      && !Array.isArray(args.schema)
+        ? args.schema as import("@orkestrator/protocol/structured-output").JsonSchema
+        : undefined,
+    // Cursor/Grok preserve the ACP session's current mode unless explicit.
+    mode: args.mode === "build"
+      ? "build"
+      : args.mode === "plan"
+        ? "plan"
+        : (agent === "cursor" || agent === "grok" ? undefined : "plan"),
+    fastMode: typeof args.fastMode === "boolean" ? args.fastMode : undefined,
+    subAgent: typeof args.subAgent === "string" ? args.subAgent : undefined,
+    executionAgent:
+      typeof args.executionAgent === "string" ? args.executionAgent : undefined,
+    includeLocalSettings:
+      typeof args.includeLocalSettings === "boolean"
+        ? args.includeLocalSettings
+        : undefined,
+    promptSuggestions:
+      typeof args.promptSuggestions === "boolean"
+        ? args.promptSuggestions
+        : undefined,
+  };
+}
+
+function asNativeAgentControlUpdate(
+  value: unknown,
+  name = "update",
+): NativeAgentControlUpdate {
+  const raw = asRecord(value, name);
+  const allowed = new Set([
+    "modelId", "reasoningId", "fastMode", "mode", "executionProfileId",
+    "includeLocalSettings", "promptSuggestions",
+  ]);
+  if (Object.keys(raw).some((key) => !allowed.has(key))) {
+    throw new Error("Native agent control update has unknown fields");
+  }
+  let mode: NativeAgentControlUpdate["mode"];
+  if (raw.mode !== undefined) {
+    if (raw.mode !== "build" && raw.mode !== "plan") {
+      throw new Error("Expected mode to be build or plan");
+    }
+    mode = raw.mode;
+  }
+  const update: NativeAgentControlUpdate = {
+    ...(raw.modelId === undefined
+      ? {} : { modelId: asNonBlankString(raw.modelId, "modelId") }),
+    ...(raw.reasoningId === undefined
+      ? {} : { reasoningId: asNonBlankString(raw.reasoningId, "reasoningId") }),
+    ...(raw.fastMode === undefined
+      ? {} : { fastMode: asRequiredBoolean(raw.fastMode, "fastMode") }),
+    ...(mode === undefined ? {} : { mode }),
+    ...(raw.executionProfileId === undefined
+      ? {} : { executionProfileId: raw.executionProfileId === null
+        ? null
+        : asNonBlankString(raw.executionProfileId, "executionProfileId") }),
+    ...(raw.includeLocalSettings === undefined
+      ? {} : { includeLocalSettings: asRequiredBoolean(raw.includeLocalSettings, "includeLocalSettings") }),
+    ...(raw.promptSuggestions === undefined
+      ? {} : { promptSuggestions: asRequiredBoolean(raw.promptSuggestions, "promptSuggestions") }),
+  };
+  if (Object.keys(update).length === 0) {
+    throw new Error("Native agent control update must not be empty");
+  }
+  return update;
+}
+
+function asNativeAgentSessionAction(value: unknown): NativeAgentSessionAction {
+  const raw = asRecord(value, "action");
+  const kind = asNonBlankString(raw.kind, "action.kind");
+  switch (kind) {
+    case "compact":
+      return { kind, ...(raw.modelId === undefined ? {} : { modelId: asNonBlankString(raw.modelId, "action.modelId") }) };
+    case "rewind-files":
+      return {
+        kind,
+        messageId: asNonBlankString(raw.messageId, "action.messageId"),
+        ...(raw.dryRun === undefined ? {} : { dryRun: asRequiredBoolean(raw.dryRun, "action.dryRun") }),
+      };
+    case "undo":
+      return { kind, ...(raw.messageId === undefined ? {} : { messageId: asNonBlankString(raw.messageId, "action.messageId") }) };
+    case "redo":
+    case "share":
+    case "unshare":
+    case "review":
+      return { kind };
+    case "steer":
+      return {
+        kind,
+        text: asNonBlankString(raw.text, "action.text"),
+        requestId: asNonBlankString(raw.requestId, "action.requestId"),
+      };
+    default:
+      throw new Error("Native agent session action is invalid");
+  }
+}
+
 function asOpenCodeModelVariants(value: unknown, name: string): string[] {
   if (!Array.isArray(value)) throw new Error(`Expected ${name} to be an array`);
   return value.map((variant, index) =>
@@ -1338,6 +1471,7 @@ function asOpenCodeModelCatalogEntry(
       "inputCost",
       "outputCost",
       "contextWindow",
+      "supportsImageInput",
     ],
     name,
   );
@@ -1362,6 +1496,11 @@ function asOpenCodeModelCatalogEntry(
             `${name}.contextWindow`,
           ),
         }),
+    ...(model.supportsImageInput === undefined
+      ? {}
+      : typeof model.supportsImageInput === "boolean"
+        ? { supportsImageInput: model.supportsImageInput }
+        : (() => { throw new Error(`Expected ${name}.supportsImageInput to be a boolean`); })()),
   };
 }
 
@@ -1389,9 +1528,9 @@ function asOpenCodeModelCatalog(value: unknown): OpenCodeModelCatalogEntry[] {
   value.forEach((candidate, index) => {
     try {
       const model = asOpenCodeModelCatalogEntry(candidate, `models[${index}]`);
-      if (model.provider === "opencode" || model.provider === "opencode-go") {
-        models.push(model);
-      }
+      // OpenCode provider IDs are upstream-defined (Anthropic, OpenRouter,
+      // local plugins, and others), not limited to the two first-party IDs.
+      models.push(model);
     } catch (error) {
       firstRejection ??= error instanceof Error ? error.message : String(error);
     }
@@ -9669,6 +9808,35 @@ export function createCommandRegistry(
     const codexModels = cache.codex?.models ?? [];
     const openCodeModels = (await storage.getOpenCodeModelCatalog(environment.projectId))
       ?.models ?? [];
+    const runningOpenCodeBridge = environment.environmentType === "local"
+      ? await peekLocalAgentBridge(environment.id, context, "opencode")
+      : environment.containerId
+        ? await peekContainerAgentBridge(environment.containerId, "opencode")
+        : null;
+    const liveOpenCodeModels = context.nativeAgents && runningOpenCodeBridge
+      ? await context.nativeAgents.listProjectionModels({
+          environmentId: id,
+          agent: "opencode",
+          logicalSessionKey: `model-catalog:${id}`,
+        }).catch(() => [])
+      : [];
+    if (liveOpenCodeModels.length > 0) {
+      await storage.cacheOpenCodeModelCatalog(
+        environment.projectId,
+        liveOpenCodeModels.map((model) => ({
+          id: model.id,
+          name: model.label,
+          provider: model.id.split("/")[0] || "opencode",
+          variants: model.reasoning
+            ?.map((option) => option.id)
+            .filter((id) => id !== "default"),
+          ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+          ...(typeof model.supportsImageInput === "boolean"
+            ? { supportsImageInput: model.supportsImageInput }
+            : {}),
+        })),
+      ).catch(() => undefined);
+    }
     const [cursorModels, grokModels] = await Promise.all([
       fetchAcpNormalizedModels(environment, context, "cursor"),
       fetchAcpNormalizedModels(environment, context, "grok"),
@@ -9717,9 +9885,7 @@ export function createCommandRegistry(
         supportsSpeed: true,
         supportsMode: true,
       })),
-      ...openCodeModels.flatMap((model): AgentModel[] => {
-        if (model.provider !== "opencode" && model.provider !== "opencode-go") return [];
-        return [{
+      ...(liveOpenCodeModels.length > 0 ? liveOpenCodeModels : openCodeModels.map((model): AgentModel => ({
           platform: "opencode",
           id: model.id,
           label: model.name,
@@ -9731,8 +9897,11 @@ export function createCommandRegistry(
           defaultReasoningId: "default",
           supportsSpeed: false,
           supportsMode: true,
-        }];
-      }),
+          ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+          ...(typeof model.supportsImageInput === "boolean"
+            ? { supportsImageInput: model.supportsImageInput }
+            : {}),
+        }))),
       ...(cursorModels.length > 0 ? cursorModels : cache.cursor?.models ?? []),
       ...(grokModels.length > 0 ? grokModels : cache.grok?.models ?? []),
     ];
@@ -10822,13 +10991,7 @@ export function createCommandRegistry(
     assertOnlyKeys(args, ["projectId"], "arguments");
     return storage.getOpenCodeModelCatalog(
       asNonBlankString(args.projectId, "projectId"),
-    ).then((snapshot) => {
-      if (!snapshot) return null;
-      const models = snapshot.models.filter(
-        (model) => model.provider === "opencode" || model.provider === "opencode-go",
-      );
-      return models.length > 0 ? { ...snapshot, models } : null;
-    });
+    );
   });
   register("cache_opencode_model_catalog", (args, { storage }) => {
     assertOnlyKeys(args, ["projectId", "models"], "arguments");
@@ -11479,63 +11642,18 @@ export function createCommandRegistry(
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
-    const agent = asString(args.agent, "agent") as import("./models.js").NativeAgentProvider;
-    return context.nativeAgents.dispatchPrompt({
-      environmentId: asNonBlankString(args.environmentId, "environmentId"),
-      agent,
-      logicalSessionKey: asNonBlankString(
-        args.logicalSessionKey,
-        "logicalSessionKey",
-      ),
-      origin: asOptionalAgentInteractionOrigin(args.origin),
-      interactionPolicy: asOptionalAgentInteractionPolicy(args.interactionPolicy),
-      title: typeof args.title === "string" ? args.title : undefined,
-      model: typeof args.model === "string" ? args.model : undefined,
-      reasoningEffort:
-        typeof args.reasoningEffort === "string"
-          ? args.reasoningEffort
-          : undefined,
-      phase:
-        typeof args.phase === "string"
-          ? args.phase as import("@orkestrator/protocol/build-pipeline").PipelineSessionPhase
-          : undefined,
-      prompt: asNonBlankString(args.prompt, "prompt"),
-      requestId: asNonBlankString(args.requestId, "requestId"),
-      // Validated rather than cast: a malformed element used to surface as a
-      // TypeError deep inside the provider, which the drain path then treated as
-      // a retryable fault and re-attempted forever.
-      images: Array.isArray(args.images)
-        ? assertValidPromptImages(args.images)
-        : undefined,
-      attachments: Array.isArray(args.attachments)
-        ? assertValidPromptAttachments(args.attachments)
-        : undefined,
-      schema:
-        args.schema
-        && typeof args.schema === "object"
-        && !Array.isArray(args.schema)
-          ? args.schema as import("@orkestrator/protocol/structured-output").JsonSchema
-          : undefined,
-      // Claude/Codex/OpenCode: absent means plan, because an unset mode
-      // otherwise resolves to bypassPermissions at those bridges. Cursor/Grok
-      // keep the ACP session's current mode unless the caller is explicit —
-      // defaulting them to plan would rewrite every prompt onto Plan.
-      mode: args.mode === "build"
-        ? "build"
-        : args.mode === "plan"
-          ? "plan"
-          : (agent === "cursor" || agent === "grok" ? undefined : "plan"),
-      fastMode: typeof args.fastMode === "boolean" ? args.fastMode : undefined,
-      subAgent: typeof args.subAgent === "string" ? args.subAgent : undefined,
-      includeLocalSettings:
-        typeof args.includeLocalSettings === "boolean"
-          ? args.includeLocalSettings
-          : undefined,
-      promptSuggestions:
-        typeof args.promptSuggestions === "boolean"
-          ? args.promptSuggestions
-          : undefined,
-    });
+    return context.nativeAgents.dispatchPrompt(
+      asDispatchNativeAgentPromptInput(args),
+    );
+  });
+
+  register("dispatch_native_agent_intent", async (args, context) => {
+    if (!context.nativeAgents) {
+      throw new Error("Native agent service is unavailable");
+    }
+    return context.nativeAgents.dispatchIntent(
+      asDispatchNativeAgentPromptInput(args),
+    );
   });
 
   register("get_native_agent_session", async (args, context) => {
@@ -11561,39 +11679,127 @@ export function createCommandRegistry(
     return session;
   });
 
-  register("claim_opencode_manual_prompt", async (args, context) => {
+  register("get_native_agent_projection", async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
-    await context.nativeAgents.claimOpenCodeManualPrompt({
+    return context.nativeAgents.getProjection({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
       logicalSessionKey: asNonBlankString(
         args.logicalSessionKey,
         "logicalSessionKey",
       ),
-      providerSessionId: asNonBlankString(
-        args.providerSessionId,
-        "providerSessionId",
-      ),
-      requestId: asNonBlankString(args.requestId, "requestId"),
     });
   });
 
-  register("release_opencode_manual_prompt", (args, context) => {
+  register("stop_native_agent_session", async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
-    context.nativeAgents.releaseOpenCodeManualPrompt({
+    return context.nativeAgents.stopProjectionSession({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
       logicalSessionKey: asNonBlankString(
         args.logicalSessionKey,
         "logicalSessionKey",
       ),
-      providerSessionId: asNonBlankString(
-        args.providerSessionId,
-        "providerSessionId",
+    });
+  });
+
+  register("stop_native_agent_background_task", async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    return context.nativeAgents.stopProjectionBackgroundTask({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+      taskId: asNonBlankString(args.taskId, "taskId"),
+    });
+  });
+
+  register("dismiss_native_agent_suggested_prompt", async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    return context.nativeAgents.dismissProjectionSuggestedPrompt({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+    });
+  });
+
+  register("list_native_agent_resumable_sessions", async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    return context.nativeAgents.listProjectionResumableSessions({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+    });
+  });
+
+  register("resume_native_agent_session", async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    return context.nativeAgents.resumeProjectionSession({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+      providerSessionId: asNonBlankString(args.providerSessionId, "providerSessionId"),
+      controls: args.controls === undefined
+        ? undefined
+        : asNativeAgentControlUpdate(args.controls, "controls"),
+    });
+  });
+
+  register("fork_native_agent_session", async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    return context.nativeAgents.forkProjectionSession({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+      messageId: args.messageId === undefined
+        ? undefined
+        : asNonBlankString(args.messageId, "messageId"),
+    });
+  });
+
+  register("update_native_agent_controls", async (args, context) => {
+    if (!context.nativeAgents) {
+      throw new Error("Native agent service is unavailable");
+    }
+    const update = asNativeAgentControlUpdate(args.update);
+    return context.nativeAgents.updateProjectionControls({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(
+        args.logicalSessionKey,
+        "logicalSessionKey",
       ),
-      requestId: asNonBlankString(args.requestId, "requestId"),
+      update,
+    });
+  });
+
+  register("perform_native_agent_session_action", async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    return context.nativeAgents.performProjectionAction({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+      action: asNativeAgentSessionAction(args.action),
+    });
+  });
+
+  register("resolve_native_agent_interaction", async (args, context) => {
+    if (!context.nativeAgents) {
+      throw new Error("Native agent service is unavailable");
+    }
+    const resolution = asRecord(args.resolution, "resolution");
+    return context.nativeAgents.resolveProjectionInteraction({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(
+        args.logicalSessionKey,
+        "logicalSessionKey",
+      ),
+      interactionId: asNonBlankString(args.interactionId, "interactionId"),
+      resolution: resolution as unknown as import("@orkestrator/protocol/agent-interactions").AgentInteractionResolution,
     });
   });
 

@@ -118,6 +118,7 @@ export type AgentInteractionState = (typeof AGENT_INTERACTION_STATES)[number];
 
 export const AGENT_INTERACTION_RESOLUTION_ACTIONS = [
   "answer",
+  "approve-for-session",
   "decline",
   "deny",
   "cancel",
@@ -164,6 +165,10 @@ export interface AgentInteractionPresentation {
   url?: string;
   confirmLabel?: string;
   declineLabel?: string;
+  /** Fail closed when an authorization request lacks enough detail to approve. */
+  confirmDisabled?: boolean;
+  /** Optional broader authorization supported by the provider. */
+  approveForSessionLabel?: string;
 }
 
 export interface AgentInteractionRequest {
@@ -209,6 +214,8 @@ export interface AgentInteractionResolution {
   sessionId: string;
   action: AgentInteractionResolutionAction;
   answer?: AgentInteractionAnswer;
+  /** Optional live-only plan revision feedback; never written to summaries. */
+  feedback?: string;
   resolvedAt: number;
 }
 
@@ -395,6 +402,7 @@ const REQUEST_KEYS = new Set([
 ]);
 const PRESENTATION_KEYS = new Set([
   "title", "body", "questions", "url", "confirmLabel", "declineLabel",
+  "confirmDisabled", "approveForSessionLabel",
 ]);
 const QUESTION_KEYS = new Set([
   "id", "prompt", "description", "required", "multiple", "secret",
@@ -406,7 +414,7 @@ const ANSWER_KEYS = new Set([
 ]);
 const QUESTION_ANSWER_KEYS = new Set(["questionId", "optionIds", "freeText"]);
 const RESOLUTION_KEYS = new Set([
-  "version", "interactionId", "sessionId", "action", "answer", "resolvedAt",
+  "version", "interactionId", "sessionId", "action", "answer", "feedback", "resolvedAt",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -471,7 +479,8 @@ function presentationTextLength(
     + (presentation.body?.length ?? 0)
     + (presentation.url?.length ?? 0)
     + (presentation.confirmLabel?.length ?? 0)
-    + (presentation.declineLabel?.length ?? 0);
+    + (presentation.declineLabel?.length ?? 0)
+    + (presentation.approveForSessionLabel?.length ?? 0);
   for (const question of presentation.questions) {
     total += question.id.length
       + question.prompt.length
@@ -553,6 +562,8 @@ function isPresentation(
     || !isOptionalBoundedString(value.url)
     || !isOptionalBoundedString(value.confirmLabel)
     || !isOptionalBoundedString(value.declineLabel)
+    || (value.confirmDisabled !== undefined && typeof value.confirmDisabled !== "boolean")
+    || !isOptionalBoundedString(value.approveForSessionLabel)
     || !Array.isArray(value.questions)
     || value.questions.length > AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest
     || !value.questions.every(isQuestion)
@@ -712,8 +723,16 @@ export function isAgentInteractionResolution(
     return false;
   }
   if (value.action === "answer") {
-    return isAnswerForValidatedRequest(value.answer, request)
+    return value.feedback === undefined
+      && isAnswerForValidatedRequest(value.answer, request)
       && isWithinSerializedLimit(value);
+  }
+  if (value.feedback !== undefined) {
+    if (
+      request.kind !== "plan-approval"
+      || (value.action !== "decline" && value.action !== "deny")
+      || !isBoundedString(value.feedback)
+    ) return false;
   }
   return value.answer === undefined && isWithinSerializedLimit(value);
 }

@@ -19,9 +19,25 @@ import {
   UNATTENDED_AGENT_INTERACTION_POLICY,
   isAgentInteractionPolicy,
   type AgentInteractionKind,
+  type AgentInteractionApplyOutcome,
   type AgentInteractionOrigin,
   type AgentInteractionPolicy,
+  type AgentInteractionResolution,
 } from "@orkestrator/protocol/agent-interactions";
+import type {
+  AgentModel,
+  NativeAgentCapabilities,
+  NativeAgentComposerControl,
+  NativeAgentComposerState,
+  NativeAgentControlUpdate,
+  NativeAgentDispatchOutcome,
+  NativeAgentForkOutcome,
+  NativeAgentResumeEntry,
+  NativeAgentSessionProjection,
+  NativeAgentSessionAction,
+  NativeAgentSessionActionOutcome,
+  NativeAgentSlashCommand,
+} from "@orkestrator/protocol/native-agent";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import type {
   Environment,
@@ -30,11 +46,12 @@ import type {
 } from "./models.js";
 import type { StorageService } from "./storage.js";
 import {
+  AmbiguousPromptDispatchError,
   createBuildPipelineProvider,
   PromptRejectedError,
   ProviderUnavailableError,
   type BridgeConnection,
-  type BuildPipelineProvider,
+  type NativeAgentRuntimeProvider,
   type ProviderInteractionObservationEvent,
   type ProviderExecutionMode,
 } from "./build-pipeline-provider.js";
@@ -110,6 +127,32 @@ export interface AdoptNativeAgentSessionInput
   expectedProviderSessionId?: string;
 }
 
+export interface NativeAgentProjectionInput {
+  environmentId: string;
+  agent: BuildPipelineAgent;
+  logicalSessionKey: string;
+}
+
+function controlsFromSessionInput(
+  input: EnsureNativeAgentSessionInput,
+): NativeAgentControlUpdate | undefined {
+  const controls: NativeAgentControlUpdate = {
+    ...(input.model ? { modelId: input.model } : {}),
+    ...(input.reasoningEffort ? { reasoningId: input.reasoningEffort } : {}),
+    ...(typeof input.fastMode === "boolean" ? { fastMode: input.fastMode } : {}),
+    ...(input.sessionMode ? { mode: input.sessionMode } : {}),
+  };
+  return Object.keys(controls).length > 0 ? controls : undefined;
+}
+
+type NativeAgentProjectionCacheEntry = {
+  input: NativeAgentProjectionInput;
+  projection: NativeAgentSessionProjection;
+  fingerprint: string;
+  generation: string;
+  nextRefreshAt: number;
+};
+
 function isValidInteractionMetadata(input: {
   origin?: AgentInteractionOrigin;
   interactionPolicy?: AgentInteractionPolicy;
@@ -159,7 +202,7 @@ export interface NativeAgentServiceOptions {
   provider?: (
     input: EnsureNativeAgentSessionInput,
     environment: Environment,
-  ) => Promise<BuildPipelineProvider>;
+  ) => Promise<NativeAgentRuntimeProvider>;
   /**
    * Clock for the activity sweep's backoff. Injectable so a test can prove the
    * retry schedule without sleeping through a 60-second ceiling.
@@ -213,6 +256,165 @@ const INTERACTION_MONITOR_DEFAULT_CONCURRENCY = 4;
 const INTERACTION_MONITOR_DEFAULT_PER_ENVIRONMENT = 8;
 const INTERACTION_MONITOR_DEFAULT_MAX_RETRIES = 5;
 const INTERACTION_MONITOR_DEFAULT_RETRY_BASE_MS = 1_000;
+const NATIVE_PROJECTION_CACHE_LIMIT = 1_024;
+const NATIVE_PROJECTION_ACTIVE_REFRESH_MS = 350;
+const NATIVE_PROJECTION_IDLE_REFRESH_MS = 1_500;
+const NATIVE_PROJECTION_MAX_MESSAGES = 512;
+const NATIVE_PROJECTION_MAX_BYTES = 8 * 1024 * 1024;
+const NATIVE_MODEL_CATALOG_TTL_MS = 30_000;
+const NATIVE_MODEL_CATALOG_CACHE_LIMIT = 128;
+const NATIVE_SLASH_COMMAND_TTL_MS = 30_000;
+const NATIVE_SLASH_COMMAND_CACHE_LIMIT = 256;
+
+const RICH_NATIVE_CAPABILITIES: NativeAgentCapabilities = Object.freeze({
+  attachments: { files: true, images: true },
+  queue: true,
+  resume: true,
+  fork: true,
+  slashCommands: true,
+  backgroundTasks: false,
+  composer: {
+    provider: true,
+    model: true,
+    reasoning: true,
+    speed: true,
+    mode: true,
+    executionProfile: false,
+    localSettings: false,
+    promptSuggestions: false,
+  },
+  actions: { compact: true },
+});
+
+function nativeCapabilities(agent: BuildPipelineAgent): NativeAgentCapabilities {
+  if (agent === "cursor" || agent === "grok") {
+    return {
+      attachments: { files: false, images: false },
+      queue: false,
+      resume: false,
+      fork: false,
+      slashCommands: false,
+      backgroundTasks: false,
+      composer: { ...RICH_NATIVE_CAPABILITIES.composer },
+      actions: {},
+    };
+  }
+  if (agent === "claude") {
+    return {
+      ...RICH_NATIVE_CAPABILITIES,
+      backgroundTasks: true,
+      composer: {
+        ...RICH_NATIVE_CAPABILITIES.composer,
+        executionProfile: true,
+        localSettings: true,
+        promptSuggestions: true,
+      },
+      actions: { compact: true, rewindFiles: true },
+    };
+  }
+  if (agent === "opencode") {
+    return {
+      ...RICH_NATIVE_CAPABILITIES,
+      composer: {
+        ...RICH_NATIVE_CAPABILITIES.composer,
+        speed: false,
+        executionProfile: true,
+      },
+      actions: { compact: true, undo: true, redo: true, share: true },
+    };
+  }
+  return {
+    ...RICH_NATIVE_CAPABILITIES,
+    actions: { compact: true, steer: true, review: true },
+  };
+}
+
+function nativeComposerControls(
+  composer: NativeAgentComposerState | undefined,
+  disabled: boolean,
+): NativeAgentComposerControl[] {
+  if (!composer) return [];
+  const selectedModel = composer.models.find(
+    (model) => model.id === composer.selectedModelId,
+  ) ?? composer.models[0];
+  const controls: NativeAgentComposerControl[] = [];
+  if (composer.models.length > 0) {
+    controls.push({
+      kind: "select",
+      id: "model",
+      label: "Model",
+      value: selectedModel?.id,
+      options: composer.models.map((model) => ({ id: model.id, label: model.label })),
+      disabled,
+    });
+  }
+  if ((selectedModel?.reasoning?.length ?? 0) > 0) {
+    controls.push({
+      kind: "select",
+      id: "reasoning",
+      label: "Reasoning",
+      value: composer.selectedReasoningId ?? selectedModel?.defaultReasoningId,
+      options: selectedModel!.reasoning!.map((option) => ({
+        id: option.id,
+        label: option.label,
+        description: option.description,
+      })),
+      disabled,
+    });
+  }
+  if (composer.fastModeAvailable && composer.fastModeEnabled !== null) {
+    controls.push({
+      kind: "toggle",
+      id: "speed",
+      label: "Fast mode",
+      value: composer.fastModeEnabled,
+      disabled,
+    });
+  }
+  if (composer.modes.length > 0) {
+    controls.push({
+      kind: "segmented",
+      id: "mode",
+      label: "Mode",
+      value: composer.selectedModeId,
+      options: composer.modes,
+      disabled,
+    });
+  }
+  if ((composer.executionProfiles?.length ?? 0) > 0) {
+    controls.push({
+      kind: "select",
+      id: "execution-profile",
+      label: "Execution profile",
+      value: composer.selectedExecutionProfileId,
+      options: composer.executionProfiles!.map((profile) => ({
+        id: profile.id,
+        label: profile.label,
+        description: profile.description,
+      })),
+      disabled,
+    });
+  }
+  if (typeof composer.includeLocalSettings === "boolean") {
+    controls.push({
+      kind: "toggle",
+      id: "local-settings",
+      label: "Include local Claude settings",
+      value: composer.includeLocalSettings,
+      disabled,
+    });
+  }
+  if (typeof composer.promptSuggestionsEnabled === "boolean") {
+    controls.push({
+      kind: "toggle",
+      id: "prompt-suggestions",
+      label: "Suggest a follow-up after each turn",
+      value: composer.promptSuggestionsEnabled,
+      disabled,
+    });
+  }
+  return controls;
+}
 
 function nonBlank(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -283,12 +485,25 @@ type PromptDispatchPreparation =
  * of idempotency at their bridges.
  */
 export class NativeAgentService {
-  private readonly providers = new Map<string, BuildPipelineProvider>();
+  private readonly providers = new Map<string, NativeAgentRuntimeProvider>();
   /**
    * Identity of the live bridge generation behind each production provider.
    * Ports and bearer credentials both change when a bridge is replaced.
    */
   private readonly providerConnections = new Map<string, string>();
+  /** Bounded, reconstructible view cache; providers remain authoritative. */
+  private readonly projectionCache = new Map<
+    string,
+    NativeAgentProjectionCacheEntry
+  >();
+  private readonly modelCatalogCache = new Map<
+    string,
+    { models: AgentModel[]; expiresAt: number }
+  >();
+  private readonly slashCommandCache = new Map<
+    string,
+    { commands: NativeAgentSlashCommand[]; expiresAt: number }
+  >();
   private readonly launchTasks = new Map<string, Promise<void>>();
   private readonly launchRetryAt = new Map<string, number>();
   private readonly queueTasks = new Map<string, Promise<void>>();
@@ -355,6 +570,8 @@ export class NativeAgentService {
   private interactionRevisionReconciliations = 0;
   private interactionMonitorAdoptionEnabled = true;
   private launchTimer: ReturnType<typeof setInterval> | null = null;
+  private projectionTimer: ReturnType<typeof setInterval> | null = null;
+  private projectionScan: Promise<void> | null = null;
   private interactionTimer: ReturnType<typeof setInterval> | null = null;
   private initialization: Promise<void> | null = null;
   private stopped = false;
@@ -395,6 +612,15 @@ export class NativeAgentService {
       void this.trackScan(this.drainPromptQueues()).catch(() => undefined);
     }, 2_000);
     this.launchTimer.unref?.();
+    this.projectionTimer = setInterval(() => {
+      if (this.stopped || this.projectionScan) return;
+      const scan = this.reconcileProjectionCache().finally(() => {
+        if (this.projectionScan === scan) this.projectionScan = null;
+      });
+      this.projectionScan = scan;
+      void scan.catch(() => undefined);
+    }, NATIVE_PROJECTION_ACTIVE_REFRESH_MS);
+    this.projectionTimer.unref?.();
     if (this.options.interactionMonitorMode === "observe-only") {
       await this.reconcileAgentInteractions().catch(() => undefined);
       if (this.stopped) return;
@@ -456,6 +682,7 @@ export class NativeAgentService {
             logicalSessionKey: input.logicalSessionKey,
             origin: input.origin,
             interactionPolicy: input.interactionPolicy,
+            controls: controlsFromSessionInput(input),
           },
           () => this.createProviderSession(provider, input),
         ),
@@ -509,10 +736,756 @@ export class NativeAgentService {
       providerSessionId: input.providerSessionId,
       origin: input.origin,
       interactionPolicy: input.interactionPolicy,
+      controls: controlsFromSessionInput(input),
       expectedProviderSessionId: input.expectedProviderSessionId,
     });
     void this.reconcileAgentInteractions().catch(() => undefined);
     return session;
+  }
+
+  async getProjection(
+    input: NativeAgentProjectionInput,
+  ): Promise<NativeAgentSessionProjection | null> {
+    this.assertProjectionInput(input);
+    return this.refreshProjection(input, true);
+  }
+
+  async listProjectionModels(
+    input: NativeAgentProjectionInput,
+  ): Promise<AgentModel[]> {
+    this.assertProjectionInput(input);
+    const provider = await this.provider(input);
+    return provider.modelCatalog
+      ? (await provider.modelCatalog()).slice(0, 512)
+      : [];
+  }
+
+  async dispatchIntent(
+    input: DispatchNativeAgentPromptInput,
+  ): Promise<NativeAgentDispatchOutcome> {
+    let manualOpenCodeSession: PersistedNativeAgentSession | null = null;
+    try {
+      const isManualOpenCode = input.agent === "opencode"
+        && input.origin !== "build-pipeline"
+        && input.origin !== "looped-review";
+      if (isManualOpenCode) {
+        manualOpenCodeSession = await this.ensureSession(input);
+        await this.claimOpenCodeManualPrompt({
+          environmentId: input.environmentId,
+          logicalSessionKey: input.logicalSessionKey,
+          providerSessionId: manualOpenCodeSession.providerSessionId,
+          requestId: input.requestId,
+        });
+      }
+      await this.dispatchPromptInternal(input);
+      void this.refreshProjection(input, true).catch(() => undefined);
+      return { outcome: "accepted", requestId: input.requestId };
+    } catch (error) {
+      if (error instanceof AmbiguousPromptDispatchError) {
+        void this.refreshProjection(input, true).catch(() => undefined);
+        return {
+          outcome: "unknown",
+          requestId: input.requestId,
+          error: error.message,
+        };
+      }
+      return {
+        outcome: "rejected",
+        error: error instanceof Error ? error.message : "Prompt dispatch failed",
+      };
+    } finally {
+      if (manualOpenCodeSession) {
+        this.releaseOpenCodeManualPrompt({
+          environmentId: input.environmentId,
+          logicalSessionKey: input.logicalSessionKey,
+          providerSessionId: manualOpenCodeSession.providerSessionId,
+          requestId: input.requestId,
+        });
+      }
+    }
+  }
+
+  async stopProjectionSession(
+    input: NativeAgentProjectionInput,
+  ): Promise<NativeAgentSessionProjection | null> {
+    const resolved = await this.resolveProjectionSession(input);
+    if (!resolved) return null;
+    await resolved.provider.abort(resolved.session.providerSessionId);
+    return this.refreshProjection(input, true);
+  }
+
+  async stopProjectionBackgroundTask(
+    input: NativeAgentProjectionInput & { taskId: string },
+  ): Promise<NativeAgentSessionProjection | null> {
+    if (!nonBlank(input.taskId)) throw new Error("Background task ID must not be blank");
+    const resolved = await this.resolveProjectionSession(input);
+    if (!resolved) return null;
+    if (!resolved.provider.stopBackgroundTask) {
+      throw new Error(`${input.agent} does not support background tasks`);
+    }
+    await resolved.provider.stopBackgroundTask(
+      resolved.session.providerSessionId,
+      input.taskId,
+    );
+    return this.refreshProjection(input, true);
+  }
+
+  async dismissProjectionSuggestedPrompt(
+    input: NativeAgentProjectionInput,
+  ): Promise<NativeAgentSessionProjection | null> {
+    const resolved = await this.resolveProjectionSession(input);
+    if (!resolved) return null;
+    if (!resolved.provider.dismissSuggestedPrompt) {
+      throw new Error(`${input.agent} does not support prompt suggestions`);
+    }
+    await resolved.provider.dismissSuggestedPrompt(
+      resolved.session.providerSessionId,
+    );
+    return this.refreshProjection(input, true);
+  }
+
+  async listProjectionResumableSessions(
+    input: NativeAgentProjectionInput,
+  ): Promise<NativeAgentResumeEntry[]> {
+    this.assertProjectionInput(input);
+    if (!nativeCapabilities(input.agent).resume) return [];
+    const provider = await this.provider(input);
+    if (!provider.listResumableSessions) {
+      throw new Error(`${input.agent} does not support session resume`);
+    }
+    return (await provider.listResumableSessions()).slice(0, 512);
+  }
+
+  async resumeProjectionSession(
+    input: NativeAgentProjectionInput & {
+      providerSessionId: string;
+      controls?: NativeAgentControlUpdate;
+    },
+  ): Promise<NativeAgentSessionProjection | null> {
+    this.assertProjectionInput(input);
+    if (!nonBlank(input.providerSessionId)) {
+      throw new Error("Native agent resume session ID must not be blank");
+    }
+    if (!nativeCapabilities(input.agent).resume) {
+      throw new Error(`${input.agent} does not support session resume`);
+    }
+    const provider = await this.provider(input);
+    if (!provider.resumeSession) {
+      throw new Error(`${input.agent} does not support session resume`);
+    }
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const existing = await this.storage.getNativeAgentSession(key);
+    const resumedId = await provider.resumeSession(
+      input.providerSessionId,
+      input.controls,
+    );
+    await this.adoptSession({
+      ...input,
+      providerSessionId: resumedId,
+      expectedProviderSessionId: existing?.providerSessionId,
+      model: input.controls?.modelId,
+      reasoningEffort: input.controls?.reasoningId,
+      sessionMode: input.controls?.mode,
+      fastMode: input.controls?.fastMode,
+    });
+    this.projectionCache.delete(key);
+    return this.refreshProjection(input, true);
+  }
+
+  async forkProjectionSession(
+    input: NativeAgentProjectionInput & { messageId?: string },
+  ): Promise<NativeAgentForkOutcome> {
+    if (!nativeCapabilities(input.agent).fork) {
+      throw new Error(`${input.agent} does not support session forks`);
+    }
+    const resolved = await this.resolveProjectionSession(input);
+    if (!resolved) throw new Error("Native agent session was not found");
+    if (!resolved.provider.forkSession) {
+      throw new Error(`${input.agent} does not support session forks`);
+    }
+    return resolved.provider.forkSession(
+      resolved.session.providerSessionId,
+      input.messageId,
+    );
+  }
+
+  async performProjectionAction(
+    input: NativeAgentProjectionInput & { action: NativeAgentSessionAction },
+  ): Promise<NativeAgentSessionActionOutcome> {
+    const resolved = await this.resolveProjectionSession(input);
+    if (!resolved) throw new Error("Native agent session was not found");
+    const capability = {
+      compact: "compact",
+      "rewind-files": "rewindFiles",
+      undo: "undo",
+      redo: "redo",
+      share: "share",
+      unshare: "share",
+      steer: "steer",
+      review: "review",
+    }[input.action.kind] as keyof NonNullable<NativeAgentCapabilities["actions"]>;
+    if (!nativeCapabilities(input.agent).actions?.[capability]) {
+      throw new Error(`${input.agent} does not support ${input.action.kind}`);
+    }
+    if (!resolved.provider.performSessionAction) {
+      throw new Error(`${input.agent} does not support ${input.action.kind}`);
+    }
+    const outcome = await resolved.provider.performSessionAction(
+      resolved.session.providerSessionId,
+      input.action,
+    );
+    this.projectionCache.delete(resolved.key);
+    return outcome;
+  }
+
+  async updateProjectionControls(
+    input: NativeAgentProjectionInput & { update: NativeAgentControlUpdate },
+  ): Promise<NativeAgentSessionProjection | null> {
+    const resolved = await this.resolveProjectionSession(input);
+    if (!resolved) return null;
+    const current = await this.refreshProjection(input, true);
+    const composer = current?.composer;
+    if (input.update.modelId !== undefined) {
+      if (!composer?.models.some((model) => model.id === input.update.modelId)) {
+        throw new Error("Native agent model selection is invalid");
+      }
+    }
+    if (input.update.reasoningId !== undefined) {
+      const modelId = input.update.modelId ?? composer?.selectedModelId;
+      const model = composer?.models.find((candidate) => candidate.id === modelId);
+      if (!model?.reasoning?.some((option) => option.id === input.update.reasoningId)) {
+        throw new Error("Native agent reasoning selection is invalid");
+      }
+    }
+    if (
+      input.update.fastMode !== undefined
+      && composer?.fastModeAvailable !== true
+    ) {
+      throw new Error("Native agent fast mode is unavailable");
+    }
+    if (
+      input.update.mode !== undefined
+      && !composer?.modes.some((mode) => mode.id === input.update.mode)
+    ) {
+      throw new Error("Native agent conversation mode is invalid");
+    }
+    if (
+      input.update.executionProfileId !== undefined
+      && input.update.executionProfileId !== null
+      && !composer?.executionProfiles?.some(
+        (profile) => profile.id === input.update.executionProfileId,
+      )
+    ) {
+      throw new Error("Native agent execution profile is invalid");
+    }
+    const capabilities = nativeCapabilities(input.agent).composer;
+    if (input.update.includeLocalSettings !== undefined && !capabilities.localSettings) {
+      throw new Error("Native agent local settings are unavailable");
+    }
+    if (input.update.promptSuggestions !== undefined && !capabilities.promptSuggestions) {
+      throw new Error("Native agent prompt suggestions are unavailable");
+    }
+    if (resolved.provider.updateInteractiveControls) {
+      await resolved.provider.updateInteractiveControls(
+        resolved.session.providerSessionId,
+        input.update,
+      );
+    }
+    await this.storage.updateNativeAgentSessionControls(
+      resolved.key,
+      resolved.session.providerSessionId,
+      input.update,
+    );
+    return this.refreshProjection(input, true);
+  }
+
+  async resolveProjectionInteraction(
+    input: NativeAgentProjectionInput & {
+      interactionId: string;
+      resolution: AgentInteractionResolution;
+    },
+  ): Promise<AgentInteractionApplyOutcome> {
+    if (!nonBlank(input.interactionId)) {
+      throw new Error("Native agent interaction ID must not be blank");
+    }
+    const resolved = await this.resolveProjectionSession(input);
+    if (!resolved) {
+      throw new Error("Native agent session was not found");
+    }
+    if (!resolved.provider.interactions) {
+      throw new Error(`${input.agent} does not support interactive requests`);
+    }
+    const outcome = await resolved.provider.interactions.resolveInteraction(
+      resolved.session.providerSessionId,
+      input.interactionId,
+      input.resolution,
+    );
+    void this.refreshProjection(input, true).catch(() => undefined);
+    return outcome;
+  }
+
+  private assertProjectionInput(input: NativeAgentProjectionInput): void {
+    this.assertAcceptingWork();
+    if (
+      !nonBlank(input.environmentId)
+      || !nonBlank(input.logicalSessionKey)
+      || !BUILD_PIPELINE_AGENTS.includes(input.agent)
+    ) {
+      throw new Error("Invalid native agent projection request");
+    }
+  }
+
+  private async resolveProjectionSession(input: NativeAgentProjectionInput) {
+    this.assertProjectionInput(input);
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const session = await this.storage.getNativeAgentSession(key);
+    if (!session) return null;
+    this.assertSessionIdentity(session, input, key);
+    const provider = await this.provider(input);
+    provider.registerSession?.(session.providerSessionId, {
+      origin: session.origin,
+      interactionPolicy: session.interactionPolicy,
+    });
+    return { key, session, provider };
+  }
+
+  private projectionMessages(messages: unknown[]): unknown[] {
+    const bounded = messages.slice(-NATIVE_PROJECTION_MAX_MESSAGES).map((raw) => {
+      const message = raw && typeof raw === "object" && !Array.isArray(raw)
+        ? raw as Record<string, unknown>
+        : null;
+      const role = message?.role;
+      if (
+        !message
+        || typeof message.id !== "string"
+        || (role !== "user" && role !== "assistant" && role !== "system")
+        || typeof message.content !== "string"
+        || !Array.isArray(message.parts)
+        || typeof message.createdAt !== "string"
+      ) {
+        throw new ProviderUnavailableError(
+          "Provider returned a non-normalized native transcript",
+        );
+      }
+      return {
+        id: message.id,
+        role,
+        content: message.content,
+        parts: message.parts,
+        createdAt: message.createdAt,
+        ...(typeof message.modelId === "string" ? { modelId: message.modelId } : {}),
+        ...(typeof message.turnId === "string" ? { turnId: message.turnId } : {}),
+        ...(typeof message.planReview === "boolean" ? { planReview: message.planReview } : {}),
+      };
+    });
+    let bytes = Number.POSITIVE_INFINITY;
+    try {
+      bytes = Buffer.byteLength(JSON.stringify(bounded));
+    } catch {
+      // The normalized provider contract is JSON. Non-serializable messages
+      // are a transport violation, never something to leak to a renderer.
+    }
+    if (bytes > NATIVE_PROJECTION_MAX_BYTES) {
+      throw new ProviderUnavailableError("Provider transcript projection is oversized");
+    }
+    return bounded;
+  }
+
+  private async projectionComposer(
+    input: NativeAgentProjectionInput,
+    session: PersistedNativeAgentSession,
+    providerComposer?: NativeAgentComposerState,
+    providerControls?: NativeAgentControlUpdate,
+  ): Promise<NativeAgentComposerState> {
+    let models = providerComposer?.models ?? [];
+    if (models.length === 0) {
+      const cached = this.modelCatalogCache.get(input.environmentId);
+      if (cached && cached.expiresAt > this.now()) {
+        models = cached.models.filter((model) => model.platform === input.agent);
+      } else {
+        try {
+          const catalog = await this.invoke<AgentModel[]>(
+            "get_native_agent_model_catalog",
+            { environmentId: input.environmentId },
+          );
+          const bounded = Array.isArray(catalog) ? catalog.slice(0, 512) : [];
+          if (this.modelCatalogCache.size >= NATIVE_MODEL_CATALOG_CACHE_LIMIT) {
+            const oldest = this.modelCatalogCache.keys().next().value as string | undefined;
+            if (oldest) this.modelCatalogCache.delete(oldest);
+          }
+          this.modelCatalogCache.set(input.environmentId, {
+            models: bounded,
+            expiresAt: this.now() + NATIVE_MODEL_CATALOG_TTL_MS,
+          });
+          models = bounded.filter((model) => model.platform === input.agent);
+        } catch {
+          // A stale or unavailable catalog must not hide the transcript.
+        }
+      }
+    }
+    const selectedModelId = providerControls?.modelId
+      ?? session.controls?.modelId
+      ?? providerComposer?.selectedModelId
+      ?? models[0]?.id;
+    const selectedModel = models.find((model) => model.id === selectedModelId)
+      ?? models[0];
+    const supportsSpeed = providerComposer?.fastModeAvailable === true
+      || selectedModel?.supportsSpeed === true;
+    const capabilities = nativeCapabilities(input.agent);
+    return {
+      models,
+      ...(selectedModel ? { selectedModelId: selectedModel.id } : {}),
+      ...(providerControls?.reasoningId
+        ?? session.controls?.reasoningId
+        ?? providerComposer?.selectedReasoningId
+        ?? selectedModel?.defaultReasoningId
+        ? {
+            selectedReasoningId: providerControls?.reasoningId
+              ?? session.controls?.reasoningId
+              ?? providerComposer?.selectedReasoningId
+              ?? selectedModel?.defaultReasoningId,
+          }
+        : {}),
+      fastModeAvailable: supportsSpeed,
+      fastModeEnabled: supportsSpeed
+        ? providerControls?.fastMode
+          ?? session.controls?.fastMode
+          ?? providerComposer?.fastModeEnabled
+          ?? false
+        : null,
+      ...(capabilities.composer.mode ? {
+        selectedModeId: providerControls?.mode
+          ?? session.controls?.mode
+          ?? providerComposer?.selectedModeId
+          ?? "build",
+      } : {}),
+      modes: capabilities.composer.mode
+        ? providerComposer?.modes.length
+          ? providerComposer.modes
+          : [{ id: "build", label: "Build" }, { id: "plan", label: "Plan" }]
+        : [],
+      ...(providerComposer?.executionProfiles?.length ? {
+        executionProfiles: providerComposer.executionProfiles,
+      } : {}),
+      ...(providerControls?.executionProfileId
+        ?? providerComposer?.selectedExecutionProfileId
+        ?? session.controls?.executionProfileId
+        ?? undefined
+        ? {
+            selectedExecutionProfileId: providerControls?.executionProfileId
+              ?? providerComposer?.selectedExecutionProfileId
+              ?? session.controls?.executionProfileId
+              ?? undefined,
+          }
+        : {}),
+      ...(capabilities.composer.localSettings ? {
+        includeLocalSettings: providerControls?.includeLocalSettings
+          ?? providerComposer?.includeLocalSettings
+          ?? session.controls?.includeLocalSettings
+          ?? false,
+      } : {}),
+      ...(capabilities.composer.promptSuggestions ? {
+        promptSuggestionsEnabled: providerControls?.promptSuggestions
+          ?? providerComposer?.promptSuggestionsEnabled
+          ?? session.controls?.promptSuggestions
+          ?? false,
+      } : {}),
+    };
+  }
+
+  private async projectionSlashCommands(
+    input: NativeAgentProjectionInput,
+    provider: NativeAgentRuntimeProvider,
+  ): Promise<NativeAgentSlashCommand[]> {
+    if (!nativeCapabilities(input.agent).slashCommands || !provider.slashCommands) {
+      return [];
+    }
+    const key = `${input.environmentId}\0${input.agent}`;
+    const cached = this.slashCommandCache.get(key);
+    if (cached && cached.expiresAt > this.now()) return cached.commands;
+    try {
+      const commands = (await provider.slashCommands()).slice(0, 512);
+      if (!cached && this.slashCommandCache.size >= NATIVE_SLASH_COMMAND_CACHE_LIMIT) {
+        const oldest = this.slashCommandCache.keys().next().value as string | undefined;
+        if (oldest) this.slashCommandCache.delete(oldest);
+      }
+      this.slashCommandCache.set(key, {
+        commands,
+        expiresAt: this.now() + NATIVE_SLASH_COMMAND_TTL_MS,
+      });
+      return commands;
+    } catch {
+      // Discovery metadata is optional. Keep the transcript usable when a
+      // provider temporarily cannot enumerate commands.
+      return cached?.commands ?? [];
+    }
+  }
+
+  private async refreshProjection(
+    input: NativeAgentProjectionInput,
+    force: boolean,
+  ): Promise<NativeAgentSessionProjection | null> {
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const previous = this.projectionCache.get(key);
+    if (!force && previous && previous.nextRefreshAt > this.now()) {
+      return previous.projection;
+    }
+    let generation = previous?.generation ?? `unresolved:${input.agent}`;
+    try {
+      const resolved = await this.resolveProjectionSession(input);
+      if (!resolved) {
+        this.projectionCache.delete(key);
+        return null;
+      }
+      const providerCacheKey = `${input.environmentId}\0${input.agent}`;
+      generation = this.providerConnections.get(providerCacheKey)
+        ?? `in-process:${input.agent}`;
+      const snapshot = resolved.provider.interactiveSnapshot
+        ? await resolved.provider.interactiveSnapshot(
+            resolved.session.providerSessionId,
+          )
+        : {
+            status: await resolved.provider.status(resolved.session.providerSessionId),
+            messages: await resolved.provider.messages(resolved.session.providerSessionId),
+          };
+      if (snapshot.providerGeneration !== undefined) {
+        generation = `${generation}:${String(snapshot.providerGeneration)}`;
+      }
+      if (snapshot.status === "missing") {
+        throw new ProviderUnavailableError("Native agent provider session is recovering");
+      }
+      const interactionSnapshot = resolved.provider.interactions
+        ? await resolved.provider.interactions.listPendingInteractions(
+            resolved.session.providerSessionId,
+          )
+        : { requests: [], revision: 0 };
+      const capabilities = nativeCapabilities(input.agent);
+      const queue = capabilities.queue
+        ? await this.storage.getPromptQueue(`${input.agent}\0${input.logicalSessionKey}`)
+        : null;
+      const blocked = interactionSnapshot.requests.length > 0;
+      const composer = await this.projectionComposer(
+        input,
+        resolved.session,
+        snapshot.composer,
+        snapshot.controls,
+      );
+      const selectedModel = composer.models.find(
+        (model) => model.id === composer.selectedModelId,
+      );
+      const contextUsage = snapshot.contextUsage
+        ? {
+            ...snapshot.contextUsage,
+            ...(snapshot.contextUsage.maximumTokens === undefined
+              && selectedModel?.contextWindow
+              ? { maximumTokens: selectedModel.contextWindow }
+              : {}),
+            ...(snapshot.contextUsage.percentage === undefined
+              && (snapshot.contextUsage.maximumTokens ?? selectedModel?.contextWindow)
+              ? {
+                  percentage: Math.max(0, Math.min(
+                    100,
+                    snapshot.contextUsage.usedTokens
+                      / (snapshot.contextUsage.maximumTokens ?? selectedModel!.contextWindow!)
+                      * 100,
+                  )),
+                }
+              : {}),
+          }
+        : undefined;
+      const slashCommands = await this.projectionSlashCommands(
+        input,
+        resolved.provider,
+      );
+      const messages = this.projectionMessages(snapshot.messages);
+      const projection: NativeAgentSessionProjection = {
+        platform: input.agent,
+        environmentId: input.environmentId,
+        sessionId: resolved.session.providerSessionId,
+        ...(snapshot.title ? { title: snapshot.title } : {}),
+        ...(snapshot.shareUrl === undefined ? {} : { shareUrl: snapshot.shareUrl }),
+        connection: "connected",
+        turn: {
+          phase: snapshot.phase === "cancelling"
+            || snapshot.phase === "recovering"
+            || snapshot.phase === "error"
+            ? snapshot.phase
+            : blocked
+              ? "blocked"
+              : snapshot.phase ?? (snapshot.status === "error"
+                ? "error"
+                : snapshot.status === "running" ? "running" : "idle"),
+          ...(snapshot.turnStartedAt === undefined
+            ? {} : { startedAt: snapshot.turnStartedAt }),
+          ...(snapshot.error ? { error: snapshot.error } : {}),
+        },
+        messages,
+        interactions: interactionSnapshot.requests,
+        composerControls: nativeComposerControls(
+          composer,
+          snapshot.status === "running" || blocked,
+        ),
+        composer,
+        capabilities,
+        ...(slashCommands.length > 0 ? { slashCommands } : {}),
+        ...(queue ? {
+          queue: {
+            items: queue.messages,
+            ...(queue.inFlight ? { inFlightRequestId: queue.inFlight.requestId } : {}),
+            ...(queue.dispatchError ? {
+              blocked: {
+                messageId: queue.dispatchError.messageId,
+                error: queue.dispatchError.message,
+              },
+            } : {}),
+          },
+        } : {}),
+        ...(contextUsage ? { contextUsage } : {}),
+        ...(snapshot.rateLimits ? { rateLimits: snapshot.rateLimits } : {}),
+        ...(snapshot.runtime ? { runtime: snapshot.runtime } : {}),
+        ...(snapshot.notices ? { notices: snapshot.notices } : {}),
+        ...(snapshot.backgroundTasks
+          ? { backgroundTasks: snapshot.backgroundTasks }
+          : {}),
+        ...(snapshot.suggestedPrompt
+          ? { suggestedPrompt: snapshot.suggestedPrompt }
+          : {}),
+        ...(snapshot.completionBlockedByBackgroundTasks === undefined
+          ? {}
+          : {
+              completionBlockedByBackgroundTasks:
+                snapshot.completionBlockedByBackgroundTasks,
+            }),
+        ...(capabilities.fork ? {
+          turnBoundaries: messages.flatMap((candidate) => {
+            const message = candidate as Record<string, unknown>;
+            return typeof message.id === "string"
+              ? [{
+                  turnId: typeof message.turnId === "string"
+                    ? message.turnId
+                    : message.id,
+                  messageId: message.id,
+                  resumable: capabilities.resume,
+                  forkable: true,
+                }]
+              : [];
+          }),
+        } : {}),
+        ...(resolved.session.openCodeIncompleteTurnNotice ? {
+          notices: [...(snapshot.notices ?? []), {
+            kind: "incomplete-turn" as const,
+            message: resolved.session.openCodeIncompleteTurnNotice.kind === "failed"
+              ? "The previous OpenCode turn ended before completion."
+              : "OpenCode could not complete the previous turn after recovery.",
+          }],
+        } : {}),
+        revision: 0,
+        generation,
+        cursor: snapshot.providerRevision === undefined
+          ? undefined
+          : String(snapshot.providerRevision),
+      };
+      return this.commitProjection(key, input, projection, generation);
+    } catch (error) {
+      const projection: NativeAgentSessionProjection = {
+        ...(previous?.projection ?? {
+          platform: input.agent,
+          environmentId: input.environmentId,
+          messages: [],
+          interactions: [],
+          composerControls: [],
+          capabilities: nativeCapabilities(input.agent),
+          revision: 0,
+          generation,
+        }),
+        connection: "error",
+        turn: {
+          phase: "recovering",
+          error: error instanceof Error ? error.message : "Native agent is unavailable",
+        },
+        notices: [{
+          kind: "recovery",
+          message: "Reconnecting to the native agent runtime…",
+        }],
+        revision: 0,
+        generation,
+      };
+      return this.commitProjection(key, input, projection, generation);
+    }
+  }
+
+  private commitProjection(
+    key: string,
+    input: NativeAgentProjectionInput,
+    candidate: NativeAgentSessionProjection,
+    generation: string,
+  ): NativeAgentSessionProjection {
+    const previous = this.projectionCache.get(key);
+    const fingerprint = JSON.stringify({
+      ...candidate,
+      revision: 0,
+      cursor: candidate.cursor,
+    });
+    const interval = candidate.turn.phase === "running"
+      || candidate.turn.phase === "blocked"
+      || candidate.turn.phase === "cancelling"
+      || candidate.turn.phase === "recovering"
+      ? NATIVE_PROJECTION_ACTIVE_REFRESH_MS
+      : NATIVE_PROJECTION_IDLE_REFRESH_MS;
+    if (
+      previous
+      && previous.generation === generation
+      && previous.fingerprint === fingerprint
+    ) {
+      previous.nextRefreshAt = this.now() + interval;
+      return previous.projection;
+    }
+    const revision = previous?.generation === generation
+      ? previous.projection.revision + 1
+      : 1;
+    const projection = {
+      ...candidate,
+      revision,
+      generation,
+      cursor: `${generation}:${revision}`,
+    };
+    if (!previous && this.projectionCache.size >= NATIVE_PROJECTION_CACHE_LIMIT) {
+      const oldest = this.projectionCache.keys().next().value as string | undefined;
+      if (oldest) this.projectionCache.delete(oldest);
+    }
+    this.projectionCache.set(key, {
+      input: { ...input },
+      projection,
+      fingerprint,
+      generation,
+      nextRefreshAt: this.now() + interval,
+    });
+    this.storage.announceNativeAgentSessionProjection(input.environmentId);
+    return projection;
+  }
+
+  private async reconcileProjectionCache(): Promise<void> {
+    const due = [...this.projectionCache.values()]
+      .filter((entry) => entry.nextRefreshAt <= this.now());
+    for (let index = 0; index < due.length; index += ACTIVITY_STATUS_CONCURRENCY) {
+      await Promise.allSettled(
+        due.slice(index, index + ACTIVITY_STATUS_CONCURRENCY).map((entry) =>
+          this.refreshProjection(entry.input, true)
+        ),
+      );
+    }
   }
 
   async dispatchPrompt(
@@ -525,7 +1498,7 @@ export class NativeAgentService {
     input: DispatchNativeAgentPromptInput,
     prepare?: (
       session: PersistedNativeAgentSession,
-      provider: BuildPipelineProvider,
+      provider: NativeAgentRuntimeProvider,
     ) => Promise<PromptDispatchPreparation>,
   ): Promise<PersistedNativeAgentSession> {
     this.assertAcceptingWork();
@@ -692,6 +1665,10 @@ export class NativeAgentService {
     this.launchTimer = null;
     if (this.interactionTimer) clearInterval(this.interactionTimer);
     this.interactionTimer = null;
+    if (this.projectionTimer) clearInterval(this.projectionTimer);
+    this.projectionTimer = null;
+    if (this.projectionScan) await this.projectionScan.catch(() => undefined);
+    this.projectionScan = null;
     await Promise.allSettled([...this.scanTasks]);
     while (
       this.launchTasks.size > 0
@@ -712,6 +1689,9 @@ export class NativeAgentService {
     this.openCodeRecoveryDispatches.clear();
     this.providers.clear();
     this.providerConnections.clear();
+    this.modelCatalogCache.clear();
+    this.slashCommandCache.clear();
+    this.projectionCache.clear();
   }
 
   /**
@@ -1247,7 +2227,7 @@ export class NativeAgentService {
         for (const session of sessions) {
           const retryKey = session.key;
           if ((this.interactionRetryAt.get(retryKey) ?? 0) > this.now()) continue;
-          let provider: BuildPipelineProvider | undefined;
+          let provider: NativeAgentRuntimeProvider | undefined;
           try {
             provider = await this.observeProvider(session);
             if (!provider) {
@@ -1438,7 +2418,7 @@ export class NativeAgentService {
           }
           continue;
         }
-        let provider: BuildPipelineProvider | undefined;
+        let provider: NativeAgentRuntimeProvider | undefined;
         try {
           provider = await this.observeProvider(first);
           if (!provider) {
@@ -2212,6 +3192,9 @@ export class NativeAgentService {
         mode: this.queueExecutionMode(agent, message),
         fastMode: this.queueFastMode(agent, message),
         subAgent: this.queueString(message, "agent"),
+        executionAgent:
+          this.queueString(message, "executionAgent")
+          ?? this.queueString(message, "agent"),
         includeLocalSettings: this.queueBoolean(message, "includeLocalSettings"),
         promptSuggestions: this.queueBoolean(message, "promptSuggestions"),
         attachments,
@@ -2430,7 +3413,7 @@ export class NativeAgentService {
    */
   private async provider(
     input: EnsureNativeAgentSessionInput,
-  ): Promise<BuildPipelineProvider> {
+  ): Promise<NativeAgentRuntimeProvider> {
     this.assertAcceptingWork();
     const cacheKey = `${input.environmentId}\0${input.agent}`;
     const environment = await this.assertEnvironmentLive(input.environmentId);
@@ -2482,7 +3465,7 @@ export class NativeAgentService {
    */
   private cacheProvider(
     cacheKey: string,
-    provider: BuildPipelineProvider,
+    provider: NativeAgentRuntimeProvider,
     connectionIdentity?: string,
   ): void {
     this.providers.set(cacheKey, provider);
@@ -2516,7 +3499,7 @@ export class NativeAgentService {
    */
   private async observeProvider(
     input: EnsureNativeAgentSessionInput,
-  ): Promise<BuildPipelineProvider | undefined> {
+  ): Promise<NativeAgentRuntimeProvider | undefined> {
     this.assertAcceptingWork();
     const cacheKey = `${input.environmentId}\0${input.agent}`;
     if ((this.absentBridgeUntil.get(cacheKey) ?? 0) > this.now()) {
@@ -2585,7 +3568,7 @@ export class NativeAgentService {
    */
   private evictProvider(
     input: Pick<EnsureNativeAgentSessionInput, "environmentId" | "agent">,
-    provider: BuildPipelineProvider,
+    provider: NativeAgentRuntimeProvider,
   ): void {
     const cacheKey = `${input.environmentId}\0${input.agent}`;
     if (this.providers.get(cacheKey) !== provider) return;
@@ -2614,7 +3597,7 @@ export class NativeAgentService {
    * the process, holding its bridge connection open.
    */
   private async pruneProviders(liveEnvironmentIds: Set<string>): Promise<void> {
-    const stale: Array<[string, BuildPipelineProvider]> = [];
+    const stale: Array<[string, NativeAgentRuntimeProvider]> = [];
     for (const [cacheKey, provider] of this.providers) {
       const environmentId = cacheKey.slice(0, cacheKey.indexOf("\0"));
       if (!liveEnvironmentIds.has(environmentId)) stale.push([cacheKey, provider]);
@@ -2669,7 +3652,7 @@ export class NativeAgentService {
   }
 
   private async createProviderSession(
-    provider: BuildPipelineProvider,
+    provider: NativeAgentRuntimeProvider,
     input: EnsureNativeAgentSessionInput,
   ): Promise<string> {
     await this.assertEnvironmentLive(input.environmentId);

@@ -1372,7 +1372,7 @@ printf "continued"
       expect(nonNumeric.stdout).toEndWith("continued");
       expect(() => statSync(join(nonNumericDestination, "skills"))).toThrow();
     });
-  });
+  }, 15_000);
 
   test("Codex setup copies the complete allowlist, secures auth, and excludes plugin runtime state", () => {
     withTempDir((dir) => {

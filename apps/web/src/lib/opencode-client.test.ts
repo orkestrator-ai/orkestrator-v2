@@ -1537,9 +1537,9 @@ describe("opencode-client sendPrompt", () => {
     });
 
     test("treats the store sentinel as an ordinary bare id", async () => {
-      // `OpenCodeChatTab` maps `"default"` to `undefined` before calling, so it
-      // never reaches here; this pins that the client itself does not silently
-      // reinterpret it, unlike the compaction path which must.
+      // The native-agent adapter maps `"default"` to `undefined` before calling,
+      // so it never reaches here; this pins that the client itself does not
+      // silently reinterpret it, unlike the compaction path which must.
       expect(await modelRefFor("default")).toEqual({
         providerID: "default",
         modelID: "default",
@@ -3479,9 +3479,9 @@ describe("opencode-client buildOpenCodeMessageFromPart", () => {
   });
 
   test("seeds role and createdAt from a partial base carrying no parts", () => {
-    // This is the shape OpenCodeChatTab supplies when a part streams in before
-    // its `message.updated`: the echo's role/createdAt are known from the
-    // pending optimistic bubble, but none of its parts are.
+    // This is the shape the OpenCode event adapter supplies when a part streams
+    // in before its `message.updated`: the echo's role/createdAt are known from
+    // the pending optimistic bubble, but none of its parts are.
     const message = buildOpenCodeMessageFromPart(
       { role: "user", createdAt: "2026-04-15T10:00:01.000Z" },
       "server-early",

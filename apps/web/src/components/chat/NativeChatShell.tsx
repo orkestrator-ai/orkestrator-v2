@@ -26,6 +26,8 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
   agentLabel: string;
   /** Only the focused chat pane owns global keyboard shortcuts. */
   isActive: boolean;
+  /** Split panes can both be active; only the focused pane owns find shortcuts. */
+  ownsGlobalShortcuts?: boolean;
   /**
    * Container the environment runs in, when Dockerised.
    *
@@ -112,6 +114,7 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
 export function NativeChatShell<TMessage extends NativeMessageType>({
   agentLabel,
   isActive,
+  ownsGlobalShortcuts,
   containerId,
   agentExpansionScope,
   connectionState,
@@ -333,7 +336,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
           scrollProps={scrollProps}
           virtuosoRef={virtuosoRef}
           find={{
-            isActive,
+            isActive: ownsGlobalShortcuts ?? isActive,
             getSearchText: getNativeMessageSearchText,
           }}
         />

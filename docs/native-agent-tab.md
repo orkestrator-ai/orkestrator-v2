@@ -1,55 +1,114 @@
 # Native agent tab architecture
 
-Every native provider enters the pane renderer through `NativeAgentTab`.
-Provider selection, capabilities, lazy controller loading, and wire-message
-normalization live in the native-agent adapter registry below that component.
+Every native provider enters the pane renderer through the same
+`AgentNativeTab` controller and `useNativeAgentSession` state machine. Provider
+transport, reconciliation and authoritative long-running state terminate in
+the backend or bridge layer.
 
 ```text
 PaneLeafContainer
-  -> NativeAgentTab
-    -> NativeAgentAdapter
-      -> provider controller and bridge client
-      -> NativeMessage[]
+  -> AgentNativeTab
+    -> useNativeAgentSession
+      -> provider-neutral backend commands + resource invalidation
+        -> NativeAgentService
+          -> NativeAgentRuntimeProvider
+            -> Claude/Codex/OpenCode/ACP transport adapter
     -> NativeChatShell
+    -> NativeComposeBar
 ```
 
 ## Boundaries
 
-- Pane layout stores `NativeAgentTabData`: platform, environment, container,
-  and provider-session identity. Provider-specific pane fields remain as a
-  compatibility projection for layouts written before this consolidation.
-- The tab type owns the platform. `getNativeAgentData` validates the canonical
-  field and requires it to agree with the tab type, falling back to the legacy
-  record otherwise; a persisted `platform`/`provider` value never selects the
-  controller on its own. `mergePersistedPaneLayouts` applies the same rule when
-  it rewrites both projections after a write conflict.
-- The adapter projects the canonical identity back to the legacy shape before
-  handing it to a controller (`toLegacyNativeAgentData`). Controllers still
-  spread that record into the pane layout when forking a tab, so `platform`
-  must not travel with it — the merge strips it again, and the same tab would
-  otherwise serialize two different ways depending on whether a write conflict
-  occurred.
-- `NativeAgentTab` does not import provider clients or switch over provider
-  message/event payloads. A platform with no registered adapter renders a
-  notice; it never throws out of the pane.
-- Each adapter publishes capabilities and converts its provider transcript to
-  `NativeMessage[]` before shared presentation sees it.
-- Provider controllers retain transport-specific reconciliation. Codex sparse
-  revision patches, OpenCode child-session hydration, Claude background-task
-  snapshots, and ACP message windows must be settled against their respective
-  authoritative bridge snapshots before normalization.
-- A tab unmount never represents cancellation. Environment subscriptions and
-  bridge/backend state continue to outlive the visible React tree.
+- Pane layout stores `NativeAgentTabData`: platform, environment, container and
+  provider-session identity. The platform is durable and locks on the first
+  dispatch; an unassigned tab is also a valid durable state.
+- `NativeAgentAdapter` contains metadata and capabilities only. It cannot load
+  or return React components.
+- `NativeAgentService` owns the bounded, reconstructible session projection.
+  Providers and bridges remain the ultimate sources of truth.
+- The renderer reads `NativeAgentSessionProjection<NativeMessage>` and sends
+  neutral intents for dispatch, stop, queue, controls, interactions, resume and
+  fork. It never receives bridge credentials, SDK clients or provider wire
+  envelopes.
+- Resource events are invalidation hints. Mount, activation, generation change
+  and revision discontinuity all reconcile through a complete authoritative
+  snapshot.
+- A tab unmount never means cancellation. Backend timers, provider sessions,
+  prompt queues, pending interactions and OpenCode recovery continue without a
+  mounted React tree.
+- Provider-specific UI is restricted to typed presentation components, such as
+  the Codex plan-mode card and Claude background-task card. Those components do
+  not own transport or session lifecycle.
+- `claude-tmux` remains separate because it is a terminal/tmux surface rather
+  than a native bridge session.
+
+## Projection contents
+
+The shared projection includes stable logical/provider identity, title and
+sharing state, connection and semantic turn phase, normalized messages and
+interactions, composer state and live model metadata, controls, queue state,
+context usage and rate limits, runtime inventory, notices, background tasks,
+suggested prompts, turn boundaries, slash commands, revision, generation and
+cursor.
+
+Provider-specific snapshot behavior is normalized before that boundary:
+
+- Codex generations, semantic cancelling/recovering phases, config and plan
+  review;
+- Claude plan mode, prompt suggestions and background tasks;
+- OpenCode live provider/model discovery, model-specific image support,
+  execution profiles, permissions/questions, share-state rehydration,
+  incomplete-turn recovery and bounded child transcripts; and
+- ACP composer snapshots, message windows and approvals.
+
+## Shared interaction behavior
+
+The component tree is unified; capabilities decide what is shown. Unsupported
+controls are omitted instead of routing the tab to a provider-specific React
+controller.
+
+| Surface | Claude | Codex | OpenCode | Cursor/Grok ACP |
+| --- | --- | --- | --- | --- |
+| Send/stop, model, reasoning, speed/mode when reported | Yes | Yes | Yes | Yes |
+| Durable compose drafts and first-prompt provider lock | Yes | Yes | Yes | Yes |
+| Queue, resume and per-message fork | Yes | Yes | Yes | No |
+| Files/images | Yes | Yes | Files and model-gated images | No |
+| Slash commands | Built-ins plus plugins | Provider commands | Provider commands | No |
+| Typed questions/approvals | Yes | Yes | Yes | Yes |
+| Provider controls | agents, local settings, suggestions | plan review, steer | execution profiles | reported ACP controls |
+| Session actions | compact, rewind files | compact, review, steer | compact, undo/redo, share | No |
+| Background tasks | Yes | No | No | No |
+
+Assigned prompt drafts remain namespaced by platform and logical tab, including
+the legacy persistence keys. Before the first send, an unassigned tab uses one
+stable `agent-native` record containing its text, attachments, selected
+platform, model, reasoning, speed and mode; a reload therefore cannot restore
+the text under a different default provider. Attachments are restored only on
+platforms that can consume them. Keyboard submission restores the editor
+focus; mouse submission leaves focus on the clicked control.
+
+Forking preserves each provider's actual boundary semantics: Claude uses
+inclusive source-message boundaries, Codex uses turn boundaries, and OpenCode
+uses its exclusive message boundary. Fork-and-edit restores the prompt in the
+new tab; attachments are deliberately not copied and the user is told when any
+were dropped. Forking the first prompt creates a fresh empty provider session
+instead of accidentally cloning the complete conversation.
+
+Stopping a turn records a content-free, session-scoped marker in the shared
+renderer store. It survives inactive-tab unmounts and is cleared when a new
+turn is accepted or the provider-session identity changes.
+
+Raw container log panes are not part of the shared projection. Connection
+failures expose bounded provider errors, recovery notices and an explicit Retry
+action; this preserves the actionable diagnostic path without moving prompts,
+transcripts, attachments, credentials or unbounded process output into renderer
+state.
 
 ## Adding a provider
 
 1. Add the platform to the shared agent-platform protocol.
-2. Register one `NativeAgentAdapter` with a label, capability set, message
-   normalizer, and lazily loaded headless/provider controller.
-3. Supply authoritative snapshot recovery and gap detection in the adapter's
-   transport layer.
-4. Add the platform to the adapter contract tests. No pane renderer or shared
-   chat-shell branch should be added.
-
-Claude tmux remains separate: it is a terminal/tmux surface rather than a
-native bridge session.
+2. Implement a backend `NativeAgentRuntimeProvider` transport adapter that
+   returns bounded provider-neutral snapshots.
+3. Register metadata and capabilities in `nativeAgentAdapters`.
+4. Add provider and shared-controller contract coverage. Do not add a pane-level
+   React controller or renderer-owned event loop.

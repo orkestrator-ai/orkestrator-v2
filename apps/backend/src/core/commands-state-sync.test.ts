@@ -92,7 +92,7 @@ async function withCommands<T>(
 const KEY = "claude env-e1:tab-1";
 
 describe("native agent model catalogue command", () => {
-  test("normalizes provider catalogues and filters OpenCode providers in the backend", async () => {
+  test("normalizes provider catalogues and preserves every OpenCode upstream provider", async () => {
     await withCommands(async (invoke, storage) => {
       await storage.updateEnvironment("e1", {
         claudeModelCatalog: {
@@ -140,6 +140,7 @@ describe("native agent model catalogue command", () => {
       expect(cached.models.map((model) => model.provider)).toEqual([
         "opencode-go",
         "opencode",
+        "openrouter",
       ]);
 
       const models = await invoke("get_native_agent_model_catalog", {
@@ -151,12 +152,14 @@ describe("native agent model catalogue command", () => {
         "gpt-codex",
         "opencode-go/b",
         "opencode/a",
+        "openrouter/c",
         "composer-cached",
         "grok-cached",
       ]);
-      expect(models.slice(2, 4).map((model) => model.providerLabel)).toEqual([
+      expect(models.slice(2, 5).map((model) => model.providerLabel)).toEqual([
         "OpenCode/opencode-go",
         "OpenCode/opencode",
+        "OpenCode/openrouter",
       ]);
 
       const rewritten = await invoke("cache_opencode_model_catalog", {
@@ -166,7 +169,10 @@ describe("native agent model catalogue command", () => {
           { id: "hpc-ai/b", name: "HPC B", provider: "hpc-ai" },
         ],
       }) as { models: Array<{ provider: string }> };
-      expect(rewritten.models.map((model) => model.provider)).toEqual(["opencode"]);
+      expect(rewritten.models.map((model) => model.provider)).toEqual([
+        "hpc-ai",
+        "opencode",
+      ]);
     });
   });
 });

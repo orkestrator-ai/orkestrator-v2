@@ -1013,6 +1013,7 @@ interface NativeState {
     name: string;
     previewUrl?: string;
   }>>;
+  draftMetadata: Map<string, unknown>;
   setDraftText: (key: string, value: string) => void;
   setDraftMentions: (key: string, value: NativeState["draftMentions"] extends Map<string, infer T> ? T : never) => void;
   clearAttachments: (key: string) => void;
@@ -1022,6 +1023,7 @@ interface NativeState {
       ? T
       : never,
   ) => void;
+  setDraftMetadata: (key: string, value: unknown) => void;
 }
 
 function createNativeStore() {
@@ -1029,6 +1031,7 @@ function createNativeStore() {
     draftText: new Map(),
     draftMentions: new Map(),
     attachments: new Map(),
+    draftMetadata: new Map(),
     setDraftText: (key, value) => set((state) => {
       const draftText = new Map(state.draftText);
       if (value) draftText.set(key, value);
@@ -1051,10 +1054,48 @@ function createNativeStore() {
       attachments.set(key, [...(attachments.get(key) ?? []), value]);
       return { attachments };
     }),
+    setDraftMetadata: (key, value) => set((state) => {
+      const draftMetadata = new Map(state.draftMetadata);
+      draftMetadata.set(key, value);
+      return { draftMetadata };
+    }),
   }));
 }
 
 describe("useNativeComposeDraftPersistence", () => {
+  test("rehydrates a provider-neutral draft with its provisional platform controls", async () => {
+    const sessionKey = "env-neutral:tab";
+    const metadata = {
+      platform: "codex",
+      modelId: "gpt-5.6-codex",
+      reasoningId: "high",
+      fastMode: true,
+      mode: "plan",
+    };
+    getComposeDraft.mockResolvedValueOnce({
+      draftKey: compose.composeDraftKey("agent-native", "env-neutral", sessionKey),
+      ownerType: "environment",
+      ownerId: "env-neutral",
+      value: { text: "survives reload", mentions: [], attachments: [], metadata },
+      updatedAt: "2026-08-14T00:00:00.000Z",
+      revision: 3,
+    });
+    const store = createNativeStore();
+    const hook = renderHook(() => useNativeComposeDraftPersistence(
+      "agent-native",
+      "env-neutral",
+      sessionKey,
+      store,
+    ));
+
+    await waitFor(() => expect(store.getState().draftText.get(sessionKey)).toBe(
+      "survives reload",
+    ));
+    expect(store.getState().draftMetadata.get(sessionKey)).toEqual(metadata);
+
+    hook.unmount();
+  });
+
   test("does not delete an unread backend draft when hydration is cancelled", async () => {
     const snapshot = deferred<Awaited<ReturnType<typeof realBackend.getComposeDraft>>>();
     getComposeDraft.mockImplementationOnce(() => snapshot.promise);

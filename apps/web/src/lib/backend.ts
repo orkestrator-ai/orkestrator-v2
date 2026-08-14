@@ -7,8 +7,10 @@ import type {
   FeaturePlanningRecord,
 } from "@orkestrator/protocol/feature-planning";
 import type {
+  AgentInteractionApplyOutcome,
   AgentInteractionOrigin,
   AgentInteractionPolicy,
+  AgentInteractionResolution,
 } from "@orkestrator/protocol/agent-interactions";
 import type {
   BuildPipeline as BackendBuildPipeline,
@@ -87,7 +89,16 @@ import {
   type ResourceRevisionManifest,
   type ResourceRevisionMap,
 } from "@orkestrator/protocol/resource-events";
-import type { AgentModel } from "@orkestrator/protocol/native-agent";
+import type {
+  AgentModel,
+  NativeAgentControlUpdate,
+  NativeAgentSessionAction,
+  NativeAgentSessionActionOutcome,
+  NativeAgentDispatchOutcome,
+  NativeAgentForkOutcome,
+  NativeAgentResumeEntry,
+  NativeAgentSessionProjection,
+} from "@orkestrator/protocol/native-agent";
 
 /** PR detection result containing URL, state, and merge conflict status */
 export interface PrDetectionResult {
@@ -988,6 +999,7 @@ export interface CachedOpenCodeModel {
   inputCost?: number;
   outputCost?: number;
   contextWindow?: number;
+  supportsImageInput?: boolean;
 }
 
 export interface OpenCodeModelCatalogSnapshot {
@@ -1048,6 +1060,9 @@ function toCachedOpenCodeModel(
     ...(inputCost === undefined ? {} : { inputCost }),
     ...(outputCost === undefined ? {} : { outputCost }),
     ...(contextWindow === undefined ? {} : { contextWindow }),
+    ...(typeof model.supportsImageInput === "boolean"
+      ? { supportsImageInput: model.supportsImageInput }
+      : {}),
   };
 }
 
@@ -2116,22 +2131,92 @@ export async function getNativeAgentSession(input: {
   );
 }
 
-export async function claimOpenCodeManualPrompt(input: {
+export async function getNativeAgentProjection<TMessage = unknown>(input: {
   environmentId: string;
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
   logicalSessionKey: string;
-  providerSessionId: string;
-  requestId: string;
-}): Promise<void> {
-  return invoke("claim_opencode_manual_prompt", input);
+}): Promise<NativeAgentSessionProjection<TMessage> | null> {
+  return invoke("get_native_agent_projection", input);
 }
 
-export async function releaseOpenCodeManualPrompt(input: {
+export async function stopNativeAgentSession<TMessage = unknown>(input: {
   environmentId: string;
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  logicalSessionKey: string;
+}): Promise<NativeAgentSessionProjection<TMessage> | null> {
+  return invoke("stop_native_agent_session", input);
+}
+
+export async function stopNativeAgentBackgroundTask<TMessage = unknown>(input: {
+  environmentId: string;
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  logicalSessionKey: string;
+  taskId: string;
+}): Promise<NativeAgentSessionProjection<TMessage> | null> {
+  return invoke("stop_native_agent_background_task", input);
+}
+
+export async function dismissNativeAgentSuggestedPrompt<TMessage = unknown>(input: {
+  environmentId: string;
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  logicalSessionKey: string;
+}): Promise<NativeAgentSessionProjection<TMessage> | null> {
+  return invoke("dismiss_native_agent_suggested_prompt", input);
+}
+
+export async function listNativeAgentResumableSessions(input: {
+  environmentId: string;
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  logicalSessionKey: string;
+}): Promise<NativeAgentResumeEntry[]> {
+  return invoke("list_native_agent_resumable_sessions", input);
+}
+
+export async function resumeNativeAgentSession<TMessage = unknown>(input: {
+  environmentId: string;
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
   logicalSessionKey: string;
   providerSessionId: string;
-  requestId: string;
-}): Promise<void> {
-  return invoke("release_opencode_manual_prompt", input);
+  controls?: NativeAgentControlUpdate;
+}): Promise<NativeAgentSessionProjection<TMessage> | null> {
+  return invoke("resume_native_agent_session", input);
+}
+
+export async function forkNativeAgentSession(input: {
+  environmentId: string;
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  logicalSessionKey: string;
+  messageId?: string;
+}): Promise<NativeAgentForkOutcome> {
+  return invoke("fork_native_agent_session", input);
+}
+
+export async function updateNativeAgentControls<TMessage = unknown>(input: {
+  environmentId: string;
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  logicalSessionKey: string;
+  update: NativeAgentControlUpdate;
+}): Promise<NativeAgentSessionProjection<TMessage> | null> {
+  return invoke("update_native_agent_controls", input);
+}
+
+export async function performNativeAgentSessionAction(input: {
+  environmentId: string;
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  logicalSessionKey: string;
+  action: NativeAgentSessionAction;
+}): Promise<NativeAgentSessionActionOutcome> {
+  return invoke("perform_native_agent_session_action", input);
+}
+
+export async function resolveNativeAgentInteraction(input: {
+  environmentId: string;
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  logicalSessionKey: string;
+  interactionId: string;
+  resolution: AgentInteractionResolution;
+}): Promise<AgentInteractionApplyOutcome> {
+  return invoke("resolve_native_agent_interaction", input);
 }
 
 export async function dispatchNativeAgentPrompt(input: {
@@ -2153,6 +2238,39 @@ export async function dispatchNativeAgentPrompt(input: {
 }): Promise<PersistedNativeAgentSession> {
   return invoke<PersistedNativeAgentSession>(
     "dispatch_native_agent_prompt",
+    input,
+  );
+}
+
+export async function dispatchNativeAgentIntent(input: {
+  environmentId: string;
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  logicalSessionKey: string;
+  origin?: AgentInteractionOrigin;
+  interactionPolicy?: AgentInteractionPolicy;
+  title?: string;
+  model?: string;
+  reasoningEffort?: string;
+  phase?: "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts";
+  prompt: string;
+  requestId: string;
+  images?: Array<{ filename: string; data: string }>;
+  attachments?: Array<{
+    type: "image" | "file";
+    path: string;
+    dataUrl?: string;
+    filename?: string;
+  }>;
+  schema?: Record<string, unknown>;
+  mode?: "plan" | "build";
+  fastMode?: boolean;
+  subAgent?: string;
+  executionAgent?: string;
+  includeLocalSettings?: boolean;
+  promptSuggestions?: boolean;
+}): Promise<NativeAgentDispatchOutcome> {
+  return invoke<NativeAgentDispatchOutcome>(
+    "dispatch_native_agent_intent",
     input,
   );
 }

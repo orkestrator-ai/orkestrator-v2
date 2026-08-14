@@ -4,9 +4,11 @@ import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import type { TabInfo } from "@/types/paneLayout";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
+import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import {
   createAgentHandoffSnapshot,
@@ -318,6 +320,7 @@ let clipboardRejection: Error | null = null;
 const originalConfirm = window.confirm;
 
 beforeEach(() => {
+  useNativeAgentProjectionStore.getState().reset();
   confirmResult = true;
   confirmMessages = [];
   clipboardWrites = [];
@@ -1816,7 +1819,9 @@ describe("AgentInfoButton session actions", () => {
   }
 
   test("fork and compact are disabled until a session id exists", () => {
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    render(<AgentInfoButton activeTab={claudeTab({
+      nativeAgentData: { platform: "claude", environmentId: ENVIRONMENT_ID },
+    })} />);
     open();
     expect(screen.getByRole("button", { name: /Fork session/ }).hasAttribute("disabled")).toBe(true);
     expect(screen.getByRole("button", { name: /Compact/ }).hasAttribute("disabled")).toBe(true);
@@ -3081,6 +3086,44 @@ describe("AgentInfoButton OpenCode sharing", () => {
     } as never);
   }
 
+  test("rehydrates sharing from the provider-neutral projection without a legacy client", () => {
+    useNativeAgentProjectionStore.getState().setProjection(OPENCODE_KEY, {
+      platform: "opencode",
+      environmentId: ENVIRONMENT_ID,
+      sessionId: "opencode-session-1",
+      shareUrl: "https://share.opencode.test/projected",
+      connection: "connected",
+      turn: { phase: "idle" },
+      messages: [],
+      interactions: [],
+      composerControls: [],
+      capabilities: {
+        attachments: { files: true, images: true },
+        queue: true,
+        resume: true,
+        fork: true,
+        slashCommands: true,
+        backgroundTasks: false,
+        composer: {
+          provider: true,
+          model: true,
+          reasoning: true,
+          speed: false,
+          mode: true,
+        },
+        actions: { share: true },
+      },
+      revision: 1,
+      generation: "test",
+    });
+
+    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    open();
+
+    expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy();
+    expect(openCodeSessionGet).not.toHaveBeenCalled();
+  });
+
   test("copies the link and offers revocation", async () => {
     seedShareableSession();
     render(<AgentInfoButton activeTab={openCodeTab()} />);
@@ -3643,6 +3686,66 @@ describe("AgentInfoButton Codex steering", () => {
 });
 
 describe("AgentInfoButton runtime inventory", () => {
+  test("reads rich usage and runtime inventory from the shared projection", () => {
+    useNativeAgentProjectionStore.getState().setProjection(OPENCODE_KEY, {
+      platform: "opencode",
+      environmentId: ENVIRONMENT_ID,
+      sessionId: "opencode-session-1",
+      connection: "connected",
+      turn: { phase: "idle" },
+      messages: [],
+      interactions: [],
+      composerControls: [],
+      capabilities: {
+        attachments: { files: true, images: true },
+        queue: true,
+        resume: true,
+        fork: true,
+        slashCommands: true,
+        backgroundTasks: false,
+        composer: {
+          provider: true,
+          model: true,
+          reasoning: true,
+          speed: false,
+          mode: true,
+        },
+      },
+      contextUsage: {
+        usedTokens: 1_200,
+        maximumTokens: 12_000,
+        percentage: 10,
+        inputTokens: 800,
+        outputTokens: 300,
+        cacheReadTokens: 100,
+        costUsd: 0.25,
+        durationMs: 1_500,
+        source: "opencode",
+        estimated: false,
+      },
+      runtime: {
+        mcpServers: 2,
+        skills: 3,
+        lspServers: 4,
+        todos: 5,
+        files: 6,
+      },
+      revision: 1,
+      generation: "test",
+    } satisfies NativeAgentSessionProjection);
+
+    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    open();
+    expect(metricValue("Input")).toBe("800");
+    expect(metricValue("Output")).toBe("300");
+    expect(metricValue("Cost")).toBe("$0.25");
+    expect(metricValue("MCP")).toBe("2");
+    expect(metricValue("Skills")).toBe("3");
+    expect(metricValue("LSP")).toBe("4");
+    expect(metricValue("Todos")).toBe("5");
+    expect(metricValue("Files")).toBe("6");
+  });
+
   test("counts Claude MCP servers, plugins and commands", () => {
     useClaudeStore.setState({
       sessionInitData: new Map([[

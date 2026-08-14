@@ -127,6 +127,7 @@ export interface OpenCodeModelCatalogEntry {
   inputCost?: number;
   outputCost?: number;
   contextWindow?: number;
+  supportsImageInput?: boolean;
 }
 
 /**
@@ -442,6 +443,8 @@ export interface PersistedNativeAgentSession {
   providerSessionId: string;
   origin: AgentInteractionOrigin;
   interactionPolicy: AgentInteractionPolicy;
+  /** Provider-neutral interactive choices that survive renderer/backend restarts. */
+  controls?: import("@orkestrator/protocol/native-agent").NativeAgentControlUpdate;
   dispatchedRequestIds?: string[];
   /** Content-free authoritative outcome rehydrated by every OpenCode tab. */
   openCodeIncompleteTurnNotice?: OpenCodeIncompleteTurnNotice;

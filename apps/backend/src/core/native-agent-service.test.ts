@@ -14,12 +14,15 @@ import {
 } from "@orkestrator/protocol/agent-interactions";
 import {
   createBuildPipelineProvider,
+  AmbiguousPromptDispatchError,
   PromptRejectedError,
   ProviderUnavailableError,
   type BridgeConnection,
   type BuildPipelineProvider,
+  type NativeAgentRuntimeProvider,
   type ProviderSendOptions,
   type ProviderActivityState,
+  type ProviderInteractiveSnapshot,
   type AgentInteractionProviderCapability,
   type ProviderStatus,
 } from "./build-pipeline-provider.js";
@@ -74,6 +77,14 @@ function createProviderStub(
     ) => Promise<Map<string, ProviderActivityState>>;
     interactions?: AgentInteractionProviderCapability;
     messages?: (sessionId: string) => Promise<unknown[]>;
+    interactiveSnapshot?: (
+      sessionId: string,
+    ) => Promise<ProviderInteractiveSnapshot>;
+    abort?: (sessionId: string) => Promise<void>;
+    stopBackgroundTask?: NativeAgentRuntimeProvider["stopBackgroundTask"];
+    dismissSuggestedPrompt?: NativeAgentRuntimeProvider["dismissSuggestedPrompt"];
+    updateInteractiveControls?: NativeAgentRuntimeProvider["updateInteractiveControls"];
+    slashCommands?: NativeAgentRuntimeProvider["slashCommands"];
   } = {},
 ) {
   const createSession = mock(
@@ -87,6 +98,22 @@ function createProviderStub(
     : undefined;
   const registerSession = mock((_sessionId: string) => undefined);
   const dispose = mock(async () => undefined);
+  const abort = mock(behaviour.abort ?? (async () => undefined));
+  const stopBackgroundTask = behaviour.stopBackgroundTask
+    ? mock(behaviour.stopBackgroundTask)
+    : undefined;
+  const dismissSuggestedPrompt = behaviour.dismissSuggestedPrompt
+    ? mock(behaviour.dismissSuggestedPrompt)
+    : undefined;
+  const interactiveSnapshot = behaviour.interactiveSnapshot
+    ? mock(behaviour.interactiveSnapshot)
+    : undefined;
+  const updateInteractiveControls = behaviour.updateInteractiveControls
+    ? mock(behaviour.updateInteractiveControls)
+    : undefined;
+  const slashCommands = behaviour.slashCommands
+    ? mock(behaviour.slashCommands)
+    : undefined;
   const provider = {
     agent,
     createSession,
@@ -97,10 +124,15 @@ function createProviderStub(
     activityBatch,
     interactions: behaviour.interactions,
     messages: behaviour.messages ?? (async () => []),
+    interactiveSnapshot,
+    updateInteractiveControls,
+    slashCommands,
     structured: async () => null,
-    abort: async () => undefined,
+    abort,
+    stopBackgroundTask,
+    dismissSuggestedPrompt,
     dispose,
-  } as unknown as BuildPipelineProvider;
+  } as unknown as NativeAgentRuntimeProvider;
   return {
     provider,
     createSession,
@@ -109,6 +141,12 @@ function createProviderStub(
     status,
     activity,
     activityBatch,
+    abort,
+    stopBackgroundTask,
+    dismissSuggestedPrompt,
+    interactiveSnapshot,
+    updateInteractiveControls,
+    slashCommands,
     dispose,
   };
 }
@@ -186,6 +224,7 @@ function internals(service: NativeAgentService) {
     observedInteractionRevisions: Map<string, number>;
     interactionSelectionCursors: Map<string, number>;
     interactionRevisionReconciliations: number;
+    reconcileProjectionCache(): Promise<void>;
     launchTimer: ReturnType<typeof setInterval> | null;
     interactionTimer: ReturnType<typeof setInterval> | null;
   };
@@ -425,6 +464,291 @@ function activePipeline(
 }
 
 describe("NativeAgentService", () => {
+  test("projects authoritative interactive state with stable revisions and inactive refresh", async () => {
+    let now = 10_000;
+    let providerRevision = 4;
+    let status: ProviderStatus = "idle";
+    const interactiveSnapshot = async (): Promise<ProviderInteractiveSnapshot> => ({
+      status,
+      providerRevision,
+      title: "Projected session",
+      shareUrl: "https://share.example/session",
+      controls: { mode: "plan" },
+      messages: [{
+        id: "message-1",
+        role: "assistant",
+        content: "Ready",
+        parts: [{ type: "text", text: "Ready" }],
+        createdAt: "2026-08-14T10:00:00.000Z",
+      }],
+      composer: {
+        models: [{ platform: "cursor", id: "cursor/default", label: "Default" }],
+        selectedModelId: "cursor/default",
+        fastModeEnabled: false,
+        fastModeAvailable: true,
+        selectedModeId: "build",
+        modes: [
+          { id: "build", label: "Build" },
+          { id: "plan", label: "Plan" },
+        ],
+      },
+    });
+    const stub = createProviderStub("cursor", { interactiveSnapshot });
+    await withService({
+      prefix: "orkestrator-native-projection-",
+      provider: async () => stub.provider,
+      now: () => now,
+    }, async ({ service }) => {
+      await service.ensureSession({
+        environmentId: "env-1",
+        agent: "cursor",
+        logicalSessionKey: "env-env-1:tab-1",
+        sessionMode: "build",
+      });
+
+      const first = await service.getProjection({
+        environmentId: "env-1",
+        agent: "cursor",
+        logicalSessionKey: "env-env-1:tab-1",
+      });
+      expect(first).toMatchObject({
+        platform: "cursor",
+        connection: "connected",
+        turn: { phase: "idle" },
+        revision: 1,
+        generation: "in-process:cursor",
+        title: "Projected session",
+        shareUrl: "https://share.example/session",
+        cursor: "in-process:cursor:1",
+        messages: [{ id: "message-1", content: "Ready" }],
+        composer: { selectedModelId: "cursor/default", selectedModeId: "plan" },
+      });
+      expect(first?.composerControls.map((control) => control.id)).toEqual([
+        "model",
+        "speed",
+        "mode",
+      ]);
+
+      const unchanged = await service.getProjection({
+        environmentId: "env-1",
+        agent: "cursor",
+        logicalSessionKey: "env-env-1:tab-1",
+      });
+      expect(unchanged).toBe(first);
+
+      status = "running";
+      providerRevision = 5;
+      now += 2_000;
+      await internals(service).reconcileProjectionCache();
+      const refreshed = await service.getProjection({
+        environmentId: "env-1",
+        agent: "cursor",
+        logicalSessionKey: "env-env-1:tab-1",
+      });
+      expect(refreshed).toMatchObject({
+        turn: { phase: "running" },
+        revision: 2,
+        cursor: "in-process:cursor:2",
+      });
+      expect(stub.interactiveSnapshot).toHaveBeenCalledTimes(4);
+    });
+  });
+
+  test("projects bounded slash commands and caches discovery independently of transcript refresh", async () => {
+    let now = 1_000;
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        composer: {
+          models: [{ platform: "claude", id: "sonnet", label: "Sonnet" }],
+          selectedModelId: "sonnet",
+          fastModeEnabled: false,
+          fastModeAvailable: false,
+          selectedModeId: "build",
+          modes: [{ id: "build", label: "Build" }],
+        },
+      }),
+      slashCommands: async () => [{
+        name: "/review",
+        description: "Review the current changes",
+        argumentHint: "[focus]",
+      }],
+    });
+    await withService({
+      prefix: "orkestrator-native-projection-slash-",
+      provider: async () => stub.provider,
+      now: () => now,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "env-env-1:tab-slash",
+      };
+      await service.ensureSession(identity);
+      const first = await service.getProjection(identity);
+      expect(first?.slashCommands).toEqual([{
+        name: "/review",
+        description: "Review the current changes",
+        argumentHint: "[focus]",
+      }]);
+      await service.getProjection(identity);
+      expect(stub.slashCommands).toHaveBeenCalledTimes(1);
+
+      now += 30_001;
+      await service.getProjection(identity);
+      expect(stub.slashCommands).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  test("projects pending interactions and routes neutral stop, controls, and resolution", async () => {
+    const resolveInteraction = mock(async () => ({
+      result: "applied" as const,
+      interactionId: "interaction-0",
+      sessionId: "provider-session",
+      revision: 2,
+    }));
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({
+        status: "running",
+        messages: [],
+        composer: {
+          models: [{ platform: "codex", id: "gpt-5", label: "GPT-5" }],
+          selectedModelId: "gpt-5",
+          fastModeEnabled: false,
+          fastModeAvailable: true,
+          selectedModeId: "build",
+          modes: [{ id: "build", label: "Build" }],
+        },
+      }),
+      interactions: {
+        listPendingInteractions: async () => pendingInteractionSnapshot(10_000, ["permission"]),
+        resolveInteraction,
+      },
+      updateInteractiveControls: async () => undefined,
+    });
+    await withService({
+      prefix: "orkestrator-native-projection-intents-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      await service.ensureSession({
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "env-env-1:tab-1",
+      });
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-1",
+      };
+      const blocked = await service.getProjection(identity);
+      expect(blocked).toMatchObject({
+        turn: { phase: "blocked" },
+        interactions: [{ id: "interaction-0", kind: "permission" }],
+      });
+
+      await service.updateProjectionControls({
+        ...identity,
+        update: { modelId: "gpt-5", fastMode: true },
+      });
+      expect(stub.updateInteractiveControls).toHaveBeenCalledWith(
+        "provider-session",
+        { modelId: "gpt-5", fastMode: true },
+      );
+
+      const resolution = {
+        version: AGENT_INTERACTION_CONTRACT_VERSION,
+        interactionId: "interaction-0",
+        sessionId: "provider-session",
+        action: "decline" as const,
+        resolvedAt: 10_001,
+      };
+      await service.resolveProjectionInteraction({
+        ...identity,
+        interactionId: "interaction-0",
+        resolution,
+      });
+      expect(resolveInteraction).toHaveBeenCalledWith(
+        "provider-session",
+        "interaction-0",
+        resolution,
+      );
+
+      await service.stopProjectionSession(identity);
+      expect(stub.abort).toHaveBeenCalledWith("provider-session");
+    });
+  });
+
+  test("routes neutral background-task and suggested-prompt intents", async () => {
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        backgroundTasks: [],
+      }),
+      stopBackgroundTask: async () => undefined,
+      dismissSuggestedPrompt: async () => undefined,
+    });
+    await withService({
+      prefix: "orkestrator-native-claude-parity-intents-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "env-env-1:tab-1",
+      };
+      await service.ensureSession(identity);
+      await service.stopProjectionBackgroundTask({ ...identity, taskId: "task/1" });
+      await service.dismissProjectionSuggestedPrompt(identity);
+      expect(stub.stopBackgroundTask).toHaveBeenCalledWith("provider-session", "task/1");
+      expect(stub.dismissSuggestedPrompt).toHaveBeenCalledWith("provider-session");
+    });
+  });
+
+  test("classifies accepted, rejected, and ambiguous dispatch intents", async () => {
+    let result: "accepted" | "rejected" | "unknown" = "accepted";
+    const stub = createProviderStub("cursor", {
+      send: async () => {
+        if (result === "rejected") throw new PromptRejectedError("No input");
+        if (result === "unknown") {
+          throw new AmbiguousPromptDispatchError("Response was lost");
+        }
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-dispatch-outcomes-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const base = {
+        environmentId: "env-1",
+        agent: "cursor" as const,
+        logicalSessionKey: "env-env-1:tab-1",
+        prompt: "Do the work",
+      };
+      await expect(service.dispatchIntent({
+        ...base,
+        requestId: "accepted-1",
+      })).resolves.toEqual({ outcome: "accepted", requestId: "accepted-1" });
+
+      result = "rejected";
+      await expect(service.dispatchIntent({
+        ...base,
+        requestId: "rejected-1",
+      })).resolves.toEqual({ outcome: "rejected", error: "No input" });
+
+      result = "unknown";
+      await expect(service.dispatchIntent({
+        ...base,
+        requestId: "unknown-1",
+      })).resolves.toEqual({
+        outcome: "unknown",
+        requestId: "unknown-1",
+        error: "Response was lost",
+      });
+    });
+  });
+
   test("observe-only monitoring survives without a renderer and never responds", async () => {
     let now = 10_000;
     let snapshot = pendingInteractionSnapshot(now);

@@ -271,6 +271,7 @@ export interface PersistedNativeAgentSession {
   providerSessionId: string;
   origin: AgentInteractionOrigin;
   interactionPolicy: AgentInteractionPolicy;
+  controls?: import("@orkestrator/protocol/native-agent").NativeAgentControlUpdate;
   dispatchedRequestIds?: string[];
   openCodeIncompleteTurnNotice?: {
     kind: "failed" | "exhausted";

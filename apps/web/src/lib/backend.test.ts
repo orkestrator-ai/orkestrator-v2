@@ -1378,7 +1378,7 @@ describe("backend native agent and looped review wrappers", () => {
     expect(minimalPayload).not.toHaveProperty("reasoningEffort");
   });
 
-  test("reads native sessions and coordinates OpenCode manual prompt claims", async () => {
+  test("reads native sessions", async () => {
     invokeMock.mockResolvedValueOnce(null);
     const identity = {
       environmentId: "env-1",
@@ -1391,22 +1391,6 @@ describe("backend native agent and looped review wrappers", () => {
       identity,
     );
 
-    const claim = {
-      environmentId: "env-1",
-      logicalSessionKey: "tab-1",
-      providerSessionId: "provider-1",
-      requestId: "request-1",
-    };
-    await backendWrappers.claimOpenCodeManualPrompt(claim);
-    expect(invokeMock).toHaveBeenLastCalledWith(
-      "claim_opencode_manual_prompt",
-      claim,
-    );
-    await backendWrappers.releaseOpenCodeManualPrompt(claim);
-    expect(invokeMock).toHaveBeenLastCalledWith(
-      "release_opencode_manual_prompt",
-      claim,
-    );
   });
 
   test("dispatches native prompts with full and minimal payloads", async () => {
@@ -1475,6 +1459,35 @@ describe("backend native agent and looped review wrappers", () => {
     expect(minimalPayload).not.toHaveProperty("phase");
     expect(minimalPayload).not.toHaveProperty("images");
     expect(minimalPayload).not.toHaveProperty("schema");
+  });
+
+  test("dispatches shared native-agent intents with an explicit outcome", async () => {
+    invokeMock.mockResolvedValueOnce({
+      outcome: "unknown",
+      requestId: "request-stable",
+      error: "response was lost",
+    });
+    const input = {
+      environmentId: "env-1",
+      agent: "cursor" as const,
+      logicalSessionKey: "env-env-1:tab-1",
+      prompt: "Continue",
+      requestId: "request-stable",
+      mode: "build" as const,
+      fastMode: true,
+    };
+
+    await expect(
+      backendWrappers.dispatchNativeAgentIntent(input),
+    ).resolves.toEqual({
+      outcome: "unknown",
+      requestId: "request-stable",
+      error: "response was lost",
+    });
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "dispatch_native_agent_intent",
+      input,
+    );
   });
 
   test("carries an optional controller fence on workflow saves", async () => {

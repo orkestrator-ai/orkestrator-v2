@@ -46,6 +46,10 @@ export interface AgentModel {
   defaultReasoningId?: string;
   supportsSpeed?: boolean;
   supportsMode?: boolean;
+  /** Provider context-window size, used by the shared usage meter. */
+  contextWindow?: number;
+  /** False only when the provider explicitly says this model rejects images. */
+  supportsImageInput?: boolean;
 }
 
 export interface AgentModelRef {
@@ -68,6 +72,10 @@ export interface NativeAgentComposerState {
   fastModeAvailable: boolean;
   selectedModeId?: AgentConversationMode;
   modes: Array<{ id: AgentConversationMode; label: string }>;
+  executionProfiles?: Array<{ id: string; label: string; description?: string; modelId?: string }>;
+  selectedExecutionProfileId?: string;
+  includeLocalSettings?: boolean;
+  promptSuggestionsEnabled?: boolean;
 }
 
 export const EMPTY_NATIVE_AGENT_COMPOSER_STATE: NativeAgentComposerState = {
@@ -91,6 +99,7 @@ export type NativeAgentDispatchOutcome =
 export type NativeAgentTurnPhase =
   | "idle"
   | "running"
+  | "blocked"
   | "cancelling"
   | "recovering"
   | "error";
@@ -146,7 +155,152 @@ export interface NativeAgentCapabilities {
     reasoning: boolean;
     speed: boolean;
     mode: boolean;
+    executionProfile?: boolean;
+    localSettings?: boolean;
+    promptSuggestions?: boolean;
   };
+  /** Platform-specific behavior exposed through the shared session surface. */
+  actions?: {
+    compact?: boolean;
+    rewindFiles?: boolean;
+    undo?: boolean;
+    redo?: boolean;
+    share?: boolean;
+    steer?: boolean;
+    review?: boolean;
+  };
+}
+
+export type NativeAgentSessionAction =
+  | { kind: "compact"; modelId?: string }
+  | { kind: "rewind-files"; messageId: string; dryRun?: boolean }
+  | { kind: "undo"; messageId?: string }
+  | { kind: "redo" }
+  | { kind: "share" }
+  | { kind: "unshare" }
+  | { kind: "steer"; text: string; requestId: string }
+  | { kind: "review" };
+
+export interface NativeAgentSessionActionOutcome {
+  outcome: "applied" | "idle" | "mismatch" | "unknown";
+  shareUrl?: string;
+  preview?: unknown;
+  requestId?: string;
+}
+
+/** Durable queue state projected with an interactive native session. */
+export interface NativeAgentQueueSnapshot<TItem = unknown> {
+  items: TItem[];
+  inFlightRequestId?: string;
+  blocked?: {
+    messageId?: string;
+    error: string;
+    attempts?: number;
+  };
+}
+
+export interface NativeAgentContextUsage {
+  usedTokens: number;
+  maximumTokens?: number;
+  percentage?: number;
+  modelId?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
+  lastTurnTokens?: number;
+  sessionTokens?: number;
+  costUsd?: number;
+  durationMs?: number;
+  apiDurationMs?: number;
+  estimated?: boolean;
+  source?: "claude" | "opencode" | "codex" | "heuristic" | "provider";
+  updatedAt?: string;
+  rateLimits?: Array<{
+    label: string;
+    usedPercent?: number;
+    resetsAt?: string;
+    windowMinutes?: number;
+  }>;
+  credits?: {
+    hasCredits?: boolean;
+    unlimited?: boolean;
+    balance?: string;
+  };
+  contextCategories?: Array<{ name: string; tokens: number; color?: string }>;
+  permissionDenials?: number;
+  linesAdded?: number;
+  linesRemoved?: number;
+}
+
+export interface NativeAgentRateLimitWindow {
+  label: string;
+  usedPercent?: number;
+  resetsAt?: string;
+  windowMinutes?: number;
+}
+
+/** Bounded, content-free runtime inventory for the agent-information panel. */
+export interface NativeAgentRuntimeSummary {
+  mcpServers?: number;
+  plugins?: number;
+  commands?: number;
+  skills?: number;
+  hooks?: number;
+  lspServers?: number;
+  formatters?: number;
+  todos?: number;
+  files?: number;
+  state?: string;
+  version?: string;
+  notices?: Array<{ message: string; count?: number }>;
+}
+
+export type NativeAgentNotice =
+  | { kind: "recovery"; message: string }
+  | { kind: "incomplete-turn"; message: string }
+  | { kind: "warning"; message: string };
+
+export interface NativeAgentBackgroundTaskSummary {
+  id: string;
+  status: "pending" | "running" | "completed" | "failed" | "killed" | "paused";
+  description?: string;
+}
+
+export interface NativeAgentTurnBoundary {
+  turnId: string;
+  messageId?: string;
+  resumable: boolean;
+  forkable: boolean;
+}
+
+export interface NativeAgentResumeEntry {
+  sessionId: string;
+  title?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface NativeAgentForkOutcome {
+  sessionId: string;
+  title?: string;
+}
+
+export interface NativeAgentSlashCommand {
+  name: string;
+  description?: string;
+  argumentHint?: string;
+}
+
+export interface NativeAgentControlUpdate {
+  modelId?: string;
+  reasoningId?: string;
+  fastMode?: boolean;
+  mode?: AgentConversationMode;
+  executionProfileId?: string | null;
+  includeLocalSettings?: boolean;
+  promptSuggestions?: boolean;
 }
 
 /**
@@ -158,13 +312,34 @@ export interface NativeAgentSessionProjection<TMessage = unknown> {
   environmentId: string;
   sessionId?: string;
   title?: string;
+  /**
+   * Authoritative provider sharing state. `null` means the provider confirmed
+   * that the session is private; `undefined` means sharing is unsupported or
+   * the provider could not report it.
+   */
+  shareUrl?: string | null;
   connection: NativeAgentConnectionState;
   turn: NativeAgentTurnState;
   messages: TMessage[];
   interactions: AgentInteractionRequest[];
   composerControls: NativeAgentComposerControl[];
+  /** Rich, provider-neutral model metadata used by the common model picker. */
+  composer?: NativeAgentComposerState;
   capabilities: NativeAgentCapabilities;
-  revision?: number;
-  generation?: string | number;
+  queue?: NativeAgentQueueSnapshot;
+  contextUsage?: NativeAgentContextUsage;
+  /** Provider limits can arrive before the first token-usage snapshot. */
+  rateLimits?: NativeAgentRateLimitWindow[];
+  runtime?: NativeAgentRuntimeSummary;
+  notices?: NativeAgentNotice[];
+  backgroundTasks?: NativeAgentBackgroundTaskSummary[];
+  suggestedPrompt?: string;
+  completionBlockedByBackgroundTasks?: boolean;
+  turnBoundaries?: NativeAgentTurnBoundary[];
+  slashCommands?: NativeAgentSlashCommand[];
+  /** Monotonic within one runtime generation. */
+  revision: number;
+  /** Changes whenever the provider transport authority is replaced. */
+  generation: string | number;
   cursor?: string;
 }

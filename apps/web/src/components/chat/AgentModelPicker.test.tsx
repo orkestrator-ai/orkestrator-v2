@@ -72,6 +72,38 @@ function getMobileTrigger(kind: "reasoning" | "speed") {
 describe("AgentModelPicker", () => {
   afterEach(() => cleanup());
 
+  test("follows a platform restored after the picker first renders", () => {
+    setMobileViewport(false);
+    function HydratingPicker() {
+      const [platform, setPlatform] = useState<"claude" | "codex">("claude");
+      return (
+        <>
+          <button type="button" onClick={() => setPlatform("codex")}>Hydrate Codex</button>
+          <AgentModelPicker
+            models={[
+              { platform: "claude", id: "claude-model", label: "Claude model" },
+              { platform: "codex", id: "codex-model", label: "Codex model" },
+            ]}
+            enabledPlatforms={["claude", "codex"]}
+            selectedPlatform={platform}
+            selectedModelId={`${platform}-model`}
+            selectedModelLabel={`${platform} model`}
+            onModelChange={() => {}}
+            reasoningOptions={[]}
+          />
+        </>
+      );
+    }
+    render(<HydratingPicker />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Hydrate Codex" }));
+    fireEvent.pointerDown(screen.getByTitle("Choose model"));
+
+    expect(screen.getByRole("button", { name: "codex models" }).getAttribute("aria-pressed"))
+      .toBe("true");
+    expect(screen.getByRole("menuitemradio", { name: /Codex model/ })).toBeTruthy();
+  });
+
   test("keeps the mobile menu inset, truncates the trigger, and signals overflow", () => {
     setMobileViewport(true);
     const { container } = renderPicker();

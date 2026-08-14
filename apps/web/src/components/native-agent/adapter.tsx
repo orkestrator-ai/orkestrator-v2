@@ -1,4 +1,3 @@
-import type { ComponentType } from "react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type {
   NativeAgentCapabilities,
@@ -19,19 +18,15 @@ export interface AgentNativeTabProps {
   agentHandoffId?: string;
   consumedAgentHandoffId?: string;
   refreshRequestId?: number;
-  /** Open this provider's normal resume dialog as soon as its controller mounts. */
+  /** Open the shared resume dialog as soon as the controller mounts. */
   initialResumeOpen?: boolean;
 }
 
-/**
- * The renderer-side provider boundary. Legacy controllers remain behind this
- * interface while their lifecycle code is moved into headless runtimes.
- */
+/** Provider metadata consumed by the one shared native-agent controller. */
 export interface NativeAgentAdapter {
   platform: AgentPlatform;
   label: string;
   capabilities: NativeAgentCapabilities;
-  loadController: () => Promise<ComponentType<AgentNativeTabProps>>;
 }
 
 function acpAdapter(
@@ -55,23 +50,7 @@ function acpAdapter(
         speed: true,
         mode: true,
       },
-    },
-    loadController: async () => {
-      const { AcpChatTab } = await import("@/components/acp");
-      return function AcpNativeAgentController(props: AgentNativeTabProps) {
-        return (
-          <AcpChatTab
-            tabId={props.tabId}
-            data={props.data as AgentNativeTabProps["data"] & { platform: "cursor" | "grok" }}
-            isActive={props.isActive}
-            initialPrompt={props.initialPrompt}
-            initialAgentModel={props.initialAgentModel}
-            initialReasoningEffort={props.initialReasoningEffort}
-            initialConversationMode={props.initialConversationMode}
-            initialFastMode={props.initialFastMode}
-          />
-        );
-      };
+      actions: {},
     },
   };
 }
@@ -89,7 +68,11 @@ const richCapabilities: NativeAgentCapabilities = {
     reasoning: true,
     speed: true,
     mode: true,
+    executionProfile: false,
+    localSettings: false,
+    promptSuggestions: false,
   },
+  actions: { compact: true },
 };
 
 export const nativeAgentAdapters: Readonly<
@@ -98,23 +81,24 @@ export const nativeAgentAdapters: Readonly<
   claude: {
     platform: "claude",
     label: "Claude",
-    capabilities: { ...richCapabilities, backgroundTasks: true },
-    loadController: async () => {
-      const { ClaudeChatTab } = await import("@/components/claude/ClaudeChatTab");
-      return function ClaudeNativeAgentController(props: AgentNativeTabProps) {
-        return <ClaudeChatTab {...props} data={props.data} />;
-      };
+    capabilities: {
+      ...richCapabilities,
+      backgroundTasks: true,
+      composer: {
+        ...richCapabilities.composer,
+        executionProfile: true,
+        localSettings: true,
+        promptSuggestions: true,
+      },
+      actions: { compact: true, rewindFiles: true },
     },
   },
   codex: {
     platform: "codex",
     label: "Codex",
-    capabilities: richCapabilities,
-    loadController: async () => {
-      const { CodexChatTab } = await import("@/components/codex/CodexChatTab");
-      return function CodexNativeAgentController(props: AgentNativeTabProps) {
-        return <CodexChatTab {...props} data={props.data} />;
-      };
+    capabilities: {
+      ...richCapabilities,
+      actions: { compact: true, steer: true, review: true },
     },
   },
   opencode: {
@@ -122,13 +106,12 @@ export const nativeAgentAdapters: Readonly<
     label: "OpenCode",
     capabilities: {
       ...richCapabilities,
-      composer: { ...richCapabilities.composer, speed: false },
-    },
-    loadController: async () => {
-      const { OpenCodeChatTab } = await import("@/components/opencode");
-      return function OpenCodeNativeAgentController(props: AgentNativeTabProps) {
-        return <OpenCodeChatTab {...props} data={props.data} />;
-      };
+      composer: {
+        ...richCapabilities.composer,
+        speed: false,
+        executionProfile: true,
+      },
+      actions: { compact: true, undo: true, redo: true, share: true },
     },
   },
   cursor: acpAdapter("cursor", "Cursor Agent"),

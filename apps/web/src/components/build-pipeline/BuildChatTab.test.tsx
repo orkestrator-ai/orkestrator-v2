@@ -2105,11 +2105,14 @@ describe("BuildChatTab agent messaging", () => {
     fireEvent.click(button);
 
     // A second click would queue the same text twice.
-    await waitFor(() => expect(button.disabled).toBe(true));
+    expect(button.disabled).toBe(true);
     expect(button.querySelector(".animate-spin")).toBeTruthy();
 
-    release?.();
-    await waitFor(() => expect(button.querySelector(".animate-spin")).toBeNull());
+    await act(async () => {
+      release?.();
+      await Promise.resolve();
+    });
+    expect(button.querySelector(".animate-spin")).toBeNull();
   });
 
   test("re-enables the retry control when the backend refuses a review restart", async () => {

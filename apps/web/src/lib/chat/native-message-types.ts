@@ -150,4 +150,6 @@ export interface NativeMessage {
   /** Provider/backend-observed model that produced this assistant message. */
   modelId?: string;
   turnId?: string;
+  /** Typed Codex plan-review marker used by the shared presentation slot. */
+  planReview?: boolean;
 }

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { Clock3, Loader2, Square } from "lucide-react";
+import type { NativeAgentBackgroundTaskSummary } from "@orkestrator/protocol/native-agent";
 import { BlockingPromptCard } from "@/components/chat/BlockingPromptCard";
 import { Button } from "@/components/ui/button";
-import type { ClaudeBackgroundTask } from "@/lib/claude-client";
 
 interface ClaudeBackgroundTaskHoldCardProps {
-  tasks: ClaudeBackgroundTask[];
+  tasks: NativeAgentBackgroundTaskSummary[];
   responseInProgress: boolean;
   responseFailed?: boolean;
   onStopTask: (taskId: string) => Promise<boolean>;
@@ -16,7 +16,7 @@ interface StopError {
   message: string;
 }
 
-function taskLabel(task: ClaudeBackgroundTask): string {
+function taskLabel(task: NativeAgentBackgroundTaskSummary): string {
   return task.description?.trim() || `Background task ${task.id}`;
 }
 
@@ -49,7 +49,7 @@ export function ClaudeBackgroundTaskHoldCard({
   }, [tasks]);
 
   const stopTask = useCallback(
-    async (task: ClaudeBackgroundTask) => {
+    async (task: NativeAgentBackgroundTaskSummary) => {
       if (stoppingTaskIds.has(task.id)) return;
       setStopError(null);
       setStoppingTaskIds((current) => new Set(current).add(task.id));

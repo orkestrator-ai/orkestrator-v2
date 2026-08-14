@@ -1,33 +1,25 @@
 /**
  * Contract suite for the single pane-level native agent tab.
  *
- * `adapter.test.ts` only checks that every platform *has* a `loadController`.
- * This file actually invokes all five of them, because the wiring they perform
- * — which module is imported, and what identity shape the controller receives
- * — is not observable from the registry alone.
+ * Every provider exercises the shared authoritative-projection path.
  */
-import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
-import type { NativeAgentTabData } from "@orkestrator/protocol/native-agent";
-import * as realClaudeChatTab from "@/components/claude/ClaudeChatTab";
-import * as realCodexChatTab from "@/components/codex/CodexChatTab";
-import * as realOpenCode from "@/components/opencode";
-import * as realAcp from "@/components/acp";
+import type { NativeAgentSessionProjection, NativeAgentTabData } from "@orkestrator/protocol/native-agent";
+import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as realBackend from "@/lib/backend";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { getNativeAgentData } from "@/types/paneLayout";
 import { createSessionKey } from "@/lib/utils";
+import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 
 // Snapshot before installing the stubs so the real modules are restored for
 // any suite that runs after this file in the same module registry.
-const realClaudeChatTabSnapshot = { ...realClaudeChatTab };
-const realCodexChatTabSnapshot = { ...realCodexChatTab };
-const realOpenCodeSnapshot = { ...realOpenCode };
-const realAcpSnapshot = { ...realAcp };
 const realBackendSnapshot = { ...realBackend };
 const realPaneLayoutPersistenceSnapshot = { ...realPaneLayoutPersistence };
 const flushPaneLayoutNowMock = mock(async () => {});
@@ -39,43 +31,86 @@ const awaitBridgeReadyMock = mock(async () => ({
   port: 4099,
   authToken: "token",
 }));
+const adoptNativeAgentSessionMock = mock(async (input: {
+  agent: string;
+  providerSessionId: string;
+  logicalSessionKey: string;
+  environmentId: string;
+}) => ({
+  providerSessionId: input.providerSessionId,
+  logicalSessionKey: input.logicalSessionKey,
+  environmentId: input.environmentId,
+  agent: input.agent,
+}));
+const ensureNativeAgentSessionMock = mock(async (input: {
+  agent: string;
+  logicalSessionKey: string;
+  environmentId: string;
+}) => ({
+  providerSessionId: `${input.agent}-session`,
+  logicalSessionKey: input.logicalSessionKey,
+  environmentId: input.environmentId,
+  agent: input.agent,
+}));
+const listNativeAgentResumableSessionsMock = mock(async () => []);
+const dispatchNativeAgentIntentMock = mock(async (input: { requestId: string }) => ({
+  outcome: "accepted" as const,
+  requestId: input.requestId,
+}));
+const stopNativeAgentSessionMock = mock(async () => getNativeAgentProjectionMock({
+  agent: "claude",
+  environmentId: "env-1",
+}));
+const getNativeAgentProjectionMock = mock(async (input: {
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  environmentId: string;
+}): Promise<NativeAgentSessionProjection<NativeMessage>> => ({
+  platform: input.agent,
+  environmentId: input.environmentId,
+  sessionId: `${input.agent}-session`,
+  connection: "connected" as const,
+  turn: { phase: "idle" as const },
+  messages: [] as NativeMessage[],
+  interactions: [],
+  composerControls: [],
+  composer: {
+    models: [],
+    fastModeEnabled: false,
+    fastModeAvailable: false,
+    selectedModeId: "build" as const,
+    modes: [{ id: "build" as const, label: "Build" }],
+  },
+  capabilities: {
+    attachments: { files: false, images: false },
+    queue: false,
+    resume: false,
+    fork: false,
+    slashCommands: false,
+    backgroundTasks: false,
+    composer: {
+      provider: true,
+      model: true,
+      reasoning: true,
+      speed: true,
+      mode: true,
+    },
+  },
+  revision: 1,
+  generation: "test-generation",
+}));
 
-/** Renders the identity it was handed so the projection can be asserted. */
-function stubController(testId: string) {
-  return ({
-    tabId,
-    data,
-    initialResumeOpen,
-  }: {
-    tabId: string;
-    data: Record<string, unknown>;
-    initialResumeOpen?: boolean;
-  }) => (
-    <div
-      data-testid={testId}
-      data-tab-id={tabId}
-      data-payload={JSON.stringify(data)}
-      data-initial-resume-open={String(initialResumeOpen ?? false)}
-    />
-  );
-}
-
-mock.module("@/components/claude/ClaudeChatTab", () => ({
-  ClaudeChatTab: stubController("claude-controller"),
-}));
-mock.module("@/components/codex/CodexChatTab", () => ({
-  CodexChatTab: stubController("codex-controller"),
-}));
-mock.module("@/components/opencode", () => ({
-  OpenCodeChatTab: stubController("opencode-controller"),
-}));
-mock.module("@/components/acp", () => ({
-  AcpChatTab: stubController("acp-controller"),
-}));
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getNativeAgentModelCatalog: getNativeAgentModelCatalogMock,
   awaitBridgeReady: awaitBridgeReadyMock,
+  adoptNativeAgentSession: adoptNativeAgentSessionMock,
+  ensureNativeAgentSession: ensureNativeAgentSessionMock,
+  listNativeAgentResumableSessions: listNativeAgentResumableSessionsMock,
+  dispatchNativeAgentIntent: dispatchNativeAgentIntentMock,
+  stopNativeAgentSession: stopNativeAgentSessionMock,
+  getFileTree: async () => [],
+  getLocalFileTree: async () => [],
+  getNativeAgentProjection: getNativeAgentProjectionMock,
 }));
 mock.module("@/lib/pane-layout-persistence", () => ({
   ...realPaneLayoutPersistenceSnapshot,
@@ -83,6 +118,18 @@ mock.module("@/lib/pane-layout-persistence", () => ({
 }));
 
 const { AgentNativeTab } = await import("./AgentNativeTab");
+
+beforeEach(() => {
+  useEnvironmentStore.setState({
+    environments: [{
+      id: "env-1",
+      projectId: "project-1",
+      name: "Native agent test",
+      order: 0,
+      setupPhase: "ready",
+    } as never],
+  });
+});
 
 afterEach(() => {
   cleanup();
@@ -95,6 +142,12 @@ afterEach(() => {
     port: 4099,
     authToken: "token",
   }));
+  adoptNativeAgentSessionMock.mockClear();
+  ensureNativeAgentSessionMock.mockClear();
+  listNativeAgentResumableSessionsMock.mockClear();
+  dispatchNativeAgentIntentMock.mockClear();
+  stopNativeAgentSessionMock.mockClear();
+  getNativeAgentProjectionMock.mockClear();
   useEnvironmentStore.setState({ environments: [] });
   usePaneLayoutStore.setState({
     environments: new Map(),
@@ -102,24 +155,13 @@ afterEach(() => {
     activeEnvironmentId: null,
   });
   useNativeComposeStore.setState({ drafts: new Map() });
+  useNativeAgentProjectionStore.getState().reset();
 });
 
 afterAll(() => {
-  mock.module("@/components/claude/ClaudeChatTab", () => realClaudeChatTabSnapshot);
-  mock.module("@/components/codex/CodexChatTab", () => realCodexChatTabSnapshot);
-  mock.module("@/components/opencode", () => realOpenCodeSnapshot);
-  mock.module("@/components/acp", () => realAcpSnapshot);
   mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("@/lib/pane-layout-persistence", () => realPaneLayoutPersistenceSnapshot);
 });
-
-const controllerTestIds: Record<string, string> = {
-  claude: "claude-controller",
-  codex: "codex-controller",
-  opencode: "opencode-controller",
-  cursor: "acp-controller",
-  grok: "acp-controller",
-};
 
 function identity(platform: NativeAgentTabData["platform"]): NativeAgentTabData {
   return {
@@ -132,14 +174,25 @@ function identity(platform: NativeAgentTabData["platform"]): NativeAgentTabData 
 }
 
 function PaneBackedAgentNativeTab({ tabId = "tab-resume" }: { tabId?: string }) {
-  const data = usePaneLayoutStore((state) => {
+  const tab = usePaneLayoutStore((state) => {
     const root = state.environments.get("env-1")?.root;
     if (!root || root.kind !== "leaf") return undefined;
-    const tab = root.tabs.find((candidate) => candidate.id === tabId);
-    return tab ? getNativeAgentData(tab) ?? undefined : undefined;
+    return root.tabs.find((candidate) => candidate.id === tabId);
   });
+  const data = tab ? getNativeAgentData(tab) : undefined;
   if (!data) return null;
-  return <AgentNativeTab tabId={tabId} data={data} isActive />;
+  return (
+    <AgentNativeTab
+      tabId={tabId}
+      data={data}
+      isActive
+      initialPrompt={tab?.initialPrompt}
+      initialAgentModel={tab?.initialAgentModel}
+      initialReasoningEffort={tab?.initialReasoningEffort}
+      initialConversationMode={tab?.initialConversationMode}
+      initialFastMode={tab?.initialFastMode}
+    />
+  );
 }
 
 function seedUnassignedPane(tabId: string) {
@@ -184,9 +237,6 @@ describe("AgentNativeTab", () => {
     expect(screen.getByRole("button", { name: "Resume Session" })).toBeTruthy();
     expect(screen.getByTestId("compose-dock").className).toContain("top-1/2");
     expect(screen.getByTestId("unassigned-native-compose-bar").className).toContain("rounded-2xl");
-    for (const testId of Object.values(controllerTestIds)) {
-      expect(screen.queryByTestId(testId)).toBeNull();
-    }
   });
 
   test("asks for a platform before opening that provider's normal resume flow", async () => {
@@ -222,8 +272,7 @@ describe("AgentNativeTab", () => {
 
     fireEvent.click(within(dialog).getByRole("button", { name: /Codex/ }));
 
-    const controller = await screen.findByTestId("codex-controller");
-    expect(controller.dataset.initialResumeOpen).toBe("true");
+    expect(await screen.findByRole("dialog", { name: "Resume session" })).toBeTruthy();
     await waitFor(() => expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(1));
   });
 
@@ -409,13 +458,7 @@ describe("AgentNativeTab", () => {
       },
     );
 
-    render(
-      <AgentNativeTab
-        tabId="tab-first-prompt"
-        data={{ environmentId: "env-1" }}
-        isActive
-      />,
-    );
+    render(<PaneBackedAgentNativeTab tabId="tab-first-prompt" />);
     fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
 
     await waitFor(() => expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(1));
@@ -423,9 +466,16 @@ describe("AgentNativeTab", () => {
     expect(root?.kind).toBe("leaf");
     if (!root || root.kind !== "leaf") throw new Error("Expected leaf pane");
     const tab = root.tabs.find((candidate) => candidate.id === "tab-first-prompt");
-    expect(tab?.initialPrompt).toContain("[@widget.ts](src/widget.ts)");
-    expect(tab?.initialPrompt).toContain("layout.png: /workspace/.orkestrator/clipboard/layout.png");
     expect(getNativeAgentData(tab!)?.platform).toBe("claude");
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0]).toMatchObject({
+      prompt: expect.stringMatching(/\[@widget\.ts\]\(src\/widget\.ts\)[\s\S]*layout\.png: \/workspace\/\.orkestrator\/clipboard\/layout\.png/),
+      attachments: [{
+        type: "image",
+        path: "/workspace/.orkestrator/clipboard/layout.png",
+        filename: "layout.png",
+      }],
+    });
   });
 
   test("retries a failed first-prompt provider-lock save without losing the draft", async () => {
@@ -448,7 +498,7 @@ describe("AgentNativeTab", () => {
     expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe("Keep this prompt");
     fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
 
-    expect(await screen.findByTestId("claude-controller")).toBeTruthy();
+    expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
     expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(2);
     expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined();
   });
@@ -467,13 +517,12 @@ describe("AgentNativeTab", () => {
     expect(await screen.findByRole("button", { name: "Retry save" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
 
-    const controller = await screen.findByTestId("codex-controller");
-    expect(controller.dataset.initialResumeOpen).toBe("true");
+    expect(await screen.findByRole("dialog", { name: "Resume session" })).toBeTruthy();
     expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(2);
   });
 
   for (const platform of AGENT_PLATFORMS) {
-    test(`loads the ${platform} controller and hands it the canonical identity`, async () => {
+    test(`routes ${platform} through the shared authoritative projection`, async () => {
       render(
         <AgentNativeTab
           tabId={`tab-${platform}`}
@@ -482,20 +531,49 @@ describe("AgentNativeTab", () => {
         />,
       );
 
-      const controller = await screen.findByTestId(controllerTestIds[platform]!);
-      expect(controller.dataset.tabId).toBe(`tab-${platform}`);
-
-      const payload = JSON.parse(controller.dataset.payload!);
-      expect(payload).toMatchObject({
-        platform,
+      expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
+      expect(adoptNativeAgentSessionMock).toHaveBeenCalledWith(expect.objectContaining({
+        agent: platform,
         environmentId: "env-1",
-        containerId: "container-1",
-        sessionId: `${platform}-session`,
-        isLocal: false,
-      });
-      expect(payload).not.toHaveProperty("provider");
+        logicalSessionKey: `env-env-1:tab-${platform}`,
+        providerSessionId: `${platform}-session`,
+      }));
+      expect(getNativeAgentProjectionMock).toHaveBeenCalledWith(expect.objectContaining({
+        agent: platform,
+        environmentId: "env-1",
+      }));
     });
   }
+
+  test("waits for environment setup before starting the shared provider", async () => {
+    useEnvironmentStore.setState({
+      environments: [{
+        id: "env-1",
+        projectId: "project-1",
+        name: "Setting up",
+        order: 0,
+        setupPhase: "running",
+      } as never],
+    });
+    render(
+      <AgentNativeTab
+        tabId="tab-setup"
+        data={identity("claude")}
+        isActive
+      />,
+    );
+    expect(screen.getByText("Waiting for setup scripts to complete...")).toBeTruthy();
+    expect(adoptNativeAgentSessionMock).not.toHaveBeenCalled();
+
+    useEnvironmentStore.setState((state) => ({
+      environments: state.environments.map((environment) => ({
+        ...environment,
+        setupPhase: "ready" as const,
+      })),
+    }));
+    expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
+    await waitFor(() => expect(adoptNativeAgentSessionMock).toHaveBeenCalledTimes(1));
+  });
 
   test("renders a mismatch notice instead of throwing on an unknown platform", async () => {
     // A persisted record can name a platform this build does not ship. Failing
@@ -512,7 +590,6 @@ describe("AgentNativeTab", () => {
     );
 
     expect(await screen.findByText(/unsupported agent/i)).toBeTruthy();
-    expect(screen.queryByTestId("claude-controller")).toBeNull();
   });
 
   test("does not resolve a platform through the prototype chain", async () => {
@@ -530,17 +607,104 @@ describe("AgentNativeTab", () => {
     expect(await screen.findByText(/unsupported agent/i)).toBeTruthy();
   });
 
-  test("swaps controllers when a tab's platform changes", async () => {
+  test("reconnects the shared controller when a tab's platform changes", async () => {
     const { rerender } = render(
       <AgentNativeTab tabId="tab-swap" data={identity("codex")} isActive />,
     );
-    expect(await screen.findByTestId("codex-controller")).toBeTruthy();
+    expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
 
     rerender(
       <AgentNativeTab tabId="tab-swap" data={identity("opencode")} isActive />,
     );
 
-    expect(await screen.findByTestId("opencode-controller")).toBeTruthy();
-    expect(screen.queryByTestId("codex-controller")).toBeNull();
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agent: "opencode" }),
+    ));
+  });
+
+  test("restores review follow-up, manual refresh, notices, and Escape stop in the shared tab", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      platform: input.agent,
+      environmentId: input.environmentId,
+      sessionId: "claude-session",
+      connection: "connected" as const,
+      turn: { phase: "idle" as const },
+      messages: [{
+        id: "assistant-1",
+        role: "assistant" as const,
+        content: "Review",
+        parts: [],
+        createdAt: "2026-08-14T10:00:00.000Z",
+      }],
+      interactions: [],
+      composerControls: [],
+      composer: {
+        models: [], fastModeEnabled: false, fastModeAvailable: false,
+        selectedModeId: "build" as const, modes: [{ id: "build" as const, label: "Build" }],
+      },
+      capabilities: {
+        attachments: { files: true, images: true }, queue: true, resume: true,
+        fork: true, slashCommands: true, backgroundTasks: true,
+        composer: { provider: true, model: true, reasoning: true, speed: true, mode: true },
+      },
+      notices: [{ kind: "warning" as const, message: "Recovered provider notice" }],
+      revision: 1,
+      generation: "test-generation",
+    }));
+    const view = render(
+      <AgentNativeTab
+        tabId="tab-review"
+        data={identity("claude")}
+        isActive
+        ownsGlobalShortcuts
+        isReviewTab
+        refreshRequestId={0}
+      />,
+    );
+    expect(await screen.findByText("Recovered provider notice")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Address all" }));
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalled());
+    expect(dispatchNativeAgentIntentMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      prompt: ADDRESS_ALL_REVIEW_PROMPT,
+    });
+
+    const readsBeforeRefresh = getNativeAgentProjectionMock.mock.calls.length;
+    view.rerender(
+      <AgentNativeTab
+        tabId="tab-review"
+        data={identity("claude")}
+        isActive
+        ownsGlobalShortcuts
+        isReviewTab
+        refreshRequestId={1}
+      />,
+    );
+    await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length)
+      .toBeGreaterThan(readsBeforeRefresh));
+
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      platform: input.agent,
+      environmentId: input.environmentId,
+      sessionId: "claude-session",
+      connection: "connected" as const,
+      turn: { phase: "running" as const },
+      messages: [], interactions: [], composerControls: [],
+      composer: { models: [], fastModeEnabled: false, fastModeAvailable: false, modes: [] },
+      capabilities: {
+        attachments: { files: true, images: true }, queue: true, resume: true,
+        fork: true, slashCommands: true, backgroundTasks: true,
+        composer: { provider: true, model: true, reasoning: true, speed: true, mode: true },
+      },
+      revision: 2, generation: "test-generation",
+    }));
+    view.rerender(
+      <AgentNativeTab tabId="tab-review-running" data={identity("claude")} isActive ownsGlobalShortcuts />,
+    );
+    await waitFor(() => expect(screen.getByTitle("Stop current query")).toBeTruthy());
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(stopNativeAgentSessionMock).toHaveBeenCalledTimes(1));
+    expect(useNativeAgentProjectionStore.getState().turnStopMarkers.get(
+      createSessionKey("env-1", "tab-review-running"),
+    )?.sessionId).toBe("claude-session");
   });
 });

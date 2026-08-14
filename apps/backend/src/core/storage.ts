@@ -822,6 +822,32 @@ function isPersistedNativeAgentSession(
     )
     && isAgentInteractionPolicy(value.interactionPolicy)
     && (
+      value.controls === undefined
+      || (
+        isRecord(value.controls)
+        && Object.keys(value.controls).every((key) =>
+          key === "modelId"
+          || key === "reasoningId"
+          || key === "fastMode"
+          || key === "mode"
+          || key === "executionProfileId"
+          || key === "includeLocalSettings"
+          || key === "promptSuggestions"
+        )
+        && (value.controls.modelId === undefined || isNonBlankString(value.controls.modelId))
+        && (value.controls.reasoningId === undefined || isNonBlankString(value.controls.reasoningId))
+        && (value.controls.fastMode === undefined || typeof value.controls.fastMode === "boolean")
+        && (value.controls.executionProfileId === undefined || value.controls.executionProfileId === null || isNonBlankString(value.controls.executionProfileId))
+        && (value.controls.includeLocalSettings === undefined || typeof value.controls.includeLocalSettings === "boolean")
+        && (value.controls.promptSuggestions === undefined || typeof value.controls.promptSuggestions === "boolean")
+        && (
+          value.controls.mode === undefined
+          || value.controls.mode === "build"
+          || value.controls.mode === "plan"
+        )
+      )
+    )
+    && (
       value.dispatchedRequestIds === undefined
       || (
         Array.isArray(value.dispatchedRequestIds)
@@ -1764,6 +1790,9 @@ function normalizeOpenCodeModelCatalogEntries(
         ? { outputCost: nonNegativeNumber(candidate.outputCost) }
         : {}),
       ...(contextWindow !== undefined ? { contextWindow } : {}),
+      ...(typeof candidate.supportsImageInput === "boolean"
+        ? { supportsImageInput: candidate.supportsImageInput }
+        : {}),
     };
     const duplicates = byId.get(id) ?? [];
     duplicates.push(normalized);
@@ -1960,6 +1989,18 @@ export class StorageService {
       // A broken client transport must never fail the mutation that succeeded.
       console.error("[Storage] Resource change listener threw:", error);
     }
+  }
+
+  /**
+   * Publish a changed provider-authoritative native-session projection.
+   *
+   * Unlike the durable identity record, transcript and turn state live in the
+   * provider. The native runtime first commits the new bounded projection to
+   * its cache and only then calls this method, preserving the same
+   * announce-after-commit ordering as file-backed resources.
+   */
+  announceNativeAgentSessionProjection(environmentId: string): void {
+    this.announce("native-agent-session", environmentId);
   }
 
   getDataDir(): string {
@@ -5023,7 +5064,7 @@ export class StorageService {
       "key" | "environmentId" | "agent" | "logicalSessionKey"
     > & Partial<Pick<
       PersistedNativeAgentSession,
-      "origin" | "interactionPolicy"
+      "origin" | "interactionPolicy" | "controls"
     >>,
     createProviderSession: () => Promise<string>,
   ): Promise<PersistedNativeAgentSession> {
@@ -5098,7 +5139,7 @@ export class StorageService {
       | "providerSessionId"
     > & Partial<Pick<
       PersistedNativeAgentSession,
-      "origin" | "interactionPolicy"
+      "origin" | "interactionPolicy" | "controls"
     >> & { expectedProviderSessionId?: string },
   ): Promise<PersistedNativeAgentSession> {
     const interactionMetadata = resolveNativeAgentInteractionMetadata(input);
@@ -5160,6 +5201,7 @@ export class StorageService {
           ? {
               origin: existing.origin,
               interactionPolicy: existing.interactionPolicy,
+              controls: existing.controls ?? input.controls,
             }
           : interactionMetadata),
         version: NATIVE_AGENT_SESSION_VERSION,
@@ -5170,6 +5212,35 @@ export class StorageService {
       await this.saveNativeAgentSessions(sessions, opaque);
       this.announce("native-agent-session", input.environmentId);
       return saved;
+    });
+  }
+
+  async updateNativeAgentSessionControls(
+    key: string,
+    expectedProviderSessionId: string,
+    update: import("@orkestrator/protocol/native-agent").NativeAgentControlUpdate,
+  ): Promise<PersistedNativeAgentSession> {
+    if (!isNonBlankString(key) || !isNonBlankString(expectedProviderSessionId)) {
+      throw new Error("Native agent control update identity is invalid");
+    }
+    return this.enqueueNativeAgentSessionMutation(async () => {
+      const loaded = await this.loadNativeAgentSessions();
+      const { sessions, opaque } = loaded;
+      this.assertReadableNativeAgentSession(loaded, key);
+      const existing = sessions[key];
+      if (!existing || existing.providerSessionId !== expectedProviderSessionId) {
+        throw new Error("Native agent control update target is stale");
+      }
+      const controls = { ...existing.controls, ...update };
+      const updated: PersistedNativeAgentSession = {
+        ...existing,
+        controls,
+        updatedAt: nowIso(),
+      };
+      sessions[key] = updated;
+      await this.saveNativeAgentSessions(sessions, opaque);
+      this.announce("native-agent-session", existing.environmentId);
+      return updated;
     });
   }
 

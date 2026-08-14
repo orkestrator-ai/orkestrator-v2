@@ -14,10 +14,12 @@ interface NativeComposeDraftState<TMention, TAttachment> {
   draftText: Map<string, string>;
   draftMentions: Map<string, TMention[]>;
   attachments: Map<string, TAttachment[]>;
+  draftMetadata?: Map<string, unknown>;
   setDraftText: (sessionKey: string, text: string) => void;
   setDraftMentions: (sessionKey: string, mentions: TMention[]) => void;
   clearAttachments: (sessionKey: string) => void;
   addAttachment: (sessionKey: string, attachment: TAttachment) => void;
+  setDraftMetadata?: (sessionKey: string, metadata: unknown) => void;
 }
 
 interface NativeComposeDraftStore<TMention, TAttachment> {
@@ -34,9 +36,17 @@ interface PersistedNativeComposeDraft {
   text: string;
   mentions: unknown[];
   attachments: unknown[];
+  metadata?: unknown;
 }
 
-type NativeDraftNamespace = "claude" | "claude-tmux" | "codex" | "opencode";
+type NativeDraftNamespace =
+  | "claude"
+  | "claude-tmux"
+  | "codex"
+  | "opencode"
+  | "cursor"
+  | "grok"
+  | "agent-native";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -65,6 +75,7 @@ function isPersistedAttachment(
   ) {
     return false;
   }
+  if (namespace === "cursor" || namespace === "grok") return false;
   if (namespace === "codex") return value.type === "image";
   return value.type === "file" || value.type === "image";
 }
@@ -77,13 +88,17 @@ function readDraft<TMention, TAttachment>(
     text: state.draftText.get(sessionKey) ?? "",
     mentions: state.draftMentions.get(sessionKey) ?? [],
     attachments: state.attachments.get(sessionKey) ?? [],
+    ...(state.draftMetadata?.has(sessionKey)
+      ? { metadata: state.draftMetadata.get(sessionKey) }
+      : {}),
   };
 }
 
 function isEmptyDraft(draft: PersistedNativeComposeDraft): boolean {
   return draft.text.length === 0
     && draft.mentions.length === 0
-    && draft.attachments.length === 0;
+    && draft.attachments.length === 0
+    && draft.metadata === undefined;
 }
 
 /**
@@ -163,12 +178,15 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
       const priorMentions = previous.draftMentions.get(sessionKey);
       const currentAttachments = state.attachments.get(sessionKey);
       const priorAttachments = previous.attachments.get(sessionKey);
+      const currentMetadata = state.draftMetadata?.get(sessionKey);
+      const priorMetadata = previous.draftMetadata?.get(sessionKey);
       if (
         applyingHydration
         || (
           currentText === priorText
           && currentMentions === priorMentions
           && currentAttachments === priorAttachments
+          && currentMetadata === priorMetadata
         )
       ) {
         return;
@@ -204,6 +222,9 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
           state.clearAttachments(sessionKey);
           for (const attachment of attachments) {
             state.addAttachment(sessionKey, attachment as TAttachment);
+          }
+          if (value.metadata !== undefined) {
+            state.setDraftMetadata?.(sessionKey, value.metadata);
           }
         } finally {
           applyingHydration = false;

@@ -116,12 +116,12 @@ describe("web-public install.sh", () => {
     expect(result.stdout).toBe("");
   });
 
-  test("runs on both supported platforms", async () => {
-    for (const platform of ["Darwin", "Linux"]) {
+  for (const platform of ["Darwin", "Linux"]) {
+    test(`runs on supported platform ${platform}`, async () => {
       const result = await runInstaller({ platform, onPath: ["bunx"] });
       expect({ platform, exitCode: result.exitCode }).toEqual({ platform, exitCode: 0 });
-    }
-  });
+    });
+  }
 
   test("launches the published CLI through bunx and passes arguments through", async () => {
     const result = await runInstaller({ onPath: ["bunx", "bun"], args: PUBLISHED_ARGS });

@@ -593,6 +593,30 @@ describe("NativeMessage", () => {
     });
   });
 
+  test("flows adjacent attachment previews and lets them wrap", () => {
+    const message: NativeMessageType = {
+      id: "msg-attachment-flow",
+      role: "user",
+      content: "Compare these screenshots",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        { type: "text", content: "Compare these screenshots" },
+        { type: "file", content: "/tmp/first.png" },
+        { type: "file", content: "/tmp/second.png" },
+      ],
+    };
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    const flow = container.querySelector(
+      '[data-message-attachment-flow="true"]',
+    );
+    expect(flow).toBeTruthy();
+    expect(getClassTokens(flow)).toContain("flex-wrap");
+    expect(getClassTokens(flow)).toContain("w-full");
+    expect(flow?.querySelectorAll("button")).toHaveLength(2);
+  });
+
   test("reopens a cached local image preview without reading the file again", async () => {
     const message: NativeMessageType = {
       id: "msg-cached-local-file-preview",

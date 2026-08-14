@@ -57,6 +57,8 @@ import { createOrkestratorScriptPrompt } from "@/prompts";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { hydrateLoopedReviewWorkflowsForEnvironment } from "@/lib/looped-review-persistence";
+import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { hydrateMultiReviewWorkflowsForEnvironment } from "@/lib/multi-review-persistence";
 import { PaneTree } from "@/components/pane-layout";
 import { TerminalPortalHost } from "./TerminalPortalHost";
 import { InitializationLogs } from "./InitializationLogs";
@@ -183,6 +185,7 @@ const STARTUP_AGENT_TAB_TYPES: Record<TabType, boolean> = {
   // Not startup agents: pipeline/review surfaces and non-agent tabs.
   "claude-build": false,
   "looped-review": false,
+  "multi-review": false,
   browser: false,
   file: false,
   plain: false,
@@ -1076,8 +1079,9 @@ export function TerminalContainer({
         void Promise.allSettled([
           backend.getPaneLayout(environmentId),
           hydrateLoopedReviewWorkflowsForEnvironment(environmentId),
+          hydrateMultiReviewWorkflowsForEnvironment(environmentId),
         ])
-          .then(([layoutResult, workflowResult]) => {
+          .then(([layoutResult, workflowResult, multiReviewResult]) => {
             const paneStore = usePaneLayoutStore.getState();
             if (paneStore.hydration.get(environmentId) !== "pending") return;
 
@@ -1085,6 +1089,12 @@ export function TerminalContainer({
               console.warn(
                 "[TerminalContainer] Failed to restore looped reviews:",
                 workflowResult.reason,
+              );
+            }
+            if (multiReviewResult.status === "rejected") {
+              console.warn(
+                "[TerminalContainer] Failed to restore multi reviews:",
+                multiReviewResult.reason,
               );
             }
             if (layoutResult.status === "rejected") {
@@ -1122,6 +1132,9 @@ export function TerminalContainer({
                 // tabs so their own read-through view can retry hydration.
                 workflowResult.status === "rejected"
                 || useLoopedReviewStore.getState().workflows.has(workflowId),
+              hasMultiReview: (workflowId) =>
+                multiReviewResult.status === "rejected"
+                || useMultiReviewStore.getState().workflows.has(workflowId),
             });
             const restored =
               restoredSnapshot && persisted?.version === LEGACY_PANE_LAYOUT_VERSION
@@ -1647,6 +1660,25 @@ export function TerminalContainer({
           loopedReviewTabData: {
             environmentId,
             workflowId: options.loopedReviewId,
+            isLocal: isLocalEnvironment,
+          },
+        };
+        addTab(activePaneId, newTab, environmentId);
+        return true;
+      }
+
+      if (type === "multi-review") {
+        if (!options?.multiReviewId) {
+          console.warn("[TerminalContainer] Refusing multi-review tab without workflow ID");
+          return false;
+        }
+        const newTab: TabInfo = {
+          id: createUniqueTabId("multi-review"),
+          type: "multi-review",
+          displayTitle: options.displayTitle ?? "Multi Review",
+          multiReviewTabData: {
+            environmentId,
+            workflowId: options.multiReviewId,
             isLocal: isLocalEnvironment,
           },
         };

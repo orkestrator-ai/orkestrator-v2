@@ -3,7 +3,7 @@ import { createContext, useContext, useCallback, useMemo, useState, ReactNode } 
 
 // Terminal-specific tab types
 export type TerminalTabType = "plain" | "claude" | "opencode" | "codex" | "cursor" | "grok" | "root";
-export type CreatableTabType = TerminalTabType | "agent-native" | "browser" | "looped-review";
+export type CreatableTabType = TerminalTabType | "agent-native" | "browser" | "looped-review" | "multi-review";
 export type AgentLaunchModeOverride = "cli" | "native" | "tmux";
 
 // All tab types including file viewer and native agent tabs
@@ -14,7 +14,8 @@ export type TabType =
   | "agent-native"
   | "claude-tmux"
   | "claude-build"
-  | "looped-review";
+  | "looped-review"
+  | "multi-review";
 
 // Maximum number of tabs allowed (matches Ctrl+1-9 shortcuts)
 export const MAX_TABS = 9;
@@ -41,6 +42,8 @@ export interface CreateTabOptions {
   initialUrl?: string;
   /** Existing authoritative workflow opened by a looped-review tab. */
   loopedReviewId?: string;
+  /** Existing authoritative workflow opened by a Multi Review tab. */
+  multiReviewId?: string;
   /** Existing native provider session opened from a backend-owned workflow. */
   resumeSessionId?: string;
 }

@@ -1,5 +1,6 @@
 import { hydrateBuildPipeline } from "@/lib/build-pipeline-persistence";
 import { hydrateLoopedReviewWorkflow } from "@/lib/looped-review-persistence";
+import { hydrateMultiReviewWorkflow } from "@/lib/multi-review-persistence";
 import {
   preserveClientPaneSelection,
   preserveRendererLocalPaneFields,
@@ -8,6 +9,7 @@ import {
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
+import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
 import {
   LEGACY_PANE_LAYOUT_VERSION,
@@ -76,6 +78,29 @@ export function collectPaneDependencyIds(root: unknown): {
   return { pipelineIds, workflowIds };
 }
 
+function collectMultiReviewIds(root: unknown): Set<string> {
+  const ids = new Set<string>();
+  const visit = (value: unknown, depth: number): void => {
+    if (depth > MAX_DEPENDENCY_SCAN_DEPTH || !value || typeof value !== "object" || Array.isArray(value)) return;
+    const record = value as Record<string, unknown>;
+    if (record.kind === "leaf" && Array.isArray(record.tabs)) {
+      for (const tab of record.tabs) {
+        if (!tab || typeof tab !== "object" || Array.isArray(tab)) continue;
+        const data = (tab as Record<string, unknown>).multiReviewTabData;
+        if (!data || typeof data !== "object" || Array.isArray(data)) continue;
+        const id = (data as Record<string, unknown>).workflowId;
+        if (typeof id === "string" && id.trim()) ids.add(id);
+      }
+      return;
+    }
+    if (record.kind === "split" && Array.isArray(record.children)) {
+      record.children.forEach((child) => visit(child, depth + 1));
+    }
+  };
+  visit(root, 0);
+  return ids;
+}
+
 /**
  * Loads any build pipeline or looped review a snapshot references but this
  * client has never seen, so `reconcilePersistedLayout` does not drop the tab
@@ -85,19 +110,27 @@ export async function hydratePaneLayoutDependencies(
   root: unknown,
 ): Promise<void> {
   const { pipelineIds, workflowIds } = collectPaneDependencyIds(root);
+  const multiReviewIds = collectMultiReviewIds(root);
   const missingPipelineIds = [...pipelineIds].filter(
     (pipelineId) => !useBuildPipelineStore.getState().pipelines.has(pipelineId),
   );
   const missingWorkflowIds = [...workflowIds].filter(
     (workflowId) => !useLoopedReviewStore.getState().workflows.has(workflowId),
   );
-  if (missingPipelineIds.length === 0 && missingWorkflowIds.length === 0) return;
+  const missingMultiReviewIds = [...multiReviewIds].filter(
+    (workflowId) => !useMultiReviewStore.getState().workflows.has(workflowId),
+  );
+  if (missingPipelineIds.length === 0 && missingWorkflowIds.length === 0
+    && missingMultiReviewIds.length === 0) return;
   await Promise.all([
     ...missingPipelineIds.map((pipelineId) =>
       hydrateBuildPipeline(pipelineId).then(() => undefined)
     ),
     ...missingWorkflowIds.map((workflowId) =>
       hydrateLoopedReviewWorkflow(workflowId).then(() => undefined)
+    ),
+    ...missingMultiReviewIds.map((workflowId) =>
+      hydrateMultiReviewWorkflow(workflowId).then(() => undefined)
     ),
   ]);
 }
@@ -134,6 +167,8 @@ export function reconcileAuthoritativePaneLayout(
       useBuildPipelineStore.getState().pipelines.has(pipelineId),
     hasLoopedReview: (workflowId) =>
       useLoopedReviewStore.getState().workflows.has(workflowId),
+    hasMultiReview: (workflowId) =>
+      useMultiReviewStore.getState().workflows.has(workflowId),
   });
   if (!restored) return null;
 

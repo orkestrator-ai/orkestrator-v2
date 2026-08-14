@@ -26,6 +26,7 @@ export {
   useLoopedReviewStore,
   LOOPED_REVIEW_DEFAULT_ALLOWANCE,
 } from "./loopedReviewStore";
+export { useMultiReviewStore } from "./multiReviewStore";
 export type {
   BuildPipeline,
   BuildPhase,

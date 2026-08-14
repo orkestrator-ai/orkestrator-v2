@@ -194,6 +194,7 @@ import {
   type NativeAgentService,
 } from "./native-agent-service.js";
 import type { LoopedReviewService } from "./looped-review-service.js";
+import type { MultiReviewService } from "./multi-review-service.js";
 import type { FeaturePlanningService } from "./feature-planning.js";
 import {
   isStartFeaturePlanningInput,
@@ -207,6 +208,12 @@ import {
   isStartLoopedReviewInput,
   type StartLoopedReviewInput,
 } from "@orkestrator/protocol/review-workflow";
+import {
+  isMultiReviewTerminalPhase,
+  isMultiReviewWorkflow,
+  isStartMultiReviewInput,
+  type StartMultiReviewInput,
+} from "@orkestrator/protocol/multi-review";
 import {
   assertValidPromptAttachments,
   assertValidPromptImages,
@@ -234,6 +241,7 @@ export type CommandContext = {
   buildPipelines?: BuildPipelineService;
   nativeAgents?: NativeAgentService;
   loopedReviews?: LoopedReviewService;
+  multiReviews?: MultiReviewService;
   featurePlanning?: FeaturePlanningService;
   /** Backend-owned notification emitted by exact agent turn lifecycles. */
   notifyAgentTurnCompleted?: (environmentId: string) => Promise<void>;
@@ -6693,6 +6701,7 @@ async function deleteEnvironment(
       }
       await storage.removeSessionsByEnvironment(environmentId).catch(() => undefined);
       await storage.deleteLoopedReviewWorkflowsByEnvironment(environmentId);
+      await storage.deleteMultiReviewWorkflowsByEnvironment(environmentId);
       // A pipeline whose environment is gone can never advance again; leaving it
       // behind would resurrect a dead build on the next client that hydrates.
       await storage.deleteBuildPipelinesByEnvironment(
@@ -11465,6 +11474,46 @@ export function createCommandRegistry(
       asNonBlankString(workflowId, "workflowId"),
       sessionId === undefined ? undefined : asNonBlankString(sessionId, "sessionId"),
     );
+  });
+
+  register("get_multi_review_workflow", ({ workflowId }, { storage }) =>
+    storage.getMultiReviewWorkflow(asNonBlankString(workflowId, "workflowId"))
+      .then((record) => record ? stripLoopedReviewRendererSecrets(record) : null),
+  );
+  register("list_multi_review_workflows", (args, { storage }) =>
+    conditionalManifestSnapshot(args, storage, "multi-review", () =>
+      storage.listMultiReviewWorkflows(asNonBlankString(args.environmentId, "environmentId"))
+        .then((records) => records.map(stripLoopedReviewRendererSecrets))),
+  );
+  register("start_multi_review", (args, context) => {
+    if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+    if (!isStartMultiReviewInput(args)) throw new Error("Invalid multi review start request");
+    return context.multiReviews.start(args as unknown as StartMultiReviewInput)
+      .then(stripLoopedReviewSnapshotSecrets);
+  });
+  register("address_multi_review", ({ workflowId }, context) => {
+    if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+    return context.multiReviews.address(asNonBlankString(workflowId, "workflowId"))
+      .then(stripLoopedReviewSnapshotSecrets);
+  });
+  register("retry_multi_review", ({ workflowId }, context) => {
+    if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+    return context.multiReviews.retry(asNonBlankString(workflowId, "workflowId"))
+      .then(stripLoopedReviewSnapshotSecrets);
+  });
+  register("cancel_multi_review", ({ workflowId }, context) => {
+    if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+    return context.multiReviews.cancel(asNonBlankString(workflowId, "workflowId"))
+      .then(stripLoopedReviewSnapshotSecrets);
+  });
+  register("delete_multi_review_workflow", async ({ workflowId }, { storage }) => {
+    const id = asNonBlankString(workflowId, "workflowId");
+    const current = await storage.getMultiReviewWorkflow(id);
+    if (current && !(isMultiReviewWorkflow(current.snapshot)
+      && isMultiReviewTerminalPhase(current.snapshot.phase))) {
+      throw new Error("An active multi review must be cancelled before deletion");
+    }
+    return storage.deleteMultiReviewWorkflow(id);
   });
 
   register("start_build_pipeline", (args, context) => {

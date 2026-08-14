@@ -16,6 +16,7 @@
     "./feature-planning": "./src/feature-planning.ts",
     "./gateway-token": "./src/gateway-token.ts",
     "./model-id": "./src/model-id.ts",
+    "./multi-review": "./src/multi-review.ts",
     "./native-agent": "./src/native-agent.ts",
     "./opencode-message-id": "./src/opencode-message-id.ts",
     "./pane-layout": "./src/pane-layout.ts",

@@ -378,6 +378,21 @@ export interface PersistedLoopedReviewWorkflow {
   };
 }
 
+/** Durable envelope for a backend-owned Multi Review workflow. */
+export interface PersistedMultiReviewWorkflow {
+  version: number;
+  id: string;
+  environmentId: string;
+  snapshot: unknown;
+  updatedAt: string;
+  revision: number;
+  controllerLease?: {
+    ownerId: string;
+    token: string;
+    expiresAt: string;
+  };
+}
+
 /**
  * A build pipeline as the backend stores it.
  *

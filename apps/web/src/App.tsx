@@ -22,6 +22,7 @@ import { startStoreResourceSync } from "@/lib/store-resource-sync";
 import {
   hydrateLoopedReviewWorkflowsForEnvironment,
 } from "@/lib/looped-review-persistence";
+import { hydrateMultiReviewWorkflowsForEnvironment } from "@/lib/multi-review-persistence";
 import {
   hydrateBuildPipelinesForProject,
   migrateLegacyBuildPipelines,
@@ -155,6 +156,12 @@ function App() {
       void hydrateLoopedReviewWorkflowsForEnvironment(environment.id).catch((error) => {
         console.warn(
           `[App] Failed to restore looped reviews for ${environment.id}:`,
+          error,
+        );
+      });
+      void hydrateMultiReviewWorkflowsForEnvironment(environment.id).catch((error) => {
+        console.warn(
+          `[App] Failed to restore multi reviews for ${environment.id}:`,
           error,
         );
       });

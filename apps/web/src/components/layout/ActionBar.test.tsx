@@ -87,6 +87,14 @@ const deleteLoopedReviewMock = mock(async (_workflowId: string) => {});
 const cancelLoopedReviewMock = mock(async (
   _workflowId: string,
 ): Promise<{ id: string; phase: string }> => cancelledLoopedWorkflow);
+const startedMultiReview = { id: "multi-workflow-1", phase: "reviewing" as const };
+const startMultiReviewMock = mock(async (_options: unknown) => startedMultiReview);
+const cancelMultiReviewMock = mock(async (_workflowId: string) => ({
+  id: "multi-workflow-1", phase: "cancelled" as const,
+}));
+const deleteMultiReviewWorkflowMock = mock(async (_workflowId: string) => {});
+const installMultiReviewWorkflowMock = mock((_workflow: unknown) => {});
+const removeMultiReviewWorkflowMock = mock((_workflowId: string) => {});
 const selectTabMock = mock((_index: number) => {});
 const closeActiveTabMock = mock(() => {});
 const setProjectBoardTabMock = mock((_tab: string) => {});
@@ -546,6 +554,12 @@ mock.module("@/stores", () => ({
     replaceWorkflow: installLoopedWorkflowMock,
     removeWorkflow: removeLoopedWorkflowMock,
   }),
+  useMultiReviewStore: {
+    getState: () => ({
+      replaceWorkflow: installMultiReviewWorkflowMock,
+      removeWorkflow: removeMultiReviewWorkflowMock,
+    }),
+  },
 }));
 
 mock.module("@/hooks", () => ({
@@ -590,6 +604,9 @@ mock.module("@/lib/backend", () => ({
   startLoopedReview: startLoopedReviewMock,
   cancelLoopedReview: cancelLoopedReviewMock,
   deleteLoopedReviewWorkflow: deleteLoopedReviewMock,
+  startMultiReview: startMultiReviewMock,
+  cancelMultiReview: cancelMultiReviewMock,
+  deleteMultiReviewWorkflow: deleteMultiReviewWorkflowMock,
   enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,
 }));
 
@@ -648,6 +665,16 @@ beforeEach(() => {
   deleteLoopedReviewMock.mockImplementation(async () => {});
   cancelLoopedReviewMock.mockReset();
   cancelLoopedReviewMock.mockImplementation(async () => cancelledLoopedWorkflow);
+  startMultiReviewMock.mockReset();
+  startMultiReviewMock.mockImplementation(async () => startedMultiReview);
+  cancelMultiReviewMock.mockReset();
+  cancelMultiReviewMock.mockImplementation(async () => ({
+    id: "multi-workflow-1", phase: "cancelled" as const,
+  }));
+  deleteMultiReviewWorkflowMock.mockReset();
+  deleteMultiReviewWorkflowMock.mockImplementation(async () => {});
+  installMultiReviewWorkflowMock.mockReset();
+  removeMultiReviewWorkflowMock.mockReset();
   selectTabMock.mockReset();
   closeActiveTabMock.mockReset();
   toastSuccessMock.mockReset();
@@ -2522,6 +2549,38 @@ describe("ActionBar workflow tabs", () => {
       );
     }
     expect(createTabMock).toHaveBeenCalledTimes(cases.length);
+  });
+
+  test("places Multi Review after Review and sends only the launch intent to the backend", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentWorkspaceReady = true;
+    render(<ActionBar />);
+
+    const toolbarButtons = screen.getAllByRole("button");
+    expect(toolbarButtons.indexOf(screen.getByRole("button", { name: "Multi Review" })))
+      .toBe(toolbarButtons.indexOf(screen.getByRole("button", { name: "Code review" })) + 1);
+    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+
+    await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalledWith(expect.objectContaining({
+      environmentId: "env-1",
+      projectId: "project-1",
+      targetBranch: "main",
+      reviewers: expect.arrayContaining([
+        expect.objectContaining({ agent: "codex", model: expect.any(String) }),
+      ]),
+      fixModel: expect.objectContaining({ agent: "codex", model: expect.any(String) }),
+    })));
+    expect(createTabMock).toHaveBeenCalledWith("multi-review", {
+      multiReviewId: "multi-workflow-1",
+      displayTitle: "Multi Review",
+    });
+    expect(installMultiReviewWorkflowMock).toHaveBeenCalledWith(startedMultiReview);
   });
 
   test("launches one dedicated looped-review tab with the default six-pass allowance", async () => {

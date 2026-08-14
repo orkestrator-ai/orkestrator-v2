@@ -24,6 +24,7 @@ export interface PaneLayoutRestoreContext {
   worktreePath?: string;
   hasBuildPipeline?: (pipelineId: string) => boolean;
   hasLoopedReview?: (workflowId: string) => boolean;
+  hasMultiReview?: (workflowId: string) => boolean;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -224,6 +225,21 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
       ...common,
       type,
       loopedReviewTabData: {
+        environmentId: context.environmentId,
+        workflowId,
+        isLocal: context.isLocal,
+      },
+    };
+  }
+
+  if (type === "multi-review") {
+    if (!isRecord(value.multiReviewTabData)) return null;
+    const workflowId = nonEmptyString(value.multiReviewTabData.workflowId);
+    if (!workflowId || !context.hasMultiReview?.(workflowId)) return null;
+    return {
+      ...common,
+      type,
+      multiReviewTabData: {
         environmentId: context.environmentId,
         workflowId,
         isLocal: context.isLocal,

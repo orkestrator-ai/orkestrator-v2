@@ -98,6 +98,12 @@ export interface LoopedReviewTabData {
   isLocal?: boolean;
 }
 
+export interface MultiReviewTabData {
+  environmentId: string;
+  workflowId: string;
+  isLocal?: boolean;
+}
+
 // Data for backend-local browser preview tabs
 export interface BrowserTabData {
   /** User-facing backend-local URL. An empty string opens the browser start screen. */
@@ -124,6 +130,8 @@ export interface TabInfo {
   buildTabData?: BuildTabData;
   /** Data for dedicated structured/looped review tabs. */
   loopedReviewTabData?: LoopedReviewTabData;
+  /** Data for backend-owned Multi Review tabs. */
+  multiReviewTabData?: MultiReviewTabData;
   /** Data for browser tabs */
   browserData?: BrowserTabData;
   /** Initial prompt to send to agent (only for claude/opencode tabs) */

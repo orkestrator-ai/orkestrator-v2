@@ -4,7 +4,7 @@
  * Every provider exercises the shared authoritative-projection path.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import type { NativeAgentSessionProjection, NativeAgentTabData } from "@orkestrator/protocol/native-agent";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
@@ -290,6 +290,26 @@ function seedUnassignedPane(tabId: string) {
 }
 
 describe("AgentNativeTab", () => {
+  test.each(AGENT_PLATFORMS.map((platform) => [platform] as const))(
+    "keeps the context-window control in the %s compose bar before usage arrives",
+    async (platform) => {
+      render(
+        <AgentNativeTab
+          tabId={`tab-context-${platform}`}
+          data={identity(platform)}
+          isActive
+        />,
+      );
+
+      const contextButton = await screen.findByRole("button", {
+        name: "Context window usage unavailable",
+      });
+      const sendButton = screen.getByTitle("Send");
+
+      expect(contextButton.nextElementSibling).toBe(sendButton);
+    },
+  );
+
   test("keeps an unassigned tab composer-only without loading a bridge controller", () => {
     const { container } = render(
       <AgentNativeTab
@@ -1151,6 +1171,61 @@ describe("AgentNativeTab", () => {
       await waitFor(() => expect(updateNativeAgentControlsMock).toHaveBeenCalled());
       expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
         update: { mode: "plan" },
+      });
+    });
+
+    test("keeps advanced session settings out of the input bar", async () => {
+      seedProjection({
+        composer: {
+          executionProfiles: [{ id: "reviewer", label: "Reviewer" }],
+          includeLocalSettings: true,
+          promptSuggestionsEnabled: true,
+        },
+      });
+      render(<AgentNativeTab tabId="tab-settings" data={identity("claude")} isActive />);
+
+      await screen.findByRole("textbox");
+      expect(screen.queryByRole("combobox", { name: "Execution profile" })).toBeNull();
+      expect(screen.queryByText("Provider default")).toBeNull();
+      expect(screen.queryByText("Local settings")).toBeNull();
+      expect(screen.queryByText("Suggestions")).toBeNull();
+    });
+
+    test("uses a projection updated by the separate settings surface for the next prompt", async () => {
+      seedProjection({
+        composer: {
+          executionProfiles: [{ id: "reviewer", label: "Reviewer" }],
+          includeLocalSettings: false,
+          promptSuggestionsEnabled: false,
+        },
+      });
+      const tabId = "tab-external-settings";
+      const sessionKey = createSessionKey("env-1", tabId);
+      render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+      const input = await screen.findByRole("textbox");
+      const initial = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+
+      act(() => {
+        useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+          ...initial,
+          revision: initial.revision + 1,
+          composer: {
+            ...initial.composer!,
+            selectedExecutionProfileId: "reviewer",
+            includeLocalSettings: true,
+            promptSuggestionsEnabled: true,
+          },
+        });
+      });
+      fireEvent.input(input, { target: { textContent: "use the new settings" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalled());
+      expect(dispatchNativeAgentIntentMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        prompt: "use the new settings",
+        subAgent: "reviewer",
+        includeLocalSettings: true,
+        promptSuggestions: true,
       });
     });
 

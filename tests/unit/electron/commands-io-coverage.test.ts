@@ -299,6 +299,28 @@ describe("backend command I/O coverage", () => {
     );
   });
 
+  test("reads base64 from the active profile's configured worktree directory", async () => {
+    const profileWorktrees = await createTempDir("ork-profile-worktrees-");
+    const filePath = path.join(profileWorktrees, "environment", ".orkestrator", "initial-prompt", "image.png");
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, Buffer.from("profile-image"));
+    const commands = createCommandRegistry();
+    const context = {
+      ...createContext(),
+      worktreeDir: profileWorktrees,
+    };
+
+    await expect(commands.get("read_file_base64")?.({ filePath }, context)).resolves.toBe(
+      Buffer.from("profile-image").toString("base64"),
+    );
+
+    const outsideFile = path.join(path.dirname(profileWorktrees), "outside-profile.png");
+    await fs.writeFile(outsideFile, "private");
+    await expect(commands.get("read_file_base64")?.({ filePath: outsideFile }, context)).rejects.toThrow(
+      "file is outside Orkestrator workspace storage",
+    );
+  });
+
   test("container base64 reader uses one bounded no-follow file snapshot", async () => {
     const directory = await createTempDir("ork-container-reader-");
     const workspace = path.join(directory, "workspace");

@@ -112,6 +112,9 @@ export function useNativeAgentSession<TMessage = unknown>({
   const [runtimeProjection, setRuntimeProjection] = useState<
     NativeAgentSessionProjection<TMessage> | null
   >(null);
+  const sharedProjection = useNativeAgentProjectionStore((state) =>
+    state.projections.get(sessionKey),
+  ) as NativeAgentSessionProjection<TMessage> | undefined;
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(enabled);
   const [isDispatching, setIsDispatching] = useState(false);
@@ -129,6 +132,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     prompt: string;
     requestId: string;
   } | null>(null);
+  const effectiveProjection = sharedProjection ?? runtimeProjection;
   const clearTabInitialAgentOptions = usePaneLayoutStore(
     (state) => state.clearTabInitialAgentOptions,
   );
@@ -407,6 +411,18 @@ export function useNativeAgentSession<TMessage = unknown>({
     return next;
   }, [applyProjection, beginProjectionMutation, identity]);
 
+  useEffect(() => {
+    if (!sharedProjection || sharedProjection === projectionRef.current) return;
+    const current = projectionRef.current;
+    if (
+      current
+      && current.generation === sharedProjection.generation
+      && sharedProjection.revision < current.revision
+    ) return;
+    projectionRef.current = sharedProjection;
+    setRuntimeProjection(sharedProjection);
+  }, [sharedProjection]);
+
   const resolveInteraction = useCallback(async (
     interactionId: string,
     resolution: AgentInteractionResolution,
@@ -546,8 +562,8 @@ export function useNativeAgentSession<TMessage = unknown>({
 
   return {
     sessionKey,
-    projection: runtimeProjection,
-    runtimeProjection,
+    projection: effectiveProjection,
+    runtimeProjection: effectiveProjection,
     runtimeError,
     isRefreshing,
     isDispatching,

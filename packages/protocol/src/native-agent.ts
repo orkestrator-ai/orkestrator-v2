@@ -124,6 +124,42 @@ export function isSelectableOpenCodeModelId(
   );
 }
 
+/**
+ * A cache key identifying the allowlist a catalogue was filtered against.
+ *
+ * Nothing constrains the shape of a stored provider id, so joining on a
+ * separator would collide `["a,b"]` with `["a","b"]` and serve one list's
+ * catalogue to the other.
+ */
+export function openCodeModelProvidersKey(
+  allowedProviders: readonly string[],
+): string {
+  return JSON.stringify(allowedProviders);
+}
+
+/**
+ * Seed the allowlist for an install that predates it.
+ *
+ * The managed pair is the baseline, but any OpenCode model already stored as a
+ * default or favourite was chosen from a picker that offered every provider.
+ * Dropping those providers would leave the user pointed at a model no picker
+ * will list, so each one is preserved alongside the managed pair.
+ */
+export function migrateOpenCodeModelProviders(
+  storedModelIds: readonly unknown[],
+): string[] {
+  const providers = [...DEFAULT_OPENCODE_MODEL_PROVIDERS];
+  for (const candidate of storedModelIds) {
+    if (typeof candidate !== "string") continue;
+    const providerId = openCodeModelProviderId(candidate.trim().toLowerCase());
+    if (!providerId || providers.includes(providerId)) continue;
+    providers.push(providerId);
+  }
+  // Normalize rather than return directly so the migrated list is bounded by
+  // the same cap as a user-edited one.
+  return normalizeOpenCodeModelProviders(providers);
+}
+
 export type AgentConversationMode = "build" | "plan";
 
 /**

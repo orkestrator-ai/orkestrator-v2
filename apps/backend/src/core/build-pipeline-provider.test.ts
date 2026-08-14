@@ -4066,6 +4066,97 @@ describe("OpenCode build pipeline provider", () => {
     }
   });
 
+  test("re-filters the composer catalogue when the allowlist changes", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: { list: mock(async () => crowdedOpenCodeCatalog()) },
+    });
+    fake.setSessionGetResponse("owned-session", {
+      data: { id: "owned-session", directory: "/workspace" },
+    });
+    let allowed: string[] = ["openrouter"];
+    const provider = openCodeActivityProvider(fake, {
+      resolveOpenCodeModelProviders: () => allowed,
+    });
+    try {
+      const before = await provider.interactiveSnapshot?.("owned-session");
+      expect(before?.composer?.models?.map((model) => model.id))
+        .toEqual(["openrouter/kimi-k2.5"]);
+
+      // The composer reads through a second, session-scoped cache. A settings
+      // edit has to invalidate that one too, or the picker keeps the pre-edit
+      // catalogue for a whole TTL without ever consulting the filter.
+      allowed = ["opencode-go"];
+      const after = await provider.interactiveSnapshot?.("owned-session");
+      expect(after?.composer?.models?.map((model) => model.id))
+        .toEqual(["opencode-go/grok-code"]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("excludes unmanaged providers before the provider cap can hide them", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: {
+        list: mock(async () => ({
+          data: {
+            providers: [
+              // The 128-provider ceiling is reached long before `opencode` is
+              // seen, so filtering after truncation would return nothing.
+              ...Array.from({ length: 200 }, (_unused, index) => ({
+                id: `flood-${index}`,
+                name: `Flood ${index}`,
+                models: { model: { name: "Model" } },
+              })),
+              {
+                id: "opencode",
+                name: "OpenCode",
+                models: { "claude-sonnet-5": { name: "Claude Sonnet 5" } },
+              },
+            ],
+          },
+        })),
+      },
+    });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      const models = await provider.modelCatalog?.();
+      expect(models?.map((model) => model.id)).toEqual([
+        "opencode/claude-sonnet-5",
+      ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("still bounds the provider scan when the allowlist is unrestricted", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: {
+        list: mock(async () => ({
+          data: {
+            providers: Array.from({ length: 200 }, (_unused, index) => ({
+              id: `flood-${index}`,
+              name: `Flood ${index}`,
+              models: { model: { name: "Model" } },
+            })),
+          },
+        })),
+      },
+    });
+    const provider = openCodeActivityProvider(fake, {
+      resolveOpenCodeModelProviders: () => [],
+    });
+    try {
+      const models = await provider.modelCatalog?.();
+      // Filtering moved ahead of the cap; the cap itself must still apply.
+      expect(models?.length).toBe(128);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("maps OpenCode status and prompt error envelopes", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);

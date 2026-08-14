@@ -9833,15 +9833,17 @@ export function createCommandRegistry(
       : environment.containerId
         ? await peekContainerAgentBridge(environment.containerId, "opencode")
         : null;
-    const liveOpenCodeModels = (context.nativeAgents && runningOpenCodeBridge
+    const liveOpenCodeModels = context.nativeAgents && runningOpenCodeBridge
       ? await context.nativeAgents.listProjectionModels({
           environmentId: id,
           agent: "opencode",
           logicalSessionKey: `model-catalog:${id}`,
         }).catch(() => [])
-      : []).filter((model) =>
-        isSelectableOpenCodeModelId(model.id, openCodeModelProviders)
-      );
+      : [];
+    // Only the reads narrow. Persisting the filtered list instead would make the
+    // allowlist durable, so widening it later would leave the launch dialogs —
+    // which read this cache before any OpenCode server is ready — narrow until
+    // an environment happened to run and re-list.
     if (liveOpenCodeModels.length > 0) {
       await storage.cacheOpenCodeModelCatalog(
         environment.projectId,
@@ -9859,6 +9861,9 @@ export function createCommandRegistry(
         })),
       ).catch(() => undefined);
     }
+    const selectableLiveOpenCodeModels = liveOpenCodeModels.filter((model) =>
+      isSelectableOpenCodeModelId(model.id, openCodeModelProviders)
+    );
     const [cursorModels, grokModels] = await Promise.all([
       fetchAcpNormalizedModels(environment, context, "cursor"),
       fetchAcpNormalizedModels(environment, context, "grok"),
@@ -9907,7 +9912,7 @@ export function createCommandRegistry(
         supportsSpeed: true,
         supportsMode: true,
       })),
-      ...(liveOpenCodeModels.length > 0 ? liveOpenCodeModels : openCodeModels.map((model): AgentModel => ({
+      ...(selectableLiveOpenCodeModels.length > 0 ? selectableLiveOpenCodeModels : openCodeModels.map((model): AgentModel => ({
           platform: "opencode",
           id: model.id,
           label: model.name,

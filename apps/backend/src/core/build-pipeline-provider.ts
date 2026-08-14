@@ -54,6 +54,7 @@ import {
   isSelectableOpenCodeModelId,
   isSelectableOpenCodeProvider,
   normalizeOpenCodeModelProviders,
+  openCodeModelProvidersKey,
 } from "@orkestrator/protocol/native-agent";
 import {
   parseLeadingSlashCommand,
@@ -707,14 +708,20 @@ function normalizeOpenCodeComposerCatalog(
   selectedReasoningId?: string;
 } {
   const models: AgentModel[] = [];
-  for (const provider of openCodeCatalogProviders(value).slice(0, 128)) {
+  // Reject the provider before either cap is applied. OpenCode advertises
+  // thousands of models across every provider it knows about, so an excluded
+  // provider allowed to consume the 128-provider or 512-model budget pushes the
+  // selectable catalogues out of the picker entirely.
+  const selectableProviders = openCodeCatalogProviders(value)
+    .filter((provider) => {
+      const providerId = nonEmptyString(provider.id);
+      return providerId !== null
+        && isSelectableOpenCodeProvider(providerId, allowedProviders);
+    })
+    .slice(0, 128);
+  for (const provider of selectableProviders) {
     const providerId = nonEmptyString(provider.id);
     if (!providerId) continue;
-    // Reject the provider before its models are walked. OpenCode advertises
-    // thousands of models across every provider it knows about, and the 512
-    // cap below is reached long before the managed catalogues are seen if the
-    // unselectable ones are allowed to consume the budget.
-    if (!isSelectableOpenCodeProvider(providerId, allowedProviders)) continue;
     for (const model of openCodeProviderModels(provider.models).slice(0, 512)) {
       const localId = nonEmptyString(model.id);
       if (!localId) continue;
@@ -3376,6 +3383,10 @@ class OpenCodeProvider implements BuildPipelineProvider {
   private readonly sessionExistenceRetryAt = new Map<string, number>();
   private readonly interactiveMetadata = new Map<string, {
     expiresAt: number;
+    /** This entry embeds a filtered catalogue, so it carries the same allowlist
+     * key as `catalogMetadata`. Without it a composer read served from this
+     * cache would keep the pre-edit catalogue for a whole TTL. */
+    providersKey: string;
     executionProfiles: NonNullable<NativeAgentComposerState["executionProfiles"]>;
     runtime: NativeAgentRuntimeSummary;
     models: AgentModel[];
@@ -3488,7 +3499,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
     ReturnType<typeof normalizeOpenCodeComposerCatalog>
   > {
     const allowedProviders = await this.openCodeModelProviders();
-    const providersKey = allowedProviders.join(",");
+    const providersKey = openCodeModelProvidersKey(allowedProviders);
     if (
       this.catalogMetadata
       && this.catalogMetadata.expiresAt > Date.now()
@@ -4718,8 +4729,20 @@ class OpenCodeProvider implements BuildPipelineProvider {
     title?: string;
     shareUrl?: string | null;
   }> {
+    // Resolved before the cache is consulted: this entry carries a catalogue
+    // filtered against a specific allowlist, and a settings edit must invalidate
+    // it here as well as in `readComposerCatalog`.
+    const providersKey = openCodeModelProvidersKey(
+      await this.openCodeModelProviders(),
+    );
     const cached = this.interactiveMetadata.get(sessionId);
-    if (cached && cached.expiresAt > Date.now()) return cached;
+    if (
+      cached
+      && cached.expiresAt > Date.now()
+      && cached.providersKey === providersKey
+    ) {
+      return cached;
+    }
 
     const directory = this.connection.directory;
     const results = await Promise.allSettled([
@@ -4780,6 +4803,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
       : { models: [] };
     const entry = {
       expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+      providersKey,
       executionProfiles,
       runtime,
       models: catalog.models,

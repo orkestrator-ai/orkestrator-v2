@@ -6,8 +6,10 @@ import {
   isNativeAgentTabData,
   isSelectableOpenCodeModelId,
   isSelectableOpenCodeProvider,
+  migrateOpenCodeModelProviders,
   normalizeOpenCodeModelProviders,
   openCodeModelProviderId,
+  openCodeModelProvidersKey,
 } from "./native-agent";
 
 describe("opencode model provider allowlist", () => {
@@ -76,6 +78,62 @@ describe("opencode model provider allowlist", () => {
     expect(isSelectableOpenCodeModelId("hpc-ai/kimi-k2.5", allowed)).toBe(false);
     // A bare model id names no provider and cannot be attributed to one.
     expect(isSelectableOpenCodeModelId("claude-sonnet-5", allowed)).toBe(false);
+  });
+
+  test("keys distinct allowlists distinctly", () => {
+    expect(openCodeModelProvidersKey(["opencode", "opencode-go"]))
+      .toBe(openCodeModelProvidersKey(["opencode", "opencode-go"]));
+    expect(openCodeModelProvidersKey(["opencode"]))
+      .not.toBe(openCodeModelProvidersKey(["opencode-go"]));
+    // Nothing constrains a stored id's shape, so a separator-joined key would
+    // serve one list's cached catalogue to the other.
+    expect(openCodeModelProvidersKey(["a,b"]))
+      .not.toBe(openCodeModelProvidersKey(["a", "b"]));
+    // Order is part of the identity; re-filtering on a reorder is harmless.
+    expect(openCodeModelProvidersKey(["a", "b"]))
+      .not.toBe(openCodeModelProvidersKey(["b", "a"]));
+  });
+});
+
+describe("opencode model provider migration", () => {
+  test("returns the managed pair when no stored model names a provider", () => {
+    expect(migrateOpenCodeModelProviders([
+      "opencode/claude-sonnet-5",
+      "claude-opus",
+      "gpt-5.4",
+      "default",
+      undefined,
+      null,
+      42,
+    ])).toEqual(["opencode", "opencode-go"]);
+  });
+
+  test("preserves providers a pre-existing install already selected from", () => {
+    expect(migrateOpenCodeModelProviders([
+      "openrouter/kimi-k2.5",
+      "hpc-ai/deepseek",
+      // A second model from an already-kept provider adds nothing.
+      "openrouter/other",
+      // Ids are matched lowercased, like a user-edited list.
+      "  OpenRouter/Another  ",
+    ])).toEqual(["opencode", "opencode-go", "openrouter", "hpc-ai"]);
+  });
+
+  test("bounds the migrated list by the same cap as a user-edited one", () => {
+    const stored = Array.from(
+      { length: MAX_OPENCODE_MODEL_PROVIDERS + 20 },
+      (_unused, index) => `provider-${index}/model`,
+    );
+    expect(migrateOpenCodeModelProviders(stored)).toHaveLength(
+      MAX_OPENCODE_MODEL_PROVIDERS,
+    );
+  });
+
+  test("returns the managed pair for an install with nothing stored", () => {
+    expect(migrateOpenCodeModelProviders([])).toEqual([
+      "opencode",
+      "opencode-go",
+    ]);
   });
 });
 

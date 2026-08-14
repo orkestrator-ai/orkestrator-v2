@@ -23,10 +23,6 @@ import {
   OpenCodeMessageIdCoordinator,
   openCodeRequestMarker,
 } from "@orkestrator/protocol/opencode-message-id";
-import {
-  DEFAULT_OPENCODE_MODEL_PROVIDERS,
-  isSelectableOpenCodeProvider,
-} from "@orkestrator/protocol/native-agent";
 import type { ContextUsageSnapshot } from "./context-usage";
 
 export { type OpencodeClient };
@@ -74,28 +70,6 @@ export interface OpenCodeModelDefaults {
 export interface OpenCodeModelsResponse {
   models: OpenCodeModel[];
   defaults: OpenCodeModelDefaults;
-}
-
-/**
- * Restrict an OpenCode catalogue to the configured provider allowlist.
- *
- * The authoritative filter is in the backend, which never sends an excluded
- * provider to the renderer. This remains for direct SDK callers, which reach
- * the OpenCode server without passing through a backend command.
- */
-export function restrictOpenCodeModelCatalog(
-  response: OpenCodeModelsResponse,
-  allowedProviders: readonly string[] = DEFAULT_OPENCODE_MODEL_PROVIDERS,
-): OpenCodeModelsResponse {
-  const models = response.models.filter((model) =>
-    isSelectableOpenCodeProvider(model.provider, allowedProviders)
-  );
-  const defaultIsSelectable = response.defaults.modelId !== undefined
-    && models.some((model) => model.id === response.defaults.modelId);
-  return {
-    models,
-    defaults: defaultIsSelectable ? response.defaults : {},
-  };
 }
 
 export interface OpenCodeSlashCommand {
@@ -1480,13 +1454,6 @@ export async function getModelsWithDefaults(client: OpencodeClient): Promise<Ope
     console.error("[opencode-client] Failed to get models:", error);
     return { models: [], defaults: {} };
   }
-}
-
-/** Get the provider-restricted catalogue used by Orkestrator's model picker. */
-export async function getSelectableModelsWithDefaults(
-  client: OpencodeClient,
-): Promise<OpenCodeModelsResponse> {
-  return restrictOpenCodeModelCatalog(await getModelsWithDefaults(client));
 }
 
 /**

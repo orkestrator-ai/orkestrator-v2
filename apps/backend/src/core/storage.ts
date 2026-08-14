@@ -68,6 +68,7 @@ import {
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import {
   DEFAULT_OPENCODE_MODEL_PROVIDERS,
+  migrateOpenCodeModelProviders,
   normalizeOpenCodeModelProviders,
 } from "@orkestrator/protocol/native-agent";
 import {
@@ -1535,6 +1536,34 @@ function sanitizePersistedReviewInstruction(config: AppConfig): AppConfig {
   };
 }
 
+/**
+ * Every place a previously-chosen OpenCode model id is durably stored.
+ *
+ * These were all selected from a picker that offered every provider OpenCode
+ * advertises, so they are what the allowlist migration has to preserve. Ids
+ * belonging to another agent contribute nothing: they carry no `provider/model`
+ * separator, so they resolve to no provider.
+ */
+function storedOpenCodeModelIds(
+  global: JsonRecord,
+  repositories: AppConfig["repositories"] | undefined,
+): unknown[] {
+  const ids: unknown[] = [global.opencodeModel];
+  if (Array.isArray(global.favoriteModels)) {
+    for (const favorite of global.favoriteModels) {
+      if (isRecord(favorite) && favorite.platform === "opencode") {
+        ids.push(favorite.modelId);
+      }
+    }
+  }
+  if (isRecord(repositories)) {
+    for (const repository of Object.values(repositories)) {
+      if (isRecord(repository)) ids.push(repository.defaultModel);
+    }
+  }
+  return ids;
+}
+
 function normalizePersistedConfig(config: AppConfig): AppConfig {
   const reviewInstructionSanitized = sanitizePersistedReviewInstruction(config);
   const global = reviewInstructionSanitized && isRecord(reviewInstructionSanitized.global)
@@ -1577,12 +1606,15 @@ function normalizePersistedConfig(config: AppConfig): AppConfig {
         ) === index
       )
     : [];
-  // An absent list is the pre-existing install migrating onto the managed
-  // default pair; an explicitly empty one is the user opting into every
-  // provider and must survive normalization.
-  const openCodeModelProviders = normalizeOpenCodeModelProviders(
-    global.openCodeModelProviders,
-  );
+  // An explicitly stored list is the user's own; an explicitly empty one is
+  // them opting into every provider and must survive normalization. Anything
+  // else is a pre-existing install being migrated onto the managed pair, which
+  // has to keep the providers that install already selected from.
+  const openCodeModelProviders = Array.isArray(global.openCodeModelProviders)
+    ? normalizeOpenCodeModelProviders(global.openCodeModelProviders)
+    : migrateOpenCodeModelProviders(
+        storedOpenCodeModelIds(global, reviewInstructionSanitized.repositories),
+      );
   if (
     global.codexMaxConcurrentThreads === codexMaxConcurrentThreads
     && global.useHostGitHubCredentials === useHostGitHubCredentials

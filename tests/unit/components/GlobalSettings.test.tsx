@@ -6,6 +6,7 @@ import {
   REVIEW_INSTRUCTION_MAX_LENGTH,
   REVIEW_INSTRUCTION_RECOMMENDED_LENGTH,
 } from "../../../packages/protocol/src/review-prompt";
+import { MAX_OPENCODE_MODEL_PROVIDERS } from "../../../packages/protocol/src/native-agent";
 import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
 
 const mockUpdateGlobalConfig = mock(async (globalConfig: unknown) => ({
@@ -895,6 +896,44 @@ describe("GlobalSettings", () => {
       fireEvent.click(screen.getByRole("button", { name: "Reset to defaults" }));
 
       expect(providerItems()).toEqual(["opencode", "opencode-go"]);
+    });
+
+    test("refuses to add past the stored provider cap", () => {
+      useConfigStore.setState((state) => ({
+        config: {
+          ...state.config,
+          global: {
+            ...state.config.global,
+            openCodeModelProviders: Array.from(
+              { length: MAX_OPENCODE_MODEL_PROVIDERS },
+              (_unused, index) => `provider-${index}`,
+            ),
+          },
+        },
+      }));
+      render(<GlobalSettings activeSection="opencode" />);
+
+      expect(providerItems()).toHaveLength(MAX_OPENCODE_MODEL_PROVIDERS);
+      fireEvent.change(screen.getByLabelText("Add a provider"), {
+        target: { value: "openrouter" },
+      });
+
+      // The backend truncates a longer list, so an add that would be silently
+      // dropped has to be refused here instead.
+      expect(
+        screen.getByText(`At most ${MAX_OPENCODE_MODEL_PROVIDERS} providers.`),
+      ).toBeTruthy();
+      expect(
+        (screen.getByRole("button", { name: "Add" }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+
+      // Removing one frees a slot without needing a re-render of the list.
+      fireEvent.click(
+        screen.getByRole("button", { name: "Remove provider-0 provider" }),
+      );
+      expect(
+        (screen.getByRole("button", { name: "Add" }) as HTMLButtonElement).disabled,
+      ).toBe(false);
     });
   });
 

@@ -12,6 +12,7 @@ import type {
   NativeTaskGroupPart,
   NativeToolGroupPart,
 } from "./native-message-types";
+import { parseLocalFilePathFromUrl } from "./file-url";
 import type { AcpMessage } from "@/lib/acp-client";
 
 interface AttachmentTag {
@@ -20,14 +21,39 @@ interface AttachmentTag {
   filename: string;
 }
 
+function decodeXmlAttribute(value: string): string {
+  return value.replace(
+    /&(?:quot|apos|amp|lt|gt|#\d+|#x[\da-f]+);/gi,
+    (entity) => {
+      switch (entity.toLowerCase()) {
+        case "&quot;": return '"';
+        case "&apos;": return "'";
+        case "&amp;": return "&";
+        case "&lt;": return "<";
+        case "&gt;": return ">";
+        default: {
+          const isHex = entity.toLowerCase().startsWith("&#x");
+          const digits = entity.slice(isHex ? 3 : 2, -1);
+          const codePoint = Number.parseInt(digits, isHex ? 16 : 10);
+          return Number.isSafeInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+            ? String.fromCodePoint(codePoint)
+            : entity;
+        }
+      }
+    },
+  );
+}
+
 function parseAttachmentTag(tagContent: string): AttachmentTag | null {
   const typeMatch = tagContent.match(/type="([^"]*)"/);
   const pathMatch = tagContent.match(/path="([^"]*)"/);
   const filenameMatch = tagContent.match(/filename="([^"]*)"/);
 
-  const type = typeMatch?.[1];
-  const path = pathMatch?.[1];
-  const filename = filenameMatch?.[1] || "";
+  const type = typeMatch?.[1] ? decodeXmlAttribute(typeMatch[1]) : undefined;
+  const path = pathMatch?.[1] ? decodeXmlAttribute(pathMatch[1]) : undefined;
+  const filename = filenameMatch?.[1]
+    ? decodeXmlAttribute(filenameMatch[1])
+    : "";
 
   if (type && path) {
     return { type, path, filename };
@@ -56,6 +82,7 @@ export function parseNativeAttachmentsFromContent(
         type: "file",
         content: parsed.path,
         fileUrl: parsed.type === "image" ? parsed.path : undefined,
+        ...(parsed.filename ? { filename: parsed.filename } : {}),
       });
     }
 
@@ -364,15 +391,103 @@ export function findPreviousNativeMessage<TMessage extends NativeMessage>(
  */
 const normalizedNativeMessageCache = new WeakMap<NativeMessage, NativeMessage>();
 
+/**
+ * The file a file part points at, independent of how the provider spelled it.
+ *
+ * The structured part and the XML wrapper describe the same attachment with
+ * different strings — `file:///w/a.png` against `/w/a.png`, or a bare
+ * `a.png` content against a fully qualified URL — so comparing the raw fields
+ * would render the same image twice. A `data:` URL carries no identity beyond
+ * its own bytes, so those fall back to the part's content.
+ */
+function fileAttachmentIdentity(part: NativeFilePart): string {
+  const fileUrl = part.fileUrl;
+  if (fileUrl && !fileUrl.startsWith("data:")) {
+    return parseLocalFilePathFromUrl(fileUrl) ?? fileUrl;
+  }
+  return parseLocalFilePathFromUrl(part.content) ?? part.content;
+}
+
+function normalizeNativeUserAttachments(message: NativeMessage): NativeMessage {
+  if (message.role !== "user") return message;
+
+  const parsedContent = parseNativeAttachmentsFromContent(message.content);
+  let parsedAttachmentPart = false;
+  const parsedParts = message.parts.flatMap((part): NativeMessagePart[] => {
+    if (part.type !== "text") return [part];
+
+    const parsed = parseNativeAttachmentsFromContent(part.content);
+    if (parsed.cleanContent === part.content) return [part];
+
+    parsedAttachmentPart = true;
+    return [
+      ...(parsed.cleanContent ? [{ ...part, content: parsed.cleanContent }] : []),
+      ...parsed.attachments,
+    ];
+  });
+
+  const contentHasAttachments = parsedContent.cleanContent !== message.content;
+  if (!parsedAttachmentPart && !contentHasAttachments) return message;
+
+  let nextParts = parsedParts;
+  if (!parsedAttachmentPart) {
+    const hasTextPart = nextParts.some((part) => part.type === "text");
+    nextParts = [
+      ...(!hasTextPart && parsedContent.cleanContent
+        ? [{ type: "text" as const, content: parsedContent.cleanContent }]
+        : []),
+      ...nextParts,
+      ...parsedContent.attachments,
+    ];
+  }
+
+  // Some providers project a structured file part as well as echoing the XML
+  // wrapper. Keep the first copy so initial-prompt images never render twice,
+  // and merge the fields only one spelling carried.
+  const fileIndexes = new Map<string, number>();
+  const dedupedParts: NativeMessagePart[] = [];
+  for (const part of nextParts) {
+    if (part.type !== "file") {
+      dedupedParts.push(part);
+      continue;
+    }
+    const identity = fileAttachmentIdentity(part);
+    const existingIndex = fileIndexes.get(identity);
+    if (existingIndex === undefined) {
+      fileIndexes.set(identity, dedupedParts.length);
+      dedupedParts.push(part);
+      continue;
+    }
+
+    const existing = dedupedParts[existingIndex];
+    if (existing?.type !== "file") continue;
+    // The structured copy is usually the one missing a filename, and the XML
+    // copy is usually the one missing a usable URL, so neither is complete on
+    // its own.
+    const merged: NativeFilePart = { ...existing };
+    if (!merged.filename && part.filename) merged.filename = part.filename;
+    if (!merged.fileUrl && part.fileUrl) merged.fileUrl = part.fileUrl;
+    dedupedParts[existingIndex] = merged;
+  }
+  nextParts = dedupedParts;
+
+  return {
+    ...message,
+    content: parsedContent.cleanContent,
+    parts: nextParts,
+  };
+}
+
 export function normalizeNativeMessage(message: NativeMessage): NativeMessage {
   const cached = normalizedNativeMessageCache.get(message);
   if (cached) return cached;
 
+  const messageWithAttachments = normalizeNativeUserAttachments(message);
   const dedupedParts = dropEmptyThinkingParts(
-    dedupeStreamedNativeParts(message.parts),
+    dedupeStreamedNativeParts(messageWithAttachments.parts),
   );
   const normalized: NativeMessage = {
-    ...message,
+    ...messageWithAttachments,
     parts: groupNativeAgentActivity(groupNativeToolActivity(dedupedParts)),
   };
   normalizedNativeMessageCache.set(message, normalized);

@@ -10,6 +10,43 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `Electron tmux backend command registration` timeout cluster (`tests/unit/electron/tmux-backend.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/fix-full-tests.log`
+- **Worker configuration:** the root and agent-support group ran concurrently with the workspace, bridges, and codex protocol-lockfile groups under `scripts/test-all.ts`'s bounded worker pools.
+- **Failure:** six cases in this one file exhausted their outer budget with no assertion failure. `starts separate tmux sessions for generated tab ids with the same old prefix` (5,005.47 ms), `attaches duplicate client starts to one tmux session unless replacement is explicit` (5,001.94 ms), `generated blocking hooks use an integer timeout and fail closed on expiry` (5,006.09 ms), `reports prompt, exit, capture, send, and transition failures` (5,002.09 ms) each hit the 5,000 ms limit; `serializes stop behind an in-flight start so no tmux session is orphaned` (2,004.37 ms) and `serializes interactive input and interrupts behind a mode transition` (724.26 ms) hit their own shorter internal waits.
+- **Suite counts:** root and agent-support group: 1 skipped and 7 failed (these six plus the separate `deduplicates concurrent background starts for one environment` entry below). The workspace, bridges, and codex protocol-lockfile groups passed.
+- **Isolated rerun:** `set -o pipefail; bun test ./tests/unit/electron/tmux-backend.test.ts --parallel 2>&1 | tee /tmp/fix-tmux-isolated.log` -> 173 passed, 0 failed, 615 assertions in 64.43 seconds.
+- **Group rerun:** `set -o pipefail; bun test ./tests --parallel 2>&1 | tee /tmp/fix-root-group.log` -> 3,641 passed, 1 skipped, 0 failed, 16,435 assertions across 143 files in 136.42 seconds. The cluster does not reproduce when the root group runs without the other groups competing for workers.
+- **Hypothesis:** these cases drive a real `tmux` server and poll its state on wall-clock deadlines, so they are the group's most timing-sensitive file. They fail together, only in the four-group aggregate, and pass both alone and as a whole-group run, which points at CPU contention pushing the polls past fixed real-time budgets rather than at a product race. Replacing the fixed deadlines with an injected clock or an explicit readiness signal should be evaluated before changing the tmux runtime.
+
+## `Electron backend command registry > deduplicates concurrent background starts for one environment` (`tests/unit/electron/commands.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/rev-full-tests.log`, and again in `/tmp/fix-full-tests.log`
+- **Worker configuration:** the root and agent-support group ran concurrently with the workspace, bridges, and codex protocol-lockfile groups.
+- **Failure:** `error: Timed out waiting for deduplicated background start to finish` raised by the file's own `waitForCondition` helper (`tests/unit/electron/commands.test.ts:1115`) after its 3,000 ms poll expired (durations 3,009.85 ms and 3,008.20 ms across the two aggregate runs). No assertion mismatch was reported.
+- **Suite counts:** first aggregate: root and agent-support group 3,641 passed, 1 skipped, 1 failed, 16,428 assertions across 145 files in 290.05 seconds; all other groups passed. Second aggregate: same test failed alongside the tmux cluster above.
+- **Isolated rerun:** `set -o pipefail; bun test ./tests/unit/electron/commands.test.ts --parallel 2>&1 | tee /tmp/rev-commands-isolated.log` -> 398 passed, 1 skipped, 0 failed, 2,385 assertions in 77.51 seconds.
+- **Group rerun:** `bun test ./tests --parallel` -> 0 failed (see the cluster entry above).
+- **Hypothesis:** the helper polls for the deduplicated start to settle on a fixed 3,000 ms wall-clock budget while the case also stands up a fake Docker and a fake `gh`. Under aggregate contention the supervised work completes later than that budget allows. The deduplication behaviour itself is what the case asserts, and it holds in both isolated and whole-group runs, so the budget rather than the product logic is the first thing to re-examine.
+
+## `MobileAppShellLayout > opens the project drawer on initial mobile entry and keeps workspace content mounted` (`apps/web/src/components/layout/MobileAppShellLayout.test.tsx`)
+
+- **Status:** resolved
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-fix-c4cb555c-full-tests.log`
+- **Worker configuration:** The web workspace package ran `bun test src --parallel=2` while the other workspace, root, bridge, and protocol-lockfile groups ran concurrently.
+- **Failure:** The test exceeded Bun's 5,000 ms outer budget and timed out after 5,014.67 ms. No assertion failure was reported.
+- **Suite counts:** Web package: 4,805 total, 4,803 passed, 1 skipped, 1 failed across 210 files with 14,866 assertions in 104.69 seconds. The backend, root, bridge, protocol, CLI, desktop, and web-public groups passed.
+- **Isolated rerun:** `set -o pipefail; bun test --cwd apps/web src/components/layout/MobileAppShellLayout.test.tsx --parallel 2>&1 | tee /tmp/orkestrator-fix-mobile-layout-isolated.log` -> 23 passed, 0 failed in 4.41 seconds; the affected case passed in 2,197.66 ms.
+- **Root cause:** The case combined the initial Radix drawer auto-focus boundary and a later close-and-restore focus boundary under one five-second test budget. The two behaviors are independent and each already has a distinct user-visible assertion, but their asynchronous focus work accumulated enough aggregate scheduling delay to exhaust the shared budget.
+- **Fix:** Split the initial-open and close-button focus behaviors into separate tests so each transition has an independent lifecycle and budget without weakening either assertion.
+- **Verification:** The owning file is stress-tested after the split and the subsequent aggregate result is recorded in this change's validation handoff.
+
 ## `StorageService prompt queues > live lease timer restores and announces a sole claimed head` (`apps/backend/src/core/storage-prompt-queues.test.ts`)
 
 - **Status:** open

@@ -121,6 +121,7 @@ function isValidTimestamp(value: unknown): value is string {
  */
 const OPTIONAL_PART_STRING_FIELDS = [
   "fileUrl",
+  "filename",
   "toolName",
   "toolTitle",
   "toolOutput",

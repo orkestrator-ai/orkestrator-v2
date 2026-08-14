@@ -1478,17 +1478,18 @@ function SharedNativeAgentController({
     ?? (isRefreshing ? "connecting" as const : "error" as const);
   const contextUsage = projection?.contextUsage;
   const maximumTokens = contextUsage?.maximumTokens;
-  const composeContextUsage = contextUsage
-    && maximumTokens !== undefined
-    && Number.isFinite(maximumTokens)
-    && maximumTokens > 0
-    ? {
-        usedTokens: contextUsage.usedTokens,
-        totalTokens: maximumTokens,
-        percentUsed: contextUsage.percentage
-          ?? Math.min(100, contextUsage.usedTokens / maximumTokens * 100),
-      }
-    : null;
+  const composeContextUsage = contextUsage === undefined
+    ? undefined
+    : maximumTokens !== undefined
+      && Number.isFinite(maximumTokens)
+      && maximumTokens > 0
+      ? {
+          usedTokens: contextUsage.usedTokens,
+          totalTokens: maximumTokens,
+          percentUsed: contextUsage.percentage
+            ?? Math.min(100, contextUsage.usedTokens / maximumTokens * 100),
+        }
+      : null;
 
   if (setupPending) {
     return (

@@ -1,13 +1,15 @@
 # Upgrading agent SDKs and binaries
 
-This runbook covers the Claude, Codex, and OpenCode versions used by
-Orkestrator. These integrations do not share one upgrade mechanism:
+This runbook covers the Claude, Codex, OpenCode, Cursor, and Grok versions used
+by Orkestrator. These integrations do not share one upgrade mechanism:
 
 | Agent | SDK integration | CLI integration | Current pins |
 | --- | --- | --- | --- |
 | Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.228`, Anthropic SDK `0.116.0`, CLI `2.1.228` |
 | Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.147.0` |
 | OpenCode | `@opencode-ai/sdk/v2/client` is used by the renderer and backend build pipeline | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.18.16` |
+| Cursor | No SDK. The ACP bridge spawns the CLI and speaks ACP over its stdio | The pinned `cursor-agent` executable runs `cursor-agent … acp` | CLI `2026.08.11-e8db854` |
+| Grok | No SDK. The ACP bridge spawns the CLI and speaks ACP over its stdio | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.3` |
 
 All versions are exact pins. Do not change them to ranges or `latest`.
 
@@ -430,6 +432,51 @@ contract.
 
 Upstream references: [OpenCode releases](https://github.com/anomalyco/opencode/releases)
 and [OpenCode SDK documentation](https://opencode.ai/docs/sdk/).
+
+## Cursor and Grok (ACP)
+
+These two are pinned in `apps/desktop/electron/toolchain-manifest.ts` and
+`docker/Dockerfile` like the others, but they have no SDK: the ACP bridge
+spawns the CLI directly and speaks ACP over its stdio. That makes their
+**command-line flags a versioned contract**, and it is the part of an upgrade
+nothing in CI can check.
+
+`bridges/acp-bridge/src/index.ts` builds one of two argument vectors:
+
+| Provider | Arguments | Gate |
+| --- | --- | --- |
+| Cursor | `--force [--approve-mcps] acp` | `--approve-mcps` only when `ACP_APPROVE_PROJECT_MCPS=1` |
+| Grok | `--always-approve agent stdio` | always |
+
+`bridges/acp-bridge/src/index.test.ts` asserts these vectors against
+`bridges/acp-bridge/src/testing/fake-agent.ts`, which records its own argv and
+accepts anything. A
+renamed or removed upstream flag therefore leaves the suite green and breaks
+every ACP session at runtime. After bumping either pin, confirm the real CLI
+still accepts the flags:
+
+```bash
+# Each flag must still be listed as a global option, not a subcommand option.
+cursor-agent --help | rg -- '--force|--approve-mcps'
+grok --help | rg -- '--always-approve'
+
+# Each must start and wait for JSON-RPC rather than exiting on an argv error.
+# No output plus a process that stays alive is the passing result.
+cursor-agent --force --approve-mcps acp </dev/null
+grok --always-approve agent stdio </dev/null
+```
+
+Run these against the pinned version, not whatever is on `PATH` — compare
+`cursor-agent --version` and `grok --version` against
+`PINNED_TOOLCHAIN_VERSIONS` and `CURSOR_AGENT_VERSION` first. `acp` is an
+undocumented `cursor-agent` subcommand and does not appear in `--help` output,
+so the start check above is the only evidence it still exists.
+
+Note that `--force` and `--always-approve` are deliberate: an ACP tab is an
+interactive session and matches the Claude bridge's local `bypassPermissions`
+default. `--approve-mcps` is deliberately narrower, because `.cursor/mcp.json`
+is repository-controlled and would otherwise execute on the host without any
+model or user involvement. Preserve that asymmetry when adjusting flags.
 
 ## Repository-wide validation
 

@@ -5,7 +5,9 @@ import {
   awaitBridgeReady,
   dispatchNativeAgentPrompt,
   ensureNativeAgentSession,
+  renameEnvironmentFromPrompt,
 } from "@/lib/backend";
+import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import {
   cancelAcpPrompt,
   createAcpClient,
@@ -63,6 +65,10 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
   // component stays mounted while hidden, so no later activation re-runs the
   // effect and submit is a no-op without a client and session.
   const [connectNonce, setConnectNonce] = useState(0);
+  // Local-only until the first prompt is in the ACP snapshot. The prompt must
+  // wait for the git branch rename; the snapshot has no row for either yet.
+  const [optimisticPrompt, setOptimisticPrompt] = useState<string | null>(null);
+  const [isNamingEnvironment, setIsNamingEnvironment] = useState(false);
   // A bridge restart changes its port and/or bearer credential. Direct ACP
   // polling is intentionally renderer-owned, so a failed request must retire
   // that client and re-run the authoritative backend readiness handshake.
@@ -231,6 +237,22 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
     dispatchingPrompt.current = true;
     setDraft("");
     try {
+      // Rename a default timestamp environment (including its git branch)
+      // before the agent starts, matching Claude/Codex. A later rename would
+      // race the agent's own git operations.
+      if (session.messages.length === 0 && session.baseIndex === 0) {
+        const environment = useEnvironmentStore.getState().getEnvironmentById(data.environmentId);
+        if (environment && isDefaultTimestampEnvironmentName(environment.name)) {
+          setOptimisticPrompt(prompt);
+          setIsNamingEnvironment(true);
+          try {
+            await renameEnvironmentFromPrompt(data.environmentId, prompt);
+          } catch (error) {
+            console.warn("[AcpChatTab] Failed to rename environment from prompt:", error);
+          }
+          setIsNamingEnvironment(false);
+        }
+      }
       await dispatchNativeAgentPrompt({
         environmentId: data.environmentId,
         agent: data.platform,
@@ -249,6 +271,8 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
       setDraft(prompt);
       return false;
     } finally {
+      setIsNamingEnvironment(false);
+      setOptimisticPrompt(null);
       dispatchingPrompt.current = false;
     }
   }, [client, data.environmentId, data.platform, label, refresh, session, sessionKey]);
@@ -276,10 +300,29 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
     tabId,
   ]);
 
-  const messages = useMemo<NativeMessage[]>(
-    () => normalizeNativeMessages(session?.messages ?? []),
-    [data.platform, session?.messages],
-  );
+  const messages = useMemo<NativeMessage[]>(() => {
+    const transcript = normalizeNativeMessages(session?.messages ?? []);
+    if (!optimisticPrompt) return transcript;
+    const local: NativeMessage[] = [
+      {
+        id: "optimistic-naming-prompt",
+        role: "user",
+        content: optimisticPrompt,
+        parts: [{ type: "text", content: optimisticPrompt }],
+        createdAt: new Date().toISOString(),
+      },
+    ];
+    if (isNamingEnvironment) {
+      local.push({
+        id: "system-naming-environment",
+        role: "system",
+        content: "Naming environment...",
+        parts: [{ type: "text", content: "Naming environment..." }],
+        createdAt: new Date().toISOString(),
+      });
+    }
+    return [...transcript, ...local];
+  }, [data.platform, isNamingEnvironment, optimisticPrompt, session?.messages]);
 
   // An explicit retry is a fresh start: drop any backed-off attempt so the
   // user's click reconnects now rather than waiting out the current delay,
@@ -308,7 +351,7 @@ export function AcpChatTab({ tabId, data, isActive, initialPrompt }: AcpChatTabP
       errorMessage={error}
       onRetry={retry}
       messages={messages}
-      isLoading={session?.status === "running"}
+      isLoading={session?.status === "running" || isNamingEnvironment}
       elapsedSeconds={null}
       finalElapsedSeconds={null}
       centerCompose={false}

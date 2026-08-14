@@ -43,7 +43,7 @@ import {
   Terminal,
   RefreshCw,
 } from "lucide-react";
-import { ClaudeIcon, CodexIcon, CursorAgentIcon, GrokBuildIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
+import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { cn } from "@/lib/utils";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "@/components/settings/FullscreenSettingsLayout";
@@ -112,9 +112,7 @@ function AgentExtensionIcon({
   agent: backend.AgentExtensionId;
   className?: string;
 }) {
-  if (agent === "claude") return <ClaudeIcon className={className} />;
-  if (agent === "codex") return <CodexIcon className={cn("text-emerald-400", className)} />;
-  return <OpenCodeIcon className={className} />;
+  return <AgentPlatformIcon platform={agent} accent className={className} />;
 }
 
 function ExtensionStatusIcon({
@@ -748,11 +746,11 @@ export function EnvironmentSettingsDialog({
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 {([
                   { value: "global", label: `Global (${AGENT_PLATFORM_LABELS[config.global.defaultAgent ?? "claude"]})`, icon: <Bot className="h-4 w-4" /> },
-                  { value: "claude", label: "Claude Code", icon: <ClaudeIcon className="h-4 w-4" /> },
-                  { value: "codex", label: "Codex", icon: <CodexIcon className="h-4 w-4 text-emerald-400" /> },
-                  { value: "cursor", label: "Cursor Agent", icon: <CursorAgentIcon className="h-4 w-4" /> },
-                  { value: "grok", label: "Grok Build", icon: <GrokBuildIcon className="h-4 w-4" /> },
-                  { value: "opencode", label: "OpenCode", icon: <OpenCodeIcon className="h-4 w-4" /> },
+                  { value: "claude", label: "Claude Code", icon: <AgentPlatformIcon platform="claude" accent className="h-4 w-4" /> },
+                  { value: "codex", label: "Codex", icon: <AgentPlatformIcon platform="codex" accent className="h-4 w-4" /> },
+                  { value: "cursor", label: "Cursor Agent", icon: <AgentPlatformIcon platform="cursor" accent className="h-4 w-4" /> },
+                  { value: "grok", label: "Grok Build", icon: <AgentPlatformIcon platform="grok" accent className="h-4 w-4" /> },
+                  { value: "opencode", label: "OpenCode", icon: <AgentPlatformIcon platform="opencode" accent className="h-4 w-4" /> },
                 ] as const).filter((opt) =>
                   opt.value === "global"
                   || (config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]).includes(opt.value)

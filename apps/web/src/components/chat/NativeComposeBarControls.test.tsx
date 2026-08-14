@@ -162,9 +162,29 @@ describe("native compose bar controls", () => {
     const { container: codex } = renderCodexComposeBar();
     const { container: openCode } = renderOpenCodeComposeBar();
 
-    expect(claude.querySelector("[data-native-compose-platform='claude']")).toBeTruthy();
-    expect(codex.querySelector("[data-native-compose-platform='codex']")).toBeTruthy();
-    expect(openCode.querySelector("[data-native-compose-platform='opencode']")).toBeTruthy();
+    const cases = [
+      { container: claude, platform: "claude", accent: "text-orange-400" },
+      { container: codex, platform: "codex", accent: "text-emerald-400" },
+      { container: openCode, platform: "opencode", accent: "text-green-500" },
+    ] as const;
+
+    for (const { container, platform, accent } of cases) {
+      const trigger = [...container.querySelectorAll("button")].find((button) =>
+        button.getAttribute("title")?.includes("Choose model"),
+      );
+      expect(trigger).toBeTruthy();
+
+      // The icon must live inside the picker trigger, not merely somewhere in
+      // the compose bar, and must precede the model label it qualifies.
+      const icon = trigger!.querySelector(`[data-native-model-platform='${platform}']`);
+      const label = trigger!.querySelector(".truncate");
+      expect(icon).toBeTruthy();
+      expect(icon?.querySelector("svg")?.getAttribute("class")).toContain(accent);
+      expect(label).toBeTruthy();
+      expect(
+        icon!.compareDocumentPosition(label!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeGreaterThan(0);
+    }
   });
 
   test("keeps every optional action reachable with long model labels", () => {

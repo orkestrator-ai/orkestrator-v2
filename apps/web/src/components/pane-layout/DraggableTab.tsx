@@ -2,7 +2,7 @@ import { useCallback, useRef } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { FileCode, Globe2, Terminal as TerminalIcon, X, Hammer, Repeat2 } from "lucide-react";
-import { ClaudeIcon, CodexIcon, CursorAgentIcon, GrokBuildIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
+import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import {
   ContextMenu,
@@ -25,6 +25,9 @@ import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { StackedEyes } from "@/components/review/MultiReviewLaunchDialog";
 import { useFileDirtyStore } from "@/stores";
 import type { TabType } from "@/contexts";
+
+/** Every agent brand mark in the tab strip is drawn at this size. */
+const TAB_ICON_CLASS = "h-3 w-3 shrink-0";
 
 /** Check if a tab type is an OpenCode variant (terminal or native mode) */
 const isOpenCodeTab = (type: TabType): boolean =>
@@ -245,27 +248,24 @@ export function DraggableTab({
       return <Globe2 className="h-3 w-3 shrink-0 text-sky-400" />;
     }
     if (tab.type === "agent-native") {
-      if (nativeAgentData?.platform === "opencode") return <OpenCodeIcon className="h-3 w-3 shrink-0 text-green-500" />;
-      if (nativeAgentData?.platform === "claude") return <ClaudeIcon className="h-3 w-3 shrink-0 text-orange-400" />;
-      if (nativeAgentData?.platform === "codex") return <CodexIcon className="h-3 w-3 shrink-0 text-emerald-400" />;
-      if (nativeAgentData?.platform === "cursor") return <CursorAgentIcon className="h-3 w-3 shrink-0 text-violet-400" />;
-      if (nativeAgentData?.platform === "grok") return <GrokBuildIcon className="h-3 w-3 shrink-0 text-sky-400" />;
-      return <TerminalIcon className="h-3 w-3 shrink-0 text-muted-foreground" />;
+      const platform = nativeAgentData?.platform;
+      if (!platform) return <TerminalIcon className="h-3 w-3 shrink-0 text-muted-foreground" />;
+      return <AgentPlatformIcon platform={platform} accent className={TAB_ICON_CLASS} />;
     }
     if (isOpenCodeTab(tab.type)) {
-      return <OpenCodeIcon className="h-3 w-3 shrink-0 text-green-500" />;
+      return <AgentPlatformIcon platform="opencode" accent className={TAB_ICON_CLASS} />;
     }
     if (isClaudeTab(tab.type)) {
-      return <ClaudeIcon className="h-3 w-3 shrink-0 text-orange-400" />;
+      return <AgentPlatformIcon platform="claude" accent className={TAB_ICON_CLASS} />;
     }
     if (isCodexTab(tab.type)) {
-      return <CodexIcon className="h-3 w-3 shrink-0 text-emerald-400" />;
+      return <AgentPlatformIcon platform="codex" accent className={TAB_ICON_CLASS} />;
     }
     if (isCursorTab(tab.type)) {
-      return <CursorAgentIcon className="h-3 w-3 shrink-0 text-violet-400" />;
+      return <AgentPlatformIcon platform="cursor" accent className={TAB_ICON_CLASS} />;
     }
     if (isGrokTab(tab.type)) {
-      return <GrokBuildIcon className="h-3 w-3 shrink-0 text-sky-400" />;
+      return <AgentPlatformIcon platform="grok" accent className={TAB_ICON_CLASS} />;
     }
     if (isBuildTab(tab.type)) {
       return <Hammer className="h-3 w-3 shrink-0 text-yellow-400" />;

@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentModel, AgentModelRef, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
-import { ClaudeIcon, CodexIcon, CursorAgentIcon, GrokBuildIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
+import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 
 interface AgentModelPickerProps {
   id?: string;
@@ -54,26 +54,8 @@ const PLATFORM_LABELS: Record<AgentPlatform, string> = {
   grok: "Grok",
 };
 
-const PLATFORM_TRIGGER_ICON_CLASS: Record<AgentPlatform, string> = {
-  claude: "text-orange-400",
-  codex: "text-emerald-400",
-  opencode: "text-green-500",
-  cursor: "text-violet-400",
-  grok: "text-sky-400",
-};
-
-function PlatformIcon({
-  platform,
-  className = "size-4",
-}: {
-  platform: AgentPlatform;
-  className?: string;
-}) {
-  if (platform === "claude") return <ClaudeIcon className={className} />;
-  if (platform === "codex") return <CodexIcon className={className} />;
-  if (platform === "opencode") return <OpenCodeIcon className={className} />;
-  if (platform === "cursor") return <CursorAgentIcon className={className} />;
-  return <GrokBuildIcon className={className} />;
+function PlatformIcon({ platform }: { platform: AgentPlatform }) {
+  return <AgentPlatformIcon platform={platform} className="size-4" />;
 }
 
 function ModelItems({
@@ -362,11 +344,11 @@ export function AgentModelPicker({
           <ChevronDown className="h-3 w-3 shrink-0" />
           {triggerPlatform ? (
             <span
-              data-native-compose-platform={triggerPlatform}
-              className={cn("shrink-0", PLATFORM_TRIGGER_ICON_CLASS[triggerPlatform])}
+              data-native-model-platform={triggerPlatform}
+              className="flex shrink-0"
               aria-hidden="true"
             >
-              <PlatformIcon platform={triggerPlatform} className="size-3.5" />
+              <AgentPlatformIcon platform={triggerPlatform} accent className="size-3.5" />
             </span>
           ) : null}
           <span className="flex min-w-0 truncate">

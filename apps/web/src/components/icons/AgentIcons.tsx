@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 interface IconProps {
   className?: string;
@@ -69,6 +70,36 @@ export function GrokBuildIcon({ className }: IconProps) {
       <path d="M12.745 20.54l10.97-8.19c.539-.4 1.307-.244 1.564.38 1.349 3.288.746 7.241-1.938 9.955-2.683 2.714-6.417 3.31-9.83 1.954l-3.728 1.745c5.347 3.697 11.84 2.782 15.898-1.324 3.219-3.255 4.216-7.692 3.284-11.693l.008.009c-1.351-5.878.332-8.227 3.782-13.031L33 0l-4.54 4.59v-.014L12.743 20.544m-2.263 1.987c-3.837-3.707-3.175-9.446.1-12.755 2.42-2.449 6.388-3.448 9.852-1.979l3.72-1.737c-.67-.49-1.53-1.017-2.515-1.387-4.455-1.854-9.789-.931-13.41 2.728-3.483 3.523-4.579 8.94-2.697 13.561 1.405 3.454-.899 5.898-3.22 8.364C1.49 30.2.666 31.074 0 32l10.478-9.466" />
     </svg>
   );
+}
+
+/** The one accent colour each agent platform is drawn in across the app. */
+export const PLATFORM_ICON_CLASS: Record<AgentPlatform, string> = {
+  claude: "text-orange-400",
+  codex: "text-emerald-400",
+  opencode: "text-green-500",
+  cursor: "text-violet-400",
+  grok: "text-sky-400",
+};
+
+/**
+ * Renders the brand mark for a platform. Every icon paints with
+ * `currentColor`, so `accent` is all it takes to apply PLATFORM_ICON_CLASS.
+ */
+export function AgentPlatformIcon({
+  platform,
+  className,
+  accent = false,
+}: {
+  platform: AgentPlatform;
+  className?: string;
+  accent?: boolean;
+}) {
+  const resolved = cn(accent && PLATFORM_ICON_CLASS[platform], className);
+  if (platform === "claude") return <ClaudeIcon className={resolved} />;
+  if (platform === "codex") return <CodexIcon className={resolved} />;
+  if (platform === "opencode") return <OpenCodeIcon className={resolved} />;
+  if (platform === "cursor") return <CursorAgentIcon className={resolved} />;
+  return <GrokBuildIcon className={resolved} />;
 }
 
 export function DockerIcon({ className }: IconProps) {

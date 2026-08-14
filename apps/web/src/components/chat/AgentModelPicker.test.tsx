@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { AgentModelPicker } from "./AgentModelPicker";
+import { PLATFORM_ICON_CLASS } from "@/components/icons/AgentIcons";
 
 function setMobileViewport(mobile: boolean) {
   Object.defineProperty(window, "matchMedia", {
@@ -58,6 +59,12 @@ function openPicker(title = "Choose model, reasoning, and speed") {
   return trigger;
 }
 
+function getTriggerPlatformIcon(platform: string) {
+  return screen
+    .getByTitle("Choose model, reasoning, and speed")
+    .querySelector(`[data-native-model-platform='${platform}']`);
+}
+
 function getMobileTrigger(kind: "reasoning" | "speed") {
   return document.querySelector<HTMLElement>(`[data-native-mobile-${kind}-trigger]`)!;
 }
@@ -97,7 +104,7 @@ describe("AgentModelPicker", () => {
     renderPicker({ selectedPlatform: "codex" });
 
     const trigger = screen.getByTitle("Choose model, reasoning, and speed");
-    const icon = trigger.querySelector("[data-native-compose-platform='codex']");
+    const icon = getTriggerPlatformIcon("codex");
     const label = [...trigger.querySelectorAll("span")].find((node) =>
       node.textContent?.startsWith("A model name that can become very long"),
     );
@@ -110,12 +117,12 @@ describe("AgentModelPicker", () => {
   });
 
   test.each([
-    ["claude", "claude"],
-    ["codex", "codex"],
-    ["opencode", "opencode"],
-    ["cursor", "cursor"],
-    ["grok", "grok"],
-  ] as const)("renders the %s platform icon on the trigger", (platform, expected) => {
+    ["claude", "text-orange-400"],
+    ["codex", "text-emerald-400"],
+    ["opencode", "text-green-500"],
+    ["cursor", "text-violet-400"],
+    ["grok", "text-sky-400"],
+  ] as const)("renders the %s platform icon in its accent colour", (platform, accentClass) => {
     setMobileViewport(false);
     renderPicker({
       models: [{ platform, id: "model-1", label: "Model 1" }],
@@ -124,24 +131,91 @@ describe("AgentModelPicker", () => {
       selectedModelLabel: "Model 1",
     });
 
-    expect(
-      screen.getByTitle("Choose model, reasoning, and speed")
-        .querySelector(`[data-native-compose-platform='${expected}']`),
-    ).toBeTruthy();
+    // The shared accent map is what makes each provider distinguishable at a
+    // glance, so assert the colour and not merely that an icon rendered.
+    const icon = getTriggerPlatformIcon(platform);
+    expect(icon).toBeTruthy();
+    expect(icon?.querySelector("svg")?.getAttribute("class")).toContain(accentClass);
+  });
+
+  test("uses the exported accent map rather than a private copy of it", () => {
+    // Guards against the map drifting back out of AgentIcons into this file.
+    expect(PLATFORM_ICON_CLASS).toEqual({
+      claude: "text-orange-400",
+      codex: "text-emerald-400",
+      opencode: "text-green-500",
+      cursor: "text-violet-400",
+      grok: "text-sky-400",
+    });
   });
 
   test("infers the trigger platform from the selected model when it is not passed", () => {
     setMobileViewport(false);
     renderPicker({
-      models: [{ platform: "claude", id: "opus", label: "Opus" }],
+      models: [
+        { platform: "codex", id: "gpt", label: "GPT" },
+        { platform: "claude", id: "opus", label: "Opus" },
+      ],
       selectedPlatform: undefined,
       selectedModelId: "opus",
       selectedModelLabel: "Opus",
     });
 
+    // The selected model wins over the first catalog entry.
+    expect(getTriggerPlatformIcon("claude")).toBeTruthy();
+    expect(getTriggerPlatformIcon("codex")).toBeNull();
+  });
+
+  test("prefers the explicit platform over the selected model's platform", () => {
+    setMobileViewport(false);
+    renderPicker({
+      models: [{ platform: "codex", id: "gpt", label: "GPT" }],
+      selectedPlatform: "claude",
+      selectedModelId: "gpt",
+      selectedModelLabel: "GPT",
+    });
+
+    expect(getTriggerPlatformIcon("claude")).toBeTruthy();
+    expect(getTriggerPlatformIcon("codex")).toBeNull();
+  });
+
+  test("falls back to the first catalog model when the selection matches nothing", () => {
+    setMobileViewport(false);
+    renderPicker({
+      models: [
+        { platform: "grok", id: "grok-1", label: "Grok 1" },
+        { platform: "claude", id: "opus", label: "Opus" },
+      ],
+      selectedPlatform: undefined,
+      selectedModelId: "not-in-catalog",
+      selectedModelLabel: "Unknown model",
+    });
+
+    expect(getTriggerPlatformIcon("grok")).toBeTruthy();
+  });
+
+  test("renders no trigger icon when there is no platform to show", () => {
+    setMobileViewport(false);
+    renderPicker({
+      models: [],
+      selectedPlatform: undefined,
+      selectedModelId: undefined,
+      selectedModelLabel: "Loading models",
+    });
+
+    const trigger = screen.getByTitle("Choose model, reasoning, and speed");
+    expect(trigger.querySelector("[data-native-model-platform]")).toBeNull();
+    expect(trigger.textContent).toContain("Loading models");
+  });
+
+  test("keeps the trigger icon out of the accessibility tree", () => {
+    setMobileViewport(false);
+    renderPicker({ selectedPlatform: "codex" });
+
+    // The icon is decorative; the accessible name already names the model.
+    expect(getTriggerPlatformIcon("codex")?.getAttribute("aria-hidden")).toBe("true");
     expect(
-      screen.getByTitle("Choose model, reasoning, and speed")
-        .querySelector("[data-native-compose-platform='claude']"),
+      screen.getByRole("button", { name: "A model name that can become very long (High ⚡)" }),
     ).toBeTruthy();
   });
 

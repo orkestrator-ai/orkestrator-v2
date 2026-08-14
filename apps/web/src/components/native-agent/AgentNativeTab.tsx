@@ -9,13 +9,7 @@ import type { MentionableInputRef } from "@/components/chat/MentionableInput";
 import { NativeAttachmentMenu } from "@/components/chat/NativeAttachmentMenu";
 import { NativeComposeBar } from "@/components/chat/NativeComposeBar";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
-import {
-  ClaudeIcon,
-  CodexIcon,
-  CursorAgentIcon,
-  GrokBuildIcon,
-  OpenCodeIcon,
-} from "@/components/icons/AgentIcons";
+import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import {
   Dialog,
   DialogContent,
@@ -70,12 +64,7 @@ function controllerFor(adapter: NativeAgentAdapter) {
 }
 
 function PlatformIcon({ platform }: { platform: AgentPlatform }) {
-  const className = "size-5";
-  if (platform === "claude") return <ClaudeIcon className={className} />;
-  if (platform === "codex") return <CodexIcon className={className} />;
-  if (platform === "opencode") return <OpenCodeIcon className={className} />;
-  if (platform === "cursor") return <CursorAgentIcon className={className} />;
-  return <GrokBuildIcon className={className} />;
+  return <AgentPlatformIcon platform={platform} className="size-5" />;
 }
 
 function NativeAgentResumePlatformDialog({

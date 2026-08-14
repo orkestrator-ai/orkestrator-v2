@@ -29,6 +29,7 @@ import {
 import type { Environment } from "./models.js";
 import {
   isAgentTurnEndTransition,
+  NATIVE_PROJECTION_CACHE_LIMIT,
   NativeAgentService,
   nativeAgentSessionStorageKey,
   type AgentInteractionObservation,
@@ -224,6 +225,9 @@ function internals(service: NativeAgentService) {
     observedInteractionRevisions: Map<string, number>;
     interactionSelectionCursors: Map<string, number>;
     interactionRevisionReconciliations: number;
+    projectionCache: Map<string, unknown>;
+    projectionEpochs: Map<string, number>;
+    projectionRefreshes: Map<string, Promise<unknown>>;
     launchTimer: ReturnType<typeof setInterval> | null;
     interactionTimer: ReturnType<typeof setInterval> | null;
   };
@@ -660,6 +664,107 @@ describe("NativeAgentService", () => {
     });
   });
 
+  test("evicting the oldest cache entry does not fence a read in flight for it", async () => {
+    let releaseSlow!: () => void;
+    let signalSlow!: () => void;
+    const slowEntered = new Promise<void>((resolve) => { signalSlow = resolve; });
+    const slowGate = new Promise<void>((resolve) => { releaseSlow = resolve; });
+    let call = 0;
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => {
+        call += 1;
+        // Only the second read of the evicted tab is held open; the first
+        // populates the cache and the third belongs to the new tab.
+        if (call === 2) {
+          signalSlow();
+          await slowGate;
+        }
+        return { status: "idle", messages: [] };
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-eviction-fence-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const evicted = {
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "env-env-1:tab-evicted",
+      };
+      const fresh = { ...evicted, logicalSessionKey: "env-env-1:tab-fresh" };
+      await service.ensureSession(evicted);
+      await service.ensureSession(fresh);
+      // Cached first, so it is the oldest key the capacity sweep will drop.
+      expect(await service.getProjection(evicted)).not.toBeNull();
+
+      const cache = internals(service).projectionCache;
+      const evictedKey = nativeAgentSessionStorageKey(
+        evicted.environmentId,
+        evicted.agent,
+        evicted.logicalSessionKey,
+      );
+      expect([...cache.keys()][0]).toBe(evictedKey);
+      while (cache.size < NATIVE_PROJECTION_CACHE_LIMIT) {
+        cache.set(`filler:${cache.size}`, cache.get(evictedKey)!);
+      }
+
+      const held = service.getProjection(evicted);
+      await slowEntered;
+      // Committing a new key now trips the capacity sweep and drops the tab
+      // whose read is still outstanding.
+      expect(await service.getProjection(fresh)).not.toBeNull();
+      expect(cache.has(evictedKey)).toBe(false);
+
+      releaseSlow();
+      // Capacity eviction is not an identity change, so the outstanding read
+      // still commits rather than reporting the session as missing.
+      const resolved = await held;
+      expect(resolved).not.toBeNull();
+      expect(resolved).toMatchObject({ turn: { phase: "idle" } });
+      expect(cache.has(evictedKey)).toBe(true);
+    });
+  });
+
+  test("reclaims projection epochs once a key is neither cached nor being read", async () => {
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+    });
+    await withService({
+      prefix: "orkestrator-native-epoch-bound-",
+      provider: async () => stub.provider,
+    }, async ({ service, storage }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-epoch",
+      };
+      const key = nativeAgentSessionStorageKey(
+        identity.environmentId,
+        identity.agent,
+        identity.logicalSessionKey,
+      );
+      const session = await service.ensureSession(identity);
+      await service.getProjection(identity);
+
+      // A session action changes the tab's identity and so records an epoch.
+      await service.performProjectionAction({ ...identity, action: { kind: "compact" } })
+        .catch(() => undefined);
+      await service.getProjection(identity);
+      const epochs = internals(service).projectionEpochs;
+      expect(epochs.size).toBeLessThanOrEqual(
+        internals(service).projectionCache.size
+          + internals(service).projectionRefreshes.size,
+      );
+
+      // Once the session is gone the projection resolves to nothing, the cache
+      // entry goes with it, and the epoch must not outlive either.
+      await storage.invalidateNativeAgentSession(key, session.providerSessionId);
+      await expect(service.getProjection(identity)).resolves.toBeNull();
+      expect(internals(service).projectionCache.has(key)).toBe(false);
+      expect(epochs.has(key)).toBe(false);
+    });
+  });
+
   test("resumes with complete controls and discards an in-flight old-session projection", async () => {
     let releaseOld!: () => void;
     let signalOld!: () => void;
@@ -719,7 +824,16 @@ describe("NativeAgentService", () => {
       });
       await waitForCondition(() => resumeSession.mock.calls.length === 1);
       releaseOld();
-      await expect(stale).resolves.toBeNull();
+      /*
+       * The fenced read must not become the cached authoritative state, but it
+       * must not report `null` either: that is reserved for "this tab resolves
+       * to no provider session", and a caller without its own fence would read
+       * an ordinary resume as a deleted session. It is handed back uncommitted
+       * at revision 0 instead.
+       */
+      const fenced = await stale;
+      expect(fenced).not.toBeNull();
+      expect(fenced).toMatchObject({ revision: 0 });
       await expect(resumed).resolves.toMatchObject({ sessionId: "provider-resumed" });
       expect(resumeSession).toHaveBeenCalledWith("provider-resumed", controls);
       const key = nativeAgentSessionStorageKey(

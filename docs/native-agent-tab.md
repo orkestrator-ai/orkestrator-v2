@@ -118,9 +118,15 @@ stable `agent-native` record containing its text, attachments, selected
 platform, model, reasoning, speed and mode; a reload therefore cannot restore
 the text under a different default provider. A prompt that is waiting for the
 first environment rename also persists its stable request id, so a remounted
-tab can retry without creating a duplicate provider turn. Attachments are restored only on
-platforms that can consume them. Keyboard submission restores the editor
-focus; mouse submission leaves focus on the clicked control.
+tab can retry without creating a duplicate provider turn. Attachments are
+reconciled against the selected agent's capabilities per type, not
+all-or-nothing: a draft that changes provider, or is restored under one, keeps
+only the kinds that agent accepts. This matters because a bridge may refuse the
+whole prompt rather than drop the entry it cannot use — Codex takes images and
+rejects files with `400` — so an unreconciled draft would fail the send with an
+error naming an attachment the composer had stopped offering. Keyboard
+submission restores the editor focus; mouse submission leaves focus on the
+clicked control.
 
 Forking preserves each provider's actual boundary semantics: Claude uses
 inclusive source-message boundaries, Codex uses turn boundaries, and OpenCode

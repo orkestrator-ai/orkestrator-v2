@@ -80,6 +80,29 @@ function isPersistedAttachment(
   return value.type === "file" || value.type === "image";
 }
 
+/**
+ * Resolve which provider's attachment rules a stored draft must satisfy.
+ *
+ * The shared `agent-native` record belongs to a tab that has not been assigned
+ * yet, so its own namespace says nothing about what the selected agent accepts.
+ * The persisted platform does, and restoring an attachment the agent refuses
+ * would fail the next send rather than being dropped by the bridge.
+ */
+function effectiveAttachmentNamespace(
+  namespace: NativeDraftNamespace,
+  metadata: unknown,
+): NativeDraftNamespace {
+  if (namespace !== "agent-native") return namespace;
+  const platform = isRecord(metadata) ? metadata.platform : undefined;
+  return platform === "claude"
+    || platform === "codex"
+    || platform === "opencode"
+    || platform === "cursor"
+    || platform === "grok"
+    ? platform
+    : namespace;
+}
+
 function readDraft<TMention, TAttachment>(
   state: NativeComposeDraftState<TMention, TAttachment>,
   sessionKey: string,
@@ -212,8 +235,12 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
           return;
         }
         const mentions = value.mentions.filter(isPersistedFileMention);
+        const attachmentNamespace = effectiveAttachmentNamespace(
+          namespace,
+          value.metadata,
+        );
         const attachments = value.attachments.filter((attachment) =>
-          isPersistedAttachment(namespace, attachment)
+          isPersistedAttachment(attachmentNamespace, attachment)
         );
         applyingHydration = true;
         try {

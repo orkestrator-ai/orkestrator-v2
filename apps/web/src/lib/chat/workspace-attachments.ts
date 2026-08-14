@@ -84,3 +84,23 @@ export function resolveWorkspaceAttachment(
   }
   return { attachment };
 }
+
+/**
+ * Keep only the attachments the target agent can actually receive.
+ *
+ * Capability is per type, not all-or-nothing: Codex takes images but refuses
+ * files, and its bridge rejects the whole prompt rather than dropping the
+ * offending entry. A draft that changes provider — or that is restored under
+ * one — must therefore be reconciled against the new capabilities before it can
+ * be submitted, or the send fails with an error naming an attachment the
+ * composer never offered.
+ */
+export function retainSupportedAttachments<T extends { type: "file" | "image" }>(
+  attachments: readonly T[],
+  capabilities: { files: boolean; images: boolean } | undefined,
+): T[] {
+  if (!capabilities) return [];
+  return attachments.filter((attachment) =>
+    attachment.type === "image" ? capabilities.images : capabilities.files
+  );
+}

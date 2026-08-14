@@ -300,7 +300,11 @@ describe("EnvironmentSettingsDialog", () => {
       expect(screen.getByText("claude-docs")).toBeTruthy();
     });
 
-    const tabs = screen.getAllByRole("tab");
+    // Scoped to this tablist: a document-wide role query also matched tabs left
+    // in the shared happy-dom document by whichever file shared this worker.
+    const tabs = within(
+      screen.getByRole("tablist", { name: "Agent extensions" }),
+    ).getAllByRole("tab");
     expect(tabs.map((tab) => tab.textContent?.trim())).toEqual(["Claude", "Codex", "OpenCode"]);
     expect(screen.getByText("claude-review")).toBeTruthy();
     await waitFor(() => expect(screen.getAllByText("claude-skill").length).toBeGreaterThan(0));

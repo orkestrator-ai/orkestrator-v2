@@ -82,7 +82,10 @@ import {
 import { createPersistedPaneLayoutInput, flushPaneLayoutNow } from "@/lib/pane-layout-persistence";
 import { composeDraftKey, discardComposeDraft } from "@/lib/compose-draft-persistence";
 import { composerOccupiedError } from "@/lib/prompt-queue-errors";
-import { resolveWorkspaceAttachment } from "@/lib/chat/workspace-attachments";
+import {
+  resolveWorkspaceAttachment,
+  retainSupportedAttachments,
+} from "@/lib/chat/workspace-attachments";
 import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -355,6 +358,24 @@ function UnassignedNativeAgentComposer({
       && selectedModel?.supportsImageInput !== false,
     [selectedAdapter, selectedModel?.supportsImageInput],
   );
+  /*
+   * A draft restored from persistence predates the selected provider, so its
+   * attachments may be ones this agent refuses. Reconcile against the neutral
+   * capabilities rather than trusting the persisted namespace: a bridge that
+   * rejects the whole prompt would otherwise fail a send the composer had no
+   * way to explain.
+   */
+  const attachmentCapabilities = selectedAdapter?.capabilities.attachments;
+  useEffect(() => {
+    const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+    if (!current || current.attachments.length === 0) return;
+    const supported = retainSupportedAttachments(
+      current.attachments,
+      attachmentCapabilities,
+    );
+    if (supported.length === current.attachments.length) return;
+    updateDraft(sessionKey, { attachments: supported });
+  }, [attachmentCapabilities, sessionKey, updateDraft]);
   const handleImageRejected = useCallback(
     () => toast.error("Images are not supported by this agent"),
     [],
@@ -473,10 +494,13 @@ function UnassignedNativeAgentComposer({
                       : next === "codex"
                         ? globalConfig.codexNativeFastModeDefault ?? false
                         : false,
-                    ...(!nextAdapter?.capabilities.attachments.images
-                      && !nextAdapter?.capabilities.attachments.files
-                      ? { attachments: [] }
-                      : {}),
+                    // Per type, not all-or-nothing: Codex takes images and
+                    // refuses files, and its bridge rejects the entire prompt
+                    // rather than dropping the entry it cannot use.
+                    attachments: retainSupportedAttachments(
+                      draft.attachments,
+                      nextAdapter?.capabilities.attachments,
+                    ),
                   });
                 }}
                 onToggleFavorite={toggleFavorite}

@@ -968,6 +968,57 @@ describe("StorageService native agent sessions", () => {
     });
   });
 
+  test("records controls when a resume lands back on the current provider session", async () => {
+    await withStorage(async (first) => {
+      const adopted = await first.adoptNativeAgentSession({
+        ...input,
+        providerSessionId: "provider-same",
+        controls: { modelId: "old-model", mode: "build", fastMode: false },
+      });
+      await first.dispatchNativeAgentPromptOnce(
+        input.key,
+        "request-kept",
+        async () => undefined,
+      );
+
+      // Resuming in place: the provider already received these controls, so
+      // storage must not keep reporting the old ones after a restart.
+      const resumed = await first.adoptNativeAgentSession({
+        ...input,
+        providerSessionId: "provider-same",
+        controls: { modelId: "new-model", reasoningId: "high", fastMode: true },
+      });
+      expect(resumed.providerSessionId).toBe("provider-same");
+      expect(resumed.controls).toEqual({
+        modelId: "new-model",
+        mode: "build",
+        reasoningId: "high",
+        fastMode: true,
+      });
+      // Adopting the same session is not a replacement, so dispatch history
+      // and creation time survive.
+      expect(resumed.dispatchedRequestIds).toEqual(["request-kept"]);
+      expect(resumed.createdAt).toBe(adopted.createdAt);
+      expect((await first.getNativeAgentSession(input.key))?.controls)
+        .toEqual(resumed.controls);
+
+      // An adopt that changes nothing must not rewrite the record.
+      const unchanged = await first.adoptNativeAgentSession({
+        ...input,
+        providerSessionId: "provider-same",
+        controls: { modelId: "new-model" },
+      });
+      expect(unchanged.updatedAt).toBe(resumed.updatedAt);
+
+      // No controls at all still means "leave them alone".
+      const untouched = await first.adoptNativeAgentSession({
+        ...input,
+        providerSessionId: "provider-same",
+      });
+      expect(untouched.controls).toEqual(resumed.controls);
+    });
+  });
+
   test("rejects a replacement expectation when no mapping exists", async () => {
     await withStorage(async (first) => {
       await expect(first.adoptNativeAgentSession({

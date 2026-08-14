@@ -5259,6 +5259,30 @@ export class StorageService {
           throw new Error("Native agent session key collision");
         }
         if (existing.providerSessionId === input.providerSessionId) {
+          /*
+           * Resuming in place still reaches the provider with new controls, so
+           * returning early without recording them would leave storage
+           * disagreeing with the live session and reconstruct the tab with the
+           * old model/mode after a restart. Only the controls can change here:
+           * the provider session, identity and dispatch records are unchanged.
+           */
+          const controls = input.controls
+            ? { ...existing.controls, ...input.controls }
+            : existing.controls;
+          if (
+            input.controls
+            && JSON.stringify(controls) !== JSON.stringify(existing.controls)
+          ) {
+            const updated: PersistedNativeAgentSession = {
+              ...existing,
+              controls,
+              updatedAt: nowIso(),
+            };
+            sessions[input.key] = updated;
+            await this.saveNativeAgentSessions(sessions, opaque);
+            this.announce("native-agent-session", input.environmentId);
+            return updated;
+          }
           if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
           return existing;
         }

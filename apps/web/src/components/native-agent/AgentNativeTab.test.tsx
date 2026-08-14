@@ -3,7 +3,7 @@
  *
  * Every provider exercises the shared authoritative-projection path.
  */
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import type { NativeAgentSessionProjection, NativeAgentTabData } from "@orkestrator/protocol/native-agent";
@@ -489,6 +489,68 @@ describe("AgentNativeTab", () => {
     expect(screen.queryByText("No models available")).toBeNull();
   });
 
+  test("drops attachments the newly selected platform cannot receive", async () => {
+    useEnvironmentStore.setState({
+      environments: [{
+        id: "env-1",
+        projectId: "project-1",
+        name: "Attachment reconcile",
+        order: 0,
+      } as never],
+    });
+    const sessionKey = createSessionKey("env-1", "tab-attachment-switch");
+    const file = {
+      id: "attachment-file",
+      type: "file" as const,
+      path: "/workspace/docs/notes.md",
+      name: "notes.md",
+    };
+    const image = {
+      id: "attachment-image",
+      type: "image" as const,
+      path: "/workspace/docs/shot.png",
+      previewUrl: "blob:preview",
+      name: "shot.png",
+    };
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      platform: "claude",
+      text: "review these",
+      attachments: [file, image],
+    });
+
+    render(
+      <AgentNativeTab
+        tabId="tab-attachment-switch"
+        data={{ environmentId: "env-1" }}
+        isActive
+      />,
+    );
+    // Claude takes both, so nothing is reconciled away.
+    await waitFor(() => expect(
+      useNativeComposeStore.getState().drafts.get(sessionKey)?.attachments,
+    ).toEqual([file, image]));
+
+    useNativeComposeStore.getState().updateDraft(sessionKey, { platform: "codex" });
+
+    /*
+     * Codex accepts images and refuses files, and its bridge rejects the whole
+     * prompt rather than dropping the entry it cannot use. Keeping the file
+     * here would fail the next send with an error naming an attachment the
+     * composer had stopped offering.
+     */
+    await waitFor(() => expect(
+      useNativeComposeStore.getState().drafts.get(sessionKey)?.attachments,
+    ).toEqual([image]));
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text)
+      .toBe("review these");
+
+    // Cursor accepts neither, so the image goes too.
+    useNativeComposeStore.getState().updateDraft(sessionKey, { platform: "cursor" });
+    await waitFor(() => expect(
+      useNativeComposeStore.getState().drafts.get(sessionKey)?.attachments,
+    ).toEqual([]));
+  });
+
   test("carries first-prompt mentions and pasted images through the provider lock", async () => {
     usePaneLayoutStore.setState({
       environments: new Map([
@@ -780,6 +842,49 @@ describe("AgentNativeTab", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(screen.getByTestId("hook-session-id").textContent).toBe("session-b");
+  });
+
+  test("polls an active tab faster while a turn runs and stops entirely when inactive", async () => {
+    /*
+     * The backend no longer refreshes projections on a timer, so this interval
+     * is the only thing that advances a visible transcript. Assert the cadence
+     * it registers rather than waiting on wall-clock ticks.
+     */
+    const registered: number[] = [];
+    const realSetInterval = window.setInterval.bind(window);
+    const intervalSpy = spyOn(window, "setInterval").mockImplementation(((
+      handler: TimerHandler,
+      timeout?: number,
+      ...rest: unknown[]
+    ) => {
+      registered.push(timeout ?? 0);
+      return realSetInterval(handler, timeout, ...rest);
+    }) as typeof window.setInterval);
+    try {
+      const view = render(<NativeSessionHarness />);
+      await waitFor(() => expect(screen.getByTestId("hook-session-id").textContent)
+        .toBe("claude-session"));
+      expect(registered).toContain(1_500);
+      expect(registered).not.toContain(500);
+
+      registered.length = 0;
+      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+        ...(await defaultProjection(input as never)),
+        turn: { phase: "running" as const },
+      }));
+      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      await waitFor(() => expect(registered).toContain(500));
+
+      // Unmounting is the inactive path: no timer may outlive the tree.
+      registered.length = 0;
+      const before = getNativeAgentProjectionMock.mock.calls.length;
+      view.unmount();
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      expect(registered).toEqual([]);
+      expect(getNativeAgentProjectionMock.mock.calls.length).toBe(before);
+    } finally {
+      intervalSpy.mockRestore();
+    }
   });
 
   test("restores review follow-up, manual refresh, notices, and Escape stop in the shared tab", async () => {

@@ -267,7 +267,7 @@ const INTERACTION_MONITOR_DEFAULT_CONCURRENCY = 4;
 const INTERACTION_MONITOR_DEFAULT_PER_ENVIRONMENT = 8;
 const INTERACTION_MONITOR_DEFAULT_MAX_RETRIES = 5;
 const INTERACTION_MONITOR_DEFAULT_RETRY_BASE_MS = 1_000;
-const NATIVE_PROJECTION_CACHE_LIMIT = 1_024;
+export const NATIVE_PROJECTION_CACHE_LIMIT = 1_024;
 const NATIVE_PROJECTION_MAX_MESSAGES = 512;
 /**
  * Ceiling for an explicitly expanded transcript window.
@@ -1368,6 +1368,21 @@ export class NativeAgentService {
     this.projectionEpochs.set(key, (this.projectionEpochs.get(key) ?? 0) + 1);
   }
 
+  /**
+   * Drop the epoch counter for a key that is neither cached nor being read.
+   *
+   * The epoch only means anything relative to a read that captured it, so once
+   * a key has no cache entry and no in-flight refresh, restarting it at zero is
+   * indistinguishable from keeping it. Without this the map would outlive every
+   * bound `projectionCache` enforces and grow with key churn for the life of
+   * the process.
+   */
+  private pruneProjectionEpoch(key: string): void {
+    if (this.projectionCache.has(key)) return;
+    if (this.projectionRefreshes.has(key)) return;
+    this.projectionEpochs.delete(key);
+  }
+
   private refreshProjection(
     input: NativeAgentProjectionInput,
     force: boolean,
@@ -1388,6 +1403,7 @@ export class NativeAgentService {
       if (this.projectionRefreshes.get(key) === operation) {
         this.projectionRefreshes.delete(key);
       }
+      this.pruneProjectionEpoch(key);
     });
   }
 
@@ -1638,9 +1654,19 @@ export class NativeAgentService {
     candidate: NativeAgentSessionProjection,
     generation: string,
     epoch: number,
-  ): NativeAgentSessionProjection | null {
+  ): NativeAgentSessionProjection {
     if ((this.projectionEpochs.get(key) ?? 0) !== epoch) {
-      return this.projectionCache.get(key)?.projection ?? null;
+      /*
+       * This read lost a race with a mutation that replaced the tab's provider
+       * identity, so it must not become the cached authoritative state. It is
+       * still a real answer though: `null` is reserved for "this logical tab
+       * resolves to no provider session", and returning it here would make an
+       * ordinary resume look like a deleted session to any caller that does not
+       * fence reads itself. Hand back the newest committed projection, or the
+       * uncommitted candidate at revision 0 when nothing is cached yet.
+       */
+      return this.projectionCache.get(key)?.projection
+        ?? { ...candidate, revision: 0, generation, cursor: `${generation}:0` };
     }
     const previous = this.projectionCache.get(key);
     const fingerprint = JSON.stringify({
@@ -1666,7 +1692,16 @@ export class NativeAgentService {
     };
     if (!previous && this.projectionCache.size >= NATIVE_PROJECTION_CACHE_LIMIT) {
       const oldest = this.projectionCache.keys().next().value as string | undefined;
-      if (oldest) this.invalidateProjection(oldest);
+      /*
+       * Capacity eviction is not an identity change: bumping the evicted key's
+       * epoch would fence an unrelated in-flight read for it and report that
+       * session as missing. Drop the entry only, and reclaim its epoch when no
+       * read is relying on it.
+       */
+      if (oldest) {
+        this.projectionCache.delete(oldest);
+        this.pruneProjectionEpoch(oldest);
+      }
     }
     this.projectionCache.set(key, {
       input: { ...input },

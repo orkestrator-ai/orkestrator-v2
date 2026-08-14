@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   MAX_PROMPT_ATTACHMENTS,
   resolveWorkspaceAttachment,
+  retainSupportedAttachments,
 } from "./workspace-attachments";
 import type { FileCandidate } from "@/types";
 
@@ -74,5 +75,38 @@ describe("resolveWorkspaceAttachment", () => {
       ...local,
       attachedCount: MAX_PROMPT_ATTACHMENTS,
     })).toMatchObject({ error: "Cannot attach file" });
+  });
+});
+
+describe("retainSupportedAttachments", () => {
+  const file = { id: "a", type: "file" as const, path: "/work/tree/notes.md", name: "notes.md" };
+  const image = { id: "b", type: "image" as const, path: "/work/tree/shot.png", name: "shot.png" };
+
+  test("keeps images and drops files for an image-only agent", () => {
+    expect(retainSupportedAttachments([file, image], { files: false, images: true }))
+      .toEqual([image]);
+  });
+
+  test("keeps files and drops images for a file-only agent", () => {
+    expect(retainSupportedAttachments([file, image], { files: true, images: false }))
+      .toEqual([file]);
+  });
+
+  test("keeps both when the agent accepts both", () => {
+    expect(retainSupportedAttachments([file, image], { files: true, images: true }))
+      .toEqual([file, image]);
+  });
+
+  test("drops everything for an agent that accepts no attachments", () => {
+    expect(retainSupportedAttachments([file, image], { files: false, images: false }))
+      .toEqual([]);
+  });
+
+  test("drops everything when no capability is known rather than guessing", () => {
+    expect(retainSupportedAttachments([file, image], undefined)).toEqual([]);
+  });
+
+  test("returns an empty list unchanged", () => {
+    expect(retainSupportedAttachments([], { files: true, images: true })).toEqual([]);
   });
 });

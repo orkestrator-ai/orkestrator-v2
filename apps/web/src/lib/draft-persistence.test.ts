@@ -1096,6 +1096,94 @@ describe("useNativeComposeDraftPersistence", () => {
     hook.unmount();
   });
 
+  test("restores only the attachments the stored platform can receive", async () => {
+    const sessionKey = "env-neutral:tab-attachments";
+    const file = {
+      id: "a",
+      type: "file" as const,
+      path: "/workspace/notes.md",
+      name: "notes.md",
+    };
+    const image = {
+      id: "b",
+      type: "image" as const,
+      path: "/workspace/shot.png",
+      name: "shot.png",
+    };
+    getComposeDraft.mockResolvedValueOnce({
+      draftKey: compose.composeDraftKey("agent-native", "env-neutral", sessionKey),
+      ownerType: "environment",
+      ownerId: "env-neutral",
+      value: {
+        text: "review these",
+        mentions: [],
+        attachments: [file, image],
+        // The shared record's own namespace says nothing about the agent; the
+        // stored platform does, and Codex refuses file attachments outright.
+        metadata: { platform: "codex" },
+      },
+      updatedAt: "2026-08-14T00:00:00.000Z",
+      revision: 1,
+    });
+    const store = createNativeStore();
+    const hook = renderHook(() => useNativeComposeDraftPersistence(
+      "agent-native",
+      "env-neutral",
+      sessionKey,
+      store,
+    ));
+
+    await waitFor(() => expect(store.getState().draftText.get(sessionKey)).toBe(
+      "review these",
+    ));
+    expect(store.getState().attachments.get(sessionKey)).toEqual([image]);
+
+    hook.unmount();
+  });
+
+  test("restores both attachment kinds when the stored platform accepts them", async () => {
+    const sessionKey = "env-neutral:tab-attachments-claude";
+    const file = {
+      id: "a",
+      type: "file" as const,
+      path: "/workspace/notes.md",
+      name: "notes.md",
+    };
+    const image = {
+      id: "b",
+      type: "image" as const,
+      path: "/workspace/shot.png",
+      name: "shot.png",
+    };
+    getComposeDraft.mockResolvedValueOnce({
+      draftKey: compose.composeDraftKey("agent-native", "env-neutral", sessionKey),
+      ownerType: "environment",
+      ownerId: "env-neutral",
+      value: {
+        text: "review these",
+        mentions: [],
+        attachments: [file, image],
+        metadata: { platform: "claude" },
+      },
+      updatedAt: "2026-08-14T00:00:00.000Z",
+      revision: 1,
+    });
+    const store = createNativeStore();
+    const hook = renderHook(() => useNativeComposeDraftPersistence(
+      "agent-native",
+      "env-neutral",
+      sessionKey,
+      store,
+    ));
+
+    await waitFor(() => expect(store.getState().draftText.get(sessionKey)).toBe(
+      "review these",
+    ));
+    expect(store.getState().attachments.get(sessionKey)).toEqual([file, image]);
+
+    hook.unmount();
+  });
+
   test("does not delete an unread backend draft when hydration is cancelled", async () => {
     const snapshot = deferred<Awaited<ReturnType<typeof realBackend.getComposeDraft>>>();
     getComposeDraft.mockImplementationOnce(() => snapshot.promise);

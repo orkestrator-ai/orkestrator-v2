@@ -635,6 +635,53 @@ describe("reconcilePersistedLayout", () => {
     });
   });
 
+  test("drops Multi Review tabs whose persisted reviewer id is unusable", () => {
+    // A reviewer tab that cannot name its reviewer would silently restore as the
+    // workflow overview, so an unusable id drops the tab rather than changing
+    // which view the user saved.
+    for (const reviewerId of ["", "   ", 7, null]) {
+      const restored = reconcilePersistedLayout(saved({
+        kind: "leaf",
+        id: "pane",
+        tabs: [
+          { id: "plain", type: "plain" },
+          {
+            id: "bad-reviewer",
+            type: "multi-review",
+            multiReviewTabData: { environmentId: "env-1", workflowId: "multi-1", reviewerId },
+          },
+        ],
+        activeTabId: "bad-reviewer",
+      }), { ...context, hasMultiReview: () => true });
+
+      expect(restored?.root, JSON.stringify(reviewerId)).toEqual({
+        kind: "leaf",
+        id: "pane",
+        tabs: [{ id: "plain", type: "plain" }],
+        activeTabId: "plain",
+      });
+    }
+  });
+
+  test("restores a Multi Review overview tab that never named a reviewer", () => {
+    const restored = reconcilePersistedLayout(saved({
+      kind: "leaf",
+      id: "pane",
+      tabs: [{
+        id: "overview",
+        type: "multi-review",
+        multiReviewTabData: { environmentId: "env-1", workflowId: "multi-1" },
+      }],
+      activeTabId: "overview",
+    }), { ...context, hasMultiReview: () => true });
+
+    const [tab] = (restored?.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs;
+    expect(tab?.multiReviewTabData).toEqual({
+      environmentId: "env-1", workflowId: "multi-1", isLocal: false,
+    });
+    expect(tab?.multiReviewTabData).not.toHaveProperty("reviewerId");
+  });
+
   test("preserves child order and direction while normalizing split sizes", () => {
     const restored = reconcilePersistedLayout(saved({
       kind: "split",

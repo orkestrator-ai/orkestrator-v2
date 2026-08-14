@@ -76,6 +76,65 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(openReviewer).toHaveBeenCalledWith("reviewer-1", 0);
   });
 
+  test("cannot open a reviewer that never opened a provider session", () => {
+    const ready = readyWorkflow();
+    delete ready.reviewers[0]!.providerSessionId;
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+    const openReviewer = mock((_reviewerId: string, _index: number) => undefined);
+
+    render(<MultiReviewTab
+      data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+      isActive
+      hydrateWorkflow={mock(async () => ready)}
+      openReviewer={openReviewer}
+    />);
+
+    const withoutSession = screen.getByRole("button", { name: "Open Reviewer 1 transcript" });
+    expect(withoutSession.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(withoutSession);
+    expect(openReviewer).not.toHaveBeenCalled();
+
+    // The sibling reviewer still has a session and stays reachable.
+    expect(screen.getByRole("button", { name: "Open Reviewer 2 transcript" })
+      .hasAttribute("disabled")).toBe(false);
+  });
+
+  test("cannot open any reviewer without an intent or a terminal context", () => {
+    const ready = readyWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+
+    render(<MultiReviewTab
+      data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+      isActive
+      hydrateWorkflow={mock(async () => ready)}
+    />);
+
+    expect(screen.getByRole("button", { name: "Open Reviewer 1 transcript" })
+      .hasAttribute("disabled")).toBe(true);
+  });
+
+  test("shows each reviewer's own failure beside the generalized workflow error", async () => {
+    const ready = readyWorkflow();
+    ready.phase = "failed";
+    ready.error = "No reviewer produced a valid report: The reviewer session failed";
+    ready.reviewers[0] = {
+      ...ready.reviewers[0]!, status: "failed", error: "The reviewer session failed",
+    };
+    ready.reviewers[1] = {
+      ...ready.reviewers[1]!, status: "failed", error: "The reviewer session no longer exists",
+    };
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+
+    render(<MultiReviewTab
+      data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+      isActive
+      hydrateWorkflow={mock(async () => ready)}
+    />);
+
+    expect(await screen.findByText("The reviewer session failed")).toBeTruthy();
+    expect(screen.getByText("The reviewer session no longer exists")).toBeTruthy();
+  });
+
   test("renders the consolidated report and delegates the fix intent to the backend", async () => {
     const ready = readyWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(ready);

@@ -14,7 +14,13 @@ import { showOnlyFinalStructuredReviewMessage } from "@/lib/structured-review-me
 import * as backend from "@/lib/backend";
 import { toPipelineTranscript } from "@/components/build-pipeline/pipeline-transcript";
 
-const REFRESH_INTERVAL_MS = 1_500;
+/**
+ * Each poll re-reads the reviewer's whole provider transcript, which in gateway
+ * mode crosses a network. A review runs for minutes, so trade a little latency
+ * on this read-only progress view for a materially cheaper steady state; the
+ * backend caps the response and a status change refreshes immediately.
+ */
+const REFRESH_INTERVAL_MS = 4_000;
 
 const AGENT_LABELS = {
   claude: "Claude",

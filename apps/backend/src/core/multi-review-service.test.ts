@@ -57,6 +57,8 @@ class Provider implements BuildPipelineProvider {
   statusValue: ProviderStatus = "idle";
   statusCalls = 0;
   abortError: Error | null = null;
+  /** Thrown by the next `status` call, then cleared. */
+  statusError: Error | null = null;
   ambiguousFixOnce = false;
   fixSends = 0;
   fixComplete = true;
@@ -95,6 +97,11 @@ class Provider implements BuildPipelineProvider {
   async status(sessionId: string): Promise<ProviderStatus> {
     this.statusCalls += 1;
     if (this.statusGate) await this.statusGate;
+    if (this.statusError) {
+      const error = this.statusError;
+      this.statusError = null;
+      throw error;
+    }
     return this.statusOverrides.get(sessionId) ?? this.statusValue;
   }
   async messages(): Promise<unknown[]> {
@@ -281,6 +288,7 @@ async function withService(
     start: (reviewers?: MultiReviewModelSelection[]) => Promise<MultiReviewWorkflow>;
     snapshot: (workflowId: string) => Promise<MultiReviewWorkflow | undefined>;
   }) => Promise<void>,
+  options: { createProvider?: () => Promise<BuildPipelineProvider> } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), `ork-multi-review-${environmentId}-`));
   const storage = new StorageService(dataDir);
@@ -293,7 +301,7 @@ async function withService(
   });
   const service = new MultiReviewService(storage, async () => { throw new Error("unexpected command"); }, {
     autoAdvance: false,
-    provider: async () => provider,
+    provider: options.createProvider ?? (async () => provider),
   });
   try {
     await run({
@@ -921,11 +929,153 @@ test("MultiReviewService fails overall when no reviewer produces a valid report"
 
     const failed = await snapshot(started.id);
     expect(failed?.phase).toBe("failed");
-    expect(failed?.error).toBe("No reviewer produced a valid report");
+    // The distinct reviewer causes are carried up; a bare "no valid report"
+    // would read as a model-quality problem rather than two dead sessions.
+    expect(failed?.error).toBe(
+      "No reviewer produced a valid report: The reviewer session failed;"
+      + " The reviewer session no longer exists",
+    );
     expect(failed?.reviewers).toMatchObject([
       { status: "failed", error: "The reviewer session failed" },
       { status: "failed", error: "The reviewer session no longer exists" },
     ]);
+  });
+});
+
+test("MultiReviewService reports one shared cause once when every reviewer fails alike", async () => {
+  const provider = new Provider();
+  provider.statusValue = "error";
+  await withService("env-shared-cause", provider, async ({ service, start, snapshot }) => {
+    const started = await start([
+      { agent: "claude", model: "opus" },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await service.advanceNow(started.id);
+
+    const failed = await snapshot(started.id);
+    expect(failed?.phase).toBe("failed");
+    expect(failed?.error).toBe(
+      "No reviewer produced a valid report: The reviewer session failed",
+    );
+  });
+});
+
+test("MultiReviewService retries every failed reviewer, not only the first", async () => {
+  const provider = new Provider();
+  provider.statusOverrides.set("session-1", "error");
+  provider.statusOverrides.set("session-2", "missing");
+  await withService("env-retry-all-reviewers", provider, async ({ service, start, snapshot }) => {
+    const started = await start([
+      { agent: "claude", model: "opus" },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await service.advanceNow(started.id);
+
+    const failed = await snapshot(started.id);
+    expect(failed?.phase).toBe("failed");
+    expect(failed?.reviewers.map((reviewer) => reviewer.status)).toEqual(["failed", "failed"]);
+
+    // Both abandoned sessions are aborted, and both reviewers return to pending.
+    // Restoring only the first would consolidate from one reviewer silently.
+    const retried = await service.retry(started.id);
+    expect(provider.aborted).toEqual(["session-1", "session-2"]);
+    expect(retried.phase).toBe("reviewing");
+    expect(retried.error).toBeUndefined();
+    for (const reviewer of retried.reviewers) {
+      expect(reviewer.status).toBe("pending");
+      expect(reviewer.error).toBeUndefined();
+      expect(reviewer.providerSessionId).toBeUndefined();
+      expect(reviewer.requestId).toBeUndefined();
+    }
+
+    // Both re-dispatched reviewers reach the consolidation input.
+    provider.statusOverrides.clear();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+    const ready = await snapshot(started.id);
+    expect(ready?.reviewers.map((reviewer) => reviewer.status)).toEqual(["completed", "completed"]);
+    const consolidation = [...provider.sends.values()].find((sent) =>
+      sent.prompt.includes("<multi-review-reports-json>"));
+    for (const reviewer of ready?.reviewers ?? []) {
+      expect(consolidation?.prompt).toContain(reviewer.id);
+    }
+  });
+});
+
+test("MultiReviewService settles every running reviewer when the review stage fails", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  await withService("env-review-stage-failure", provider, async ({ service, storage, start, snapshot }) => {
+    const started = await start([
+      { agent: "claude", model: "opus" },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await service.advanceNow(started.id);
+    const running = await snapshot(started.id);
+    expect(running?.reviewers.map((reviewer) => reviewer.status)).toEqual(["running", "running"]);
+
+    // Fail the reviewer pass itself: the per-reviewer handler cannot persist its
+    // own local failure, so the error escapes to the workflow-level handler
+    // while both reviewer sessions are still recorded as running.
+    const originalSave = storage.saveMultiReviewWorkflow.bind(storage);
+    let rejectNextSave = true;
+    storage.saveMultiReviewWorkflow = (async (...args: Parameters<typeof originalSave>) => {
+      if (rejectNextSave) {
+        rejectNextSave = false;
+        throw new Error("Durable write rejected");
+      }
+      return originalSave(...args);
+    }) as typeof storage.saveMultiReviewWorkflow;
+    provider.statusError = new Error("The reviewer session could not be polled");
+    await service.advanceNow(started.id);
+    storage.saveMultiReviewWorkflow = originalSave;
+
+    const failed = await snapshot(started.id);
+    expect(failed?.phase).toBe("failed");
+    // No reviewer may stay `running` on a settled workflow: the environment
+    // activity projection reads that status and would never retire.
+    expect(failed?.reviewers.map((reviewer) => reviewer.status)).toEqual(["failed", "failed"]);
+    expect(await storage.getEnvironment("env-review-stage-failure")).toMatchObject({
+      agentActivitySources: { "multi-review": { state: "idle" } },
+    });
+  });
+});
+
+test("MultiReviewService builds one provider for concurrent transcript reads", async () => {
+  const provider = new Provider();
+  let creations = 0;
+  let releaseCreation = (): void => {};
+  let creationGate: Promise<void> | null = null;
+  await withService("env-provider-dedup", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+    // Reaching `ready` releases the supervisor's provider, so the next reader
+    // takes the construction path rather than the cache.
+    const reviewer = (await snapshot(started.id))!.reviewers[0]!;
+    const creationsBeforeReads = creations;
+    creationGate = new Promise<void>((resolve) => { releaseCreation = () => resolve(); });
+
+    const reads = [
+      service.reviewerTranscript(started.id, reviewer.id),
+      service.reviewerTranscript(started.id, reviewer.id),
+    ];
+    await waitUntil(() => creations > creationsBeforeReads);
+    releaseCreation();
+    creationGate = null;
+    await Promise.all(reads);
+
+    expect(creations).toBe(creationsBeforeReads + 1);
+  }, {
+    createProvider: async () => {
+      creations += 1;
+      if (creationGate) await creationGate;
+      return provider;
+    },
   });
 });
 
@@ -942,7 +1092,7 @@ test("MultiReviewService fails a reviewer whose provider session errors or disap
 
       const current = await snapshot(started.id);
       expect(current?.phase).toBe("failed");
-      expect(current?.error).toBe("No reviewer produced a valid report");
+      expect(current?.error).toBe(`No reviewer produced a valid report: ${message}`);
       expect(current?.reviewers[0]).toMatchObject({ status: "failed", error: message });
     });
   }

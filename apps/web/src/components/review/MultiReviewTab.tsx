@@ -154,6 +154,13 @@ function MultiReviewOverviewTab({
                   <div className="min-w-0">
                     <p className="truncate text-xs font-medium">Reviewer {index + 1} · {reviewer.agent}</p>
                     <p className="truncate text-[11px] text-muted-foreground">{reviewer.model}{reviewer.reasoningEffort ? ` · ${reviewer.reasoningEffort}` : ""}</p>
+                    {/* The workflow error generalizes a shared cause; this is the
+                        only place the reviewer's own failure is legible. */}
+                    {reviewer.error ? (
+                      <p className="truncate text-[11px] text-destructive" title={reviewer.error}>
+                        {reviewer.error}
+                      </p>
+                    ) : null}
                   </div>
                 </button>
               ))}

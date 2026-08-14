@@ -50,9 +50,10 @@ history rather than two partial ones.
 ## `BuildChatTab agent messaging > disables the send button and shows progress while a send is in flight` (`apps/web/src/components/build-pipeline/BuildChatTab.test.tsx`)
 
 - **Status:** open
-- **Date observed:** 2026-08-13
+- **Date observed:** 2026-08-13; recurred 2026-08-14
 - **Original command:** `bun test src --parallel` from `apps/web`.
 - **Worker configuration:** Bun's default parallel worker pool for the complete web package, run alongside the root suite during native-agent consolidation verification.
+- **Recurrence (2026-08-14):** `set -o pipefail; bun run test 2>&1 | tee /tmp/rev-d78f50fb-full-tests.log` at commit `d78f50fb`, with the workspace, root, bridge, and protocol-lockfile groups running concurrently. `(fail) ... [5228.39ms]` — `this test timed out after 5000ms`, no assertion failure reported. Web package: 5,647 total, 5,645 passed, 1 skipped, 1 failed across 231 files; every other group passed. Isolated rerun `bun test --cwd apps/web src/components/build-pipeline/BuildChatTab.test.tsx` -> 75 passed, 0 failed, 230 assertions in 3.36 seconds. The signature matches the original: a bare outer-budget timeout that clears completely in isolation, so the hypothesis below is unchanged.
 - **Failure:** `(fail) BuildChatTab agent messaging > disables the send button and shows progress while a send is in flight [6090.90ms]`. The filtered aggregate log did not retain a narrower assertion message; the duration exceeded Bun's five-second default test budget.
 - **Suite counts:** 5,548 tests across 227 files; 5,546 passed, 1 skipped, and 1 failed in 21.24 seconds.
 - **Isolated rerun:** `bun test src/components/build-pipeline/BuildChatTab.test.tsx` from `apps/web` -> 75 passed, 0 failed, 230 assertions in 3.54 seconds; the affected test passed in 2,718.90 ms.

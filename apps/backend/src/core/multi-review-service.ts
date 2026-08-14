@@ -43,6 +43,12 @@ const CONTROLLER_LEASE_MS = 15_000;
 const CONTROLLER_RENEW_MS = 5_000;
 const MAX_IDLE_RESULT_POLLS = 5;
 const MAX_SCHEMA_REPAIR_ATTEMPTS = 3;
+/**
+ * Caps one transcript response. The reviewer tab polls this read model while a
+ * review runs, and the bridge transcript itself is unbounded, so without a cap
+ * every poll would carry the whole history. The viewer renders the tail.
+ */
+const MAX_REVIEWER_TRANSCRIPT_MESSAGES = 500;
 const CANCELLATION_DEADLINE_MS = 10 * 60_000;
 
 function nowIso(): string {
@@ -81,6 +87,18 @@ function hasWorkflowActivity(workflow: MultiReviewWorkflow): boolean {
   return isSupervisedPhase(workflow.phase)
     || workflow.reviewers.some((reviewer) => reviewer.status === "running")
     || workflow.fixSession?.status === "running";
+}
+
+const NO_VALID_REPORT_ERROR = "No reviewer produced a valid report";
+
+/** Summarises why every reviewer failed, deduplicating a shared root cause. */
+function multiReviewFailureSummary(
+  reviewers: readonly MultiReviewWorkflow["reviewers"][number][],
+): string {
+  const reasons = [...new Set(reviewers.flatMap((reviewer) =>
+    reviewer.error ? [reviewer.error] : []))];
+  if (reasons.length === 0) return NO_VALID_REPORT_ERROR;
+  return `${NO_VALID_REPORT_ERROR}: ${reasons.join("; ")}`.slice(0, 4_096);
 }
 
 export interface MultiReviewServiceOptions {
@@ -192,7 +210,10 @@ export class MultiReviewService {
           provider: reviewer.agent,
           fence: reviewer.sessionKey,
         });
-        messages = await provider.messages(reviewer.providerSessionId);
+        const transcript = await provider.messages(reviewer.providerSessionId);
+        messages = transcript.length > MAX_REVIEWER_TRANSCRIPT_MESSAGES
+          ? transcript.slice(-MAX_REVIEWER_TRANSCRIPT_MESSAGES)
+          : transcript;
       } finally {
         await this.releaseProviderReaderByKey(key);
       }
@@ -277,21 +298,26 @@ export class MultiReviewService {
       if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
       const { workflow, token } = controlled;
       if (workflow.phase !== "failed") return workflow;
-      const failedReviewer = workflow.reviewers.find((reviewer) => reviewer.status === "failed");
-      if (failedReviewer) {
-        // Retrying allocates a fresh session, so the abandoned one must be
-        // aborted while its id is still known. Clearing the id first would
-        // leave a provider turn running that nothing can ever reach again.
-        await this.abandonSession(workflow, failedReviewer, failedReviewer.providerSessionId);
-        failedReviewer.status = "pending";
-        delete failedReviewer.error;
-        delete failedReviewer.providerSessionId;
-        delete failedReviewer.sessionKey;
-        delete failedReviewer.requestId;
-        delete failedReviewer.dispatchState;
-        delete failedReviewer.schemaRepairAttempts;
-        delete failedReviewer.schemaRepairPrompt;
-        delete failedReviewer.idleResultPolls;
+      // Reviewer failures are independent, so a single pass can fail several of
+      // them at once. Restoring only the first would consolidate from fewer
+      // reviewers than the user asked for, without saying so.
+      const failedReviewers = workflow.reviewers.filter((reviewer) => reviewer.status === "failed");
+      if (failedReviewers.length > 0) {
+        for (const failedReviewer of failedReviewers) {
+          // Retrying allocates a fresh session, so the abandoned one must be
+          // aborted while its id is still known. Clearing the id first would
+          // leave a provider turn running that nothing can ever reach again.
+          await this.abandonSession(workflow, failedReviewer, failedReviewer.providerSessionId);
+          failedReviewer.status = "pending";
+          delete failedReviewer.error;
+          delete failedReviewer.providerSessionId;
+          delete failedReviewer.sessionKey;
+          delete failedReviewer.requestId;
+          delete failedReviewer.dispatchState;
+          delete failedReviewer.schemaRepairAttempts;
+          delete failedReviewer.schemaRepairPrompt;
+          delete failedReviewer.idleResultPolls;
+        }
         workflow.phase = "reviewing";
       } else if (workflow.consolidatedReport && workflow.fixSession) {
         workflow.phase = "ready";
@@ -637,7 +663,11 @@ export class MultiReviewService {
     }
 
     workflow.phase = "failed";
-    workflow.error = "No reviewer produced a valid report";
+    // Reviewers fail locally, so an environment-wide cause (an unreachable
+    // bridge, a deleted worktree) reaches here as the same message on every
+    // reviewer. Carry the distinct causes up rather than reporting a bare
+    // "no valid report", which reads as a model-quality problem instead.
+    workflow.error = multiReviewFailureSummary(workflow.reviewers);
     await this.save(workflow, token);
     await this.release(workflow, token);
   }
@@ -1099,9 +1129,15 @@ export class MultiReviewService {
     workflow.phase = "failed";
     workflow.error = errorMessage(error).slice(0, 4_096);
     if (failedDuringReview) {
-      const reviewer = workflow.reviewers.find((entry) => entry.status === "running")
-        ?? workflow.reviewers.find((entry) => entry.status === "pending");
-      if (reviewer) {
+      // This failure abandons every live reviewer session, so none of them may
+      // stay `running` on a settled workflow: `hasWorkflowActivity` reads that
+      // status, and a survivor would pin the environment badge to "working"
+      // for good, including across the boot-time reconcile.
+      const running = workflow.reviewers.filter((entry) => entry.status === "running");
+      const abandoned = running.length > 0
+        ? running
+        : workflow.reviewers.filter((entry) => entry.status === "pending").slice(0, 1);
+      for (const reviewer of abandoned) {
         reviewer.status = "failed";
         reviewer.error = workflow.error;
       }

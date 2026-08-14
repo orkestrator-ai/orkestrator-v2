@@ -2254,6 +2254,79 @@ describe("session lifecycle", () => {
     expect(h.runtime.getRegistry().getSession(sessionId)?.config.mode).toBe("plan");
   });
 
+  test("an attached image is published as a file part and referenced in the persisted text", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "Inspect the diagram",
+      requestId: "req-1",
+      attachments: [{
+        type: "image",
+        path: "/workspace/.orkestrator/initial-prompt/shot.png",
+        filename: "diagram.png",
+        dataUrl: "data:image/png;base64,iVBORw0KGgo=",
+      }],
+    });
+
+    // The live row renders from the inline data, so no workspace read is needed.
+    const userMessage = h.events.find(
+      (event) => event.type === "message.updated"
+        && (event.data?.message as { role?: unknown } | undefined)?.role === "user",
+    )!.data!.message as { content: string; parts: unknown[] };
+    expect(userMessage.content).toBe("Inspect the diagram");
+    expect(userMessage.parts).toEqual([
+      { type: "text", content: "Inspect the diagram" },
+      {
+        type: "file",
+        content: "/workspace/.orkestrator/initial-prompt/shot.png",
+        fileUrl: "data:image/png;base64,iVBORw0KGgo=",
+        filename: "diagram.png",
+      },
+    ]);
+
+    // Codex keeps only an opaque data URL for the image itself, so the path has
+    // to travel in the text or a rehydrated transcript loses the attachment.
+    const input = h.child().requests.find((request) => request.method === "turn/start")!
+      .params.input as Array<Record<string, unknown>>;
+    expect(input[0]!.text).toBe(
+      "Inspect the diagram\n\n<attached-files>\n"
+      + '<attachment type="image" path="/workspace/.orkestrator/initial-prompt/shot.png"'
+      + ' filename="diagram.png" />\n</attached-files>',
+    );
+    expect(input[1]).toEqual({
+      type: "localImage",
+      path: "/workspace/.orkestrator/initial-prompt/shot.png",
+    });
+  });
+
+  test("an attachment-only prompt still sends a text slot carrying the reference", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "",
+      requestId: "req-1",
+      attachments: [{ type: "image", path: "/workspace/a.png" }],
+    });
+
+    const input = h.child().requests.find((request) => request.method === "turn/start")!
+      .params.input as Array<Record<string, unknown>>;
+    expect(input[0]!.text).toBe(
+      '<attached-files>\n<attachment type="image" path="/workspace/a.png" filename="" />\n</attached-files>',
+    );
+    expect(input[1]).toEqual({ type: "localImage", path: "/workspace/a.png" });
+  });
+
+  test("a prompt with no attachments is sent verbatim", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "hello", requestId: "req-1", attachments: [] });
+
+    const input = h.child().requests.find((request) => request.method === "turn/start")!
+      .params.input as Array<Record<string, unknown>>;
+    expect(input).toHaveLength(1);
+    expect(input[0]!.text).toBe("hello");
+  });
+
   test("a full turn streams deltas and finalizes the transcript", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });

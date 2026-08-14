@@ -2288,7 +2288,85 @@ describe("TerminalContainer", () => {
 
   });
 
-  test("does not reconstruct a second text-only Codex tab while the live create flow stages images", async () => {
+  test("leaves initial prompt images to the backend when it owns the native launch", async () => {
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((env) =>
+        env.id === "env-hidden"
+          ? {
+              ...env,
+              containerId: null,
+              environmentType: "local",
+              worktreePath: "/tmp/env-hidden-worktree",
+              defaultAgent: "codex",
+              codexMode: "native",
+              initialPrompt: "Inspect this screenshot",
+              pendingAgentLaunch: true,
+            }
+          : env
+      ),
+    }));
+    const attachments = [
+      {
+        id: "img-1",
+        name: "race.png",
+        previewUrl: "data:image/png;base64,UkFDRQ==",
+        base64Data: "UkFDRQ==",
+      },
+    ];
+    useClaudeOptionsStore.setState({
+      options: {
+        "env-hidden": {
+          launchAgent: true,
+          agentType: "codex",
+          initialPrompt: "Inspect this screenshot",
+          initialPromptAttachments: attachments,
+        },
+      },
+      pendingNativeLaunches: {},
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId={null}
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      const codexTabs = usePaneLayoutStore.getState().getAllTabs("env-hidden")
+        .filter((tab) => tab.type === "agent-native");
+      expect(codexTabs).toHaveLength(1);
+      expect(codexTabs[0]?.id).toBe("startup-agent");
+    });
+
+    // The backend dispatches this launch and stages the images itself, so the
+    // renderer must not rewrite the prompt into a list of paths — doing so also
+    // clears the stored attachments, which is what left the agent with a
+    // filename instead of the image.
+    expect(writeLocalFileMock).not.toHaveBeenCalled();
+    expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
+    expect(
+      useClaudeOptionsStore.getState().getOptions("env-hidden")?.initialPromptAttachments,
+    ).toEqual(attachments);
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-hidden")
+        .find((tab) => tab.id === "startup-agent")?.initialPrompt,
+    ).not.toContain(".orkestrator/initial-prompt");
+  });
+
+  test("does not reconstruct a second tab while a terminal launch stages images", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: { ...state.config.global, codexMode: "terminal" },
+        repositories: {},
+      },
+    }));
     let resolveAttachmentWrite: ((savedPath: string) => void) | undefined;
     writeLocalFileMock.mockImplementationOnce(
       async () => new Promise<string>((resolve) => {
@@ -2305,7 +2383,7 @@ describe("TerminalContainer", () => {
               environmentType: "local",
               worktreePath: "/tmp/env-hidden-worktree",
               defaultAgent: "codex",
-              codexMode: "native",
+              codexMode: "terminal",
               initialPrompt: "Inspect this screenshot",
               pendingAgentLaunch: true,
             }
@@ -2341,10 +2419,10 @@ describe("TerminalContainer", () => {
       </TerminalProvider>,
     );
 
+    // A PTY prompt cannot carry an attachment, so this path still rewrites the
+    // prompt into workspace paths — and must not seed a second tab while the
+    // staging write is in flight.
     await waitFor(() => expect(writeLocalFileMock).toHaveBeenCalledTimes(1));
-    expect(
-      useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden"),
-    ).toBeUndefined();
 
     await act(async () => {
       resolveAttachmentWrite?.(
@@ -2355,9 +2433,8 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       const codexTabs = usePaneLayoutStore.getState().getAllTabs("env-hidden")
-        .filter((tab) => tab.type === "agent-native");
+        .filter((tab) => tab.type === "codex");
       expect(codexTabs).toHaveLength(1);
-      expect(codexTabs[0]?.id).toBe("startup-agent");
       expect(codexTabs[0]?.initialPrompt).toContain(
         "/tmp/env-hidden-worktree/.orkestrator/initial-prompt/race.png",
       );

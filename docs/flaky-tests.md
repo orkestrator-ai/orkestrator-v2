@@ -120,7 +120,8 @@ history rather than two partial ones.
 
 ## `MobileAppShellLayout > opens the project drawer on initial mobile entry and keeps workspace content mounted` (`apps/web/src/components/layout/MobileAppShellLayout.test.tsx`)
 
-- **Status:** resolved
+- **Status:** open — recurred on 2026-08-14 after the split below, on the
+  close-button half rather than the initial-open half.
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-fix-c4cb555c-full-tests.log`
 - **Worker configuration:** The web workspace package ran `bun test src --parallel=2` while the other workspace, root, bridge, and protocol-lockfile groups ran concurrently.
@@ -137,6 +138,19 @@ history rather than two partial ones.
 - **Isolated rerun:** `set -o pipefail; bun test --cwd apps/web ./src/components/layout/MobileAppShellLayout.test.tsx --parallel 2>&1 | tee /tmp/orkestrator-mobile-app-shell-layout-isolated.log` -> 24 passed, 0 failed, 111 assertions in 8.21 seconds; both affected cases passed.
 - **Verification:** `set -o pipefail; bun run --cwd apps/web test 2>&1 | tee /tmp/orkestrator-web-full-coverage-fix.log` -> 4,846 passed, 1 skipped, 0 failed across 4,847 tests in 24.07 seconds.
 - **Hypothesis:** The two affected cases each await Radix drawer close and focus restoration under the five-second default budget. Their 4.14-second and 3.00-second isolated durations, combined with the aggregate-only failure and a green subsequent aggregate, point to worker scheduling contention rather than a deterministic drawer behavior failure.
+- **Recurrence (2026-08-14, initial-prompt image preview change):** `closes the
+  initial project drawer from its close button and restores trigger focus` — one
+  of the two cases the split above produced — timed out after 5,398.71 ms with no
+  assertion failure during `bun test src --parallel` in `apps/web` (4,845 passed,
+  1 skipped, 2 failed across 211 files in 214.19 s; the other failure is the
+  separate context-wheel entry below). The first isolated rerun of the owning
+  file also timed out at 5,000 ms, but three consecutive reruns after it passed
+  24/0 (~5.4-12.3 s each), and the file passed 24/0 on a stashed clean tree.
+  Unrelated to the change under test, which touches no layout, drawer, or focus
+  code. The split reduced the frequency but did not remove the cause: the
+  close-and-restore-focus transition still spends most of a 5,000 ms budget on
+  Radix focus scheduling, so aggregate contention alone can exhaust it. Raising
+  or removing that single budget is the next thing to evaluate.
 
 ## `MobileAppShellLayout` drawer focus-restoration timeouts (`apps/web/src/components/layout/MobileAppShellLayout.test.tsx`)
 

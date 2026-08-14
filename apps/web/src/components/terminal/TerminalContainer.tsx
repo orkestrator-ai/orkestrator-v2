@@ -1231,7 +1231,33 @@ export function TerminalContainer({
       }
 
       const pendingAttachments = claudeOptions?.initialPromptAttachments ?? [];
-      if (claudeOptions?.launchAgent && pendingAttachments.length > 0) {
+      /*
+       * A native launch is dispatched by the backend, which stages these images
+       * itself and hands the bridge real attachments — so the transcript shows a
+       * thumbnail. Rewriting the prompt into a plain list of paths here would
+       * destroy that: it also clears the stored attachments, so whichever of the
+       * two paths happened to run first decided whether the user ever saw their
+       * image. Terminal and Claude-tmux launches keep the rewrite, because a
+       * prompt typed into a PTY has no way to carry an attachment.
+       */
+      const launchAgentType = claudeOptions?.agentType;
+      const backendStagesAttachments =
+        // Mirrors `reconcileInitialLaunchOnce`'s own preconditions. Anything it
+        // would decline to dispatch has to keep the text rewrite, or the images
+        // would be dropped by both sides.
+        environment?.pendingAgentLaunch === true
+        && (
+          (launchAgentType === "claude"
+            && claudeMode === "native"
+            && claudeNativeBackend !== "tmux")
+          || (launchAgentType === "codex" && codexMode === "native")
+          || (launchAgentType === "opencode" && opencodeMode === "native")
+        );
+      if (
+        claudeOptions?.launchAgent
+        && pendingAttachments.length > 0
+        && !backendStagesAttachments
+      ) {
         if (!isSavingInitialPromptAttachmentsRef.current) {
           isSavingInitialPromptAttachmentsRef.current = true;
           void (async () => {
@@ -1401,7 +1427,7 @@ export function TerminalContainer({
         }, environmentId);
       }
     }
-  }, [isEnvironmentRunning, containerId, isLocalEnvironmentReady, isLocalEnvironment, setupPhase, backendSetupRunning, claudeOptions, initialize, addTab, environmentId, currentEnvState, hydrationStatus, beginHydration, finishHydration, opencodeMode, claudeMode, claudeNativeBackend, codexMode, setPendingNativeLaunch, setOptions, worktreePath, hasBoundSetupSession, bindBackendSetupSession, setupSessionBindNonce]);
+  }, [isEnvironmentRunning, containerId, isLocalEnvironmentReady, isLocalEnvironment, setupPhase, backendSetupRunning, claudeOptions, initialize, addTab, environmentId, currentEnvState, environment?.pendingAgentLaunch, hydrationStatus, beginHydration, finishHydration, opencodeMode, claudeMode, claudeNativeBackend, codexMode, setPendingNativeLaunch, setOptions, worktreePath, hasBoundSetupSession, bindBackendSetupSession, setupSessionBindNonce]);
 
   // Reset pane layout when container changes within the same environment
   // (e.g., container was stopped and restarted with a new ID).

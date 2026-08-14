@@ -29,6 +29,7 @@ import {
   type ToolState,
 } from "../messages/types.js";
 import { rawApplyPatchParts } from "../messages/apply-patch.js";
+import { extractAttachmentTags } from "../messages/attachment-tags.js";
 import {
   applyTranscriptToolOutput,
   normalizeTranscriptToolArgs,
@@ -646,10 +647,20 @@ function isSyntheticPersistedUserText(text: string): boolean {
     );
 }
 
-export function extractPersistedMessageText(
+/**
+ * Split a persisted message into its display text and any attachments it
+ * referenced.
+ *
+ * `input_image` items are deliberately not read here. Codex persists them as
+ * inline base64 data URLs, so a single screenshot is megabytes that would then
+ * be replayed to every subscriber on every rehydration. The bridge writes a
+ * bounded `<attached-files>` marker into the prompt text for exactly this
+ * reason, and that marker is what rebuilds the attachment rows.
+ */
+export function extractPersistedMessageContent(
   content: unknown,
   role: MessageRole,
-): string | null {
+): { text: string; attachments: NormalizedPart[] } | null {
   if (!Array.isArray(content)) {
     return null;
   }
@@ -669,8 +680,18 @@ export function extractPersistedMessageText(
     return null;
   }
 
-  const text = segments.join("\n").trim();
-  if (!text) {
+  const joined = segments.join("\n").trim();
+  if (!joined) {
+    return null;
+  }
+
+  const { text, parts } = role === "user"
+    ? extractAttachmentTags(joined)
+    : { text: joined, parts: [] as NormalizedPart[] };
+
+  // An attachment-only prompt has no text left after stripping, but it is still
+  // a message the user sent.
+  if (!text && parts.length === 0) {
     return null;
   }
 
@@ -678,7 +699,14 @@ export function extractPersistedMessageText(
     return null;
   }
 
-  return text;
+  return { text, attachments: parts };
+}
+
+export function extractPersistedMessageText(
+  content: unknown,
+  role: MessageRole,
+): string | null {
+  return extractPersistedMessageContent(content, role)?.text || null;
 }
 
 /**
@@ -981,8 +1009,9 @@ export async function hydrateMessagesFromPersistedSession(
         : null;
     if (!role) continue;
 
-    const text = extractPersistedMessageText(payload.content, role);
-    if (!text) continue;
+    const persisted = extractPersistedMessageContent(payload.content, role);
+    if (!persisted) continue;
+    const { text, attachments } = persisted;
 
     if (role === "assistant") {
       const assistantMessage = ensureAssistantMessage();
@@ -996,7 +1025,10 @@ export async function hydrateMessagesFromPersistedSession(
       id: createMessageId(),
       role,
       content: text,
-      parts: [{ type: "text", content: text }],
+      parts: [
+        ...(text ? [{ type: "text" as const, content: text }] : []),
+        ...attachments,
+      ],
       createdAt: timestamp,
       ...(currentTurnId ? { turnId: currentTurnId } : {}),
     });

@@ -68,7 +68,11 @@ import {
   createOptimisticNativeMessage,
   TURN_STOPPED_BY_USER,
 } from "@/lib/chat/client-only-messages";
-import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
+import {
+  pinActiveNativeAgentParts,
+  separateActiveNativeAgentParts,
+} from "@/lib/chat/native-agent-pinning";
+import { ActiveSubagentRail } from "@/components/chat/ActiveSubagentRail";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { persistAgentModelDefault } from "@/lib/chat/agent-model-preferences";
 import { persistCodexGlobalPreferences } from "@/components/codex/codex-preferences";
@@ -811,10 +815,16 @@ function SharedNativeAgentController({
     transcriptEchoedOptimistic,
     turnStopMarker,
   ]);
-  const messages = useMemo(
-    () => pinActiveNativeAgentParts(displayMessages),
-    [displayMessages],
-  );
+  const activeAgentPresentation = useMemo(() => {
+    if (platform === "claude") {
+      return {
+        messages: pinActiveNativeAgentParts(displayMessages),
+        activeAgents: [],
+      };
+    }
+    return separateActiveNativeAgentParts(displayMessages);
+  }, [displayMessages, platform]);
+  const messages = activeAgentPresentation.messages;
   const latestAssistantMessage = [...normalizedMessages].reverse().find(
     (message) => message.role === "assistant",
   );
@@ -1633,6 +1643,7 @@ function SharedNativeAgentController({
               {sendError}
             </div>
           ) : null}
+          <ActiveSubagentRail agents={activeAgentPresentation.activeAgents} />
         </>
       )}
       topAccessory={projection?.suggestedPrompt ? (

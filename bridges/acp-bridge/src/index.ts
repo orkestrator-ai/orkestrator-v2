@@ -92,6 +92,14 @@ interface BridgeToolPart {
   toolName?: string;
   toolArgs?: JsonObject;
   toolState?: "success" | "failure" | "pending";
+  /**
+   * Lifecycle of a sub-agent launched by this tool.
+   *
+   * Cursor and Grok can complete the launch tool as soon as the child starts.
+   * Keep that lifecycle separate from `toolState`, just as the shared renderer
+   * does for Codex collaboration items.
+   */
+  agentState?: "active" | "finished" | "failed";
   toolTitle?: string;
   toolOutput?: string;
   toolError?: string;
@@ -102,9 +110,12 @@ interface AcpToolSourceState {
   title?: string;
   explicitName?: string;
   inputName?: string;
+  metadataName?: string;
+  metadataKind?: string;
   kind?: string;
   toolArgs?: JsonObject;
   toolState?: BridgeToolPart["toolState"];
+  agentState?: BridgeToolPart["agentState"];
   contentOutput?: string;
   rawOutput?: string;
   contentDiffs: BridgeToolDiff[];
@@ -143,6 +154,14 @@ interface PromptJournalEntry {
   acceptedAt: number;
 }
 
+interface ActiveSubagentDescriptor {
+  /** Bounded launch metadata used to correlate Grok's child-id notification. */
+  description?: string;
+  subagentType?: string;
+  /** Distinguishes a completed background launch from an abandoned pending one. */
+  toolState?: BridgeToolPart["toolState"];
+}
+
 interface SessionState {
   id: string;
   clientSessionKey?: string;
@@ -150,6 +169,18 @@ interface SessionState {
   status: SessionStatus;
   error?: string;
   messages: BridgeMessage[];
+  /** Active background children, maintained incrementally for the hot activity route. */
+  activeSubagentToolIds: Set<string>;
+  /**
+   * Authoritative, bounded correlation metadata for active children. This is
+   * intentionally independent of rendered parts: transcript retention is a
+   * display concern and must not decide whether background work still exists.
+   */
+  activeSubagentDescriptors: Map<string, ActiveSubagentDescriptor>;
+  /** Fatal latch: once the bound trips, later provider frames cannot reopen work. */
+  subagentLimitExceeded: boolean;
+  /** Grok's terminal sub-agent notifications identify the child, not its tool call. */
+  subagentToolIds: Map<string, string>;
   /** Provider message IDs seen during the current process, bounded with the transcript. */
   historyMessageIds: Map<string, string>;
   child: AcpProcess | null;
@@ -228,6 +259,7 @@ interface PersistedSession {
   sessionConfig?: AcpNormalizedSessionConfig;
   usage?: PersistedUsage;
   commandCount?: number;
+  subagentLimitExceeded?: boolean;
 }
 
 interface PersistedState {
@@ -315,6 +347,12 @@ const MAX_TRANSCRIPT_BYTES = parseBoundedInteger(
 );
 const MAX_MESSAGE_TEXT_BYTES = 2 * 1024 * 1024;
 const MAX_PARTS_PER_MESSAGE = 512;
+/**
+ * A provider that attempts to exceed this bound is cancelled and every known
+ * child is failed explicitly. Dropping one active child silently could make
+ * `/activity` report idle while that child still writes to the workspace.
+ */
+const MAX_ACTIVE_SUBAGENTS_PER_SESSION = 512;
 const MAX_TOOL_ARGUMENT_BYTES = 512 * 1024;
 const MAX_TOOL_OUTPUT_BYTES = 512 * 1024;
 const MAX_TOOL_INLINE_FILE_BYTES = 256 * 1024;
@@ -816,6 +854,10 @@ async function resumeSessionReserved(
       acpSessionId,
       status: "idle",
       messages: [],
+      activeSubagentToolIds: new Set(),
+      activeSubagentDescriptors: new Map(),
+      subagentLimitExceeded: false,
+      subagentToolIds: new Map(),
       historyMessageIds: new Map(),
       child,
       revision: 0,
@@ -840,6 +882,9 @@ async function resumeSessionReserved(
       sessionId: acpSessionId,
     }, RPC_TIMEOUT_MS, signal);
     state.historyReplay = false;
+    // session/load is a projection of work owned by another ACP process. Its
+    // historical active markers cannot describe children of this new process.
+    reconcileStaleToolParts(state, true);
     if (isObject(loaded)) {
       const sessionConfig = normalizeAcpSessionConfig(provider, {
         ...loaded,
@@ -921,6 +966,10 @@ async function createSessionReserved(
       acpSessionId: created.sessionId,
       status: "idle",
       messages: [],
+      activeSubagentToolIds: new Set(),
+      activeSubagentDescriptors: new Map(),
+      subagentLimitExceeded: false,
+      subagentToolIds: new Map(),
       historyMessageIds: new Map(),
       child,
       revision: 0,
@@ -987,7 +1036,7 @@ function attachChild(state: SessionState, child: AcpProcess): void {
     state.status = "error";
     state.error = error.message;
     // The agent is gone, so nothing will ever complete the tools it had open.
-    reconcileStaleToolParts(state);
+    reconcileStaleToolParts(state, true);
     state.revision += 1;
     schedulePersist();
   };
@@ -1006,6 +1055,7 @@ async function ensureSessionProcess(state: SessionState, signal?: AbortSignal): 
     }
     attachChild(state, child);
     state.historyReplay = state.messages.length === 0 ? "hydrate" : "ignore";
+    const hydratedHistory = state.historyReplay === "hydrate";
     const loaded = await child.request("session/load", {
       cwd: workingDirectory,
       additionalDirectories: [],
@@ -1013,6 +1063,7 @@ async function ensureSessionProcess(state: SessionState, signal?: AbortSignal): 
       sessionId: state.acpSessionId,
     }, RPC_TIMEOUT_MS, signal);
     state.historyReplay = false;
+    if (hydratedHistory) reconcileStaleToolParts(state, true);
     if (isObject(loaded)) {
       const sessionConfig = normalizeAcpSessionConfig(provider, {
         ...loaded,
@@ -1134,12 +1185,20 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     }
     return;
   }
-  if (state.outputTruncated) return;
   // A reconnect replays a transcript the bridge already holds, so every update
   // that would mutate it has to be dropped — tool calls included. `tool_call`
   // upserts by id against the *trailing* message only, so a replayed historical
   // call finds no owner and appends a duplicate to whatever is at the tail.
   if (state.historyReplay === "ignore" && isTranscriptUpdateKind(kind)) return;
+  if (kind === "subagent_spawned") {
+    applySubagentSpawned(state, update);
+    return;
+  }
+  if (kind === "subagent_finished") {
+    applySubagentFinished(state, update);
+    return;
+  }
+  if (state.outputTruncated) return;
   if (kind === "tool_call" || kind === "tool_call_update") {
     applyToolCallUpdate(state, update, kind === "tool_call");
     return;
@@ -1255,6 +1314,8 @@ const TRANSCRIPT_UPDATE_KINDS = new Set([
   "agent_thought_chunk",
   "tool_call",
   "tool_call_update",
+  "subagent_spawned",
+  "subagent_finished",
 ]);
 
 function isTranscriptUpdateKind(kind: string): boolean {
@@ -1295,6 +1356,31 @@ function applyToolCallUpdate(
     )
     : undefined;
 
+  // A background child can outlive the turn and message that launched it.
+  // Terminal Cursor updates must target that launch part wherever it remains,
+  // while an evicted launch is settled through the authoritative registry
+  // below instead of being rebuilt as a context-free ghost part.
+  if (!part && state.activeSubagentToolIds.has(toolCallId)) {
+    for (let index = state.messages.length - 1; index >= 0 && !part; index -= 1) {
+      const candidateOwner = state.messages[index]!;
+      const candidate = candidateOwner.parts.find(
+        (messagePart): messagePart is BridgeToolPart =>
+          messagePart.type === "tool-invocation" && messagePart.toolUseId === toolCallId,
+      );
+      if (candidate) {
+        owner = candidateOwner;
+        part = candidate;
+      }
+    }
+    if (!part && !isInitial) {
+      if (settleEvictedSubagentFromToolUpdate(state, toolCallId, update)) {
+        state.revision += 1;
+        schedulePersist();
+      }
+      return;
+    }
+  }
+
   if (!part) {
     owner = currentAssistantMessage(state);
     const trimmed = trimmedToolCalls.get(owner);
@@ -1331,6 +1417,7 @@ function applyToolCallUpdate(
       explicitName: part.toolName,
       toolArgs: part.toolArgs,
       toolState: part.toolState ?? (isInitial ? "pending" : undefined),
+      agentState: part.agentState,
       rawOutput: part.toolOutput,
       contentDiffs: part.toolDiff ? [part.toolDiff] : [],
     };
@@ -1338,6 +1425,7 @@ function applyToolCallUpdate(
   }
   applyAcpToolSourcePatch(source, update);
   renderAcpToolSource(part, source);
+  syncActiveSubagentTool(state, part);
 
   state.revision += 1;
   const serializedBytes = Buffer.byteLength(JSON.stringify(part));
@@ -1676,6 +1764,15 @@ function applyAcpToolSourcePatch(source: AcpToolSourceState, update: JsonObject)
   if ("kind" in update) {
     source.kind = boundedNullableString(update.kind, MAX_TOOL_NAME_BYTES);
   }
+  if ("_meta" in update && isObject(update._meta)) {
+    const toolMeta = isObject(update._meta["x.ai/tool"])
+      ? update._meta["x.ai/tool"]
+      : undefined;
+    if (toolMeta) {
+      source.metadataName = boundedString(toolMeta.name, MAX_TOOL_NAME_BYTES)?.trim();
+      source.metadataKind = boundedString(toolMeta.kind, MAX_TOOL_NAME_BYTES)?.trim();
+    }
+  }
   if ("rawInput" in update) {
     if (isObject(update.rawInput)) {
       source.inputName = boundedString(update.rawInput._toolName, MAX_TOOL_NAME_BYTES);
@@ -1709,7 +1806,10 @@ function applyAcpToolSourcePatch(source: AcpToolSourceState, update: JsonObject)
 }
 
 function renderAcpToolSource(part: BridgeToolPart, source: AcpToolSourceState): void {
-  const toolName = source.explicitName ?? source.inputName ?? source.kind;
+  const toolName = source.explicitName
+    ?? source.inputName
+    ?? source.metadataName
+    ?? source.kind;
   setOptionalPartField(part, "toolTitle", source.title);
   setOptionalPartField(part, "toolName", toolName);
   setOptionalPartField(part, "toolArgs", source.toolArgs);
@@ -1718,6 +1818,11 @@ function renderAcpToolSource(part: BridgeToolPart, source: AcpToolSourceState): 
 
   const output = source.contentOutput ?? source.rawOutput;
   setOptionalPartField(part, "toolOutput", output);
+  // Cursor puts `isBackground` in rawOutput even when it also supplies a
+  // human-readable content block. Grok carries the equivalent signal in the
+  // Task input and later sends separate subagent lifecycle notifications.
+  source.agentState = acpSubagentState(source, source.rawOutput ?? output);
+  setOptionalPartField(part, "agentState", source.agentState);
   setOptionalPartField(
     part,
     "toolError",
@@ -1729,6 +1834,225 @@ function renderAcpToolSource(part: BridgeToolPart, source: AcpToolSourceState): 
     source.locationPath ?? toolArgumentPath(source.toolArgs),
   );
   setOptionalPartField(part, "toolDiff", diff);
+}
+
+function acpSubagentState(
+  source: AcpToolSourceState,
+  output: string | undefined,
+): BridgeToolPart["agentState"] | undefined {
+  const toolName = (source.explicitName ?? source.inputName ?? source.kind)?.trim();
+  const title = source.title?.trim();
+  const normalizedToolName = toolName?.toLowerCase();
+  const normalizedMetadataName = source.metadataName?.toLowerCase();
+  const normalizedMetadataKind = source.metadataKind?.toLowerCase();
+  const variant = typeof source.toolArgs?.variant === "string"
+    ? source.toolArgs.variant.toLowerCase()
+    : undefined;
+  const isSubagentTool = normalizedToolName === "task"
+    || normalizedToolName === "agent"
+    || normalizedMetadataName === "spawn_subagent"
+    || normalizedMetadataKind === "task"
+    || variant === "task"
+    || /\bsub[- ]?agent\b/i.test(title ?? "");
+  if (!isSubagentTool && source.agentState === undefined) return undefined;
+  if (source.toolState === "failure") return "failed";
+  // A vendor may send a late tool projection after its dedicated lifecycle
+  // notification. Terminal child state is authoritative and cannot reopen.
+  if (source.agentState === "finished" || source.agentState === "failed") {
+    return source.agentState;
+  }
+
+  let lifecycle: Record<string, unknown> | undefined;
+  if (output) {
+    try {
+      const parsed = JSON.parse(output);
+      if (isObject(parsed)) lifecycle = parsed;
+    } catch {
+      // ACP permits plain-text tool output. The tool status still supplies the
+      // foreground lifecycle when no structured background hint is present.
+    }
+  }
+
+  if (lifecycle?.isBackground === true) return "active";
+  if (lifecycle?.isBackground === false) return "finished";
+  const backgroundLaunch = source.toolArgs?.background === true
+    || source.toolArgs?.run_in_background === true;
+  if (backgroundLaunch) return "active";
+  const reportedState = typeof lifecycle?.status === "string"
+    ? lifecycle.status
+    : typeof lifecycle?.state === "string"
+      ? lifecycle.state
+      : undefined;
+  if (reportedState && /^(failed|killed|cancelled|canceled|error)$/i.test(reportedState)) {
+    return "failed";
+  }
+  if (reportedState && /^(completed|finished|done|success)$/i.test(reportedState)) {
+    return "finished";
+  }
+  if (source.toolState === "pending") return "active";
+  if (source.toolState === "success") return "finished";
+  return source.agentState;
+}
+
+function syncActiveSubagentTool(state: SessionState, part: BridgeToolPart): void {
+  if (part.agentState === "active") {
+    const activated = activateSubagent(state, part.toolUseId, {
+      ...(typeof part.toolArgs?.description === "string"
+        ? { description: truncateUtf8(part.toolArgs.description.trim(), MAX_TOOL_TITLE_BYTES) }
+        : {}),
+      ...(typeof part.toolArgs?.subagent_type === "string"
+        ? { subagentType: truncateUtf8(part.toolArgs.subagent_type.trim(), MAX_TOOL_NAME_BYTES) }
+        : {}),
+      ...(part.toolState ? { toolState: part.toolState } : {}),
+    });
+    if (!activated) {
+      part.agentState = "failed";
+      const source = acpToolSourceStates.get(part);
+      if (source) source.agentState = "failed";
+    }
+  } else {
+    settleActiveSubagent(state, part.toolUseId);
+  }
+}
+
+function indexActiveSubagentsFromTranscript(state: SessionState): void {
+  for (const message of state.messages) {
+    for (const part of message.parts) {
+      if (part.type === "tool-invocation" && part.agentState === "active") {
+        syncActiveSubagentTool(state, part);
+      }
+    }
+  }
+}
+
+function activateSubagent(
+  state: SessionState,
+  toolUseId: string,
+  descriptor: ActiveSubagentDescriptor,
+): boolean {
+  if (state.subagentLimitExceeded) return false;
+  if (!state.activeSubagentToolIds.has(toolUseId)
+    && state.activeSubagentToolIds.size >= MAX_ACTIVE_SUBAGENTS_PER_SESSION) {
+    state.subagentLimitExceeded = true;
+    failAllActiveSubagents(state);
+    state.status = "error";
+    state.error = `${provider} exceeded the active sub-agent limit`;
+    state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
+    return false;
+  }
+  state.activeSubagentToolIds.add(toolUseId);
+  state.activeSubagentDescriptors.set(toolUseId, descriptor);
+  return true;
+}
+
+function settleActiveSubagent(state: SessionState, toolUseId: string): void {
+  state.activeSubagentToolIds.delete(toolUseId);
+  state.activeSubagentDescriptors.delete(toolUseId);
+  for (const [subagentId, mappedToolUseId] of state.subagentToolIds) {
+    if (mappedToolUseId === toolUseId) state.subagentToolIds.delete(subagentId);
+  }
+}
+
+function failAllActiveSubagents(state: SessionState): void {
+  for (const message of state.messages) {
+    for (const part of message.parts) {
+      if (part.type !== "tool-invocation"
+        || !state.activeSubagentToolIds.has(part.toolUseId)) continue;
+      part.agentState = "failed";
+      const source = acpToolSourceStates.get(part);
+      if (source) source.agentState = "failed";
+    }
+  }
+  state.activeSubagentToolIds.clear();
+  state.activeSubagentDescriptors.clear();
+  state.subagentToolIds.clear();
+}
+
+function settleEvictedSubagentFromToolUpdate(
+  state: SessionState,
+  toolUseId: string,
+  update: JsonObject,
+): boolean {
+  const toolState = mapAcpToolState(update.status);
+  if (toolState === "failure") {
+    settleActiveSubagent(state, toolUseId);
+    return true;
+  }
+  const lifecycle = isObject(update.rawOutput)
+    ? update.rawOutput
+    : toolCallLifecycle(update.rawOutput ?? update.content);
+  if (lifecycle?.isBackground === true) return false;
+  const reportedState = typeof lifecycle?.status === "string"
+    ? lifecycle.status
+    : typeof lifecycle?.state === "string"
+      ? lifecycle.state
+      : undefined;
+  if (lifecycle?.isBackground === false
+    || (reportedState && /^(completed|finished|done|success|failed|killed|cancelled|canceled|error)$/i.test(reportedState))) {
+    settleActiveSubagent(state, toolUseId);
+    return true;
+  }
+  return false;
+}
+
+function toolCallLifecycle(value: unknown): JsonObject | undefined {
+  const text = stringifyToolPayload(value);
+  if (!text) return undefined;
+  try {
+    const parsed = JSON.parse(text);
+    return isObject(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function applySubagentSpawned(state: SessionState, update: JsonObject): void {
+  const subagentId = boundedString(update.subagent_id, MAX_TOOL_ID_BYTES)?.trim();
+  if (!subagentId || state.subagentToolIds.has(subagentId)) return;
+
+  const claimedToolIds = new Set(state.subagentToolIds.values());
+  const description = boundedString(update.description, MAX_TOOL_TITLE_BYTES)?.trim();
+  const subagentType = boundedString(update.subagent_type, MAX_TOOL_NAME_BYTES)?.trim();
+  const candidates = [...state.activeSubagentDescriptors.entries()].filter(
+    ([toolUseId]) => !claimedToolIds.has(toolUseId),
+  );
+  const matched = candidates.find(([, descriptor]) =>
+    (!description || descriptor.description === description)
+    && (!subagentType || descriptor.subagentType === subagentType)
+  );
+  // With metadata present, a mismatch is not permission to claim an unrelated
+  // child. Metadata-free events are safe only when exactly one candidate exists.
+  const selected = matched ?? (!description && !subagentType && candidates.length === 1
+    ? candidates[0]
+    : undefined);
+
+  if (selected) state.subagentToolIds.set(subagentId, selected[0]);
+}
+
+function applySubagentFinished(state: SessionState, update: JsonObject): void {
+  const subagentId = boundedString(update.subagent_id, MAX_TOOL_ID_BYTES)?.trim();
+  if (!subagentId) return;
+  const toolUseId = state.subagentToolIds.get(subagentId);
+  if (!toolUseId) return;
+
+  const part = state.messages
+    .flatMap((message) => message.parts)
+    .find((candidate): candidate is BridgeToolPart =>
+      candidate.type === "tool-invocation" && candidate.toolUseId === toolUseId
+    );
+  state.subagentToolIds.delete(subagentId);
+  const status = typeof update.status === "string" ? update.status : "completed";
+  const agentState = /^(failed|killed|cancelled|canceled|error)$/i.test(status)
+    ? "failed"
+    : "finished";
+  if (part) {
+    part.agentState = agentState;
+    const source = acpToolSourceStates.get(part);
+    if (source) source.agentState = agentState;
+  }
+  settleActiveSubagent(state, toolUseId);
+  state.revision += 1;
+  schedulePersist();
 }
 
 function setOptionalPartField<TKey extends keyof BridgeToolPart>(
@@ -2317,6 +2641,8 @@ function boundTranscript(state: SessionState): boolean {
     state.error = `${provider} output exceeded the transcript limit`;
     truncatedCurrentMessage = true;
   }
+  // Transcript retention is presentation-only. Active child lifecycle stays
+  // in the separately bounded registry until a terminal event or process death.
   return truncatedCurrentMessage;
 }
 
@@ -2503,7 +2829,13 @@ async function route(
     }
     return json(response, 200, state.sessionConfig.composer);
   }
-  if (action === "activity" && request.method === "GET") return json(response, 200, { activity: state.status === "running" ? "working" : "idle" });
+  if (action === "activity" && request.method === "GET") {
+    return json(response, 200, {
+      activity: state.status === "running" || state.activeSubagentToolIds.size > 0
+        ? "working"
+        : "idle",
+    });
+  }
   if (action === "approvals" && request.method === "GET") return json(response, 200, { approvals: publicApprovals(state), revision: state.revision });
   if (action === "interactions" && request.method === "GET") return json(response, 200, { interactions: [], revision: state.revision });
   if (action?.startsWith("approvals/") && request.method === "POST") {
@@ -2541,6 +2873,9 @@ async function route(
     }
     if (!prompt && attachments.length === 0) {
       return json(response, 400, { error: "prompt or image attachment is required" });
+    }
+    if (state.subagentLimitExceeded) {
+      return json(response, 409, { error: "Session exceeded the active sub-agent limit" });
     }
     if (Buffer.byteLength(requestId) > 512) return json(response, 400, { error: "requestId is too long" });
     if (requestId && state.promptJournal.has(requestId)) {
@@ -2675,7 +3010,9 @@ async function route(
       state.currentTurnOutput = null;
       const replayTargets = cursorToolReplayTargets(state);
       const replaySequence = state.promptSequence;
-      if (!state.outputTruncated && state.child === child) state.status = "idle";
+      if (!state.outputTruncated && state.child === child && state.status !== "error") {
+        state.status = "idle";
+      }
       state.revision += 1;
       schedulePersist();
       // Cursor's display enrichment is deliberately outside the authoritative
@@ -2693,7 +3030,7 @@ async function route(
       state.error = error instanceof Error ? error.message : String(error);
       state.turnStartedAt = undefined;
       state.currentTurnUsage = undefined;
-      reconcileStaleToolParts(state);
+      reconcileStaleToolParts(state, true);
       if (requestId) setPromptJournal(state, {
         requestId,
         state: "failed",
@@ -3153,6 +3490,7 @@ function persistedSnapshot(): PersistedState {
       composer: state.sessionConfig.composer,
       ...(state.usage ? { usage: state.usage } : {}),
       ...(state.commandCount === undefined ? {} : { commandCount: state.commandCount }),
+      ...(state.subagentLimitExceeded ? { subagentLimitExceeded: true } : {}),
     })),
   };
 }
@@ -3268,6 +3606,10 @@ async function loadPersistedState(): Promise<void> {
         ? { error: candidate.error.slice(0, 4_000) }
         : {}),
       messages,
+      activeSubagentToolIds: new Set(),
+      activeSubagentDescriptors: new Map(),
+      subagentLimitExceeded: candidate.subagentLimitExceeded === true,
+      subagentToolIds: new Map(),
       historyMessageIds: new Map(),
       child: null,
       revision: Number.isSafeInteger(candidate.revision) ? Number(candidate.revision) : 0,
@@ -3305,8 +3647,9 @@ async function loadPersistedState(): Promise<void> {
         state.promptJournal.set(entry.requestId, entry);
       }
     }
+    indexActiveSubagentsFromTranscript(state);
     boundTranscript(state);
-    reconcileStaleToolParts(state);
+    reconcileStaleToolParts(state, true);
     rememberCatalog(state.sessionConfig.composer);
     sessions.set(state.id, state);
     if (state.clientSessionKey) clientSessionKeys.set(state.clientSessionKey, state.id);
@@ -3325,10 +3668,19 @@ async function loadPersistedState(): Promise<void> {
  * Every live caller bumps the revision for its own status change already, so
  * this reports nothing back.
  */
-function reconcileStaleToolParts(state: SessionState): void {
+function reconcileStaleToolParts(
+  state: SessionState,
+  failActiveSubagents = false,
+): void {
   for (const message of state.messages) {
     for (const part of message.parts) {
       if (part.type !== "tool-invocation") continue;
+      const abandoned = part.toolState !== "success" && part.toolState !== "failure";
+      if ((failActiveSubagents || abandoned) && part.agentState === "active") {
+        part.agentState = "failed";
+        const source = acpToolSourceStates.get(part);
+        if (source) source.agentState = "failed";
+      }
       if (part.toolState === "success" || part.toolState === "failure") continue;
       part.toolState = "failure";
       part.toolError = part.toolError ?? "Tool call ended without a result";
@@ -3336,6 +3688,20 @@ function reconcileStaleToolParts(state: SessionState): void {
       // own would otherwise re-render this part straight back to `pending`.
       const source = acpToolSourceStates.get(part);
       if (source) source.toolState = "failure";
+    }
+  }
+  if (failActiveSubagents) failAllActiveSubagents(state);
+  else {
+    for (const message of state.messages) {
+      for (const part of message.parts) {
+        if (part.type === "tool-invocation") syncActiveSubagentTool(state, part);
+      }
+    }
+    // The rendered launch may already have been evicted, but its bounded
+    // descriptor still records whether the foreground launch ever completed.
+    // Only successful launches may continue beyond the parent turn.
+    for (const [toolUseId, descriptor] of state.activeSubagentDescriptors) {
+      if (descriptor.toolState !== "success") settleActiveSubagent(state, toolUseId);
     }
   }
 }
@@ -3413,6 +3779,11 @@ function normalizeBridgePart(
     || value.toolState === "pending"
     ? value.toolState
     : undefined;
+  const agentState = value.agentState === "active"
+    || value.agentState === "finished"
+    || value.agentState === "failed"
+    ? value.agentState
+    : undefined;
   const toolOutput = boundedString(value.toolOutput, MAX_TOOL_OUTPUT_BYTES);
   const toolError = boundedString(value.toolError, MAX_TOOL_OUTPUT_BYTES);
   const toolDiff = normalizeBridgeToolDiff(value.toolDiff);
@@ -3427,6 +3798,7 @@ function normalizeBridgePart(
     ...(toolName ? { toolName } : {}),
     ...(isObject(value.toolArgs) ? { toolArgs: boundedToolArguments(value.toolArgs) } : {}),
     ...(toolState ? { toolState } : {}),
+    ...(agentState ? { agentState } : {}),
     ...(toolTitle ? { toolTitle } : {}),
     ...(toolOutput !== undefined ? { toolOutput } : {}),
     ...(toolError !== undefined ? { toolError } : {}),

@@ -246,7 +246,7 @@ export function BuildLaunchDialog({
   localEnvironmentAvailable = true,
   onConfirm,
 }: BuildLaunchDialogProps) {
-  const { favorites, toggleFavorite } = useAgentModelFavorites();
+  const { favorites, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
   const dockerAvailable = useDockerAvailability();
   const [environmentType, setEnvironmentType] = useState(defaultEnvironmentType);
   const [steps, setSteps] = useState(() =>
@@ -575,6 +575,7 @@ export function BuildLaunchDialog({
                           selectedPlatform="opencode"
                           favorites={favorites}
                           onToggleFavorite={toggleFavorite}
+                          onReorderFavorites={reorderFavorites}
                           selectedModelId={step.model?.id ?? steps[key].model}
                           selectedModelLabel={step.model?.name ?? "Choose a model"}
                           onModelChange={(model) => handleModelChange(key, model)}

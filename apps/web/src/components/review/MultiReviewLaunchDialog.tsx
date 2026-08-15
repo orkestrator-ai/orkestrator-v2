@@ -87,6 +87,7 @@ function ModelRow({
   catalog,
   favorites,
   onToggleFavorite,
+  onReorderFavorites,
   onChange,
   onRemove,
 }: {
@@ -96,6 +97,7 @@ function ModelRow({
   catalog: AgentModelCatalog;
   favorites: ReturnType<typeof useAgentModelFavorites>["favorites"];
   onToggleFavorite: ReturnType<typeof useAgentModelFavorites>["toggleFavorite"];
+  onReorderFavorites: ReturnType<typeof useAgentModelFavorites>["reorderFavorites"];
   onChange: (row: PickerRow) => void;
   onRemove?: () => void;
 }) {
@@ -123,6 +125,7 @@ function ModelRow({
         selectedPlatform={row.agent}
         favorites={favorites}
         onToggleFavorite={onToggleFavorite}
+        onReorderFavorites={onReorderFavorites}
         selectedModelId={row.model}
         selectedModelLabel={selected?.name ?? row.model}
         onPlatformChange={(agent) => {
@@ -154,7 +157,7 @@ export function MultiReviewLaunchDialog({
   busy = false,
   onConfirm,
 }: MultiReviewLaunchDialogProps) {
-  const { favorites, toggleFavorite } = useAgentModelFavorites();
+  const { favorites, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
   const models = useMemo(() => flatCatalog(catalog), [catalog]);
   const makeRow = () => initialRow(
     defaultAgent, catalog, preferredModels, preferredReasoningEfforts,
@@ -226,6 +229,7 @@ export function MultiReviewLaunchDialog({
                   catalog={catalog}
                   favorites={favorites}
                   onToggleFavorite={toggleFavorite}
+                  onReorderFavorites={reorderFavorites}
                   onChange={(next) => setReviewers((rows) => rows.map((item) => item.key === row.key ? next : item))}
                   onRemove={reviewers.length > 1
                     ? () => setReviewers((rows) => rows.filter((item) => item.key !== row.key))
@@ -246,6 +250,7 @@ export function MultiReviewLaunchDialog({
               catalog={catalog}
               favorites={favorites}
               onToggleFavorite={toggleFavorite}
+              onReorderFavorites={reorderFavorites}
               onChange={setFixModel}
             />
             <p className="mt-2 text-xs leading-relaxed text-zinc-500">

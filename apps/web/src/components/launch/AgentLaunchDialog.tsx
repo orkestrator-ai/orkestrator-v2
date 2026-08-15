@@ -84,7 +84,7 @@ export function AgentLaunchDialog({
   error,
   onConfirm,
 }: AgentLaunchDialogProps) {
-  const { favorites, toggleFavorite } = useAgentModelFavorites();
+  const { favorites, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
   const initialModel = firstModelFor(defaultAgent, catalog, preferredModels);
   const [agent, setAgent] = useState<LaunchAgent>(defaultAgent);
   const [model, setModel] = useState(initialModel);
@@ -257,6 +257,7 @@ export function AgentLaunchDialog({
               favorites={favorites}
               onPlatformChange={selectAgent}
               onToggleFavorite={toggleFavorite}
+              onReorderFavorites={reorderFavorites}
               selectedModelId={selectedModel?.id ?? model}
               selectedModelLabel={selectedModel?.name ?? "Choose a model"}
               onModelChange={(nextModelId) =>

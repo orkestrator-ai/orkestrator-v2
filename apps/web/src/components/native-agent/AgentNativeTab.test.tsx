@@ -506,6 +506,7 @@ describe("AgentNativeTab", () => {
     );
 
     fireEvent.pointerDown(await screen.findByTitle(/^Choose /));
+    fireEvent.click(await screen.findByRole("button", { name: "claude models" }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: /Claude N/ }));
 
     await waitFor(() => expect(
@@ -603,6 +604,7 @@ describe("AgentNativeTab", () => {
     await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledWith("env-1"));
     const picker = await screen.findByTitle(/Choose model/);
     fireEvent.pointerDown(picker);
+    fireEvent.click(screen.getByRole("button", { name: "opencode models" }));
 
     expect(screen.getByRole("menuitemradio", { name: /OpenCode A/ })).toBeTruthy();
     expect(screen.getByRole("menuitemradio", { name: /OpenCode Go B/ })).toBeTruthy();
@@ -611,6 +613,9 @@ describe("AgentNativeTab", () => {
   });
 
   test("renders the cached Cursor catalogue without starting its ACP bridge", async () => {
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["cursor"],
+    });
     useEnvironmentStore.setState({
       environments: [{
         id: "env-1",
@@ -648,6 +653,7 @@ describe("AgentNativeTab", () => {
     expect(awaitBridgeReadyMock).not.toHaveBeenCalled();
     const picker = await screen.findByTitle(/Choose model/);
     fireEvent.pointerDown(picker);
+    fireEvent.click(screen.getByRole("button", { name: "cursor models" }));
     expect(screen.getByRole("menuitemradio", { name: /Composer 2.5/ })).toBeTruthy();
     expect(useAgentModelCatalogStore.getState().cursorModels.map((model) => model.id))
       .toEqual(["composer-2.5"]);

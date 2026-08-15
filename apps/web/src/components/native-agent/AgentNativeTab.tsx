@@ -300,7 +300,7 @@ function UnassignedNativeAgentComposer({
     (state) => state.getEnvironmentById(environmentId),
   );
   const worktreePath = environment?.worktreePath;
-  const { favorites, enabledPlatforms, toggleFavorite } = useAgentModelFavorites();
+  const { favorites, enabledPlatforms, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
   const [resumePlatformDialogOpen, setResumePlatformDialogOpen] = useState(false);
   const [models, setModels] = useState<AgentModel[]>([]);
   const platform = draft.platform ?? defaultPlatform;
@@ -587,6 +587,7 @@ function UnassignedNativeAgentComposer({
                   });
                 }}
                 onToggleFavorite={toggleFavorite}
+                onReorderFavorites={reorderFavorites}
                 selectedModelId={selectedModel?.id}
                 selectedModelLabel={selectedModel?.label ?? "No models available"}
                 onModelChange={(modelId) => {
@@ -825,7 +826,7 @@ function SharedNativeAgentController({
   const backendOwnsStartupPrompt = tabId === "startup-agent"
     && (environment?.pendingAgentLaunch === true
       || environment?.startupAgentSession !== undefined);
-  const { favorites, toggleFavorite } = useAgentModelFavorites();
+  const { favorites, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
   const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } =
     useVirtuosoScrollState({
       isActive,
@@ -1907,6 +1908,7 @@ function SharedNativeAgentController({
                 selectedPlatform={platform}
                 platformSelectionLocked
                 onToggleFavorite={toggleFavorite}
+                onReorderFavorites={reorderFavorites}
                 selectedModelId={selectedModel?.id}
                 selectedModelLabel={selectedModel?.label ?? "No models available"}
                 onRefreshModels={() => {

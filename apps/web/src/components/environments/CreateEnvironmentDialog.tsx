@@ -249,7 +249,7 @@ export function CreateEnvironmentDialog({
   const [cachedOpenCodeModels, setCachedOpenCodeModels] = useState<
     CachedOpenCodeModel[]
   >([]);
-  const { favorites: favoriteModels, toggleFavorite: toggleFavoriteModel } = useAgentModelFavorites();
+  const { favorites: favoriteModels, toggleFavorite: toggleFavoriteModel, reorderFavorites } = useAgentModelFavorites();
   const configuredOpenCodeModel =
     (configDefaultAgent === "opencode" ? repoConfig?.defaultModel : undefined)
     ?? config.global.opencodeModel;
@@ -1171,6 +1171,7 @@ export function CreateEnvironmentDialog({
                 favorites={favoriteModels}
                 onPlatformChange={selectAgent}
                 onToggleFavorite={toggleFavoriteModel}
+                onReorderFavorites={reorderFavorites}
                 selectedModelId={model}
                 selectedModelLabel={selectedModel?.name ?? "Select model"}
                 onModelChange={selectModel}

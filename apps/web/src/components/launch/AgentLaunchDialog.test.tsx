@@ -193,6 +193,7 @@ describe("AgentLaunchDialog", () => {
     });
 
     openPicker();
+    fireEvent.click(screen.getByRole("button", { name: "claude models" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: /Claude Fixed/ }));
 
     expect(screen.getByText("This model uses its default reasoning setting.")).toBeTruthy();

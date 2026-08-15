@@ -219,7 +219,7 @@ history rather than two partial ones.
 
 ## `MultiReviewService > keeps a provider alive while a transcript read overlaps fix execution` (`apps/backend/src/core/multi-review-service.test.ts`)
 
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-full-tests4.log`; also `set -o pipefail; bun test --cwd apps/backend src/core --parallel 2>&1 | tee /tmp/ork-be-core-tests.log`
 - **Worker configuration:** Observed both as the backend workspace package (`bun test src tests --parallel` while the other workspace, root, bridge, and protocol-lockfile groups ran concurrently) and as a standalone `bun test --cwd apps/backend src/core --parallel` group of 49 files with no other group running concurrently.
@@ -228,6 +228,9 @@ history rather than two partial ones.
 - **Isolated rerun:** `bun test --cwd apps/backend src/core/multi-review-service.test.ts` -> 32 passed, 0 failed in one isolated run; another isolated first attempt was 31 passed, 1 failed, then five consecutive repetitions of the same command failed once and passed four times (32 passed, 0 failed).
 - **Pre-existing:** confirmed independent of the OpenCode provider-filter change and of later reviewed work. The working tree was stashed (`git stash push --include-untracked`) and the same parallel command rerun on the clean checkout: 1,584 passed, 1 failed, failing on this same test at the same assertion (215.41 ms and 128.45 ms).
 - **Hypothesis:** the test releases the blocked status call, polls `snapshot(started.id)` until `phase === "completed"`, and then immediately asserts the final dispose count. Reaching the completed phase and running the provider's teardown appear to be separate awaits, so the assertion can observe the phase transition before the release-path disposal has run. The failure is a timing boundary in the test's completion signal, not evidence of a leaked provider; the durable phase is already correct when it fires. An explicit wait on the dispose count (or an instrumented teardown signal) should be evaluated before changing the service's disposal ordering.
+- **Root cause:** Address-all no longer starts a supervised unattended fix turn, so the test was asserting a teardown that the product path no longer performs. The race was between `phase === "completed"` becoming visible and the asynchronous provider dispose after that turn.
+- **Fix:** Replace the overlapping-fix-execution case with `MultiReviewService hands the idle consolidation session to interactive addressing`. The handoff takes a bounded provider lease for one liveness read and releases it synchronously, so the test asserts exact call and disposal counts at a deterministic boundary instead of polling for a phase and then racing an asynchronous teardown.
+- **Verification:** Owning-file coverage for the rewritten handoff case is included in this change's Multi Review test run.
 
 ## `StorageService prompt queues > live lease timer restores and announces a sole claimed head` (`apps/backend/src/core/storage-prompt-queues.test.ts`)
 
@@ -424,7 +427,7 @@ history rather than two partial ones.
 
 ## `MultiReviewService keeps a provider alive while a transcript read overlaps fix execution` (`apps/backend/src/core/multi-review-service.test.ts`)
 
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-picker-fixes-full-tests.log`
 - **Worker configuration:** The backend workspace ran `bun test src tests --parallel` while the web, root, bridge, and protocol-lockfile groups ran concurrently.
@@ -432,6 +435,9 @@ history rather than two partial ones.
 - **Suite counts:** Backend package: 1,684 total, 1,682 passed, 2 failed across 55 files. Root/agent-support and the protocol lockfile passed; the bridge group had one separate aggregate-only failure.
 - **Isolated rerun:** `bun test ./src/core/multi-review-service.test.ts --parallel` from `apps/backend` -> 32 passed, 0 failed in 3.16 seconds; the target passed in 56.74 ms. Evidence: `/tmp/orkestrator-picker-fixes-isolated-multi-review.log`.
 - **Hypothesis:** The workflow reached its durable completed phase before the asynchronous provider-disposal observation became visible under aggregate scheduling. The isolated run proves the production path can satisfy the assertion, but this occurrence does not establish whether the test needs an explicit disposal boundary or the service is publishing completion before cleanup settles.
+- **Root cause:** Same overlapping-fix-execution teardown race as the entry above. Address-all no longer starts that supervised turn.
+- **Fix:** Same replacement case as the entry above.
+- **Verification:** Owning-file coverage for the rewritten handoff case is included in this change's Multi Review test run.
 
 ## `titles > a generated title is persisted for every tab sharing the thread` (`bridges/codex-bridge/src/app-server-runtime.test.ts`)
 

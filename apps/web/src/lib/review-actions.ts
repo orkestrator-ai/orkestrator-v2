@@ -1,2 +1,2 @@
-export const ADDRESS_ALL_REVIEW_PROMPT =
-  "Please address all the issues and coverage gaps";
+export { MULTI_REVIEW_ADDRESS_PROMPT as ADDRESS_ALL_REVIEW_PROMPT }
+  from "@orkestrator/protocol/multi-review";

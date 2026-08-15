@@ -9,7 +9,10 @@ import { StackedEyes } from "./MultiReviewLaunchDialog";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { hydrateMultiReviewWorkflow } from "@/lib/multi-review-persistence";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
-import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
+import {
+  useOptionalTerminalContext,
+  type CreateTabOptions,
+} from "@/contexts/TerminalContext";
 import { MultiReviewReviewerTab } from "./MultiReviewReviewerTab";
 import * as backend from "@/lib/backend";
 
@@ -39,12 +42,30 @@ function phaseCopy(phase: MultiReviewPhase): string {
     consolidating: "The fix model is consolidating findings",
     ready: "Consolidated report ready",
     fixing: "The fix model is addressing every finding",
+    interactive: "The fix model is working interactively",
     completed: "All findings were addressed",
     cancelling: "Cancelling Multi Review",
     cancelled: "Multi Review cancelled",
     failed: "Multi Review needs attention",
   } as const;
   return labels[phase];
+}
+
+/** Opens the idle consolidation session as a normal native agent tab. */
+export function multiReviewFixSessionTabOptions(
+  workflow: MultiReviewWorkflow,
+): CreateTabOptions | null {
+  const session = workflow.fixSession;
+  if (!session?.providerSessionId) return null;
+  return {
+    agentLaunchMode: "native",
+    resumeSessionId: session.providerSessionId,
+    displayTitle: "Multi Review · Fix",
+    isReviewTab: true,
+    initialAgentModel: workflow.fixModel.model === "default" ? undefined : workflow.fixModel.model,
+    initialReasoningEffort: workflow.fixModel.reasoningEffort,
+    initialConversationMode: "build",
+  };
 }
 
 function MultiReviewOverviewTab({
@@ -74,12 +95,77 @@ function MultiReviewOverviewTab({
     void hydrate();
   }, [hydrate, isActive]);
 
+  const openFixSession = (
+    target: MultiReviewWorkflow | undefined = workflow,
+  ): "opened" | "no-session" | "tab-unavailable" => {
+    if (!target) return "no-session";
+    const options = multiReviewFixSessionTabOptions(target);
+    if (!options) return "no-session";
+    return createTab?.(target.fixModel.agent, options) === true
+      ? "opened"
+      : "tab-unavailable";
+  };
+
+  const openFixSessionError = (outcome: "no-session" | "tab-unavailable"): string =>
+    outcome === "no-session"
+      ? "The consolidation session is no longer available"
+      : "The environment is not ready or the maximum tab count was reached.";
+
   const run = async (command: () => Promise<NonNullable<typeof workflow>>) => {
     if (pending) return;
     setPending(true);
     setError(null);
     try {
       replaceWorkflow(await command());
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  // The backend commits the handoff and durably dispatches the prompt before
+  // this opens a tab. If the tab cannot be created, work still continues in the
+  // provider session and a later mount can recover it from the authoritative
+  // interactive snapshot without relying on component-local state.
+  const addressAll = async () => {
+    if (pending || !workflow) return;
+    setPending(true);
+    setError(null);
+    try {
+      if (!multiReviewFixSessionTabOptions(workflow)) {
+        setError("The consolidation session is no longer available");
+        return;
+      }
+      const handedOff = await commands.address(workflow.id);
+      replaceWorkflow(handedOff);
+      if (openFixSession(handedOff) !== "opened") {
+        setError(
+          "The fix session is running, but a tab could not be opened. "
+          + "Close a tab, then use Open fix session to continue.",
+        );
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const openInteractiveFixSession = async () => {
+    if (pending || !workflow) return;
+    setPending(true);
+    setError(null);
+    try {
+      // A crash or transport failure can leave the terminal interactive
+      // snapshot with its idempotent backend dispatch still pending. Resume
+      // that durable half before presenting the session in a new tab.
+      const target = workflow.addressPromptPending === true
+        ? await commands.address(workflow.id)
+        : workflow;
+      if (target !== workflow) replaceWorkflow(target);
+      const outcome = openFixSession(target);
+      if (outcome !== "opened") setError(openFixSessionError(outcome));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -102,7 +188,7 @@ function MultiReviewOverviewTab({
   const busy = workflow.phase === "reviewing" || workflow.phase === "consolidating"
     || workflow.phase === "fixing" || workflow.phase === "cancelling";
   const canCancel = workflow.phase !== "completed" && workflow.phase !== "cancelled"
-    && workflow.phase !== "cancelling";
+    && workflow.phase !== "cancelling" && workflow.phase !== "interactive";
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -201,8 +287,20 @@ function MultiReviewOverviewTab({
             {workflow.phase === "ready" || workflow.phase === "failed" ? "Abandon" : "Cancel"}
           </Button>
         )}
+        {workflow.phase === "interactive" && workflow.fixSession?.providerSessionId && (
+          <Button
+            variant="outline"
+            disabled={pending || !createTab}
+            onClick={() => { void openInteractiveFixSession(); }}
+          >
+            Open fix session
+          </Button>
+        )}
         {workflow.phase === "ready" && (
-          <Button disabled={pending} onClick={() => void run(() => commands.address(workflow.id))}>
+          <Button
+            disabled={pending || !createTab}
+            onClick={() => void addressAll()}
+          >
             <Wrench className="mr-2 size-4" />{ADDRESS_ALL_REVIEW_PROMPT}
           </Button>
         )}

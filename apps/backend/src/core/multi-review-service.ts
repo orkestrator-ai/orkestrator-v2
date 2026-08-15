@@ -276,20 +276,70 @@ export class MultiReviewService {
       const controlled = await this.loadControlled(workflowId);
       if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
       const { workflow, token } = controlled;
-      if (workflow.phase !== "ready" || !workflow.consolidatedReport || !workflow.fixSession) {
-        throw new Error("The consolidated review is not ready to address");
+      try {
+        // `address_multi_review` also owns the durable native-agent dispatch. If
+        // that second half was interrupted, repeating the command must resume it
+        // without trying to transition the already-interactive workflow again.
+        if (workflow.phase === "interactive" && workflow.addressPromptPending === true) {
+          return workflow;
+        }
+        if (workflow.phase !== "ready" || !workflow.consolidatedReport || !workflow.fixSession) {
+          throw new Error("The consolidated review is not ready to address");
+        }
+        // The whole point of the handoff is that the adopted session already
+        // holds the consolidated report. A renderer that resumes a rollout the
+        // provider has forgotten silently falls back to creating an empty
+        // session, which would then receive "address every finding" with no
+        // findings in context. Prove liveness here, before anything is dispatched.
+        //
+        // Reading status does not register the session, so this cannot pull the
+        // conversation back into the unattended policy the renderer is about to
+        // replace. A failed last turn is not a missing session, and a transport
+        // failure is not evidence of deletion: only `missing` blocks the handoff.
+        const provider = await this.provider(workflow, workflow.fixModel);
+        await this.assertFence(workflow.id, token);
+        const { status } = await readProviderStatus(
+          provider, workflow.fixSession.providerSessionId,
+        );
+        await this.assertFence(workflow.id, token);
+        if (status === "missing") {
+          throw new Error("The consolidation session is no longer available");
+        }
+        // The renderer adopts this idle consolidation session as an interactive
+        // native tab and sends the address prompt there. Supervising a structured
+        // fix turn would steal the same provider session back into unattended mode.
+        workflow.phase = "interactive";
+        workflow.fixSession.status = "idle";
+        workflow.addressPromptPending = true;
+        delete workflow.activeRequest;
+        delete workflow.error;
+        return await this.save(workflow, token);
+      } finally {
+        // This method owns a short-lived transition/dispatch claim. Every exit
+        // path must release it, including validation and already-complete errors,
+        // or a rejected retry fences out subsequent controllers until expiry.
+        await this.release(workflow, token);
       }
-      const requestId = randomUUID();
-      workflow.phase = "fixing";
-      workflow.fixSession.status = "running";
-      workflow.fixSession.requestIds.push(requestId);
-      workflow.activeRequest = {
-        kind: "fix", requestId, state: "prepared", createdAt: nowIso(),
-      };
-      delete workflow.error;
-      const saved = await this.save(workflow, token);
-      void this.advanceNow(workflowId);
-      return saved;
+    });
+  }
+
+  async acknowledgeAddressPrompt(workflowId: string): Promise<MultiReviewWorkflow> {
+    return this.withLock(workflowId, async () => {
+      const controlled = await this.loadControlled(workflowId);
+      if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
+      const { workflow, token } = controlled;
+      try {
+        if (workflow.phase !== "interactive") {
+          throw new Error("The Multi Review address prompt is not awaiting dispatch");
+        }
+        if (workflow.addressPromptPending !== true) return workflow;
+        delete workflow.addressPromptPending;
+        return await this.save(workflow, token);
+      } finally {
+        // Interactive workflows are terminal and must never retain a renewed
+        // controller/provider lease just because dispatch acknowledgement ran.
+        await this.release(workflow, token);
+      }
     });
   }
 
@@ -323,6 +373,7 @@ export class MultiReviewService {
       } else if (workflow.consolidatedReport && workflow.fixSession) {
         workflow.phase = "ready";
         workflow.fixSession.status = "idle";
+        delete workflow.addressPromptPending;
         delete workflow.activeRequest;
       } else {
         await this.abandonSession(

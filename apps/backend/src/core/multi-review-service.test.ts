@@ -10,9 +10,10 @@ import type {
   StructuredOutputFailureCode,
   StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
-import type {
-  MultiReviewModelSelection,
-  MultiReviewWorkflow,
+import {
+  MULTI_REVIEW_WORKFLOW_VERSION,
+  type MultiReviewModelSelection,
+  type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import type {
   BuildPipelineProvider,
@@ -260,7 +261,7 @@ test("MultiReviewService exposes an authoritative reviewer transcript read model
   });
 });
 
-test("MultiReviewService keeps a provider alive while a transcript read overlaps fix execution", async () => {
+test("MultiReviewService hands the idle consolidation session to interactive addressing", async () => {
   const provider = new Provider();
   await withService("env-transcript-provider-race", provider, async ({ service, start, snapshot }) => {
     const started = await start();
@@ -271,26 +272,127 @@ test("MultiReviewService keeps a provider alive while a transcript read overlaps
     const ready = (await snapshot(started.id))!;
     const reviewer = ready.reviewers[0]!;
     const disposalsAfterReady = provider.disposeCalls;
+    const statusCallsAfterReady = provider.statusCalls;
+    const sendsAfterReady = provider.sends.size;
 
     const releaseMessages = provider.blockMessages();
     const transcript = service.reviewerTranscript(started.id, reviewer.id);
     await waitUntil(() => provider.messagesCalls > 0);
 
-    const statusCallsBeforeFix = provider.statusCalls;
-    const releaseStatus = provider.blockStatus();
-    await service.address(started.id);
-    await waitUntil(() => provider.statusCalls > statusCallsBeforeFix);
+    const addressed = await service.address(started.id);
+    expect(addressed).toMatchObject({
+      phase: "interactive",
+      addressPromptPending: true,
+      fixSession: { status: "idle", providerSessionId: ready.fixSession?.providerSessionId },
+    });
+    expect(addressed.activeRequest).toBeUndefined();
+    // Exactly one liveness read, and no send: proving the rollout still exists
+    // must not pull the conversation back into a supervised turn.
+    expect(provider.statusCalls).toBe(statusCallsAfterReady + 1);
+    expect(provider.sends.size).toBe(sendsAfterReady);
+    expect(provider.disposeCalls).toBe(disposalsAfterReady);
 
     releaseMessages();
     await transcript;
-    expect(provider.disposeCalls).toBe(disposalsAfterReady);
+    // Address released its own lease, so the transcript reader is the last one
+    // and finishing that read is what disposes the provider.
+    expect(provider.disposeCalls).toBe(disposalsAfterReady + 1);
+    expect(provider.aborted).toEqual([]);
+  });
+});
 
-    releaseStatus();
-    await waitUntil(async () => (await snapshot(started.id))?.phase === "completed");
-    // The terminal snapshot is persisted before release() disposes the final
-    // provider lease, so observe that cleanup boundary directly instead of
-    // racing it immediately after the phase becomes visible.
-    await waitUntil(() => provider.disposeCalls === disposalsAfterReady + 1);
+test("MultiReviewService releases the controller lease when it hands off", async () => {
+  const provider = new Provider();
+  await withService("env-address-lease", provider, async ({ service, storage, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+
+    await service.address(started.id);
+    // `interactive` is terminal, so nothing advances this workflow again. A
+    // retained lease would be renewed — and rewrite the workflow store — for the
+    // life of the process, and would fence every other controller out meanwhile.
+    const claimed = await storage.claimMultiReviewController(started.id, "other-owner", 15_000);
+    expect(claimed.granted).toBe(true);
+  });
+});
+
+test("MultiReviewService resumes and acknowledges an interrupted address dispatch", async () => {
+  const provider = new Provider();
+  await withService("env-address-resume", provider, async ({ service, storage, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+
+    const statusCallsBeforeAddress = provider.statusCalls;
+    const handedOff = await service.address(started.id);
+    expect(handedOff.addressPromptPending).toBe(true);
+
+    // Repeating the command after a renderer/backend interruption resumes the
+    // durable dispatch half without another provider liveness read.
+    const resumed = await service.address(started.id);
+    expect(resumed.addressPromptPending).toBe(true);
+    expect(provider.statusCalls).toBe(statusCallsBeforeAddress + 1);
+
+    const acknowledged = await service.acknowledgeAddressPrompt(started.id);
+    expect(acknowledged.addressPromptPending).toBeUndefined();
+    await expect(service.address(started.id)).rejects.toThrow("not ready to address");
+
+    // Both terminal operations release their short-lived controller claims.
+    const claimed = await storage.claimMultiReviewController(
+      started.id, "other-owner", 15_000,
+    );
+    expect(claimed.granted).toBe(true);
+  });
+});
+
+test("MultiReviewService refuses to hand off a consolidation session the provider forgot", async () => {
+  const provider = new Provider();
+  await withService("env-address-missing", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+    const ready = (await snapshot(started.id))!;
+    const sendsAfterReady = provider.sends.size;
+
+    // The renderer's adoption falls back to creating an empty session here, so
+    // the handoff has to fail loudly rather than let the address prompt land in
+    // a conversation that never saw the consolidated report.
+    provider.statusOverrides.set(ready.fixSession!.providerSessionId, "missing");
+    await expect(service.address(started.id))
+      .rejects.toThrow("The consolidation session is no longer available");
+
+    // The refusal is recoverable: the workflow is still addressable, and nothing
+    // was dispatched to the session.
+    expect((await snapshot(started.id))?.phase).toBe("ready");
+    expect(provider.sends.size).toBe(sendsAfterReady);
+    expect(provider.aborted).toEqual([]);
+
+    provider.statusOverrides.delete(ready.fixSession!.providerSessionId);
+    expect((await service.address(started.id)).phase).toBe("interactive");
+  });
+});
+
+test("MultiReviewService hands off a consolidation session whose last turn failed", async () => {
+  const provider = new Provider();
+  await withService("env-address-failed-turn", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+    const ready = (await snapshot(started.id))!;
+
+    // Same liveness-only rule the native adoption path uses: a failed last turn
+    // is not a missing session, and the user can still drive it interactively.
+    provider.sessionFailures.set(ready.fixSession!.providerSessionId, "the last turn failed");
+    expect((await service.address(started.id)).phase).toBe("interactive");
   });
 });
 
@@ -438,23 +540,92 @@ test("MultiReviewService repairs provider-level schema failures with their detai
   });
 });
 
+test("MultiReviewService refuses to address a review that is not ready", async () => {
+  const provider = new Provider();
+  await withService("env-address-not-ready", provider, async ({ service, start }) => {
+    const started = await start();
+    await expect(service.address(started.id)).rejects.toThrow("not ready to address");
+  });
+});
+
+/**
+ * A snapshot in the shape the pre-handoff `address()` used to persist.
+ *
+ * Nothing writes `fixing` any more, but the supervisor still advances it so a
+ * workflow caught mid-fix by an upgrade finishes instead of stalling forever.
+ * That path is only reachable from durable state, so seed it directly.
+ */
+async function seedLegacyFixingWorkflow(
+  storage: StorageService,
+  environmentId: string,
+): Promise<string> {
+  const workflowId = `legacy-fixing-${environmentId}`;
+  const timestamp = new Date(0).toISOString();
+  const snapshot: MultiReviewWorkflow = {
+    version: MULTI_REVIEW_WORKFLOW_VERSION,
+    controller: "backend",
+    id: workflowId,
+    environmentId,
+    projectId: "project-1",
+    targetBranch: "main",
+    reviewers: [{
+      id: "reviewer-1", agent: "claude", model: "opus",
+      status: "completed", report: cleanReport,
+      sessionKey: `multi-review:${workflowId}:reviewer-1`,
+      providerSessionId: "session-1",
+    }],
+    fixModel: { agent: "claude", model: "opus" },
+    consolidatedReport,
+    fixSession: {
+      agent: "claude", model: "opus",
+      sessionKey: `multi-review:${workflowId}:fix`,
+      providerSessionId: "session-legacy-fix",
+      requestIds: ["consolidate-1", "fix-1"],
+      status: "running",
+      startedAt: timestamp,
+    },
+    activeRequest: { kind: "fix", requestId: "fix-1", state: "prepared", createdAt: timestamp },
+    phase: "fixing",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    backendRevision: 0,
+  };
+  const saved = await storage.createMultiReviewWorkflowIfNoActive(
+    workflowId, environmentId, MULTI_REVIEW_WORKFLOW_VERSION, snapshot,
+  );
+  expect(saved).not.toBeNull();
+  return workflowId;
+}
+
+test("MultiReviewService finishes a fix turn persisted before the interactive handoff", async () => {
+  const provider = new Provider();
+  await withService("env-legacy-fixing", provider, async ({ service, storage, snapshot }) => {
+    const workflowId = await seedLegacyFixingWorkflow(storage, "env-legacy-fixing");
+    await waitUntil(async () => {
+      await service.advanceNow(workflowId);
+      return (await snapshot(workflowId))?.phase === "completed";
+    });
+
+    expect(await snapshot(workflowId)).toMatchObject({
+      phase: "completed",
+      fixResult: { complete: true, summary: "Addressed every finding" },
+      fixSession: { status: "idle" },
+    });
+    expect(provider.fixSends).toBe(1);
+  });
+});
+
 test("MultiReviewService asks the fix model to correct an invalid fix result", async () => {
   const provider = new Provider();
-  await withService("env-fix-result-repair", provider, async ({ service, start, snapshot }) => {
-    const started = await start();
+  provider.invalidFixResults = 1;
+  await withService("env-legacy-fix-repair", provider, async ({ service, storage, snapshot }) => {
+    const workflowId = await seedLegacyFixingWorkflow(storage, "env-legacy-fix-repair");
     await waitUntil(async () => {
-      await service.advanceNow(started.id);
-      return (await snapshot(started.id))?.phase === "ready";
+      await service.advanceNow(workflowId);
+      return (await snapshot(workflowId))?.phase === "completed";
     });
 
-    provider.invalidFixResults = 1;
-    await service.address(started.id);
-    await waitUntil(async () => {
-      await service.advanceNow(started.id);
-      return (await snapshot(started.id))?.phase === "completed";
-    });
-
-    const completed = await snapshot(started.id);
+    const completed = await snapshot(workflowId);
     expect(completed?.fixResult).toMatchObject({ complete: true });
     expect(completed?.fixSession?.requestIds).toHaveLength(3);
     const repair = [...provider.sends.values()].find((sent) =>
@@ -470,27 +641,46 @@ test("MultiReviewService asks the fix model to correct an invalid fix result", a
 test("MultiReviewService does not treat provider fix failures as schema repair work", async () => {
   for (const code of ["provider_error", "interrupted"] as const) {
     const provider = new Provider();
-    await withService(`env-fix-${code}`, provider, async ({ service, start, snapshot }) => {
-      const started = await start();
+    provider.fixStructuredFailure = code;
+    await withService(`env-legacy-fix-${code}`, provider, async ({ service, storage, snapshot }) => {
+      const workflowId = await seedLegacyFixingWorkflow(storage, `env-legacy-fix-${code}`);
       await waitUntil(async () => {
-        await service.advanceNow(started.id);
-        return (await snapshot(started.id))?.phase === "ready";
+        await service.advanceNow(workflowId);
+        return (await snapshot(workflowId))?.phase === "failed";
       });
 
-      provider.fixStructuredFailure = code;
-      await service.address(started.id);
-      await waitUntil(async () => {
-        await service.advanceNow(started.id);
-        return (await snapshot(started.id))?.phase === "failed";
-      });
-
-      const failed = await snapshot(started.id);
+      const failed = await snapshot(workflowId);
       expect(failed?.error).toBe(`Fix result failed with ${code}`);
       expect(failed?.activeRequest?.schemaRepairAttempts).toBeUndefined();
       expect(failed?.activeRequest?.schemaRepairPrompt).toBeUndefined();
       expect(failed?.fixSession?.requestIds).toHaveLength(2);
     });
   }
+});
+
+test("MultiReviewService retries an incomplete legacy fix turn from the consolidated report", async () => {
+  const provider = new Provider();
+  provider.fixComplete = false;
+  await withService("env-legacy-fix-retry", provider, async ({ service, storage, snapshot }) => {
+    const workflowId = await seedLegacyFixingWorkflow(storage, "env-legacy-fix-retry");
+    await waitUntil(async () => {
+      await service.advanceNow(workflowId);
+      return (await snapshot(workflowId))?.phase === "failed";
+    });
+
+    const failed = await snapshot(workflowId);
+    expect(failed?.fixSession?.status).toBe("failed");
+    expect(failed?.error).toContain("could not address every finding");
+
+    const retried = await service.retry(workflowId);
+    expect(retried.phase).toBe("ready");
+    expect(retried.fixSession?.status).toBe("idle");
+    expect(retried.activeRequest).toBeUndefined();
+    expect(retried.error).toBeUndefined();
+    expect(retried.consolidatedReport).toBeDefined();
+    // The consolidated session is reused for the next attempt, never abandoned.
+    expect(provider.aborted).toEqual([]);
+  });
 });
 
 test("MultiReviewService bounds repeated reviewer schema corrections", async () => {
@@ -602,7 +792,7 @@ test("MultiReviewService rehydrates active review activity without a renderer", 
   }
 });
 
-test("MultiReviewService owns fan-out, consolidation, and the explicit fix turn", async () => {
+test("MultiReviewService owns fan-out, consolidation, and the interactive fix handoff", async () => {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-multi-review-"));
   const storage = new StorageService(dataDir);
   await storage.init();
@@ -639,11 +829,12 @@ test("MultiReviewService owns fan-out, consolidation, and the explicit fix turn"
   expect(provider.sessions).toBe(3);
 
   await service.address(started.id);
-  for (let attempt = 0; attempt < 4; attempt++) await service.advanceNow(started.id);
   expect((await storage.getMultiReviewWorkflow(started.id))?.snapshot).toMatchObject({
-    phase: "completed",
-    fixResult: { complete: true, summary: "Addressed every finding" },
+    phase: "interactive",
+    fixSession: { status: "idle" },
   });
+  expect((await storage.getMultiReviewWorkflow(started.id))?.snapshot)
+    .not.toHaveProperty("activeRequest");
   await service.shutdown();
   await fs.rm(dataDir, { recursive: true, force: true });
 });
@@ -679,12 +870,12 @@ test("MultiReviewService fails an idle reviewer that never returns structured ou
   await fs.rm(dataDir, { recursive: true, force: true });
 });
 
-test("MultiReviewService reconciles an ambiguously accepted fix without sending it twice", async () => {
-  const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-multi-review-ambiguous-"));
+test("MultiReviewService leaves an interactive handoff idle for the native tab", async () => {
+  const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-multi-review-interactive-"));
   const storage = new StorageService(dataDir);
   await storage.init();
   await storage.addEnvironment({
-    id: "env-ambiguous", projectId: "project-1", name: "review", branch: "change",
+    id: "env-interactive", projectId: "project-1", name: "review", branch: "change",
     containerId: null, status: "running", prUrl: null, prState: null,
     hasMergeConflicts: null, createdAt: new Date(0).toISOString(), networkAccessMode: "full",
     order: 0, environmentType: "local", worktreePath: "/tmp/review", setupScriptsComplete: true,
@@ -695,7 +886,7 @@ test("MultiReviewService reconciles an ambiguously accepted fix without sending 
     provider: async () => provider,
   });
   const started = await service.start({
-    environmentId: "env-ambiguous", projectId: "project-1", targetBranch: "main",
+    environmentId: "env-interactive", projectId: "project-1", targetBranch: "main",
     reviewers: [{ agent: "claude", model: "opus" }],
     fixModel: { agent: "claude", model: "opus" },
   });
@@ -707,17 +898,19 @@ test("MultiReviewService reconciles an ambiguously accepted fix without sending 
   expect((await storage.getMultiReviewWorkflow(started.id))?.snapshot)
     .toMatchObject({ phase: "ready" });
 
-  provider.ambiguousFixOnce = true;
-  await service.address(started.id);
+  const sendsBeforeAddress = provider.sends.size;
+  const addressed = await service.address(started.id);
   await service.advanceNow(started.id);
-  await waitUntil(async () => ((await storage.getMultiReviewWorkflow(started.id))?.snapshot as { phase?: string })?.phase === "completed");
-
-  expect(provider.fixSends).toBe(1);
+  expect(addressed.phase).toBe("interactive");
+  expect((await storage.getMultiReviewWorkflow(started.id))?.snapshot)
+    .toMatchObject({ phase: "interactive", fixSession: { status: "idle" } });
+  expect(provider.sends.size).toBe(sendsBeforeAddress);
+  expect(provider.fixSends).toBe(0);
   await service.shutdown();
   await fs.rm(dataDir, { recursive: true, force: true });
 });
 
-test("MultiReviewService persists cancellation until an aborting fix provider actually stops", async () => {
+test("MultiReviewService persists cancellation until an aborting consolidation provider actually stops", async () => {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-multi-review-cancel-"));
   const storage = new StorageService(dataDir);
   await storage.init();
@@ -728,6 +921,9 @@ test("MultiReviewService persists cancellation until an aborting fix provider ac
     order: 0, environmentType: "local", worktreePath: "/tmp/review", setupScriptsComplete: true,
   });
   const provider = new Provider();
+  // Pin the consolidation session before start() kicks the first advance so a
+  // coalesced run cannot skip consolidating and land on ready.
+  provider.statusOverrides.set("session-2", "running");
   const service = new MultiReviewService(storage, async () => { throw new Error("unexpected command"); }, {
     autoAdvance: false,
     provider: async () => provider,
@@ -737,24 +933,23 @@ test("MultiReviewService persists cancellation until an aborting fix provider ac
     reviewers: [{ agent: "claude", model: "opus" }],
     fixModel: { agent: "claude", model: "opus" },
   });
-  for (let attempt = 0; attempt < 4; attempt += 1) await service.advanceNow(started.id);
-  expect((await storage.getMultiReviewWorkflow(started.id))?.snapshot)
-    .toMatchObject({ phase: "ready" });
+  await waitUntil(async () => {
+    await service.advanceNow(started.id);
+    return ((await storage.getMultiReviewWorkflow(started.id))?.snapshot as { phase?: string })
+      ?.phase === "consolidating";
+  });
 
-  const statusCallsBeforeFix = provider.statusCalls;
-  provider.statusValue = "running";
+  const statusCallsBeforeCancel = provider.statusCalls;
   provider.abortError = new Error("abort unavailable");
-  await service.address(started.id);
-  await waitUntil(() => provider.statusCalls > statusCallsBeforeFix);
-
   expect((await service.cancel(started.id)).phase).toBe("cancelling");
+  await waitUntil(() => provider.statusCalls > statusCallsBeforeCancel);
   await service.advanceNow(started.id);
   expect((await storage.getMultiReviewWorkflow(started.id))?.snapshot).toMatchObject({
     phase: "cancelling",
     error: expect.stringContaining("abort unavailable"),
   });
 
-  provider.statusValue = "idle";
+  provider.statusOverrides.delete("session-2");
   await service.advanceNow(started.id);
   expect((await storage.getMultiReviewWorkflow(started.id))?.snapshot).toMatchObject({
     phase: "cancelled",
@@ -787,6 +982,7 @@ test("MultiReviewService settles cancellation when the aborted session reports a
     order: 0, environmentType: "local", worktreePath: "/tmp/review", setupScriptsComplete: true,
   });
   const provider = new Provider();
+  provider.statusOverrides.set("session-2", "running");
   const service = new MultiReviewService(storage, async () => { throw new Error("unexpected command"); }, {
     autoAdvance: false,
     provider: async () => provider,
@@ -796,15 +992,16 @@ test("MultiReviewService settles cancellation when the aborted session reports a
     reviewers: [{ agent: "claude", model: "opus" }],
     fixModel: { agent: "claude", model: "opus" },
   });
-  for (let attempt = 0; attempt < 4; attempt += 1) await service.advanceNow(started.id);
+  await waitUntil(async () => {
+    await service.advanceNow(started.id);
+    return ((await storage.getMultiReviewWorkflow(started.id))?.snapshot as { phase?: string })
+      ?.phase === "consolidating";
+  });
 
-  const statusCallsBeforeFix = provider.statusCalls;
-  provider.statusValue = "running";
+  const statusCallsBeforeCancel = provider.statusCalls;
   provider.abortError = new Error("abort unavailable");
-  await service.address(started.id);
-  await waitUntil(() => provider.statusCalls > statusCallsBeforeFix);
-
   expect((await service.cancel(started.id)).phase).toBe("cancelling");
+  await waitUntil(() => provider.statusCalls > statusCallsBeforeCancel);
   await service.advanceNow(started.id);
   expect((await storage.getMultiReviewWorkflow(started.id))?.snapshot)
     .toMatchObject({ phase: "cancelling" });
@@ -1305,31 +1502,19 @@ test("MultiReviewService retries a failed reviewer without stranding its provide
   });
 });
 
-test("MultiReviewService retries an incomplete fix turn from the consolidated report", async () => {
+test("MultiReviewService does not abort an interactive fix session on cancel", async () => {
   const provider = new Provider();
-  provider.fixComplete = false;
-  await withService("env-retry-fix", provider, async ({ service, start, snapshot }) => {
+  await withService("env-interactive-cancel", provider, async ({ service, start, snapshot }) => {
     const started = await start();
-    for (let attempt = 0; attempt < 4; attempt++) {
+    await waitUntil(async () => {
       await service.advanceNow(started.id);
-      if ((await snapshot(started.id))?.phase === "ready") break;
-    }
+      return (await snapshot(started.id))?.phase === "ready";
+    });
     await service.address(started.id);
-    for (let attempt = 0; attempt < 4; attempt++) await service.advanceNow(started.id);
-
-    const failed = await snapshot(started.id);
-    expect(failed?.phase).toBe("failed");
-    expect(failed?.fixSession?.status).toBe("failed");
-    expect(failed?.error).toContain("could not address every finding");
-
-    const retried = await service.retry(started.id);
-    expect(retried.phase).toBe("ready");
-    expect(retried.fixSession?.status).toBe("idle");
-    expect(retried.activeRequest).toBeUndefined();
-    expect(retried.error).toBeUndefined();
-    expect(retried.consolidatedReport).toBeDefined();
-    // The consolidated session is reused for the next attempt, never abandoned.
+    const cancelled = await service.cancel(started.id);
+    expect(cancelled.phase).toBe("interactive");
     expect(provider.aborted).toEqual([]);
+    expect(cancelled.fixSession?.status).toBe("idle");
   });
 });
 

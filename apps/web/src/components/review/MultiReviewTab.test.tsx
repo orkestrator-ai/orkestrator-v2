@@ -1,12 +1,18 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { useEffect } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
   MultiReviewReviewerTranscript,
   MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import { TerminalProvider, useTerminalContext, type CreatableTabType, type CreateTabOptions } from "@/contexts";
+import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import { MultiReviewTab } from "./MultiReviewTab";
+import {
+  MultiReviewTab,
+  multiReviewFixSessionTabOptions,
+} from "./MultiReviewTab";
 import {
   MultiReviewReviewerTab,
   REFRESH_INTERVAL_MS,
@@ -55,6 +61,19 @@ function readyWorkflow(): MultiReviewWorkflow {
     },
     consolidatedReport: report, createdAt: timestamp, updatedAt: timestamp, backendRevision: 7,
   };
+}
+
+function TabRegistrar({
+  createTab,
+}: {
+  createTab: (type: CreatableTabType, options?: CreateTabOptions) => boolean;
+}) {
+  const terminal = useTerminalContext();
+  useEffect(() => {
+    terminal.setCreateTab(createTab);
+    return () => terminal.setCreateTab(null);
+  }, [createTab, terminal]);
+  return null;
 }
 
 beforeEach(() => useMultiReviewStore.setState({ workflows: new Map() }));
@@ -136,27 +155,39 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(screen.getByText("The reviewer session no longer exists")).toBeTruthy();
   });
 
-  test("renders the consolidated report and delegates the fix intent to the backend", async () => {
+  test("opens the consolidation session as an interactive native tab and hands off", async () => {
     const ready = readyWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(ready);
-    const fixing: MultiReviewWorkflow = {
-      ...ready, phase: "fixing", backendRevision: 8,
-      fixSession: { ...ready.fixSession!, status: "running", requestIds: ["consolidate-1", "fix-1"] },
-      activeRequest: { kind: "fix", requestId: "fix-1", state: "prepared", createdAt: ready.updatedAt },
+    const interactive: MultiReviewWorkflow = {
+      ...ready, phase: "interactive", backendRevision: 8,
     };
-    const address = mock(async () => fixing);
+    let addressed = false;
+    let addressedBeforeTab = false;
+    const address = mock(async () => {
+      addressed = true;
+      return interactive;
+    });
+    const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => {
+      addressedBeforeTab = addressed;
+      return true;
+    });
     const hydrate = mock(async () => ready);
 
-    render(<MultiReviewTab
-      data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
-      isActive
-      hydrateWorkflow={hydrate}
-      commands={{
-        address,
-        retry: mock(async () => ready),
-        cancel: mock(async () => ready),
-      }}
-    />);
+    render(
+      <TerminalProvider>
+        <TabRegistrar createTab={createTab} />
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={hydrate}
+          commands={{
+            address,
+            retry: mock(async () => ready),
+            cancel: mock(async () => ready),
+          }}
+        />
+      </TerminalProvider>,
+    );
 
     const consolidated = screen.getByRole("article", { name: "Consolidated Multi Review" });
     expect(consolidated.textContent).toContain("Shared finding");
@@ -165,8 +196,245 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       name: "Please address all the issues and coverage gaps",
     }));
 
+    await waitFor(() => expect(createTab).toHaveBeenCalledWith("codex", {
+      agentLaunchMode: "native",
+      resumeSessionId: "provider-fix",
+      displayTitle: "Multi Review · Fix",
+      isReviewTab: true,
+      initialAgentModel: "gpt-5.6",
+      initialReasoningEffort: "high",
+      initialConversationMode: "build",
+    }));
     await waitFor(() => expect(address).toHaveBeenCalledWith(ready.id));
-    expect(await screen.findByText("The fix model is addressing every finding")).toBeTruthy();
+    expect(await screen.findByText("The fix model is working interactively")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open fix session" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: ADDRESS_ALL_REVIEW_PROMPT })).toBeNull();
+    // The backend owns both the transition and prompt dispatch, so the tab is
+    // presentation-only and must be opened after that durable work completes.
+    expect(addressedBeforeTab).toBe(true);
+    expect(createTab.mock.calls[0]?.[1]).not.toHaveProperty("initialPrompt");
+  });
+
+  test("does not open a fix tab when the backend refuses the handoff", async () => {
+    const ready = readyWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+    const address = mock(async () => {
+      throw new Error("The consolidation session is no longer available");
+    });
+    const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
+
+    render(
+      <TerminalProvider>
+        <TabRegistrar createTab={createTab} />
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => ready)}
+          commands={{
+            address,
+            retry: mock(async () => ready),
+            cancel: mock(async () => ready),
+          }}
+        />
+      </TerminalProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: ADDRESS_ALL_REVIEW_PROMPT }));
+    expect(await screen.findByText(/consolidation session is no longer available/)).toBeTruthy();
+    // Nothing may reach the provider session when the handoff was refused.
+    expect(createTab).not.toHaveBeenCalled();
+    expect(useMultiReviewStore.getState().workflows.get(ready.id)?.phase).toBe("ready");
+  });
+
+  test("reopens a handed-off session after tab creation failed and the view remounted", async () => {
+    const ready = readyWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+    const interactive: MultiReviewWorkflow = {
+      ...ready, phase: "interactive", backendRevision: 8,
+    };
+    const address = mock(async () => interactive);
+    let tabsAvailable = false;
+    const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => tabsAvailable);
+
+    const firstView = render(
+      <TerminalProvider>
+        <TabRegistrar createTab={createTab} />
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => ready)}
+          commands={{
+            address,
+            retry: mock(async () => ready),
+            cancel: mock(async () => ready),
+          }}
+        />
+      </TerminalProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: ADDRESS_ALL_REVIEW_PROMPT }));
+    expect(await screen.findByText(/a tab could not be opened/)).toBeTruthy();
+    await waitFor(() => expect(address).toHaveBeenCalledWith(ready.id));
+    expect(useMultiReviewStore.getState().workflows.get(ready.id)?.phase).toBe("interactive");
+
+    // The backend already dispatched durably. Remounting must not rely on a
+    // component-local prompt marker, and reopening must not dispatch again.
+    firstView.unmount();
+    tabsAvailable = true;
+    render(
+      <TerminalProvider>
+        <TabRegistrar createTab={createTab} />
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => interactive)}
+          commands={{
+            address,
+            retry: mock(async () => ready),
+            cancel: mock(async () => ready),
+          }}
+        />
+      </TerminalProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open fix session" }));
+    await waitFor(() => expect(createTab).toHaveBeenLastCalledWith("codex", expect.objectContaining({
+      resumeSessionId: "provider-fix",
+    })));
+    expect(createTab.mock.calls.at(-1)?.[1]).not.toHaveProperty("initialPrompt");
+    expect(address).toHaveBeenCalledTimes(1);
+  });
+
+  test("resumes a durable address dispatch pending across a remount before opening", async () => {
+    const ready = readyWorkflow();
+    const pending: MultiReviewWorkflow = {
+      ...ready,
+      phase: "interactive",
+      addressPromptPending: true,
+      backendRevision: 8,
+    };
+    const dispatched: MultiReviewWorkflow = {
+      ...pending,
+      addressPromptPending: undefined,
+      backendRevision: 9,
+    };
+    useMultiReviewStore.getState().replaceWorkflow(pending);
+    const address = mock(async (_id: string) => dispatched);
+    let dispatchFinished = false;
+    const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => {
+      expect(dispatchFinished).toBe(true);
+      return true;
+    });
+
+    const firstView = render(
+      <TerminalProvider>
+        <TabRegistrar createTab={createTab} />
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => pending)}
+          commands={{
+            address: mock(async (id) => {
+              const result = await address(id);
+              dispatchFinished = true;
+              return result;
+            }),
+            retry: mock(async () => ready),
+            cancel: mock(async () => ready),
+          }}
+        />
+      </TerminalProvider>,
+    );
+    firstView.unmount();
+
+    render(
+      <TerminalProvider>
+        <TabRegistrar createTab={createTab} />
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => pending)}
+          commands={{
+            address: mock(async (id) => {
+              const result = await address(id);
+              dispatchFinished = true;
+              return result;
+            }),
+            retry: mock(async () => ready),
+            cancel: mock(async () => ready),
+          }}
+        />
+      </TerminalProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open fix session" }));
+    await waitFor(() => expect(address).toHaveBeenCalledWith(ready.id));
+    expect(createTab).toHaveBeenCalledWith("codex", expect.objectContaining({
+      resumeSessionId: "provider-fix",
+      initialConversationMode: "build",
+    }));
+    expect(createTab.mock.calls[0]?.[1]).not.toHaveProperty("initialPrompt");
+    expect(useMultiReviewStore.getState().workflows.get(ready.id)?.addressPromptPending)
+      .toBeUndefined();
+  });
+
+  test("reopens an interactive fix session without sending the address prompt again", async () => {
+    const ready = readyWorkflow();
+    const interactive = { ...ready, phase: "interactive" as const, backendRevision: 8 };
+    useMultiReviewStore.getState().replaceWorkflow(interactive);
+    const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
+
+    render(
+      <TerminalProvider>
+        <TabRegistrar createTab={createTab} />
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => interactive)}
+        />
+      </TerminalProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open fix session" }));
+    await waitFor(() => expect(createTab).toHaveBeenCalledWith("codex", expect.objectContaining({
+      resumeSessionId: "provider-fix",
+      agentLaunchMode: "native",
+      initialConversationMode: "build",
+    })));
+    expect(createTab.mock.calls[0]?.[1]).not.toHaveProperty("initialPrompt");
+  });
+
+  test("keeps Address all disabled until a native tab can be created", () => {
+    const ready = readyWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+
+    render(<MultiReviewTab
+      data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+      isActive
+      hydrateWorkflow={mock(async () => ready)}
+    />);
+
+    expect(screen.getByRole("button", { name: ADDRESS_ALL_REVIEW_PROMPT })
+      .hasAttribute("disabled")).toBe(true);
+  });
+
+  test("builds native tab options that resume the consolidation session", () => {
+    const ready = readyWorkflow();
+    expect(multiReviewFixSessionTabOptions(ready)).toEqual({
+      agentLaunchMode: "native",
+      resumeSessionId: "provider-fix",
+      displayTitle: "Multi Review · Fix",
+      isReviewTab: true,
+      initialAgentModel: "gpt-5.6",
+      initialReasoningEffort: "high",
+      initialConversationMode: "build",
+    });
+    expect(multiReviewFixSessionTabOptions(ready)).not.toHaveProperty("initialPrompt");
+    const defaultModel = multiReviewFixSessionTabOptions({
+      ...ready,
+      fixModel: { agent: "codex", model: "default" },
+    });
+    expect(defaultModel?.initialAgentModel).toBeUndefined();
+    expect(defaultModel?.initialReasoningEffort).toBeUndefined();
   });
 
   test("rehydrates from the authoritative backend when activated", async () => {

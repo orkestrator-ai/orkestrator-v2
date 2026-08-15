@@ -9,6 +9,8 @@ import { isSafeLoopedReviewTargetBranch } from "./review-workflow.js";
 export const MULTI_REVIEW_WORKFLOW_VERSION = 1 as const;
 export const MULTI_REVIEW_MIN_REVIEWERS = 1;
 export const MULTI_REVIEW_MAX_REVIEWERS = 32;
+export const MULTI_REVIEW_ADDRESS_PROMPT =
+  "Please address all the issues and coverage gaps";
 
 export interface MultiReviewModelSelection {
   agent: AgentPlatform;
@@ -60,6 +62,7 @@ export type MultiReviewPhase =
   | "consolidating"
   | "ready"
   | "fixing"
+  | "interactive"
   | "completed"
   | "cancelling"
   | "cancelled"
@@ -98,6 +101,8 @@ export interface MultiReviewWorkflow {
     notes: string[];
     limitations: string[];
   };
+  /** The interactive address prompt still needs durable backend dispatch. */
+  addressPromptPending?: boolean;
   activeRequest?: {
     kind: "consolidate" | "fix";
     requestId: string;
@@ -169,7 +174,7 @@ export function isStartMultiReviewInput(value: unknown): value is StartMultiRevi
 }
 
 const PHASES = new Set<MultiReviewPhase>([
-  "reviewing", "consolidating", "ready", "fixing", "completed",
+  "reviewing", "consolidating", "ready", "fixing", "interactive", "completed",
   "cancelling", "cancelled", "failed",
 ]);
 const REVIEWER_STATUSES = new Set<MultiReviewReviewerStatus>([
@@ -260,7 +265,8 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     || !hasOnlyKeys(value, [
       "version", "controller", "controllerFence", "id", "environmentId", "projectId",
       "targetBranch", "reviewInstruction", "reviewers", "fixModel", "fixSession", "phase",
-      "consolidatedReport", "fixResult", "activeRequest", "cancellingSince", "error", "createdAt", "updatedAt",
+      "consolidatedReport", "fixResult", "addressPromptPending", "activeRequest",
+      "cancellingSince", "error", "createdAt", "updatedAt",
       "backendRevision",
     ])
     || value.version !== MULTI_REVIEW_WORKFLOW_VERSION
@@ -285,6 +291,8 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     || (value.activeRequest !== undefined && !isActiveRequest(value.activeRequest))
     || !optionalDate(value.cancellingSince)
     || (value.fixResult !== undefined && !isFixResult(value.fixResult))
+    || (value.addressPromptPending !== undefined
+      && typeof value.addressPromptPending !== "boolean")
     || !optionalString(value.error, 4_096)
     || (value.consolidatedReport !== undefined
       && !isStructuredReviewReport(value.consolidatedReport))) {
@@ -314,7 +322,8 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
   }
   if (new Set(value.reviewers.map((entry) => entry.id)).size !== value.reviewers.length) return false;
   if (value.reviewers.some((entry) => entry.status === "completed" && !isStructuredReviewReport(entry.report))) return false;
-  if ((value.phase === "ready" || value.phase === "fixing" || value.phase === "completed")
+  if ((value.phase === "ready" || value.phase === "fixing" || value.phase === "interactive"
+    || value.phase === "completed")
     && (!isStructuredReviewReport(value.consolidatedReport) || !isFixSession(value.fixSession))) {
     return false;
   }
@@ -322,10 +331,11 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     const activeRequest = value.activeRequest;
     if (!isActiveRequest(activeRequest) || activeRequest.kind !== "fix") return false;
   }
+  if (value.addressPromptPending === true && value.phase !== "interactive") return false;
   if ((value.phase === "cancelling") !== (typeof value.cancellingSince === "string")) return false;
   return true;
 }
 
 export function isMultiReviewTerminalPhase(phase: MultiReviewPhase): boolean {
-  return phase === "completed" || phase === "cancelled";
+  return phase === "interactive" || phase === "completed" || phase === "cancelled";
 }

@@ -12,7 +12,9 @@ import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useFileDirtyStore } from "@/stores";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
+import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { loopedReviewFixture } from "@/test/looped-review-fixture";
+import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 
 const realSortableSnapshot = { ...realSortable };
 const realUtilitiesSnapshot = { ...realUtilities };
@@ -106,6 +108,7 @@ describe("DraggableTab title precedence", () => {
     useBuildPipelineStore.setState({ pipelines: new Map() });
     useFileDirtyStore.setState({ dirtyFiles: new Map() });
     useLoopedReviewStore.setState({ workflows: new Map() });
+    useMultiReviewStore.setState({ workflows: new Map() });
   });
 
   afterEach(() => {
@@ -448,6 +451,41 @@ describe("DraggableTab title precedence", () => {
     expect(screen.getByText("Looped Review ✓")).toBeDefined();
   });
 
+  test("multi-review tabs show a checkmark after an interactive handoff", () => {
+    const workflow = {
+      version: 1 as const,
+      controller: "backend" as const,
+      id: "multi-1",
+      environmentId: "env-1",
+      projectId: "project-1",
+      targetBranch: "main",
+      phase: "interactive" as const,
+      reviewers: [],
+      fixModel: { agent: "codex" as const, model: "gpt-5.6" },
+      createdAt: "2026-08-14T00:00:00.000Z",
+      updatedAt: "2026-08-14T00:00:00.000Z",
+      backendRevision: 1,
+    } satisfies Pick<
+      MultiReviewWorkflow,
+      | "version" | "controller" | "id" | "environmentId" | "projectId"
+      | "targetBranch" | "phase" | "reviewers" | "fixModel"
+      | "createdAt" | "updatedAt" | "backendRevision"
+    >;
+    useMultiReviewStore.getState().replaceWorkflow(workflow as MultiReviewWorkflow);
+
+    renderTab({
+      id: "multi-interactive",
+      type: "multi-review",
+      multiReviewTabData: {
+        environmentId: "env-1",
+        workflowId: workflow.id,
+        isLocal: true,
+      },
+    });
+
+    expect(screen.getByText("Multi Review ✓")).toBeDefined();
+  });
+
   test("file tab title uses the basename and ignores displayTitle", () => {
     const tab: TabInfo = {
       id: "tab-a",
@@ -604,6 +642,7 @@ describe("DraggableTab icons", () => {
     useBuildPipelineStore.setState({ pipelines: new Map() });
     useFileDirtyStore.setState({ dirtyFiles: new Map() });
     useLoopedReviewStore.setState({ workflows: new Map() });
+    useMultiReviewStore.setState({ workflows: new Map() });
   });
 
   afterEach(() => {

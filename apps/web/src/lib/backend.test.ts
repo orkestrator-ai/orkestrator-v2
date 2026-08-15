@@ -1397,6 +1397,8 @@ describe("backend native agent and looped review wrappers", () => {
       expectedProviderSessionId: "provider-old",
       model: "open-model",
       reasoningEffort: "medium",
+      sessionMode: "build" as const,
+      fastMode: true,
     };
     await expect(
       backendWrappers.adoptNativeAgentSession(fullInput),
@@ -1423,6 +1425,8 @@ describe("backend native agent and looped review wrappers", () => {
     expect(minimalPayload).not.toHaveProperty("interactionPolicy");
     expect(minimalPayload).not.toHaveProperty("model");
     expect(minimalPayload).not.toHaveProperty("reasoningEffort");
+    expect(minimalPayload).not.toHaveProperty("sessionMode");
+    expect(minimalPayload).not.toHaveProperty("fastMode");
   });
 
   test("reads native sessions", async () => {

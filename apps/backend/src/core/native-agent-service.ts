@@ -327,7 +327,7 @@ function nativeCapabilities(agent: BuildPipelineAgent): NativeAgentCapabilities 
     return {
       // Both ACP agents read inline image content blocks; neither takes files.
       attachments: { files: false, images: true },
-      queue: false,
+      queue: true,
       resume: true,
       fork: false,
       slashCommands: false,
@@ -4526,11 +4526,12 @@ export class NativeAgentService {
       return undefined;
     }
     const record = message as Record<string, unknown>;
+    // Native compose queues persist the shared `fastMode` field for every
+    // provider. Keep accepting Claude's legacy `fastModeEnabled` shape while
+    // forwarding the shared field to Codex and both ACP agents.
     const value = agent === "claude"
-      ? record.fastModeEnabled
-      : agent === "codex"
-        ? record.fastMode
-        : undefined;
+      ? record.fastModeEnabled ?? record.fastMode
+      : record.fastMode;
     return typeof value === "boolean" ? value : undefined;
   }
 

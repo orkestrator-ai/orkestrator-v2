@@ -1685,22 +1685,31 @@ describe("NativeAgentService", () => {
   });
 
   for (const agent of ["cursor", "grok"] as const) {
-    test(`advertises ${agent} session resume through the native projection`, async () => {
+    test(`advertises ${agent} session resume and queued prompts through the native projection`, async () => {
       const stub = createProviderStub(agent, {
         interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
       });
       await withService({
         prefix: `orkestrator-native-${agent}-resume-capability-`,
         provider: async () => stub.provider,
-      }, async ({ service }) => {
+      }, async ({ storage, service }) => {
         const identity = {
           environmentId: "env-1",
           agent,
           logicalSessionKey: `env-env-1:tab-${agent}-resume`,
         };
         await service.ensureSession(identity);
+        await storage.savePromptQueue(
+          `${agent}\u0000${identity.logicalSessionKey}`,
+          identity.environmentId,
+          [{ id: `queued-${agent}`, text: `Queued for ${agent}` }],
+        );
         const projection = await service.getProjection(identity);
         expect(projection?.capabilities.resume).toBe(true);
+        expect(projection?.capabilities.queue).toBe(true);
+        expect(projection?.queue?.items).toEqual([
+          { id: `queued-${agent}`, text: `Queued for ${agent}` },
+        ]);
       });
     });
   }
@@ -6689,6 +6698,8 @@ describe("NativeAgentService", () => {
   test.each([
     ["claude", { planModeEnabled: true }],
     ["opencode", { mode: "plan" }],
+    ["cursor", { mode: "plan" }],
+    ["grok", { mode: "plan" }],
   ] as const)("preserves queued %s plan mode through dispatch", async (agent, mode) => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-native-plan-"));
     const storage = await createStorage(dataDir);
@@ -6729,6 +6740,8 @@ describe("NativeAgentService", () => {
   test.each([
     ["claude", { fastModeEnabled: true }, true],
     ["codex", { fastMode: false }, false],
+    ["cursor", { fastMode: true }, true],
+    ["grok", { fastMode: false }, false],
   ] as const)("preserves queued %s fast mode through dispatch", async (
     agent,
     fastModeField,

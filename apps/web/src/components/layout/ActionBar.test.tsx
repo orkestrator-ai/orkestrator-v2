@@ -2583,7 +2583,12 @@ describe("ActionBar workflow tabs", () => {
       clientY: 24,
     });
 
-    expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy();
+    // The 550 ms production timer is raced against this test's fixed 575 ms
+    // sleep, so under aggregate scheduling the dialog can mount just after an
+    // immediate query. Same fix as the code-review twin below.
+    await waitFor(() => {
+      expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy();
+    }, { timeout: 10_000 });
 
     // The click mobile browsers synthesize after the gesture must be consumed.
     fireEvent.click(createPrButton);

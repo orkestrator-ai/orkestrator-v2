@@ -942,22 +942,68 @@ lines.on("line", (line) => {
           },
         },
       });
-      write({
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: {
-          sessionId: "fake-session",
-          update: {
-            sessionUpdate: "tool_call",
-            toolCallId: "cursor-child-grep-1",
-            title: "Search Find",
-            kind: "search",
-            status: "in_progress",
-            rawInput: { _toolName: "grep", pattern: "ActiveSubagentRail" },
-            _meta: { parentToolCallId: "cursor-subagent-1" },
-          },
+      // One child per parent-id shape the bridge accepts. The standard ACP
+      // schema has no parent field, so every vendor spelling has to be proven
+      // rather than assumed — a typo in any key would otherwise ship silently.
+      const nestedChildren: Array<{ id: string; title: string; parent: Record<string, unknown> }> = [
+        {
+          id: "cursor-child-grep-1",
+          title: "Search Find",
+          parent: { _meta: { parentToolCallId: "cursor-subagent-1" } },
         },
-      });
+        // Titles stay deliberately non-generic: a generic Cursor title is a
+        // replay-reconcile candidate, which is a different code path.
+        {
+          id: "cursor-child-read-2",
+          title: "Inspect Manifest",
+          parent: { parentToolCallId: "cursor-subagent-1" },
+        },
+        {
+          id: "cursor-child-edit-3",
+          title: "Apply Patch",
+          parent: { parent_tool_call_id: "cursor-subagent-1" },
+        },
+        {
+          id: "cursor-child-list-4",
+          title: "Enumerate Modules",
+          parent: { _meta: { parent_tool_call_id: "cursor-subagent-1" } },
+        },
+        {
+          id: "cursor-child-claude-5",
+          title: "Summarize Findings",
+          parent: { _meta: { claudeCode: { parentToolUseId: "cursor-subagent-1" } } },
+        },
+        {
+          id: "cursor-child-claude-6",
+          title: "Collect Diagnostics",
+          parent: { _meta: { claudeCode: { parent_tool_use_id: "cursor-subagent-1" } } },
+        },
+        // A provider that names a call as its own parent must not produce a
+        // self-parented part; the frontend would group it under itself.
+        {
+          id: "cursor-child-self-7",
+          title: "Self Referencing",
+          parent: { _meta: { parentToolCallId: "cursor-child-self-7" } },
+        },
+      ];
+      for (const child of nestedChildren) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: child.id,
+              title: child.title,
+              kind: "search",
+              status: "in_progress",
+              rawInput: { _toolName: "grep", pattern: "ActiveSubagentRail" },
+              ...child.parent,
+            },
+          },
+        });
+      }
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }

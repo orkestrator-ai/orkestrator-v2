@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { GitPullRequest } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,6 +41,10 @@ interface CreatePRDialogProps {
   preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
   /** Base branch the pull request will target, shown so it can be verified. */
   targetBranch: string;
+  returnFocusRef?: RefObject<HTMLElement | null>;
+  returnFocusFallback?: () => HTMLElement | null;
+  confirmDisabled?: boolean;
+  error?: string | null;
   onConfirm: (selection: CreatePRSelection) => void;
 }
 
@@ -64,6 +68,10 @@ export function CreatePRDialog({
   preferredModels,
   preferredReasoningEfforts,
   targetBranch,
+  returnFocusRef,
+  returnFocusFallback,
+  confirmDisabled = false,
+  error,
   onConfirm,
 }: CreatePRDialogProps) {
   const { favorites, toggleFavorite } = useAgentModelFavorites();
@@ -153,7 +161,18 @@ export function CreatePRDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex w-[min(calc(100%-1rem),34rem)] flex-col gap-0 overflow-hidden border-zinc-700/80 bg-[#111113] p-0 sm:max-w-[34rem]">
+      <DialogContent
+        className="flex w-[min(calc(100%-1rem),34rem)] flex-col gap-0 overflow-hidden border-zinc-700/80 bg-[#111113] p-0 sm:max-w-[34rem]"
+        onCloseAutoFocus={(event) => {
+          const primaryTarget = returnFocusRef?.current;
+          const focusTarget =
+            returnFocusFallback?.() ??
+            (primaryTarget?.isConnected ? primaryTarget : null);
+          if (!focusTarget) return;
+          event.preventDefault();
+          focusTarget.focus();
+        }}
+      >
         <DialogHeader className="shrink-0 border-b border-zinc-800 bg-gradient-to-br from-cyan-500/[0.08] via-transparent to-transparent px-5 pb-4 pt-5 sm:px-6">
           <DialogTitle className="flex items-center gap-2 text-base">
             <span className="grid size-8 shrink-0 place-items-center rounded-full border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
@@ -218,13 +237,21 @@ export function CreatePRDialog({
             <div className="mt-5 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-400">
               <span className="text-zinc-500">Launch:</span> {summary}
             </div>
+            {error && (
+              <p
+                role="alert"
+                className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+              >
+                {error}
+              </p>
+            )}
           </div>
 
           <DialogFooter className="shrink-0 flex-row justify-end border-t border-zinc-800 bg-zinc-950/40 px-5 py-4 sm:px-6">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit">Create pull request</Button>
+            <Button type="submit" disabled={confirmDisabled}>Create pull request</Button>
           </DialogFooter>
         </form>
       </DialogContent>

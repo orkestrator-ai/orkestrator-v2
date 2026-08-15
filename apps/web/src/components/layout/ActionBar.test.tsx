@@ -2338,6 +2338,81 @@ describe("ActionBar workflow tabs", () => {
     expect(setModeCreatePendingMock).not.toHaveBeenCalled();
   });
 
+  test("keeps the PR modal pinned when the selected environment changes", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    const view = render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+    expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy();
+
+    currentSelectedEnvironmentId = "env-2";
+    currentEnvironment = {
+      ...currentEnvironment,
+      id: "env-2",
+      name: "other-environment",
+    };
+    view.rerender(<ActionBar />);
+
+    expect(screen.getByRole("alert").textContent).toContain("selected environment changed");
+    expect((screen.getByRole("button", { name: "Create pull request" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect(screen.getByText(/into main/)).toBeTruthy();
+    expect(createTabMock).not.toHaveBeenCalled();
+    expect(setModeCreatePendingMock).not.toHaveBeenCalled();
+  });
+
+  test("disables a configured PR launch when a PR appears while the modal is open", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    const view = render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+    currentEnvironment = {
+      ...currentEnvironment,
+      prUrl: "https://github.com/org/repo/pull/2",
+      prState: "open",
+    };
+    view.rerender(<ActionBar />);
+
+    expect(screen.getByRole("alert").textContent).toContain("now exists");
+    expect((screen.getByRole("button", { name: "Create pull request" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect(createTabMock).not.toHaveBeenCalled();
+    expect(setModeCreatePendingMock).not.toHaveBeenCalled();
+  });
+
+  test("keeps the PR modal open and monitoring idle when tab creation is rejected", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    createTabMock.mockReturnValueOnce(false);
+    render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
+
+    expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain("could not be created");
+    expect(setModeCreatePendingMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
+    expect(screen.queryByRole("dialog", { name: "Configure pull request" })).toBeNull();
+    expect(createTabMock).toHaveBeenCalledTimes(2);
+    expect(setModeCreatePendingMock).toHaveBeenCalledTimes(1);
+  });
+
   test("opens the PR modal after a mobile long press without launching a default PR", async () => {
     currentEnvironment = {
       ...selectedEnvironment,

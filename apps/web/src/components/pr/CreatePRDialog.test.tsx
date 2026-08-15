@@ -206,6 +206,19 @@ describe("CreatePRDialog", () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
+  test("shows a launch error and disables confirmation while the target is invalid", () => {
+    const { onConfirm } = renderDialog({
+      confirmDisabled: true,
+      error: "The environment is no longer running.",
+    });
+
+    expect(screen.getByRole("alert").textContent).toContain("no longer running");
+    const confirm = screen.getByRole("button", { name: "Create pull request" });
+    expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(confirm);
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
   test("reconfigures itself on every open, including the first", () => {
     const { props, rerender } = renderDialog({
       open: false,

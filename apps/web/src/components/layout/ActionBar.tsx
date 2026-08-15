@@ -293,7 +293,14 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const multiReviewLaunchInFlightRef = useRef(false);
   const [loopedReviewLaunchPending, setLoopedReviewLaunchPending] = useState(false);
   const loopedReviewLaunchInFlightRef = useRef(false);
-  const [prDialogOpen, setPrDialogOpen] = useState(false);
+  const [prDialogTarget, setPrDialogTarget] = useState<{
+    environmentId: string;
+    projectId: string;
+    targetBranch: string;
+  } | null>(null);
+  const [prLaunchError, setPrLaunchError] = useState<string | null>(null);
+  const prDialogOpen = prDialogTarget !== null;
+  const createPrButtonRef = useRef<HTMLButtonElement>(null);
 
   const anyLaunchDialogOpen =
     reviewDialogOpen || loopedReviewDialogOpen || multiReviewDialogOpen || prDialogOpen;
@@ -1119,40 +1126,98 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       initialAgentModel?: string;
       initialReasoningEffort?: string;
     },
-  ) => {
-    if (!createTab || !selectedProjectId || !canCreateTab) return;
+    targetBranchOverride?: string,
+  ): boolean => {
+    if (
+      !createTab
+      || !selectedEnvironmentId
+      || !selectedProjectId
+      || !canCreateTab
+      || !isRunning
+      || hasPR
+    ) return false;
 
     const repoConfig = config.repositories[selectedProjectId];
-    const targetBranch = repoConfig?.prBaseBranch || "main";
+    const targetBranch = targetBranchOverride ?? repoConfig?.prBaseBranch ?? "main";
     const prPrompt = createPRPrompt(targetBranch);
 
-    // Set monitoring mode to create-pending for faster PR detection (5s intervals)
-    setModeCreatePending();
-
-    createTab(agentOverride || defaultAgent, {
+    const created = createTab(agentOverride || defaultAgent, {
       initialPrompt: prPrompt,
       displayTitle: "PR",
       ...launchOptions,
     });
-  }, [createTab, selectedProjectId, canCreateTab, config.repositories, defaultAgent, setModeCreatePending]);
+    if (!created) return false;
 
-  const canConfigurePR = canCreateTab && isRunning;
+    // Set monitoring mode only after the tab exists. Otherwise a rejected
+    // launch leaves the backend polling for a PR no agent is creating.
+    setModeCreatePending();
+    return true;
+  }, [
+    canCreateTab,
+    config.repositories,
+    createTab,
+    defaultAgent,
+    hasPR,
+    isRunning,
+    selectedEnvironmentId,
+    selectedProjectId,
+    setModeCreatePending,
+  ]);
+
+  const canConfigurePR = Boolean(
+    canCreateTab
+    && isRunning
+    && !hasPR
+    && selectedEnvironmentId
+    && selectedProjectId,
+  );
 
   const openPrDialog = useCallback(() => {
-    if (!canConfigurePR) return;
-    setPrDialogOpen(true);
-  }, [canConfigurePR]);
+    if (!canConfigurePR || !selectedEnvironmentId || !selectedProjectId) return;
+    setPrLaunchError(null);
+    setPrDialogTarget({
+      environmentId: selectedEnvironmentId,
+      projectId: selectedProjectId,
+      targetBranch: config.repositories[selectedProjectId]?.prBaseBranch || "main",
+    });
+  }, [
+    canConfigurePR,
+    config.repositories,
+    selectedEnvironmentId,
+    selectedProjectId,
+  ]);
 
   const prLongPress = useLongPressAction(openPrDialog, canConfigurePR);
 
+  const prEligibilityError = !prDialogTarget
+    ? null
+    : selectedEnvironmentId !== prDialogTarget.environmentId
+      || selectedProjectId !== prDialogTarget.projectId
+      ? "The selected environment changed. Close this dialog and reopen it from the intended environment."
+      : hasPR
+        ? "A pull request now exists for this environment."
+        : !isRunning
+          ? "The environment is no longer running."
+          : !canCreateTab
+            ? "The maximum number of tabs has been reached."
+            : null;
+
   const handleConfiguredCreatePR = useCallback((selection: CreatePRSelection) => {
-    setPrDialogOpen(false);
-    handleCreatePR(selection.agent, {
+    if (!prDialogTarget || prEligibilityError) return;
+    const created = handleCreatePR(selection.agent, {
       agentLaunchMode: "native",
       initialAgentModel: selection.model,
       initialReasoningEffort: selection.reasoningEffort,
-    });
-  }, [handleCreatePR]);
+    }, prDialogTarget.targetBranch);
+    if (!created) {
+      setPrLaunchError(
+        "The pull request agent tab could not be created. Check the environment and tab limit, then try again.",
+      );
+      return;
+    }
+    setPrLaunchError(null);
+    setPrDialogTarget(null);
+  }, [handleCreatePR, prDialogTarget, prEligibilityError]);
 
   // Handler for pushing changes to an existing PR - launches agent tab with commit/push prompt
   const handlePushChanges = useCallback((agentOverride?: "claude" | "opencode" | "codex" | "cursor" | "grok") => {
@@ -1847,6 +1912,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
               }
             >
               <Button
+                ref={createPrButtonRef}
                 variant={isGrid ? "ghost" : "default"}
                 size="sm"
                 className="gap-2 touch-manipulation"
@@ -2310,7 +2376,12 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       />
       <CreatePRDialog
         open={prDialogOpen}
-        onOpenChange={setPrDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPrDialogTarget(null);
+            setPrLaunchError(null);
+          }
+        }}
         defaultAgent={defaultAgent}
         catalog={reviewModelCatalog}
         enabledAgents={enabledAgentList}
@@ -2322,7 +2393,15 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         preferredReasoningEfforts={{
           codex: config.global.codexReasoningEffort,
         }}
-        targetBranch={targetBranch}
+        targetBranch={prDialogTarget?.targetBranch ?? targetBranch}
+        returnFocusRef={createPrButtonRef}
+        returnFocusFallback={() =>
+          window.matchMedia("(max-width: 767px)").matches
+            ? document.querySelector<HTMLButtonElement>('button[aria-label="Open tools"]')
+            : null
+        }
+        confirmDisabled={Boolean(prEligibilityError)}
+        error={prEligibilityError ?? prLaunchError}
         onConfirm={handleConfiguredCreatePR}
       />
 

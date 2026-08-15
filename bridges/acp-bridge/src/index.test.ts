@@ -3409,6 +3409,163 @@ describe("ACP bridge", () => {
     expect(diff?.diff).toContain("+const value = 2;");
   });
 
+  test("resumes a flattened resource-exhausted turn with exponential backoff", async () => {
+    const directory = await temporaryDirectory();
+    const counterFile = resolve(directory, "resource-retry-prompts.log");
+    const promptBlocksFile = resolve(directory, "resource-retry-blocks.log");
+    const { base, headers } = await spawnBridge({ env: {
+      ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_PROMPT_BLOCKS_FILE: promptBlocksFile,
+      FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "2",
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: "RESOURCEEXHAUSTED: finish without repeating completed work",
+        requestId: "resource-retry-1",
+      }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{
+            role: string;
+            content: string;
+            parts: Array<Record<string, unknown>>;
+          }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    expect(session.error).toBeUndefined();
+    expect(session.messages.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(session.messages.at(-1)?.content).toContain("Recovered and finished the original request.");
+    expect(session.messages.at(-1)?.content).not.toContain("resource_exhausted");
+    expect(session.messages.at(-1)?.parts.find((part) => part.toolUseId === "resource-safe-1"))
+      .toMatchObject({ toolState: "success" });
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(3);
+
+    const promptBlocks = (await fs.readFile(promptBlocksFile, "utf8")).trim().split("\n")
+      .map((line) => JSON.parse(line) as Array<{ type?: string; text?: string }>);
+    expect(promptBlocks[0]?.[0]?.text).toBe(
+      "RESOURCEEXHAUSTED: finish without repeating completed work",
+    );
+    expect(promptBlocks.slice(1).every((blocks) =>
+      blocks[0]?.text?.startsWith("Continue from where the interrupted turn stopped.")))
+      .toBe(true);
+  });
+
+  test("retries a structured ACP resource-exhausted response", async () => {
+    const directory = await temporaryDirectory();
+    const counterFile = resolve(directory, "resource-rpc-retry-prompts.log");
+    const { base, headers } = await spawnBridge({ env: {
+      ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_RPC_RESOURCE_EXHAUSTED_ATTEMPTS: "2",
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: "RESOURCEEXHAUSTEDRPC: retry the typed failure",
+        requestId: "resource-rpc-retry-1",
+      }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ role: string; content: string }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    expect(session.error).toBeUndefined();
+    expect(session.messages.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(session.messages.at(-1)?.content).toBe("Recovered from the structured RPC error.");
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(3);
+  });
+
+  test("fails visibly after three resource-exhausted retries", async () => {
+    const directory = await temporaryDirectory();
+    const counterFile = resolve(directory, "resource-retry-exhausted.log");
+    const { base, headers } = await spawnBridge({ env: {
+      ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "4",
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "RESOURCEEXHAUSTED: keep failing", requestId: "resource-retry-2" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ role: string; content: string }>;
+        }>,
+      (value) => value.status === "error",
+    );
+
+    expect(session.error).toBe("cursor remained resource exhausted after 3 retries");
+    expect(session.messages.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(session.messages.at(-1)?.content).toContain(
+      "Error: RetriableError: [resource_exhausted] Error",
+    );
+    // Initial dispatch plus exactly three retries.
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(4);
+  });
+
+  test("cancels a resource-exhausted turn while it is in backoff", async () => {
+    const directory = await temporaryDirectory();
+    const counterFile = resolve(directory, "resource-retry-cancelled.log");
+    const { base, headers } = await spawnBridge({ env: {
+      ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "500",
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "4",
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "RESOURCEEXHAUSTED: cancel me", requestId: "resource-retry-3" }),
+    });
+    await waitFor(
+      () => fs.readFile(counterFile, "utf8").catch(() => ""),
+      (contents) => contents.trim().split("\n").filter(Boolean).length === 1,
+    );
+    const cancelled = await nativeFetch(`${base}/session/${created.id}/cancel`, {
+      method: "POST",
+      headers,
+    });
+    expect(cancelled.status).toBe(202);
+    await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{ status: string }>,
+      (value) => value.status === "idle",
+    );
+    await Bun.sleep(100);
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(1);
+  });
+
   test("deduplicates session creation and prompt dispatch by durable keys", async () => {
     const stateDirectory = await temporaryDirectory();
     const counterFile = resolve(stateDirectory, "prompts.log");

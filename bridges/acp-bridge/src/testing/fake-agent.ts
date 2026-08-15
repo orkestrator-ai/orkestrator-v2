@@ -1240,6 +1240,25 @@ lines.on("line", (line) => {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }
+    if (prompt.startsWith("FINISHCURSORSUBAGENTSTATUS")) {
+      // Real Cursor keeps `isBackground: true` on the launch result and reports
+      // completion through a later status field rather than flipping the flag.
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "cursor-subagent-1",
+            status: "completed",
+            rawOutput: { durationMs: 84, isBackground: true, status: "completed" },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
     if (prompt.startsWith("FINISHCURSORSUBAGENT")) {
       write({
         jsonrpc: "2.0",
@@ -1252,6 +1271,83 @@ lines.on("line", (line) => {
             status: "completed",
             rawOutput: { durationMs: 84, isBackground: false, status: "completed" },
           },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FINISHCURSORTASKREQUEST")) {
+      write({
+        jsonrpc: "2.0",
+        id: 903,
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          prompt: "Validate the implementation",
+          subagentType: "explore",
+          durationMs: 84,
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FINISHCURSORTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          prompt: "Validate the implementation",
+          subagentType: "explore",
+          durationMs: 84,
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FAILCURSORTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          outcome: { outcome: "cancelled" },
+          durationMs: 12,
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FINISHEVICTEDCURSORTASK")) {
+      for (const index of [0, 1]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `cursor-task-late-filler-${index}`,
+              title: `Late retained output ${index}`,
+              status: "completed",
+              rawOutput: `${index}:`.padEnd(600 * 1024, "z"),
+            },
+          },
+        });
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          durationMs: 84,
         },
       });
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
@@ -3038,6 +3134,12 @@ lines.on("line", (line) => {
   if (message.id === 902 && process.env.FAKE_ACP_VENDOR_MODEL_REQUEST_FILE) {
     appendFileSync(
       process.env.FAKE_ACP_VENDOR_MODEL_REQUEST_FILE,
+      `${JSON.stringify(message)}\n`,
+    );
+  }
+  if (message.id === 903 && process.env.FAKE_ACP_CURSOR_TASK_REQUEST_FILE) {
+    appendFileSync(
+      process.env.FAKE_ACP_CURSOR_TASK_REQUEST_FILE,
       `${JSON.stringify(message)}\n`,
     );
   }

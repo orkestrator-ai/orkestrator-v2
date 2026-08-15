@@ -693,6 +693,12 @@ class AcpProcess {
         // than acknowledge a capability we do not have.
         this.onVendor(message.method, params);
         this.respond(message.id, {});
+      } else if (isCursorTaskMethod(message.method)) {
+        // Cursor documents `cursor/task` as a notification, but it also
+        // arrives as a request. Either form is the sub-agent completion
+        // signal; refusing it with -32601 leaves the launch card Active.
+        this.onVendor(message.method, params);
+        this.respond(message.id, cursorTaskAck(params));
       } else {
         this.#write({
           jsonrpc: "2.0",
@@ -2073,8 +2079,10 @@ function renderAcpToolSource(part: BridgeToolPart, source: AcpToolSourceState): 
   const output = source.contentOutput ?? source.rawOutput;
   setOptionalPartField(part, "toolOutput", output);
   // Cursor puts `isBackground` in rawOutput even when it also supplies a
-  // human-readable content block. Grok carries the equivalent signal in the
-  // Task input and later sends separate subagent lifecycle notifications.
+  // human-readable content block. That flag is launch mode, not liveness —
+  // a later `status: "completed"` in the same object is the child's end.
+  // Grok carries the equivalent signal in the Task input and later sends
+  // separate subagent lifecycle notifications.
   source.agentState = acpSubagentState(source, source.rawOutput ?? output);
   setOptionalPartField(part, "agentState", source.agentState);
   setOptionalPartField(
@@ -2127,22 +2135,16 @@ function acpSubagentState(
     }
   }
 
+  const reportedState = lifecycleStatus(lifecycle);
+  const terminal = terminalAgentState(reportedState);
+  if (terminal) return terminal;
+  // `isBackground` is launch mode, not liveness. Cursor keeps it true on a
+  // background Task even after a later update reports `status: "completed"`.
   if (lifecycle?.isBackground === true) return "active";
   if (lifecycle?.isBackground === false) return "finished";
   const backgroundLaunch = source.toolArgs?.background === true
     || source.toolArgs?.run_in_background === true;
   if (backgroundLaunch) return "active";
-  const reportedState = typeof lifecycle?.status === "string"
-    ? lifecycle.status
-    : typeof lifecycle?.state === "string"
-      ? lifecycle.state
-      : undefined;
-  if (reportedState && /^(failed|killed|cancelled|canceled|error)$/i.test(reportedState)) {
-    return "failed";
-  }
-  if (reportedState && /^(completed|finished|done|success)$/i.test(reportedState)) {
-    return "finished";
-  }
   if (source.toolState === "pending") return "active";
   if (source.toolState === "success") return "finished";
   return source.agentState;
@@ -2235,14 +2237,11 @@ function settleEvictedSubagentFromToolUpdate(
   const lifecycle = isObject(update.rawOutput)
     ? update.rawOutput
     : toolCallLifecycle(update.rawOutput ?? update.content);
-  if (lifecycle?.isBackground === true) return false;
-  const reportedState = typeof lifecycle?.status === "string"
-    ? lifecycle.status
-    : typeof lifecycle?.state === "string"
-      ? lifecycle.state
-      : undefined;
-  if (lifecycle?.isBackground === false
-    || (reportedState && /^(completed|finished|done|success|failed|killed|cancelled|canceled|error)$/i.test(reportedState))) {
+  const reportedState = lifecycleStatus(lifecycle);
+  if (lifecycle?.isBackground === true && terminalAgentState(reportedState) === undefined) {
+    return false;
+  }
+  if (lifecycle?.isBackground === false || terminalAgentState(reportedState) !== undefined) {
     settleActiveSubagent(state, toolUseId);
     return true;
   }
@@ -2288,18 +2287,33 @@ function applySubagentFinished(state: SessionState, update: JsonObject): void {
   if (!subagentId) return;
   const toolUseId = state.subagentToolIds.get(subagentId);
   if (!toolUseId) return;
+  finishSubagentTool(state, toolUseId, terminalAgentState(typeof update.status === "string" ? update.status : undefined) ?? "finished");
+}
 
-  const part = state.messages
-    .flatMap((message) => message.parts)
-    .find((candidate): candidate is BridgeToolPart =>
-      candidate.type === "tool-invocation" && candidate.toolUseId === toolUseId
-    );
-  state.subagentToolIds.delete(subagentId);
-  const status = typeof update.status === "string" ? update.status : "completed";
-  const agentState = /^(failed|killed|cancelled|canceled|error)$/i.test(status)
-    ? "failed"
-    : "finished";
-  if (part) {
+/**
+ * Cursor's documented sub-agent completion signal. The Task launch tool
+ * resolves as soon as the child starts (`isBackground: true`); this method is
+ * what tells the client the child actually ended.
+ */
+function applyCursorTask(state: SessionState, params: JsonObject): void {
+  if (params.sessionId !== undefined && params.sessionId !== state.acpSessionId) return;
+  const payload = isObject(params.update) ? params.update : params;
+  const toolCallId = boundedString(payload.toolCallId, MAX_TOOL_ID_BYTES)?.trim();
+  if (!toolCallId) return;
+  if (!state.activeSubagentToolIds.has(toolCallId)) {
+    const part = findToolPart(state, toolCallId);
+    if (!part || part.agentState !== "active") return;
+  }
+  finishSubagentTool(state, toolCallId, cursorTaskAgentState(payload));
+}
+
+function finishSubagentTool(
+  state: SessionState,
+  toolUseId: string,
+  agentState: "finished" | "failed",
+): void {
+  const part = findToolPart(state, toolUseId);
+  if (part && part.agentState !== "finished" && part.agentState !== "failed") {
     part.agentState = agentState;
     const source = acpToolSourceStates.get(part);
     if (source) source.agentState = agentState;
@@ -2307,6 +2321,49 @@ function applySubagentFinished(state: SessionState, update: JsonObject): void {
   settleActiveSubagent(state, toolUseId);
   state.revision += 1;
   schedulePersist();
+}
+
+function findToolPart(state: SessionState, toolUseId: string): BridgeToolPart | undefined {
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    const candidate = state.messages[index]!.parts.find(
+      (part): part is BridgeToolPart =>
+        part.type === "tool-invocation" && part.toolUseId === toolUseId,
+    );
+    if (candidate) return candidate;
+  }
+  return undefined;
+}
+
+function lifecycleStatus(lifecycle: JsonObject | undefined): string | undefined {
+  if (typeof lifecycle?.status === "string") return lifecycle.status;
+  if (typeof lifecycle?.state === "string") return lifecycle.state;
+  return undefined;
+}
+
+function terminalAgentState(status: string | undefined): "finished" | "failed" | undefined {
+  if (!status) return undefined;
+  if (/^(failed|killed|cancelled|canceled|error|rejected)$/i.test(status)) return "failed";
+  if (/^(completed|finished|done|success)$/i.test(status)) return "finished";
+  return undefined;
+}
+
+function cursorTaskAgentState(payload: JsonObject): "finished" | "failed" {
+  const outcome = typeof payload.outcome === "string"
+    ? payload.outcome
+    : isObject(payload.outcome) && typeof payload.outcome.outcome === "string"
+      ? payload.outcome.outcome
+      : undefined;
+  const status = typeof payload.status === "string" ? payload.status : undefined;
+  return terminalAgentState(outcome) ?? terminalAgentState(status) ?? "finished";
+}
+
+function cursorTaskAck(params: JsonObject): JsonObject {
+  const payload = isObject(params.update) ? params.update : params;
+  return {
+    outcome: {
+      outcome: cursorTaskAgentState(payload) === "failed" ? "cancelled" : "completed",
+    },
+  };
 }
 
 function setOptionalPartField<TKey extends keyof BridgeToolPart>(
@@ -3730,6 +3787,10 @@ class HttpError extends Error {
   }
 }
 
+function isCursorTaskMethod(method: string): boolean {
+  return method === "cursor/task";
+}
+
 function isVendorModelUpdate(method: string, params: JsonObject): boolean {
   if (method === "x.ai/models/update" || method === "_x.ai/models/update" || method === "cursor/models/update") {
     return true;
@@ -3809,6 +3870,10 @@ async function applyComposerPatch(
 }
 
 function applyVendorUpdate(state: SessionState, method: string, params: JsonObject): void {
+  if (isCursorTaskMethod(method)) {
+    applyCursorTask(state, params);
+    return;
+  }
   const update = isObject(params.update) ? params.update : params;
   const kind = typeof update.sessionUpdate === "string" ? update.sessionUpdate : "";
   if (method.endsWith("/models/update") || kind === "models_update") {

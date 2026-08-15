@@ -1480,6 +1480,161 @@ describe("ACP bridge", () => {
     });
   });
 
+  test("keeps cursor/task launch args after a later generic Task rawInput patch", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task-wipe:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASKWIPE: summarize" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    const parts = settled.messages.flatMap((message) => message.parts)
+      .filter((part) => part.toolUseId === "cursor-task-wipe");
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({
+      toolName: "task",
+      toolState: "success",
+      toolArgs: {
+        description: "Summarize two docs",
+        prompt: "Read docs/upgrade-agents.md and docs/flaky-tests.md.",
+        subagent_type: "explore",
+        model: "composer-2.5",
+        agentId: "bc-wipe",
+        durationMs: 1_240,
+      },
+    });
+  });
+
+  test("creates a single Task part when cursor/task arrives before the tool_call", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task-first:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASKFIRST: explore" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    const parts = settled.messages.flatMap((message) => message.parts)
+      .filter((part) => part.toolUseId === "cursor-task-first");
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({
+      toolName: "task",
+      toolTitle: "Task: Subagent task",
+      agentState: "active",
+      toolArgs: {
+        description: "Explore the repo",
+        prompt: "List the files that own native chat rendering.",
+        subagent_type: "explore",
+        model: "composer-2.5",
+        agentId: "bc-first",
+      },
+    });
+  });
+
+  test("trims oldest parts when a synthetic cursor/task would exceed the per-message cap", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task-cap:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASKCAP: overflow" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    expect(settled.error).toBeUndefined();
+    expect(settled.messages[1]?.parts).toHaveLength(512);
+    expect(settled.messages[1]?.parts[0]).toMatchObject({
+      type: "text",
+      content: expect.stringContaining("Earlier steps in this response were dropped"),
+    });
+    expect(settled.messages[1]?.parts.at(-1)).toMatchObject({
+      toolUseId: "cursor-task-cap",
+      toolName: "task",
+      toolArgs: { description: "Overflow task", subagent_type: "explore" },
+    });
+    expect(settled.messages[1]?.parts.filter((part) => part.toolUseId === "cursor-task-cap"))
+      .toHaveLength(1);
+  });
+
+  test("charges a cursor/task prompt so a near-cap transcript stays inside the byte budget", async () => {
+    const maximumTranscriptBytes = 1024 * 1024;
+    const { base, headers } = await spawnBridge({
+      env: { ACP_MAX_TRANSCRIPT_BYTES: String(maximumTranscriptBytes) },
+    });
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task-charge:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASKCHARGE: fill then prompt" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    expect(settled.error).toBeUndefined();
+    expect(Buffer.byteLength(JSON.stringify(settled.messages)))
+      .toBeLessThanOrEqual(maximumTranscriptBytes);
+    const charged = settled.messages.flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "cursor-task-charge");
+    expect(charged).toMatchObject({
+      toolName: "task",
+      toolArgs: { description: "Charge the prompt", subagent_type: "explore" },
+    });
+    expect((charged?.toolArgs as { prompt?: string } | undefined)?.prompt?.length)
+      .toBe(64 * 1024);
+  });
+
   test("preserves ACP nested child parentToolCallId as parentTaskUseId", async () => {
     const bridge = await spawnBridge();
     const created = await nativeFetch(`${bridge.base}/session/create`, {

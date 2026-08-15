@@ -1059,6 +1059,159 @@ lines.on("line", (line) => {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }
+    if (prompt.startsWith("CURSORTASKWIPE")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "cursor-task-wipe",
+            title: "Task: Subagent task",
+            kind: "other",
+            status: "in_progress",
+            rawInput: { _toolName: "task" },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          toolCallId: "cursor-task-wipe",
+          description: "Summarize two docs",
+          prompt: "Read docs/upgrade-agents.md and docs/flaky-tests.md.",
+          subagentType: "explore",
+          model: "composer-2.5",
+          agentId: "bc-wipe",
+          durationMs: 1_240,
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "cursor-task-wipe",
+            status: "completed",
+            rawInput: { _toolName: "task" },
+            content: [{ type: "content", content: { type: "text", text: "Sub-agent launched." } }],
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("CURSORTASKFIRST")) {
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          toolCallId: "cursor-task-first",
+          description: "Explore the repo",
+          prompt: "List the files that own native chat rendering.",
+          subagentType: "explore",
+          model: "composer-2.5",
+          agentId: "bc-first",
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "cursor-task-first",
+            title: "Task: Subagent task",
+            kind: "other",
+            status: "in_progress",
+            rawInput: { _toolName: "task" },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "cursor-task-first",
+            status: "completed",
+            content: [{ type: "content", content: { type: "text", text: "Sub-agent launched." } }],
+            rawOutput: { durationMs: 42, isBackground: true },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("CURSORTASKCAP")) {
+      for (let index = 0; index < 512; index += 1) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `cap-fill-${index}`,
+              kind: "noop",
+              status: "pending",
+            },
+          },
+        });
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          toolCallId: "cursor-task-cap",
+          description: "Overflow task",
+          prompt: "This launch has no matching tool_call yet.",
+          subagentType: "explore",
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("CURSORTASKCHARGE")) {
+      // 42 × 28 KiB completions: every third tool crosses the 64 KiB dirty
+      // interval and resets it, so `cursor/task` below starts from a clean
+      // counter against a transcript already sitting on the 1 MiB test floor.
+      for (let index = 0; index < 42; index += 1) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `charge-fill-${index}`,
+              kind: "read",
+              status: "completed",
+              rawOutput: `${index}:`.padEnd(28 * 1024, "x"),
+            },
+          },
+        });
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          toolCallId: "cursor-task-charge",
+          description: "Charge the prompt",
+          prompt: "P".repeat(64 * 1024),
+          subagentType: "explore",
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
     if (prompt.startsWith("CURSORTASK")) {
       write({
         jsonrpc: "2.0",

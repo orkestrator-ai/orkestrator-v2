@@ -1431,6 +1431,64 @@ function rememberHistoryMessage(state: SessionState, providerMessageId: string, 
   state.historyMessageIds.set(providerMessageId, messageId);
 }
 
+/**
+ * Append a tool part, trimming oldest siblings when the per-message cap is full.
+ * Returns false when the part must not be created: a non-initial update for a
+ * trimmed id, or a structured turn that cannot lose output.
+ */
+function pushToolPart(
+  state: SessionState,
+  owner: BridgeMessage,
+  part: BridgeToolPart,
+  isInitial: boolean,
+): boolean {
+  const trimmed = trimmedToolCalls.get(owner);
+  if (trimmed?.has(part.toolUseId)) {
+    // This call's part was dropped on purpose. Rebuilding it from one late
+    // update would append an empty `Tool call` *after* the notice saying
+    // those steps went, with none of the title, arguments or output the
+    // original carried. A genuinely new call reusing the id still starts.
+    if (!isInitial) return false;
+    trimmed.delete(part.toolUseId);
+  }
+  if (owner.parts.length >= MAX_PARTS_PER_MESSAGE) {
+    if (turnRequiresCompleteOutput(state)) {
+      failTranscriptLimit(state);
+      return false;
+    }
+    state.droppedParts += trimPartsTo(owner, MAX_PARTS_PER_MESSAGE - 1);
+    state.transcriptTruncated = true;
+  }
+  owner.parts.push(part);
+  return true;
+}
+
+/**
+ * Bill the rendered part against the transcript dirty counter and persist.
+ * Returns false when a structured turn had to fail because bounding dropped
+ * current-message content.
+ */
+function commitToolPartMutation(
+  state: SessionState,
+  part: BridgeToolPart,
+  source: AcpToolSourceState,
+): boolean {
+  state.revision += 1;
+  const serializedBytes = Buffer.byteLength(JSON.stringify(part));
+  state.uncheckedTranscriptBytes += Math.max(0, serializedBytes - (source.chargedBytes ?? 0));
+  source.chargedBytes = serializedBytes;
+  const transcriptTruncated = state.messages.length > MAX_MESSAGES
+    || state.uncheckedTranscriptBytes >= TRANSCRIPT_CHECK_INTERVAL_BYTES
+    ? boundTranscript(state)
+    : false;
+  if (transcriptTruncated && turnRequiresCompleteOutput(state)) {
+    failTranscriptLimit(state);
+    return false;
+  }
+  schedulePersist();
+  return true;
+}
+
 function applyToolCallUpdate(
   state: SessionState,
   update: JsonObject,
@@ -1478,23 +1536,6 @@ function applyToolCallUpdate(
 
   if (!part) {
     owner = currentAssistantMessage(state);
-    const trimmed = trimmedToolCalls.get(owner);
-    if (trimmed?.has(toolCallId)) {
-      // This call's part was dropped on purpose. Rebuilding it from one late
-      // update would append an empty `Tool call` *after* the notice saying
-      // those steps went, with none of the title, arguments or output the
-      // original carried. A genuinely new call reusing the id still starts.
-      if (!isInitial) return;
-      trimmed.delete(toolCallId);
-    }
-    if (owner.parts.length >= MAX_PARTS_PER_MESSAGE) {
-      if (turnRequiresCompleteOutput(state)) {
-        failTranscriptLimit(state);
-        return;
-      }
-      state.droppedParts += trimPartsTo(owner, MAX_PARTS_PER_MESSAGE - 1);
-      state.transcriptTruncated = true;
-    }
     part = {
       type: "tool-invocation",
       content: "Tool call",
@@ -1503,7 +1544,7 @@ function applyToolCallUpdate(
       toolUseId: toolCallId,
       toolState: "pending",
     };
-    owner.parts.push(part);
+    if (!pushToolPart(state, owner, part, isInitial)) return;
   }
 
   let source = acpToolSourceStates.get(part);
@@ -1527,19 +1568,7 @@ function applyToolCallUpdate(
   }
   syncActiveSubagentTool(state, part);
 
-  state.revision += 1;
-  const serializedBytes = Buffer.byteLength(JSON.stringify(part));
-  state.uncheckedTranscriptBytes += Math.max(0, serializedBytes - (source.chargedBytes ?? 0));
-  source.chargedBytes = serializedBytes;
-  const transcriptTruncated = state.messages.length > MAX_MESSAGES
-    || state.uncheckedTranscriptBytes >= TRANSCRIPT_CHECK_INTERVAL_BYTES
-    ? boundTranscript(state)
-    : false;
-  if (transcriptTruncated && turnRequiresCompleteOutput(state)) {
-    failTranscriptLimit(state);
-    return;
-  }
-  schedulePersist();
+  if (!commitToolPartMutation(state, part, source)) return;
 
   // Cursor's live ACP stream intentionally reduces read/search calls to
   // generic labels such as `Read File` and `grep`. Its indexed session replay
@@ -2333,7 +2362,9 @@ function applyCursorTask(state: SessionState, params: JsonObject): void {
       toolState: durationMs === undefined ? "pending" : "success",
       agentState: durationMs === undefined ? "active" : "finished",
     };
-    owner.parts.push(part);
+    // Not an initial `tool_call`: a late `cursor/task` for a trimmed id must
+    // not rebuild the evicted launch as a context-free ghost part.
+    if (!pushToolPart(state, owner, part, false)) return;
     found = { owner, part };
   }
 
@@ -2368,8 +2399,7 @@ function applyCursorTask(state: SessionState, params: JsonObject): void {
   }
   renderAcpToolSource(part, source);
   syncActiveSubagentTool(state, part);
-  state.revision += 1;
-  schedulePersist();
+  commitToolPartMutation(state, part, source);
 }
 
 function failAllActiveSubagents(state: SessionState): void {

@@ -601,6 +601,13 @@ export interface RepositoryConfig {
   defaultBranch: string;
   prBaseBranch: string;
   lastEnvironmentType?: EnvironmentType;
+  /** Agent controls used by the most recently created agent-enabled environment. */
+  lastEnvironmentAgentSelection?: {
+    platform: DefaultAgent;
+    mode: AgentStyle;
+    model?: string;
+    reasoningEffort?: string;
+  };
   defaultPortMappings?: PortMapping[];
   filesToCopy?: string[];
   defaultModel?: string;
@@ -651,6 +658,12 @@ export interface AppConfig {
       | "max"
       | "ultra";
     opencodeMode: OpenCodeMode;
+    /**
+     * OpenCode provider catalogues offered in model pickers. Filtering happens
+     * in the backend so the renderer never receives the full OpenCode
+     * catalogue. An empty list means unrestricted.
+     */
+    openCodeModelProviders?: string[];
     claudeMode: ClaudeMode;
     claudeNativeBackend: ClaudeNativeBackend;
     claudeNativeFastModeDefault?: boolean;

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, resolve } from "node:path";
@@ -49,6 +49,8 @@ interface BridgeMessage {
   content: string;
   parts: BridgeMessagePart[];
   createdAt: string;
+  /** Model selected when this assistant response began. */
+  modelId?: string;
 }
 
 interface BridgeTextPart {
@@ -90,6 +92,14 @@ interface BridgeToolPart {
   toolName?: string;
   toolArgs?: JsonObject;
   toolState?: "success" | "failure" | "pending";
+  /**
+   * Lifecycle of a sub-agent launched by this tool.
+   *
+   * Cursor and Grok can complete the launch tool as soon as the child starts.
+   * Keep that lifecycle separate from `toolState`, just as the shared renderer
+   * does for Codex collaboration items.
+   */
+  agentState?: "active" | "finished" | "failed";
   toolTitle?: string;
   toolOutput?: string;
   toolError?: string;
@@ -100,9 +110,12 @@ interface AcpToolSourceState {
   title?: string;
   explicitName?: string;
   inputName?: string;
+  metadataName?: string;
+  metadataKind?: string;
   kind?: string;
   toolArgs?: JsonObject;
   toolState?: BridgeToolPart["toolState"];
+  agentState?: BridgeToolPart["agentState"];
   contentOutput?: string;
   rawOutput?: string;
   contentDiffs: BridgeToolDiff[];
@@ -116,12 +129,37 @@ interface AcpToolSourceState {
   chargedBytes?: number;
 }
 
+interface AcpReplayToolMetadata {
+  id: string;
+  title?: string;
+  toolName?: string;
+  toolArgs?: JsonObject;
+  contentOutputHash?: string;
+  rawOutputHash?: string;
+  retainedBytes: number;
+}
+
+interface AcpToolReplayCollector {
+  capacity: number;
+  maximumBytes: number;
+  retainedBytes: number;
+  byId: Map<string, AcpReplayToolMetadata>;
+}
+
 type BridgeMessagePart = BridgeTextPart | BridgeFilePart | BridgeToolPart;
 
 interface PromptJournalEntry {
   requestId: string;
   state: "accepted" | "completed" | "failed" | "ambiguous";
   acceptedAt: number;
+}
+
+interface ActiveSubagentDescriptor {
+  /** Bounded launch metadata used to correlate Grok's child-id notification. */
+  description?: string;
+  subagentType?: string;
+  /** Distinguishes a completed background launch from an abandoned pending one. */
+  toolState?: BridgeToolPart["toolState"];
 }
 
 interface SessionState {
@@ -131,6 +169,20 @@ interface SessionState {
   status: SessionStatus;
   error?: string;
   messages: BridgeMessage[];
+  /** Active background children, maintained incrementally for the hot activity route. */
+  activeSubagentToolIds: Set<string>;
+  /**
+   * Authoritative, bounded correlation metadata for active children. This is
+   * intentionally independent of rendered parts: transcript retention is a
+   * display concern and must not decide whether background work still exists.
+   */
+  activeSubagentDescriptors: Map<string, ActiveSubagentDescriptor>;
+  /** Fatal latch: once the bound trips, later provider frames cannot reopen work. */
+  subagentLimitExceeded: boolean;
+  /** Grok's terminal sub-agent notifications identify the child, not its tool call. */
+  subagentToolIds: Map<string, string>;
+  /** Provider message IDs seen during the current process, bounded with the transcript. */
+  historyMessageIds: Map<string, string>;
   child: AcpProcess | null;
   revision: number;
   structured: Map<string, unknown>;
@@ -139,6 +191,14 @@ interface SessionState {
   outputTruncated: boolean;
   uncheckedTranscriptBytes: number;
   currentTurnOutput: string | null;
+  /**
+   * Monotonic count of turns dispatched to the agent in this process. Cursor's
+   * tool replay is detached from the turn lifecycle, so it needs a way to tell
+   * that the session has moved on since it captured its targets. Deliberately
+   * in-memory: a restart kills every outstanding replay, so a persisted value
+   * would only invite comparing sequences across two different processes.
+   */
+  promptSequence: number;
   /** Messages evicted from the front, so absolute indices stay stable. */
   droppedMessages: number;
   /**
@@ -164,6 +224,8 @@ interface SessionState {
   turnStartedAt?: number;
   /** `available_commands_update` size; both agents advertise their commands. */
   commandCount?: number;
+  /** Whether session/load is replaying transcript updates into this state. */
+  historyReplay: false | "hydrate" | "ignore";
 }
 
 interface PersistedUsage {
@@ -197,6 +259,7 @@ interface PersistedSession {
   sessionConfig?: AcpNormalizedSessionConfig;
   usage?: PersistedUsage;
   commandCount?: number;
+  subagentLimitExceeded?: boolean;
 }
 
 interface PersistedState {
@@ -219,9 +282,36 @@ const stateDirectory = process.env.ACP_STATE_DIR?.trim();
 const stateFile = stateDirectory ? resolve(stateDirectory, "state.json") : null;
 const sessions = new Map<string, SessionState>();
 const acpToolSourceStates = new WeakMap<BridgeToolPart, AcpToolSourceState>();
+/**
+ * Parts and messages whose text already sits at its byte cap, marker included.
+ *
+ * Overflow used to end the turn, so the cap was only ever reached once. An
+ * interactive turn now survives it, which means the agent keeps streaming into
+ * a buffer that can no longer grow — and `appendBounded` would re-encode and
+ * re-copy the whole 2MiB buffer for every remaining chunk, on the JSON-RPC read
+ * loop, only to hand back exactly what it was given. Saturation is recorded
+ * once and the append is skipped from then on.
+ *
+ * Weakly held, so a trimmed part or an evicted message takes its entry with it.
+ * A restart repopulates it from the first post-restore chunk.
+ */
+const saturatedText = new WeakSet<BridgeMessage | BridgeMessagePart>();
+/**
+ * Tool call ids whose parts a trim removed, per message.
+ *
+ * `applyToolCallUpdate` only searches the message's live parts, so a late update
+ * for a trimmed call would otherwise rebuild it from that one patch: an empty
+ * `Tool call` part, appended *after* the notice that says those steps were
+ * dropped, with none of the title or arguments the original carried.
+ */
+const trimmedToolCalls = new WeakMap<BridgeMessage, Set<string>>();
 const clientSessionKeys = new Map<string, string>();
 const sessionCreations = new Map<string, Promise<SessionState>>();
+const sessionResumes = new Map<string, Promise<SessionState>>();
 let anonymousSessionCreations = 0;
+let activeCursorToolReplays = 0;
+const cursorToolReplayProcesses = new Set<AcpProcess>();
+let sessionListProbe: Promise<JsonObject[]> | null = null;
 let persistenceTail = Promise.resolve();
 let persistenceScheduled = false;
 let shuttingDown = false;
@@ -242,19 +332,49 @@ interface AcpSpawnOptions {
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_LINE_BYTES = 4 * 1024 * 1024;
 const MAX_MESSAGES = 500;
-const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
+const MAX_HISTORY_MESSAGE_IDS = 1_024;
+/**
+ * The rendered-transcript display budget. Overridable only *downwards*, and
+ * only inside a bounded range, so a test can reach the aggregate-trim floor
+ * without pushing eight megabytes through a fixture. Nothing can raise it past
+ * the reviewed cap.
+ */
+const MAX_TRANSCRIPT_BYTES = parseBoundedInteger(
+  process.env.ACP_MAX_TRANSCRIPT_BYTES,
+  8 * 1024 * 1024,
+  1024 * 1024,
+  8 * 1024 * 1024,
+);
 const MAX_MESSAGE_TEXT_BYTES = 2 * 1024 * 1024;
 const MAX_PARTS_PER_MESSAGE = 512;
+/**
+ * A provider that attempts to exceed this bound is cancelled and every known
+ * child is failed explicitly. Dropping one active child silently could make
+ * `/activity` report idle while that child still writes to the workspace.
+ */
+const MAX_ACTIVE_SUBAGENTS_PER_SESSION = 512;
 const MAX_TOOL_ARGUMENT_BYTES = 512 * 1024;
 const MAX_TOOL_OUTPUT_BYTES = 512 * 1024;
 const MAX_TOOL_INLINE_FILE_BYTES = 256 * 1024;
 const MAX_TOOL_DIFF_BYTES = 1024 * 1024;
 const MAX_TOOL_ID_BYTES = 512;
+// Matches the bound `session-config.ts` applies to a persisted `selectedModelId`,
+// so a model id cannot mean one length live and another in the transcript.
+const MAX_MODEL_ID_BYTES = 1_024;
 const MAX_TOOL_NAME_BYTES = 256;
 const MAX_TOOL_TITLE_BYTES = 4 * 1024;
 const MAX_TOOL_PATH_BYTES = 16 * 1024;
+const MAX_REPLAY_RECONCILE_TOOLS = 4_096;
+const MAX_CURSOR_TOOL_REPLAY_PROCESSES = 8;
 /** Bounds both the time and the retained memory of `diffFileLines`. */
 const MAX_DIFF_EDIT_DISTANCE = 512;
+/**
+ * Unchanged lines kept either side of a change. Rendering every line instead
+ * billed the *whole file* per edit: a one-line change to a 200KiB source file
+ * produced a 4,993-line "diff" of which 4,989 lines were untouched context, and
+ * 58 such edits exhausted the 8MiB transcript budget in a single turn.
+ */
+const DIFF_CONTEXT_LINES = 3;
 const MAX_SESSIONS = parseBoundedInteger(process.env.ACP_MAX_SESSIONS, 256, 1, 256);
 const MAX_APPROVALS_PER_SESSION = 64;
 const MAX_STRUCTURED_RESULTS = 4;
@@ -262,6 +382,8 @@ const MAX_STRUCTURED_RESULT_BYTES = 1024 * 1024;
 const TRANSCRIPT_CHECK_INTERVAL_BYTES = 64 * 1024;
 const MAX_PROMPT_JOURNAL = 512;
 const MAX_STATE_FILE_BYTES = 16 * 1024 * 1024;
+const MAX_RESUMABLE_SESSIONS = 512;
+const MAX_SESSION_LIST_PAGES = 64;
 const RPC_TIMEOUT_MS = parseDuration(process.env.ACP_RPC_TIMEOUT_MS, 30_000);
 const PROMPT_TIMEOUT_MS = parseDuration(process.env.ACP_PROMPT_TIMEOUT_MS, 30 * 60_000);
 const PARENT_WATCHDOG_INTERVAL_MS = parseDuration(
@@ -538,7 +660,254 @@ class AcpProcess {
 }
 
 function activeSessionReservations(): number {
-  return sessions.size + sessionCreations.size + anonymousSessionCreations;
+  return sessions.size + sessionCreations.size + sessionResumes.size + anonymousSessionCreations;
+}
+
+const EXTERNAL_SESSION_PREFIX = "acp-session:";
+
+function externalSessionToken(acpSessionId: string): string {
+  const encoded = Buffer.from(acpSessionId).toString("base64url");
+  const signature = createHmac("sha256", authToken).update(encoded).digest("base64url");
+  return `${EXTERNAL_SESSION_PREFIX}${encoded}.${signature}`;
+}
+
+function parseExternalSessionToken(value: string): string | null {
+  if (!value.startsWith(EXTERNAL_SESSION_PREFIX)) return null;
+  const token = value.slice(EXTERNAL_SESSION_PREFIX.length);
+  const separator = token.lastIndexOf(".");
+  if (separator <= 0) return null;
+  const encoded = token.slice(0, separator);
+  const signature = token.slice(separator + 1);
+  if (!encoded || encoded.length > 1_024 || !signature) return null;
+  const expected = createHmac("sha256", authToken).update(encoded).digest();
+  let supplied: Buffer;
+  try {
+    supplied = Buffer.from(signature, "base64url");
+  } catch {
+    return null;
+  }
+  if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return null;
+  let decoded: Buffer;
+  try {
+    decoded = Buffer.from(encoded, "base64url");
+  } catch {
+    return null;
+  }
+  const sessionId = decoded.toString("utf8");
+  if (!sessionId.trim() || Buffer.byteLength(sessionId) > 512) return null;
+  return decoded.toString("base64url") === encoded ? sessionId : null;
+}
+
+function supportsSessionCapability(initialized: JsonObject, capability: string): boolean {
+  const agentCapabilities = isObject(initialized.agentCapabilities)
+    ? initialized.agentCapabilities
+    : undefined;
+  const sessionCapabilities = isObject(agentCapabilities?.sessionCapabilities)
+    ? agentCapabilities.sessionCapabilities
+    : undefined;
+  return sessionCapabilities?.[capability] === true
+    || isObject(sessionCapabilities?.[capability]);
+}
+
+/**
+ * Query the agent's own durable history through ACP. One shared probe prevents
+ * several simultaneously-open pickers from spawning an unbounded process fanout.
+ */
+async function listResumableSessions(): Promise<JsonObject[]> {
+  if (sessionListProbe) return sessionListProbe;
+  const operation = listResumableSessionsReserved();
+  sessionListProbe = operation;
+  try {
+    return await operation;
+  } finally {
+    if (sessionListProbe === operation) sessionListProbe = null;
+  }
+}
+
+async function listResumableSessionsReserved(): Promise<JsonObject[]> {
+  const child = new AcpProcess();
+  try {
+    const initialized = await child.initialize();
+    const capabilities = isObject(initialized.agentCapabilities)
+      ? initialized.agentCapabilities
+      : undefined;
+    if (!supportsSessionCapability(initialized, "list") || capabilities?.loadSession !== true) {
+      throw new HttpError(410, `${provider} cannot list resumable ACP sessions`);
+    }
+    const knownSessions = new Map(
+      [...sessions.values()].map((state) => [state.acpSessionId, state.id]),
+    );
+    const listed: JsonObject[] = [];
+    const seenSessionIds = new Set<string>();
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    for (let page = 0; page < MAX_SESSION_LIST_PAGES && listed.length < MAX_RESUMABLE_SESSIONS; page += 1) {
+      const result = await child.request("session/list", {
+        cwd: workingDirectory,
+        ...(cursor ? { cursor } : {}),
+      });
+      if (!isObject(result) || !Array.isArray(result.sessions)) {
+        throw new Error(`${provider} returned an invalid ACP session list`);
+      }
+      for (const candidate of result.sessions) {
+        if (!isObject(candidate)) continue;
+        const acpSessionId = boundedString(candidate.sessionId, 512)?.trim();
+        if (!acpSessionId || seenSessionIds.has(acpSessionId)) continue;
+        const cwd = boundedString(candidate.cwd, MAX_TOOL_PATH_BYTES)?.trim();
+        if (!cwd || resolve(cwd) !== workingDirectory) continue;
+        seenSessionIds.add(acpSessionId);
+        const meta = isObject(candidate._meta) ? candidate._meta : undefined;
+        const messageCount = Number.isSafeInteger(meta?.messageCount)
+          && Number(meta?.messageCount) >= 0
+          ? Number(meta!.messageCount)
+          : undefined;
+        const createdAt = boundedString(candidate.createdAt, 64);
+        const updatedAt = boundedString(candidate.updatedAt, 64);
+        listed.push({
+          id: knownSessions.get(acpSessionId) ?? externalSessionToken(acpSessionId),
+          ...(boundedString(candidate.title, MAX_TOOL_TITLE_BYTES)
+            ? { title: boundedString(candidate.title, MAX_TOOL_TITLE_BYTES) }
+            : {}),
+          ...(createdAt ? { createdAt } : {}),
+          ...(updatedAt ? { updatedAt } : {}),
+          ...(messageCount === undefined ? {} : { messageCount }),
+        });
+        if (listed.length >= MAX_RESUMABLE_SESSIONS) break;
+      }
+      const nextCursor = boundedString(result.nextCursor, 4_096)?.trim();
+      if (!nextCursor || seenCursors.has(nextCursor)) break;
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
+    }
+    return listed;
+  } finally {
+    await child.close();
+  }
+}
+
+async function resumeSession(
+  selectedSessionId: string,
+  signal?: AbortSignal,
+  patch?: AcpComposerPatch,
+): Promise<SessionState> {
+  const existing = sessions.get(selectedSessionId);
+  if (existing) return resumeExistingSession(existing, signal, patch);
+  const acpSessionId = parseExternalSessionToken(selectedSessionId);
+  if (!acpSessionId) throw new HttpError(404, "ACP session was not found");
+  // Checked before the `sessions` scan below: an adoption registers its state
+  // before `session/load` returns, so a racing caller would otherwise find a
+  // still-dispatching session and be told 409 for work it should simply join.
+  // The in-flight adoption also carries the *first* caller's controls, so this
+  // caller has to apply its own rather than inherit them silently.
+  const pending = sessionResumes.get(acpSessionId);
+  if (pending) {
+    const adopted = await pending;
+    return patch ? resumeExistingSession(adopted, signal, patch) : adopted;
+  }
+  const alreadyLoaded = [...sessions.values()].find((state) => state.acpSessionId === acpSessionId);
+  if (alreadyLoaded) return resumeExistingSession(alreadyLoaded, signal, patch);
+  if (activeSessionReservations() >= MAX_SESSIONS) throw new HttpError(429, "ACP session limit reached");
+  const operation = resumeSessionReserved(acpSessionId, signal, patch);
+  sessionResumes.set(acpSessionId, operation);
+  try {
+    return await operation;
+  } finally {
+    if (sessionResumes.get(acpSessionId) === operation) sessionResumes.delete(acpSessionId);
+  }
+}
+
+async function resumeExistingSession(
+  state: SessionState,
+  signal?: AbortSignal,
+  patch?: AcpComposerPatch,
+): Promise<SessionState> {
+  if (state.status === "running" || state.dispatching) {
+    throw new HttpError(409, "Session is already running");
+  }
+  state.dispatching = true;
+  try {
+    await ensureSessionProcess(state, signal);
+    if (patch) await applyComposerPatch(state, patch, signal);
+    return state;
+  } finally {
+    state.dispatching = false;
+  }
+}
+
+async function resumeSessionReserved(
+  acpSessionId: string,
+  signal?: AbortSignal,
+  patch?: AcpComposerPatch,
+): Promise<SessionState> {
+  const child = new AcpProcess();
+  let state: SessionState | undefined;
+  try {
+    const initialized = await child.initialize(signal);
+    const capabilities = isObject(initialized.agentCapabilities)
+      ? initialized.agentCapabilities
+      : undefined;
+    if (capabilities?.loadSession !== true) {
+      throw new HttpError(410, `${provider} cannot reload persisted ACP sessions`);
+    }
+    state = {
+      id: randomBytes(16).toString("hex"),
+      acpSessionId,
+      status: "idle",
+      messages: [],
+      activeSubagentToolIds: new Set(),
+      activeSubagentDescriptors: new Map(),
+      subagentLimitExceeded: false,
+      subagentToolIds: new Map(),
+      historyMessageIds: new Map(),
+      child,
+      revision: 0,
+      structured: new Map(),
+      promptJournal: new Map(),
+      approvals: new Map(),
+      outputTruncated: false,
+      uncheckedTranscriptBytes: 0,
+      currentTurnOutput: null,
+      promptSequence: 0,
+      droppedMessages: 0,
+      sessionConfig: emptySessionConfig(),
+      dispatching: true,
+      historyReplay: "hydrate",
+    };
+    attachChild(state, child);
+    sessions.set(state.id, state);
+    const loaded = await child.request("session/load", {
+      cwd: workingDirectory,
+      additionalDirectories: [],
+      mcpServers: [],
+      sessionId: acpSessionId,
+    }, RPC_TIMEOUT_MS, signal);
+    state.historyReplay = false;
+    // session/load is a projection of work owned by another ACP process. Its
+    // historical active markers cannot describe children of this new process.
+    reconcileStaleToolParts(state, true);
+    if (isObject(loaded)) {
+      const sessionConfig = normalizeAcpSessionConfig(provider, {
+        ...loaded,
+        sessionId: acpSessionId,
+      });
+      if (sessionConfig.composer.models.length > 0 || sessionConfig.composer.modes.length > 0) {
+        state.sessionConfig = sessionConfig;
+        rememberCatalog(sessionConfig.composer);
+      }
+    }
+    state.status = "idle";
+    state.error = undefined;
+    if (patch) await applyComposerPatch(state, patch, signal);
+    state.dispatching = false;
+    await persistState();
+    return state;
+  } catch (error) {
+    if (state && sessions.get(state.id) === state) sessions.delete(state.id);
+    if (state) clearApprovals(state);
+    await child.close();
+    await persistState().catch(() => undefined);
+    throw error;
+  }
 }
 
 async function createSession(
@@ -597,6 +966,11 @@ async function createSessionReserved(
       acpSessionId: created.sessionId,
       status: "idle",
       messages: [],
+      activeSubagentToolIds: new Set(),
+      activeSubagentDescriptors: new Map(),
+      subagentLimitExceeded: false,
+      subagentToolIds: new Map(),
+      historyMessageIds: new Map(),
       child,
       revision: 0,
       structured: new Map(),
@@ -605,12 +979,14 @@ async function createSessionReserved(
       outputTruncated: false,
       uncheckedTranscriptBytes: 0,
       currentTurnOutput: null,
+      promptSequence: 0,
       droppedMessages: 0,
       sessionConfig,
       // The session is reachable from `sessions` before its initial
       // configuration finishes, so hold the same claim the config and prompt
       // routes take rather than leaving a window where both see it idle.
       dispatching: true,
+      historyReplay: false,
     };
     attachChild(state, child);
     sessions.set(id, state);
@@ -660,7 +1036,7 @@ function attachChild(state: SessionState, child: AcpProcess): void {
     state.status = "error";
     state.error = error.message;
     // The agent is gone, so nothing will ever complete the tools it had open.
-    reconcileStaleToolParts(state);
+    reconcileStaleToolParts(state, true);
     state.revision += 1;
     schedulePersist();
   };
@@ -678,12 +1054,16 @@ async function ensureSessionProcess(state: SessionState, signal?: AbortSignal): 
       throw new HttpError(410, `${provider} cannot reload persisted ACP sessions`);
     }
     attachChild(state, child);
+    state.historyReplay = state.messages.length === 0 ? "hydrate" : "ignore";
+    const hydratedHistory = state.historyReplay === "hydrate";
     const loaded = await child.request("session/load", {
       cwd: workingDirectory,
       additionalDirectories: [],
       mcpServers: [],
       sessionId: state.acpSessionId,
     }, RPC_TIMEOUT_MS, signal);
+    state.historyReplay = false;
+    if (hydratedHistory) reconcileStaleToolParts(state, true);
     if (isObject(loaded)) {
       const sessionConfig = normalizeAcpSessionConfig(provider, {
         ...loaded,
@@ -701,6 +1081,7 @@ async function ensureSessionProcess(state: SessionState, signal?: AbortSignal): 
     return child;
   } catch (error) {
     if (state.child === child) state.child = null;
+    state.historyReplay = false;
     await child.close();
     throw error;
   }
@@ -804,50 +1185,106 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     }
     return;
   }
+  // A reconnect replays a transcript the bridge already holds, so every update
+  // that would mutate it has to be dropped — tool calls included. `tool_call`
+  // upserts by id against the *trailing* message only, so a replayed historical
+  // call finds no owner and appends a duplicate to whatever is at the tail.
+  if (state.historyReplay === "ignore" && isTranscriptUpdateKind(kind)) return;
+  if (kind === "subagent_spawned") {
+    applySubagentSpawned(state, update);
+    return;
+  }
+  if (kind === "subagent_finished") {
+    applySubagentFinished(state, update);
+    return;
+  }
   if (state.outputTruncated) return;
   if (kind === "tool_call" || kind === "tool_call_update") {
     applyToolCallUpdate(state, update, kind === "tool_call");
     return;
   }
-  if (kind !== "agent_message_chunk" && kind !== "agent_thought_chunk") return;
+  if (kind !== "user_message"
+    && kind !== "user_message_chunk"
+    && kind !== "agent_message"
+    && kind !== "agent_message_chunk"
+    && kind !== "agent_thought_chunk") return;
+  // User content is authored by `/session/prompt`, which pushes the
+  // authoritative message before dispatching the turn. An agent that echoes the
+  // prompt back mid-turn would append the same text onto that message a second
+  // time — and for a structured turn the echo carries the appended JSON Schema
+  // instructions too. Only a `session/load` replay, where the bridge has no
+  // record of its own, may introduce user messages.
+  if ((kind === "user_message" || kind === "user_message_chunk")
+    && state.historyReplay !== "hydrate") return;
   const text = contentText(update.content);
   if (!text) return;
-  let message = state.messages.at(-1);
-  if (!message || message.role !== "assistant" || state.status !== "running") {
+  const role = kind === "user_message" || kind === "user_message_chunk" ? "user" : "assistant";
+  const partType = kind === "agent_thought_chunk" ? "thinking" : "text";
+  // A non-chunk update carries a complete message, so it always begins one.
+  // Only chunks continue the message before them.
+  const isChunk = kind === "user_message_chunk"
+    || kind === "agent_message_chunk"
+    || kind === "agent_thought_chunk";
+  const providerMessageId = boundedString(update.messageId, MAX_TOOL_ID_BYTES)?.trim();
+  let message = providerMessageId
+    ? findHistoryMessage(state, providerMessageId)
+    : undefined;
+  const last = state.messages.at(-1);
+  // With no provider message id there is no explicit boundary, so a chunk
+  // continues the message before it regardless of part type: a thought chunk
+  // followed by a text chunk is one assistant turn, not two.
+  if (!message && !providerMessageId && isChunk && last?.role === role && (
+    state.status === "running" || state.historyReplay === "hydrate"
+  )) {
+    message = last;
+  }
+  if (!message) {
+    const modelId = role === "assistant"
+      ? boundedModelId(state.sessionConfig.composer.selectedModelId)
+      : undefined;
     message = {
       id: randomBytes(12).toString("hex"),
-      role: "assistant",
+      role,
       content: "",
       parts: [],
       createdAt: new Date().toISOString(),
+      ...(modelId ? { modelId } : {}),
     };
     state.messages.push(message);
   }
-  const partType = kind === "agent_thought_chunk" ? "thinking" : "text";
-  const previous = message.parts.at(-1);
+  if (providerMessageId) rememberHistoryMessage(state, providerMessageId, message.id);
+  const lastPart = message.parts.at(-1);
+  // The trim notice is a marker, not a stream. Appending a chunk to it would
+  // rewrite the notice into agent output and lose the announcement.
+  const previous = isTrimNotice(message, lastPart) ? undefined : lastPart;
   if (previous?.type !== partType && message.parts.length >= MAX_PARTS_PER_MESSAGE) {
-    state.outputTruncated = true;
-    state.status = "error";
-    state.error = `${provider} output exceeded the transcript limit`;
-    state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
-    state.revision += 1;
-    schedulePersist();
-    return;
+    if (turnRequiresCompleteOutput(state)) {
+      failTranscriptLimit(state);
+      return;
+    }
+    trimPartsTo(message, MAX_PARTS_PER_MESSAGE - 1);
   }
-  const currentPartText = previous?.type === partType ? previous.content : "";
-  const nextPartText = appendBounded(currentPartText, text, MAX_MESSAGE_TEXT_BYTES);
-  if (previous?.type === partType) previous.content = nextPartText.value;
-  else message.parts.push({
-    type: partType,
-    content: nextPartText.value,
-    sourcePartId: `${message.id}:${message.parts.length}`,
-    sourceMessageId: message.id,
-  });
+  const streaming = previous?.type === partType ? previous : undefined;
+  const currentPartText = streaming?.content ?? "";
+  const nextPartText = appendSaturating(streaming, currentPartText, text, MAX_MESSAGE_TEXT_BYTES);
+  if (streaming) streaming.content = nextPartText.value;
+  else {
+    const created: BridgeTextPart = {
+      type: partType,
+      content: nextPartText.value,
+      sourcePartId: `${message.id}:${message.parts.length}`,
+      sourceMessageId: message.id,
+    };
+    message.parts.push(created);
+    // A single chunk can exceed the cap on its own, so the freshly pushed part
+    // can already be saturated.
+    if (nextPartText.truncated) saturatedText.add(created);
+  }
   const nextContent = partType === "text"
-    ? appendBounded(message.content, text, MAX_MESSAGE_TEXT_BYTES)
+    ? appendSaturating(message, message.content, text, MAX_MESSAGE_TEXT_BYTES)
     : { value: message.content, truncated: false };
   message.content = nextContent.value;
-  if (partType === "text" && state.currentTurnOutput !== null) {
+  if (role === "assistant" && partType === "text" && state.currentTurnOutput !== null) {
     const captured = appendBounded(state.currentTurnOutput, text, MAX_MESSAGE_TEXT_BYTES);
     state.currentTurnOutput = captured.value;
     if (captured.truncated) state.outputTruncated = true;
@@ -858,13 +1295,45 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     || state.uncheckedTranscriptBytes >= TRANSCRIPT_CHECK_INTERVAL_BYTES
     ? boundTranscript(state)
     : false;
-  if (nextPartText.truncated || nextContent.truncated || transcriptTruncated) {
-    state.outputTruncated = true;
-    state.status = "error";
-    state.error = `${provider} output exceeded the transcript limit`;
-    state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
+  if (
+    (nextPartText.truncated || nextContent.truncated || transcriptTruncated)
+    && turnRequiresCompleteOutput(state)
+  ) {
+    failTranscriptLimit(state);
+    return;
   }
   schedulePersist();
+}
+
+/** Every `session/update` kind that appends to or mutates the transcript. */
+const TRANSCRIPT_UPDATE_KINDS = new Set([
+  "user_message",
+  "user_message_chunk",
+  "agent_message",
+  "agent_message_chunk",
+  "agent_thought_chunk",
+  "tool_call",
+  "tool_call_update",
+  "subagent_spawned",
+  "subagent_finished",
+]);
+
+function isTranscriptUpdateKind(kind: string): boolean {
+  return TRANSCRIPT_UPDATE_KINDS.has(kind);
+}
+
+function findHistoryMessage(state: SessionState, providerMessageId: string): BridgeMessage | undefined {
+  const messageId = state.historyMessageIds.get(providerMessageId);
+  return messageId ? state.messages.find((message) => message.id === messageId) : undefined;
+}
+
+function rememberHistoryMessage(state: SessionState, providerMessageId: string, messageId: string): void {
+  if (!state.historyMessageIds.has(providerMessageId)
+    && state.historyMessageIds.size >= MAX_HISTORY_MESSAGE_IDS) {
+    const oldest = state.historyMessageIds.keys().next().value;
+    if (typeof oldest === "string") state.historyMessageIds.delete(oldest);
+  }
+  state.historyMessageIds.set(providerMessageId, messageId);
 }
 
 function applyToolCallUpdate(
@@ -887,11 +1356,48 @@ function applyToolCallUpdate(
     )
     : undefined;
 
+  // A background child can outlive the turn and message that launched it.
+  // Terminal Cursor updates must target that launch part wherever it remains,
+  // while an evicted launch is settled through the authoritative registry
+  // below instead of being rebuilt as a context-free ghost part.
+  if (!part && state.activeSubagentToolIds.has(toolCallId)) {
+    for (let index = state.messages.length - 1; index >= 0 && !part; index -= 1) {
+      const candidateOwner = state.messages[index]!;
+      const candidate = candidateOwner.parts.find(
+        (messagePart): messagePart is BridgeToolPart =>
+          messagePart.type === "tool-invocation" && messagePart.toolUseId === toolCallId,
+      );
+      if (candidate) {
+        owner = candidateOwner;
+        part = candidate;
+      }
+    }
+    if (!part && !isInitial) {
+      if (settleEvictedSubagentFromToolUpdate(state, toolCallId, update)) {
+        state.revision += 1;
+        schedulePersist();
+      }
+      return;
+    }
+  }
+
   if (!part) {
     owner = currentAssistantMessage(state);
+    const trimmed = trimmedToolCalls.get(owner);
+    if (trimmed?.has(toolCallId)) {
+      // This call's part was dropped on purpose. Rebuilding it from one late
+      // update would append an empty `Tool call` *after* the notice saying
+      // those steps went, with none of the title, arguments or output the
+      // original carried. A genuinely new call reusing the id still starts.
+      if (!isInitial) return;
+      trimmed.delete(toolCallId);
+    }
     if (owner.parts.length >= MAX_PARTS_PER_MESSAGE) {
-      failTranscriptLimit(state);
-      return;
+      if (turnRequiresCompleteOutput(state)) {
+        failTranscriptLimit(state);
+        return;
+      }
+      trimPartsTo(owner, MAX_PARTS_PER_MESSAGE - 1);
     }
     part = {
       type: "tool-invocation",
@@ -911,6 +1417,7 @@ function applyToolCallUpdate(
       explicitName: part.toolName,
       toolArgs: part.toolArgs,
       toolState: part.toolState ?? (isInitial ? "pending" : undefined),
+      agentState: part.agentState,
       rawOutput: part.toolOutput,
       contentDiffs: part.toolDiff ? [part.toolDiff] : [],
     };
@@ -918,6 +1425,7 @@ function applyToolCallUpdate(
   }
   applyAcpToolSourcePatch(source, update);
   renderAcpToolSource(part, source);
+  syncActiveSubagentTool(state, part);
 
   state.revision += 1;
   const serializedBytes = Buffer.byteLength(JSON.stringify(part));
@@ -927,11 +1435,323 @@ function applyToolCallUpdate(
     || state.uncheckedTranscriptBytes >= TRANSCRIPT_CHECK_INTERVAL_BYTES
     ? boundTranscript(state)
     : false;
-  if (transcriptTruncated) {
+  if (transcriptTruncated && turnRequiresCompleteOutput(state)) {
     failTranscriptLimit(state);
     return;
   }
   schedulePersist();
+}
+
+function collectReplayToolMetadata(
+  collector: AcpToolReplayCollector,
+  update: JsonObject,
+  isInitial: boolean,
+): void {
+  const id = boundedString(update.toolCallId, MAX_TOOL_ID_BYTES)?.trim();
+  if (!id) return;
+
+  let call = collector.byId.get(id);
+  if (!call && isInitial) {
+    call = { id, retainedBytes: 0 };
+    call.retainedBytes = replayToolMetadataBytes(call);
+    while (collector.byId.size >= collector.capacity) {
+      if (!evictOldestReplayTool(collector, id)) break;
+    }
+    if (!makeReplayToolRoom(collector, call.retainedBytes, id)) return;
+    collector.retainedBytes += call.retainedBytes;
+    collector.byId.set(id, call);
+  }
+  if (!call) return;
+
+  const candidate: AcpReplayToolMetadata = { ...call };
+  if ("title" in update) {
+    candidate.title = boundedNullableString(update.title, MAX_TOOL_TITLE_BYTES);
+  }
+  if ("name" in update) {
+    candidate.toolName = boundedNullableString(update.name, MAX_TOOL_NAME_BYTES);
+  }
+  if ("kind" in update && !candidate.toolName) {
+    candidate.toolName = boundedNullableString(update.kind, MAX_TOOL_NAME_BYTES);
+  }
+  if ("rawInput" in update && isObject(update.rawInput)) {
+    candidate.toolName ??= boundedString(update.rawInput._toolName, MAX_TOOL_NAME_BYTES);
+    candidate.toolArgs = boundedToolArguments(update.rawInput);
+  }
+  if ("content" in update) {
+    candidate.contentOutputHash = replayOutputHash(toolCallContentText(update.content));
+  }
+  if ("rawOutput" in update) {
+    const rawOutput = update.rawOutput === null
+      ? undefined
+      : stringifyToolPayload(update.rawOutput);
+    candidate.rawOutputHash = replayOutputHash(rawOutput);
+  }
+  candidate.retainedBytes = replayToolMetadataBytes(candidate);
+  const growth = candidate.retainedBytes - call.retainedBytes;
+  // Both bounds have to prefer the *newest* calls. Returning here without
+  // evicting would keep stale older metadata and silently strip the title and
+  // arguments off the call the live turn is most likely to still need.
+  if (growth > 0 && !makeReplayToolRoom(collector, growth, id)) return;
+  collector.retainedBytes += growth;
+  Object.assign(call, candidate);
+}
+
+/**
+ * Drops the oldest retained call other than `keepId`. Returns false once the
+ * collector holds nothing else, so every caller's loop terminates.
+ */
+function evictOldestReplayTool(collector: AcpToolReplayCollector, keepId: string): boolean {
+  for (const [id, call] of collector.byId) {
+    if (id === keepId) continue;
+    collector.byId.delete(id);
+    collector.retainedBytes -= call.retainedBytes;
+    return true;
+  }
+  return false;
+}
+
+/** Frees room for `bytes` more, never at the expense of `keepId` itself. */
+function makeReplayToolRoom(
+  collector: AcpToolReplayCollector,
+  bytes: number,
+  keepId: string,
+): boolean {
+  while (collector.retainedBytes + bytes > collector.maximumBytes) {
+    if (!evictOldestReplayTool(collector, keepId)) break;
+  }
+  return collector.retainedBytes + bytes <= collector.maximumBytes;
+}
+
+function replayOutputHash(value: string | undefined): string | undefined {
+  return value === undefined ? undefined : createHash("sha256").update(value).digest("hex");
+}
+
+function replayToolMetadataBytes(call: AcpReplayToolMetadata): number {
+  return Buffer.byteLength(JSON.stringify({
+    id: call.id,
+    title: call.title,
+    toolName: call.toolName,
+    toolArgs: call.toolArgs,
+    contentOutputHash: call.contentOutputHash,
+    rawOutputHash: call.rawOutputHash,
+  }));
+}
+
+function orderedReplayTools(collector: AcpToolReplayCollector): AcpReplayToolMetadata[] {
+  return [...collector.byId.values()];
+}
+
+function transcriptToolParts(state: SessionState): BridgeToolPart[] {
+  return state.messages.flatMap((message) => message.parts.flatMap(
+    (part) => part.type === "tool-invocation" ? [part] : [],
+  ));
+}
+
+function normalizedToolKind(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized || undefined;
+}
+
+function hasToolArguments(value: JsonObject | undefined): boolean {
+  return value !== undefined && Object.keys(value).length > 0;
+}
+
+function isGenericCursorToolTitle(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "read file"
+    || normalized === "read lints"
+    || normalized === "edit file"
+    || normalized === "grep"
+    || normalized === "find";
+}
+
+/**
+ * The tool parts a replay may still improve, as a *contiguous suffix* of the
+ * transcript's tool calls starting at the oldest one that is still generic.
+ *
+ * A replay carries the whole session, and the join back onto live parts is
+ * positional at heart: the collector keeps the last `capacity` replayed calls
+ * and lines them up against the last `capacity` live parts. Scoping targets to
+ * the current turn alone would break that alignment as soon as an earlier turn
+ * went unenriched — its replayed calls would still occupy the tail while its
+ * live parts were excluded. Taking the suffix keeps both sides drawn from the
+ * same window, and including the already-enriched parts inside it lets them
+ * consume their own replay entries instead of leaving them as false candidates.
+ */
+function cursorToolReplayTargets(state: SessionState): BridgeToolPart[] {
+  if (provider !== "cursor") return [];
+  const parts = transcriptToolParts(state).slice(-MAX_REPLAY_RECONCILE_TOOLS);
+  const firstGeneric = parts.findIndex((part) =>
+    isGenericCursorToolTitle(part.toolTitle)
+    && !hasToolArguments(part.toolArgs)
+  );
+  return firstGeneric === -1 ? [] : parts.slice(firstGeneric);
+}
+
+function applyReplayToolMetadata(
+  state: SessionState,
+  capturedTargets: readonly BridgeToolPart[],
+  collector: AcpToolReplayCollector,
+): boolean {
+  const liveToolParts = new Set(transcriptToolParts(state));
+  const targets = capturedTargets.filter((part) => liveToolParts.has(part));
+  const replayed = orderedReplayTools(collector);
+  if (targets.length === 0 || replayed.length === 0) return false;
+  const unused = new Set(replayed.keys());
+
+  let changed = false;
+  // Cursor replays concurrent calls in completion order, while the live stream
+  // starts them in launch order. Join on a unique path or normalized output,
+  // with a unique tool kind as the final safe fallback; ambiguous calls stay
+  // generic rather than borrowing a neighbour's filename or search pattern.
+  for (const part of targets) {
+    const targetKind = normalizedToolKind(part.toolName);
+    const targetOutputHash = replayOutputHash(part.toolOutput);
+    const sameKind = [...unused].filter((index) => {
+      const replay = replayed[index];
+      if (normalizedToolKind(replay?.toolName) !== targetKind) return false;
+      // Outputs known on both sides that disagree are positive evidence of two
+      // different calls, so they have to veto the last-resort single-candidate
+      // fallback below too — not merely fail to support a match. Otherwise a
+      // replay entry the collector dropped for space leaves its neighbour as
+      // the only candidate, and the part inherits the wrong file outright.
+      const replayHash = replay?.contentOutputHash ?? replay?.rawOutputHash;
+      return !(targetOutputHash !== undefined
+        && replayHash !== undefined
+        && replayHash !== targetOutputHash);
+    });
+    const targetPath = part.toolDiff?.filePath ?? toolArgumentPath(part.toolArgs);
+    const pathMatches = targetPath
+      ? sameKind.filter((index) => toolArgumentPath(replayed[index]?.toolArgs) === targetPath)
+      : [];
+    const outputMatches = targetOutputHash
+      ? sameKind.filter((index) => {
+          const replay = replayed[index];
+          const replayHash = replay?.contentOutputHash ?? replay?.rawOutputHash;
+          return replayHash !== undefined && replayHash === targetOutputHash;
+        })
+      : [];
+    const candidateIndexes = pathMatches.length > 0 ? pathMatches : outputMatches;
+    const replayIndex = candidateIndexes.length === 1
+      ? candidateIndexes[0]
+      : sameKind.length === 1
+        ? sameKind[0]
+        : undefined;
+    if (replayIndex === undefined) continue;
+    const replay = replayed[replayIndex];
+    if (!replay) continue;
+    unused.delete(replayIndex);
+    let partChanged = false;
+    if (!part.toolName && replay.toolName) {
+      part.toolName = replay.toolName;
+      partChanged = true;
+    }
+    if (!hasToolArguments(part.toolArgs) && hasToolArguments(replay.toolArgs)) {
+      part.toolArgs = replay.toolArgs;
+      partChanged = true;
+    }
+    if (replay.title && isGenericCursorToolTitle(part.toolTitle) && replay.title !== part.toolTitle) {
+      const previousTitle = part.toolTitle;
+      part.toolTitle = replay.title;
+      if (!part.content || part.content === previousTitle) part.content = replay.title;
+      partChanged = true;
+    }
+    if (partChanged) {
+      changed = true;
+      acpToolSourceStates.delete(part);
+    }
+  }
+  // Re-bound, but never fail. `turnRequiresCompleteOutput` describes whichever
+  // turn is running *now*, and by construction that is never the turn this
+  // enrichment belongs to — the settle handler clears `currentTurnOutput`
+  // before scheduling the replay. Failing here would cancel and error out an
+  // unrelated structured turn because an older turn's display metadata grew.
+  if (changed) boundTranscript(state);
+  return changed;
+}
+
+async function reconcileCursorToolMetadata(
+  state: SessionState,
+  child: AcpProcess,
+  targets: readonly BridgeToolPart[],
+  promptSequence: number,
+): Promise<void> {
+  if (provider !== "cursor"
+    || shuttingDown
+    || sessions.get(state.id) !== state
+    || state.child !== child
+    || state.promptSequence !== promptSequence
+    || targets.length === 0) return;
+  if (activeCursorToolReplays >= MAX_CURSOR_TOOL_REPLAY_PROCESSES) return;
+  const capacity = Math.min(targets.length, MAX_REPLAY_RECONCILE_TOOLS);
+  if (capacity === 0) return;
+  const collector: AcpToolReplayCollector = {
+    capacity,
+    maximumBytes: MAX_TRANSCRIPT_BYTES,
+    retainedBytes: 0,
+    byId: new Map(),
+  };
+  activeCursorToolReplays += 1;
+  let replayChild: AcpProcess | undefined;
+  try {
+    // Cursor's live ACP process reports generic Read/Grep calls with empty
+    // input. A newly attached process replays the same session with its indexed
+    // path, pattern and descriptive title; the process that ran the turn does
+    // not. Concurrency is capped above so simultaneous turns cannot double the
+    // bridge's process count without bound.
+    replayChild = new AcpProcess();
+    cursorToolReplayProcesses.add(replayChild);
+    replayChild.onUpdate = (params) => {
+      if (params.sessionId !== state.acpSessionId || !isObject(params.update)) return;
+      const update = params.update;
+      const kind = typeof update.sessionUpdate === "string"
+        ? update.sessionUpdate
+        : typeof update.type === "string"
+          ? update.type
+          : "";
+      if (kind === "tool_call" || kind === "tool_call_update") {
+        collectReplayToolMetadata(collector, update, kind === "tool_call");
+      }
+    };
+    const initialized = await replayChild.initialize();
+    const capabilities = isObject(initialized.agentCapabilities)
+      ? initialized.agentCapabilities
+      : undefined;
+    if (capabilities?.loadSession !== true) return;
+    await replayChild.request("session/load", {
+      cwd: workingDirectory,
+      additionalDirectories: [],
+      mcpServers: [],
+      sessionId: state.acpSessionId,
+    });
+    // A turn dispatched while this replay was loading may already have been
+    // persisted by the agent, in which case its tool calls are in the stream
+    // above and the collector's trailing window no longer describes *this*
+    // turn. Applying it would hand a later turn's path and title to an earlier
+    // turn's part, which nothing afterwards can correct — the part stops
+    // looking generic, so the next replay skips it. Drop this pass instead:
+    // the newer turn settles into its own replay, and `cursorToolReplayTargets`
+    // walks back to the oldest still-generic call, so these parts are picked up
+    // there with a window that matches them again.
+    if (!shuttingDown
+      && sessions.get(state.id) === state
+      && state.child === child
+      && state.promptSequence === promptSequence
+      && applyReplayToolMetadata(state, targets, collector)) {
+      state.revision += 1;
+      schedulePersist();
+    }
+  } catch {
+    // Display enrichment is best-effort. The completed turn remains valid even
+    // when an older Cursor build cannot replay its session from a fresh child.
+  } finally {
+    try {
+      await replayChild?.close();
+    } finally {
+      if (replayChild) cursorToolReplayProcesses.delete(replayChild);
+      activeCursorToolReplays -= 1;
+    }
+  }
 }
 
 function applyAcpToolSourcePatch(source: AcpToolSourceState, update: JsonObject): void {
@@ -943,6 +1763,15 @@ function applyAcpToolSourcePatch(source: AcpToolSourceState, update: JsonObject)
   }
   if ("kind" in update) {
     source.kind = boundedNullableString(update.kind, MAX_TOOL_NAME_BYTES);
+  }
+  if ("_meta" in update && isObject(update._meta)) {
+    const toolMeta = isObject(update._meta["x.ai/tool"])
+      ? update._meta["x.ai/tool"]
+      : undefined;
+    if (toolMeta) {
+      source.metadataName = boundedString(toolMeta.name, MAX_TOOL_NAME_BYTES)?.trim();
+      source.metadataKind = boundedString(toolMeta.kind, MAX_TOOL_NAME_BYTES)?.trim();
+    }
   }
   if ("rawInput" in update) {
     if (isObject(update.rawInput)) {
@@ -977,7 +1806,10 @@ function applyAcpToolSourcePatch(source: AcpToolSourceState, update: JsonObject)
 }
 
 function renderAcpToolSource(part: BridgeToolPart, source: AcpToolSourceState): void {
-  const toolName = source.explicitName ?? source.inputName ?? source.kind;
+  const toolName = source.explicitName
+    ?? source.inputName
+    ?? source.metadataName
+    ?? source.kind;
   setOptionalPartField(part, "toolTitle", source.title);
   setOptionalPartField(part, "toolName", toolName);
   setOptionalPartField(part, "toolArgs", source.toolArgs);
@@ -986,6 +1818,11 @@ function renderAcpToolSource(part: BridgeToolPart, source: AcpToolSourceState): 
 
   const output = source.contentOutput ?? source.rawOutput;
   setOptionalPartField(part, "toolOutput", output);
+  // Cursor puts `isBackground` in rawOutput even when it also supplies a
+  // human-readable content block. Grok carries the equivalent signal in the
+  // Task input and later sends separate subagent lifecycle notifications.
+  source.agentState = acpSubagentState(source, source.rawOutput ?? output);
+  setOptionalPartField(part, "agentState", source.agentState);
   setOptionalPartField(
     part,
     "toolError",
@@ -999,6 +1836,225 @@ function renderAcpToolSource(part: BridgeToolPart, source: AcpToolSourceState): 
   setOptionalPartField(part, "toolDiff", diff);
 }
 
+function acpSubagentState(
+  source: AcpToolSourceState,
+  output: string | undefined,
+): BridgeToolPart["agentState"] | undefined {
+  const toolName = (source.explicitName ?? source.inputName ?? source.kind)?.trim();
+  const title = source.title?.trim();
+  const normalizedToolName = toolName?.toLowerCase();
+  const normalizedMetadataName = source.metadataName?.toLowerCase();
+  const normalizedMetadataKind = source.metadataKind?.toLowerCase();
+  const variant = typeof source.toolArgs?.variant === "string"
+    ? source.toolArgs.variant.toLowerCase()
+    : undefined;
+  const isSubagentTool = normalizedToolName === "task"
+    || normalizedToolName === "agent"
+    || normalizedMetadataName === "spawn_subagent"
+    || normalizedMetadataKind === "task"
+    || variant === "task"
+    || /\bsub[- ]?agent\b/i.test(title ?? "");
+  if (!isSubagentTool && source.agentState === undefined) return undefined;
+  if (source.toolState === "failure") return "failed";
+  // A vendor may send a late tool projection after its dedicated lifecycle
+  // notification. Terminal child state is authoritative and cannot reopen.
+  if (source.agentState === "finished" || source.agentState === "failed") {
+    return source.agentState;
+  }
+
+  let lifecycle: Record<string, unknown> | undefined;
+  if (output) {
+    try {
+      const parsed = JSON.parse(output);
+      if (isObject(parsed)) lifecycle = parsed;
+    } catch {
+      // ACP permits plain-text tool output. The tool status still supplies the
+      // foreground lifecycle when no structured background hint is present.
+    }
+  }
+
+  if (lifecycle?.isBackground === true) return "active";
+  if (lifecycle?.isBackground === false) return "finished";
+  const backgroundLaunch = source.toolArgs?.background === true
+    || source.toolArgs?.run_in_background === true;
+  if (backgroundLaunch) return "active";
+  const reportedState = typeof lifecycle?.status === "string"
+    ? lifecycle.status
+    : typeof lifecycle?.state === "string"
+      ? lifecycle.state
+      : undefined;
+  if (reportedState && /^(failed|killed|cancelled|canceled|error)$/i.test(reportedState)) {
+    return "failed";
+  }
+  if (reportedState && /^(completed|finished|done|success)$/i.test(reportedState)) {
+    return "finished";
+  }
+  if (source.toolState === "pending") return "active";
+  if (source.toolState === "success") return "finished";
+  return source.agentState;
+}
+
+function syncActiveSubagentTool(state: SessionState, part: BridgeToolPart): void {
+  if (part.agentState === "active") {
+    const activated = activateSubagent(state, part.toolUseId, {
+      ...(typeof part.toolArgs?.description === "string"
+        ? { description: truncateUtf8(part.toolArgs.description.trim(), MAX_TOOL_TITLE_BYTES) }
+        : {}),
+      ...(typeof part.toolArgs?.subagent_type === "string"
+        ? { subagentType: truncateUtf8(part.toolArgs.subagent_type.trim(), MAX_TOOL_NAME_BYTES) }
+        : {}),
+      ...(part.toolState ? { toolState: part.toolState } : {}),
+    });
+    if (!activated) {
+      part.agentState = "failed";
+      const source = acpToolSourceStates.get(part);
+      if (source) source.agentState = "failed";
+    }
+  } else {
+    settleActiveSubagent(state, part.toolUseId);
+  }
+}
+
+function indexActiveSubagentsFromTranscript(state: SessionState): void {
+  for (const message of state.messages) {
+    for (const part of message.parts) {
+      if (part.type === "tool-invocation" && part.agentState === "active") {
+        syncActiveSubagentTool(state, part);
+      }
+    }
+  }
+}
+
+function activateSubagent(
+  state: SessionState,
+  toolUseId: string,
+  descriptor: ActiveSubagentDescriptor,
+): boolean {
+  if (state.subagentLimitExceeded) return false;
+  if (!state.activeSubagentToolIds.has(toolUseId)
+    && state.activeSubagentToolIds.size >= MAX_ACTIVE_SUBAGENTS_PER_SESSION) {
+    state.subagentLimitExceeded = true;
+    failAllActiveSubagents(state);
+    state.status = "error";
+    state.error = `${provider} exceeded the active sub-agent limit`;
+    state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
+    return false;
+  }
+  state.activeSubagentToolIds.add(toolUseId);
+  state.activeSubagentDescriptors.set(toolUseId, descriptor);
+  return true;
+}
+
+function settleActiveSubagent(state: SessionState, toolUseId: string): void {
+  state.activeSubagentToolIds.delete(toolUseId);
+  state.activeSubagentDescriptors.delete(toolUseId);
+  for (const [subagentId, mappedToolUseId] of state.subagentToolIds) {
+    if (mappedToolUseId === toolUseId) state.subagentToolIds.delete(subagentId);
+  }
+}
+
+function failAllActiveSubagents(state: SessionState): void {
+  for (const message of state.messages) {
+    for (const part of message.parts) {
+      if (part.type !== "tool-invocation"
+        || !state.activeSubagentToolIds.has(part.toolUseId)) continue;
+      part.agentState = "failed";
+      const source = acpToolSourceStates.get(part);
+      if (source) source.agentState = "failed";
+    }
+  }
+  state.activeSubagentToolIds.clear();
+  state.activeSubagentDescriptors.clear();
+  state.subagentToolIds.clear();
+}
+
+function settleEvictedSubagentFromToolUpdate(
+  state: SessionState,
+  toolUseId: string,
+  update: JsonObject,
+): boolean {
+  const toolState = mapAcpToolState(update.status);
+  if (toolState === "failure") {
+    settleActiveSubagent(state, toolUseId);
+    return true;
+  }
+  const lifecycle = isObject(update.rawOutput)
+    ? update.rawOutput
+    : toolCallLifecycle(update.rawOutput ?? update.content);
+  if (lifecycle?.isBackground === true) return false;
+  const reportedState = typeof lifecycle?.status === "string"
+    ? lifecycle.status
+    : typeof lifecycle?.state === "string"
+      ? lifecycle.state
+      : undefined;
+  if (lifecycle?.isBackground === false
+    || (reportedState && /^(completed|finished|done|success|failed|killed|cancelled|canceled|error)$/i.test(reportedState))) {
+    settleActiveSubagent(state, toolUseId);
+    return true;
+  }
+  return false;
+}
+
+function toolCallLifecycle(value: unknown): JsonObject | undefined {
+  const text = stringifyToolPayload(value);
+  if (!text) return undefined;
+  try {
+    const parsed = JSON.parse(text);
+    return isObject(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function applySubagentSpawned(state: SessionState, update: JsonObject): void {
+  const subagentId = boundedString(update.subagent_id, MAX_TOOL_ID_BYTES)?.trim();
+  if (!subagentId || state.subagentToolIds.has(subagentId)) return;
+
+  const claimedToolIds = new Set(state.subagentToolIds.values());
+  const description = boundedString(update.description, MAX_TOOL_TITLE_BYTES)?.trim();
+  const subagentType = boundedString(update.subagent_type, MAX_TOOL_NAME_BYTES)?.trim();
+  const candidates = [...state.activeSubagentDescriptors.entries()].filter(
+    ([toolUseId]) => !claimedToolIds.has(toolUseId),
+  );
+  const matched = candidates.find(([, descriptor]) =>
+    (!description || descriptor.description === description)
+    && (!subagentType || descriptor.subagentType === subagentType)
+  );
+  // With metadata present, a mismatch is not permission to claim an unrelated
+  // child. Metadata-free events are safe only when exactly one candidate exists.
+  const selected = matched ?? (!description && !subagentType && candidates.length === 1
+    ? candidates[0]
+    : undefined);
+
+  if (selected) state.subagentToolIds.set(subagentId, selected[0]);
+}
+
+function applySubagentFinished(state: SessionState, update: JsonObject): void {
+  const subagentId = boundedString(update.subagent_id, MAX_TOOL_ID_BYTES)?.trim();
+  if (!subagentId) return;
+  const toolUseId = state.subagentToolIds.get(subagentId);
+  if (!toolUseId) return;
+
+  const part = state.messages
+    .flatMap((message) => message.parts)
+    .find((candidate): candidate is BridgeToolPart =>
+      candidate.type === "tool-invocation" && candidate.toolUseId === toolUseId
+    );
+  state.subagentToolIds.delete(subagentId);
+  const status = typeof update.status === "string" ? update.status : "completed";
+  const agentState = /^(failed|killed|cancelled|canceled|error)$/i.test(status)
+    ? "failed"
+    : "finished";
+  if (part) {
+    part.agentState = agentState;
+    const source = acpToolSourceStates.get(part);
+    if (source) source.agentState = agentState;
+  }
+  settleActiveSubagent(state, toolUseId);
+  state.revision += 1;
+  schedulePersist();
+}
+
 function setOptionalPartField<TKey extends keyof BridgeToolPart>(
   part: BridgeToolPart,
   key: TKey,
@@ -1010,17 +2066,51 @@ function setOptionalPartField<TKey extends keyof BridgeToolPart>(
 
 function currentAssistantMessage(state: SessionState): BridgeMessage {
   let message = state.messages.at(-1);
-  if (!message || message.role !== "assistant" || state.status !== "running") {
+  // A hydrating replay is idle by definition, so requiring "running" here would
+  // open a fresh, empty assistant message for every tool call in the history.
+  if (!message || message.role !== "assistant"
+    || (state.status !== "running" && state.historyReplay !== "hydrate")) {
+    const modelId = boundedModelId(state.sessionConfig.composer.selectedModelId);
     message = {
       id: randomBytes(12).toString("hex"),
       role: "assistant",
       content: "",
       parts: [],
       createdAt: new Date().toISOString(),
+      ...(modelId ? { modelId } : {}),
     };
     state.messages.push(message);
   }
   return message;
+}
+
+/**
+ * A model id is an identifier, not display text, so an oversized or non-string
+ * value is dropped rather than truncated — exactly as `session-config.ts`
+ * rejects an over-long `selectedModelId` instead of shortening it. A truncated
+ * id would match no catalogue entry and would render as a plausible-looking
+ * model the agent never actually ran; absent renders as "no model recorded".
+ */
+function boundedModelId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || Buffer.byteLength(trimmed) > MAX_MODEL_ID_BYTES) return undefined;
+  return trimmed;
+}
+
+/**
+ * Whether losing transcript content has to fail the turn.
+ *
+ * A structured turn is worth exactly its complete output, so any loss must
+ * fail: the caller would otherwise parse a truncated answer as a whole one. An
+ * interactive turn is a conversation, and trimming its oldest steps to stay
+ * inside the display budget is routine housekeeping. Failing the session there
+ * strands the *entire* conversation behind a "Connection Failed" screen —
+ * `HttpBridgeProvider.status()` turns any bridge error status into a thrown
+ * command — and the failure is persisted, so Retry only reads it back.
+ */
+function turnRequiresCompleteOutput(state: SessionState): boolean {
+  return state.currentTurnOutput !== null;
 }
 
 function failTranscriptLimit(state: SessionState): void {
@@ -1030,6 +2120,61 @@ function failTranscriptLimit(state: SessionState): void {
   state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
   state.revision += 1;
   schedulePersist();
+}
+
+const TRANSCRIPT_TRIM_NOTICE =
+  "[Earlier steps in this response were dropped: it reached the transcript display limit.]";
+
+function trimNoticePartId(message: BridgeMessage): string {
+  return `${message.id}:transcript-trimmed`;
+}
+
+function isTrimNotice(
+  message: BridgeMessage,
+  part: BridgeMessagePart | undefined,
+): boolean {
+  return part !== undefined && part.sourcePartId === trimNoticePartId(message);
+}
+
+/**
+ * Drop the oldest parts of `message` until it holds at most `targetLength`,
+ * leaving one notice in their place. Always drops at least one, so callers can
+ * loop on it, and counts the notice against the target so trimming for room
+ * cannot itself push the message back over a cap.
+ *
+ * The announcement matters more here than for the rest of the transcript: the
+ * parts most likely to be dropped are the tool calls that did the work, and a
+ * silent cut reads as a response that simply never took those steps. The notice
+ * is keyed by `sourcePartId`, so repeated trims replace it rather than stack.
+ */
+function trimPartsTo(message: BridgeMessage, targetLength: number): void {
+  if (isTrimNotice(message, message.parts[0])) message.parts.shift();
+  const keep = Math.max(0, targetLength - 1);
+  rememberTrimmedToolCalls(message, message.parts.splice(0, Math.max(1, message.parts.length - keep)));
+  message.parts.unshift({
+    type: "text",
+    content: TRANSCRIPT_TRIM_NOTICE,
+    sourcePartId: trimNoticePartId(message),
+    sourceMessageId: message.id,
+  });
+}
+
+/**
+ * Record the tool calls a trim just removed, so a late update cannot rebuild
+ * one as an empty part. Bounded by the number of parts a message may hold in
+ * the first place, oldest evicted first: a turn can trim an unlimited number of
+ * calls, and this must not become the unbounded thing that replaces them.
+ */
+function rememberTrimmedToolCalls(message: BridgeMessage, dropped: BridgeMessagePart[]): void {
+  const ids = trimmedToolCalls.get(message) ?? new Set<string>();
+  for (const part of dropped) {
+    if (part.type === "tool-invocation") ids.add(part.toolUseId);
+  }
+  for (const id of ids) {
+    if (ids.size <= MAX_PARTS_PER_MESSAGE) break;
+    ids.delete(id);
+  }
+  trimmedToolCalls.set(message, ids);
 }
 
 function boundedString(value: unknown, maximumBytes: number): string | undefined {
@@ -1126,11 +2271,16 @@ function normalizeAcpContentDiff(value: JsonObject): BridgeToolDiff | undefined 
   if (!filePath && rawBefore === undefined && rawAfter === undefined && diff === undefined) {
     return undefined;
   }
+  // The file states are only ever rendered as the fallback for a part that has
+  // no diff at all: the renderer treats `diff` as authoritative the moment it
+  // exists. Keeping them alongside one stored two more whole copies of the file
+  // per edit — 5.3MiB of one 8MiB transcript — that nothing would ever read.
+  const keepFileStates = keepInline && diff === undefined;
   return {
     ...(filePath ? { filePath } : {}),
     ...(stats ? { additions: stats.additions, deletions: stats.deletions } : {}),
-    ...(keepInline && rawBefore !== undefined ? { before: rawBefore } : {}),
-    ...(keepInline && rawAfter !== undefined ? { after: rawAfter } : {}),
+    ...(keepFileStates && rawBefore !== undefined ? { before: rawBefore } : {}),
+    ...(keepFileStates && rawAfter !== undefined ? { after: rawAfter } : {}),
     ...(diff !== undefined ? { diff } : {}),
   };
 }
@@ -1188,21 +2338,88 @@ function createDisplayDiff(
   const lines = diffFileLines(fileLines(before ?? ""), fileLines(after));
   let additions = 0;
   let deletions = 0;
-  const rendered = lines.map((line) => {
+  for (const line of lines) {
     if (line.type === "add") additions += 1;
     if (line.type === "remove") deletions += 1;
-    return `${line.type === "add" ? "+" : line.type === "remove" ? "-" : " "}${line.content}`;
-  });
+  }
   const path = safeDiffPath(filePath ?? "unknown-file");
   return {
     diff: truncateDisplayText(
-      [`--- ${before === undefined ? "/dev/null" : path}`, `+++ ${path}`, "@@", ...rendered].join("\n"),
+      [
+        `--- ${before === undefined ? "/dev/null" : path}`,
+        `+++ ${path}`,
+        ...renderDiffHunks(lines),
+      ].join("\n"),
       MAX_TOOL_DIFF_BYTES,
       "\n… file diff truncated",
     ),
     additions,
     deletions,
   };
+}
+
+/**
+ * Render the changed regions as unified hunks rather than the whole file.
+ *
+ * Runs of unchanged lines longer than twice the context are elided, and each
+ * surviving region gets a `@@` header carrying its line numbers so the reader
+ * can still place it in the file. A file with no changes at all renders as a
+ * single empty `@@` header, which is what it is: nothing to show.
+ */
+function renderDiffHunks(lines: DisplayDiffLine[]): string[] {
+  const changed = lines.reduce<number[]>((indexes, line, index) => {
+    if (line.type !== "context") indexes.push(index);
+    return indexes;
+  }, []);
+  if (changed.length === 0) return ["@@"];
+
+  const rendered: string[] = [];
+  let beforeLine = 1;
+  let afterLine = 1;
+  let cursor = 0;
+  let nextChange = 0;
+
+  while (nextChange < changed.length) {
+    const start = Math.max(cursor, changed[nextChange]! - DIFF_CONTEXT_LINES);
+    // Extend the hunk while the next change is close enough that the gap
+    // between them is cheaper to print than a second header.
+    let end = Math.min(lines.length - 1, changed[nextChange]! + DIFF_CONTEXT_LINES);
+    while (
+      nextChange + 1 < changed.length
+      && changed[nextChange + 1]! - DIFF_CONTEXT_LINES <= end + 1
+    ) {
+      nextChange += 1;
+      end = Math.min(lines.length - 1, changed[nextChange]! + DIFF_CONTEXT_LINES);
+    }
+    nextChange += 1;
+
+    // Advance the line counters across everything elided before this hunk.
+    for (let index = cursor; index < start; index += 1) {
+      const type = lines[index]!.type;
+      if (type !== "add") beforeLine += 1;
+      if (type !== "remove") afterLine += 1;
+    }
+
+    let beforeCount = 0;
+    let afterCount = 0;
+    const body: string[] = [];
+    for (let index = start; index <= end; index += 1) {
+      const line = lines[index]!;
+      if (line.type !== "add") beforeCount += 1;
+      if (line.type !== "remove") afterCount += 1;
+      body.push(
+        `${line.type === "add" ? "+" : line.type === "remove" ? "-" : " "}${line.content}`,
+      );
+    }
+    rendered.push(
+      `@@ -${beforeLine},${beforeCount} +${afterLine},${afterCount} @@`,
+      ...body,
+    );
+    beforeLine += beforeCount;
+    afterLine += afterCount;
+    cursor = end + 1;
+  }
+  return rendered;
 }
 
 function fileLines(value: string): string[] {
@@ -1326,8 +2543,37 @@ function truncateDisplayText(value: string, maximumBytes: number, notice: string
 
 function contentText(value: unknown): string {
   if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(contentText).filter(Boolean).join("");
   if (!isObject(value)) return "";
   return typeof value.text === "string" ? value.text : "";
+}
+
+/**
+ * `appendBounded`, memoised on the object that owns `current`.
+ *
+ * Once a target is saturated the answer can only ever be `current` unchanged,
+ * so returning it directly keeps a stream that overruns its cap O(1) per chunk
+ * instead of re-encoding and re-copying the capped buffer on the read loop for
+ * the rest of the turn.
+ *
+ * Truncation can leave a saturated buffer a few bytes short of the cap, where
+ * the two UTF-8 backoffs landed. Dropping a chunk that would fit in those bytes
+ * is deliberate: it would be appended *after* the marker, and a response that
+ * reads `…[output truncated by Orkestrator]y` looks corrupted rather than cut.
+ *
+ * `target` is absent when the caller is about to create the part that will own
+ * the result; it records the saturation itself in that case.
+ */
+function appendSaturating(
+  target: BridgeMessage | BridgeMessagePart | undefined,
+  current: string,
+  addition: string,
+  maximumBytes: number,
+): { value: string; truncated: boolean } {
+  if (target && saturatedText.has(target)) return { value: current, truncated: true };
+  const next = appendBounded(current, addition, maximumBytes);
+  if (next.truncated && target) saturatedText.add(target);
+  return next;
 }
 
 function appendBounded(current: string, addition: string, maximumBytes: number): {
@@ -1339,9 +2585,16 @@ function appendBounded(current: string, addition: string, maximumBytes: number):
   if (Buffer.byteLength(addition) <= remaining) return { value: current + addition, truncated: false };
   const marker = "\n[output truncated by Orkestrator]";
   const markerBytes = Buffer.byteLength(marker);
-  const usable = Math.max(0, remaining - markerBytes);
+  // Truncation is no longer fatal for an interactive turn, so the marker is
+  // part of the correctness contract rather than optional decoration. A prior
+  // stream chunk can leave fewer free bytes than the marker needs; reserve its
+  // space from the already-buffered prefix in that case instead of silently
+  // dropping this chunk and presenting the shortened response as complete.
+  const contentLimit = Math.max(0, maximumBytes - markerBytes);
+  const prefix = truncateUtf8(current, contentLimit);
+  const usable = Math.max(0, contentLimit - Buffer.byteLength(prefix));
   return {
-    value: current + truncateUtf8(addition, usable) + (remaining >= markerBytes ? marker : ""),
+    value: prefix + truncateUtf8(addition, usable) + truncateUtf8(marker, maximumBytes),
     truncated: true,
   };
 }
@@ -1350,7 +2603,11 @@ function truncateUtf8(value: string, maximumBytes: number): string {
   if (maximumBytes <= 0) return "";
   const encoded = Buffer.from(value);
   if (encoded.length <= maximumBytes) return value;
-  return new TextDecoder("utf-8", { fatal: false }).decode(encoded.subarray(0, maximumBytes));
+  // Back up over continuation bytes so decoding cannot replace a partial code
+  // point with U+FFFD (three bytes) and accidentally exceed the byte cap.
+  let end = maximumBytes;
+  while (end > 0 && (encoded[end]! & 0b1100_0000) === 0b1000_0000) end -= 1;
+  return encoded.subarray(0, end).toString("utf8");
 }
 
 function boundTranscript(state: SessionState): boolean {
@@ -1368,16 +2625,24 @@ function boundTranscript(state: SessionState): boolean {
   }
   const onlyMessage = state.messages[0];
   while (bytes > MAX_TRANSCRIPT_BYTES && onlyMessage && onlyMessage.parts.length > 1) {
-    onlyMessage.parts.shift();
+    // Strictly shorter every pass, so the loop still terminates once only the
+    // notice is left.
+    trimPartsTo(onlyMessage, onlyMessage.parts.length - 1);
     truncatedCurrentMessage = true;
     bytes = Buffer.byteLength(JSON.stringify(state.messages));
   }
   if (bytes > MAX_TRANSCRIPT_BYTES) {
+    // One part alone is over the whole-transcript budget, so nothing left to
+    // drop can bring it back under and the bound is genuinely unenforceable.
+    // Every part is individually capped well below 8MiB, so this is a backstop
+    // against a future cap being raised, not a state the agents can reach.
     state.outputTruncated = true;
     state.status = "error";
     state.error = `${provider} output exceeded the transcript limit`;
     truncatedCurrentMessage = true;
   }
+  // Transcript retention is presentation-only. Active child lifecycle stays
+  // in the separately bounded registry until a terminal event or process death.
   return truncatedCurrentMessage;
 }
 
@@ -1490,6 +2755,23 @@ async function route(
     const models = await listNormalizedModels(clientSignal);
     return json(response, 200, { models });
   }
+  if (url.pathname === "/session/list" && request.method === "GET") {
+    return json(response, 200, { sessions: await listResumableSessions() });
+  }
+  if (url.pathname === "/session/resume" && request.method === "POST") {
+    const body = await readJson(request);
+    const selectedSessionId = typeof body.sessionId === "string" ? body.sessionId.trim() : "";
+    if (!selectedSessionId) return json(response, 400, { error: "sessionId is required" });
+    if (Buffer.byteLength(selectedSessionId) > 1_024) {
+      return json(response, 400, { error: "sessionId is too long" });
+    }
+    const state = await resumeSession(
+      selectedSessionId,
+      clientSignal,
+      parseComposerPatch(body),
+    );
+    return json(response, 201, publicSession(state));
+  }
   if (url.pathname === "/session/create" && request.method === "POST") {
     const body = await readJson(request);
     const rawClientSessionKey = typeof body.clientSessionKey === "string" ? body.clientSessionKey.trim() : "";
@@ -1547,7 +2829,13 @@ async function route(
     }
     return json(response, 200, state.sessionConfig.composer);
   }
-  if (action === "activity" && request.method === "GET") return json(response, 200, { activity: state.status === "running" ? "working" : "idle" });
+  if (action === "activity" && request.method === "GET") {
+    return json(response, 200, {
+      activity: state.status === "running" || state.activeSubagentToolIds.size > 0
+        ? "working"
+        : "idle",
+    });
+  }
   if (action === "approvals" && request.method === "GET") return json(response, 200, { approvals: publicApprovals(state), revision: state.revision });
   if (action === "interactions" && request.method === "GET") return json(response, 200, { interactions: [], revision: state.revision });
   if (action?.startsWith("approvals/") && request.method === "POST") {
@@ -1585,6 +2873,9 @@ async function route(
     }
     if (!prompt && attachments.length === 0) {
       return json(response, 400, { error: "prompt or image attachment is required" });
+    }
+    if (state.subagentLimitExceeded) {
+      return json(response, 409, { error: "Session exceeded the active sub-agent limit" });
     }
     if (Buffer.byteLength(requestId) > 512) return json(response, 400, { error: "requestId is too long" });
     if (requestId && state.promptJournal.has(requestId)) {
@@ -1656,6 +2947,7 @@ async function route(
     state.status = "running";
     state.error = undefined;
     state.outputTruncated = false;
+    state.promptSequence += 1;
     state.turnStartedAt = Date.now();
     state.currentTurnUsage = {};
     state.currentTurnOutput = schema ? "" : null;
@@ -1682,7 +2974,6 @@ async function route(
         })),
       ],
     }, PROMPT_TIMEOUT_MS).then((result) => {
-      if (!state.outputTruncated) state.status = "idle";
       // The result `_meta` is the last and most complete usage carrier, so it is
       // read before `turnStartedAt` is cleared and the elapsed time is lost.
       recordTurnUsage(state, isObject(result) ? result._meta : undefined);
@@ -1717,14 +3008,29 @@ async function route(
       // by the agent — ACP has no status for that, so settle it explicitly.
       reconcileStaleToolParts(state);
       state.currentTurnOutput = null;
+      const replayTargets = cursorToolReplayTargets(state);
+      const replaySequence = state.promptSequence;
+      if (!state.outputTruncated && state.child === child && state.status !== "error") {
+        state.status = "idle";
+      }
       state.revision += 1;
       schedulePersist();
+      // Cursor's display enrichment is deliberately outside the authoritative
+      // turn lifecycle. A slow or incompatible replay cannot keep the session
+      // working, block the next prompt, or persist a completed turn as
+      // ambiguous. Captured part references keep a late replay scoped to the
+      // parts that requested it, and `replaySequence` lets it notice that the
+      // session moved on to another turn while it was loading.
+      if (replayTargets.length > 0) {
+        void reconcileCursorToolMetadata(state, child, replayTargets, replaySequence)
+          .catch(() => undefined);
+      }
     }, (error: unknown) => {
       state.status = "error";
       state.error = error instanceof Error ? error.message : String(error);
       state.turnStartedAt = undefined;
       state.currentTurnUsage = undefined;
-      reconcileStaleToolParts(state);
+      reconcileStaleToolParts(state, true);
       if (requestId) setPromptJournal(state, {
         requestId,
         state: "failed",
@@ -2184,6 +3490,7 @@ function persistedSnapshot(): PersistedState {
       composer: state.sessionConfig.composer,
       ...(state.usage ? { usage: state.usage } : {}),
       ...(state.commandCount === undefined ? {} : { commandCount: state.commandCount }),
+      ...(state.subagentLimitExceeded ? { subagentLimitExceeded: true } : {}),
     })),
   };
 }
@@ -2280,15 +3587,30 @@ async function loadPersistedState(): Promise<void> {
       })
       .slice(-MAX_MESSAGES);
     const usage = restorePersistedUsage(candidate.usage);
+    // A session persisted by an older build's fatal transcript trim is healed
+    // rather than restored. Trimming an interactive turn is no longer a
+    // failure, `boundTranscript` below re-applies the bound to whatever was
+    // persisted, and the status is otherwise unclearable: the tab renders it as
+    // a connection failure whose only control reads the same state back.
+    const healed = candidate.status === "error"
+      && typeof candidate.error === "string"
+      && candidate.error.endsWith("output exceeded the transcript limit");
     const state: SessionState = {
       id: candidate.id.slice(0, 128),
       ...(typeof candidate.clientSessionKey === "string"
         ? { clientSessionKey: candidate.clientSessionKey.slice(0, 512) }
         : {}),
       acpSessionId: candidate.acpSessionId.slice(0, 512),
-      status: candidate.status === "idle" || candidate.status === "error" ? candidate.status : "error",
-      ...(typeof candidate.error === "string" ? { error: candidate.error.slice(0, 4_000) } : {}),
+      status: healed || candidate.status === "idle" ? "idle" : "error",
+      ...(!healed && typeof candidate.error === "string"
+        ? { error: candidate.error.slice(0, 4_000) }
+        : {}),
       messages,
+      activeSubagentToolIds: new Set(),
+      activeSubagentDescriptors: new Map(),
+      subagentLimitExceeded: candidate.subagentLimitExceeded === true,
+      subagentToolIds: new Map(),
+      historyMessageIds: new Map(),
       child: null,
       revision: Number.isSafeInteger(candidate.revision) ? Number(candidate.revision) : 0,
       structured: new Map(Array.isArray(candidate.structured)
@@ -2302,9 +3624,11 @@ async function loadPersistedState(): Promise<void> {
       outputTruncated: false,
       uncheckedTranscriptBytes: 0,
       currentTurnOutput: null,
+      promptSequence: 0,
       droppedMessages: 0,
       sessionConfig: restoreSessionConfig(candidate),
       dispatching: false,
+      historyReplay: false,
       ...(usage ? { usage } : {}),
       ...(Number.isSafeInteger(candidate.commandCount) && Number(candidate.commandCount) >= 0
         ? { commandCount: Number(candidate.commandCount) }
@@ -2323,8 +3647,9 @@ async function loadPersistedState(): Promise<void> {
         state.promptJournal.set(entry.requestId, entry);
       }
     }
+    indexActiveSubagentsFromTranscript(state);
     boundTranscript(state);
-    reconcileStaleToolParts(state);
+    reconcileStaleToolParts(state, true);
     rememberCatalog(state.sessionConfig.composer);
     sessions.set(state.id, state);
     if (state.clientSessionKey) clientSessionKeys.set(state.clientSessionKey, state.id);
@@ -2343,10 +3668,19 @@ async function loadPersistedState(): Promise<void> {
  * Every live caller bumps the revision for its own status change already, so
  * this reports nothing back.
  */
-function reconcileStaleToolParts(state: SessionState): void {
+function reconcileStaleToolParts(
+  state: SessionState,
+  failActiveSubagents = false,
+): void {
   for (const message of state.messages) {
     for (const part of message.parts) {
       if (part.type !== "tool-invocation") continue;
+      const abandoned = part.toolState !== "success" && part.toolState !== "failure";
+      if ((failActiveSubagents || abandoned) && part.agentState === "active") {
+        part.agentState = "failed";
+        const source = acpToolSourceStates.get(part);
+        if (source) source.agentState = "failed";
+      }
       if (part.toolState === "success" || part.toolState === "failure") continue;
       part.toolState = "failure";
       part.toolError = part.toolError ?? "Tool call ended without a result";
@@ -2354,6 +3688,20 @@ function reconcileStaleToolParts(state: SessionState): void {
       // own would otherwise re-render this part straight back to `pending`.
       const source = acpToolSourceStates.get(part);
       if (source) source.toolState = "failure";
+    }
+  }
+  if (failActiveSubagents) failAllActiveSubagents(state);
+  else {
+    for (const message of state.messages) {
+      for (const part of message.parts) {
+        if (part.type === "tool-invocation") syncActiveSubagentTool(state, part);
+      }
+    }
+    // The rendered launch may already have been evicted, but its bounded
+    // descriptor still records whether the foreground launch ever completed.
+    // Only successful launches may continue beyond the parent turn.
+    for (const [toolUseId, descriptor] of state.activeSubagentDescriptors) {
+      if (descriptor.toolState !== "success") settleActiveSubagent(state, toolUseId);
     }
   }
 }
@@ -2366,6 +3714,7 @@ function normalizeBridgeMessage(value: unknown): BridgeMessage | null {
     && Array.isArray(value.parts)
     && typeof value.createdAt === "string")) return null;
   const messageId = value.id.slice(0, 256);
+  const modelId = boundedModelId(value.modelId);
   return {
     id: messageId,
     role: value.role,
@@ -2377,6 +3726,7 @@ function normalizeBridgeMessage(value: unknown): BridgeMessage | null {
         return normalized ? [normalized] : [];
       }),
     createdAt: value.createdAt.slice(0, 64),
+    ...(modelId ? { modelId } : {}),
   };
 }
 
@@ -2429,6 +3779,11 @@ function normalizeBridgePart(
     || value.toolState === "pending"
     ? value.toolState
     : undefined;
+  const agentState = value.agentState === "active"
+    || value.agentState === "finished"
+    || value.agentState === "failed"
+    ? value.agentState
+    : undefined;
   const toolOutput = boundedString(value.toolOutput, MAX_TOOL_OUTPUT_BYTES);
   const toolError = boundedString(value.toolError, MAX_TOOL_OUTPUT_BYTES);
   const toolDiff = normalizeBridgeToolDiff(value.toolDiff);
@@ -2443,6 +3798,7 @@ function normalizeBridgePart(
     ...(toolName ? { toolName } : {}),
     ...(isObject(value.toolArgs) ? { toolArgs: boundedToolArguments(value.toolArgs) } : {}),
     ...(toolState ? { toolState } : {}),
+    ...(agentState ? { agentState } : {}),
     ...(toolTitle ? { toolTitle } : {}),
     ...(toolOutput !== undefined ? { toolOutput } : {}),
     ...(toolError !== undefined ? { toolError } : {}),
@@ -2522,7 +3878,10 @@ function shutdown(): Promise<void> {
     for (const state of sessions.values()) {
       for (const approval of [...state.approvals.values()]) approval.respond();
     }
-    await Promise.allSettled([...sessions.values()].map((state) => state.child?.close()));
+    await Promise.allSettled([
+      ...[...sessions.values()].map((state) => state.child?.close()),
+      ...[...cursorToolReplayProcesses].map((child) => child.close()),
+    ]);
     await persistenceTail.catch(() => undefined);
     await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
   })();

@@ -72,27 +72,6 @@ export interface OpenCodeModelsResponse {
   defaults: OpenCodeModelDefaults;
 }
 
-const SELECTABLE_OPENCODE_PROVIDERS = new Set(["opencode", "opencode-go"]);
-
-/**
- * Restrict Orkestrator's OpenCode picker to the two managed provider
- * catalogues. The raw SDK catalogue intentionally remains available to lower
- * level callers because it describes every provider known to OpenCode.
- */
-export function restrictOpenCodeModelCatalog(
-  response: OpenCodeModelsResponse,
-): OpenCodeModelsResponse {
-  const models = response.models.filter((model) =>
-    SELECTABLE_OPENCODE_PROVIDERS.has(model.provider)
-  );
-  const defaultIsSelectable = response.defaults.modelId !== undefined
-    && models.some((model) => model.id === response.defaults.modelId);
-  return {
-    models,
-    defaults: defaultIsSelectable ? response.defaults : {},
-  };
-}
-
 export interface OpenCodeSlashCommand {
   name: string;
   description?: string;
@@ -1475,13 +1454,6 @@ export async function getModelsWithDefaults(client: OpencodeClient): Promise<Ope
     console.error("[opencode-client] Failed to get models:", error);
     return { models: [], defaults: {} };
   }
-}
-
-/** Get the provider-restricted catalogue used by Orkestrator's model picker. */
-export async function getSelectableModelsWithDefaults(
-  client: OpencodeClient,
-): Promise<OpenCodeModelsResponse> {
-  return restrictOpenCodeModelCatalog(await getModelsWithDefaults(client));
 }
 
 /**

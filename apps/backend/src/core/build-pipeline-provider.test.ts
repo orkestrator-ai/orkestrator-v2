@@ -18,6 +18,7 @@ import {
   createBuildPipelineProvider,
   PromptRejectedError,
   ProviderUnavailableError,
+  readProviderStatus,
   type BridgeConnection,
   type ProviderDependencies,
   type ProviderSessionRegistration,
@@ -45,6 +46,20 @@ const codexConnection: BridgeConnection = {
   authToken: "codex-token",
   model: "gpt-5-codex",
   effort: "high",
+  requestTimeoutMs: 25,
+};
+
+const cursorConnection: BridgeConnection = {
+  agent: "cursor",
+  baseUrl: "http://cursor.test",
+  authToken: "cursor-token",
+  requestTimeoutMs: 25,
+};
+
+const grokConnection: BridgeConnection = {
+  agent: "grok",
+  baseUrl: "http://grok.test",
+  authToken: "grok-token",
   requestTimeoutMs: 25,
 };
 
@@ -192,6 +207,94 @@ describe("HTTP build pipeline provider", () => {
     )).toBe("test-token");
     expect(JSON.parse(String(request.init.body))).toEqual({ title: "Build task" });
   });
+
+  test.each([
+    ["cursor" as const, cursorConnection],
+    ["grok" as const, grokConnection],
+  ])("lists and resumes %s ACP sessions through the bridge", async (_agent, connection) => {
+    const { provider, requests } = httpProvider((url) => {
+      if (url.endsWith("/session/list")) {
+        return Response.json({ sessions: [{
+          id: "opaque-session",
+          title: "Previous work",
+          updatedAt: "2026-08-14T20:00:00.000Z",
+          messageCount: 7,
+        }] });
+      }
+      if (url.endsWith("/session/resume")) {
+        return Response.json({ sessionId: "bridge-session" }, { status: 201 });
+      }
+      return new Response(null, { status: 404 });
+    }, connection);
+
+    await expect(provider.listResumableSessions?.()).resolves.toEqual([{
+      sessionId: "opaque-session",
+      title: "Previous work",
+      updatedAt: "2026-08-14T20:00:00.000Z",
+      detail: "7 messages",
+    }]);
+    await expect(provider.resumeSession?.("opaque-session", {
+      modelId: "model-a",
+      reasoningId: "high",
+      mode: "plan",
+      fastMode: true,
+    })).resolves.toBe("bridge-session");
+
+    expect(requests.map((request) => [request.url, request.init.method ?? "GET"]))
+      .toEqual([
+        [`${connection.baseUrl}/session/list`, "GET"],
+        [`${connection.baseUrl}/session/resume`, "POST"],
+      ]);
+    expect(JSON.parse(String(requests[1]!.init.body))).toEqual({
+      sessionId: "opaque-session",
+      modelId: "model-a",
+      reasoningId: "high",
+      mode: "plan",
+      fastMode: true,
+    });
+  });
+
+  for (const [agent, connection] of [
+    ["cursor" as const, cursorConnection],
+    ["grok" as const, grokConnection],
+  ] as const) {
+    test(`rejects malformed ${agent} ACP session responses`, async () => {
+      const malformedList = httpProvider(
+        (url) => url.endsWith("/session/list")
+          ? Response.json({ sessions: "not-an-array" })
+          : new Response(null, { status: 404 }),
+        connection,
+      );
+      await expect(malformedList.provider.listResumableSessions?.())
+        .rejects.toBeInstanceOf(ProviderUnavailableError);
+
+      const malformedResume = httpProvider(
+        (url) => url.endsWith("/session/resume")
+          ? Response.json({ status: "idle" }, { status: 201 })
+          : new Response(null, { status: 404 }),
+        connection,
+      );
+      await expect(malformedResume.provider.resumeSession?.("opaque-session"))
+        .rejects.toBeInstanceOf(ProviderUnavailableError);
+    });
+
+    test(`surfaces why ${agent} cannot list its own ACP sessions`, async () => {
+      const { provider } = httpProvider(
+        (url) => url.endsWith("/session/list")
+          ? Response.json(
+            { error: `${agent} cannot list resumable ACP sessions` },
+            { status: 410 },
+          )
+          : new Response(null, { status: 404 }),
+        connection,
+      );
+
+      // A bare "HTTP 410" tells the user nothing actionable; the bridge's own
+      // explanation has to survive the hop.
+      await expect(provider.listResumableSessions?.())
+        .rejects.toThrow(`${agent} cannot list resumable ACP sessions`);
+    });
+  }
 
   test("treats a successful empty structured result as pending", async () => {
     const { provider } = httpProvider(() =>
@@ -576,6 +679,27 @@ describe("HTTP build pipeline provider", () => {
     await expect(provider.status("session-1")).rejects.toThrow(
       "The claude session failed: claude declined mid-turn",
     );
+  });
+
+  test("readProviderStatus reports a failed turn as data instead of a throw", async () => {
+    const { provider } = httpProvider(() => Response.json({
+      status: "error",
+      error: "Selected model is at capacity. Please try a different model.",
+    }), codexConnection);
+
+    await expect(readProviderStatus(provider, "session-1")).resolves.toEqual({
+      status: "error",
+      error: "Selected model is at capacity. Please try a different model.",
+    });
+  });
+
+  test("readProviderStatus still rejects a transport fault", async () => {
+    const { provider } = httpProvider(
+      () => new Response("boom", { status: 500 }),
+      codexConnection,
+    );
+
+    await expect(readProviderStatus(provider, "session-1")).rejects.toThrow();
   });
 
   test("falls back to a plain error status when the session failure detail is empty", async () => {
@@ -2372,7 +2496,7 @@ function openCodeActivityProvider(
   fake: OpenCodeFake,
   dependencies: Pick<
     ProviderDependencies,
-    "now" | "openCodeExistenceCacheTtlMs"
+    "now" | "openCodeExistenceCacheTtlMs" | "resolveOpenCodeModelProviders"
   > = {},
 ) {
   return createBuildPipelineProvider(
@@ -3870,8 +3994,8 @@ describe("OpenCode build pipeline provider", () => {
     const providerList = mock(async () => ({
       data: {
         providers: [{
-          id: "anthropic",
-          name: "Anthropic",
+          id: "opencode",
+          name: "OpenCode",
           models: {
             "claude-sonnet": {
               name: "Claude Sonnet",
@@ -3885,7 +4009,7 @@ describe("OpenCode build pipeline provider", () => {
           },
         }],
         default: {
-          providerID: "anthropic",
+          providerID: "opencode",
           modelID: "claude-sonnet",
           variant: "high",
         },
@@ -3904,9 +4028,9 @@ describe("OpenCode build pipeline provider", () => {
     try {
       await expect(provider.modelCatalog?.()).resolves.toEqual([{
         platform: "opencode",
-        id: "anthropic/claude-sonnet",
+        id: "opencode/claude-sonnet",
         label: "Claude Sonnet",
-        providerLabel: "Anthropic",
+        providerLabel: "OpenCode",
         reasoning: [
           { id: "default", label: "Default" },
           { id: "high", label: "High" },
@@ -3922,10 +4046,10 @@ describe("OpenCode build pipeline provider", () => {
         title: "Shared investigation",
         shareUrl: "https://share.opencode.test/live",
         composer: {
-          selectedModelId: "anthropic/claude-sonnet",
+          selectedModelId: "opencode/claude-sonnet",
           selectedReasoningId: "high",
           models: [{
-            id: "anthropic/claude-sonnet",
+            id: "opencode/claude-sonnet",
             contextWindow: 200_000,
             supportsImageInput: true,
           }],
@@ -3933,6 +4057,266 @@ describe("OpenCode build pipeline provider", () => {
       });
       await provider.modelCatalog?.();
       expect(providerList).toHaveBeenCalledTimes(1);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  /** A catalogue whose unmanaged providers alone exceed the 512-model cap. */
+  const crowdedOpenCodeCatalog = () => ({
+    data: {
+      providers: [
+        {
+          id: "hpc-ai",
+          name: "HPC-AI",
+          models: Object.fromEntries(
+            Array.from({ length: 600 }, (_unused, index) => [
+              `flood-${index}`,
+              { name: `Flood ${index}` },
+            ]),
+          ),
+        },
+        {
+          id: "openrouter",
+          name: "OpenRouter",
+          models: { "kimi-k2.5": { name: "Kimi K2.5" } },
+        },
+        {
+          id: "opencode",
+          name: "OpenCode",
+          models: { "claude-sonnet-5": { name: "Claude Sonnet 5" } },
+        },
+        {
+          id: "opencode-go",
+          name: "OpenCode Go",
+          models: { "grok-code": { name: "Grok Code" } },
+        },
+      ],
+      default: { providerID: "hpc-ai", modelID: "flood-0" },
+    },
+  });
+
+  test("excludes unmanaged providers before the model cap can hide the managed ones", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: { list: mock(async () => crowdedOpenCodeCatalog()) },
+    });
+    // The unmanaged provider is listed first and alone exceeds the 512-model
+    // budget, so filtering after truncation would return nothing selectable.
+    const provider = openCodeActivityProvider(fake);
+    try {
+      const models = await provider.modelCatalog?.();
+      expect(models?.map((model) => model.id)).toEqual([
+        "opencode/claude-sonnet-5",
+        "opencode-go/grok-code",
+      ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("drops an OpenCode default that names an excluded provider", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: { list: mock(async () => crowdedOpenCodeCatalog()) },
+    });
+    fake.setSessionGetResponse("owned-session", {
+      data: { id: "owned-session", directory: "/workspace" },
+    });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      const snapshot = await provider.interactiveSnapshot?.("owned-session");
+      // Pre-selecting `hpc-ai/flood-0` would name a model the picker cannot show.
+      expect(snapshot?.composer?.selectedModelId).toBeUndefined();
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("honours a configured allowlist and re-filters when it changes", async () => {
+    const fake = openCodeFake();
+    const providerList = mock(async () => crowdedOpenCodeCatalog());
+    Object.assign(fake.client as object, { provider: { list: providerList } });
+    let allowed: string[] = ["openrouter"];
+    const provider = openCodeActivityProvider(fake, {
+      resolveOpenCodeModelProviders: () => allowed,
+    });
+    try {
+      await expect(provider.modelCatalog?.()).resolves.toEqual([
+        expect.objectContaining({ id: "openrouter/kimi-k2.5" }),
+      ]);
+      // A settings edit must not be served the previously cached catalogue.
+      allowed = ["opencode-go"];
+      await expect(provider.modelCatalog?.()).resolves.toEqual([
+        expect.objectContaining({ id: "opencode-go/grok-code" }),
+      ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("keeps the bounded raw catalogue available for durable cache refreshes", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: {
+        list: mock(async () => ({
+          data: {
+            providers: [
+              {
+                id: "opencode",
+                name: "OpenCode",
+                models: { "claude-sonnet-5": { name: "Claude Sonnet 5" } },
+              },
+              {
+                id: "openrouter",
+                name: "OpenRouter",
+                models: { "kimi-k2.5": { name: "Kimi K2.5" } },
+              },
+            ],
+          },
+        })),
+      },
+    });
+    const provider = openCodeActivityProvider(fake, {
+      resolveOpenCodeModelProviders: () => ["opencode"],
+    });
+    try {
+      await expect(provider.modelCatalog?.()).resolves.toEqual([
+        expect.objectContaining({ id: "opencode/claude-sonnet-5" }),
+      ]);
+      await expect(provider.rawModelCatalog?.()).resolves.toEqual([
+        expect.objectContaining({ id: "opencode/claude-sonnet-5" }),
+        expect.objectContaining({ id: "openrouter/kimi-k2.5" }),
+      ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("treats an empty allowlist as unrestricted", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: { list: mock(async () => crowdedOpenCodeCatalog()) },
+    });
+    const provider = openCodeActivityProvider(fake, {
+      resolveOpenCodeModelProviders: () => [],
+    });
+    try {
+      const models = await provider.modelCatalog?.();
+      expect(models?.some((model) => model.id.startsWith("hpc-ai/"))).toBe(true);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("falls back to the managed default when the allowlist cannot be read", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: { list: mock(async () => crowdedOpenCodeCatalog()) },
+    });
+    // A failed config read must not widen the catalogue to every provider.
+    const provider = openCodeActivityProvider(fake, {
+      resolveOpenCodeModelProviders: () => {
+        throw new Error("config unavailable");
+      },
+    });
+    try {
+      const models = await provider.modelCatalog?.();
+      expect(models?.map((model) => model.id)).toEqual([
+        "opencode/claude-sonnet-5",
+        "opencode-go/grok-code",
+      ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("re-filters the composer catalogue when the allowlist changes", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: { list: mock(async () => crowdedOpenCodeCatalog()) },
+    });
+    fake.setSessionGetResponse("owned-session", {
+      data: { id: "owned-session", directory: "/workspace" },
+    });
+    let allowed: string[] = ["openrouter"];
+    const provider = openCodeActivityProvider(fake, {
+      resolveOpenCodeModelProviders: () => allowed,
+    });
+    try {
+      const before = await provider.interactiveSnapshot?.("owned-session");
+      expect(before?.composer?.models?.map((model) => model.id))
+        .toEqual(["openrouter/kimi-k2.5"]);
+
+      // The composer reads through a second, session-scoped cache. A settings
+      // edit has to invalidate that one too, or the picker keeps the pre-edit
+      // catalogue for a whole TTL without ever consulting the filter.
+      allowed = ["opencode-go"];
+      const after = await provider.interactiveSnapshot?.("owned-session");
+      expect(after?.composer?.models?.map((model) => model.id))
+        .toEqual(["opencode-go/grok-code"]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("excludes unmanaged providers before the provider cap can hide them", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: {
+        list: mock(async () => ({
+          data: {
+            providers: [
+              // The 128-provider ceiling is reached long before `opencode` is
+              // seen, so filtering after truncation would return nothing.
+              ...Array.from({ length: 200 }, (_unused, index) => ({
+                id: `flood-${index}`,
+                name: `Flood ${index}`,
+                models: { model: { name: "Model" } },
+              })),
+              {
+                id: "opencode",
+                name: "OpenCode",
+                models: { "claude-sonnet-5": { name: "Claude Sonnet 5" } },
+              },
+            ],
+          },
+        })),
+      },
+    });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      const models = await provider.modelCatalog?.();
+      expect(models?.map((model) => model.id)).toEqual([
+        "opencode/claude-sonnet-5",
+      ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("still bounds the provider scan when the allowlist is unrestricted", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: {
+        list: mock(async () => ({
+          data: {
+            providers: Array.from({ length: 200 }, (_unused, index) => ({
+              id: `flood-${index}`,
+              name: `Flood ${index}`,
+              models: { model: { name: "Model" } },
+            })),
+          },
+        })),
+      },
+    });
+    const provider = openCodeActivityProvider(fake, {
+      resolveOpenCodeModelProviders: () => [],
+    });
+    try {
+      const models = await provider.modelCatalog?.();
+      // Filtering moved ahead of the cap; the cap itself must still apply.
+      expect(models?.length).toBe(128);
     } finally {
       await provider.dispose?.();
     }
@@ -4483,6 +4867,168 @@ describe("HTTP build pipeline provider (codex)", () => {
       "http://codex.test/session/codex-1/config",
       "http://codex.test/session/codex-1/runtime-health",
     ]);
+  });
+
+  test("does not hold a Codex transcript behind expired runtime inventory", async () => {
+    let message = "old transcript";
+    let runtimeReads = 0;
+    let releaseRuntime!: () => void;
+    const runtimeGate = new Promise<void>((resolve) => { releaseRuntime = resolve; });
+    const { provider } = httpProvider(async (url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [message] });
+      if (url.endsWith("/config")) {
+        return Response.json({ mode: "build", fastMode: false, durable: true });
+      }
+      if (url.endsWith("/runtime-health")) {
+        runtimeReads += 1;
+        if (runtimeReads > 1) await runtimeGate;
+        return Response.json({
+          engine: { state: runtimeReads > 1 ? "refreshed" : "ready" },
+          mcp: { data: [] },
+          skills: { data: [] },
+          hooks: { data: [] },
+          notices: [],
+        });
+      }
+      return Response.json({ status: "idle", phase: "idle", messageRevision: 1 });
+    }, codexConnection);
+
+    const first = await provider.interactiveSnapshot?.("codex-1");
+    expect(first?.runtime?.state).toBe("ready");
+    const metadata = (provider as unknown as {
+      interactiveMetadata: Map<string, { expiresAt: number }>;
+    }).interactiveMetadata.get("codex-1");
+    expect(metadata).toBeDefined();
+    metadata!.expiresAt = 0;
+    message = "latest transcript";
+
+    const second = await Promise.race([
+      provider.interactiveSnapshot!("codex-1"),
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(() => reject(new Error("Transcript waited for runtime inventory")), 100);
+      }),
+    ]);
+    expect(second.messages).toEqual(["latest transcript"]);
+    expect(second.runtime?.state).toBe("ready");
+    expect(runtimeReads).toBe(2);
+
+    releaseRuntime();
+    const refreshes = (provider as unknown as {
+      codexRuntimeMetadataRefreshes: Map<string, Promise<void>>;
+    }).codexRuntimeMetadataRefreshes;
+    await waitUntil(() => refreshes.size === 0);
+
+    const third = await provider.interactiveSnapshot?.("codex-1");
+    expect(third?.runtime?.state).toBe("refreshed");
+    expect(runtimeReads).toBe(2);
+  });
+
+  test("retains Codex runtime metadata after a malformed background response", async () => {
+    let runtimeReads = 0;
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      if (url.endsWith("/config")) {
+        return Response.json({ mode: "build", fastMode: false, durable: true });
+      }
+      if (url.endsWith("/runtime-health")) {
+        runtimeReads += 1;
+        if (runtimeReads === 2) return Response.json(null);
+        return Response.json({
+          engine: { state: runtimeReads === 1 ? "ready" : "recovered" },
+          mcp: { data: [] },
+          skills: { data: [] },
+          hooks: { data: [] },
+          notices: [],
+        });
+      }
+      return Response.json({ status: "idle", phase: "idle", messageRevision: 1 });
+    }, codexConnection);
+
+    const first = await provider.interactiveSnapshot?.("codex-1");
+    expect(first?.runtime?.state).toBe("ready");
+    const internals = provider as unknown as {
+      interactiveMetadata: Map<string, {
+        expiresAt: number;
+        runtime?: { state?: string };
+      }>;
+      codexRuntimeMetadataRefreshes: Map<string, Promise<void>>;
+    };
+    const retained = internals.interactiveMetadata.get("codex-1");
+    expect(retained).toBeDefined();
+    retained!.expiresAt = 0;
+
+    const stale = await provider.interactiveSnapshot?.("codex-1");
+    expect(stale?.runtime?.state).toBe("ready");
+    await waitUntil(() => internals.codexRuntimeMetadataRefreshes.size === 0);
+    expect(internals.interactiveMetadata.get("codex-1")).toBe(retained);
+    expect(retained!.runtime?.state).toBe("ready");
+    expect(retained!.expiresAt).toBeGreaterThan(Date.now());
+
+    retained!.expiresAt = 0;
+    const retrying = await provider.interactiveSnapshot?.("codex-1");
+    expect(retrying?.runtime?.state).toBe("ready");
+    await waitUntil(() => internals.codexRuntimeMetadataRefreshes.size === 0);
+    const recovered = await provider.interactiveSnapshot?.("codex-1");
+    expect(recovered?.runtime?.state).toBe("recovered");
+    expect(runtimeReads).toBe(3);
+  });
+
+  test("drops a background Codex runtime refresh an explicit catalog refresh superseded", async () => {
+    let runtimeReads = 0;
+    let releaseRuntime!: () => void;
+    const runtimeGate = new Promise<void>((resolve) => { releaseRuntime = resolve; });
+    const { provider } = httpProvider(async (url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      if (url.endsWith("/config")) {
+        return Response.json({ mode: "build", fastMode: false, durable: true });
+      }
+      if (url.endsWith("/runtime-health")) {
+        runtimeReads += 1;
+        if (runtimeReads === 2) await runtimeGate;
+        return Response.json({
+          engine: {
+            state: runtimeReads === 1
+              ? "ready"
+              : runtimeReads === 2 ? "superseded" : "rediscovered",
+          },
+          mcp: { data: [] },
+          skills: { data: [] },
+          hooks: { data: [] },
+          notices: [],
+        });
+      }
+      return Response.json({ status: "idle", phase: "idle", messageRevision: 1 });
+    }, codexConnection);
+
+    const first = await provider.interactiveSnapshot?.("codex-1");
+    expect(first?.runtime?.state).toBe("ready");
+    const internals = provider as unknown as {
+      interactiveMetadata: Map<string, {
+        expiresAt: number;
+        runtime?: { state?: string };
+      }>;
+      codexRuntimeMetadataRefreshes: Map<string, Promise<void>>;
+    };
+    internals.interactiveMetadata.get("codex-1")!.expiresAt = 0;
+
+    // Parks the background refresh on the gate, so it is still in flight when
+    // the user asks for an explicit re-discovery.
+    const stale = await provider.interactiveSnapshot?.("codex-1");
+    expect(stale?.runtime?.state).toBe("ready");
+    expect(runtimeReads).toBe(2);
+
+    provider.refreshCatalog?.();
+    expect(internals.interactiveMetadata.size).toBe(0);
+
+    releaseRuntime();
+    await waitUntil(() => internals.codexRuntimeMetadataRefreshes.size === 0);
+    // The superseded read describes the inventory the refresh just dropped, so
+    // it must not repopulate the map the picker is waiting to re-read.
+    expect(internals.interactiveMetadata.has("codex-1")).toBe(false);
+
+    const rediscovered = await provider.interactiveSnapshot?.("codex-1");
+    expect(rediscovered?.runtime?.state).toBe("rediscovered");
+    expect(runtimeReads).toBe(3);
   });
 
   test("sends codex attachments as data URLs without claude-only options", async () => {
@@ -5118,6 +5664,36 @@ describe("HTTP build pipeline provider (ACP)", () => {
     }]);
   });
 
+  test("gives Cursor and Grok session creation enough time for initialize plus session/new", async () => {
+    const timeouts: number[] = [];
+    const originalTimeout = AbortSignal.timeout.bind(AbortSignal);
+    AbortSignal.timeout = ((ms: number) => {
+      timeouts.push(ms);
+      return originalTimeout(ms);
+    }) as typeof AbortSignal.timeout;
+    try {
+      for (const agent of ["cursor", "grok"] as const) {
+        timeouts.length = 0;
+        const { provider } = httpProvider(
+          () => Response.json({ sessionId: `${agent}-1` }, { status: 201 }),
+          { agent, baseUrl: `http://${agent}.test`, authToken: `${agent}-token` },
+        );
+        await provider.createSession("build", `${agent} session`);
+        expect(timeouts).toEqual([75_000]);
+      }
+
+      timeouts.length = 0;
+      const { provider } = httpProvider(
+        () => Response.json({ sessionId: "claude-1" }, { status: 201 }),
+        { agent: "claude", baseUrl: "http://claude.test", authToken: "claude-token" },
+      );
+      await provider.createSession("build", "Claude session");
+      expect(timeouts).toEqual([30_000]);
+    } finally {
+      AbortSignal.timeout = originalTimeout;
+    }
+  });
+
   test("surfaces the bounded ACP session-creation error detail", async () => {
     const { provider } = httpProvider(
       () => Response.json(
@@ -5541,6 +6117,44 @@ describe("OpenCode build pipeline provider dispatch", () => {
           },
         ],
       });
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("keeps the file part when an attachment-only prompt has no text", async () => {
+    // Reachable since the startup launch began dispatching image-only prompts.
+    // The generated SDK type allows an empty `text`, and the file part is what
+    // actually carries the turn; pinned here so a change to either is visible.
+    const fake = openCodeFake();
+    const provider = createBuildPipelineProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "test-token",
+        directory: "/workspace",
+      },
+      { openCodeClient: fake.client, monitorRetryMs: 1 },
+    );
+    try {
+      await provider.send("owned-session", "", {
+        requestId: "request-image-only",
+        attachments: [{
+          type: "image",
+          path: "/workspace/only.png",
+          filename: "only.png",
+        }],
+      });
+
+      expect(fake.promptCalls[0]?.parts).toEqual([
+        { type: "text", text: "" },
+        {
+          type: "file",
+          mime: "image/png",
+          filename: "only.png",
+          url: "file:///workspace/only.png",
+        },
+      ]);
     } finally {
       await provider.dispose?.();
     }

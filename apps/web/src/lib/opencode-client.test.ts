@@ -15,7 +15,6 @@ import {
   getAvailableSlashCommands,
   getModels,
   getModelsWithDefaults,
-  restrictOpenCodeModelCatalog,
   getOpenCodePartKey,
   getOpenCodeRuntimeHealth,
   getPendingPermissions,
@@ -238,24 +237,6 @@ const noProviderCatalog = {
 };
 
 describe("opencode-client getModelsWithDefaults", () => {
-  test("restricts picker models to opencode and opencode-go providers", () => {
-    expect(restrictOpenCodeModelCatalog({
-      models: [
-        { id: "opencode/free", name: "Free", provider: "opencode" },
-        { id: "opencode-go/paid", name: "Paid", provider: "opencode-go" },
-        { id: "hpc-ai/deepseek", name: "DeepSeek", provider: "hpc-ai" },
-        { id: "openrouter/other", name: "Other", provider: "openrouter" },
-      ],
-      defaults: { modelId: "hpc-ai/deepseek", variant: "max" },
-    })).toEqual({
-      models: [
-        { id: "opencode/free", name: "Free", provider: "opencode" },
-        { id: "opencode-go/paid", name: "Paid", provider: "opencode-go" },
-      ],
-      defaults: {},
-    });
-  });
-
   test("prefers provider catalog so unconfigured models still appear", async () => {
     const client = {
       provider: {

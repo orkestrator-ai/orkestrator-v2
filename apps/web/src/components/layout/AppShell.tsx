@@ -24,7 +24,7 @@ import {
 } from "@/constants/terminal";
 import { getCurrentWindow } from "@/lib/native/window";
 import { cn } from "@/lib/utils";
-import { MobileAppShellLayout } from "./MobileAppShellLayout";
+import { MOBILE_SHELL_MEDIA_QUERY, MobileAppShellLayout } from "./MobileAppShellLayout";
 import { getApplicationTitle } from "@/lib/application-title";
 import { AgentInfoButton } from "./AgentInfoButton";
 
@@ -33,7 +33,7 @@ interface AppShellProps {
 }
 
 export function AppShell({ children }: AppShellProps) {
-  const isMobile = useMediaQuery("(max-width: 767px)");
+  const isMobile = useMediaQuery(MOBILE_SHELL_MEDIA_QUERY);
   const filesPanelOpen = useFilesPanelStore((state) => state.isOpen);
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);

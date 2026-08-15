@@ -2045,6 +2045,49 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.getByAltText("initial-shot.png")).toBeTruthy();
   });
 
+  test("renders a structured attachment part as an image thumbnail", async () => {
+    // The shape the Codex bridge publishes for a live turn: `content` is the
+    // workspace path and `fileUrl` is the inline data it still has in hand.
+    const message = makeMessage(
+      [
+        { type: "text", content: "Inspect the diagram" },
+        {
+          type: "file",
+          content: "/workspace/.orkestrator/initial-prompt/staged.png",
+          fileUrl: "data:image/png;base64,iVBORw0KGgo=",
+          filename: "diagram.png",
+        },
+      ],
+      { id: "codex-structured-image", role: "user", content: "Inspect the diagram" },
+    );
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByText("Inspect the diagram")).toBeTruthy();
+    expect(await screen.findByAltText("Thumbnail: diagram.png")).toBeTruthy();
+  });
+
+  test("renders a rehydrated attachment part, which has a path but no inline data", async () => {
+    // The same attachment after a reload: the bridge rebuilt it from the
+    // persisted marker, so the renderer has to read the bytes from the path.
+    const message = makeMessage(
+      [
+        { type: "text", content: "Inspect the diagram" },
+        {
+          type: "file",
+          content: "/workspace/.orkestrator/initial-prompt/staged.png",
+          fileUrl: "/workspace/.orkestrator/initial-prompt/staged.png",
+          filename: "diagram.png",
+        },
+      ],
+      { id: "codex-rehydrated-image", role: "user", content: "Inspect the diagram" },
+    );
+
+    render(<NativeMessage message={message} />);
+
+    expect(await screen.findByAltText("Thumbnail: diagram.png")).toBeTruthy();
+  });
+
   test("can render Claude tmux agent usage as tokens only", () => {
     const message = makeMessage([
       {

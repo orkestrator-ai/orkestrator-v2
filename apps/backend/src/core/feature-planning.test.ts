@@ -7,6 +7,7 @@ import { StorageService } from "./storage.js";
 import { FeaturePlanningService } from "./feature-planning.js";
 import {
   AmbiguousPromptDispatchError,
+  ProviderSessionFailedError,
   type BuildPipelineProvider,
   type ProviderActivityState,
   type ProviderCreateSessionOptions,
@@ -455,6 +456,27 @@ describe("FeaturePlanningService", () => {
       expect(context.provider.sends[0]?.sessionId).toBe("session-1");
       expect((await context.storage.getFeaturePlan(context.featureId))?.codexSessionId)
         .toBe("session-1");
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("reuses a planning session whose previous turn failed", async () => {
+    const context = await harness();
+    try {
+      context.provider.statusError = new ProviderSessionFailedError(
+        "codex",
+        "Selected model is at capacity",
+      );
+
+      await context.start({ kind: "feature", userMessage: "Let me export reports" });
+
+      expect(context.provider.created).toEqual([]);
+      expect(context.provider.sends).toHaveLength(1);
+      expect(context.provider.sends[0]?.sessionId).toBe("session-existing");
+      expect((await context.storage.getFeaturePlan(context.featureId))?.codexSessionId)
+        .toBe("session-existing");
+      expect((await context.record())?.phase).toBe("running");
     } finally {
       await context.dispose();
     }

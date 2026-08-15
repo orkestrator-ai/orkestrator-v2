@@ -205,6 +205,129 @@ describe("favorite model normalization", () => {
   });
 });
 
+describe("OpenCode model provider allowlist config", () => {
+  /** Write a `config.json` that predates the allowlist field entirely. */
+  async function writeLegacyConfig(
+    dataDir: string,
+    overrides: Record<string, unknown>,
+    repositories: Record<string, unknown> = {},
+  ): Promise<void> {
+    const base = defaultConfig();
+    const { openCodeModelProviders: _absent, ...legacyGlobal } = base.global;
+    await fs.writeFile(
+      path.join(dataDir, "config.json"),
+      JSON.stringify({
+        ...base,
+        repositories,
+        global: { ...legacyGlobal, ...overrides },
+      }),
+      "utf8",
+    );
+  }
+
+  test("migrates an install that only ever used the managed catalogues", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await writeLegacyConfig(dataDir, { opencodeModel: "opencode/claude-sonnet-5" });
+
+      expect((await storage.loadConfig()).global.openCodeModelProviders).toEqual([
+        "opencode",
+        "opencode-go",
+      ]);
+    });
+  });
+
+  test("keeps the provider of a model the install already defaulted to", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      // This model was chosen from a picker that offered every provider. Losing
+      // it would leave the launcher pointed at a model no picker will list.
+      await writeLegacyConfig(dataDir, { opencodeModel: "openrouter/kimi-k2.5" });
+
+      expect((await storage.loadConfig()).global.openCodeModelProviders).toEqual([
+        "opencode",
+        "opencode-go",
+        "openrouter",
+      ]);
+    });
+  });
+
+  test("keeps providers named by favorites and repository defaults", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await writeLegacyConfig(
+        dataDir,
+        {
+          opencodeModel: "opencode/claude-sonnet-5",
+          favoriteModels: [
+            { platform: "opencode", modelId: "hpc-ai/deepseek" },
+            // Another agent's favourite names no OpenCode provider.
+            { platform: "claude", modelId: "claude-opus" },
+          ],
+        },
+        {
+          "proj-1": { ...defaultRepositoryConfig(), defaultModel: "openrouter/kimi-k2.5" },
+          "proj-2": { ...defaultRepositoryConfig(), defaultModel: "default" },
+        },
+      );
+
+      const providers = (await storage.loadConfig()).global.openCodeModelProviders;
+      expect(providers).toEqual([
+        "opencode",
+        "opencode-go",
+        "hpc-ai",
+        "openrouter",
+      ]);
+    });
+  });
+
+  test("preserves an explicitly empty list as unrestricted", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await writeLegacyConfig(dataDir, {
+        opencodeModel: "openrouter/kimi-k2.5",
+        openCodeModelProviders: [],
+      });
+
+      // An empty list is the user opting into every provider. Migration must
+      // not read it as "absent" and re-narrow to the managed pair.
+      expect((await storage.loadConfig()).global.openCodeModelProviders).toEqual([]);
+    });
+  });
+
+  test("does not widen a list the user has already chosen", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await writeLegacyConfig(dataDir, {
+        opencodeModel: "openrouter/kimi-k2.5",
+        openCodeModelProviders: ["opencode"],
+      });
+
+      expect((await storage.loadConfig()).global.openCodeModelProviders).toEqual([
+        "opencode",
+      ]);
+    });
+  });
+
+  test("normalizes a stored list on read and survives a restart", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      // Normalization is a read boundary, as it is for `favoriteModels`: a
+      // write is stored verbatim and every reader is handed the canonical form,
+      // so a stray capital cannot silently select nothing.
+      await storage.updateGlobalConfig({
+        ...defaultConfig().global,
+        openCodeModelProviders: ["  OpenCode ", "opencode", "OPENROUTER"],
+      });
+      expect((await storage.loadConfig()).global.openCodeModelProviders).toEqual([
+        "opencode",
+        "openrouter",
+      ]);
+
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      expect((await restarted.loadConfig()).global.openCodeModelProviders).toEqual([
+        "opencode",
+        "openrouter",
+      ]);
+    });
+  });
+});
+
 describe("ACP bridge runtime persistence", () => {
   test("round-trips and clears Cursor and Grok process coordinates", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {

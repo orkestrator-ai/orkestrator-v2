@@ -91,8 +91,194 @@ async function withCommands<T>(
 
 const KEY = "claude env-e1:tab-1";
 
+/** `updateGlobalConfig` replaces the whole block, so edit a loaded copy. */
+async function setOpenCodeModelProviders(
+  storage: StorageService,
+  openCodeModelProviders: string[],
+): Promise<void> {
+  const config = await storage.loadConfig();
+  await storage.updateGlobalConfig({
+    ...config.global,
+    openCodeModelProviders,
+  });
+}
+
+describe("create-environment agent preference command", () => {
+  test("persists a successful agent-enabled create selection without replacing repository settings", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.updateRepositoryConfig("proj-1", {
+        defaultBranch: "develop",
+        prBaseBranch: "release",
+        lastEnvironmentType: "local",
+      });
+
+      await invoke("remember_environment_agent_selection", {
+        projectId: "proj-1",
+        platform: "codex",
+        mode: "terminal",
+        model: "gpt-remembered",
+        reasoningEffort: "xhigh",
+      });
+
+      expect(await storage.getRepositoryConfig("proj-1")).toEqual({
+        defaultBranch: "develop",
+        prBaseBranch: "release",
+        lastEnvironmentType: "local",
+        lastEnvironmentAgentSelection: {
+          platform: "codex",
+          mode: "terminal",
+          model: "gpt-remembered",
+          reasoningEffort: "xhigh",
+        },
+      });
+
+      await invoke("update_environment_agent_settings", {
+        environmentId: "e1",
+        defaultAgent: "claude",
+        claudeMode: "native",
+        claudeNativeBackend: null,
+        opencodeMode: null,
+        codexMode: null,
+        pendingAgentLaunch: false,
+      });
+
+      expect((await storage.getRepositoryConfig("proj-1"))
+        .lastEnvironmentAgentSelection?.platform).toBe("codex");
+    });
+  });
+
+  test("records provider-default model and reasoning choices as omitted fields", async () => {
+    await withCommands(async (invoke, storage) => {
+      await invoke("remember_environment_agent_selection", {
+        projectId: "proj-1",
+        platform: "opencode",
+        mode: "native",
+      });
+
+      expect((await storage.getRepositoryConfig("proj-1"))
+        .lastEnvironmentAgentSelection).toEqual({
+          platform: "opencode",
+          mode: "native",
+        });
+    });
+  });
+
+  test("preserves backend-owned create state when stale repository settings are saved", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.updateRepositoryConfig("proj-1", {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+        lastEnvironmentType: "local",
+        lastEnvironmentAgentSelection: {
+          platform: "codex",
+          mode: "terminal",
+          model: "gpt-current",
+        },
+      });
+
+      await invoke("update_repository_config", {
+        projectId: "proj-1",
+        repoConfig: {
+          defaultBranch: "develop",
+          prBaseBranch: "release",
+          lastEnvironmentType: "containerized",
+          lastEnvironmentAgentSelection: {
+            platform: "claude",
+            mode: "native",
+            model: "stale-model",
+          },
+        },
+      });
+
+      expect(await storage.getRepositoryConfig("proj-1")).toEqual({
+        defaultBranch: "develop",
+        prBaseBranch: "release",
+        lastEnvironmentType: "local",
+        lastEnvironmentAgentSelection: {
+          platform: "codex",
+          mode: "terminal",
+          model: "gpt-current",
+        },
+      });
+    });
+  });
+
+  test("serializes concurrent repository settings and remembered-selection writes", async () => {
+    await withCommands(async (_invoke, storage) => {
+      await storage.updateRepositoryConfig("proj-1", {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+        lastEnvironmentType: "local",
+      });
+
+      await Promise.all([
+        storage.updateRepositorySettings("proj-1", {
+          defaultBranch: "develop",
+          prBaseBranch: "release",
+        }),
+        storage.patchRepositoryConfig("proj-1", {
+          lastEnvironmentAgentSelection: {
+            platform: "codex",
+            mode: "terminal",
+            model: "gpt-concurrent",
+          },
+        }),
+      ]);
+
+      expect(await storage.getRepositoryConfig("proj-1")).toEqual({
+        defaultBranch: "develop",
+        prBaseBranch: "release",
+        lastEnvironmentType: "local",
+        lastEnvironmentAgentSelection: {
+          platform: "codex",
+          mode: "terminal",
+          model: "gpt-concurrent",
+        },
+      });
+    });
+  });
+
+  // `patchRepositoryConfig` seeds `defaultRepositoryConfig()` when the project
+  // has never been saved. Without that seed the patch would write a repository
+  // entry with no `defaultBranch`/`prBaseBranch`, which every later reader treats
+  // as configured rather than defaulted.
+  test("seeds repository defaults when remembering against an unsaved project", async () => {
+    await withCommands(async (invoke, storage) => {
+      const untouched = await storage.getRepositoryConfig("proj-never-saved");
+
+      await invoke("remember_environment_agent_selection", {
+        projectId: "proj-never-saved",
+        platform: "claude",
+        mode: "native",
+      });
+
+      expect(await storage.getRepositoryConfig("proj-never-saved")).toEqual({
+        ...untouched,
+        lastEnvironmentAgentSelection: { platform: "claude", mode: "native" },
+      });
+      expect(untouched.defaultBranch).toBe("main");
+      expect(untouched.prBaseBranch).toBe("main");
+    });
+  });
+
+  test("rejects malformed remembered agent selections", async () => {
+    await withCommands(async (invoke) => {
+      await expect(invoke("remember_environment_agent_selection", {
+        projectId: "proj-1",
+        platform: "codex",
+        mode: "background",
+      })).rejects.toThrow("Expected mode to be terminal or native");
+      await expect(invoke("remember_environment_agent_selection", {
+        projectId: "proj-1",
+        platform: "unknown",
+        mode: "native",
+      })).rejects.toThrow("Expected platform to be a supported agent platform");
+    });
+  });
+});
+
 describe("native agent model catalogue command", () => {
-  test("normalizes provider catalogues and preserves every OpenCode upstream provider", async () => {
+  test("normalizes provider catalogues and filters OpenCode to the configured providers", async () => {
     await withCommands(async (invoke, storage) => {
       await storage.updateEnvironment("e1", {
         claudeModelCatalog: {
@@ -134,13 +320,14 @@ describe("native agent model catalogue command", () => {
         { id: "openrouter/c", name: "OpenRouter C", provider: "openrouter" },
       ]);
 
+      // Both picker-facing reads filter, so a cache written before the
+      // allowlist changed cannot leak an excluded provider to the renderer.
       const cached = await invoke("get_opencode_model_catalog_cache", {
         projectId: "proj-1",
       }) as { models: Array<{ provider: string }> };
       expect(cached.models.map((model) => model.provider)).toEqual([
         "opencode-go",
         "opencode",
-        "openrouter",
       ]);
 
       const models = await invoke("get_native_agent_model_catalog", {
@@ -152,16 +339,15 @@ describe("native agent model catalogue command", () => {
         "gpt-codex",
         "opencode-go/b",
         "opencode/a",
-        "openrouter/c",
         "composer-cached",
         "grok-cached",
       ]);
-      expect(models.slice(2, 5).map((model) => model.providerLabel)).toEqual([
+      expect(models.slice(2, 4).map((model) => model.providerLabel)).toEqual([
         "OpenCode/opencode-go",
         "OpenCode/opencode",
-        "OpenCode/openrouter",
       ]);
 
+      // Storage stays the complete durable record; only the reads narrow.
       const rewritten = await invoke("cache_opencode_model_catalog", {
         projectId: "proj-1",
         models: [
@@ -232,6 +418,54 @@ describe("native agent model catalogue command", () => {
         expect(reasoning.map((option) => option.id))
           .toContain(model.defaultReasoningId as string);
       }
+    });
+  });
+
+  test("widens the catalogue when a provider is added to the configured list", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.cacheOpenCodeModelCatalog("proj-1", [
+        { id: "opencode/a", name: "OpenCode A", provider: "opencode" },
+        { id: "openrouter/c", name: "OpenRouter C", provider: "openrouter" },
+      ]);
+      await setOpenCodeModelProviders(storage, [
+        "opencode",
+        "opencode-go",
+        "openrouter",
+      ]);
+
+      const cached = await invoke("get_opencode_model_catalog_cache", {
+        projectId: "proj-1",
+      }) as { models: Array<{ provider: string }> };
+      expect(cached.models.map((model) => model.provider)).toEqual([
+        "opencode",
+        "openrouter",
+      ]);
+
+      const models = await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+      }) as Array<Record<string, unknown>>;
+      expect(models.map((model) => model.id)).toEqual([
+        "opencode/a",
+        "openrouter/c",
+      ]);
+    });
+  });
+
+  test("offers every provider when the configured list is emptied", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.cacheOpenCodeModelCatalog("proj-1", [
+        { id: "opencode/a", name: "OpenCode A", provider: "opencode" },
+        { id: "hpc-ai/b", name: "HPC B", provider: "hpc-ai" },
+      ]);
+      await setOpenCodeModelProviders(storage, []);
+
+      const models = await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+      }) as Array<Record<string, unknown>>;
+      expect(models.map((model) => model.id)).toEqual([
+        "hpc-ai/b",
+        "opencode/a",
+      ]);
     });
   });
 });

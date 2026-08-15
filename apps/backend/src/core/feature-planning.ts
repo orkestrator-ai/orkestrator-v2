@@ -20,6 +20,7 @@ import {
 import {
   AmbiguousPromptDispatchError,
   createBuildPipelineProvider,
+  readProviderStatus,
   type BuildPipelineProvider,
 } from "./build-pipeline-provider.js";
 import {
@@ -857,10 +858,12 @@ export class FeaturePlanningService {
     const plan = await this.storage.getFeaturePlan(record.featureId);
     const existing = plan?.codexSessionId;
     if (existing) {
-      const status = await this.providerOperation(
+      // Liveness only: a session whose last turn failed still exists, so it is
+      // reused rather than replaced by a second planning session.
+      const { status } = await this.providerOperation(
         environmentId,
         provider,
-        () => provider.status(existing),
+        () => readProviderStatus(provider, existing),
       );
       if (status !== "missing") return { sessionId: existing, created: false };
     }

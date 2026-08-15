@@ -10,14 +10,16 @@ import type { NativeAgentSessionProjection, NativeAgentTabData } from "@orkestra
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as realBackend from "@/lib/backend";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
+import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
-import { useConfigStore } from "@/stores/configStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { getNativeAgentData } from "@/types/paneLayout";
 import { createSessionKey } from "@/lib/utils";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { dispatchResourceChange } from "@/lib/resource-sync";
 
 // Snapshot before installing the stubs so the real modules are restored for
 // any suite that runs after this file in the same module registry.
@@ -174,6 +176,7 @@ let configSnapshot: ReturnType<typeof useConfigStore.getState>["config"];
 
 beforeEach(() => {
   configSnapshot = useConfigStore.getState().config;
+  useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [] });
   useEnvironmentStore.setState({
     environments: [{
       id: "env-1",
@@ -216,6 +219,9 @@ afterEach(() => {
   getNativeAgentProjectionMock.mockClear();
   getNativeAgentProjectionMock.mockImplementation(defaultProjection);
   useEnvironmentStore.setState({ environments: [] });
+  useConfigStore.getState().updateGlobalConfig({
+    enabledAgentPlatforms: ["claude", "codex", "opencode"],
+  });
   usePaneLayoutStore.setState({
     environments: new Map(),
     hydration: new Map(),
@@ -262,17 +268,20 @@ function PaneBackedAgentNativeTab({ tabId = "tab-resume" }: { tabId?: string }) 
   );
 }
 
-function NativeSessionHarness() {
+function NativeSessionHarness({ isActive = true }: { isActive?: boolean } = {}) {
   const session = useNativeAgentSession<NativeMessage>({
     platform: "claude",
     environmentId: "env-1",
     tabId: "tab-hook-race",
     initialProviderSessionId: "session-a",
-    isActive: true,
+    isActive,
   });
   return (
     <div>
       <output data-testid="hook-session-id">{session.projection?.sessionId}</output>
+      <output data-testid="hook-message">
+        {(session.projection?.messages[0] as NativeMessage | undefined)?.content}
+      </output>
       <button type="button" onClick={() => { void session.refresh(); }}>Refresh</button>
       <button type="button" onClick={() => { void session.resume("session-b"); }}>Resume B</button>
     </div>
@@ -304,7 +313,7 @@ function seedUnassignedPane(tabId: string) {
 
 describe("AgentNativeTab", () => {
   test.each(AGENT_PLATFORMS.map((platform) => [platform] as const))(
-    "keeps the context-window control in the %s compose bar before usage arrives",
+    "does not render a context-window control in the %s compose bar before usage arrives",
     async (platform) => {
       render(
         <AgentNativeTab
@@ -314,12 +323,36 @@ describe("AgentNativeTab", () => {
         />,
       );
 
-      const contextButton = await screen.findByRole("button", {
-        name: "Context window usage unavailable",
-      });
+      await screen.findByTestId("shared-native-compose-bar");
       const sendButton = screen.getByTitle("Send");
 
-      expect(contextButton.nextElementSibling).toBe(sendButton);
+      expect(screen.queryByRole("button", { name: /Context window/ })).toBeNull();
+      expect(sendButton).toBeTruthy();
+    },
+  );
+
+  test.each(AGENT_PLATFORMS.map((platform) => [platform] as const))(
+    "renders the context-window control in the %s compose bar once usage arrives",
+    async (platform) => {
+      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+        ...(await defaultProjection(input)),
+        contextUsage: { usedTokens: 4_000, maximumTokens: 16_000, percentage: 25 },
+      }));
+
+      render(
+        <AgentNativeTab
+          tabId={`tab-context-present-${platform}`}
+          data={identity(platform)}
+          isActive
+        />,
+      );
+
+      // The control is conditional, so absence before usage arrives must not be
+      // allowed to become permanent absence after it does.
+      const contextButton = await screen.findByRole("button", {
+        name: "Context window 25% used",
+      });
+      expect(contextButton.nextElementSibling).toBe(screen.getByTitle("Send"));
     },
   );
 
@@ -456,6 +489,9 @@ describe("AgentNativeTab", () => {
   });
 
   test("asks for a platform before opening that provider's normal resume flow", async () => {
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: [...AGENT_PLATFORMS],
+    });
     usePaneLayoutStore.setState({
       environments: new Map([
         ["env-1", {
@@ -484,9 +520,16 @@ describe("AgentNativeTab", () => {
     expect(within(dialog).getByText("Resume a session")).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: /Claude/ })).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: /Codex/ })).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: /Cursor Agent/ })).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: /Grok Build/ })).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: /OpenCode/ })).toBeTruthy();
 
-    fireEvent.click(within(dialog).getByRole("button", { name: /Codex/ }));
+    expect((within(dialog).getByRole("button", { name: /Cursor Agent/ }) as HTMLButtonElement).disabled)
+      .toBe(false);
+    expect((within(dialog).getByRole("button", { name: /Grok Build/ }) as HTMLButtonElement).disabled)
+      .toBe(false);
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /Cursor Agent/ }));
 
     expect(await screen.findByRole("dialog", { name: "Resume Session" })).toBeTruthy();
     await waitFor(() => expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(1));
@@ -577,6 +620,8 @@ describe("AgentNativeTab", () => {
     const picker = await screen.findByTitle(/Choose model/);
     fireEvent.pointerDown(picker);
     expect(screen.getByRole("menuitemradio", { name: /Composer 2.5/ })).toBeTruthy();
+    expect(useAgentModelCatalogStore.getState().cursorModels.map((model) => model.id))
+      .toEqual(["composer-2.5"]);
   });
 
   // The catalogue is environment-scoped and already holds every platform, so a
@@ -1016,6 +1061,176 @@ describe("AgentNativeTab", () => {
     expect(screen.getByTestId("hook-session-id").textContent).toBe("session-b");
   });
 
+  test("hydrates a cached session while its remount adoption probe is still pending", async () => {
+    const sessionKey = createSessionKey("env-1", "tab-hook-race");
+    useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+      ...(await defaultProjection({ agent: "claude", environmentId: "env-1" })),
+      sessionId: "session-a",
+      messages: [{
+        id: "assistant-stale",
+        role: "assistant",
+        content: "stale transcript",
+        parts: [],
+        createdAt: "2026-08-14T10:00:00.000Z",
+      }],
+    });
+    let releaseAdoption!: () => void;
+    adoptNativeAgentSessionMock.mockImplementationOnce(async (input) => {
+      await new Promise<void>((resolve) => { releaseAdoption = resolve; });
+      return {
+        providerSessionId: input.providerSessionId,
+        logicalSessionKey: input.logicalSessionKey,
+        environmentId: input.environmentId,
+        agent: input.agent,
+      };
+    });
+    getNativeAgentProjectionMock.mockImplementationOnce(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      sessionId: "session-a",
+      messages: [{
+        id: "assistant-latest",
+        role: "assistant",
+        content: "latest transcript",
+        parts: [],
+        createdAt: "2026-08-14T10:00:01.000Z",
+      }],
+      revision: 2,
+    }));
+
+    render(<NativeSessionHarness />);
+    expect(screen.getByTestId("hook-message").textContent).toBe("stale transcript");
+    await waitFor(() => expect(screen.getByTestId("hook-message").textContent)
+      .toBe("latest transcript"));
+    expect(adoptNativeAgentSessionMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      releaseAdoption();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  });
+
+  /**
+   * Park the very first projection read so the invalidation below is
+   * guaranteed to land while a read is genuinely in flight. Gating a later
+   * read instead races the mount's own reads, and a dispatch that arrives with
+   * nothing in flight takes the ordinary path and proves nothing.
+   */
+  async function parkFirstProjectionRead(): Promise<() => void> {
+    let releaseRefresh!: () => void;
+    const parked = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    getNativeAgentProjectionMock.mockImplementationOnce(async (input) => {
+      await parked;
+      return {
+        ...(await defaultProjection(input as never)),
+        messages: [{
+          id: "assistant-stale",
+          role: "assistant",
+          content: "stale transcript",
+          parts: [],
+          createdAt: "2026-08-14T10:00:00.000Z",
+        }],
+      };
+    });
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      messages: [{
+        id: "assistant-latest",
+        role: "assistant",
+        content: "latest transcript",
+        parts: [],
+        createdAt: "2026-08-14T10:00:01.000Z",
+      }],
+      revision: 2,
+    }));
+    return releaseRefresh;
+  }
+
+  test("coalesces a resource invalidation into one trailing projection read", async () => {
+    const releaseRefresh = await parkFirstProjectionRead();
+    render(<NativeSessionHarness />);
+    await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length)
+      .toBeGreaterThan(0));
+    const callsWhileParked = getNativeAgentProjectionMock.mock.calls.length;
+
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
+      });
+      // The dispatcher coalesces for 50ms, so the invalidation has to be given
+      // time to actually reach the hook while the read above is still parked.
+      await new Promise<void>((resolve) => { setTimeout(resolve, 80); });
+    });
+    // Coalesced, not executed: proof the read below is the trailing
+    // reconciliation rather than the invalidation's own read.
+    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked);
+
+    await act(async () => {
+      releaseRefresh();
+      await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
+    });
+    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked + 1);
+    await waitFor(() => expect(screen.getByTestId("hook-message").textContent)
+      .toBe("latest transcript"));
+  });
+
+  test("drops the queued reconciliation read when the tab stops being active", async () => {
+    const releaseRefresh = await parkFirstProjectionRead();
+    const { rerender } = render(<NativeSessionHarness />);
+    await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length)
+      .toBeGreaterThan(0));
+    const callsWhileParked = getNativeAgentProjectionMock.mock.calls.length;
+
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
+      });
+      await new Promise<void>((resolve) => { setTimeout(resolve, 80); });
+    });
+    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked);
+    // The tab stops being visible before the in-flight read drains. A tab the
+    // user cannot see must not keep reading; the next activation reconnects
+    // and reads authoritatively anyway.
+    rerender(<NativeSessionHarness isActive={false} />);
+
+    await act(async () => {
+      releaseRefresh();
+      // A full macrotask turn drains every queued microtask, so a trailing
+      // read would already have been recorded by the time this resolves.
+      await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
+    });
+    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked);
+  });
+
+  test("drops the queued reconciliation read when the tab unmounts", async () => {
+    const releaseRefresh = await parkFirstProjectionRead();
+    const { unmount } = render(<NativeSessionHarness />);
+    await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length)
+      .toBeGreaterThan(0));
+    const callsWhileParked = getNativeAgentProjectionMock.mock.calls.length;
+
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
+      });
+      await new Promise<void>((resolve) => { setTimeout(resolve, 80); });
+    });
+    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked);
+    unmount();
+
+    await act(async () => {
+      releaseRefresh();
+      await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
+    });
+    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked);
+  });
+
   test("polls an active tab faster while a turn runs and stops entirely when inactive", async () => {
     /*
      * The backend no longer refreshes projections on a timer, so this interval
@@ -1227,7 +1442,158 @@ describe("AgentNativeTab", () => {
       }));
     }
 
-    test("does not render a context wheel when the provider reports no maximum", async () => {
+    test("shows an active Cursor Task as a sub-agent rail above the composer", async () => {
+      seedProjection({
+        messages: [{
+          id: "assistant-cursor-subagent",
+          role: "assistant",
+          content: "Parent response complete",
+          createdAt: "2026-08-15T10:00:00.000Z",
+          parts: [{
+            type: "tool-invocation",
+            content: "Task: Validate the implementation",
+            toolName: "task",
+            toolTitle: "Task: Validate the implementation",
+            toolUseId: "cursor-subagent-1",
+            toolState: "success",
+            agentState: "active",
+            toolArgs: { description: "Validate the implementation" },
+          }],
+        }],
+      });
+
+      render(<AgentNativeTab tabId="tab-cursor-subagent" data={identity("cursor")} isActive />);
+
+      const rail = await screen.findByRole("status", { name: "1 sub-agent working" });
+      const composeDock = screen.getByTestId("compose-dock");
+      const composeBar = screen.getByTestId("shared-native-compose-bar");
+      expect(within(rail).getByText("Validate the implementation")).toBeTruthy();
+      expect(composeDock.contains(rail)).toBe(true);
+      expect(rail.compareDocumentPosition(composeBar) & Node.DOCUMENT_POSITION_FOLLOWING)
+        .toBeTruthy();
+    });
+
+    test("shows an active Grok Build sub-agent in the shared composer rail", async () => {
+      seedProjection({
+        messages: [{
+          id: "assistant-grok-subagent",
+          role: "assistant",
+          content: "Parent response complete",
+          createdAt: "2026-08-15T10:00:00.000Z",
+          parts: [{
+            type: "tool-invocation",
+            content: "Launch validation agent",
+            toolName: "spawn_subagent",
+            toolTitle: "Launch validation agent",
+            toolUseId: "grok-subagent-1",
+            toolState: "success",
+            agentState: "active",
+            toolArgs: {
+              variant: "Task",
+              run_in_background: true,
+              description: "Validate the implementation",
+              subagent_type: "explore",
+            },
+          }],
+        }],
+      });
+
+      const view = render(
+        <AgentNativeTab tabId="tab-grok-subagent" data={identity("grok")} isActive={false} />,
+      );
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      });
+      expect(screen.queryByTestId("active-subagent-rail")).toBeNull();
+
+      await act(async () => {
+        view.rerender(<AgentNativeTab tabId="tab-grok-subagent" data={identity("grok")} isActive />);
+      });
+
+      const rail = await screen.findByRole("status", { name: "1 sub-agent working" });
+      expect(within(rail).getByText("Validate the implementation")).toBeTruthy();
+      expect(screen.getByTestId("active-subagent-spinner")).toBeTruthy();
+      expect(screen.getByTestId("compose-dock").contains(rail)).toBe(true);
+
+      // Simulate leaving the environment and then reloading the renderer: the
+      // in-memory projection is gone, so the rail must rehydrate from the next
+      // authoritative snapshot rather than a live event the old tree observed.
+      view.unmount();
+      useNativeAgentProjectionStore.getState().reset();
+      getNativeAgentProjectionMock.mockClear();
+      render(<AgentNativeTab tabId="tab-grok-subagent" data={identity("grok")} isActive />);
+
+      expect(await screen.findByRole("status", { name: "1 sub-agent working" })).toBeTruthy();
+      expect(getNativeAgentProjectionMock).toHaveBeenCalledWith(expect.objectContaining({
+        agent: "grok",
+        logicalSessionKey: createSessionKey("env-1", "tab-grok-subagent"),
+      }));
+    });
+
+    test("removes a mounted Cursor Task rail when the authoritative projection becomes terminal", async () => {
+      seedProjection({
+        messages: [{
+          id: "assistant-cursor-subagent-transition",
+          role: "assistant",
+          content: "",
+          createdAt: "2026-08-15T10:00:00.000Z",
+          parts: [{
+            type: "tool-invocation",
+            content: "Task: Validate the implementation",
+            toolName: "task",
+            toolUseId: "cursor-subagent-1",
+            toolState: "success",
+            agentState: "active",
+            toolArgs: { description: "Validate the implementation" },
+          }],
+        }],
+      });
+
+      const view = render(
+        <AgentNativeTab
+          tabId="tab-cursor-subagent-transition"
+          data={identity("cursor")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+      expect(await screen.findByRole("status", { name: "1 sub-agent working" })).toBeTruthy();
+
+      seedProjection({
+        messages: [{
+          id: "assistant-cursor-subagent-transition",
+          role: "assistant",
+          content: "",
+          createdAt: "2026-08-15T10:00:00.000Z",
+          parts: [{
+            type: "tool-invocation",
+            content: "Task: Validate the implementation",
+            toolName: "task",
+            toolUseId: "cursor-subagent-1",
+            toolState: "success",
+            agentState: "finished",
+            toolArgs: { description: "Validate the implementation" },
+          }],
+        }],
+      });
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-cursor-subagent-transition"
+          data={identity("cursor")}
+          isActive
+          refreshRequestId={1}
+        />,
+      );
+
+      await waitFor(() => expect(screen.queryByTestId("active-subagent-rail")).toBeNull());
+      expect(useNativeAgentProjectionStore.getState().projections.get(
+        createSessionKey("env-1", "tab-cursor-subagent-transition"),
+      )?.messages[0]).toMatchObject({
+        parts: [expect.objectContaining({ agentState: "finished" })],
+      });
+    });
+
+    test("renders an unavailable context wheel when the provider reports no maximum", async () => {
       seedProjection({
         contextUsage: {
           usedTokens: 222,
@@ -1239,7 +1605,9 @@ describe("AgentNativeTab", () => {
       render(<AgentNativeTab tabId="tab-unbounded-usage" data={identity("grok")} isActive />);
 
       expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
-      expect(screen.queryByRole("button", { name: /Context window/ })).toBeNull();
+      await waitFor(() => {
+        expect(screen.queryByRole("button", { name: /Context window/ })).toBeNull();
+      });
     });
 
     test("renders the context wheel from the percentage the provider reported", async () => {

@@ -48,7 +48,14 @@ import type {
   NativeAgentSlashCommand,
   NativeAgentTurnPhase,
 } from "@orkestrator/protocol/native-agent";
-import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
+import {
+  DEFAULT_OPENCODE_MODEL_PROVIDERS,
+  EMPTY_NATIVE_AGENT_COMPOSER_STATE,
+  isSelectableOpenCodeModelId,
+  isSelectableOpenCodeProvider,
+  normalizeOpenCodeModelProviders,
+  openCodeModelProvidersKey,
+} from "@orkestrator/protocol/native-agent";
 import {
   parseLeadingSlashCommand,
   type ParsedSlashCommand,
@@ -327,6 +334,52 @@ export class ProviderUnavailableError extends Error {
 }
 
 /**
+ * The provider session is alive but its last turn ended in a terminal error.
+ *
+ * Thrown by `status()` so a pipeline stage fails with the provider's own
+ * explanation instead of a bare status. It is deliberately *not* a session
+ * death: the thread, its rollout and its configuration are all still there, and
+ * the next prompt clears the state — which is why interactive callers that only
+ * need liveness must read `detail` through `readProviderStatus()` rather than
+ * letting this escape. Treating it as fatal there left a tab that hit, say,
+ * "Selected model is at capacity" unable to change model and continue, because
+ * every later `ensureSession` threw on the previous turn's error.
+ */
+export class ProviderSessionFailedError extends Error {
+  readonly agent: BuildPipelineAgent;
+  readonly detail: string;
+
+  constructor(agent: BuildPipelineAgent, detail: string) {
+    super(`The ${agent} session failed: ${detail}`);
+    this.name = "ProviderSessionFailedError";
+    this.agent = agent;
+    this.detail = detail;
+  }
+}
+
+/**
+ * Read a provider status without a terminal turn error escaping as a throw.
+ *
+ * Liveness callers ("does this session still exist?", "may I dispatch?") need
+ * the `error` status and its detail as data. Only `ProviderSessionFailedError`
+ * is absorbed; transport faults still reject, because those genuinely leave the
+ * answer unknown.
+ */
+export async function readProviderStatus(
+  provider: Pick<BuildPipelineProvider, "status">,
+  sessionId: string,
+): Promise<{ status: ProviderStatus; error?: string }> {
+  try {
+    return { status: await provider.status(sessionId) };
+  } catch (error) {
+    if (error instanceof ProviderSessionFailedError) {
+      return { status: "error", error: error.detail };
+    }
+    throw error;
+  }
+}
+
+/**
  * A prompt transport failed without proving whether the provider accepted it.
  *
  * Callers retain the durable request id and reconcile provider status before
@@ -494,6 +547,13 @@ export interface BuildPipelineProvider {
 export interface NativeAgentRuntimeProvider extends BuildPipelineProvider {
   /** Live, bounded model discovery for launch surfaces without a session yet. */
   modelCatalog?(): Promise<AgentModel[]>;
+  /**
+   * Backend-only bounded discovery for the durable OpenCode cache. Unlike
+   * `modelCatalog`, this retains an unfiltered bounded source catalogue so a
+   * later allowlist expansion can work before another bridge is started. It
+   * must never be returned directly to a renderer.
+   */
+  rawModelCatalog?(): Promise<AgentModel[]>;
   interactiveSnapshot?(sessionId: string): Promise<ProviderInteractiveSnapshot>;
   updateInteractiveControls?(
     sessionId: string,
@@ -562,9 +622,26 @@ export type ProviderDependencies = {
   onInteractionObservation?: (
     event: ProviderInteractionObservationEvent,
   ) => void | Promise<void>;
+  /**
+   * Resolve the OpenCode provider allowlist for the model catalogue. Filtering
+   * happens here, in the backend, so the renderer is never sent the thousands
+   * of models OpenCode advertises. Omitted means the default managed pair.
+   */
+  resolveOpenCodeModelProviders?: () =>
+    | readonly string[]
+    | undefined
+    | Promise<readonly string[] | undefined>;
 };
 
 const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 30_000;
+/**
+ * Cursor and Grok session create runs `initialize` then `session/new` in one
+ * HTTP request. Each RPC is allowed 30s on the bridge, so a 30s fetch timeout
+ * fires while the agent is still coming up — the tab flashes Connection Failed
+ * and then attaches about a second later when the next refresh finds the
+ * session. Cover both RPCs plus a small margin.
+ */
+const ACP_SESSION_START_TIMEOUT_MS = 75_000;
 const DEFAULT_MONITOR_RETRY_MS = 1_000;
 
 const DEFAULT_SESSION_REGISTRATION: ProviderSessionRegistration = Object.freeze({
@@ -587,6 +664,7 @@ const MCP_FORM_CONTENT_QUESTION_ID = "mcp-form-content";
 const MAX_RENDERED_FILE_CHANGES = 48;
 const MAX_RENDERED_FILE_CHANGE_TEXT_LENGTH = 256;
 const INTERACTIVE_RUNTIME_METADATA_TTL_MS = 30_000;
+const INTERACTIVE_RUNTIME_METADATA_RETRY_MS = 5_000;
 const OPENCODE_COMMAND_NAME_TTL_MS = 30_000;
 
 function setBoundedMapEntry<K, V>(
@@ -683,13 +761,27 @@ function openCodeCatalogDefault(value: unknown): {
   };
 }
 
-function normalizeOpenCodeComposerCatalog(value: unknown): {
+function normalizeOpenCodeComposerCatalog(
+  value: unknown,
+  allowedProviders: readonly string[] = DEFAULT_OPENCODE_MODEL_PROVIDERS,
+): {
   models: AgentModel[];
   selectedModelId?: string;
   selectedReasoningId?: string;
 } {
   const models: AgentModel[] = [];
-  for (const provider of openCodeCatalogProviders(value).slice(0, 128)) {
+  // Reject the provider before either cap is applied. OpenCode advertises
+  // thousands of models across every provider it knows about, so an excluded
+  // provider allowed to consume the 128-provider or 512-model budget pushes the
+  // selectable catalogues out of the picker entirely.
+  const selectableProviders = openCodeCatalogProviders(value)
+    .filter((provider) => {
+      const providerId = nonEmptyString(provider.id);
+      return providerId !== null
+        && isSelectableOpenCodeProvider(providerId, allowedProviders);
+    })
+    .slice(0, 128);
+  for (const provider of selectableProviders) {
     const providerId = nonEmptyString(provider.id);
     if (!providerId) continue;
     for (const model of openCodeProviderModels(provider.models).slice(0, 512)) {
@@ -738,10 +830,17 @@ function normalizeOpenCodeComposerCatalog(value: unknown): {
     if (models.length >= 512) break;
   }
   const defaults = openCodeCatalogDefault(value);
+  // OpenCode's own default may name a provider the user excluded. Surfacing it
+  // would pre-select a model the picker cannot show, so it is dropped with the
+  // rest of that provider's catalogue.
+  const selectedModelId = defaults.modelId
+    && isSelectableOpenCodeModelId(defaults.modelId, allowedProviders)
+    ? defaults.modelId
+    : undefined;
   return {
     models,
-    ...(defaults.modelId ? { selectedModelId: defaults.modelId } : {}),
-    ...(defaults.reasoningId
+    ...(selectedModelId ? { selectedModelId } : {}),
+    ...(selectedModelId && defaults.reasoningId
       ? { selectedReasoningId: defaults.reasoningId }
       : {}),
   };
@@ -1294,18 +1393,32 @@ function authHeaders(connection: BridgeConnection): Headers {
   return headers;
 }
 
+function bridgeRequestTimeoutMs(
+  connection: BridgeConnection,
+  kind: "default" | "session-start" = "default",
+): number {
+  if (connection.requestTimeoutMs !== undefined) {
+    return Math.max(1, connection.requestTimeoutMs);
+  }
+  if (
+    kind === "session-start"
+    && (connection.agent === "cursor" || connection.agent === "grok")
+  ) {
+    return ACP_SESSION_START_TIMEOUT_MS;
+  }
+  return DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS;
+}
+
 async function bridgeFetch(
   connection: BridgeConnection,
   path: string,
   init: RequestInit = {},
   fetchImpl: typeof fetch = fetch,
+  timeoutKind: "default" | "session-start" = "default",
 ): Promise<Response> {
   const headers = authHeaders(connection);
   new Headers(init.headers).forEach((value, key) => headers.set(key, value));
-  const timeoutMs = Math.max(
-    1,
-    connection.requestTimeoutMs ?? DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS,
-  );
+  const timeoutMs = bridgeRequestTimeoutMs(connection, timeoutKind);
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const signal = init.signal
     ? AbortSignal.any([init.signal, timeoutSignal])
@@ -1433,6 +1546,9 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     executionProfiles?: NativeAgentComposerState["executionProfiles"];
     runtime?: NativeAgentRuntimeSummary;
   }>();
+  /** Runtime inventory is optional UI metadata and must not delay transcripts. */
+  private readonly codexRuntimeMetadataRefreshes = new Map<string, Promise<void>>();
+  private codexRuntimeMetadataGeneration = 0;
 
   constructor(
     private readonly connection: BridgeConnection,
@@ -1487,6 +1603,7 @@ class HttpBridgeProvider implements BuildPipelineProvider {
             : { title: label, clientSessionKey }),
       },
       this.fetchImpl,
+      "session-start",
     );
     await assertOkWithErrorDetail(response, `${this.agent} session creation`);
     const body = await response.json() as { sessionId?: unknown };
@@ -1665,6 +1782,18 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     }
   }
 
+  /**
+   * Read the session's lifecycle state.
+   *
+   * The failed-turn contract is split, so read it before branching on the
+   * result: a terminal turn error is delivered as a `ProviderSessionFailedError`
+   * **throw** when the bridge supplied a detail, and returned as `"error"` only
+   * when it did not. A caller that branches on `status === "error"` therefore
+   * reaches that branch exactly when the provider declined to explain itself —
+   * which is backwards. Any such caller must read through `readProviderStatus`,
+   * which turns the throw back into `{ status: "error", error }` so the branch
+   * fires either way and the detail is available to it.
+   */
   async status(sessionId: string): Promise<ProviderStatus> {
     const path = this.agent === "claude"
       ? `/session/${encodeURIComponent(sessionId)}`
@@ -1681,7 +1810,7 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     if (body.status === "error" && typeof body.error === "string") {
       const detail = body.error.trim().slice(0, 4_000);
       if (detail) {
-        throw new Error(`The ${this.agent} session failed: ${detail}`);
+        throw new ProviderSessionFailedError(this.agent, detail);
       }
     }
     return body.status === "running" || body.status === "idle" || body.status === "error"
@@ -2503,6 +2632,87 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     return Array.isArray(body.messages) ? body.messages : [];
   }
 
+  private codexRuntimeSummary(payload: unknown): NativeAgentRuntimeSummary | undefined {
+    const health = asRecord(payload);
+    if (!health) return undefined;
+    const engine = asRecord(health.engine);
+    const groupedNotices = new Map<string, number>();
+    if (Array.isArray(health.notices)) {
+      for (const candidate of health.notices.slice(-128)) {
+        const message = asRecord(candidate)?.message;
+        if (typeof message !== "string" || message.length === 0) continue;
+        const bounded = message.slice(0, 1_000);
+        groupedNotices.set(bounded, (groupedNotices.get(bounded) ?? 0) + 1);
+      }
+    }
+    return {
+      mcpServers: providerInventoryCount(health.mcp),
+      skills: providerInventoryCount(health.skills),
+      hooks: providerInventoryCount(health.hooks),
+      ...(typeof engine?.state === "string" ? { state: engine.state.slice(0, 64) } : {}),
+      ...(typeof engine?.codexVersion === "string"
+        ? { version: engine.codexVersion.slice(0, 64) }
+        : {}),
+      ...(groupedNotices.size > 0
+        ? {
+            notices: [...groupedNotices.entries()].slice(-5).map(([message, count]) => ({
+              message,
+              ...(count > 1 ? { count } : {}),
+            })),
+          }
+        : {}),
+    };
+  }
+
+  private refreshCodexRuntimeMetadata(sessionId: string): Promise<void> {
+    const pending = this.codexRuntimeMetadataRefreshes.get(sessionId);
+    if (pending) return pending;
+    const retained = this.interactiveMetadata.get(sessionId);
+    const generation = this.codexRuntimeMetadataGeneration;
+    const operation = (async () => {
+      try {
+        const response = await bridgeFetch(
+          this.connection,
+          `/session/${encodeURIComponent(sessionId)}/runtime-health`,
+          {},
+          this.fetchImpl,
+        );
+        assertOk(response, "Codex runtime health read");
+        const runtime = this.codexRuntimeSummary(await boundedJson(
+          response,
+          "Codex runtime health read",
+          { remaining: 512 * 1024 },
+        ));
+        if (!runtime) {
+          throw new ProviderUnavailableError(
+            "Codex runtime health read returned malformed metadata",
+          );
+        }
+        if (generation !== this.codexRuntimeMetadataGeneration) return;
+        setBoundedMapEntry(this.interactiveMetadata, sessionId, {
+          expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+          runtime,
+        }, MAX_TRACKED_INTERACTION_SESSIONS);
+      } catch {
+        // Keep known inventory usable and avoid retrying a failed optional
+        // endpoint on every 500ms projection poll.
+        if (
+          generation === this.codexRuntimeMetadataGeneration
+          && retained
+          && this.interactiveMetadata.get(sessionId) === retained
+        ) {
+          retained.expiresAt = Date.now() + INTERACTIVE_RUNTIME_METADATA_RETRY_MS;
+        }
+      }
+    })();
+    this.codexRuntimeMetadataRefreshes.set(sessionId, operation);
+    return operation.finally(() => {
+      if (this.codexRuntimeMetadataRefreshes.get(sessionId) === operation) {
+        this.codexRuntimeMetadataRefreshes.delete(sessionId);
+      }
+    });
+  }
+
   async interactiveSnapshot(
     sessionId: string,
   ): Promise<ProviderInteractiveSnapshot> {
@@ -2558,6 +2768,12 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       : `/session/${encodeURIComponent(sessionId)}`;
     const cachedMetadata = this.interactiveMetadata.get(sessionId);
     const refreshMetadata = !cachedMetadata || cachedMetadata.expiresAt <= Date.now();
+    if (this.agent === "codex" && cachedMetadata && refreshMetadata) {
+      // `/runtime-health` fans out to several app-server inventory RPCs. The
+      // previous inventory remains useful while that optional refresh runs;
+      // message/status/config reads below are the foreground critical path.
+      void this.refreshCodexRuntimeMetadata(sessionId);
+    }
     const [sessionResponse, messages, configResponse, initResponse, runtimeResponse] = await Promise.all([
       bridgeFetch(this.connection, sessionPath, {}, this.fetchImpl),
       this.messages(sessionId),
@@ -2577,7 +2793,7 @@ class HttpBridgeProvider implements BuildPipelineProvider {
             this.fetchImpl,
           )
         : Promise.resolve(undefined),
-      this.agent === "codex" && refreshMetadata
+      this.agent === "codex" && refreshMetadata && !cachedMetadata
         ? bridgeFetch(
             this.connection,
             `/session/${encodeURIComponent(sessionId)}/runtime-health`,
@@ -2612,42 +2828,13 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       const rawPhase = payload?.phase;
       let runtime: NativeAgentRuntimeSummary | undefined = cachedMetadata?.runtime;
       if (runtimeResponse?.ok) {
-        const health = asRecord(await boundedJson(
+        runtime = this.codexRuntimeSummary(await boundedJson(
           runtimeResponse,
           "Codex runtime health read",
           { remaining: 512 * 1024 },
         ));
-        if (health) {
-          const engine = asRecord(health.engine);
-          const groupedNotices = new Map<string, number>();
-          if (Array.isArray(health.notices)) {
-            for (const candidate of health.notices.slice(-128)) {
-              const message = asRecord(candidate)?.message;
-              if (typeof message !== "string" || message.length === 0) continue;
-              const bounded = message.slice(0, 1_000);
-              groupedNotices.set(bounded, (groupedNotices.get(bounded) ?? 0) + 1);
-            }
-          }
-          runtime = {
-            mcpServers: providerInventoryCount(health.mcp),
-            skills: providerInventoryCount(health.skills),
-            hooks: providerInventoryCount(health.hooks),
-            ...(typeof engine?.state === "string" ? { state: engine.state.slice(0, 64) } : {}),
-            ...(typeof engine?.codexVersion === "string"
-              ? { version: engine.codexVersion.slice(0, 64) }
-              : {}),
-            ...(groupedNotices.size > 0
-              ? {
-                  notices: [...groupedNotices.entries()].slice(-5).map(([message, count]) => ({
-                    message,
-                    ...(count > 1 ? { count } : {}),
-                  })),
-                }
-              : {}),
-          };
-        }
       }
-      if (refreshMetadata) {
+      if (refreshMetadata && !cachedMetadata) {
         setBoundedMapEntry(this.interactiveMetadata, sessionId, {
           expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
           ...(runtime ? { runtime } : {}),
@@ -2830,18 +3017,21 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     // Execution profiles and runtime inventory are discovered alongside models,
     // so an explicit refresh has to drop them too or the picker re-renders the
     // same stale list it was asked to replace.
+    this.codexRuntimeMetadataGeneration += 1;
     this.interactiveMetadata.clear();
   }
 
   async listResumableSessions(): Promise<NativeAgentResumeEntry[]> {
-    if (this.agent === "cursor" || this.agent === "grok") return [];
     const response = await bridgeFetch(
       this.connection,
       "/session/list",
       {},
       this.fetchImpl,
     );
-    assertOk(response, `${this.agent} resumable session list`);
+    // The ACP bridge answers 410 with the reason the agent cannot list its own
+    // history. Dropping that body would reduce a specific, actionable message
+    // to a bare status code in front of the user.
+    await assertOkWithErrorDetail(response, `${this.agent} resumable session list`);
     const payload = asRecord(await boundedJson(
       response,
       `${this.agent} resumable session list`,
@@ -2949,7 +3139,28 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     controls?: NativeAgentControlUpdate,
   ): Promise<string> {
     if (this.agent === "cursor" || this.agent === "grok") {
-      throw new PromptRejectedError(`${this.agent} does not support session resume`);
+      const response = await bridgeFetch(
+        this.connection,
+        "/session/resume",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            sessionId,
+            ...(controls?.modelId ? { modelId: controls.modelId } : {}),
+            ...(controls?.reasoningId ? { reasoningId: controls.reasoningId } : {}),
+            ...(controls?.mode ? { mode: controls.mode } : {}),
+            ...(controls?.fastMode === undefined ? {} : { fastMode: controls.fastMode }),
+          }),
+        },
+        this.fetchImpl,
+      );
+      await assertOkWithErrorDetail(response, `${this.agent} session resume`);
+      const payload = asRecord(await boundedJson(response, `${this.agent} session resume`));
+      const resumedId = nonEmptyString(payload?.sessionId);
+      if (!resumedId) {
+        throw new ProviderUnavailableError(`${this.agent} returned a malformed resumed session`);
+      }
+      return resumedId;
     }
     if (this.agent === "claude") {
       const response = await bridgeFetch(
@@ -3408,6 +3619,10 @@ class OpenCodeProvider implements BuildPipelineProvider {
   private readonly sessionExistenceRetryAt = new Map<string, number>();
   private readonly interactiveMetadata = new Map<string, {
     expiresAt: number;
+    /** This entry embeds a filtered catalogue, so it carries the same allowlist
+     * key as `catalogMetadata`. Without it a composer read served from this
+     * cache would keep the pre-edit catalogue for a whole TTL. */
+    providersKey: string;
     executionProfiles: NonNullable<NativeAgentComposerState["executionProfiles"]>;
     runtime: NativeAgentRuntimeSummary;
     models: AgentModel[];
@@ -3418,6 +3633,9 @@ class OpenCodeProvider implements BuildPipelineProvider {
   }>();
   private catalogMetadata: {
     expiresAt: number;
+    /** The allowlist this catalogue was filtered against; a settings edit
+     * changes it and must not be served a stale, differently-filtered list. */
+    providersKey: string;
     catalog: ReturnType<typeof normalizeOpenCodeComposerCatalog>;
   } | null = null;
   private commandNames: { names: Set<string>; expiresAt: number } | null = null;
@@ -3438,6 +3656,10 @@ class OpenCodeProvider implements BuildPipelineProvider {
   private readonly onInteractionObservation?: (
     event: ProviderInteractionObservationEvent,
   ) => void | Promise<void>;
+  private readonly resolveOpenCodeModelProviders?: () =>
+    | readonly string[]
+    | undefined
+    | Promise<readonly string[] | undefined>;
 
   constructor(
     private readonly connection: BridgeConnection,
@@ -3467,6 +3689,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
     );
     this.autoAnswerRequests = dependencies.autoAnswerRequests === true;
     this.onInteractionObservation = dependencies.onInteractionObservation;
+    this.resolveOpenCodeModelProviders = dependencies.resolveOpenCodeModelProviders;
     // An interactive provider has nothing to monitor: every request belongs to a
     // tab that will answer it. Subscribing anyway would open a permanent event
     // stream per provider for no consumer.
@@ -3508,10 +3731,17 @@ class OpenCodeProvider implements BuildPipelineProvider {
     ) => Promise<unknown>).call(owner, parameters, this.requestOptions());
   }
 
-  private async readComposerCatalog(): Promise<
+  private async readComposerCatalog(
+    allowedProviders: readonly string[],
+  ): Promise<
     ReturnType<typeof normalizeOpenCodeComposerCatalog>
   > {
-    if (this.catalogMetadata && this.catalogMetadata.expiresAt > Date.now()) {
+    const providersKey = openCodeModelProvidersKey(allowedProviders);
+    if (
+      this.catalogMetadata
+      && this.catalogMetadata.expiresAt > Date.now()
+      && this.catalogMetadata.providersKey === providersKey
+    ) {
       return this.catalogMetadata.catalog;
     }
     const [providerResult, fallbackResult] = await Promise.allSettled([
@@ -3520,19 +3750,52 @@ class OpenCodeProvider implements BuildPipelineProvider {
     ]);
     const payload = (result: PromiseSettledResult<unknown>): unknown =>
       result.status === "fulfilled" ? asRecord(result.value)?.data ?? {} : {};
-    const live = normalizeOpenCodeComposerCatalog(payload(providerResult));
+    const live = normalizeOpenCodeComposerCatalog(
+      payload(providerResult),
+      allowedProviders,
+    );
     const catalog = live.models.length > 0
       ? live
-      : normalizeOpenCodeComposerCatalog(payload(fallbackResult));
+      : normalizeOpenCodeComposerCatalog(
+          payload(fallbackResult),
+          allowedProviders,
+        );
     this.catalogMetadata = {
       expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+      providersKey,
       catalog,
     };
     return catalog;
   }
 
+  /**
+   * The configured allowlist, or the managed default when config is
+   * unavailable. A failed read must not widen the catalogue to every provider.
+   */
+  private async openCodeModelProviders(): Promise<readonly string[]> {
+    if (!this.resolveOpenCodeModelProviders) {
+      return DEFAULT_OPENCODE_MODEL_PROVIDERS;
+    }
+    try {
+      return normalizeOpenCodeModelProviders(
+        await this.resolveOpenCodeModelProviders(),
+      );
+    } catch {
+      return DEFAULT_OPENCODE_MODEL_PROVIDERS;
+    }
+  }
+
   async modelCatalog(): Promise<AgentModel[]> {
-    return (await this.readComposerCatalog()).models;
+    return (await this.readComposerCatalog(
+      await this.openCodeModelProviders(),
+    )).models;
+  }
+
+  async rawModelCatalog(): Promise<AgentModel[]> {
+    // The empty allowlist has the documented provider-filter meaning of
+    // unrestricted, while `normalizeOpenCodeComposerCatalog` still enforces
+    // its provider/model bounds before this reaches persistent storage.
+    return (await this.readComposerCatalog([])).models;
   }
 
   private async monitorRequests(): Promise<void> {
@@ -4712,8 +4975,19 @@ class OpenCodeProvider implements BuildPipelineProvider {
     title?: string;
     shareUrl?: string | null;
   }> {
+    // Resolved before the cache is consulted: this entry carries a catalogue
+    // filtered against a specific allowlist, and a settings edit must invalidate
+    // it here as well as in `readComposerCatalog`.
+    const allowedProviders = await this.openCodeModelProviders();
+    const providersKey = openCodeModelProvidersKey(allowedProviders);
     const cached = this.interactiveMetadata.get(sessionId);
-    if (cached && cached.expiresAt > Date.now()) return cached;
+    if (
+      cached
+      && cached.expiresAt > Date.now()
+      && cached.providersKey === providersKey
+    ) {
+      return cached;
+    }
 
     const directory = this.connection.directory;
     const results = await Promise.allSettled([
@@ -4725,7 +4999,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
       this.optionalSdkCall("session", "todo", { sessionID: sessionId, directory }),
       this.optionalSdkCall("session", "diff", { sessionID: sessionId, directory }),
       this.optionalSdkCall("session", "get", { sessionID: sessionId, directory }),
-      this.readComposerCatalog(),
+      this.readComposerCatalog(allowedProviders),
     ]);
     const data = (index: number, fallback: unknown): unknown => {
       const result = results[index];
@@ -4774,6 +5048,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
       : { models: [] };
     const entry = {
       expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+      providersKey,
       executionProfiles,
       runtime,
       models: catalog.models,

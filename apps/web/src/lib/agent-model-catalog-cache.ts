@@ -1,6 +1,7 @@
 import { getAgentModelCatalogCache } from "@/lib/backend";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
+import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
 /**
  * Rehydrate model pickers from disk before React mounts. Network-backed bridge
@@ -10,6 +11,8 @@ import { useCodexStore } from "@/stores/codexStore";
 export async function hydrateAgentModelCatalogCache(): Promise<void> {
   const claudeModelsBeforeRead = useClaudeStore.getState().models;
   const codexModelsBeforeRead = useCodexStore.getState().models;
+  const cursorModelsBeforeRead = useAgentModelCatalogStore.getState().cursorModels;
+  const grokModelsBeforeRead = useAgentModelCatalogStore.getState().grokModels;
   const cache = await getAgentModelCatalogCache();
   if (
     cache.claude?.models.length
@@ -23,4 +26,15 @@ export async function hydrateAgentModelCatalogCache(): Promise<void> {
   ) {
     useCodexStore.getState().setModels(cache.codex.models);
   }
+  const currentAcpModels = useAgentModelCatalogStore.getState();
+  useAgentModelCatalogStore.setState({
+    ...(cache.cursor?.models.length
+      && currentAcpModels.cursorModels === cursorModelsBeforeRead
+      ? { cursorModels: cache.cursor.models }
+      : {}),
+    ...(cache.grok?.models.length
+      && currentAcpModels.grokModels === grokModelsBeforeRead
+      ? { grokModels: cache.grok.models }
+      : {}),
+  });
 }

@@ -23,6 +23,7 @@ import type { StorageService } from "./storage.js";
 import {
   AmbiguousPromptDispatchError,
   createBuildPipelineProvider,
+  readProviderStatus,
   type BridgeConnection,
   type BuildPipelineProvider,
   type ProviderDependencies,
@@ -585,7 +586,10 @@ export class MultiReviewService {
         abortError = error;
       }
       try {
-        const status = await provider.status(providerSessionId);
+        // Read as data: a session whose turn ended terminally is stopped, which
+        // is what settles the abort. Letting that throw reported a successful
+        // abort as unsettled whenever the provider explained why it failed.
+        const { status } = await readProviderStatus(provider, providerSessionId);
         await this.assertFence(workflow.id, token);
         if (status === "idle" || status === "missing" || status === "error") {
           return { settled: true, error: "" };
@@ -759,7 +763,12 @@ export class MultiReviewService {
     }
     if (reviewer.status !== "running") return "continue";
     await this.resolveUnattendedInteractions(workflow, token, provider, reviewer.providerSessionId);
-    const status = await provider.status(reviewer.providerSessionId);
+    // Read as data so the terminal-failure branch below fires whether or not
+    // the provider explained itself, and can report the explanation when it did.
+    const { status, error: statusDetail } = await readProviderStatus(
+      provider,
+      reviewer.providerSessionId,
+    );
     await this.assertFence(workflow.id, token);
     if (status === "running") return this.clearStall(workflow, token, reviewer);
     if (status === "blocked") {
@@ -776,7 +785,9 @@ export class MultiReviewService {
       reviewer.status = "failed";
       reviewer.error = status === "missing"
         ? "The reviewer session no longer exists"
-        : "The reviewer session failed";
+        : statusDetail
+          ? `The reviewer session failed: ${statusDetail}`
+          : "The reviewer session failed";
       await this.save(workflow, token);
       return "continue";
     }
@@ -947,7 +958,12 @@ export class MultiReviewService {
       await this.save(workflow, token);
     }
     await this.resolveUnattendedInteractions(workflow, token, provider, session.providerSessionId);
-    const status = await provider.status(session.providerSessionId);
+    // Read as data so the terminal-failure branch below fires whether or not
+    // the provider explained itself, and can report the explanation when it did.
+    const { status, error: statusDetail } = await readProviderStatus(
+      provider,
+      session.providerSessionId,
+    );
     await this.assertFence(workflow.id, token);
     if (status === "running") {
       if (request.idleResultPolls !== undefined) {
@@ -969,7 +985,9 @@ export class MultiReviewService {
     if (status === "error" || status === "missing") {
       throw new Error(status === "missing"
         ? "The consolidation session no longer exists"
-        : "The consolidation session failed");
+        : statusDetail
+          ? `The consolidation session failed: ${statusDetail}`
+          : "The consolidation session failed");
     }
     const result = await provider.structured<unknown>(session.providerSessionId, request.requestId);
     await this.assertFence(workflow.id, token);

@@ -1,6 +1,11 @@
 import { create } from "zustand";
 import { deepEqualJson } from "@/lib/chat/message-identity";
-import type { AppConfig, EnvironmentType, GlobalConfig, RepositoryConfig } from "@/types";
+import type {
+  AppConfig,
+  EnvironmentType,
+  GlobalConfig,
+  RepositoryConfig,
+} from "@/types";
 import { DEFAULT_TERMINAL_SCROLLBACK, TERMINAL_BACKGROUND_COLOR } from "@/constants/terminal";
 import { LEGACY_ENABLED_AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 

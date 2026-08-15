@@ -16,6 +16,7 @@ import {
   createBuildPipelineProvider,
   AmbiguousPromptDispatchError,
   PromptRejectedError,
+  ProviderSessionFailedError,
   ProviderUnavailableError,
   type BridgeConnection,
   type BuildPipelineProvider,
@@ -81,11 +82,14 @@ function createProviderStub(
     interactiveSnapshot?: (
       sessionId: string,
     ) => Promise<ProviderInteractiveSnapshot>;
+    modelCatalog?: NativeAgentRuntimeProvider["modelCatalog"];
+    rawModelCatalog?: NativeAgentRuntimeProvider["rawModelCatalog"];
     abort?: (sessionId: string) => Promise<void>;
     stopBackgroundTask?: NativeAgentRuntimeProvider["stopBackgroundTask"];
     dismissSuggestedPrompt?: NativeAgentRuntimeProvider["dismissSuggestedPrompt"];
     updateInteractiveControls?: NativeAgentRuntimeProvider["updateInteractiveControls"];
     slashCommands?: NativeAgentRuntimeProvider["slashCommands"];
+    refreshCatalog?: NativeAgentRuntimeProvider["refreshCatalog"];
   } = {},
 ) {
   const createSession = mock(
@@ -109,11 +113,20 @@ function createProviderStub(
   const interactiveSnapshot = behaviour.interactiveSnapshot
     ? mock(behaviour.interactiveSnapshot)
     : undefined;
+  const modelCatalog = behaviour.modelCatalog
+    ? mock(behaviour.modelCatalog)
+    : undefined;
+  const rawModelCatalog = behaviour.rawModelCatalog
+    ? mock(behaviour.rawModelCatalog)
+    : undefined;
   const updateInteractiveControls = behaviour.updateInteractiveControls
     ? mock(behaviour.updateInteractiveControls)
     : undefined;
   const slashCommands = behaviour.slashCommands
     ? mock(behaviour.slashCommands)
+    : undefined;
+  const refreshCatalog = behaviour.refreshCatalog
+    ? mock(behaviour.refreshCatalog)
     : undefined;
   const provider = {
     agent,
@@ -126,8 +139,11 @@ function createProviderStub(
     interactions: behaviour.interactions,
     messages: behaviour.messages ?? (async () => []),
     interactiveSnapshot,
+    modelCatalog,
+    rawModelCatalog,
     updateInteractiveControls,
     slashCommands,
+    refreshCatalog,
     structured: async () => null,
     abort,
     stopBackgroundTask,
@@ -146,8 +162,11 @@ function createProviderStub(
     stopBackgroundTask,
     dismissSuggestedPrompt,
     interactiveSnapshot,
+    modelCatalog,
+    rawModelCatalog,
     updateInteractiveControls,
     slashCommands,
+    refreshCatalog,
     dispose,
   };
 }
@@ -467,6 +486,30 @@ function activePipeline(
 }
 
 describe("NativeAgentService", () => {
+  test("uses the provider's raw OpenCode catalogue for durable cache refreshes", async () => {
+    const filtered = [{ platform: "opencode" as const, id: "opencode/a", label: "A" }];
+    const raw = [
+      ...filtered,
+      { platform: "opencode" as const, id: "openrouter/b", label: "B" },
+    ];
+    const stub = createProviderStub("opencode", {
+      modelCatalog: async () => filtered,
+      rawModelCatalog: async () => raw,
+    });
+    await withService({
+      prefix: "orkestrator-native-catalog-cache-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      await expect(service.listModelCatalogForCache({
+        environmentId: "env-1",
+        agent: "opencode",
+        logicalSessionKey: "model-catalog:env-1",
+      })).resolves.toEqual(raw);
+      expect(stub.rawModelCatalog).toHaveBeenCalledTimes(1);
+      expect(stub.modelCatalog).not.toHaveBeenCalled();
+    });
+  });
+
   test("projects authoritative interactive state with stable revisions and inactive refresh", async () => {
     let now = 10_000;
     let providerRevision = 4;
@@ -722,6 +765,108 @@ describe("NativeAgentService", () => {
       expect(resolved).not.toBeNull();
       expect(resolved).toMatchObject({ turn: { phase: "idle" } });
       expect(cache.has(evictedKey)).toBe(true);
+    });
+  });
+
+  test("keeps an at-capacity session usable so a new model can continue it", async () => {
+    // Codex answers a turn it could not run with a terminal session error. The
+    // thread, rollout and config all survive it, and the fix is to pick another
+    // model and send again — so neither the liveness probe nor the dispatch may
+    // treat the previous turn's failure as a dead session.
+    const stub = createProviderStub("codex", {
+      status: async () => {
+        throw new ProviderSessionFailedError(
+          "codex",
+          "Selected model is at capacity. Please try a different model.",
+        );
+      },
+      interactiveSnapshot: async () => ({
+        status: "error",
+        messages: [],
+        error: "Selected model is at capacity. Please try a different model.",
+      }),
+    });
+    await withService({
+      prefix: "orkestrator-native-at-capacity-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-capacity",
+      };
+      const created = await service.ensureSession({ ...identity, model: "gpt-5.6-sol" });
+
+      const reused = await service.ensureSession({ ...identity, model: "gpt-5.6-luna" });
+      expect(reused.providerSessionId).toBe(created.providerSessionId);
+      expect(stub.createSession).toHaveBeenCalledTimes(1);
+
+      await service.dispatchPrompt({
+        ...identity,
+        prompt: "Please continue",
+        requestId: "request-after-capacity",
+        model: "gpt-5.6-luna",
+      });
+      expect(stub.send).toHaveBeenCalledTimes(1);
+      expect(stub.send.mock.calls[0]?.[1]).toBe("Please continue");
+      // The point of reusing the session is that the *replacement* model runs.
+      // Reuse alone would still be broken if the new model were dropped here.
+      expect(stub.send.mock.calls[0]?.[2]).toMatchObject({ model: "gpt-5.6-luna" });
+
+      // The failure is still reported — it just no longer blocks the composer.
+      const projection = await service.getProjection(identity);
+      expect(projection?.turn).toMatchObject({
+        phase: "error",
+        error: "Selected model is at capacity. Please try a different model.",
+      });
+    });
+  });
+
+  test("projects a terminal turn failure through the status fallback", async () => {
+    const detail = "Selected model is at capacity. Please try a different model.";
+    const stub = createProviderStub("codex", {
+      status: async () => {
+        throw new ProviderSessionFailedError("codex", detail);
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-terminal-projection-fallback-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-terminal-projection",
+      };
+      await service.ensureSession(identity);
+
+      const projection = await service.getProjection(identity);
+
+      expect(stub.status).toHaveBeenCalledWith("provider-session");
+      expect(projection).toMatchObject({
+        connection: "connected",
+        turn: { phase: "error", error: detail },
+        messages: [{ role: "system", content: detail }],
+      });
+    });
+  });
+
+  test("adopts a session whose last turn failed rather than calling it missing", async () => {
+    const stub = createProviderStub("codex", {
+      status: async () => {
+        throw new ProviderSessionFailedError("codex", "usage limit reached");
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-adopt-failed-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      await expect(service.adoptSession({
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "env-env-1:tab-adopt-failed",
+        providerSessionId: "provider-existing",
+      })).resolves.toMatchObject({ providerSessionId: "provider-existing" });
     });
   });
 
@@ -1068,6 +1213,260 @@ describe("NativeAgentService", () => {
     });
   });
 
+  test("does not hold an updated transcript behind expired discovery metadata", async () => {
+    let now = 1_000;
+    let message = "old transcript";
+    let releaseCatalog!: () => void;
+    let releaseCommands!: () => void;
+    const catalogGate = new Promise<void>((resolve) => { releaseCatalog = resolve; });
+    const commandGate = new Promise<void>((resolve) => { releaseCommands = resolve; });
+    let catalogReads = 0;
+    let catalogRefreshFinished = false;
+    const invoke: Invoke = async <T>(command: string): Promise<T> => {
+      if (command !== "get_native_agent_model_catalog") {
+        throw new Error(`Unexpected backend command: ${command}`);
+      }
+      catalogReads += 1;
+      if (catalogReads > 1) {
+        await catalogGate;
+        catalogRefreshFinished = true;
+      }
+      return [{
+        platform: "codex",
+        id: catalogReads > 1 ? "gpt-new" : "gpt-old",
+        label: catalogReads > 1 ? "GPT new" : "GPT old",
+      }] as T;
+    };
+    let commandReads = 0;
+    let commandRefreshFinished = false;
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [{
+          id: "message-1",
+          role: "assistant",
+          content: message,
+          parts: [],
+          createdAt: "2026-08-14T10:00:00.000Z",
+        }],
+      }),
+      slashCommands: async () => {
+        commandReads += 1;
+        if (commandReads > 1) {
+          await commandGate;
+          commandRefreshFinished = true;
+        }
+        return [{ name: commandReads > 1 ? "/new" : "/old" }];
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-stale-discovery-",
+      provider: async () => stub.provider,
+      invoke,
+      now: () => now,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-stale-discovery",
+      };
+      await service.ensureSession(identity);
+      await service.getProjection(identity);
+
+      now += 30_001;
+      message = "latest transcript";
+      const projection = await Promise.race([
+        service.getProjection(identity),
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("Transcript waited for discovery metadata")), 100);
+        }),
+      ]);
+
+      expect(projection?.messages).toEqual([
+        expect.objectContaining({ content: "latest transcript" }),
+      ]);
+      expect(projection?.composer?.models).toEqual([
+        expect.objectContaining({ id: "gpt-old" }),
+      ]);
+      expect(projection?.slashCommands?.map((command) => command.name))
+        .toEqual(["/old", "/steer"]);
+
+      releaseCatalog();
+      releaseCommands();
+      await waitForCondition(() => catalogRefreshFinished && commandRefreshFinished);
+      const updated = await service.getProjection(identity);
+      expect(updated?.composer?.models).toEqual([
+        expect.objectContaining({ id: "gpt-new" }),
+      ]);
+      expect(updated?.slashCommands?.map((command) => command.name))
+        .toEqual(["/new", "/steer"]);
+    });
+  });
+
+  test("runs fresh discovery after an explicit refresh overlaps stale background work", async () => {
+    let now = 1_000;
+    let releaseCatalog!: () => void;
+    let releaseCommands!: () => void;
+    const catalogGate = new Promise<void>((resolve) => { releaseCatalog = resolve; });
+    const commandGate = new Promise<void>((resolve) => { releaseCommands = resolve; });
+    let catalogReads = 0;
+    let staleCatalogSettled = false;
+    const invoke: Invoke = async <T>(command: string): Promise<T> => {
+      if (command !== "get_native_agent_model_catalog") {
+        throw new Error(`Unexpected backend command: ${command}`);
+      }
+      catalogReads += 1;
+      if (catalogReads === 2) {
+        await catalogGate;
+        staleCatalogSettled = true;
+      }
+      return [{
+        platform: "codex",
+        id: catalogReads > 2 ? "gpt-new" : "gpt-old",
+        label: catalogReads > 2 ? "GPT new" : "GPT old",
+      }] as T;
+    };
+    let commandReads = 0;
+    let staleCommandsSettled = false;
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+      slashCommands: async () => {
+        commandReads += 1;
+        if (commandReads === 2) {
+          await commandGate;
+          staleCommandsSettled = true;
+        }
+        return [{ name: commandReads > 2 ? "/new" : "/old" }];
+      },
+      refreshCatalog: () => undefined,
+    });
+    await withService({
+      prefix: "orkestrator-native-forced-discovery-",
+      provider: async () => stub.provider,
+      invoke,
+      now: () => now,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-forced-discovery",
+      };
+      try {
+        await service.ensureSession(identity);
+        const initial = await service.getProjection(identity);
+        expect(initial?.composer?.models.map((model) => model.id)).toEqual(["gpt-old"]);
+        expect(initial?.slashCommands?.map((command) => command.name))
+          .toEqual(["/old", "/steer"]);
+
+        now += 30_001;
+        await service.getProjection(identity);
+        await waitForCondition(() => catalogReads === 2 && commandReads === 2);
+
+        const refreshedProjection = service.refreshProjectionModels(identity);
+        await Promise.resolve();
+        expect(catalogReads).toBe(2);
+        expect(commandReads).toBe(2);
+
+        // Both gates are still closed: an explicit refresh discards the stale
+        // reads instead of inheriting their latency, which for a wedged bridge
+        // is a full request timeout.
+        const refreshed = await refreshedProjection;
+        expect(staleCatalogSettled).toBe(false);
+        expect(staleCommandsSettled).toBe(false);
+        expect(stub.refreshCatalog).toHaveBeenCalledTimes(1);
+        expect(catalogReads).toBe(3);
+        expect(commandReads).toBe(3);
+        expect(refreshed?.composer?.models.map((model) => model.id)).toEqual(["gpt-new"]);
+        expect(refreshed?.slashCommands?.map((command) => command.name))
+          .toEqual(["/new", "/steer"]);
+
+        // The discarded reads finishing later must not overwrite the catalogue
+        // the explicit refresh just installed.
+        releaseCatalog();
+        releaseCommands();
+        await waitForCondition(() => staleCatalogSettled && staleCommandsSettled);
+        const settled = await service.getProjection(identity);
+        expect(catalogReads).toBe(3);
+        expect(commandReads).toBe(3);
+        expect(settled?.composer?.models.map((model) => model.id)).toEqual(["gpt-new"]);
+        expect(settled?.slashCommands?.map((command) => command.name))
+          .toEqual(["/new", "/steer"]);
+      } finally {
+        releaseCatalog();
+        releaseCommands();
+      }
+    });
+  });
+
+  test("backs a failed background discovery off instead of retrying every poll", async () => {
+    let now = 1_000;
+    let catalogReads = 0;
+    const invoke: Invoke = async <T>(command: string): Promise<T> => {
+      if (command !== "get_native_agent_model_catalog") {
+        throw new Error(`Unexpected backend command: ${command}`);
+      }
+      catalogReads += 1;
+      if (catalogReads > 1) throw new Error("Model discovery is unavailable");
+      return [{ platform: "codex", id: "gpt-old", label: "GPT old" }] as T;
+    };
+    let commandReads = 0;
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+      slashCommands: async () => {
+        commandReads += 1;
+        if (commandReads > 1) throw new Error("Command discovery is unavailable");
+        return [{ name: "/old" }];
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-discovery-backoff-",
+      provider: async () => stub.provider,
+      invoke,
+      now: () => now,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-discovery-backoff",
+      };
+      await service.ensureSession(identity);
+      await service.getProjection(identity);
+      expect(catalogReads).toBe(1);
+      expect(commandReads).toBe(1);
+
+      now += 30_001;
+      const stale = await service.getProjection(identity);
+      expect(stale?.composer?.models.map((model) => model.id)).toEqual(["gpt-old"]);
+      expect(stale?.slashCommands?.map((command) => command.name))
+        .toEqual(["/old", "/steer"]);
+
+      // A failed optional endpoint must not be re-probed on every 500ms
+      // projection poll, so the retained entry carries an explicit back-off.
+      const caches = service as unknown as {
+        modelCatalogCache: Map<string, { expiresAt: number }>;
+        slashCommandCache: Map<string, { expiresAt: number }>;
+      };
+      await waitForCondition(() => (
+        caches.modelCatalogCache.get("env-1")?.expiresAt === now + 5_000
+        && caches.slashCommandCache.get("env-1\0codex")?.expiresAt === now + 5_000
+      ));
+      expect(catalogReads).toBe(2);
+      expect(commandReads).toBe(2);
+
+      now += 4_999;
+      const withinBackoff = await service.getProjection(identity);
+      expect(catalogReads).toBe(2);
+      expect(commandReads).toBe(2);
+      expect(withinBackoff?.composer?.models.map((model) => model.id)).toEqual(["gpt-old"]);
+      expect(withinBackoff?.slashCommands?.map((command) => command.name))
+        .toEqual(["/old", "/steer"]);
+
+      now += 2;
+      await service.getProjection(identity);
+      await waitForCondition(() => catalogReads === 3 && commandReads === 3);
+    });
+  });
+
   test("advertises runtime session-action commands beside provider discovery", async () => {
     const stub = createProviderStub("codex", {
       interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
@@ -1094,6 +1493,27 @@ describe("NativeAgentService", () => {
       });
     });
   });
+
+  for (const agent of ["cursor", "grok"] as const) {
+    test(`advertises ${agent} session resume through the native projection`, async () => {
+      const stub = createProviderStub(agent, {
+        interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+      });
+      await withService({
+        prefix: `orkestrator-native-${agent}-resume-capability-`,
+        provider: async () => stub.provider,
+      }, async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent,
+          logicalSessionKey: `env-env-1:tab-${agent}-resume`,
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        expect(projection?.capabilities.resume).toBe(true);
+      });
+    });
+  }
 
   test("orders resumable sessions by most recent activity", async () => {
     const stub = createProviderStub("claude", {
@@ -2246,6 +2666,59 @@ describe("NativeAgentService", () => {
         eventualOutcome: "expired",
       });
       expect(internals(service).trackedInteractions.size).toBe(0);
+    });
+  });
+
+  test("settles an empty interaction snapshot from a terminal turn without backoff", async () => {
+    let pending = true;
+    const { provider, status } = createProviderStub("codex", {
+      status: async () => {
+        throw new ProviderSessionFailedError("codex", "usage limit reached");
+      },
+      interactions: {
+        listPendingInteractions: async () => pending
+          ? pendingInteractionSnapshot(10_000, ["question"])
+          : { version: AGENT_INTERACTION_CONTRACT_VERSION, revision: 2, requests: [] },
+        resolveInteraction: async () => {
+          throw new Error("observe-only must never resolve");
+        },
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-interaction-terminal-status-",
+      provider: async () => provider,
+      now: () => 10_000,
+      interactionMonitorMode: "observe-only",
+    }, async ({ storage, service }) => {
+      const logicalSessionKey = "looped-review:workflow:terminal-status:Review";
+      const key = nativeAgentSessionStorageKey(
+        "env-1",
+        "codex",
+        logicalSessionKey,
+      );
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey,
+        providerSessionId: "provider-session",
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+      await service.reconcileAgentInteractions();
+      pending = false;
+
+      const warnings = await captureWarnings(() => service.reconcileAgentInteractions());
+
+      expect(warnings).toEqual([]);
+      expect(status).toHaveBeenCalledTimes(1);
+      expect(service.getInteractionObservations()[0]).toMatchObject({
+        providerState: "error",
+        eventualOutcome: "withdrawn",
+      });
+      expect(internals(service).trackedInteractions.size).toBe(0);
+      expect(internals(service).interactionAttempts.has(key)).toBe(false);
+      expect(internals(service).interactionRetryAt.has(key)).toBe(false);
     });
   });
 
@@ -4459,6 +4932,49 @@ describe("NativeAgentService", () => {
     });
   });
 
+  test("maps a terminal turn failure onto idle activity without retry backoff", async () => {
+    const { provider, status, activity, activityBatch } = createProviderStub(
+      "codex",
+      {
+        status: async () => {
+          throw new ProviderSessionFailedError("codex", "usage limit reached");
+        },
+      },
+    );
+    await withService({
+      prefix: "orkestrator-native-activity-terminal-status-",
+      provider: async () => provider,
+    }, async ({ storage, service }) => {
+      const key = nativeAgentSessionStorageKey("env-1", "codex", "tab-1");
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "tab-1",
+        providerSessionId: "provider-1",
+      });
+      await storage.setEnvironmentAgentActivity(
+        "env-1",
+        "working",
+        new Date().toISOString(),
+        "native-agent",
+      );
+
+      const warnings = await captureWarnings(() => service.reconcileAgentActivity());
+
+      expect(warnings).toEqual([]);
+      expect(activity).toBeUndefined();
+      expect(activityBatch).toBeUndefined();
+      expect(status).toHaveBeenCalledWith("provider-1");
+      expect(await storage.getEnvironment("env-1")).toMatchObject({
+        agentActivitySources: { "native-agent": { state: "idle" } },
+      });
+      expect(await storage.getNativeAgentSession(key)).not.toBeNull();
+      expect(internals(service).activityAttempts.size).toBe(0);
+      expect(internals(service).activityRetryAt.size).toBe(0);
+    });
+  });
+
   test("treats a batch that omits a requested session as a failed read, not a missing session", async () => {
     const { provider, activityBatch } = createProviderStub("opencode", {
       activityBatch: async () => new Map<string, ProviderActivityState>([
@@ -6452,6 +6968,150 @@ describe("NativeAgentService", () => {
       });
     });
 
+    test("dispatches an attachment-only startup prompt before clearing its images", async () => {
+      const { provider, send } = createProviderStub("codex");
+      await withService({
+        prefix: "orkestrator-native-launch-image-only-",
+        environment: {
+          pendingAgentLaunch: true,
+          defaultAgent: "codex",
+          codexMode: "native",
+          initialPrompt: "   ",
+          initialPromptAttachments: [{
+            id: "image-1",
+            name: "reference.png",
+            previewUrl: "data:image/png;base64,cG5n",
+            base64Data: "cG5n",
+          }],
+        },
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        await service.reconcileInitialLaunch("env-1");
+
+        expect(send).toHaveBeenCalledWith(
+          "provider-session",
+          "",
+          expect.objectContaining({
+            requestId: "initial-prompt:env-1:startup-agent",
+            images: [{ filename: "reference.png", data: "cG5n" }],
+          }),
+        );
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          pendingAgentLaunch: false,
+          startupAgentSession: {
+            providerSessionId: "provider-session",
+            status: "running",
+          },
+        });
+        expect((await storage.getEnvironment("env-1"))?.initialPromptAttachments)
+          .toBeUndefined();
+      });
+    });
+
+    test.each([
+      ["claude", { claudeMode: "native" }] as const,
+      ["opencode", { opencodeMode: "native" }] as const,
+    ])(
+      "dispatches an attachment-only startup prompt for %s too",
+      async (agent, modes) => {
+        // The blank-prompt relaxation is agent-neutral: every native agent that
+        // accepts an attachment-only turn must reach the same dispatch, not
+        // only the codex path the fix was written against.
+        const { provider, send } = createProviderStub(agent);
+        await withService({
+          prefix: `orkestrator-native-launch-image-only-${agent}-`,
+          environment: {
+            pendingAgentLaunch: true,
+            defaultAgent: agent,
+            ...modes,
+            initialPrompt: "",
+            initialPromptAttachments: [{
+              id: "image-1",
+              name: "reference.png",
+              previewUrl: "data:image/png;base64,cG5n",
+              base64Data: "cG5n",
+            }],
+          },
+          provider: async () => provider,
+        }, async ({ storage, service }) => {
+          await service.reconcileInitialLaunch("env-1");
+
+          expect(send).toHaveBeenCalledWith(
+            "provider-session",
+            "",
+            expect.objectContaining({
+              requestId: "initial-prompt:env-1:startup-agent",
+              images: [{ filename: "reference.png", data: "cG5n" }],
+            }),
+          );
+          expect(await storage.getEnvironment("env-1")).toMatchObject({
+            pendingAgentLaunch: false,
+            startupAgentSession: { agent, status: "running" },
+          });
+        });
+      },
+    );
+
+    test("dispatches a launch the repository's agent style makes native", async () => {
+      // The renderer resolves the Claude style through the repository tier when
+      // it decides whether to leave the initial prompt's images alone. This
+      // side has to agree: if it declined here, a launch the renderer stood
+      // down for would never deliver its attachments.
+      const { provider, send } = createProviderStub("claude");
+      await withService({
+        prefix: "orkestrator-native-launch-repo-style-",
+        environment: {
+          pendingAgentLaunch: true,
+          defaultAgent: "claude",
+          initialPrompt: "Inspect this screenshot",
+        },
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        const config = await storage.loadConfig();
+        await storage.updateGlobalConfig({ ...config.global, claudeMode: "terminal" });
+        await storage.updateRepositoryConfig("project-1", {
+          defaultBranch: "main",
+          prBaseBranch: "main",
+          agentStyle: "native",
+        });
+
+        await service.reconcileInitialLaunch("env-1");
+
+        expect(send).toHaveBeenCalledWith(
+          "provider-session",
+          "Inspect this screenshot",
+          expect.objectContaining({
+            requestId: "initial-prompt:env-1:startup-agent",
+          }),
+        );
+      });
+    });
+
+    test("leaves a tmux-backed native Claude launch to the terminal coordinator", async () => {
+      const { provider, send, createSession } = createProviderStub("claude");
+      await withService({
+        prefix: "orkestrator-native-launch-tmux-",
+        environment: {
+          pendingAgentLaunch: true,
+          defaultAgent: "claude",
+          claudeMode: "native",
+          claudeNativeBackend: "tmux",
+          initialPrompt: "Inspect this screenshot",
+        },
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        await service.reconcileInitialLaunch("env-1");
+
+        expect(send).not.toHaveBeenCalled();
+        expect(createSession).not.toHaveBeenCalled();
+        // Still pending: the terminal coordinator owns this launch and the
+        // renderer is the side that will deliver its attachments.
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          pendingAgentLaunch: true,
+        });
+      });
+    });
+
     test("shares one launch task between concurrent reconciliations", async () => {
       let releaseCreate: (() => void) | undefined;
       const createBarrier = new Promise<void>((resolve) => {
@@ -6757,7 +7417,7 @@ describe("NativeAgentService", () => {
           prompt: "Do it",
           requestId: "request-1",
           ...override,
-        })).rejects.toThrow("prompt and request ID must not be blank");
+        })).rejects.toThrow("prompt or attachment and request ID must not be blank");
         expect(send).not.toHaveBeenCalled();
       });
     });
@@ -7187,6 +7847,104 @@ describe("NativeAgentService", () => {
         });
         expect(internals(service).queueRetryAt.get(queueKey))
           .toBeGreaterThan(Date.now());
+      });
+    });
+
+    test("backs off a terminal session error as provider status data", async () => {
+      const stub = createProviderStub("codex", {
+        status: async () => {
+          throw new ProviderSessionFailedError("codex", "usage limit reached");
+        },
+      });
+      await withService({
+        prefix: "orkestrator-native-drain-terminal-status-",
+        provider: async () => stub.provider,
+      }, async ({ storage, service }) => {
+        const queueKey = "codex\u0000env-env-1:tab-1";
+        await storage.savePromptQueue(queueKey, "env-1", [
+          { id: "row-1", text: "Do it" },
+        ]);
+
+        for (let attempt = 1; attempt < 5; attempt += 1) {
+          await internals(service).drainPromptQueues();
+          expect(internals(service).queueAttempts.get(queueKey)).toBe(attempt);
+          // The prompt is held, not burned: an at-capacity model would fail
+          // every queued prompt in turn if the drain sent them anyway.
+          expect(stub.send).not.toHaveBeenCalled();
+          expect(await storage.getPromptQueue(queueKey)).toMatchObject({
+            messages: [{ id: "row-1" }],
+          });
+          expect((await storage.getPromptQueue(queueKey))?.dispatchError)
+            .toBeUndefined();
+          internals(service).queueRetryAt.delete(queueKey);
+        }
+        const warnings = await captureWarnings(() =>
+          internals(service).drainPromptQueues()
+        );
+
+        expect(warnings.join(" ")).toContain("provider session is error");
+        expect(warnings.join(" ")).not.toContain("ProviderSessionFailedError");
+        // Provider-authored detail is persisted for the user, never logged.
+        expect(warnings.join(" ")).not.toContain("usage limit reached");
+        expect(stub.send).not.toHaveBeenCalled();
+        expect(stub.dispose).not.toHaveBeenCalled();
+        // Parked, not silently stalled. The drain is the only thing that would
+        // have run the turn that clears a sticky terminal status, so deferring
+        // forever left the prompt neither sent nor failed, and told the user
+        // nothing.
+        const parked = await storage.getPromptQueue(queueKey);
+        expect(parked).toMatchObject({ messages: [{ id: "row-1" }] });
+        expect(parked?.inFlight).toBeUndefined();
+        expect(parked?.dispatchError).toMatchObject({
+          requestId: "row-1",
+          messageId: "row-1",
+          message:
+            "The codex session failed before this prompt was sent: usage limit reached",
+        });
+        expect(internals(service).queueAttempts.has(queueKey)).toBe(false);
+        expect(internals(service).queueRetryAt.has(queueKey)).toBe(false);
+
+        // The park is a latch, not a loop: a further sweep must not re-read the
+        // provider or park a second time, and the retry control clears it.
+        stub.status.mockClear();
+        await internals(service).drainPromptQueues();
+        expect(stub.status).not.toHaveBeenCalled();
+
+        await storage.retryPromptQueueDispatch(queueKey);
+        expect((await storage.getPromptQueue(queueKey))?.dispatchError)
+          .toBeUndefined();
+      });
+    });
+
+    test("parks a terminal session error reported without a detail", async () => {
+      // The bridge reports `error` with no explanation, so `status()` returns it
+      // instead of throwing. The queued prompt must still park, not stall.
+      const stub = createProviderStub("codex", {
+        status: async () => "error" as ProviderStatus,
+      });
+      await withService({
+        prefix: "orkestrator-native-drain-bare-error-",
+        provider: async () => stub.provider,
+      }, async ({ storage, service }) => {
+        // Same key shape as its siblings: agent and logical session key joined
+        // by a NUL.
+        const queueKey = ["codex", "env-env-1:tab-1"].join(String.fromCharCode(0));
+        await storage.savePromptQueue(queueKey, "env-1", [
+          { id: "row-1", text: "Do it" },
+        ]);
+
+        for (let attempt = 1; attempt < 5; attempt += 1) {
+          await internals(service).drainPromptQueues();
+          internals(service).queueRetryAt.delete(queueKey);
+        }
+        await captureWarnings(() => internals(service).drainPromptQueues());
+
+        expect(stub.send).not.toHaveBeenCalled();
+        expect((await storage.getPromptQueue(queueKey))?.dispatchError)
+          .toMatchObject({
+            messageId: "row-1",
+            message: "The codex session is error; the queued prompt was not sent.",
+          });
       });
     });
 

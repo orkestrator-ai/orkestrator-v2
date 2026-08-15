@@ -485,6 +485,12 @@ export interface GlobalConfig {
   codexReasoningEffort: CodexReasoningEffortPreference;
   /** OpenCode mode - terminal CLI or native chat interface */
   opencodeMode: OpenCodeMode;
+  /**
+   * OpenCode provider catalogues offered in model pickers. The backend filters
+   * against this before the catalogue is sent to the renderer. An empty list
+   * means unrestricted (every provider OpenCode advertises).
+   */
+  openCodeModelProviders?: string[];
   /** Claude mode - terminal CLI or native chat interface */
   claudeMode: ClaudeMode;
   /** Default backend used when Claude mode is "native" (sdk or tmux) */
@@ -518,6 +524,8 @@ export interface RepositoryConfig {
   prBaseBranch: string;
   /** Last environment type successfully created in this repository */
   lastEnvironmentType?: EnvironmentType;
+  /** Agent controls used by the most recently created agent-enabled environment. */
+  lastEnvironmentAgentSelection?: LastEnvironmentAgentSelection;
   /** Default port mappings for new environments in this repository */
   defaultPortMappings?: PortMapping[];
   /** Additional files to copy from local project path to environments (relative paths) */
@@ -538,6 +546,15 @@ export interface RepositoryConfig {
    * global). Only meaningful when the resolved Claude mode is "native".
    */
   claudeNativeBackend?: ClaudeNativeBackend;
+}
+
+export interface LastEnvironmentAgentSelection {
+  platform: DefaultAgent;
+  mode: AgentStyle;
+  /** Missing means the provider's default model was selected. */
+  model?: string;
+  /** Missing means the provider's default reasoning level was selected. */
+  reasoningEffort?: string;
 }
 
 export interface AppConfig {

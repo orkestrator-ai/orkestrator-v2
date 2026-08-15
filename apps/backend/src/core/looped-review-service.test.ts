@@ -110,6 +110,12 @@ class FakeProvider implements BuildPipelineProvider {
   readonly pending = new Map<string, AgentInteractionRequest[]>();
   statusValue: ProviderStatus = "idle";
   statusRejectCount = 0;
+  /**
+   * Terminal turn detail, reported the way the HTTP bridge reports one: as a
+   * `ProviderSessionFailedError` throw rather than an `"error"` status, and on
+   * every call, because a failed turn stays failed until the next turn runs.
+   */
+  statusFailure: string | null = null;
   returnNull = false;
   ambiguousOnce = false;
   definiteRejectOnce = false;
@@ -192,6 +198,10 @@ class FakeProvider implements BuildPipelineProvider {
     if (this.statusRejectCount > 0) {
       this.statusRejectCount -= 1;
       throw new Error("status transport unavailable");
+    }
+    if (this.statusFailure) {
+      const { ProviderSessionFailedError } = await import("./build-pipeline-provider.js");
+      throw new ProviderSessionFailedError("claude", this.statusFailure);
     }
     return this.statusValue;
   }
@@ -591,6 +601,34 @@ describe("LoopedReviewService", () => {
       });
     });
   }
+
+  /*
+   * A turn that ended terminally is definitely not going to produce structured
+   * output, and only the `error` branch classifies that as definite. Letting the
+   * status read throw made the same condition indefinite — and so retried —
+   * whenever the provider explained why it failed.
+   */
+  test("fails definitely on a terminal turn error and reports its detail", async () => {
+    const detail = "Selected model is at capacity. Please try a different model.";
+    await harness(async (service, storage, provider) => {
+      provider.returnNull = true;
+      const started = await service.start({
+        environmentId: "env-1", projectId: "project-1", agent: "claude",
+        model: "model", targetBranch: "main", allowance: 1,
+      });
+      await service.advanceNow(started.id);
+      provider.statusFailure = detail;
+      await service.advanceNow(started.id);
+
+      const failed = await snapshot(storage, started.id);
+      expect(failed.phase).toBe("failed");
+      // `preserveDispatch: false` is what proves it was classified definite: an
+      // indefinite fault keeps the dispatch so the same request id is retried.
+      expect(failed.dispatch).toBeUndefined();
+      expect(failed.failure?.preserveDispatch).toBe(false);
+      expect(failed.failure?.message).toContain(detail);
+    });
+  });
 
   test("retries malformed structured output with a fresh request", async () => {
     await harness(async (service, storage, provider) => {

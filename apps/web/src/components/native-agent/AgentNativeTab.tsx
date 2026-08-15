@@ -68,7 +68,11 @@ import {
   createOptimisticNativeMessage,
   TURN_STOPPED_BY_USER,
 } from "@/lib/chat/client-only-messages";
-import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
+import {
+  pinActiveNativeAgentParts,
+  separateActiveNativeAgentParts,
+} from "@/lib/chat/native-agent-pinning";
+import { ActiveSubagentRail } from "@/components/chat/ActiveSubagentRail";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { persistAgentModelDefault } from "@/lib/chat/agent-model-preferences";
 import { persistCodexGlobalPreferences } from "@/components/codex/codex-preferences";
@@ -88,6 +92,7 @@ import {
 } from "@/lib/chat/workspace-attachments";
 import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores/configStore";
+import { syncCachedAcpModels } from "@/stores/agentModelCatalogStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import {
   nativeComposeDraft,
@@ -273,6 +278,10 @@ function UnassignedNativeAgentComposer({
     setModels([]);
     void getNativeAgentModelCatalog(environmentId)
       .then((catalog) => {
+        // The backend has already normalized and durably cached these models.
+        // Mirror its response so every other mounted launcher updates without
+        // each picker performing its own storage read.
+        syncCachedAcpModels(catalog);
         if (!cancelled) setModels(catalog);
       })
       .catch((error) => {
@@ -822,10 +831,16 @@ function SharedNativeAgentController({
     transcriptEchoedOptimistic,
     turnStopMarker,
   ]);
-  const messages = useMemo(
-    () => pinActiveNativeAgentParts(displayMessages),
-    [displayMessages],
-  );
+  const activeAgentPresentation = useMemo(() => {
+    if (platform === "claude") {
+      return {
+        messages: pinActiveNativeAgentParts(displayMessages),
+        activeAgents: [],
+      };
+    }
+    return separateActiveNativeAgentParts(displayMessages);
+  }, [displayMessages, platform]);
+  const messages = activeAgentPresentation.messages;
   const latestAssistantMessage = [...normalizedMessages].reverse().find(
     (message) => message.role === "assistant",
   );
@@ -1494,17 +1509,18 @@ function SharedNativeAgentController({
     ?? (isRefreshing ? "connecting" as const : "error" as const);
   const contextUsage = projection?.contextUsage;
   const maximumTokens = contextUsage?.maximumTokens;
-  const composeContextUsage = contextUsage
-    && maximumTokens !== undefined
-    && Number.isFinite(maximumTokens)
-    && maximumTokens > 0
-    ? {
-        usedTokens: contextUsage.usedTokens,
-        totalTokens: maximumTokens,
-        percentUsed: contextUsage.percentage
-          ?? Math.min(100, contextUsage.usedTokens / maximumTokens * 100),
-      }
-    : null;
+  const composeContextUsage = contextUsage === undefined
+    ? undefined
+    : maximumTokens !== undefined
+      && Number.isFinite(maximumTokens)
+      && maximumTokens > 0
+      ? {
+          usedTokens: contextUsage.usedTokens,
+          totalTokens: maximumTokens,
+          percentUsed: contextUsage.percentage
+            ?? Math.min(100, contextUsage.usedTokens / maximumTokens * 100),
+        }
+      : null;
 
   if (setupPending) {
     return (
@@ -1520,6 +1536,7 @@ function SharedNativeAgentController({
     <NativeChatShell
       agentExpansionScope={data.environmentId}
       agentLabel={label}
+      platform={platform}
       isActive={isActive}
       ownsGlobalShortcuts={ownsGlobalShortcuts}
       // Without this, images the agent wrote inside the container render as
@@ -1642,6 +1659,7 @@ function SharedNativeAgentController({
               {sendError}
             </div>
           ) : null}
+          <ActiveSubagentRail agents={activeAgentPresentation.activeAgents} />
         </>
       )}
       topAccessory={projection?.suggestedPrompt ? (
@@ -1878,6 +1896,7 @@ function SharedNativeAgentController({
           )}
           onAddressAll={async () => { await submit(ADDRESS_ALL_REVIEW_PROMPT); }}
           contextUsage={composeContextUsage}
+          showContextUsage={contextUsage === undefined || composeContextUsage !== null}
           queue={projection?.queue ? {
             length: queuedMessages.length,
             error: projection.queue.blocked

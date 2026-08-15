@@ -76,8 +76,21 @@ const grokConfig = {
   },
 };
 
-function sessionPayload(): JsonObject {
-  return (provider === "grok" ? grokConfig : cursorConfig) as JsonObject;
+function sessionPayload(sessionId = "fake-session"): JsonObject {
+  const config = provider === "grok" ? grokConfig : cursorConfig;
+  // An agent that advertises no model option at all. The bridge must then leave
+  // the composer with no selection rather than inventing one, and assistant
+  // messages must carry no model attribution.
+  const withoutModel = provider !== "grok" && process.env.FAKE_ACP_NO_MODEL_OPTION === "1"
+    ? {
+        ...cursorConfig,
+        configOptions: cursorConfig.configOptions.filter((option) => option.id !== "model"),
+      }
+    : config;
+  return {
+    ...withoutModel,
+    sessionId,
+  } as JsonObject;
 }
 
 function isObject(value: unknown): value is JsonObject {
@@ -117,6 +130,9 @@ lines.on("line", (line) => {
         // silently reattached to a session they have never heard of.
         agentCapabilities: {
           loadSession: process.env.FAKE_ACP_NO_LOAD_SESSION !== "1",
+          sessionCapabilities: {
+            ...(process.env.FAKE_ACP_NO_LIST_SESSION === "1" ? {} : { list: {} }),
+          },
           ...(process.env.FAKE_ACP_IMAGE_CAPABILITY
             ? { promptCapabilities: { image: process.env.FAKE_ACP_IMAGE_CAPABILITY === "true" } }
             : {}),
@@ -137,6 +153,87 @@ lines.on("line", (line) => {
         params: { sessionId: "fake-session", question: "Continue?" },
       });
     }
+    return;
+  }
+  if (message.method === "session/list" && typeof message.id === "number") {
+    const params = isObject(message.params) ? message.params : {};
+    const cwd = typeof params.cwd === "string" ? params.cwd : process.cwd();
+    const listedCwd = process.env.FAKE_ACP_LIST_MISSING_CWD === "1"
+      ? {}
+      : { cwd: process.env.FAKE_ACP_LIST_WRONG_CWD === "1" ? `${cwd}-other` : cwd };
+    const cursor = typeof params.cursor === "string" ? params.cursor : "";
+    if (process.env.FAKE_ACP_LIST_COUNTER_FILE) {
+      appendFileSync(process.env.FAKE_ACP_LIST_COUNTER_FILE, `${cursor || "<none>"}\n`);
+    }
+    // An agent that keeps handing back a cursor it has already issued must not
+    // spin the bridge forever, so this loops on one repeated page deliberately.
+    if (process.env.FAKE_ACP_LIST_REPEAT_CURSOR === "1") {
+      write({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          sessions: [{
+            sessionId: "looping-session",
+            ...listedCwd,
+            title: "Looping ACP work",
+          }],
+          nextCursor: "same-cursor",
+        },
+      });
+      return;
+    }
+    const pages = Number(process.env.FAKE_ACP_LIST_PAGES ?? "1");
+    if (Number.isSafeInteger(pages) && pages > 1) {
+      const page = cursor ? Number(cursor.replace("page-", "")) : 0;
+      const last = page >= pages - 1;
+      write({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          sessions: [
+            // Repeated on every page: the bridge must return one entry, not one
+            // per page, so cross-page de-duplication is what is under test.
+            {
+              sessionId: "external-session",
+              ...listedCwd,
+              title: "Previous ACP work",
+              updatedAt: "2026-08-13T20:00:00.000Z",
+              _meta: { messageCount: 12 },
+            },
+            {
+              sessionId: `paged-session-${page}`,
+              ...listedCwd,
+              title: `Paged ACP work ${page}`,
+              updatedAt: "2026-08-12T20:00:00.000Z",
+            },
+          ],
+          ...(last ? {} : { nextCursor: `page-${page + 1}` }),
+        },
+      });
+      return;
+    }
+    write({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        sessions: [
+          {
+            sessionId: "fake-session",
+            ...listedCwd,
+            title: "Current ACP work",
+            updatedAt: "2026-08-14T20:00:00.000Z",
+            _meta: { messageCount: 4 },
+          },
+          {
+            sessionId: "external-session",
+            ...listedCwd,
+            title: "Previous ACP work",
+            updatedAt: "2026-08-13T20:00:00.000Z",
+            _meta: { messageCount: 12 },
+          },
+        ],
+      },
+    });
     return;
   }
   if (message.method === "session/set_config_option" && typeof message.id === "number") {
@@ -193,7 +290,277 @@ lines.on("line", (line) => {
       });
       return;
     }
-    write({ jsonrpc: "2.0", id: message.id, result: {} });
+    const params = isObject(message.params) ? message.params : {};
+    const replaySessionId = typeof params.sessionId === "string"
+      ? params.sessionId
+      : "external-session";
+    const replay = (update: JsonObject): void => write({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: { sessionId: replaySessionId, update },
+    });
+    if (process.env.FAKE_ACP_REPLAY_HISTORY === "1") {
+      replay({
+        sessionUpdate: "user_message_chunk",
+        messageId: "history-user-1",
+        content: { type: "text", text: "Earlier question" },
+      });
+      replay({
+        sessionUpdate: "agent_message_chunk",
+        messageId: "history-agent-1",
+        content: { type: "text", text: "Earlier answer" },
+      });
+      replay({
+        sessionUpdate: "agent_message_chunk",
+        messageId: "history-agent-1",
+        content: { type: "text", text: " continued" },
+      });
+      // A replayed tool call has to be suppressed on reconnect exactly like the
+      // replayed text around it, or the transcript grows one copy per restart.
+      replay({
+        sessionUpdate: "tool_call",
+        toolCallId: "history-tool-1",
+        title: "Read earlier file",
+        status: "completed",
+      });
+    }
+    if (process.env.FAKE_ACP_REPLAY_ACTIVE_SUBAGENT === "1") {
+      replay({
+        sessionUpdate: "tool_call",
+        toolCallId: "history-background-child",
+        title: "Task: Historical child",
+        status: "completed",
+        rawInput: { _toolName: "task", description: "Historical child" },
+        rawOutput: { isBackground: true },
+      });
+    }
+    if (process.env.FAKE_ACP_REPLAY_CURSOR_TOOL_METADATA === "1") {
+      replay({
+        sessionUpdate: "tool_call",
+        toolCallId: "replay-search-1",
+        title: "grep --include=\"*.json\" \"scripts\"",
+        kind: "search",
+        status: "pending",
+        rawInput: { pattern: "scripts", path: "/workspace" },
+      });
+      replay({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "replay-search-1",
+        status: "completed",
+        rawOutput: { totalMatches: 1, truncated: false },
+      });
+      replay({
+        sessionUpdate: "tool_call",
+        toolCallId: "replay-read-1",
+        title: "Read package.json (1 - 80)",
+        kind: "read",
+        status: "pending",
+        rawInput: { path: "/workspace/package.json" },
+      });
+      replay({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "replay-read-1",
+        status: "completed",
+        rawOutput: { content: "package contents" },
+      });
+    }
+    // The same first turn as above, preceded by tool calls from turns the live
+    // transcript has already enriched or never held. Exercises the collector's
+    // count bound: only the trailing `capacity` calls may survive.
+    if (process.env.FAKE_ACP_REPLAY_CURSOR_HISTORY_TOOL_METADATA === "1") {
+      for (const stale of [
+        { id: "replay-stale-1", title: "Read stale-one.json", path: "/workspace/stale-one.json" },
+        { id: "replay-stale-2", title: "Read stale-two.json", path: "/workspace/stale-two.json" },
+      ]) {
+        replay({
+          sessionUpdate: "tool_call",
+          toolCallId: stale.id,
+          title: stale.title,
+          kind: "read",
+          status: "pending",
+          rawInput: { path: stale.path },
+        });
+        replay({
+          sessionUpdate: "tool_call_update",
+          toolCallId: stale.id,
+          status: "completed",
+          rawOutput: { content: "stale contents" },
+        });
+      }
+      replay({
+        sessionUpdate: "tool_call",
+        toolCallId: "replay-search-1",
+        title: "grep --include=\"*.json\" \"scripts\"",
+        kind: "search",
+        status: "pending",
+        rawInput: { pattern: "scripts", path: "/workspace" },
+      });
+      replay({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "replay-search-1",
+        status: "completed",
+        rawOutput: { totalMatches: 1, truncated: false },
+      });
+      replay({
+        sessionUpdate: "tool_call",
+        toolCallId: "replay-read-1",
+        title: "Read package.json (1 - 80)",
+        kind: "read",
+        status: "pending",
+        rawInput: { path: "/workspace/package.json" },
+      });
+      replay({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "replay-read-1",
+        status: "completed",
+        rawOutput: { content: "package contents" },
+      });
+    }
+    // Two complete turns' worth of tool calls, so a replay that loads late
+    // enough to see the *second* turn can be caught handing its paths and
+    // titles to the first turn's parts.
+    if (process.env.FAKE_ACP_REPLAY_CURSOR_TWO_TURN_METADATA === "1") {
+      for (const replayed of [
+        {
+          id: "replay-search-1",
+          title: "grep --include=\"*.json\" \"scripts\"",
+          kind: "search",
+          rawInput: { pattern: "scripts", path: "/workspace" },
+          rawOutput: { totalMatches: 1, truncated: false },
+        },
+        {
+          id: "replay-read-1",
+          title: "Read package.json (1 - 80)",
+          kind: "read",
+          rawInput: { path: "/workspace/package.json" },
+          rawOutput: { content: "package contents" },
+        },
+        {
+          id: "replay-read-2",
+          title: "Read tsconfig.json (1 - 40)",
+          kind: "read",
+          rawInput: { path: "/workspace/tsconfig.json" },
+          rawOutput: { content: "tsconfig contents" },
+        },
+        {
+          id: "replay-search-2",
+          title: "grep --include=\"*.ts\" \"strict\"",
+          kind: "search",
+          rawInput: { pattern: "strict", path: "/workspace/src" },
+          rawOutput: { totalMatches: 2, truncated: false },
+        },
+      ]) {
+        replay({
+          sessionUpdate: "tool_call",
+          toolCallId: replayed.id,
+          title: replayed.title,
+          kind: replayed.kind,
+          status: "pending",
+          rawInput: replayed.rawInput,
+        });
+        replay({
+          sessionUpdate: "tool_call_update",
+          toolCallId: replayed.id,
+          status: "completed",
+          rawOutput: replayed.rawOutput,
+        });
+      }
+    }
+    if (process.env.FAKE_ACP_REPLAY_CURSOR_SAME_KIND_METADATA === "1") {
+      for (const replayed of [
+        { id: "replay-read-c", title: "Read c.json", path: "/workspace/c.json", output: "shared" },
+        { id: "replay-read-b", title: "Read b.json", path: "/workspace/b.json", output: "b" },
+        { id: "replay-read-d", title: "Read d.json", path: "/workspace/d.json", output: "shared" },
+        { id: "replay-read-a", title: "Read a.json", path: "/workspace/a.json", output: "a" },
+      ]) {
+        replay({
+          sessionUpdate: "tool_call",
+          toolCallId: replayed.id,
+          title: replayed.title,
+          kind: "read",
+          status: "pending",
+          rawInput: { path: replayed.path },
+        });
+        replay({
+          sessionUpdate: "tool_call_update",
+          toolCallId: replayed.id,
+          status: "completed",
+          rawOutput: { content: replayed.output },
+        });
+      }
+    }
+    if (process.env.FAKE_ACP_REPLAY_CURSOR_OVERSIZED_METADATA === "1") {
+      for (const replayed of [
+        { id: "replay-huge-b", title: "Read huge-b.json", path: "/workspace/huge-b.json", output: "huge-b" },
+        { id: "replay-huge-a", title: "Read huge-a.json", path: "/workspace/huge-a.json", output: "huge-a" },
+        { id: "replay-huge-c", title: "Read huge-c.json", path: "/workspace/huge-c.json", output: "huge-c" },
+      ]) {
+        replay({
+          sessionUpdate: "tool_call",
+          toolCallId: replayed.id,
+          title: replayed.title,
+          kind: "read",
+          status: "pending",
+          rawInput: { path: replayed.path, payload: "x".repeat(480 * 1024) },
+        });
+        replay({
+          sessionUpdate: "tool_call_update",
+          toolCallId: replayed.id,
+          status: "completed",
+          rawOutput: { content: replayed.output },
+        });
+      }
+    }
+    // The same history without provider message ids, which is all the bridge
+    // gets from an agent that does not stamp them. Message boundaries then have
+    // to come from chunk-versus-whole rather than from part type.
+    if (process.env.FAKE_ACP_REPLAY_NO_MESSAGE_IDS === "1") {
+      replay({
+        sessionUpdate: "user_message",
+        // Array-form content: several blocks in one update.
+        content: [{ type: "text", text: "Earlier " }, { type: "text", text: "question" }],
+      });
+      replay({
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "Thinking first" },
+      });
+      replay({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Earlier answer" },
+      });
+      replay({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: " continued" },
+      });
+      // A whole-message update always starts a new turn, so this must not be
+      // folded into the assistant message above.
+      replay({
+        sessionUpdate: "agent_message",
+        content: { type: "text", text: "Second answer" },
+      });
+    }
+    // Enough distinct provider message ids to push the bridge past its own
+    // history-id bound, so eviction runs against a live transcript.
+    const replayCount = Number(process.env.FAKE_ACP_REPLAY_MESSAGE_COUNT ?? "0");
+    if (Number.isSafeInteger(replayCount) && replayCount > 0) {
+      for (let index = 0; index < replayCount; index += 1) {
+        replay({
+          sessionUpdate: "agent_message_chunk",
+          messageId: `bulk-agent-${index}`,
+          content: { type: "text", text: `Bulk ${index}` },
+        });
+      }
+    }
+    const answer = (): void => write({
+      jsonrpc: "2.0",
+      id: message.id as number,
+      result: sessionPayload(typeof params.sessionId === "string" ? params.sessionId : "fake-session"),
+    });
+    // Holds `session/load` open so a second resume for the same ACP session
+    // genuinely races the first rather than finding it already finished.
+    const loadDelayMs = Number(process.env.FAKE_ACP_LOAD_DELAY_MS ?? "0");
+    if (Number.isSafeInteger(loadDelayMs) && loadDelayMs > 0) setTimeout(answer, loadDelayMs);
+    else answer();
     return;
   }
   if (message.method === "session/prompt" && typeof message.params === "object") {
@@ -248,6 +615,26 @@ lines.on("line", (line) => {
         `${JSON.stringify(params?.prompt ?? [])}\n`,
       );
     }
+    // Agents that mirror the user turn back to the client mid-prompt. The
+    // bridge already holds the authoritative copy from `/session/prompt`, so
+    // this must not reach the transcript in any form.
+    if (process.env.FAKE_ACP_ECHO_USER_PROMPT === "1") {
+      for (const update of [
+        {
+          sessionUpdate: "user_message_chunk",
+          messageId: "live-user-1",
+          content: { type: "text", text: prompt },
+        },
+        // The same echo without a message id, and as a whole message.
+        { sessionUpdate: "user_message", content: { type: "text", text: prompt } },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: "fake-session", update },
+        });
+      }
+    }
     // An image-only prompt carries no text block, so none of the keyword
     // branches below can match it. Ending the turn is what a real agent does;
     // falling through would park it on a permission request and hide whatever
@@ -280,6 +667,30 @@ lines.on("line", (line) => {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }
+    if (prompt.startsWith("STREAMOVERFLOW")) {
+      // Real agents stream in many chunks. Leave one byte under the message cap
+      // before crossing it so the bridge has to reclaim already-buffered text
+      // to make the truncation marker visible. Put a multi-byte code point over
+      // the reclaimed boundary so the shortened prefix must remain valid UTF-8.
+      const maximumBytes = 2 * 1024 * 1024;
+      const markerBytes = Buffer.byteLength("\n[output truncated by Orkestrator]");
+      const contentLimit = maximumBytes - markerBytes;
+      const first = "x".repeat(contentLimit - 1)
+        + "🙂"
+        + "y".repeat(markerBytes - Buffer.byteLength("🙂"));
+      for (const text of [first, "yz"]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
+          },
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
     if (prompt.startsWith("TOOLSFIRST")) {
       write({
         jsonrpc: "2.0",
@@ -302,6 +713,432 @@ lines.on("line", (line) => {
         params: {
           sessionId: "fake-session",
           update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Led with a tool." } },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("BACKGROUNDSUBAGENT")) {
+      if (provider === "grok") {
+        const toolMeta = {
+          version: 1,
+          name: "spawn_subagent",
+          kind: "task",
+          namespace: "grok_build",
+          label: "Subagent",
+          read_only: false,
+        };
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: "grok-subagent-tool-1",
+              title: "Agent: Validate the implementation",
+              rawInput: {
+                background: true,
+                description: "Validate the implementation",
+                prompt: "Inspect the implementation and report any issues.",
+                subagent_type: "explore",
+              },
+              _meta: {
+                subagentBackground: true,
+                "x.ai/tool": toolMeta,
+              },
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "grok-subagent-tool-1",
+              title: "Launch validation agent",
+              kind: "other",
+              rawInput: {
+                variant: "Task",
+                task_id: "",
+                capability_mode: "default",
+                run_in_background: true,
+                description: "Validate the implementation",
+                prompt: "Inspect the implementation and report any issues.",
+                subagent_type: "explore",
+              },
+              _meta: { "x.ai/tool": toolMeta },
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "grok-subagent-tool-1",
+              status: "completed",
+              content: [{ type: "content", content: { type: "text", text: "Subagent started." } }],
+              rawOutput: { type: "Text", text: "Subagent started." },
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "subagent_spawned",
+              subagent_id: "grok-subagent-1",
+              child_session_id: "grok-child-session-1",
+              parent_session_id: "fake-session",
+              parent_prompt_id: "grok-parent-prompt-1",
+              subagent_type: "explore",
+              description: "Validate the implementation",
+              model: "grok-test",
+              effective_context_source: "parent",
+            },
+          },
+        });
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+        return;
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "cursor-subagent-1",
+            title: "Task: Validate the implementation",
+            kind: "other",
+            status: "in_progress",
+            rawInput: {
+              _toolName: "task",
+              description: "Validate the implementation",
+            },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "cursor-subagent-1",
+            status: "completed",
+            content: [{ type: "content", content: { type: "text", text: "Sub-agent launched." } }],
+            rawOutput: { durationMs: 42, isBackground: true },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("PENDINGSUBAGENT")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "abandoned-subagent-1",
+            title: "Task: Never launched",
+            status: "in_progress",
+            rawInput: { _toolName: "task", description: "Never launched" },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("SUBAGENTOVERFLOW")) {
+      // These are protocol frames, not child OS processes. Two arrive after
+      // the 512-entry bound: one trips it and the next proves the fatal latch
+      // cannot be reopened by later buffered provider output.
+      for (let index = 0; index < 514; index += 1) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `overflow-subagent-${index}`,
+              title: `Task: Overflow child ${index}`,
+              status: "completed",
+              rawInput: {
+                _toolName: "task",
+                background: true,
+                description: `Overflow child ${index}`,
+              },
+            },
+          },
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FINISHCURSORSUBAGENT")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "cursor-subagent-1",
+            status: "completed",
+            rawOutput: { durationMs: 84, isBackground: false, status: "completed" },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FAILCURSORSUBAGENT")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "cursor-subagent-1",
+            status: "failed",
+            rawOutput: { status: "failed", error: "child failed" },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("GROKMULTISUBAGENT")) {
+      for (const [suffix, description, subagentType] of [
+        ["a", "Alpha task", "explore"],
+        ["b", "Beta task", "review"],
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `grok-multi-tool-${suffix}`,
+              title: `Agent: ${description}`,
+              status: "completed",
+              rawInput: {
+                _toolName: "task",
+                run_in_background: true,
+                description,
+                subagent_type: subagentType,
+              },
+            },
+          },
+        });
+      }
+      for (const [subagentId, description, subagentType] of [
+        ["grok-mismatch", "Unknown task", "explore"],
+        ["grok-child-b", "Beta task", "review"],
+        ["grok-child-a", "Alpha task", "explore"],
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "subagent_spawned",
+              subagent_id: subagentId,
+              description,
+              subagent_type: subagentType,
+            },
+          },
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FAILGROKSUBAGENT_B")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: { sessionUpdate: "subagent_finished", subagent_id: "grok-child-b", status: "failed" },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("CANCELGROKSUBAGENT_A")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: { sessionUpdate: "subagent_finished", subagent_id: "grok-child-a", status: "cancelled" },
+        },
+      });
+      // A mismatched spawn must still be uncorrelated and harmless.
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: { sessionUpdate: "subagent_finished", subagent_id: "grok-mismatch", status: "completed" },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("EVICTGROKSUBAGENT")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "grok-evicted-tool",
+            title: "Agent: Survive transcript eviction",
+            status: "completed",
+            rawInput: {
+              _toolName: "task",
+              run_in_background: true,
+              description: "Survive transcript eviction",
+              subagent_type: "explore",
+            },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "subagent_spawned",
+            subagent_id: "grok-evicted-child",
+            description: "Survive transcript eviction",
+            subagent_type: "explore",
+          },
+        },
+      });
+      for (const index of [0, 1]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `grok-eviction-filler-${index}`,
+              title: `Large retained output ${index}`,
+              status: "completed",
+              rawOutput: `${index}:`.padEnd(600 * 1024, "x"),
+            },
+          },
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FINISHEVICTEDGROKSUBAGENT")) {
+      // Push the launch's already-trimmed assistant message out of the byte
+      // window entirely before the terminal child notification arrives.
+      for (const index of [0, 1]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `grok-late-filler-${index}`,
+              title: `Late retained output ${index}`,
+              status: "completed",
+              rawOutput: `${index}:`.padEnd(600 * 1024, "y"),
+            },
+          },
+        });
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "subagent_finished",
+            subagent_id: "grok-evicted-child",
+            status: "completed",
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FINISHEVICTEDCURSORSUBAGENT")) {
+      for (const index of [0, 1]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `cursor-late-filler-${index}`,
+              title: `Late retained output ${index}`,
+              status: "completed",
+              rawOutput: `${index}:`.padEnd(600 * 1024, "z"),
+            },
+          },
+        });
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "cursor-subagent-1",
+            status: "completed",
+            rawOutput: { isBackground: false, status: "completed" },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FINISHSUBAGENT")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "subagent_finished",
+            subagent_id: "grok-subagent-1",
+            child_session_id: "grok-child-session-1",
+            status: "completed",
+            duration_ms: 42,
+            tokens_used: 12,
+            tool_calls: 1,
+            turns: 1,
+            output: "Validation complete.",
+            will_wake: true,
+          },
         },
       });
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
@@ -573,6 +1410,171 @@ lines.on("line", (line) => {
       }
       return;
     }
+    if (prompt.startsWith("TRANSCRIPTOVERFLOW")) {
+      // Individually valid parts whose combined rendered transcript crosses the
+      // 8 MiB budget. Each update is terminal so persistence/reload can verify
+      // trimming without stale-tool reconciliation changing the snapshot.
+      for (let index = 0; index < 18; index += 1) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `large-${index}`,
+              kind: "read",
+              status: "completed",
+              rawOutput: `${index}:`.padEnd(520 * 1024, "x"),
+            },
+          },
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("TRIMTOTEXT")) {
+      // Two parts that together cross a lowered transcript budget, so the
+      // aggregate trim empties the message down to the notice alone — the one
+      // state in which the notice is also the *last* part. The text chunk that
+      // follows must start a new part rather than stream into the notice.
+      // Needs ACP_MAX_TRANSCRIPT_BYTES=1048576.
+      for (const index of [0, 1]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `bulk-${index}`,
+              // Widens each part beyond its output alone, so the pair clears
+              // the budget by kilobytes rather than by JSON punctuation.
+              title: `Bulk read ${index} `.padEnd(3 * 1024, "."),
+              kind: "read",
+              status: "completed",
+              rawOutput: `${index}:`.padEnd(600 * 1024, "x"),
+            },
+          },
+        });
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Recovered summary." },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("TRIMMEDTOOLUPDATE")) {
+      // A long-running early tool whose completion lands after the volume of
+      // the turn has already trimmed its part away.
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "early-1",
+            title: "Start the long build",
+            kind: "execute",
+            status: "pending",
+          },
+        },
+      });
+      for (let index = 0; index < 520; index += 1) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `filler-${index}`,
+              kind: "read",
+              status: "completed",
+            },
+          },
+        });
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "early-1",
+            status: "completed",
+            rawOutput: "build finished",
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("SATURATEDSTREAM")) {
+      // Fills the per-message cap, then sends one more chunk. Overflow no
+      // longer ends an interactive turn, so that chunk reaches a buffer which
+      // cannot grow and has to be discarded.
+      const maximumBytes = 2 * 1024 * 1024;
+      const markerBytes = Buffer.byteLength("\n[output truncated by Orkestrator]");
+      const contentLimit = maximumBytes - markerBytes;
+      // Truncating this at the content limit lands inside the emoji, so the
+      // bridge backs off a byte and the capped buffer settles one byte under
+      // the cap. That single free byte is what a plain "is there room?" test
+      // hands to the next chunk — placing it *after* the truncation marker.
+      // The one-byte chunk has to be last: any further chunk reclaims the
+      // prefix, rewrites the marker at the end, and hides the corruption.
+      const first = "s".repeat(contentLimit - 1) + "🙂" + "s".repeat(64);
+      for (const text of [first, "!"]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
+          },
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("NOOPEDIT")) {
+      // An edit tool that reports identical file states. There is no change to
+      // place in a hunk, so there is nothing to render.
+      const unchanged = Array.from({ length: 40 }, (_, index) => `const line_${index} = ${index};`)
+        .join("\n");
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "noop-1",
+            title: "Rewrite a file with the same contents",
+            kind: "edit",
+            status: "completed",
+            content: [{
+              type: "diff",
+              path: "src/noop.ts",
+              oldText: unchanged,
+              newText: unchanged,
+            }],
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
     if (prompt.startsWith("HANGTOOL")) {
       // Ends the turn with a tool still in flight. ACP has no cancelled tool
       // status, so this is what an interrupted or abandoned tool looks like.
@@ -712,6 +1714,63 @@ lines.on("line", (line) => {
                 oldText: "x".repeat(300 * 1024),
               },
             ],
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("CONTEXTEDIT")) {
+      // The shape that exhausted the transcript in the field: a one-line change
+      // to a large file, sent as whole-file oldText/newText.
+      const lines = Array.from({ length: 5000 }, (_, index) => `const line_${index} = ${index};`);
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "context-1",
+            title: "Edit one line of a large file",
+            kind: "edit",
+            status: "completed",
+            content: [{
+              type: "diff",
+              path: "src/large.ts",
+              oldText: lines.join("\n"),
+              newText: lines
+                .map((line, index) => index === 2500 ? `${line} // touched` : line)
+                .join("\n"),
+            }],
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("MULTIHUNK")) {
+      const oldLines = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`);
+      const newLines = oldLines.map((line, index) =>
+        index === 0 || index === 9 || index === 19 ? `${line} changed` : line
+      );
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "multi-hunk-1",
+            title: "Edit three distant lines",
+            kind: "edit",
+            status: "completed",
+            content: [{
+              type: "diff",
+              path: "src/boundaries.ts",
+              oldText: oldLines.join("\n"),
+              newText: newLines.join("\n"),
+            }],
           },
         },
       });
@@ -919,6 +1978,191 @@ lines.on("line", (line) => {
           _meta: { totalTokens: 15_675, usage: { inputTokens: 15_639, outputTokens: 36 } },
         },
       });
+      return;
+    }
+    if (prompt.startsWith("CURSOR_GENERIC_TOOLS")) {
+      for (const update of [
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-read-1",
+          title: "Read File",
+          kind: "read",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "live-read-1",
+          status: "completed",
+          rawOutput: { content: "package contents" },
+        },
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-search-1",
+          title: "grep",
+          kind: "search",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "live-search-1",
+          status: "completed",
+          rawOutput: { totalMatches: 1, truncated: false },
+        },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: "fake-session", update },
+        });
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Done." },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    // A second turn's worth of generic Cursor tool calls, distinguishable from
+    // `CURSOR_GENERIC_TOOLS` only by their outputs — which is exactly what the
+    // replay join has to key on to keep the two turns apart.
+    if (prompt.startsWith("CURSOR_SECOND_TURN_TOOLS")) {
+      for (const update of [
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-read-2",
+          title: "Read File",
+          kind: "read",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "live-read-2",
+          status: "completed",
+          rawOutput: { content: "tsconfig contents" },
+        },
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-search-2",
+          title: "grep",
+          kind: "search",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "live-search-2",
+          status: "completed",
+          rawOutput: { totalMatches: 2, truncated: false },
+        },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: "fake-session", update },
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("CURSOR_SAME_KIND_TOOLS")) {
+      for (const live of [
+        { id: "live-read-a", output: "a" },
+        { id: "live-read-b", output: "b" },
+        { id: "live-read-c", output: "shared" },
+        { id: "live-read-d", output: "shared" },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: live.id,
+              title: "Read File",
+              kind: "read",
+              status: "pending",
+              rawInput: {},
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: live.id,
+              status: "completed",
+              rawOutput: { content: live.output },
+            },
+          },
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("CURSOR_OVERSIZED_REPLAY")) {
+      // Lead with enough ordinary response text that replay enrichment pushes
+      // the aggregate over its budget. When the bridge trims, the notice and
+      // the final enriched tool remain observable for the persistence check.
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "s".repeat(128 * 1024) },
+          },
+        },
+      });
+      for (const live of [
+        { id: "live-huge-a", output: "huge-a" },
+        { id: "live-huge-b", output: "huge-b" },
+        { id: "live-huge-c", output: "huge-c" },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: live.id,
+              title: "Read File",
+              kind: "read",
+              status: "pending",
+              rawInput: {},
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: live.id,
+              status: "completed",
+              rawOutput: { content: live.output },
+            },
+          },
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }
     if (prompt.startsWith("TOOLS")) {

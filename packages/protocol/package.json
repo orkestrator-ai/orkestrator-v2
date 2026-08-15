@@ -1,6 +1,6 @@
 {
   "name": "@orkestrator/protocol",
-  "version": "2.9.0",
+  "version": "2.10.1",
   "private": true,
   "type": "module",
   "exports": {
@@ -29,6 +29,7 @@
     "./review-instruction": "./src/review-prompt.ts",
     "./review-prompt": "./src/review-prompt.ts",
     "./review-workflow": "./src/review-workflow.ts",
+    "./startup-launch": "./src/startup-launch.ts",
     "./structured-review": "./src/structured-review.ts",
     "./structured-output": "./src/structured-output.ts",
     "./task-list": "./src/task-list.ts",

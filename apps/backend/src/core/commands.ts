@@ -182,9 +182,15 @@ import {
   isStartBuildPipelineInput,
   type StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
-import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
+import {
+  AGENT_PLATFORM_LABELS,
+  isAgentPlatform,
+} from "@orkestrator/protocol/agent-platforms";
 import {
   fallbackReasoningId,
+  isSelectableOpenCodeModelId,
+  isSelectableOpenCodeProvider,
+  normalizeOpenCodeModelProviders,
   type AgentModel,
   type AgentReasoningOption,
   type NativeAgentControlUpdate,
@@ -384,6 +390,14 @@ const LOCAL_SERVER_KINDS: readonly LocalServerKind[] = ["opencode", "claude", "c
 // group before escalating the bridge itself.
 const LOCAL_SERVER_SHUTDOWN_GRACE_MS = 8_000;
 const LOCAL_SERVER_KILL_WAIT_MS = 1_000;
+const LOCAL_SERVER_HEALTH_ATTEMPTS = 75;
+const LOCAL_SERVER_HEALTH_INTERVAL_MS = 200;
+/**
+ * Grok and Cursor take longer than the HTTP bridges to bind: the ACP child
+ * often becomes healthy about a second after the 15s wait gives up, which
+ * flashes Connection Failed and then attaches on the next refresh.
+ */
+const ACP_LOCAL_SERVER_HEALTH_ATTEMPTS = 120;
 let localServerShutdownRequested = false;
 let localServerShutdownPromise: Promise<void> | null = null;
 let terminateProcessTreeImpl = terminateProcessTree;
@@ -5968,17 +5982,45 @@ async function isHttpServerReachable(
   });
 }
 
+function localServerHealthAttempts(kind: LocalServerKind): number {
+  return kind === "cursor" || kind === "grok"
+    ? ACP_LOCAL_SERVER_HEALTH_ATTEMPTS
+    : LOCAL_SERVER_HEALTH_ATTEMPTS;
+}
+
 async function waitForHealth(
   port: number,
   pathName = "/global/health",
-  attempts = 75,
+  attempts = LOCAL_SERVER_HEALTH_ATTEMPTS,
   headers?: Record<string, string>,
+  dependencies: {
+    checkHealth?: typeof checkHttpHealth;
+    delay?: (milliseconds: number) => Promise<void>;
+  } = {},
 ): Promise<void> {
+  const checkHealth = dependencies.checkHealth ?? checkHttpHealth;
+  const delay = dependencies.delay
+    ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (await checkHttpHealth(port, pathName, headers)) return;
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    if (await checkHealth(port, pathName, headers)) return;
+    await delay(LOCAL_SERVER_HEALTH_INTERVAL_MS);
   }
   throw new Error(`Server on port ${port} did not become healthy`);
+}
+
+async function waitForLocalServerHealth(
+  port: number,
+  kind: LocalServerKind,
+  headers?: Record<string, string>,
+  dependencies?: Parameters<typeof waitForHealth>[4],
+): Promise<void> {
+  await waitForHealth(
+    port,
+    "/global/health",
+    localServerHealthAttempts(kind),
+    headers,
+    dependencies,
+  );
 }
 
 async function waitForHttpServerExit(port: number, attempts = 50): Promise<void> {
@@ -6024,7 +6066,7 @@ async function waitForLocalServerStartup(
 
     child.once("error", onError);
     child.once("exit", onExit);
-    waitForHealth(port, "/global/health", 75, headers).then(() => complete(), (error: unknown) => {
+    waitForLocalServerHealth(port, kind, headers).then(() => complete(), (error: unknown) => {
       complete(error instanceof Error ? error : new Error(String(error)));
     });
   });
@@ -8803,7 +8845,7 @@ async function startContainerServer(
   if (!hostPort) throw new Error(`Container port ${port} is not mapped`);
   if (await checkHttpHealth(hostPort)) return { hostPort, wasRunning: true };
   await dockerExecDetached(containerId, command, redactValues);
-  await waitForHealth(hostPort).catch(async (error) => {
+  await waitForLocalServerHealth(hostPort, processName).catch(async (error) => {
     const logFile = processName === "opencode"
       ? "/tmp/opencode-serve.log"
       : processName === "claude"
@@ -9814,20 +9856,32 @@ export function createCommandRegistry(
       ?? cache.claude?.models
       ?? [];
     const codexModels = cache.codex?.models ?? [];
-    const openCodeModels = (await storage.getOpenCodeModelCatalog(environment.projectId))
-      ?.models ?? [];
+    // The live catalogue is already filtered by the provider, but a cache
+    // written before the allowlist changed is not. Filter here too so the
+    // renderer never receives a provider the user excluded.
+    const openCodeModelProviders = normalizeOpenCodeModelProviders(
+      (await storage.loadConfig()).global.openCodeModelProviders,
+    );
+    const openCodeModels = ((await storage.getOpenCodeModelCatalog(environment.projectId))
+      ?.models ?? []).filter((model) =>
+        isSelectableOpenCodeProvider(model.provider, openCodeModelProviders)
+      );
     const runningOpenCodeBridge = environment.environmentType === "local"
       ? await peekLocalAgentBridge(environment.id, context, "opencode")
       : environment.containerId
         ? await peekContainerAgentBridge(environment.containerId, "opencode")
         : null;
     const liveOpenCodeModels = context.nativeAgents && runningOpenCodeBridge
-      ? await context.nativeAgents.listProjectionModels({
+      ? await context.nativeAgents.listModelCatalogForCache({
           environmentId: id,
           agent: "opencode",
           logicalSessionKey: `model-catalog:${id}`,
         }).catch(() => [])
       : [];
+    // Only the reads narrow. Persisting the filtered list instead would make the
+    // allowlist durable, so widening it later would leave the launch dialogs —
+    // which read this cache before any OpenCode server is ready — narrow until
+    // an environment happened to run and re-list.
     if (liveOpenCodeModels.length > 0) {
       await storage.cacheOpenCodeModelCatalog(
         environment.projectId,
@@ -9845,6 +9899,9 @@ export function createCommandRegistry(
         })),
       ).catch(() => undefined);
     }
+    const selectableLiveOpenCodeModels = liveOpenCodeModels.filter((model) =>
+      isSelectableOpenCodeModelId(model.id, openCodeModelProviders)
+    );
     const [cursorModels, grokModels] = await Promise.all([
       fetchAcpNormalizedModels(environment, context, "cursor"),
       fetchAcpNormalizedModels(environment, context, "grok"),
@@ -9900,24 +9957,26 @@ export function createCommandRegistry(
           supportsMode: true,
         };
       }),
-      ...(liveOpenCodeModels.length > 0 ? liveOpenCodeModels : openCodeModels.map((model): AgentModel => {
+      ...(selectableLiveOpenCodeModels.length > 0
+        ? selectableLiveOpenCodeModels
+        : openCodeModels.map((model): AgentModel => {
           const reasoningOptions = [
             { id: "default", label: "Default" },
             ...reasoning(model.variants ?? []),
           ];
           return {
-          platform: "opencode",
-          id: model.id,
-          label: model.name,
-          providerLabel: `OpenCode/${model.provider}`,
-          reasoning: reasoningOptions,
-          defaultReasoningId: fallbackReasoningId(reasoningOptions) ?? "default",
-          supportsSpeed: false,
-          supportsMode: true,
-          ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
-          ...(typeof model.supportsImageInput === "boolean"
-            ? { supportsImageInput: model.supportsImageInput }
-            : {}),
+            platform: "opencode",
+            id: model.id,
+            label: model.name,
+            providerLabel: `OpenCode/${model.provider}`,
+            reasoning: reasoningOptions,
+            defaultReasoningId: fallbackReasoningId(reasoningOptions) ?? "default",
+            supportsSpeed: false,
+            supportsMode: true,
+            ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+            ...(typeof model.supportsImageInput === "boolean"
+              ? { supportsImageInput: model.supportsImageInput }
+              : {}),
           };
         })),
       ...(cursorModels.length > 0 ? cursorModels : cache.cursor?.models ?? []),
@@ -9992,7 +10051,7 @@ export function createCommandRegistry(
   });
   register("get_repository_config", ({ projectId }, { storage }) => storage.getRepositoryConfig(asString(projectId, "projectId")));
   register("update_repository_config", async ({ projectId, repoConfig }, context) => {
-    const updated = await context.storage.updateRepositoryConfig(
+    const updated = await context.storage.updateRepositorySettings(
       asString(projectId, "projectId"),
       repoConfig as never,
     );
@@ -10002,6 +10061,37 @@ export function createCommandRegistry(
     // the setting the user just changed.
     void syncDiffStatsTracking(context).catch(() => undefined);
     return redactAppConfig(updated);
+  });
+  register("remember_environment_agent_selection", async ({
+    projectId,
+    platform,
+    mode,
+    model,
+    reasoningEffort,
+  }, { storage }) => {
+    if (!isAgentPlatform(platform)) {
+      throw new Error("Expected platform to be a supported agent platform");
+    }
+    const selectedPlatform = platform;
+    const selectedMode = asString(mode, "mode");
+    if (selectedMode !== "terminal" && selectedMode !== "native") {
+      throw new Error("Expected mode to be terminal or native");
+    }
+    const selectedModel = asOptionalString(model)?.trim();
+    const selectedReasoningEffort = asOptionalString(reasoningEffort)?.trim();
+    return redactAppConfig(await storage.patchRepositoryConfig(
+      asString(projectId, "projectId"),
+      {
+        lastEnvironmentAgentSelection: {
+          platform: selectedPlatform,
+          mode: selectedMode,
+          ...(selectedModel ? { model: selectedModel } : {}),
+          ...(selectedReasoningEffort
+            ? { reasoningEffort: selectedReasoningEffort }
+            : {}),
+        },
+      },
+    ));
   });
   register("get_linear_connection", async (_args, context) => {
     const auth = await context.storage.getLinearAuth();
@@ -10381,7 +10471,9 @@ export function createCommandRegistry(
       entryPort: repoConfig.entryPort,
       pendingRenamePrompt,
     });
-    await storage.updateRepositoryConfig(project.id, { ...repoConfig, lastEnvironmentType: env.environmentType });
+    await storage.patchRepositoryConfig(project.id, {
+      lastEnvironmentType: env.environmentType,
+    });
     return toClientEnvironment(await storage.addEnvironment(env));
   });
   register("delete_environment", async ({ environmentId }, context) => {
@@ -10641,7 +10733,7 @@ export function createCommandRegistry(
       { portMappings: asPortMappings(portMappings) ?? [] },
     ).then(toClientEnvironment),
   );
-  register("update_environment_agent_settings", ({
+  register("update_environment_agent_settings", async ({
     environmentId,
     defaultAgent,
     claudeMode,
@@ -10653,6 +10745,7 @@ export function createCommandRegistry(
     initialReasoningEffort,
     initialPromptAttachments,
   }, { storage }) => {
+    const id = asString(environmentId, "environmentId");
     const updates = {
       defaultAgent,
       claudeMode,
@@ -10678,8 +10771,7 @@ export function createCommandRegistry(
       updates.initialPromptAttachments =
         initialPromptAttachments as Environment["initialPromptAttachments"];
     }
-    return storage.updateEnvironment(asString(environmentId, "environmentId"), updates)
-      .then(toClientEnvironment);
+    return toClientEnvironment(await storage.updateEnvironment(id, updates));
   });
   register("set_environment_pending_agent_launch", ({ environmentId, pending }, { storage }) => {
     const nextPending = asRequiredBoolean(pending, "pending");
@@ -11005,11 +11097,24 @@ export function createCommandRegistry(
     if (!await pathExists(modelPath)) return { recent: [], favorite: [], variant: {} };
     return JSON.parse(await fs.readFile(modelPath, "utf8"));
   });
-  register("get_opencode_model_catalog_cache", (args, { storage }) => {
+  register("get_opencode_model_catalog_cache", async (args, { storage }) => {
     assertOnlyKeys(args, ["projectId"], "arguments");
-    return storage.getOpenCodeModelCatalog(
+    const snapshot = await storage.getOpenCodeModelCatalog(
       asNonBlankString(args.projectId, "projectId"),
     );
+    if (!snapshot) return snapshot;
+    // A cache written before the allowlist changed still holds the providers
+    // the user has since excluded. Filter on read so the launch dialogs get
+    // the same catalogue as the chat picker.
+    const allowedProviders = normalizeOpenCodeModelProviders(
+      (await storage.loadConfig()).global.openCodeModelProviders,
+    );
+    return {
+      ...snapshot,
+      models: snapshot.models.filter((model) =>
+        isSelectableOpenCodeProvider(model.provider, allowedProviders)
+      ),
+    };
   });
   register("cache_opencode_model_catalog", (args, { storage }) => {
     assertOnlyKeys(args, ["projectId", "models"], "arguments");
@@ -14294,6 +14399,9 @@ export const __testing = {
     return localServerProcesses.get(key);
   },
   releaseLocalServerOwnership,
+  LOCAL_SERVER_HEALTH_ATTEMPTS,
+  ACP_LOCAL_SERVER_HEALTH_ATTEMPTS,
+  waitForLocalServerHealth,
   waitForHttpServerExit,
   waitForUnhealthy,
   setTerminateProcessTree(

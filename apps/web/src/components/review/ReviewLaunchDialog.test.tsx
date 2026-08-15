@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, act, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { createContext, useContext } from "react";
 import * as realDialog from "@/components/ui/dialog";
 import * as realSelect from "@/components/ui/select";
@@ -81,8 +81,35 @@ import {
 } from "./ReviewLaunchDialog";
 import { useConfigStore } from "@/stores/configStore";
 
+/**
+ * The picker renders its three choice columns side by side on desktop and as
+ * pop-out submenus on mobile, so every assertion here has to pin the viewport.
+ */
+function setViewport(mobile: boolean) {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: (query: string) => ({
+      matches: query === "(max-width: 767px)" ? mobile : false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => true,
+    }),
+  });
+}
+
+/**
+ * `matchMedia` is a shared global, so a stub left installed decides the layout
+ * of every suite that runs after this one in the same process.
+ */
+const originalMatchMedia = window.matchMedia;
+
 afterEach(cleanup);
 beforeEach(() => {
+  setViewport(false);
   const config = useConfigStore.getState().config;
   useConfigStore.setState({
     config: {
@@ -98,6 +125,10 @@ beforeEach(() => {
 afterAll(() => {
   mock.module("@/components/ui/dialog", () => realDialogSnapshot);
   mock.module("@/components/ui/select", () => realSelectSnapshot);
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: originalMatchMedia,
+  });
 });
 
 const catalog: ReviewModelCatalog = {
@@ -144,13 +175,49 @@ const openCodeCatalog: ReviewModelCatalog = {
   ],
 };
 
-const openModelPicker = () => {
-  const trigger = screen.getByRole("combobox", { name: "Model" });
-  act(() => {
-    fireEvent.pointerDown(trigger);
-    fireEvent.click(trigger);
-  });
+/** The one control the dialog now offers for provider, model and reasoning. */
+const picker = () => screen.getByRole("combobox", { name: "Agent, model and reasoning" });
+
+const openPicker = () => {
+  const trigger = picker();
+  fireEvent.pointerDown(trigger);
   return trigger;
+};
+
+/**
+ * An open menu marks the rest of the dialog `aria-hidden`, so anything queried
+ * by role outside it is invisible until the menu is dismissed. Choosing an item
+ * dismisses it; browsing the platform rail does not.
+ */
+const closePicker = () => {
+  fireEvent.keyDown(document.body, { key: "Escape" });
+};
+
+const models = () => within(screen.getByRole("group", { name: "Models" }));
+
+const modelItem = (name: RegExp) => models().getByRole("menuitemradio", { name });
+
+const reasoningItems = () => within(screen.getByRole("group", { name: "Reasoning" }));
+
+const showProviderModels = (agent: string) => {
+  fireEvent.click(screen.getByRole("button", { name: `${agent} models` }));
+};
+
+const chooseModel = (name: RegExp, agent?: string) => {
+  openPicker();
+  if (agent) showProviderModels(agent);
+  fireEvent.click(modelItem(name));
+};
+
+const chooseReasoning = (name: RegExp) => {
+  openPicker();
+  fireEvent.click(reasoningItems().getByRole("menuitemradio", { name }));
+};
+
+const chooseProvider = (agent: string) => {
+  openPicker();
+  showProviderModels(agent);
+  closePicker();
 };
 
 function renderDialog(overrides: Partial<Parameters<typeof ReviewLaunchDialog>[0]> = {}) {
@@ -167,7 +234,7 @@ function renderDialog(overrides: Partial<Parameters<typeof ReviewLaunchDialog>[0
 }
 
 describe("ReviewLaunchDialog", () => {
-  test("offers only native providers and confirms a one-pass review", () => {
+  test("offers every native provider in one picker and confirms a one-pass review", () => {
     const onConfirm = mock((_selection: ReviewLaunchSelection) => undefined);
     render(
       <ReviewLaunchDialog
@@ -183,16 +250,176 @@ describe("ReviewLaunchDialog", () => {
 
     expect(screen.getByRole("dialog")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Configure code review" })).toBeTruthy();
-    expect(
-      within(screen.getByRole("radiogroup", { name: "Review provider" }))
-        .getAllByRole("radio"),
-    ).toHaveLength(5);
+
+    openPicker();
+    // Every provider is reachable from the one control rather than from a
+    // separate radio group.
+    for (const option of REVIEW_TAB_OPTIONS) {
+      expect(screen.getByRole("button", { name: `${option.agent} models` })).toBeTruthy();
+    }
+    expect(screen.getByPlaceholderText("Search models...")).toBeTruthy();
+    closePicker();
+
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onConfirm).toHaveBeenCalledWith({
       tabType: "claude",
       model: "claude-b",
       reasoningEffort: "xhigh",
     });
+  });
+
+  test("hides disabled providers and falls back from a disabled default", () => {
+    const config = useConfigStore.getState().config;
+    useConfigStore.setState({
+      config: {
+        ...config,
+        global: {
+          ...config.global,
+          enabledAgentPlatforms: ["claude"],
+        },
+      },
+    });
+    const { onConfirm } = renderDialog({
+      defaultTabType: "codex",
+      preferredModels: { claude: "claude-b" },
+      preferredReasoningEfforts: { claude: "xhigh" },
+    });
+
+    expect(picker().textContent).toContain("Claude B");
+    openPicker();
+    expect(screen.getByRole("button", { name: "claude models" })).toBeTruthy();
+    for (const agent of ["codex", "cursor", "grok", "opencode"]) {
+      expect(screen.queryByRole("button", { name: `${agent} models` })).toBeNull();
+    }
+    closePicker();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith({
+      tabType: "claude",
+      model: "claude-b",
+      reasoningEffort: "xhigh",
+    });
+  });
+
+  test("keeps only Claude when configuration enables no platform at all", () => {
+    const config = useConfigStore.getState().config;
+    useConfigStore.setState({
+      config: {
+        ...config,
+        global: { ...config.global, enabledAgentPlatforms: [] },
+      },
+    });
+    // Malformed persisted state must still leave the dialog launchable rather
+    // than offering an empty picker.
+    const { onConfirm } = renderDialog({ defaultTabType: "opencode" });
+
+    expect(picker().textContent).toContain("Claude A");
+    openPicker();
+    expect(screen.getByRole("button", { name: "claude models" })).toBeTruthy();
+    for (const agent of ["codex", "cursor", "grok", "opencode"]) {
+      expect(screen.queryByRole("button", { name: `${agent} models` })).toBeNull();
+    }
+    closePicker();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith({
+      tabType: "claude",
+      model: "claude-a",
+      reasoningEffort: undefined,
+    });
+  });
+
+  test("keeps favourites from disabled providers out of the picker", () => {
+    const config = useConfigStore.getState().config;
+    useConfigStore.setState({
+      config: {
+        ...config,
+        global: {
+          ...config.global,
+          enabledAgentPlatforms: ["claude"],
+          // A favourite outlives the provider it was earned under, and the
+          // favourites view reads this list rather than the model catalog.
+          favoriteModels: [
+            { platform: "claude", modelId: "claude-b" },
+            { platform: "opencode", modelId: "provider/model-a" },
+          ],
+        },
+      },
+    });
+    renderDialog();
+
+    openPicker();
+    fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
+    expect(modelItem(/Claude B/)).toBeTruthy();
+    expect(models().queryByRole("menuitemradio", { name: /provider\/model-a/ })).toBeNull();
+    expect(models().queryByRole("menuitemradio", { name: /OpenCode/ })).toBeNull();
+    closePicker();
+  });
+
+  test("keeps the chosen model after a keyboard glance at favourites", () => {
+    const { onConfirm } = renderDialog();
+
+    chooseModel(/Claude B/);
+    chooseReasoning(/^Extra high$/);
+    expect(picker().textContent).toContain("Claude B");
+    expect(picker().textContent).toContain("Extra high");
+
+    openPicker();
+    const list = document.querySelector("[data-native-model-list]")!;
+    fireEvent.keyDown(list, { key: "ArrowLeft" });
+    expect(screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"))
+      .toBe("true");
+    fireEvent.keyDown(list, { key: "ArrowRight" });
+    expect(screen.getByRole("button", { name: "claude models" }).getAttribute("aria-pressed"))
+      .toBe("true");
+    closePicker();
+
+    expect(picker().textContent).toContain("Claude B");
+    expect(picker().textContent).toContain("Extra high");
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith({
+      tabType: "claude",
+      model: "claude-b",
+      reasoningEffort: "xhigh",
+    });
+  });
+
+  test("captions each model row with its catalog description", () => {
+    renderDialog({
+      catalog: {
+        ...catalog,
+        claude: [
+          {
+            id: "claude-a",
+            name: "Claude A",
+            description: "Balanced reviews for everyday code changes",
+            reasoningEfforts: ["low", "high"],
+          },
+          { id: "claude-b", name: "Claude B", reasoningEfforts: ["xhigh"] },
+        ],
+      },
+    });
+
+    openPicker();
+    // The caption the old model list showed has to survive the move into the
+    // picker, where a row's second line is the provider label.
+    expect(modelItem(/Claude A/).textContent)
+      .toContain("Balanced reviews for everyday code changes");
+    // A model with no description still names its platform.
+    expect(modelItem(/Claude B/).textContent).toContain("Claude");
+    closePicker();
+  });
+
+  test("shows the model and its reasoning effort on the single trigger", () => {
+    renderDialog({
+      preferredModels: { claude: "claude-a" },
+      preferredReasoningEfforts: { claude: "high" },
+    });
+
+    // The three former controls collapse into one labelled combobox.
+    expect(screen.getAllByRole("combobox")).toHaveLength(1);
+    expect(picker().textContent).toContain("Claude A");
+    expect(picker().textContent).toContain("High");
   });
 
   test("configures looped review with allowance 6 by default and supports 1 through 10", () => {
@@ -227,7 +454,7 @@ describe("ReviewLaunchDialog", () => {
     });
   });
 
-  test("disables dismissal and submission while a launch is busy", () => {
+  test("disables dismissal, the picker, and submission while a launch is busy", () => {
     const onOpenChange = mock((_open: boolean) => undefined);
     const { onConfirm } = renderDialog({
       kind: "looped",
@@ -239,6 +466,8 @@ describe("ReviewLaunchDialog", () => {
     const cancelButton = screen.getByRole("button", { name: "Cancel" });
     expect((startButton as HTMLButtonElement).disabled).toBe(true);
     expect((cancelButton as HTMLButtonElement).disabled).toBe(true);
+    // The picker is a real button, so the disabled fieldset covers it too.
+    expect(picker().closest("fieldset")?.disabled).toBe(true);
     expect(startButton.closest("form")?.getAttribute("aria-busy")).toBe("true");
 
     fireEvent.submit(startButton.closest("form")!);
@@ -261,9 +490,9 @@ describe("ReviewLaunchDialog", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("radio", { name: /^Codex/ }));
-    expect(screen.getByRole("combobox", { name: "Model" }).textContent).toContain("Codex A");
-    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent).toContain("high");
+    chooseProvider("codex");
+    expect(picker().textContent).toContain("Codex A");
+    expect(picker().textContent).toContain("High");
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
 
     expect(onConfirm).toHaveBeenCalledWith({
@@ -273,36 +502,40 @@ describe("ReviewLaunchDialog", () => {
     });
   });
 
-  test("lets a described model trigger grow beyond its minimum height", () => {
-    renderDialog({
-      catalog: {
-        ...catalog,
-        claude: [
-          {
-            ...catalog.claude[0]!,
-            description: "Balanced reviews for everyday code changes",
-          },
-        ],
-      },
+  test("picks another provider's model directly, without switching provider first", () => {
+    const { onConfirm } = renderDialog({
+      preferredReasoningEfforts: { codex: "medium" },
     });
 
-    const trigger = screen.getByRole("combobox", { name: "Model" });
-    const classes = trigger.className.split(/\s+/);
+    chooseModel(/Codex A/, "codex");
+
+    // Provider, model and effort all move in one commit, so the effort is
+    // resolved against Codex's catalog rather than Claude's.
+    expect(picker().textContent).toContain("Codex A");
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith({
+      tabType: "codex",
+      model: "codex-a",
+      reasoningEffort: "medium",
+    });
+  });
+
+  test("keeps the picker trigger sized like the other review controls", () => {
+    renderDialog();
+
+    const classes = picker().className.split(/\s+/);
     expect(classes).toContain("min-h-11");
     expect(classes).toContain("py-2.5");
-    expect(classes).toContain("data-[size=default]:h-auto");
-    expect(classes).not.toContain("h-11");
-    expect(trigger.textContent).toContain("Claude A");
-    expect(trigger.textContent).toContain("Balanced reviews for everyday code changes");
+    expect(classes).toContain("w-full");
+    expect(picker().textContent).toContain("Claude A");
   });
 
   test("manually changes reasoning effort and submits the selection", () => {
     const { onConfirm } = renderDialog();
 
-    fireEvent.click(screen.getByRole("option", { name: "High" }));
+    chooseReasoning(/^High$/);
 
-    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
-      .toContain("high");
+    expect(picker().textContent).toContain("High");
     expect(screen.getByText(/Claude Native · Claude A · high effort · one pass/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
@@ -316,14 +549,15 @@ describe("ReviewLaunchDialog", () => {
   test("spells xhigh out rather than showing the wire value", () => {
     const { onConfirm } = renderDialog();
 
-    fireEvent.click(screen.getByRole("option", { name: /Claude B/ }));
+    chooseModel(/Claude B/);
 
     // "Xhigh" is what a naive capitalisation would produce; the provider still
     // has to be sent the raw value.
-    expect(screen.getByRole("option", { name: "Extra high" })).toBeTruthy();
-    expect(screen.queryByRole("option", { name: "Xhigh" })).toBeNull();
+    openPicker();
+    expect(reasoningItems().getByRole("menuitemradio", { name: "Extra high" })).toBeTruthy();
+    expect(reasoningItems().queryByRole("menuitemradio", { name: "Xhigh" })).toBeNull();
 
-    fireEvent.click(screen.getByRole("option", { name: "Extra high" }));
+    fireEvent.click(reasoningItems().getByRole("menuitemradio", { name: "Extra high" }));
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onConfirm).toHaveBeenCalledWith({
       tabType: "claude",
@@ -339,15 +573,13 @@ describe("ReviewLaunchDialog", () => {
     });
 
     // Claude A does not offer the preferred effort, so it starts at default.
-    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
-      .toContain("default");
+    expect(picker().textContent).toContain("Default");
 
-    fireEvent.click(screen.getByRole("option", { name: /Claude B/ }));
+    chooseModel(/Claude B/);
 
     // Claude B does. Leaving it on default here would quietly downgrade the run
     // the user configured a preference for.
-    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
-      .toContain("xhigh");
+    expect(picker().textContent).toContain("Extra high");
     expect(screen.getByText(/Claude Native · Claude B · xhigh effort · one pass/))
       .toBeTruthy();
 
@@ -365,12 +597,10 @@ describe("ReviewLaunchDialog", () => {
       preferredReasoningEfforts: { opencode: "deep" },
     });
 
-    fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
+    chooseProvider("opencode");
 
-    expect(screen.getByRole("combobox", { name: "Model" }).textContent)
-      .toContain("OpenCode A");
-    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
-      .toContain("deep");
+    expect(picker().textContent).toContain("OpenCode A");
+    expect(picker().textContent).toContain("Deep");
     expect(screen.getByText(/OpenCode Native · OpenCode A · deep effort · one pass/))
       .toBeTruthy();
 
@@ -384,57 +614,23 @@ describe("ReviewLaunchDialog", () => {
     });
   });
 
-  test("swaps the model list for the searchable picker when OpenCode is chosen", () => {
-    renderDialog({
-      preferredModels: { opencode: "provider/model-a" },
-    });
-
-    // The searchable OpenCode picker exposes the catalogue in a combobox with
-    // aria-expanded; the plain Select does not.
-    const modelTrigger = screen.getByRole("combobox", { name: "Model" });
-    expect(modelTrigger.hasAttribute("aria-expanded")).toBe(false);
-
-    fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
-
-    const openCodeTrigger = screen.getByRole("combobox", { name: "Model" });
-    expect(openCodeTrigger.getAttribute("aria-expanded")).not.toBeNull();
-    expect(openCodeTrigger.textContent).toContain("OpenCode A");
-    // The defining feature of the swap is the search field, so assert it rather
-    // than only the attribute that distinguishes the two triggers.
-    openModelPicker();
-    expect(screen.getByPlaceholderText("Search models...")).toBeTruthy();
-  });
-
-  test("keeps the OpenCode trigger sized like the other review controls", () => {
+  test("orders models favourites-first for every provider, not only OpenCode", () => {
     renderDialog({
       catalog: openCodeCatalog,
       preferredModels: { opencode: "provider/model-a" },
     });
 
-    fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
-
-    const trigger = screen.getByRole("combobox", { name: "Model" });
-    expect(trigger.className).toContain("min-h-11");
-    expect(trigger.textContent).toContain("OpenCode A");
-  });
-
-  test("orders OpenCode models favourites-first in the searchable picker", () => {
-    renderDialog({
-      catalog: openCodeCatalog,
-      preferredModels: { opencode: "provider/model-a" },
-    });
-
-    fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
-    openModelPicker();
+    chooseProvider("opencode");
+    openPicker();
 
     fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
-    expect(screen.getByRole("menuitemradio", { name: /OpenCode A/ })).toBeTruthy();
-    expect(screen.queryByRole("menuitemradio", { name: /OpenCode B/ })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "opencode models" }));
-    expect(screen.getByRole("menuitemradio", { name: /OpenCode B/ })).toBeTruthy();
+    expect(modelItem(/OpenCode A/)).toBeTruthy();
+    expect(models().queryByRole("menuitemradio", { name: /OpenCode B/ })).toBeNull();
+    showProviderModels("opencode");
+    expect(modelItem(/OpenCode B/)).toBeTruthy();
   });
 
-  test("orders OpenCode models favourites-first in the looped dialog too", () => {
+  test("orders models favourites-first in the looped dialog too", () => {
     const config = useConfigStore.getState().config;
     useConfigStore.setState({
       config: {
@@ -451,12 +647,12 @@ describe("ReviewLaunchDialog", () => {
       preferredModels: { opencode: "provider/model-a" },
     });
 
-    fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
-    openModelPicker();
+    chooseProvider("opencode");
+    openPicker();
 
     fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
-    expect(screen.getByRole("menuitemradio", { name: /OpenCode B/ })).toBeTruthy();
-    expect(screen.queryByRole("menuitemradio", { name: /OpenCode A/ })).toBeNull();
+    expect(modelItem(/OpenCode B/)).toBeTruthy();
+    expect(models().queryByRole("menuitemradio", { name: /OpenCode A/ })).toBeNull();
   });
 
   test("closes without launching when cancelled", () => {
@@ -480,8 +676,8 @@ describe("ReviewLaunchDialog step markers", () => {
     const { container } = renderDialog({ kind: "looped" });
 
     const badges = iconBadges(container);
-    // One header badge + four steps (looped adds the pass-allowance step).
-    expect(badges).toHaveLength(5);
+    // One header badge + two steps (looped adds the pass-allowance step).
+    expect(badges).toHaveLength(3);
     for (const badge of badges) {
       expect(badge.className).toContain("rounded-full");
       // Without shrink-0 a flex sibling can squash the circle into an ellipse.
@@ -494,130 +690,29 @@ describe("ReviewLaunchDialog step markers", () => {
     const { container } = renderDialog({ kind: "looped" });
 
     const glyphs = iconBadges(container).map((badge) => badge.querySelector("svg"));
-    expect(glyphs).toHaveLength(5);
+    expect(glyphs).toHaveLength(3);
     for (const glyph of glyphs) {
       expect(glyph).not.toBeNull();
       expect(glyph!.getAttribute("class")).toContain("size-4");
     }
   });
 
-  test("drops the fourth step and its connector for a one-pass review", () => {
+  test("drops the second step and its connector for a one-pass review", () => {
     const { container } = renderDialog();
 
     // Steps are decorative, so they are hidden from the accessibility tree.
     for (const badge of iconBadges(container).slice(1)) {
       expect(badge.closest("[aria-hidden]")?.getAttribute("aria-hidden")).toBe("true");
     }
-    expect(iconBadges(container)).toHaveLength(4);
-    // Three steps, connected between each pair: the last step has no connector.
-    expect(container.querySelectorAll('[class~="bg-gradient-to-b"]')).toHaveLength(2);
+    expect(iconBadges(container)).toHaveLength(2);
+    // A single step has nothing to connect to.
+    expect(container.querySelectorAll('[class~="bg-gradient-to-b"]')).toHaveLength(0);
   });
 
-  test("connects all four steps for a looped review", () => {
+  test("connects both steps for a looped review", () => {
     const { container } = renderDialog({ kind: "looped" });
 
-    expect(container.querySelectorAll('[class~="bg-gradient-to-b"]')).toHaveLength(3);
-  });
-
-  test("captions every provider card with its own description", () => {
-    renderDialog();
-
-    const cards = screen.getAllByRole("radio")
-      .map((radio) => radio.parentElement!.querySelector("label")!);
-    expect(cards).toHaveLength(REVIEW_TAB_OPTIONS.length);
-
-    // The card is the only place the review modes are told apart, so each one
-    // carries the description declared beside its tab type rather than a
-    // duplicate string maintained in the group.
-    REVIEW_TAB_OPTIONS.forEach((option, index) => {
-      expect(option.description.length).toBeGreaterThan(0);
-      expect(cards[index]!.textContent).toContain(option.description);
-      expect(screen.getByText(option.description)).toBeTruthy();
-    });
-    expect(new Set(REVIEW_TAB_OPTIONS.map((option) => option.description)).size)
-      .toBe(REVIEW_TAB_OPTIONS.length);
-  });
-
-  test("renders a distinct icon for each provider", () => {
-    renderDialog();
-
-    const icons = screen.getAllByRole("radio").map((radio) => {
-      const card = radio.parentElement!.querySelector("label")!;
-      const svg = card.querySelector("svg");
-      expect(svg).not.toBeNull();
-      return svg!.outerHTML;
-    });
-
-    expect(icons).toHaveLength(5);
-    expect(new Set(icons).size).toBe(5);
-  });
-});
-
-describe("ReviewLaunchDialog provider keyboard navigation", () => {
-  function radios() {
-    return screen.getAllByRole("radio");
-  }
-
-  function selectedModelName() {
-    return screen.getByRole("combobox", { name: "Model" }).textContent;
-  }
-
-  test("moves forward with ArrowRight and ArrowDown", () => {
-    renderDialog();
-
-    // fireEvent returns false when the handler called preventDefault, which is
-    // what stops the arrow key from also scrolling the dialog.
-    expect(fireEvent.keyDown(radios()[0]!, { key: "ArrowRight" })).toBe(false);
-    expect(selectedModelName()).toContain("Codex A");
-    expect(document.activeElement).toBe(radios()[1]!);
-
-    expect(fireEvent.keyDown(radios()[1]!, { key: "ArrowDown" })).toBe(false);
-    expect(selectedModelName()).toContain("Cursor A");
-    expect(document.activeElement).toBe(radios()[2]!);
-  });
-
-  test("moves backward with ArrowLeft and ArrowUp", () => {
-    renderDialog({ defaultTabType: "opencode" });
-
-    expect(fireEvent.keyDown(radios()[4]!, { key: "ArrowLeft" })).toBe(false);
-    expect(selectedModelName()).toContain("Grok A");
-
-    expect(fireEvent.keyDown(radios()[3]!, { key: "ArrowUp" })).toBe(false);
-    expect(selectedModelName()).toContain("Cursor A");
-    expect(document.activeElement).toBe(radios()[2]!);
-  });
-
-  test("wraps around both ends", () => {
-    renderDialog();
-
-    // First -> previous wraps to last.
-    fireEvent.keyDown(radios()[0]!, { key: "ArrowLeft" });
-    expect(selectedModelName()).toContain("OpenCode A");
-
-    // Last -> next wraps to first.
-    fireEvent.keyDown(radios()[4]!, { key: "ArrowRight" });
-    expect(selectedModelName()).toContain("Claude A");
-  });
-
-  test("jumps to the ends with Home and End", () => {
-    renderDialog();
-
-    expect(fireEvent.keyDown(radios()[0]!, { key: "End" })).toBe(false);
-    expect(selectedModelName()).toContain("OpenCode A");
-    expect(document.activeElement).toBe(radios()[4]!);
-
-    expect(fireEvent.keyDown(radios()[4]!, { key: "Home" })).toBe(false);
-    expect(selectedModelName()).toContain("Claude A");
-    expect(document.activeElement).toBe(radios()[0]!);
-  });
-
-  test("ignores every other key", () => {
-    renderDialog();
-
-    for (const key of ["a", "Enter", "Tab", "PageDown"]) {
-      expect(fireEvent.keyDown(radios()[0]!, { key })).toBe(true);
-      expect(selectedModelName()).toContain("Claude A");
-    }
+    expect(container.querySelectorAll('[class~="bg-gradient-to-b"]')).toHaveLength(1);
   });
 });
 
@@ -635,20 +730,16 @@ describe("ReviewLaunchDialog reopen behaviour", () => {
 
     rerender(<ReviewLaunchDialog {...props} open />);
 
-    expect(screen.getByRole("combobox", { name: "Model" }).textContent)
-      .toContain("Claude B");
-    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
-      .toContain("xhigh");
+    expect(picker().textContent).toContain("Claude B");
+    expect(picker().textContent).toContain("Extra high");
 
     // And a cold-mounted dialog still resets what the user changed in it.
-    fireEvent.click(screen.getByRole("radio", { name: /^Codex/ }));
-    expect(screen.getByRole("combobox", { name: "Model" }).textContent)
-      .toContain("Codex A");
+    chooseProvider("codex");
+    expect(picker().textContent).toContain("Codex A");
     rerender(<ReviewLaunchDialog {...props} open={false} />);
     rerender(<ReviewLaunchDialog {...props} open />);
 
-    expect(screen.getByRole("combobox", { name: "Model" }).textContent)
-      .toContain("Claude B");
+    expect(picker().textContent).toContain("Claude B");
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onConfirm).toHaveBeenCalledWith({
       tabType: "claude",
@@ -662,16 +753,14 @@ describe("ReviewLaunchDialog reopen behaviour", () => {
       preferredModels: { claude: "claude-a" },
     });
 
-    fireEvent.click(screen.getByRole("radio", { name: /^Codex/ }));
-    fireEvent.click(screen.getByRole("option", { name: /Codex A/ }));
-    expect(screen.getByRole("combobox", { name: "Model" }).textContent).toContain("Codex A");
+    chooseModel(/Codex A/, "codex");
+    expect(picker().textContent).toContain("Codex A");
 
     rerender(<ReviewLaunchDialog {...props} open={false} />);
     rerender(<ReviewLaunchDialog {...props} open />);
 
-    expect(screen.getByRole("combobox", { name: "Model" }).textContent).toContain("Claude A");
-    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
-      .toContain("default");
+    expect(picker().textContent).toContain("Claude A");
+    expect(picker().textContent).toContain("Default");
   });
 
   test("resets the pass allowance when it is reopened", () => {
@@ -693,8 +782,8 @@ describe("ReviewLaunchDialog reopen behaviour", () => {
   test("keeps an in-progress selection when the catalog is refreshed while open", () => {
     const { props, rerender } = renderDialog();
 
-    fireEvent.click(screen.getByRole("radio", { name: /^Codex/ }));
-    expect(screen.getByRole("combobox", { name: "Model" }).textContent).toContain("Codex A");
+    chooseProvider("codex");
+    expect(picker().textContent).toContain("Codex A");
 
     // A parent re-render hands down an equal but fresh catalog object, which
     // changes the effect's dependencies without the dialog having reopened.
@@ -702,14 +791,14 @@ describe("ReviewLaunchDialog reopen behaviour", () => {
       <ReviewLaunchDialog {...props} catalog={structuredClone(catalog)} />,
     );
 
-    expect(screen.getByRole("combobox", { name: "Model" }).textContent).toContain("Codex A");
+    expect(picker().textContent).toContain("Codex A");
   });
 
   test("falls back to the first model when a refreshed catalog drops the selected one", () => {
     const { onConfirm, props, rerender } = renderDialog({
       preferredModels: { claude: "claude-b" },
     });
-    expect(screen.getByRole("combobox", { name: "Model" }).textContent).toContain("Claude B");
+    expect(picker().textContent).toContain("Claude B");
 
     rerender(
       <ReviewLaunchDialog
@@ -718,7 +807,7 @@ describe("ReviewLaunchDialog reopen behaviour", () => {
       />,
     );
 
-    expect(screen.getByRole("combobox", { name: "Model" }).textContent).toContain("Claude A");
+    expect(picker().textContent).toContain("Claude A");
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onConfirm).toHaveBeenCalledWith({
       tabType: "claude",
@@ -732,8 +821,7 @@ describe("ReviewLaunchDialog reopen behaviour", () => {
       preferredModels: { claude: "claude-a" },
       preferredReasoningEfforts: { claude: "high" },
     });
-    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
-      .toContain("high");
+    expect(picker().textContent).toContain("High");
 
     rerender(
       <ReviewLaunchDialog
@@ -751,8 +839,7 @@ describe("ReviewLaunchDialog reopen behaviour", () => {
       />,
     );
 
-    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
-      .toContain("default");
+    expect(picker().textContent).toContain("Default");
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onConfirm).toHaveBeenCalledWith({
       tabType: "claude",
@@ -763,14 +850,15 @@ describe("ReviewLaunchDialog reopen behaviour", () => {
 });
 
 describe("ReviewLaunchDialog degraded catalogs", () => {
-  test("disables reasoning effort for a model that has none", () => {
+  test("hides the reasoning column for a model that has none", () => {
     const { onConfirm } = renderDialog({ catalog: sparseCatalog });
 
-    fireEvent.click(screen.getByRole("option", { name: /Claude Fixed/ }));
+    chooseModel(/Claude Fixed/);
 
-    const effort = screen.getByRole("combobox", { name: "Reasoning effort" });
-    expect(effort.hasAttribute("disabled")).toBe(true);
     expect(screen.getByText("This model uses its default reasoning setting.")).toBeTruthy();
+    openPicker();
+    expect(screen.queryByRole("group", { name: "Reasoning" })).toBeNull();
+    closePicker();
 
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onConfirm).toHaveBeenCalledWith({
@@ -786,10 +874,9 @@ describe("ReviewLaunchDialog degraded catalogs", () => {
       preferredModels: { claude: "claude-a" },
       preferredReasoningEfforts: { claude: "high" },
     });
-    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
-      .toContain("high");
+    expect(picker().textContent).toContain("High");
 
-    fireEvent.click(screen.getByRole("option", { name: /Claude Fixed/ }));
+    chooseModel(/Claude Fixed/);
 
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onConfirm).toHaveBeenCalledWith({
@@ -802,12 +889,10 @@ describe("ReviewLaunchDialog degraded catalogs", () => {
   test("stays usable when a provider has no models at all", () => {
     const { onConfirm } = renderDialog({ catalog: sparseCatalog });
 
-    fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
+    chooseProvider("opencode");
 
-    expect(screen.getByRole("combobox", { name: "Model" }).textContent)
-      .toContain("Choose a model");
-    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).hasAttribute("disabled"))
-      .toBe(true);
+    expect(picker().textContent).toContain("Choose a model");
+    expect(screen.getByText("This model uses its default reasoning setting.")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onConfirm).toHaveBeenCalledWith({
@@ -829,6 +914,58 @@ describe("ReviewLaunchDialog degraded catalogs", () => {
       model: "claude-a",
       reasoningEffort: undefined,
     });
+  });
+});
+
+/**
+ * The picker lays its choices out as three desktop columns or as mobile
+ * drill-in views, and the dialog is a phone surface too, so the mobile route to
+ * a provider, a model and an effort needs its own coverage.
+ */
+describe("ReviewLaunchDialog on a phone", () => {
+  test("chooses provider, model and reasoning through the mobile views", async () => {
+    setViewport(true);
+    const { onConfirm } = renderDialog({
+      preferredReasoningEfforts: { codex: "medium" },
+    });
+
+    openPicker();
+    expect(screen.getByRole("group", { name: "Agent platforms" })).toBeTruthy();
+    // Desktop's side-by-side columns do not exist here.
+    expect(screen.queryByRole("group", { name: "Models" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "codex models" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Codex A/ }));
+    expect(picker().textContent).toContain("Codex A");
+    expect(picker().textContent).toContain("Medium");
+
+    // Reasoning is behind a drill-in view rather than a visible column.
+    openPicker();
+    fireEvent.click(document.querySelector<HTMLElement>(
+      "[data-native-mobile-reasoning-trigger]",
+    )!);
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
+
+    expect(picker().textContent).toContain("High");
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith({
+      tabType: "codex",
+      model: "codex-a",
+      reasoningEffort: "high",
+    });
+  });
+
+  test("omits the reasoning view for a model that has no efforts", () => {
+    setViewport(true);
+    renderDialog({ catalog: sparseCatalog });
+
+    openPicker();
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Claude Fixed/ }));
+
+    expect(screen.getByText("This model uses its default reasoning setting.")).toBeTruthy();
+    openPicker();
+    expect(document.querySelector("[data-native-mobile-reasoning-trigger]")).toBeNull();
+    closePicker();
   });
 });
 
@@ -855,10 +992,10 @@ describe("ReviewLaunchDialog summary", () => {
     ).toBeTruthy();
   });
 
-  test("names the provider chosen by keyboard in the summary", () => {
+  test("names the provider chosen in the picker in the summary", () => {
     renderDialog();
 
-    fireEvent.keyDown(screen.getAllByRole("radio")[0]!, { key: "End" });
+    chooseProvider("opencode");
 
     expect(screen.getByText(/OpenCode Native · OpenCode A · default effort · one pass/))
       .toBeTruthy();

@@ -459,6 +459,30 @@ function createContext(
         config.repositories[projectId as "project-1"] = nextConfig;
         return config;
       }),
+      updateRepositorySettings: mock(async (projectId: string, nextConfig: RepositoryConfig) => {
+        const current = config.repositories[projectId as "project-1"];
+        config.repositories[projectId as "project-1"] = {
+          ...nextConfig,
+          ...(current?.lastEnvironmentType !== undefined
+            ? { lastEnvironmentType: current.lastEnvironmentType }
+            : {}),
+          ...(current?.lastEnvironmentAgentSelection !== undefined
+            ? {
+                lastEnvironmentAgentSelection:
+                  current.lastEnvironmentAgentSelection,
+              }
+            : {}),
+        };
+        return config;
+      }),
+      patchRepositoryConfig: mock(async (projectId: string, updates: Partial<RepositoryConfig>) => {
+        config.repositories[projectId as "project-1"] = {
+          ...repositoryConfig,
+          ...config.repositories[projectId as "project-1"],
+          ...updates,
+        };
+        return config;
+      }),
       getDesktopConnections: mock(async () => desktopConnections),
       saveDesktopConnections: mock(async (nextConnections: typeof desktopConnections) => {
         desktopConnections = nextConnections;
@@ -14304,6 +14328,72 @@ exit 0
     }
   });
 
+  test.each(["cursor", "grok"] as const)(
+    "allows a delayed %s ACP server to become healthy after the old attempt limit",
+    async (kind) => {
+      let checks = 0;
+
+      await expect(commandTesting.waitForLocalServerHealth(
+        45_678,
+        kind,
+        undefined,
+        {
+          checkHealth: async () => {
+            checks += 1;
+            return checks === commandTesting.LOCAL_SERVER_HEALTH_ATTEMPTS + 1;
+          },
+          delay: async () => {},
+        },
+      )).resolves.toBeUndefined();
+
+      expect(checks).toBe(commandTesting.LOCAL_SERVER_HEALTH_ATTEMPTS + 1);
+    },
+  );
+
+  test.each(["cursor", "grok"] as const)(
+    "gives %s servers the full ACP startup window before failing",
+    async (kind) => {
+      let checks = 0;
+
+      await expect(commandTesting.waitForLocalServerHealth(
+        45_678,
+        kind,
+        undefined,
+        {
+          checkHealth: async () => {
+            checks += 1;
+            return false;
+          },
+          delay: async () => {},
+        },
+      )).rejects.toThrow("Server on port 45678 did not become healthy");
+
+      expect(checks).toBe(commandTesting.ACP_LOCAL_SERVER_HEALTH_ATTEMPTS);
+    },
+  );
+
+  test.each(["opencode", "claude", "codex"] as const)(
+    "keeps the existing startup window for %s servers",
+    async (kind) => {
+      let checks = 0;
+
+      await expect(commandTesting.waitForLocalServerHealth(
+        45_678,
+        kind,
+        undefined,
+        {
+          checkHealth: async () => {
+            checks += 1;
+            return false;
+          },
+          delay: async () => {},
+        },
+      )).rejects.toThrow("Server on port 45678 did not become healthy");
+
+      expect(checks).toBe(commandTesting.LOCAL_SERVER_HEALTH_ATTEMPTS);
+    },
+  );
+
   test("does not persist local bridge process state when the bridge entrypoint is missing", async () => {
     const appRoot = await createTempDir("ork-electron-app-missing-");
     const worktreePath = await createTempDir("ork-electron-worktree-missing-");
@@ -17550,6 +17640,10 @@ describe("storage-backed command delegation", () => {
         config = { ...config, repositories: { ...config.repositories, [id]: value } };
         return config;
       }),
+      updateRepositorySettings: mock(async (id: string, value: RepositoryConfig) => {
+        config = { ...config, repositories: { ...config.repositories, [id]: value } };
+        return config;
+      }),
     };
     const context = { storage } as unknown as CommandContext;
     const commands = createCommandRegistry();
@@ -17722,7 +17816,8 @@ describe("storage-backed command delegation", () => {
 
     expect(storage.removeProject).toHaveBeenCalledWith("project-1");
     expect(storage.updateProject).toHaveBeenCalledWith("project-1", { name: "renamed" });
-    expect(storage.updateRepositoryConfig).toHaveBeenCalledWith("project-1", repositoryConfig);
+    expect(storage.updateRepositorySettings).toHaveBeenCalledWith("project-1", repositoryConfig);
+    expect(storage.updateRepositoryConfig).not.toHaveBeenCalled();
   });
 
   test("delegates session lifecycle, synchronization, and buffer commands", async () => {

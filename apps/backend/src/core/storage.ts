@@ -67,6 +67,11 @@ import {
 } from "@orkestrator/protocol/resource-events";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import {
+  DEFAULT_OPENCODE_MODEL_PROVIDERS,
+  migrateOpenCodeModelProviders,
+  normalizeOpenCodeModelProviders,
+} from "@orkestrator/protocol/native-agent";
+import {
   DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
   isValidCodexMaxConcurrentThreads,
   MAX_CODEX_CONCURRENT_THREADS,
@@ -1531,6 +1536,34 @@ function sanitizePersistedReviewInstruction(config: AppConfig): AppConfig {
   };
 }
 
+/**
+ * Every place a previously-chosen OpenCode model id is durably stored.
+ *
+ * These were all selected from a picker that offered every provider OpenCode
+ * advertises, so they are what the allowlist migration has to preserve. Ids
+ * belonging to another agent contribute nothing: they carry no `provider/model`
+ * separator, so they resolve to no provider.
+ */
+function storedOpenCodeModelIds(
+  global: JsonRecord,
+  repositories: AppConfig["repositories"] | undefined,
+): unknown[] {
+  const ids: unknown[] = [global.opencodeModel];
+  if (Array.isArray(global.favoriteModels)) {
+    for (const favorite of global.favoriteModels) {
+      if (isRecord(favorite) && favorite.platform === "opencode") {
+        ids.push(favorite.modelId);
+      }
+    }
+  }
+  if (isRecord(repositories)) {
+    for (const repository of Object.values(repositories)) {
+      if (isRecord(repository)) ids.push(repository.defaultModel);
+    }
+  }
+  return ids;
+}
+
 function normalizePersistedConfig(config: AppConfig): AppConfig {
   const reviewInstructionSanitized = sanitizePersistedReviewInstruction(config);
   const global = reviewInstructionSanitized && isRecord(reviewInstructionSanitized.global)
@@ -1573,12 +1606,23 @@ function normalizePersistedConfig(config: AppConfig): AppConfig {
         ) === index
       )
     : [];
+  // An explicitly stored list is the user's own; an explicitly empty one is
+  // them opting into every provider and must survive normalization. Anything
+  // else is a pre-existing install being migrated onto the managed pair, which
+  // has to keep the providers that install already selected from.
+  const openCodeModelProviders = Array.isArray(global.openCodeModelProviders)
+    ? normalizeOpenCodeModelProviders(global.openCodeModelProviders)
+    : migrateOpenCodeModelProviders(
+        storedOpenCodeModelIds(global, reviewInstructionSanitized.repositories),
+      );
   if (
     global.codexMaxConcurrentThreads === codexMaxConcurrentThreads
     && global.useHostGitHubCredentials === useHostGitHubCredentials
     && JSON.stringify(global.enabledAgentPlatforms) === JSON.stringify(enabledAgentPlatforms)
     && global.defaultAgent === defaultAgent
     && JSON.stringify(global.favoriteModels ?? []) === JSON.stringify(favoriteModels)
+    && JSON.stringify(global.openCodeModelProviders)
+      === JSON.stringify(openCodeModelProviders)
   ) {
     return reviewInstructionSanitized;
   }
@@ -1592,6 +1636,7 @@ function normalizePersistedConfig(config: AppConfig): AppConfig {
       enabledAgentPlatforms,
       defaultAgent,
       favoriteModels,
+      openCodeModelProviders,
     } as unknown as AppConfig["global"],
   };
 }
@@ -1657,6 +1702,7 @@ export function defaultConfig(): AppConfig {
       // user changes it in settings.
       codexReasoningEffort: "high",
       opencodeMode: "terminal",
+      openCodeModelProviders: [...DEFAULT_OPENCODE_MODEL_PROVIDERS],
       claudeMode: "terminal",
       claudeNativeBackend: "sdk",
       claudeNativeFastModeDefault: false,
@@ -4054,6 +4100,58 @@ export class StorageService {
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadConfig();
       config.repositories[projectId] = { ...defaultRepositoryConfig(), ...repoConfig };
+      await this.saveJson(this.configFile(), config);
+      this.announce("config", "app");
+      return config;
+    });
+  }
+
+  /**
+   * Update user-editable repository settings without accepting a stale renderer
+   * echo for state owned by successful environment creation.
+   */
+  async updateRepositorySettings(
+    projectId: string,
+    repoConfig: RepositoryConfig,
+  ): Promise<AppConfig> {
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadConfig();
+      const current = config.repositories[projectId] ?? defaultRepositoryConfig();
+      const userSettings = { ...repoConfig };
+      delete userSettings.lastEnvironmentType;
+      delete userSettings.lastEnvironmentAgentSelection;
+      config.repositories[projectId] = {
+        ...defaultRepositoryConfig(),
+        ...userSettings,
+        ...(current.lastEnvironmentType !== undefined
+          ? { lastEnvironmentType: current.lastEnvironmentType }
+          : {}),
+        ...(current.lastEnvironmentAgentSelection !== undefined
+          ? {
+              lastEnvironmentAgentSelection:
+                current.lastEnvironmentAgentSelection,
+            }
+          : {}),
+      };
+      await this.saveJson(this.configFile(), config);
+      this.announce("config", "app");
+      return config;
+    });
+  }
+
+  /** Atomically patch backend-owned repository state under the config lock. */
+  async patchRepositoryConfig(
+    projectId: string,
+    updates: Partial<RepositoryConfig>,
+  ): Promise<AppConfig> {
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadConfig();
+      const current = config.repositories[projectId] ?? defaultRepositoryConfig();
+      config.repositories[projectId] = {
+        ...defaultRepositoryConfig(),
+        ...current,
+        ...updates,
+      };
       await this.saveJson(this.configFile(), config);
       this.announce("config", "app");
       return config;

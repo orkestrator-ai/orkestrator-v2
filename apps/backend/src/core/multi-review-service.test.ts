@@ -20,7 +20,10 @@ import type {
   ProviderSendOptions,
   ProviderStatus,
 } from "./build-pipeline-provider.js";
-import { AmbiguousPromptDispatchError } from "./build-pipeline-provider.js";
+import {
+  AmbiguousPromptDispatchError,
+  ProviderSessionFailedError,
+} from "./build-pipeline-provider.js";
 import { REVIEW_FIX_RESULT_JSON_SCHEMA } from "./looped-review-prompts.js";
 import { StorageService } from "./storage.js";
 import { MultiReviewService } from "./multi-review-service.js";
@@ -53,6 +56,13 @@ class Provider implements BuildPipelineProvider {
   readonly aborted: string[] = [];
   /** Per-session status, overriding `statusValue`; keeps tests pass-count independent. */
   readonly statusOverrides = new Map<string, ProviderStatus>();
+  /**
+   * Per-session terminal turn detail. Reported the way the HTTP bridge reports
+   * one — as a `ProviderSessionFailedError` throw rather than an `"error"`
+   * status — and, unlike `statusError`, on every call, because a failed turn
+   * stays failed until the next turn runs.
+   */
+  readonly sessionFailures = new Map<string, string>();
   sessions = 0;
   statusValue: ProviderStatus = "idle";
   statusCalls = 0;
@@ -102,6 +112,8 @@ class Provider implements BuildPipelineProvider {
       this.statusError = null;
       throw error;
     }
+    const failure = this.sessionFailures.get(sessionId);
+    if (failure) throw new ProviderSessionFailedError(this.agent, failure);
     return this.statusOverrides.get(sessionId) ?? this.statusValue;
   }
   async messages(): Promise<unknown[]> {
@@ -759,6 +771,62 @@ test("MultiReviewService persists cancellation until an aborting fix provider ac
   await fs.rm(dataDir, { recursive: true, force: true });
 });
 
+/*
+ * A session whose turn ended terminally has stopped, which is exactly what the
+ * abort was waiting for. Letting that read throw reported a successful abort as
+ * unsettled, so cancellation stayed pending on a provider that was already done.
+ */
+test("MultiReviewService settles cancellation when the aborted session reports a terminal turn error", async () => {
+  const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-multi-review-cancel-terminal-"));
+  const storage = new StorageService(dataDir);
+  await storage.init();
+  await storage.addEnvironment({
+    id: "env-cancel-terminal", projectId: "project-1", name: "review", branch: "change",
+    containerId: null, status: "running", prUrl: null, prState: null,
+    hasMergeConflicts: null, createdAt: new Date(0).toISOString(), networkAccessMode: "full",
+    order: 0, environmentType: "local", worktreePath: "/tmp/review", setupScriptsComplete: true,
+  });
+  const provider = new Provider();
+  const service = new MultiReviewService(storage, async () => { throw new Error("unexpected command"); }, {
+    autoAdvance: false,
+    provider: async () => provider,
+  });
+  const started = await service.start({
+    environmentId: "env-cancel-terminal", projectId: "project-1", targetBranch: "main",
+    reviewers: [{ agent: "claude", model: "opus" }],
+    fixModel: { agent: "claude", model: "opus" },
+  });
+  for (let attempt = 0; attempt < 4; attempt += 1) await service.advanceNow(started.id);
+
+  const statusCallsBeforeFix = provider.statusCalls;
+  provider.statusValue = "running";
+  provider.abortError = new Error("abort unavailable");
+  await service.address(started.id);
+  await waitUntil(() => provider.statusCalls > statusCallsBeforeFix);
+
+  expect((await service.cancel(started.id)).phase).toBe("cancelling");
+  await service.advanceNow(started.id);
+  expect((await storage.getMultiReviewWorkflow(started.id))?.snapshot)
+    .toMatchObject({ phase: "cancelling" });
+
+  // The persisted snapshot is stored untyped; the sibling tests only ever hand
+  // it to `toMatchObject`, so narrow it here to read one field back out.
+  const cancelling = (await storage.getMultiReviewWorkflow(started.id))
+    ?.snapshot as MultiReviewWorkflow | undefined;
+  const fixSessionId = cancelling?.fixSession?.providerSessionId;
+  expect(fixSessionId).toBeDefined();
+  // The turn ends terminally rather than returning to idle: still settled.
+  provider.sessionFailures.set(fixSessionId!, "Selected model is at capacity");
+  await service.advanceNow(started.id);
+
+  expect((await storage.getMultiReviewWorkflow(started.id))?.snapshot).toMatchObject({
+    phase: "cancelled",
+    fixSession: { status: "cancelled" },
+  });
+  await service.shutdown();
+  await fs.rm(dataDir, { recursive: true, force: true });
+});
+
 test("MultiReviewService coalesces repeated advances while a provider call is blocked", async () => {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-multi-review-coalesce-"));
   const storage = new StorageService(dataDir);
@@ -1146,6 +1214,31 @@ test("MultiReviewService fails a reviewer whose provider session errors or disap
   }
 });
 
+/*
+ * The bridge reports a terminal turn as a throw when it can say why, and as a
+ * bare `error` status only when it cannot — so branching on the status alone
+ * took the graceful path exactly when the provider had declined to explain
+ * itself. This reviewer must fail the same way as its bare-status sibling
+ * above, and carry the explanation instead of discarding it.
+ */
+test("MultiReviewService fails a reviewer on a terminal turn error and reports its detail", async () => {
+  const detail = "Selected model is at capacity. Please try a different model.";
+  const provider = new Provider();
+  provider.sessionFailures.set("session-1", detail);
+  await withService("env-reviewer-terminal", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await service.advanceNow(started.id);
+
+    const current = await snapshot(started.id);
+    expect(current?.phase).toBe("failed");
+    expect(current?.reviewers[0]).toMatchObject({
+      status: "failed",
+      error: `The reviewer session failed: ${detail}`,
+    });
+    expect(current?.error).toContain(detail);
+  });
+});
+
 test("MultiReviewService bounds a blocked reviewer and clears the count once it progresses", async () => {
   const provider = new Provider();
   provider.statusValue = "blocked";
@@ -1261,6 +1354,26 @@ test("MultiReviewService retries a failed consolidation with a fresh fix session
 
     await waitUntil(async () => (await snapshot(started.id))?.phase === "ready");
     expect((await snapshot(started.id))?.fixSession?.providerSessionId).toBe("session-3");
+  });
+});
+
+// Same terminal-turn contract as the reviewer path: the consolidation must fail
+// on a thrown session error too, with the provider's explanation attached.
+test("MultiReviewService fails a consolidation on a terminal turn error and reports its detail", async () => {
+  const detail = "usage limit reached";
+  const provider = new Provider();
+  provider.sessionFailures.set("session-2", detail);
+  await withService("env-consolidate-terminal", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    for (let attempt = 0; attempt < 4; attempt++) await service.advanceNow(started.id);
+
+    const failed = await snapshot(started.id);
+    expect(failed?.phase).toBe("failed");
+    expect(failed?.error).toBe(`The consolidation session failed: ${detail}`);
+    expect(failed?.fixSession).toMatchObject({
+      providerSessionId: "session-2",
+      status: "failed",
+    });
   });
 });
 

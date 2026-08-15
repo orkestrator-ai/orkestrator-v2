@@ -111,6 +111,115 @@ export interface AgentModelRef {
   modelId: string;
 }
 
+/**
+ * Provider catalogues Orkestrator selects from by default. OpenCode advertises
+ * every provider it knows about — thousands of models — but only these two are
+ * the managed catalogues Orkestrator ships against.
+ */
+export const DEFAULT_OPENCODE_MODEL_PROVIDERS: readonly string[] = Object.freeze([
+  "opencode",
+  "opencode-go",
+]);
+
+/** Upper bound on the configured allowlist, so config cannot unbound a scan. */
+export const MAX_OPENCODE_MODEL_PROVIDERS = 64;
+
+/**
+ * OpenCode model ids are `providerID/modelID` and the model half may itself
+ * contain slashes, so the provider is only ever the first segment.
+ */
+export function openCodeModelProviderId(modelId: string): string {
+  const separator = modelId.indexOf("/");
+  return separator > 0 ? modelId.slice(0, separator) : "";
+}
+
+/**
+ * Coerce a stored/user-supplied allowlist into canonical form. An absent or
+ * unusable value falls back to the default pair; an explicitly empty list is
+ * preserved so "show everything" stays expressible.
+ */
+export function normalizeOpenCodeModelProviders(value: unknown): string[] {
+  if (!Array.isArray(value)) return [...DEFAULT_OPENCODE_MODEL_PROVIDERS];
+  // An empty array is the user's explicit opt-in to OpenCode's full catalogue.
+  // A non-empty array that normalizes to nothing is malformed config, not that
+  // opt-in, and must retain the managed default rather than fail open.
+  if (value.length === 0) return [];
+  const providers: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== "string") continue;
+    // Provider ids are matched case-insensitively but stored as typed, so a
+    // stray "OpenCode" cannot silently select nothing.
+    const id = entry.trim().toLowerCase();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    providers.push(id);
+    if (providers.length >= MAX_OPENCODE_MODEL_PROVIDERS) break;
+  }
+  return providers.length > 0
+    ? providers
+    : [...DEFAULT_OPENCODE_MODEL_PROVIDERS];
+}
+
+/**
+ * Whether a provider id is selectable. An empty allowlist means unrestricted,
+ * which is the only way to opt back into OpenCode's full catalogue.
+ */
+export function isSelectableOpenCodeProvider(
+  providerId: string,
+  allowedProviders: readonly string[],
+): boolean {
+  if (allowedProviders.length === 0) return true;
+  return allowedProviders.includes(providerId.trim().toLowerCase());
+}
+
+/** Whether a `providerID/modelID` belongs to a selectable provider. */
+export function isSelectableOpenCodeModelId(
+  modelId: string,
+  allowedProviders: readonly string[],
+): boolean {
+  return isSelectableOpenCodeProvider(
+    openCodeModelProviderId(modelId),
+    allowedProviders,
+  );
+}
+
+/**
+ * A cache key identifying the allowlist a catalogue was filtered against.
+ *
+ * Nothing constrains the shape of a stored provider id, so joining on a
+ * separator would collide `["a,b"]` with `["a","b"]` and serve one list's
+ * catalogue to the other.
+ */
+export function openCodeModelProvidersKey(
+  allowedProviders: readonly string[],
+): string {
+  return JSON.stringify(allowedProviders);
+}
+
+/**
+ * Seed the allowlist for an install that predates it.
+ *
+ * The managed pair is the baseline, but any OpenCode model already stored as a
+ * default or favourite was chosen from a picker that offered every provider.
+ * Dropping those providers would leave the user pointed at a model no picker
+ * will list, so each one is preserved alongside the managed pair.
+ */
+export function migrateOpenCodeModelProviders(
+  storedModelIds: readonly unknown[],
+): string[] {
+  const providers = [...DEFAULT_OPENCODE_MODEL_PROVIDERS];
+  for (const candidate of storedModelIds) {
+    if (typeof candidate !== "string") continue;
+    const providerId = openCodeModelProviderId(candidate.trim().toLowerCase());
+    if (!providerId || providers.includes(providerId)) continue;
+    providers.push(providerId);
+  }
+  // Normalize rather than return directly so the migrated list is bounded by
+  // the same cap as a user-edited one.
+  return normalizeOpenCodeModelProviders(providers);
+}
+
 export type AgentConversationMode = "build" | "plan";
 
 /**

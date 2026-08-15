@@ -73,6 +73,7 @@ import {
   type NormalizedMessage,
   type NormalizedPart,
 } from "./messages/types.js";
+import { appendAttachmentTags } from "./messages/attachment-tags.js";
 import {
   buildPromptInput,
   expandPromptTemplate,
@@ -4460,10 +4461,16 @@ export class AppServerRuntime {
     const parts: NormalizedPart[] = [];
     if (prompt.length > 0) parts.push({ type: "text", content: prompt });
     for (const attachment of attachments) {
+      // `content` is the path, not the filename: this row has to be identical
+      // to the one `extractAttachmentTags` rebuilds after a rehydration, and
+      // the renderer reads the path from `content` to load the bytes. An inline
+      // `dataUrl` is still preferred for `fileUrl` while we have it, since it
+      // shows the thumbnail without a workspace read.
       parts.push({
         type: "file",
-        content: attachment.filename || attachment.path,
-        fileUrl: attachment.dataUrl || `file://${attachment.path}`,
+        content: attachment.path,
+        fileUrl: attachment.dataUrl || attachment.path,
+        ...(attachment.filename ? { filename: attachment.filename } : {}),
       });
     }
     const message: NormalizedMessage = {
@@ -4948,12 +4955,17 @@ export class AppServerRuntime {
 
 function toEngineInput(prompt: string, attachments: PromptAttachmentInput[]): EngineUserInput[] {
   const input: EngineUserInput[] = [];
-  if (prompt.length > 0) input.push({ type: "text", text: prompt });
+  // Codex stores the image itself as an opaque base64 data URL and forgets
+  // where it came from, so the text carries the path as well. That is the only
+  // copy a transcript rebuilt from the rollout can afford to replay, and it
+  // doubles as the reference the model needs to read or edit the file.
+  const text = appendAttachmentTags(prompt, attachments);
+  if (text.length > 0) input.push({ type: "text", text });
   for (const attachment of attachments) {
     input.push({ type: "local_image", path: attachment.path });
   }
   // A prompt-less turn is not valid; attachments alone still need a text slot.
-  if (input.length === 0) input.push({ type: "text", text: prompt });
+  if (input.length === 0) input.push({ type: "text", text });
   return input;
 }
 

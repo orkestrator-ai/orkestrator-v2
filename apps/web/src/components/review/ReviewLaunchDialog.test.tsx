@@ -85,11 +85,11 @@ import { useConfigStore } from "@/stores/configStore";
  * The picker renders its three choice columns side by side on desktop and as
  * pop-out submenus on mobile, so every assertion here has to pin the viewport.
  */
-function setDesktopViewport() {
+function setViewport(mobile: boolean) {
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
     value: (query: string) => ({
-      matches: false,
+      matches: query === "(max-width: 767px)" ? mobile : false,
       media: query,
       onchange: null,
       addEventListener: () => {},
@@ -101,9 +101,15 @@ function setDesktopViewport() {
   });
 }
 
+/**
+ * `matchMedia` is a shared global, so a stub left installed decides the layout
+ * of every suite that runs after this one in the same process.
+ */
+const originalMatchMedia = window.matchMedia;
+
 afterEach(cleanup);
 beforeEach(() => {
-  setDesktopViewport();
+  setViewport(false);
   const config = useConfigStore.getState().config;
   useConfigStore.setState({
     config: {
@@ -119,6 +125,10 @@ beforeEach(() => {
 afterAll(() => {
   mock.module("@/components/ui/dialog", () => realDialogSnapshot);
   mock.module("@/components/ui/select", () => realSelectSnapshot);
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: originalMatchMedia,
+  });
 });
 
 const catalog: ReviewModelCatalog = {
@@ -289,6 +299,87 @@ describe("ReviewLaunchDialog", () => {
       model: "claude-b",
       reasoningEffort: "xhigh",
     });
+  });
+
+  test("keeps only Claude when configuration enables no platform at all", () => {
+    const config = useConfigStore.getState().config;
+    useConfigStore.setState({
+      config: {
+        ...config,
+        global: { ...config.global, enabledAgentPlatforms: [] },
+      },
+    });
+    // Malformed persisted state must still leave the dialog launchable rather
+    // than offering an empty picker.
+    const { onConfirm } = renderDialog({ defaultTabType: "opencode" });
+
+    expect(picker().textContent).toContain("Claude A");
+    openPicker();
+    expect(screen.getByRole("button", { name: "claude models" })).toBeTruthy();
+    for (const agent of ["codex", "cursor", "grok", "opencode"]) {
+      expect(screen.queryByRole("button", { name: `${agent} models` })).toBeNull();
+    }
+    closePicker();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith({
+      tabType: "claude",
+      model: "claude-a",
+      reasoningEffort: undefined,
+    });
+  });
+
+  test("keeps favourites from disabled providers out of the picker", () => {
+    const config = useConfigStore.getState().config;
+    useConfigStore.setState({
+      config: {
+        ...config,
+        global: {
+          ...config.global,
+          enabledAgentPlatforms: ["claude"],
+          // A favourite outlives the provider it was earned under, and the
+          // favourites view reads this list rather than the model catalog.
+          favoriteModels: [
+            { platform: "claude", modelId: "claude-b" },
+            { platform: "opencode", modelId: "provider/model-a" },
+          ],
+        },
+      },
+    });
+    renderDialog();
+
+    openPicker();
+    fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
+    expect(modelItem(/Claude B/)).toBeTruthy();
+    expect(models().queryByRole("menuitemradio", { name: /provider\/model-a/ })).toBeNull();
+    expect(models().queryByRole("menuitemradio", { name: /OpenCode/ })).toBeNull();
+    closePicker();
+  });
+
+  test("captions each model row with its catalog description", () => {
+    renderDialog({
+      catalog: {
+        ...catalog,
+        claude: [
+          {
+            id: "claude-a",
+            name: "Claude A",
+            description: "Balanced reviews for everyday code changes",
+            reasoningEfforts: ["low", "high"],
+          },
+          { id: "claude-b", name: "Claude B", reasoningEfforts: ["xhigh"] },
+        ],
+      },
+    });
+
+    openPicker();
+    // The caption the old model list showed has to survive the move into the
+    // picker, where a row's second line is the provider label.
+    expect(modelItem(/Claude A/).textContent)
+      .toContain("Balanced reviews for everyday code changes");
+    // A model with no description still names its platform.
+    expect(modelItem(/Claude B/).textContent).toContain("Claude");
+    closePicker();
   });
 
   test("shows the model and its reasoning effort on the single trigger", () => {
@@ -795,6 +886,58 @@ describe("ReviewLaunchDialog degraded catalogs", () => {
       model: "claude-a",
       reasoningEffort: undefined,
     });
+  });
+});
+
+/**
+ * The picker lays its choices out as three desktop columns or as mobile
+ * drill-in views, and the dialog is a phone surface too, so the mobile route to
+ * a provider, a model and an effort needs its own coverage.
+ */
+describe("ReviewLaunchDialog on a phone", () => {
+  test("chooses provider, model and reasoning through the mobile views", async () => {
+    setViewport(true);
+    const { onConfirm } = renderDialog({
+      preferredReasoningEfforts: { codex: "medium" },
+    });
+
+    openPicker();
+    expect(screen.getByRole("group", { name: "Agent platforms" })).toBeTruthy();
+    // Desktop's side-by-side columns do not exist here.
+    expect(screen.queryByRole("group", { name: "Models" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "codex models" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Codex A/ }));
+    expect(picker().textContent).toContain("Codex A");
+    expect(picker().textContent).toContain("Medium");
+
+    // Reasoning is behind a drill-in view rather than a visible column.
+    openPicker();
+    fireEvent.click(document.querySelector<HTMLElement>(
+      "[data-native-mobile-reasoning-trigger]",
+    )!);
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
+
+    expect(picker().textContent).toContain("High");
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith({
+      tabType: "codex",
+      model: "codex-a",
+      reasoningEffort: "high",
+    });
+  });
+
+  test("omits the reasoning view for a model that has no efforts", () => {
+    setViewport(true);
+    renderDialog({ catalog: sparseCatalog });
+
+    openPicker();
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Claude Fixed/ }));
+
+    expect(screen.getByText("This model uses its default reasoning setting.")).toBeTruthy();
+    openPicker();
+    expect(document.querySelector("[data-native-mobile-reasoning-trigger]")).toBeNull();
+    closePicker();
   });
 });
 

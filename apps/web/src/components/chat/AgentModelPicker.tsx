@@ -263,6 +263,8 @@ export function AgentModelPicker({
   const mobileReasoningBackRef = useRef<HTMLDivElement>(null);
   const mobileSpeedBackRef = useRef<HTMLDivElement>(null);
   const mobileReturnFocusRef = useRef<MobileSubmenu | null>(null);
+  const modelListRef = useRef<HTMLDivElement>(null);
+  const focusModelListRef = useRef(false);
   const isMobile = useMediaQuery("(max-width: 767px)");
   const normalizedSearch = search.trim().toLowerCase();
   const availablePlatforms = useMemo(
@@ -285,6 +287,46 @@ export function AgentModelPicker({
     },
     [onModelChange, onModelSelect, onPlatformChange],
   );
+  /**
+   * Steps the catalog rail one entry left or right.
+   *
+   * A Radix menu is a single tab stop — it calls `preventDefault` on Tab — so
+   * the rail's plain buttons can never be reached by keyboard. Left and Right
+   * are unused by the desktop layout (only the mobile drill-in views claim
+   * them), and they are the same keys the provider radio groups this picker
+   * replaced answered to, so they walk the rail instead.
+   */
+  const stepCatalogView = useCallback(
+    (step: 1 | -1) => {
+      if (platformSelectionLocked) return false;
+      const views: Array<AgentPlatform | "favorites"> = ["favorites", ...availablePlatforms];
+      if (views.length < 2) return false;
+      const current = Math.max(views.indexOf(catalogView), 0);
+      const next = views[(current + step + views.length) % views.length]!;
+      setCatalogView(next);
+      // Moving focus onto the new list is what announces the switch; the rail
+      // itself is not in the roving focus group and cannot take focus.
+      focusModelListRef.current = true;
+      if (next !== "favorites") onPlatformChange?.(next);
+      return true;
+    },
+    [availablePlatforms, catalogView, onPlatformChange, platformSelectionLocked],
+  );
+  useLayoutEffect(() => {
+    if (!focusModelListRef.current) return;
+    focusModelListRef.current = false;
+    modelListRef.current
+      ?.querySelector<HTMLElement>("[role='menuitemradio'], [role='menuitem']")
+      ?.focus();
+  }, [catalogView]);
+  const handleCatalogKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    // A rail that cannot move — one platform, or a locked selection — leaves the
+    // key to whatever else would have handled it rather than swallowing it.
+    if (!stepCatalogView(event.key === "ArrowRight" ? 1 : -1)) return;
+    event.preventDefault();
+    event.stopPropagation();
+  };
   const visibleModels = useMemo(() => {
     const byKey = new Map(models.map((model) => [`${model.platform}:${model.id}`, model]));
     const ordered = catalogView === "favorites"
@@ -676,8 +718,14 @@ export function AgentModelPicker({
                   ? "grid-cols-[3rem_repeat(2,minmax(0,1fr))]"
                   : "grid-cols-[3rem_minmax(0,1fr)]",
             )}
+            onKeyDown={handleCatalogKeyDown}
           >
-            <div className="flex min-h-0 flex-col items-center gap-1 pr-1" aria-label="Agent platforms">
+            <div
+              className="flex min-h-0 flex-col items-center gap-1 pr-1"
+              role="group"
+              aria-label="Agent platforms"
+              aria-keyshortcuts="ArrowLeft ArrowRight"
+            >
               <button
                 type="button"
                 aria-label="Favorite models"
@@ -718,7 +766,11 @@ export function AgentModelPicker({
               <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 Model
               </DropdownMenuLabel>
-              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain" data-native-model-list>
+              <div
+                ref={modelListRef}
+                className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+                data-native-model-list
+              >
                 <ModelItems
                   models={visibleModels}
                   selectedModelId={selectedModelId}

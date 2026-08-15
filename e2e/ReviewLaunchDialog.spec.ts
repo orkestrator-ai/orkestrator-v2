@@ -160,3 +160,76 @@ test("step and header icon badges render as equally sized circles", async ({
     expect(badge.glyphHeight).toBe(16);
   }
 });
+
+test("chooses a provider, a model and an effort with the keyboard alone", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop project only");
+  await page.goto("/review-launch");
+
+  const trigger = page.getByRole("combobox", { name: "Agent, model and reasoning" });
+  const reasoning = page.getByRole("group", { name: "Reasoning" });
+  await trigger.focus();
+  await page.keyboard.press("Enter");
+  // Every step waits for focus before sending the next key: the menu mounts and
+  // autofocuses asynchronously, and keys sent before that are dropped.
+  await expect(page.getByRole("menuitemradio", { name: /Claude Sonnet/ })).toBeFocused();
+
+  // A Radix menu is a single tab stop and calls preventDefault on Tab, so the
+  // platform rail answers Left/Right instead — the keys the provider radio
+  // group this control replaced also used.
+  await expect(page.getByRole("button", { name: "claude models" }))
+    .toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("button", { name: "codex models" }))
+    .toHaveAttribute("aria-pressed", "true");
+
+  // Focus lands on the new provider's list, which is what announces the switch.
+  const codexModel = page.getByRole("menuitemradio", { name: /Codex Review/ });
+  await expect(codexModel).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(trigger).toContainText("Codex Review");
+
+  // Reasoning shares the menu's roving focus group, so arrows reach it.
+  await page.keyboard.press("Enter");
+  await expect(codexModel).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(reasoning.getByRole("menuitemradio", { name: "Default" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(reasoning.getByRole("menuitemradio", { name: "Medium" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(reasoning.getByRole("menuitemradio", { name: "High" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(trigger).toContainText("High");
+
+  await page.getByRole("button", { name: "Start review" }).click();
+  await expect(page.getByTestId("review-launch-selection"))
+    .toHaveText("codex|codex-review|high");
+});
+
+test("the phone layout reaches every choice through its drill-in views", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "mobile project only");
+  await page.goto("/review-launch");
+
+  const trigger = page.getByRole("combobox", { name: "Agent, model and reasoning" });
+  await trigger.click();
+
+  // The phone layout stacks the choices instead of showing three columns.
+  await expect(page.getByRole("group", { name: "Agent platforms" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Models" })).toHaveCount(0);
+  await page.getByRole("button", { name: "codex models" }).click();
+  await page.getByRole("menuitemradio", { name: /Codex Review/ }).click();
+  await expect(trigger).toContainText("Codex Review");
+
+  await trigger.click();
+  await page.locator("[data-native-mobile-reasoning-trigger]").click();
+  await page.getByRole("menuitemradio", { name: "High" }).click();
+  await expect(trigger).toContainText("High");
+
+  await page.getByRole("button", { name: "Start review" }).click();
+  await expect(page.getByTestId("review-launch-selection"))
+    .toHaveText("codex|codex-review|high");
+});
+

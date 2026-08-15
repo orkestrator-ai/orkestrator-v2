@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Bot, BrainCircuit, Layers3 } from "lucide-react";
 import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
+import { firstEnabledAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -120,13 +121,13 @@ export function ReviewLaunchDialog({
 }: ReviewLaunchDialogProps) {
   const { favorites, enabledPlatforms, toggleFavorite } = useAgentModelFavorites();
   // Configuration guarantees at least one enabled platform, but retain a safe
-  // fallback for older or malformed persisted state.
+  // fallback for older or malformed persisted state. `firstEnabledAgentPlatform`
+  // already answers "the preferred one, or the first enabled one, or Claude", so
+  // the empty case resolves to the same single platform the picker is given.
+  const defaultEnabledTabType = firstEnabledAgentPlatform(enabledPlatforms, defaultTabType);
   const reviewPlatforms: ReviewAgent[] = enabledPlatforms.length > 0
     ? enabledPlatforms
-    : ["claude"];
-  const defaultEnabledTabType = reviewPlatforms.includes(defaultTabType)
-    ? defaultTabType
-    : reviewPlatforms[0]!;
+    : [defaultEnabledTabType];
   const initialModel = firstModelFor(
     getReviewAgent(defaultEnabledTabType),
     catalog,
@@ -186,15 +187,27 @@ export function ReviewLaunchDialog({
 
   // The picker owns provider, model and reasoning together, so it is fed every
   // provider's catalog at once rather than the selected provider's slice.
+  // `providerLabel` is the second line of a row, so the catalog's description
+  // has to travel there or the caption the old model list showed disappears
+  // behind a platform name repeated on every row.
   const pickerModels = useMemo<AgentModel[]>(
     () => reviewPlatforms.flatMap((platform) =>
       modelsForAgent(catalog, platform).map((option) => ({
         platform,
         id: option.id,
         label: option.name,
+        ...(option.description ? { providerLabel: option.description } : {}),
         description: option.description,
       }))),
     [catalog, reviewPlatforms],
+  );
+  // Favorites are global, so one earned while a platform was enabled outlives
+  // its provider being turned off. The favourites view reads this list rather
+  // than the model catalog, so an unfiltered list is the one place a disabled
+  // provider can still name itself inside the dialog.
+  const pickerFavorites = useMemo(
+    () => favorites.filter((favorite) => reviewPlatforms.includes(favorite.platform)),
+    [favorites, reviewPlatforms],
   );
   const reasoningOptions: AgentReasoningOption[] = effortAvailable
     ? [
@@ -335,7 +348,7 @@ export function ReviewLaunchDialog({
                 models={pickerModels}
                 enabledPlatforms={reviewPlatforms}
                 selectedPlatform={agent}
-                favorites={favorites}
+                favorites={pickerFavorites}
                 onToggleFavorite={toggleFavorite}
                 onPlatformChange={handleAgentChange}
                 selectedModelId={selectedModel?.id ?? model}

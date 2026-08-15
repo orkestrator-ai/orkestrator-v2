@@ -430,6 +430,67 @@ describe("AgentModelPicker", () => {
     expect(onFastModeChange).toHaveBeenCalledWith(true);
   });
 
+  test("walks the desktop platform rail with Left and Right", () => {
+    setMobileViewport(false);
+    const onPlatformChange = mock(() => {});
+    renderPicker({
+      models: [
+        { platform: "claude", id: "claude-model", label: "Claude model" },
+        { platform: "codex", id: "codex-model", label: "Codex model" },
+      ],
+      enabledPlatforms: ["claude", "codex"],
+      selectedPlatform: "claude",
+      selectedModelId: "claude-model",
+      onPlatformChange,
+    });
+
+    openPicker();
+    // A Radix menu calls preventDefault on Tab, so the rail's buttons are
+    // unreachable by keyboard without these keys.
+    const list = document.querySelector("[data-native-model-list]")!;
+    fireEvent.keyDown(list, { key: "ArrowRight" });
+    expect(onPlatformChange).toHaveBeenLastCalledWith("codex");
+    expect(screen.getByRole("button", { name: "codex models" }).getAttribute("aria-pressed"))
+      .toBe("true");
+    expect(screen.getByRole("menuitemradio", { name: /Codex model/ })).toBeTruthy();
+
+    fireEvent.keyDown(list, { key: "ArrowLeft" });
+    expect(screen.getByRole("button", { name: "claude models" }).getAttribute("aria-pressed"))
+      .toBe("true");
+
+    // Favourites sit at the head of the rail and are a view, not a platform.
+    fireEvent.keyDown(list, { key: "ArrowLeft" });
+    expect(screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"))
+      .toBe("true");
+    expect(onPlatformChange).toHaveBeenLastCalledWith("claude");
+
+    // And the ends wrap.
+    fireEvent.keyDown(list, { key: "ArrowLeft" });
+    expect(onPlatformChange).toHaveBeenLastCalledWith("codex");
+  });
+
+  test("leaves the desktop rail alone when platform selection is locked", () => {
+    setMobileViewport(false);
+    const onPlatformChange = mock(() => {});
+    renderPicker({
+      models: [
+        { platform: "claude", id: "claude-model", label: "Claude model" },
+        { platform: "codex", id: "codex-model", label: "Codex model" },
+      ],
+      enabledPlatforms: ["claude", "codex"],
+      selectedPlatform: "claude",
+      selectedModelId: "claude-model",
+      platformSelectionLocked: true,
+      onPlatformChange,
+    });
+
+    openPicker();
+    fireEvent.keyDown(document.querySelector("[data-native-model-list]")!, { key: "ArrowRight" });
+    expect(onPlatformChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "claude models" }).getAttribute("aria-pressed"))
+      .toBe("true");
+  });
+
   test("keeps long desktop reasoning ladders inside their own scroll region", () => {
     setMobileViewport(false);
     const reasoningOptions = Array.from({ length: 12 }, (_, index) => ({

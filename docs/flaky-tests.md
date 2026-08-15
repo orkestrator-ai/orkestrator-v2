@@ -877,3 +877,14 @@ Post-fix stress verification:
 - **Isolated rerun:** `bun test --cwd apps/backend ./tests/standalone.test.ts` -> 8 passed, 0 failed in 35.48 s. Evidence: `/tmp/rev-isolated-standalone.log`.
 - **Related:** a different case in the same file, `exits without a leftover listener when environment-managed Serve setup fails`, is recorded separately above. Both cases boot a real backend process and wait on its shutdown.
 - **Hypothesis:** The test spawns a real local server process tree and waits for the drain to complete. The isolated file takes 35.48 s for 8 tests, so this suite is already near the budget per case without contention; a parallel backend run adds process-startup competition on top. A later run of the same command at the same head passed this case and failed a different backend test instead, which is consistent with a shared-resource race rather than a defect in the drain itself. Establish whether the outstanding wait is on process exit or on port release before adjusting the budget.
+
+## `environment status and settings commands > preserves an admitted container start while its container is not yet persisted` (`tests/unit/electron/commands.test.ts:16388`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-full-tests.log`
+- **Worker configuration:** The root and agent-support group ran concurrently with the workspace, bridge, and protocol-lockfile groups under `scripts/test-all.ts`'s bounded worker pools.
+- **Failure:** `error: Timed out waiting for active start to finish` from the file's own `waitForCondition` helper (`commands.test.ts:1115`), reached through `withFakeGh` -> `withFakeDocker` (duration: 3,090.51 ms).
+- **Suite counts:** Root and agent-support group: 3,657 total, 3,655 passed, 1 skipped, 1 failed across 145 files.
+- **Isolated rerun:** `set -o pipefail; bun test ./tests/unit/electron/commands.test.ts` -> 398 passed, 1 skipped, 0 failed, 2,385 assertions in 89.34 seconds; the target passed.
+- **Hypothesis:** The case drives fake `gh` and `docker` child processes and polls for the start to settle on a wall-clock budget, so it is contention-sensitive in the same way as the tmux clusters above. Observed while the only source change was in `bridges/acp-bridge`, which this test never loads. A recurrence should capture whether the admitted-start latch or only the poll budget was late before changing the command's behavior.

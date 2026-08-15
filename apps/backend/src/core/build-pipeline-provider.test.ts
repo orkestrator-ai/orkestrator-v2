@@ -4811,8 +4811,64 @@ describe("HTTP build pipeline provider (codex)", () => {
     expect(runtimeReads).toBe(2);
 
     releaseRuntime();
-    await Promise.resolve();
-    await Promise.resolve();
+    const refreshes = (provider as unknown as {
+      codexRuntimeMetadataRefreshes: Map<string, Promise<void>>;
+    }).codexRuntimeMetadataRefreshes;
+    await waitUntil(() => refreshes.size === 0);
+
+    const third = await provider.interactiveSnapshot?.("codex-1");
+    expect(third?.runtime?.state).toBe("refreshed");
+    expect(runtimeReads).toBe(2);
+  });
+
+  test("retains Codex runtime metadata after a malformed background response", async () => {
+    let runtimeReads = 0;
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      if (url.endsWith("/config")) {
+        return Response.json({ mode: "build", fastMode: false, durable: true });
+      }
+      if (url.endsWith("/runtime-health")) {
+        runtimeReads += 1;
+        if (runtimeReads === 2) return Response.json(null);
+        return Response.json({
+          engine: { state: runtimeReads === 1 ? "ready" : "recovered" },
+          mcp: { data: [] },
+          skills: { data: [] },
+          hooks: { data: [] },
+          notices: [],
+        });
+      }
+      return Response.json({ status: "idle", phase: "idle", messageRevision: 1 });
+    }, codexConnection);
+
+    const first = await provider.interactiveSnapshot?.("codex-1");
+    expect(first?.runtime?.state).toBe("ready");
+    const internals = provider as unknown as {
+      interactiveMetadata: Map<string, {
+        expiresAt: number;
+        runtime?: { state?: string };
+      }>;
+      codexRuntimeMetadataRefreshes: Map<string, Promise<void>>;
+    };
+    const retained = internals.interactiveMetadata.get("codex-1");
+    expect(retained).toBeDefined();
+    retained!.expiresAt = 0;
+
+    const stale = await provider.interactiveSnapshot?.("codex-1");
+    expect(stale?.runtime?.state).toBe("ready");
+    await waitUntil(() => internals.codexRuntimeMetadataRefreshes.size === 0);
+    expect(internals.interactiveMetadata.get("codex-1")).toBe(retained);
+    expect(retained!.runtime?.state).toBe("ready");
+    expect(retained!.expiresAt).toBeGreaterThan(Date.now());
+
+    retained!.expiresAt = 0;
+    const retrying = await provider.interactiveSnapshot?.("codex-1");
+    expect(retrying?.runtime?.state).toBe("ready");
+    await waitUntil(() => internals.codexRuntimeMetadataRefreshes.size === 0);
+    const recovered = await provider.interactiveSnapshot?.("codex-1");
+    expect(recovered?.runtime?.state).toBe("recovered");
+    expect(runtimeReads).toBe(3);
   });
 
   test("sends codex attachments as data URLs without claude-only options", async () => {

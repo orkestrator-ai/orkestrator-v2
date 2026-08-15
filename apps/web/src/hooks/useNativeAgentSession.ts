@@ -134,6 +134,12 @@ export function useNativeAgentSession<TMessage = unknown>({
   const refreshSequenceRef = useRef(0);
   const projectionOperationEpochRef = useRef(0);
   const refreshesInFlightRef = useRef(0);
+  const reconcileAfterInFlightRef = useRef(false);
+  const backgroundRefreshEnabledRef = useRef(enabled && isActive);
+  backgroundRefreshEnabledRef.current = enabled && isActive;
+  const refreshRef = useRef<(
+    options?: { manual?: boolean; reconcileAfterInFlight?: boolean },
+  ) => Promise<NativeAgentSessionProjection<TMessage> | null>>(null);
   const pendingDispatchRef = useRef<{
     prompt: string;
     requestId: string;
@@ -190,10 +196,16 @@ export function useNativeAgentSession<TMessage = unknown>({
     }
   }, [environmentId, sessionKey, tabId, updateTabNativeSessionId]);
 
-  const refresh = useCallback(async (options?: { manual?: boolean }) => {
+  const refresh = useCallback(async (options?: {
+    manual?: boolean;
+    reconcileAfterInFlight?: boolean;
+  }) => {
     if (!enabled) return null;
     const background = options?.manual === false;
     if (background && refreshesInFlightRef.current > 0) {
+      if (options.reconcileAfterInFlight) {
+        reconcileAfterInFlightRef.current = true;
+      }
       return projectionRef.current;
     }
     refreshesInFlightRef.current += 1;
@@ -229,8 +241,26 @@ export function useNativeAgentSession<TMessage = unknown>({
         sequence === refreshSequenceRef.current
         && operationEpoch === projectionOperationEpochRef.current
       ) setIsRefreshing(false);
+      if (refreshesInFlightRef.current === 0 && reconcileAfterInFlightRef.current) {
+        reconcileAfterInFlightRef.current = false;
+        if (backgroundRefreshEnabledRef.current) {
+          queueMicrotask(() => {
+            void refreshRef.current?.({
+              manual: false,
+              reconcileAfterInFlight: true,
+            });
+          });
+        }
+      }
     }
   }, [applyProjection, enabled, identity, messageLimit]);
+
+  useEffect(() => {
+    refreshRef.current = refresh;
+    return () => {
+      if (refreshRef.current === refresh) refreshRef.current = null;
+    };
+  }, [refresh]);
 
   const connect = useCallback(async () => {
     if (!enabled) {
@@ -327,12 +357,14 @@ export function useNativeAgentSession<TMessage = unknown>({
       "native-agent-session",
       ({ id }) => {
         if (enabled && isActive && id === environmentId) {
-          void refresh({ manual: false });
+          void refresh({ manual: false, reconcileAfterInFlight: true });
         }
       },
     );
     const unsubscribeResync = onResourceResync(() => {
-      if (enabled && isActive) void refresh({ manual: false });
+      if (enabled && isActive) {
+        void refresh({ manual: false, reconcileAfterInFlight: true });
+      }
     });
     return () => {
       unsubscribeChange();

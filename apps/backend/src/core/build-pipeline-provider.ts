@@ -1526,6 +1526,7 @@ class HttpBridgeProvider implements BuildPipelineProvider {
   }>();
   /** Runtime inventory is optional UI metadata and must not delay transcripts. */
   private readonly codexRuntimeMetadataRefreshes = new Map<string, Promise<void>>();
+  private codexRuntimeMetadataGeneration = 0;
 
   constructor(
     private readonly connection: BridgeConnection,
@@ -2644,6 +2645,7 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     const pending = this.codexRuntimeMetadataRefreshes.get(sessionId);
     if (pending) return pending;
     const retained = this.interactiveMetadata.get(sessionId);
+    const generation = this.codexRuntimeMetadataGeneration;
     const operation = (async () => {
       try {
         const response = await bridgeFetch(
@@ -2658,14 +2660,24 @@ class HttpBridgeProvider implements BuildPipelineProvider {
           "Codex runtime health read",
           { remaining: 512 * 1024 },
         ));
+        if (!runtime) {
+          throw new ProviderUnavailableError(
+            "Codex runtime health read returned malformed metadata",
+          );
+        }
+        if (generation !== this.codexRuntimeMetadataGeneration) return;
         setBoundedMapEntry(this.interactiveMetadata, sessionId, {
           expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
-          ...(runtime ? { runtime } : {}),
+          runtime,
         }, MAX_TRACKED_INTERACTION_SESSIONS);
       } catch {
         // Keep known inventory usable and avoid retrying a failed optional
         // endpoint on every 500ms projection poll.
-        if (retained && this.interactiveMetadata.get(sessionId) === retained) {
+        if (
+          generation === this.codexRuntimeMetadataGeneration
+          && retained
+          && this.interactiveMetadata.get(sessionId) === retained
+        ) {
           retained.expiresAt = Date.now() + INTERACTIVE_RUNTIME_METADATA_RETRY_MS;
         }
       }
@@ -2982,6 +2994,7 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     // Execution profiles and runtime inventory are discovered alongside models,
     // so an explicit refresh has to drop them too or the picker re-renders the
     // same stale list it was asked to replace.
+    this.codexRuntimeMetadataGeneration += 1;
     this.interactiveMetadata.clear();
   }
 

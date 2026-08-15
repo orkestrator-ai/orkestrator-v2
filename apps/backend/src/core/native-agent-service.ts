@@ -528,10 +528,16 @@ export class NativeAgentService {
     { commands: NativeAgentSlashCommand[]; expiresAt: number }
   >();
   /** Coalesced stale-while-revalidate tasks for projection-only metadata. */
-  private readonly modelCatalogRefreshes = new Map<string, Promise<AgentModel[]>>();
+  private readonly modelCatalogRefreshes = new Map<string, {
+    operation: Promise<AgentModel[]>;
+    validity: { current: boolean };
+  }>();
   private readonly slashCommandRefreshes = new Map<
     string,
-    Promise<NativeAgentSlashCommand[]>
+    {
+      operation: Promise<NativeAgentSlashCommand[]>;
+      validity: { current: boolean };
+    }
   >();
   private readonly launchTasks = new Map<string, Promise<void>>();
   private readonly launchRetryAt = new Map<string, number>();
@@ -800,10 +806,25 @@ export class NativeAgentService {
     input: NativeAgentProjectionInput,
   ): Promise<NativeAgentSessionProjection | null> {
     this.assertProjectionInput(input);
-    this.modelCatalogCache.delete(input.environmentId);
-    this.slashCommandCache.delete(`${input.environmentId}\0${input.agent}`);
     const provider = await this.provider(input);
+    const slashCommandKey = `${input.environmentId}\0${input.agent}`;
+    const pendingModelCatalog = this.modelCatalogRefreshes.get(input.environmentId);
+    const pendingSlashCommands = this.slashCommandRefreshes.get(slashCommandKey);
+    if (pendingModelCatalog) pendingModelCatalog.validity.current = false;
+    if (pendingSlashCommands) pendingSlashCommands.validity.current = false;
+    await Promise.allSettled([
+      ...(pendingModelCatalog ? [pendingModelCatalog.operation] : []),
+      ...(pendingSlashCommands ? [pendingSlashCommands.operation] : []),
+    ]);
+    if (this.modelCatalogRefreshes.get(input.environmentId) === pendingModelCatalog) {
+      this.modelCatalogRefreshes.delete(input.environmentId);
+    }
+    if (this.slashCommandRefreshes.get(slashCommandKey) === pendingSlashCommands) {
+      this.slashCommandRefreshes.delete(slashCommandKey);
+    }
     await provider.refreshCatalog?.();
+    this.modelCatalogCache.delete(input.environmentId);
+    this.slashCommandCache.delete(slashCommandKey);
     return this.refreshProjection(input, true);
   }
 
@@ -1384,13 +1405,17 @@ export class NativeAgentService {
 
   private refreshProjectionModelCatalog(environmentId: string): Promise<AgentModel[]> {
     const pending = this.modelCatalogRefreshes.get(environmentId);
-    if (pending) return pending;
+    if (pending) return pending.operation;
+    const validity = { current: true };
     const operation = (async () => {
       const catalog = await this.invoke<AgentModel[]>(
         "get_native_agent_model_catalog",
         { environmentId },
       );
       const bounded = Array.isArray(catalog) ? catalog.slice(0, 512) : [];
+      if (!validity.current) {
+        throw new ProviderUnavailableError("Model catalog refresh was invalidated");
+      }
       if (
         !this.modelCatalogCache.has(environmentId)
         && this.modelCatalogCache.size >= NATIVE_MODEL_CATALOG_CACHE_LIMIT
@@ -1404,9 +1429,10 @@ export class NativeAgentService {
       });
       return bounded;
     })();
-    this.modelCatalogRefreshes.set(environmentId, operation);
+    const entry = { operation, validity };
+    this.modelCatalogRefreshes.set(environmentId, entry);
     return operation.finally(() => {
-      if (this.modelCatalogRefreshes.get(environmentId) === operation) {
+      if (this.modelCatalogRefreshes.get(environmentId) === entry) {
         this.modelCatalogRefreshes.delete(environmentId);
       }
     });
@@ -1417,9 +1443,13 @@ export class NativeAgentService {
     provider: NativeAgentRuntimeProvider,
   ): Promise<NativeAgentSlashCommand[]> {
     const pending = this.slashCommandRefreshes.get(key);
-    if (pending) return pending;
+    if (pending) return pending.operation;
+    const validity = { current: true };
     const operation = (async () => {
       const commands = (await provider.slashCommands!()).slice(0, 512);
+      if (!validity.current) {
+        throw new ProviderUnavailableError("Slash command refresh was invalidated");
+      }
       if (
         !this.slashCommandCache.has(key)
         && this.slashCommandCache.size >= NATIVE_SLASH_COMMAND_CACHE_LIMIT
@@ -1433,9 +1463,10 @@ export class NativeAgentService {
       });
       return commands;
     })();
-    this.slashCommandRefreshes.set(key, operation);
+    const entry = { operation, validity };
+    this.slashCommandRefreshes.set(key, entry);
     return operation.finally(() => {
-      if (this.slashCommandRefreshes.get(key) === operation) {
+      if (this.slashCommandRefreshes.get(key) === entry) {
         this.slashCommandRefreshes.delete(key);
       }
     });
@@ -2057,8 +2088,8 @@ export class NativeAgentService {
     this.interactionTimer = null;
     await Promise.allSettled([
       ...this.projectionRefreshes.values(),
-      ...this.modelCatalogRefreshes.values(),
-      ...this.slashCommandRefreshes.values(),
+      ...[...this.modelCatalogRefreshes.values()].map((entry) => entry.operation),
+      ...[...this.slashCommandRefreshes.values()].map((entry) => entry.operation),
     ]);
     await Promise.allSettled([...this.scanTasks]);
     while (

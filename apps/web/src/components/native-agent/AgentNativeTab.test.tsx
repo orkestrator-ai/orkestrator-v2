@@ -949,7 +949,7 @@ describe("AgentNativeTab", () => {
     });
   });
 
-  test("coalesces a resource invalidation with a projection read already in flight", async () => {
+  test("coalesces a resource invalidation into one trailing projection read", async () => {
     render(<NativeSessionHarness />);
     await waitFor(() => expect(screen.getByTestId("hook-session-id").textContent)
       .toBe("claude-session"));
@@ -957,8 +957,28 @@ describe("AgentNativeTab", () => {
     let releaseRefresh!: () => void;
     getNativeAgentProjectionMock.mockImplementationOnce(async (input) => {
       await new Promise<void>((resolve) => { releaseRefresh = resolve; });
-      return defaultProjection(input as never);
+      return {
+        ...(await defaultProjection(input as never)),
+        messages: [{
+          id: "assistant-stale",
+          role: "assistant",
+          content: "stale transcript",
+          parts: [],
+          createdAt: "2026-08-14T10:00:00.000Z",
+        }],
+      };
     });
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      messages: [{
+        id: "assistant-latest",
+        role: "assistant",
+        content: "latest transcript",
+        parts: [],
+        createdAt: "2026-08-14T10:00:01.000Z",
+      }],
+      revision: 2,
+    }));
 
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length)
@@ -978,6 +998,10 @@ describe("AgentNativeTab", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
+    await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length)
+      .toBe(callsBeforeRefresh + 2));
+    await waitFor(() => expect(screen.getByTestId("hook-message").textContent)
+      .toBe("latest transcript"));
   });
 
   test("polls an active tab faster while a turn runs and stops entirely when inactive", async () => {

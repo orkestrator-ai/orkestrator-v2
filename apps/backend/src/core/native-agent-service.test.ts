@@ -89,6 +89,7 @@ function createProviderStub(
     dismissSuggestedPrompt?: NativeAgentRuntimeProvider["dismissSuggestedPrompt"];
     updateInteractiveControls?: NativeAgentRuntimeProvider["updateInteractiveControls"];
     slashCommands?: NativeAgentRuntimeProvider["slashCommands"];
+    refreshCatalog?: NativeAgentRuntimeProvider["refreshCatalog"];
   } = {},
 ) {
   const createSession = mock(
@@ -124,6 +125,9 @@ function createProviderStub(
   const slashCommands = behaviour.slashCommands
     ? mock(behaviour.slashCommands)
     : undefined;
+  const refreshCatalog = behaviour.refreshCatalog
+    ? mock(behaviour.refreshCatalog)
+    : undefined;
   const provider = {
     agent,
     createSession,
@@ -139,6 +143,7 @@ function createProviderStub(
     rawModelCatalog,
     updateInteractiveControls,
     slashCommands,
+    refreshCatalog,
     structured: async () => null,
     abort,
     stopBackgroundTask,
@@ -161,6 +166,7 @@ function createProviderStub(
     rawModelCatalog,
     updateInteractiveControls,
     slashCommands,
+    refreshCatalog,
     dispose,
   };
 }
@@ -1094,15 +1100,24 @@ describe("NativeAgentService", () => {
     const catalogGate = new Promise<void>((resolve) => { releaseCatalog = resolve; });
     const commandGate = new Promise<void>((resolve) => { releaseCommands = resolve; });
     let catalogReads = 0;
+    let catalogRefreshFinished = false;
     const invoke: Invoke = async <T>(command: string): Promise<T> => {
       if (command !== "get_native_agent_model_catalog") {
         throw new Error(`Unexpected backend command: ${command}`);
       }
       catalogReads += 1;
-      if (catalogReads > 1) await catalogGate;
-      return [{ platform: "codex", id: "gpt-old", label: "GPT old" }] as T;
+      if (catalogReads > 1) {
+        await catalogGate;
+        catalogRefreshFinished = true;
+      }
+      return [{
+        platform: "codex",
+        id: catalogReads > 1 ? "gpt-new" : "gpt-old",
+        label: catalogReads > 1 ? "GPT new" : "GPT old",
+      }] as T;
     };
     let commandReads = 0;
+    let commandRefreshFinished = false;
     const stub = createProviderStub("codex", {
       interactiveSnapshot: async () => ({
         status: "idle",
@@ -1116,7 +1131,10 @@ describe("NativeAgentService", () => {
       }),
       slashCommands: async () => {
         commandReads += 1;
-        if (commandReads > 1) await commandGate;
+        if (commandReads > 1) {
+          await commandGate;
+          commandRefreshFinished = true;
+        }
         return [{ name: commandReads > 1 ? "/new" : "/old" }];
       },
     });
@@ -1154,7 +1172,85 @@ describe("NativeAgentService", () => {
 
       releaseCatalog();
       releaseCommands();
-      await waitForCondition(() => catalogReads === 2 && commandReads === 2);
+      await waitForCondition(() => catalogRefreshFinished && commandRefreshFinished);
+      const updated = await service.getProjection(identity);
+      expect(updated?.composer?.models).toEqual([
+        expect.objectContaining({ id: "gpt-new" }),
+      ]);
+      expect(updated?.slashCommands?.map((command) => command.name))
+        .toEqual(["/new", "/steer"]);
+    });
+  });
+
+  test("runs fresh discovery after an explicit refresh overlaps stale background work", async () => {
+    let now = 1_000;
+    let releaseCatalog!: () => void;
+    let releaseCommands!: () => void;
+    const catalogGate = new Promise<void>((resolve) => { releaseCatalog = resolve; });
+    const commandGate = new Promise<void>((resolve) => { releaseCommands = resolve; });
+    let catalogReads = 0;
+    const invoke: Invoke = async <T>(command: string): Promise<T> => {
+      if (command !== "get_native_agent_model_catalog") {
+        throw new Error(`Unexpected backend command: ${command}`);
+      }
+      catalogReads += 1;
+      if (catalogReads === 2) await catalogGate;
+      return [{
+        platform: "codex",
+        id: catalogReads > 2 ? "gpt-new" : "gpt-old",
+        label: catalogReads > 2 ? "GPT new" : "GPT old",
+      }] as T;
+    };
+    let commandReads = 0;
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+      slashCommands: async () => {
+        commandReads += 1;
+        if (commandReads === 2) await commandGate;
+        return [{ name: commandReads > 2 ? "/new" : "/old" }];
+      },
+      refreshCatalog: () => undefined,
+    });
+    await withService({
+      prefix: "orkestrator-native-forced-discovery-",
+      provider: async () => stub.provider,
+      invoke,
+      now: () => now,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-forced-discovery",
+      };
+      try {
+        await service.ensureSession(identity);
+        const initial = await service.getProjection(identity);
+        expect(initial?.composer?.models.map((model) => model.id)).toEqual(["gpt-old"]);
+        expect(initial?.slashCommands?.map((command) => command.name))
+          .toEqual(["/old", "/steer"]);
+
+        now += 30_001;
+        await service.getProjection(identity);
+        await waitForCondition(() => catalogReads === 2 && commandReads === 2);
+
+        const refreshedProjection = service.refreshProjectionModels(identity);
+        await Promise.resolve();
+        expect(catalogReads).toBe(2);
+        expect(commandReads).toBe(2);
+
+        releaseCatalog();
+        releaseCommands();
+        const refreshed = await refreshedProjection;
+        expect(stub.refreshCatalog).toHaveBeenCalledTimes(1);
+        expect(catalogReads).toBe(3);
+        expect(commandReads).toBe(3);
+        expect(refreshed?.composer?.models.map((model) => model.id)).toEqual(["gpt-new"]);
+        expect(refreshed?.slashCommands?.map((command) => command.name))
+          .toEqual(["/new", "/steer"]);
+      } finally {
+        releaseCatalog();
+        releaseCommands();
+      }
     });
   });
 

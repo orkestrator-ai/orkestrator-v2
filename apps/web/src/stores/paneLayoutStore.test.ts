@@ -1443,6 +1443,45 @@ describe("paneLayoutStore authoritative cleanup", () => {
     expect(pruneAgentHandoffs).not.toHaveBeenCalled();
   });
 
+  test("installs an authoritative layout for a hydrated environment that has no local record yet", () => {
+    const environmentId = "env-authoritative-missing";
+    usePaneLayoutStore.setState({
+      hydration: new Map([[environmentId, "done"]]),
+    });
+
+    usePaneLayoutStore.getState().applyAuthoritativeLayout(environmentId, {
+      containerId: "container-late",
+      activePaneId: "default",
+      backendRevision: 2,
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [{
+          id: "startup-agent",
+          type: "agent-native",
+          nativeAgentData: {
+            platform: "codex",
+            environmentId,
+            sessionId: "late-session",
+          },
+        }],
+        activeTabId: "startup-agent",
+      },
+    });
+
+    expect(usePaneLayoutStore.getState().getAllTabs(environmentId)).toEqual([{
+      id: "startup-agent",
+      type: "agent-native",
+      nativeAgentData: {
+        platform: "codex",
+        environmentId,
+        sessionId: "late-session",
+      },
+    }]);
+    expect(usePaneLayoutStore.getState().environments.get(environmentId)?.containerId)
+      .toBe("container-late");
+  });
+
   test("contains browser cleanup failures while installing the authoritative layout", async () => {
     const environmentId = "env-authoritative-browser-error";
     consoleDebugSpy = spyOn(console, "debug").mockImplementation(() => {});

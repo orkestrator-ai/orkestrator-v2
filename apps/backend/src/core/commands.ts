@@ -14288,34 +14288,49 @@ export function createCommandRegistry(
       console.warn("[backend] Skipping orphaned tab reconciliation because pane layouts are unreadable");
       return { terminals: 0, nativeSessions: 0, tmuxSessions: 0, skipped: true };
     }
-    const referencedTabs = new Map<string, Set<string>>();
-    const collectTabs = (node: unknown, result: Set<string>): void => {
+    const referencedTerminalTabs = new Map<string, Set<string>>();
+    const referencedNativeTabs = new Map<string, Set<string>>();
+    const terminalTabTypes = new Set([
+      "plain", "root", "claude", "opencode", "codex", "cursor", "grok",
+    ]);
+    const collectTabs = (
+      node: unknown,
+      terminals: Set<string>,
+      native: Set<string>,
+    ): void => {
       if (!node || typeof node !== "object" || Array.isArray(node)) return;
       const record = node as Record<string, unknown>;
       if (record.kind === "leaf" && Array.isArray(record.tabs)) {
         for (const tab of record.tabs) {
           if (!tab || typeof tab !== "object" || Array.isArray(tab)) continue;
-          const id = (tab as Record<string, unknown>).id;
-          if (typeof id === "string" && id.length > 0) result.add(id);
+          const tabRecord = tab as Record<string, unknown>;
+          const id = tabRecord.id;
+          if (typeof id !== "string" || id.length === 0) continue;
+          if (tabRecord.type === "agent-native") native.add(id);
+          else if (typeof tabRecord.type === "string" && terminalTabTypes.has(tabRecord.type)) {
+            terminals.add(id);
+          }
         }
         return;
       }
       if (record.kind === "split" && Array.isArray(record.children)) {
-        for (const child of record.children) collectTabs(child, result);
+        for (const child of record.children) collectTabs(child, terminals, native);
       }
     };
     for (const environment of environments) {
-      const tabs = new Set<string>();
+      const terminals = new Set<string>();
+      const native = new Set<string>();
       const layout = paneLayouts.layouts[environment.id];
-      if (layout) collectTabs(layout.root, tabs);
-      referencedTabs.set(environment.id, tabs);
+      if (layout) collectTabs(layout.root, terminals, native);
+      referencedTerminalTabs.set(environment.id, terminals);
+      referencedNativeTabs.set(environment.id, native);
     }
 
     let terminals = 0;
     for (const [sessionId, stableKey] of terminalStableKeysBySessionId) {
       const [, environmentId, tabId] = stableKey.split("\0");
       if (!environmentId || !tabId) continue;
-      if (referencedTabs.get(environmentId)?.has(tabId)) {
+      if (referencedTerminalTabs.get(environmentId)?.has(tabId)) {
         orphanedTerminalMissingSince.delete(sessionId);
         continue;
       }
@@ -14334,16 +14349,16 @@ export function createCommandRegistry(
     const teardownTab = commands.get("teardown_tab");
     let nativeSessions = 0;
     if (teardownTab) {
-      // Startup launch snapshots are consume-on-mount intents. If no pane ever
-      // adopts one (for example every renderer crashes after creation), expire
-      // it with the same grace period as any other orphaned native tab and
-      // retire both the provider session and the durable projection.
+      // Startup launch snapshots are backend-owned session identities. If their
+      // pane is removed or never survives persistence, expire them with the
+      // same grace period as any other orphaned native tab and retire both the
+      // provider session and the durable projection.
       for (const environment of environments) {
         const startup = environment.startupAgentSession;
         if (
           startup?.status !== "running"
           || !startup.providerSessionId
-          || referencedTabs.get(environment.id)?.has(startup.tabId)
+          || referencedNativeTabs.get(environment.id)?.has(startup.tabId)
         ) continue;
         const startedAt = Date.parse(startup.startedAt ?? "");
         if (!Number.isFinite(startedAt) || now - startedAt < graceMs) continue;
@@ -14372,7 +14387,7 @@ export function createCommandRegistry(
         const prefix = `env-${session.environmentId}:`;
         if (!session.logicalSessionKey.startsWith(prefix)) continue;
         const tabId = session.logicalSessionKey.slice(prefix.length);
-        if (!tabId || referencedTabs.get(session.environmentId)?.has(tabId)) continue;
+        if (!tabId || referencedNativeTabs.get(session.environmentId)?.has(tabId)) continue;
         const environment = environments.find((candidate) => candidate.id === session.environmentId);
         if (!environment || environment.tabTeardownIntents?.[tabId]) continue;
         const updatedAt = Date.parse(session.updatedAt);

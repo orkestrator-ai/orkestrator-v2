@@ -478,6 +478,361 @@ describe("backend-owned setup and build surfaces", () => {
     });
   });
 
+  test("publishes a backend-owned native startup tab beside the setup terminal", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-cursor-startup";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      await storage.addEnvironment(environment);
+
+      const layout = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "cursor",
+        providerSessionId: "cursor-session-1",
+      });
+
+      expect(layout?.root).toMatchObject({
+        kind: "leaf",
+        activeTabId: "startup-agent",
+        tabs: [
+          { id: "default", type: "plain", isSetupTab: true },
+          {
+            id: "startup-agent",
+            type: "agent-native",
+            nativeAgentData: {
+              platform: "cursor",
+              environmentId: environment.id,
+              sessionId: "cursor-session-1",
+              isLocal: true,
+            },
+          },
+        ],
+      });
+    });
+  });
+
+  test("repairs a malformed Cursor startup tab in place without resurrecting a closed tab", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-cursor-repair";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      await storage.addEnvironment(environment);
+      await storage.savePaneLayout(environment.id, {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "default",
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [
+            { id: "default", type: "plain", isSetupTab: true },
+            { id: "startup-agent", type: "cursor" },
+          ],
+          activeTabId: "startup-agent",
+        },
+      }, 0);
+
+      const repaired = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "cursor",
+        providerSessionId: "cursor-session-1",
+        existingOnly: true,
+      });
+      expect(repaired?.revision).toBe(2);
+      expect(repaired?.root).toMatchObject({
+        tabs: [
+          { id: "default", type: "plain", isSetupTab: true },
+          {
+            id: "startup-agent",
+            type: "agent-native",
+            nativeAgentData: { platform: "cursor", sessionId: "cursor-session-1" },
+          },
+        ],
+      });
+
+      const withoutStartup = createEnvironment("project-1");
+      withoutStartup.id = "env-closed-startup";
+      withoutStartup.environmentType = "local";
+      withoutStartup.containerId = null;
+      await storage.addEnvironment(withoutStartup);
+      await storage.savePaneLayout(withoutStartup.id, {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "default",
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [{ id: "default", type: "plain" }],
+          activeTabId: "default",
+        },
+      }, 0);
+      await expect(storage.ensureStartupNativeAgentTab({
+        environmentId: withoutStartup.id,
+        agent: "cursor",
+        providerSessionId: "closed-session",
+        existingOnly: true,
+      })).resolves.toBeNull();
+      expect((await storage.getPaneLayout(withoutStartup.id))?.revision).toBe(1);
+    });
+  });
+
+  test("preserves the user's own tab state when publishing provider identity", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-startup-merge";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      await storage.addEnvironment(environment);
+      await storage.savePaneLayout(environment.id, {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "default",
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [
+            { id: "default", type: "plain", isSetupTab: true },
+            {
+              id: "startup-agent",
+              type: "cursor",
+              displayTitle: "Reviewer",
+              agentHandoffId: "handoff-1",
+              consumedAgentHandoffId: "handoff-0",
+              initialAgentModel: "chosen-model",
+              initialReasoningEffort: "high",
+              initialConversationMode: "plan",
+              initialFastMode: true,
+              isReviewTab: true,
+              // Payload for a tab kind this tab definitively is not.
+              initialCommands: ["echo stale"],
+              nativeAgentData: {
+                platform: "cursor",
+                environmentId: environment.id,
+                hostPort: 4321,
+              },
+            },
+          ],
+          activeTabId: "startup-agent",
+        },
+      }, 0);
+
+      const published = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "cursor",
+        providerSessionId: "cursor-session-1",
+      });
+
+      const startupTab = (published?.root as {
+        tabs: Array<Record<string, unknown>>;
+      }).tabs[1]!;
+      // Everything the backend does not own survives; only the native identity
+      // is authored here. A wholesale rewrite silently dropped all of this.
+      expect(startupTab).toMatchObject({
+        id: "startup-agent",
+        type: "agent-native",
+        displayTitle: "Reviewer",
+        agentHandoffId: "handoff-1",
+        consumedAgentHandoffId: "handoff-0",
+        initialAgentModel: "chosen-model",
+        initialReasoningEffort: "high",
+        initialConversationMode: "plan",
+        initialFastMode: true,
+        isReviewTab: true,
+        nativeAgentData: {
+          platform: "cursor",
+          environmentId: environment.id,
+          hostPort: 4321,
+          sessionId: "cursor-session-1",
+          isLocal: true,
+        },
+      });
+      expect(startupTab.initialCommands).toBeUndefined();
+    });
+  });
+
+  test("leaves a healthy native startup tab untouched when only upgrading", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-startup-upgrade-only";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      await storage.addEnvironment(environment);
+      await storage.savePaneLayout(environment.id, {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "default",
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [
+            { id: "default", type: "plain", isSetupTab: true },
+            {
+              id: "startup-agent",
+              type: "agent-native",
+              displayTitle: "Renamed by the user",
+              nativeAgentData: {
+                platform: "cursor",
+                environmentId: environment.id,
+                sessionId: "resumed-elsewhere",
+                isLocal: true,
+              },
+            },
+          ],
+          activeTabId: "startup-agent",
+        },
+      }, 0);
+
+      // The repair runs on every backend start, so a tab that already holds the
+      // native identity must not be rewritten toward a different session.
+      const result = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "cursor",
+        providerSessionId: "cursor-session-1",
+        existingOnly: true,
+        upgradeOnly: true,
+      });
+
+      expect(result?.revision).toBe(1);
+      expect((await storage.getPaneLayout(environment.id))?.root).toMatchObject({
+        tabs: [
+          { id: "default" },
+          {
+            id: "startup-agent",
+            displayTitle: "Renamed by the user",
+            nativeAgentData: { sessionId: "resumed-elsewhere" },
+          },
+        ],
+      });
+    });
+  });
+
+  test("republishing an unchanged startup tab does not bump the layout revision", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-startup-idempotent";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      await storage.addEnvironment(environment);
+
+      const first = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "codex",
+        providerSessionId: "codex-session-1",
+      });
+      // The two-second launch sweep republishes while setup runs, so a repeat
+      // call must be a read, not a write.
+      const second = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "codex",
+        providerSessionId: "codex-session-1",
+      });
+
+      expect(second?.revision).toBe(first?.revision);
+      expect(second?.updatedAt).toBe(first?.updatedAt);
+    });
+  });
+
+  test("publishes the startup tab into the pane that already holds it in a split", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-startup-split";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      await storage.addEnvironment(environment);
+      await storage.savePaneLayout(environment.id, {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "left",
+        root: {
+          kind: "split",
+          id: "split-1",
+          direction: "horizontal",
+          sizes: [0.5, 0.5],
+          children: [
+            {
+              kind: "leaf",
+              id: "left",
+              tabs: [{ id: "default", type: "plain", isSetupTab: true }],
+              activeTabId: "default",
+            },
+            {
+              kind: "leaf",
+              id: "right",
+              tabs: [{ id: "startup-agent", type: "cursor" }],
+              activeTabId: "startup-agent",
+            },
+          ],
+        },
+      }, 0);
+
+      const published = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "cursor",
+        providerSessionId: "cursor-session-1",
+      });
+
+      // The walk must find the tab in the non-active leaf rather than appending
+      // a duplicate into the active one.
+      expect(published?.root).toMatchObject({
+        kind: "split",
+        children: [
+          { id: "left", tabs: [{ id: "default" }] },
+          {
+            id: "right",
+            tabs: [{
+              id: "startup-agent",
+              type: "agent-native",
+              nativeAgentData: { sessionId: "cursor-session-1" },
+            }],
+          },
+        ],
+      });
+    });
+  });
+
+  test("omits a container id the environment does not have yet", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-startup-precontainer";
+      environment.environmentType = "containerized";
+      environment.containerId = null;
+      await storage.addEnvironment(environment);
+
+      // Published while the environment is still `creating`, so there is no
+      // container to name yet.
+      const published = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "codex",
+      });
+      const startupTab = (published?.root as {
+        tabs: Array<Record<string, unknown>>;
+      }).tabs[1]!;
+      expect(startupTab.nativeAgentData).toEqual({
+        platform: "codex",
+        environmentId: environment.id,
+        isLocal: false,
+      });
+
+      await storage.updateEnvironment(environment.id, { containerId: "container-1" });
+      const rebound = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "codex",
+        providerSessionId: "codex-session-1",
+      });
+      expect((rebound?.root as {
+        tabs: Array<Record<string, unknown>>;
+      }).tabs[1]!.nativeAgentData).toEqual({
+        platform: "codex",
+        environmentId: environment.id,
+        isLocal: false,
+        containerId: "container-1",
+        sessionId: "codex-session-1",
+      });
+    });
+  });
+
   test("refuses a backend-owned build tab that would exceed the layout bound", async () => {
     await withTemporaryStorage(async (storage) => {
       const environment = createEnvironment("project-1");

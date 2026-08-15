@@ -46,6 +46,7 @@ import {
   PANE_LAYOUT_VERSION,
   paneLayoutRevisionConflictMessage,
 } from "@orkestrator/protocol/pane-layout";
+import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import {
   isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
@@ -4517,6 +4518,150 @@ export class StorageService {
         environmentId: input.environmentId,
         containerId: environment.containerId,
         activePaneId: target.id,
+        root,
+        updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+      };
+      assertPaneLayoutRootWithinBounds(saved.root);
+      layouts[input.environmentId] = saved;
+      await this.saveJson(this.paneLayoutsFile(), layouts, { backup: false });
+      this.announce("pane-layout", input.environmentId);
+      return saved;
+    });
+  }
+
+  /**
+   * Publish the native surface for a backend-owned environment launch.
+   *
+   * The pane is published before provider startup and updated with provider
+   * identity later. The launch intent is not consumed until both have
+   * converged. That keeps a renderer which was unmounted during setup from
+   * being the only process capable of creating the tab. `existingOnly` is used
+   * at startup to repair the historical Cursor/Grok bug without resurrecting a
+   * tab the user deliberately closed, and `upgradeOnly` keeps that repair off a
+   * tab that already holds the native identity.
+   *
+   * The existing tab is merged into, never replaced: it carries user state this
+   * method does not own (`displayTitle`, `agentHandoffId`, the one-shot
+   * `initial*` selections) plus `nativeAgentData.hostPort`, and a wholesale
+   * rewrite silently discarded all of it on every backend start.
+   */
+  async ensureStartupNativeAgentTab(input: {
+    environmentId: string;
+    agent: BuildPipelineAgent;
+    providerSessionId?: string;
+    existingOnly?: boolean;
+    upgradeOnly?: boolean;
+  }): Promise<PersistedPaneLayout | null> {
+    return this.enqueuePaneLayoutMutation(async () => {
+      const environment = await this.getEnvironment(input.environmentId);
+      if (!environment) throw new Error(`Environment not found: ${input.environmentId}`);
+      const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
+        this.paneLayoutsFile(),
+        () => ({}),
+      );
+      const previous = layouts[input.environmentId];
+      if (input.existingOnly && !previous) return null;
+
+      const root = previous
+        ? JSON.parse(JSON.stringify(previous.root)) as unknown
+        : {
+            kind: "leaf",
+            id: "default",
+            tabs: [{ id: "default", type: "plain", isSetupTab: true }],
+            activeTabId: "default",
+          };
+      type Leaf = {
+        kind: "leaf";
+        id: string;
+        tabs: Array<Record<string, unknown>>;
+        activeTabId: string | null;
+      };
+      const leaves: Leaf[] = [];
+      const visit = (node: unknown): void => {
+        if (!node || typeof node !== "object" || Array.isArray(node)) return;
+        const record = node as Record<string, unknown>;
+        if (record.kind === "leaf" && typeof record.id === "string" && Array.isArray(record.tabs)) {
+          leaves.push(record as unknown as Leaf);
+          return;
+        }
+        if (record.kind === "split" && Array.isArray(record.children)) {
+          for (const child of record.children) visit(child);
+        }
+      };
+      visit(root);
+      if (leaves.length === 0) throw new Error("Persisted pane layout has no leaf pane");
+
+      const existingLeaf = leaves.find((leaf) =>
+        leaf.tabs.some((tab) => tab.id === "startup-agent")
+      );
+      if (input.existingOnly && !existingLeaf) return null;
+      const target = existingLeaf
+        ?? leaves.find((leaf) => leaf.id === previous?.activePaneId)
+        ?? leaves[0]!;
+      const existingIndex = target.tabs.findIndex((tab) => tab.id === "startup-agent");
+      const existingTab = existingIndex >= 0 ? target.tabs[existingIndex]! : undefined;
+      if (input.upgradeOnly && existingTab?.type === "agent-native") return previous ?? null;
+
+      const previousNativeAgentData =
+        existingTab?.nativeAgentData
+        && typeof existingTab.nativeAgentData === "object"
+        && !Array.isArray(existingTab.nativeAgentData)
+          ? existingTab.nativeAgentData as Record<string, unknown>
+          : undefined;
+      const nativeAgentData: Record<string, unknown> = {
+        ...previousNativeAgentData,
+        platform: input.agent,
+        environmentId: input.environmentId,
+      };
+      if (environment.environmentType === "local") {
+        nativeAgentData.isLocal = true;
+        // A worktree environment has no container, so a stale id carried over
+        // from a previous Docker incarnation must not survive the merge.
+        delete nativeAgentData.containerId;
+      } else {
+        nativeAgentData.isLocal = false;
+        if (environment.containerId) nativeAgentData.containerId = environment.containerId;
+        else delete nativeAgentData.containerId;
+      }
+      if (input.providerSessionId) nativeAgentData.sessionId = input.providerSessionId;
+
+      const tab: Record<string, unknown> = {
+        ...existingTab,
+        id: "startup-agent",
+        type: "agent-native",
+        nativeAgentData,
+      };
+      // The tab is definitively a native agent surface now, so payloads that
+      // belong to the other tab kinds cannot apply. Everything else the tab
+      // carried is user state and is preserved by the spread above.
+      for (const foreign of [
+        "fileData",
+        "claudeTmuxData",
+        "buildTabData",
+        "loopedReviewTabData",
+        "multiReviewTabData",
+        "browserData",
+        "initialCommands",
+      ]) delete tab[foreign];
+      if (existingIndex >= 0) target.tabs[existingIndex] = tab;
+      else {
+        target.tabs.push(tab);
+        if (!input.existingOnly) target.activeTabId = "startup-agent";
+      }
+
+      const unchanged = previous
+        && (input.existingOnly || previous.activePaneId === target.id)
+        && JSON.stringify(previous.root) === JSON.stringify(root);
+      if (unchanged) return previous;
+
+      const saved: PersistedPaneLayout = {
+        version: PANE_LAYOUT_VERSION,
+        environmentId: input.environmentId,
+        containerId: environment.containerId,
+        activePaneId: input.existingOnly && previous
+          ? previous.activePaneId
+          : target.id,
         root,
         updatedAt: nowIso(),
         revision: (previous?.revision ?? 0) + 1,

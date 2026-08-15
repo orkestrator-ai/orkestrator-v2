@@ -1770,8 +1770,12 @@ export class NativeAgentService {
     persistAmbiguousDispatch = false,
   ): Promise<PersistedNativeAgentSession> {
     this.assertAcceptingWork();
-    if (!nonBlank(input.prompt) || !nonBlank(input.requestId)) {
-      throw new Error("Native agent prompt and request ID must not be blank");
+    const hasAttachments = (input.images?.length ?? 0) > 0
+      || (input.attachments?.length ?? 0) > 0;
+    if ((!nonBlank(input.prompt) && !hasAttachments) || !nonBlank(input.requestId)) {
+      throw new Error(
+        "Native agent prompt or attachment and request ID must not be blank",
+      );
     }
     const session = await this.ensureSession(input);
     const provider = await this.provider(input);
@@ -3652,14 +3656,14 @@ export class NativeAgentService {
         filename: attachment.name,
         data: attachment.base64Data,
       }));
-      const session = prompt
+      const session = prompt || (images?.length ?? 0) > 0
         ? await this.dispatchPrompt({
             environmentId: environment.id,
             agent,
             logicalSessionKey,
             model,
             reasoningEffort,
-            prompt,
+            prompt: prompt ?? "",
             requestId: `initial-prompt:${environment.id}:startup-agent`,
             images,
           })

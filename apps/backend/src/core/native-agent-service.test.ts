@@ -6587,6 +6587,46 @@ describe("NativeAgentService", () => {
       });
     });
 
+    test("dispatches an attachment-only startup prompt before clearing its images", async () => {
+      const { provider, send } = createProviderStub("codex");
+      await withService({
+        prefix: "orkestrator-native-launch-image-only-",
+        environment: {
+          pendingAgentLaunch: true,
+          defaultAgent: "codex",
+          codexMode: "native",
+          initialPrompt: "   ",
+          initialPromptAttachments: [{
+            id: "image-1",
+            name: "reference.png",
+            previewUrl: "data:image/png;base64,cG5n",
+            base64Data: "cG5n",
+          }],
+        },
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        await service.reconcileInitialLaunch("env-1");
+
+        expect(send).toHaveBeenCalledWith(
+          "provider-session",
+          "",
+          expect.objectContaining({
+            requestId: "initial-prompt:env-1:startup-agent",
+            images: [{ filename: "reference.png", data: "cG5n" }],
+          }),
+        );
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          pendingAgentLaunch: false,
+          startupAgentSession: {
+            providerSessionId: "provider-session",
+            status: "running",
+          },
+        });
+        expect((await storage.getEnvironment("env-1"))?.initialPromptAttachments)
+          .toBeUndefined();
+      });
+    });
+
     test("shares one launch task between concurrent reconciliations", async () => {
       let releaseCreate: (() => void) | undefined;
       const createBarrier = new Promise<void>((resolve) => {
@@ -6892,7 +6932,7 @@ describe("NativeAgentService", () => {
           prompt: "Do it",
           requestId: "request-1",
           ...override,
-        })).rejects.toThrow("prompt and request ID must not be blank");
+        })).rejects.toThrow("prompt or attachment and request ID must not be blank");
         expect(send).not.toHaveBeenCalled();
       });
     });

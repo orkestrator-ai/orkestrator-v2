@@ -2358,6 +2358,66 @@ describe("TerminalContainer", () => {
     ).not.toContain(".orkestrator/initial-prompt");
   });
 
+  test("leaves an attachment-only native launch to the backend", async () => {
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((env) =>
+        env.id === "env-hidden"
+          ? {
+              ...env,
+              containerId: null,
+              environmentType: "local",
+              worktreePath: "/tmp/env-hidden-worktree",
+              defaultAgent: "codex",
+              codexMode: "native",
+              initialPrompt: "",
+              pendingAgentLaunch: true,
+            }
+          : env
+      ),
+    }));
+    const attachments = [{
+      id: "img-only",
+      name: "image-only.png",
+      previewUrl: "data:image/png;base64,SU1BR0U=",
+      base64Data: "SU1BR0U=",
+    }];
+    useClaudeOptionsStore.setState({
+      options: {
+        "env-hidden": {
+          launchAgent: true,
+          agentType: "codex",
+          initialPrompt: "",
+          initialPromptAttachments: attachments,
+        },
+      },
+      pendingNativeLaunches: {},
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId={null}
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      const startupTab = usePaneLayoutStore.getState().getAllTabs("env-hidden")
+        .find((tab) => tab.id === "startup-agent");
+      expect(startupTab?.type).toBe("agent-native");
+      expect(startupTab?.initialPrompt).toBeUndefined();
+    });
+
+    expect(writeLocalFileMock).not.toHaveBeenCalled();
+    expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
+    expect(
+      useClaudeOptionsStore.getState().getOptions("env-hidden")?.initialPromptAttachments,
+    ).toEqual(attachments);
+  });
+
   test("does not reconstruct a second tab while a terminal launch stages images", async () => {
     useConfigStore.setState((state) => ({
       ...state,

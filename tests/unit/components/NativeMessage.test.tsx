@@ -1981,6 +1981,8 @@ describe("NativeMessage", () => {
     expect(screen.getByText("Active")).toBeTruthy();
     expect(screen.getByText("1 tool")).toBeTruthy();
     expect(screen.getByText("1 update")).toBeTruthy();
+    // Still working, so the collapsed row tracks the latest action rather than
+    // repeating the static spawn prompt for the child's whole lifetime.
     expect(screen.getByText('rg -n "codex" src')).toBeTruthy();
     expect(screen.queryByText("Inspect the Codex integration") === null).toBe(true);
 

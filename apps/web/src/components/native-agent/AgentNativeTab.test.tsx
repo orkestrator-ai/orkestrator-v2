@@ -1535,6 +1535,7 @@ describe("AgentNativeTab", () => {
       promptSuggestions?: boolean;
       messages?: NativeMessage[];
       recoverableDispatch?: NativeAgentSessionProjection["recoverableDispatch"];
+      notices?: NativeAgentSessionProjection["notices"];
       composer?: Partial<NonNullable<NativeAgentSessionProjection["composer"]>>;
       contextUsage?: NativeAgentSessionProjection["contextUsage"];
     } = {}) {
@@ -1560,6 +1561,7 @@ describe("AgentNativeTab", () => {
           ? { suggestedPrompt: overrides.suggestedPrompt }
           : {}),
         ...(overrides.contextUsage ? { contextUsage: overrides.contextUsage } : {}),
+        ...(overrides.notices ? { notices: overrides.notices } : {}),
         interactions: [],
         composerControls: [],
         composer: {
@@ -1606,7 +1608,7 @@ describe("AgentNativeTab", () => {
       }));
     }
 
-    test("shows an active Cursor Task as a sub-agent rail above the composer", async () => {
+    test("announces an active Cursor Task pinned to the transcript", async () => {
       seedProjection({
         messages: [{
           id: "assistant-cursor-subagent",
@@ -1628,16 +1630,15 @@ describe("AgentNativeTab", () => {
 
       render(<AgentNativeTab tabId="tab-cursor-subagent" data={identity("cursor")} isActive />);
 
-      const rail = await screen.findByRole("status", { name: "1 sub-agent working" });
-      const composeDock = screen.getByTestId("compose-dock");
-      const composeBar = screen.getByTestId("shared-native-compose-bar");
-      expect(within(rail).getByText("Validate the implementation")).toBeTruthy();
-      expect(composeDock.contains(rail)).toBe(true);
-      expect(rail.compareDocumentPosition(composeBar) & Node.DOCUMENT_POSITION_FOLLOWING)
-        .toBeTruthy();
+      await screen.findByRole("textbox");
+      expect(await screen.findByRole("status", {
+        name: "1 sub-agent working: Validate the implementation.",
+      })).toBeTruthy();
+      expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true);
+      expect(screen.getByTestId("transcript-bottom-spacer").className).toContain("h-32");
     });
 
-    test("shows an active Grok Build sub-agent in the shared composer rail", async () => {
+    test("announces and rehydrates an active Grok Build sub-agent", async () => {
       seedProjection({
         messages: [{
           id: "assistant-grok-subagent",
@@ -1668,33 +1669,47 @@ describe("AgentNativeTab", () => {
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 25));
       });
-      expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true);
+      expect(screen.queryByRole("button", { name: /Validate the implementation/i }) === null)
+        .toBe(true);
 
       await act(async () => {
         view.rerender(<AgentNativeTab tabId="tab-grok-subagent" data={identity("grok")} isActive />);
       });
 
-      const rail = await screen.findByRole("status", { name: "1 sub-agent working" });
-      expect(within(rail).getByText("Validate the implementation")).toBeTruthy();
-      expect(screen.getByTestId("active-subagent-spinner")).toBeTruthy();
-      expect(screen.getByTestId("compose-dock").contains(rail)).toBe(true);
+      await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+      expect(await screen.findByRole("status", {
+        name: "1 sub-agent working: Validate the implementation.",
+      })).toBeTruthy();
+      expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true);
+      expect(screen.getByTestId("transcript-bottom-spacer").className).toContain("h-32");
 
       // Simulate leaving the environment and then reloading the renderer: the
-      // in-memory projection is gone, so the rail must rehydrate from the next
-      // authoritative snapshot rather than a live event the old tree observed.
+      // in-memory projection is gone, so the transcript row must rehydrate from
+      // the next authoritative snapshot rather than a live event the old tree observed.
       view.unmount();
       useNativeAgentProjectionStore.getState().reset();
       getNativeAgentProjectionMock.mockClear();
       render(<AgentNativeTab tabId="tab-grok-subagent" data={identity("grok")} isActive />);
 
-      expect(await screen.findByRole("status", { name: "1 sub-agent working" })).toBeTruthy();
+      await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+      expect(await screen.findByRole("status", {
+        name: "1 sub-agent working: Validate the implementation.",
+      })).toBeTruthy();
+      expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true);
       expect(getNativeAgentProjectionMock).toHaveBeenCalledWith(expect.objectContaining({
         agent: "grok",
         logicalSessionKey: createSessionKey("env-1", "tab-grok-subagent"),
       }));
     });
 
-    test("removes a mounted Cursor Task rail when the authoritative projection becomes terminal", async () => {
+    test.each([
+      ["finished", "finished"],
+      ["failed", "failed"],
+    ] as const)("announces a Cursor Task lifecycle that becomes %s", async (
+      agentState,
+      announcementState,
+    ) => {
+      const tabId = `tab-cursor-subagent-${agentState}`;
       seedProjection({
         messages: [{
           id: "assistant-cursor-subagent-transition",
@@ -1715,13 +1730,16 @@ describe("AgentNativeTab", () => {
 
       const view = render(
         <AgentNativeTab
-          tabId="tab-cursor-subagent-transition"
+          tabId={tabId}
           data={identity("cursor")}
           isActive
           refreshRequestId={0}
         />,
       );
-      expect(await screen.findByRole("status", { name: "1 sub-agent working" })).toBeTruthy();
+      await screen.findByRole("textbox");
+      expect(await screen.findByRole("status", {
+        name: "1 sub-agent working: Validate the implementation.",
+      })).toBeTruthy();
 
       seedProjection({
         messages: [{
@@ -1735,26 +1753,164 @@ describe("AgentNativeTab", () => {
             toolName: "task",
             toolUseId: "cursor-subagent-1",
             toolState: "success",
-            agentState: "finished",
+            agentState,
             toolArgs: { description: "Validate the implementation" },
           }],
         }],
       });
       view.rerender(
         <AgentNativeTab
-          tabId="tab-cursor-subagent-transition"
+          tabId={tabId}
           data={identity("cursor")}
           isActive
           refreshRequestId={1}
         />,
       );
 
-      await waitFor(() => expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true));
-      expect(useNativeAgentProjectionStore.getState().projections.get(
-        createSessionKey("env-1", "tab-cursor-subagent-transition"),
-      )?.messages[0]).toMatchObject({
-        parts: [expect.objectContaining({ agentState: "finished" })],
+      await waitFor(() => expect(
+        useNativeAgentProjectionStore.getState().projections.get(
+          createSessionKey("env-1", tabId),
+        )?.messages[0],
+      ).toMatchObject({
+        parts: [expect.objectContaining({ agentState })],
+      }));
+      expect(await screen.findByRole("status", {
+        name: `Validate the implementation ${announcementState}.`,
+      })).toBeTruthy();
+      expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true);
+    });
+
+    /** One assistant row carrying `count` identically-labelled active children. */
+    function subagentMessage(
+      count: number,
+      state: (index: number) => "active" | "finished" | "failed",
+    ): NativeMessage {
+      return {
+        id: "assistant-many-subagents",
+        role: "assistant",
+        content: "Parent response complete",
+        createdAt: "2026-08-15T10:00:00.000Z",
+        parts: Array.from({ length: count }, (_unused, index) => ({
+          type: "tool-invocation" as const,
+          content: "Task",
+          toolName: "task",
+          toolUseId: `shared-label-task-${index}`,
+          toolState: "success" as const,
+          agentState: state(index),
+          toolArgs: { description: "Sub-agent" },
+        })),
+      };
+    }
+
+    test("announces the plural active summary and a simultaneous finish and start", async () => {
+      seedProjection({
+        messages: [subagentMessage(2, () => "active")],
       });
+
+      const view = render(
+        <AgentNativeTab
+          tabId="tab-plural-subagents"
+          data={identity("cursor")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+
+      expect(await screen.findByRole("status", {
+        name: "2 sub-agents working: Sub-agent, Sub-agent.",
+      })).toBeTruthy();
+
+      // The first child finishes in the same update that starts a third one, so
+      // the lifecycle line and the refreshed summary must both be announced.
+      seedProjection({
+        messages: [subagentMessage(3, (index) => index === 0 ? "finished" : "active")],
+      });
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-plural-subagents"
+          data={identity("cursor")}
+          isActive
+          refreshRequestId={1}
+        />,
+      );
+
+      expect(await screen.findByRole("status", {
+        name: "Sub-agent finished. 2 sub-agents working: Sub-agent, Sub-agent.",
+      })).toBeTruthy();
+    });
+
+    test("re-announces an identical lifecycle message for a second child", async () => {
+      // Both children resolve to the same label, so the second "finished" line is
+      // byte-identical to the first. It still has to reach the live region.
+      seedProjection({ messages: [subagentMessage(2, () => "active")] });
+
+      const view = render(
+        <AgentNativeTab
+          tabId="tab-repeat-announcement"
+          data={identity("cursor")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+      await screen.findByRole("status", {
+        name: "2 sub-agents working: Sub-agent, Sub-agent.",
+      });
+
+      const liveRegionText = () => screen
+        .getByRole("status", { name: /Sub-agent/ })
+        .firstElementChild;
+
+      seedProjection({
+        messages: [subagentMessage(2, (index) => index === 0 ? "finished" : "active")],
+      });
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-repeat-announcement"
+          data={identity("cursor")}
+          isActive
+          refreshRequestId={1}
+        />,
+      );
+      const firstFinish = await screen.findByRole("status", {
+        name: "Sub-agent finished.",
+      });
+      const firstNode = liveRegionText();
+
+      seedProjection({ messages: [subagentMessage(2, () => "finished")] });
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-repeat-announcement"
+          data={identity("cursor")}
+          isActive
+          refreshRequestId={2}
+        />,
+      );
+
+      await waitFor(() => expect(liveRegionText() === firstNode).toBe(false));
+      expect(screen.getByRole("status", { name: "Sub-agent finished." })).toBe(firstFinish);
+      expect(liveRegionText()?.textContent).toBe("Sub-agent finished.");
+    });
+
+    test("keeps pinned cards rendered and reserves their clearance", async () => {
+      // The guard that stops an empty pinned wrapper reserving dock height must
+      // not also hide real cards; it is derived from the same list that renders.
+      seedProjection({
+        notices: [{ kind: "warning", message: "Recovered provider notice" }],
+      });
+
+      render(
+        <AgentNativeTab
+          tabId="tab-pinned-notice"
+          data={identity("cursor")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+
+      const notice = await screen.findByText("Recovered provider notice");
+      expect(screen.getByTestId("compose-dock").contains(notice)).toBe(true);
+      expect(screen.getByTestId("transcript-bottom-spacer").className)
+        .not.toContain("h-32");
     });
 
     test("renders an unavailable context wheel when the provider reports no maximum", async () => {

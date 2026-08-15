@@ -8,6 +8,18 @@ const globalConfig = {
 } as GlobalConfig;
 
 describe("resolveClaudeConfig", () => {
+  test("uses the native default when a legacy global config has no mode", () => {
+    const legacyGlobal = {
+      ...globalConfig,
+      claudeMode: undefined,
+    } as unknown as GlobalConfig;
+
+    expect(resolveClaudeConfig(legacyGlobal, undefined, undefined)).toEqual({
+      mode: "native",
+      nativeBackend: "sdk",
+    });
+  });
+
   test("falls back to global mode and backend", () => {
     expect(resolveClaudeConfig(globalConfig, undefined, undefined)).toEqual({
       mode: "terminal",

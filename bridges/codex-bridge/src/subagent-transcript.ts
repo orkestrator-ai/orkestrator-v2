@@ -784,6 +784,30 @@ function parseChildTranscript(
   };
 }
 
+/**
+ * Build the best available row from a native child thread alone.
+ *
+ * Current app-server collaboration can spawn through a custom tool wrapper,
+ * so the parent rollout has no direct `spawn_agent` function-call record. The
+ * native item still supplies the child thread id; its session metadata supplies
+ * the nickname while the collab item supplies the prompt during reconciliation.
+ */
+export function deriveSubagentPartFromChildRecords(
+  agentId: string,
+  records: TranscriptRecord[],
+): TranscriptSubagentPart {
+  const { reopenedAfterTerminal: _reopenedAfterTerminal, ...part } =
+    parseChildTranscript(records, { callId: `native:${agentId}`, agentId });
+  // The child's session metadata may not be reachable yet, in which case the
+  // parse has no nickname or role and `content` falls through to the thread id.
+  // A raw UUID is not a title: leave the generic label so collab reconciliation
+  // — which learns the task name from `agent_path` — still owns the display name.
+  if (!part.subagentName && !part.subagentRole) {
+    return { ...part, content: "subagent" };
+  }
+  return part;
+}
+
 export function parseTranscriptRecords(lines: string[]): TranscriptRecord[] {
   const records: TranscriptRecord[] = [];
 

@@ -41,6 +41,7 @@ import {
   isAgentPlatform,
   normalizeAgentPlatforms,
 } from "@orkestrator/protocol/agent-platforms";
+import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
 import {
   PANE_LAYOUT_VERSION,
   paneLayoutRevisionConflictMessage,
@@ -1595,6 +1596,9 @@ function normalizePersistedConfig(config: AppConfig): AppConfig {
     enabledAgentPlatforms,
     isAgentPlatform(global.defaultAgent) ? global.defaultAgent : undefined,
   );
+  const claudeMode = isOneOf(global.claudeMode, ["terminal", "native"])
+    ? global.claudeMode
+    : DEFAULT_CLAUDE_MODE;
   const favoriteModels = Array.isArray(global.favoriteModels)
     ? global.favoriteModels.flatMap((value) => {
         if (!isRecord(value) || !isAgentPlatform(value.platform)) return [];
@@ -1620,6 +1624,7 @@ function normalizePersistedConfig(config: AppConfig): AppConfig {
     && global.useHostGitHubCredentials === useHostGitHubCredentials
     && JSON.stringify(global.enabledAgentPlatforms) === JSON.stringify(enabledAgentPlatforms)
     && global.defaultAgent === defaultAgent
+    && global.claudeMode === claudeMode
     && JSON.stringify(global.favoriteModels ?? []) === JSON.stringify(favoriteModels)
     && JSON.stringify(global.openCodeModelProviders)
       === JSON.stringify(openCodeModelProviders)
@@ -1635,6 +1640,7 @@ function normalizePersistedConfig(config: AppConfig): AppConfig {
       useHostGitHubCredentials,
       enabledAgentPlatforms,
       defaultAgent,
+      claudeMode,
       favoriteModels,
       openCodeModelProviders,
     } as unknown as AppConfig["global"],
@@ -1703,7 +1709,7 @@ export function defaultConfig(): AppConfig {
       codexReasoningEffort: "high",
       opencodeMode: "terminal",
       openCodeModelProviders: [...DEFAULT_OPENCODE_MODEL_PROVIDERS],
-      claudeMode: "terminal",
+      claudeMode: DEFAULT_CLAUDE_MODE,
       claudeNativeBackend: "sdk",
       claudeNativeFastModeDefault: false,
       codexMode: "native",

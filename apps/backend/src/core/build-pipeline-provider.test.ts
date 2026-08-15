@@ -18,6 +18,7 @@ import {
   createBuildPipelineProvider,
   PromptRejectedError,
   ProviderUnavailableError,
+  readProviderStatus,
   type BridgeConnection,
   type ProviderDependencies,
   type ProviderSessionRegistration,
@@ -678,6 +679,27 @@ describe("HTTP build pipeline provider", () => {
     await expect(provider.status("session-1")).rejects.toThrow(
       "The claude session failed: claude declined mid-turn",
     );
+  });
+
+  test("readProviderStatus reports a failed turn as data instead of a throw", async () => {
+    const { provider } = httpProvider(() => Response.json({
+      status: "error",
+      error: "Selected model is at capacity. Please try a different model.",
+    }), codexConnection);
+
+    await expect(readProviderStatus(provider, "session-1")).resolves.toEqual({
+      status: "error",
+      error: "Selected model is at capacity. Please try a different model.",
+    });
+  });
+
+  test("readProviderStatus still rejects a transport fault", async () => {
+    const { provider } = httpProvider(
+      () => new Response("boom", { status: 500 }),
+      codexConnection,
+    );
+
+    await expect(readProviderStatus(provider, "session-1")).rejects.toThrow();
   });
 
   test("falls back to a plain error status when the session failure detail is empty", async () => {

@@ -49,6 +49,8 @@ interface BridgeMessage {
   content: string;
   parts: BridgeMessagePart[];
   createdAt: string;
+  /** Model selected when this assistant response began. */
+  modelId?: string;
 }
 
 interface BridgeTextPart {
@@ -223,6 +225,29 @@ const stateDirectory = process.env.ACP_STATE_DIR?.trim();
 const stateFile = stateDirectory ? resolve(stateDirectory, "state.json") : null;
 const sessions = new Map<string, SessionState>();
 const acpToolSourceStates = new WeakMap<BridgeToolPart, AcpToolSourceState>();
+/**
+ * Parts and messages whose text already sits at its byte cap, marker included.
+ *
+ * Overflow used to end the turn, so the cap was only ever reached once. An
+ * interactive turn now survives it, which means the agent keeps streaming into
+ * a buffer that can no longer grow — and `appendBounded` would re-encode and
+ * re-copy the whole 2MiB buffer for every remaining chunk, on the JSON-RPC read
+ * loop, only to hand back exactly what it was given. Saturation is recorded
+ * once and the append is skipped from then on.
+ *
+ * Weakly held, so a trimmed part or an evicted message takes its entry with it.
+ * A restart repopulates it from the first post-restore chunk.
+ */
+const saturatedText = new WeakSet<BridgeMessage | BridgeMessagePart>();
+/**
+ * Tool call ids whose parts a trim removed, per message.
+ *
+ * `applyToolCallUpdate` only searches the message's live parts, so a late update
+ * for a trimmed call would otherwise rebuild it from that one patch: an empty
+ * `Tool call` part, appended *after* the notice that says those steps were
+ * dropped, with none of the title or arguments the original carried.
+ */
+const trimmedToolCalls = new WeakMap<BridgeMessage, Set<string>>();
 const clientSessionKeys = new Map<string, string>();
 const sessionCreations = new Map<string, Promise<SessionState>>();
 const sessionResumes = new Map<string, Promise<SessionState>>();
@@ -249,7 +274,18 @@ const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_LINE_BYTES = 4 * 1024 * 1024;
 const MAX_MESSAGES = 500;
 const MAX_HISTORY_MESSAGE_IDS = 1_024;
-const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
+/**
+ * The rendered-transcript display budget. Overridable only *downwards*, and
+ * only inside a bounded range, so a test can reach the aggregate-trim floor
+ * without pushing eight megabytes through a fixture. Nothing can raise it past
+ * the reviewed cap.
+ */
+const MAX_TRANSCRIPT_BYTES = parseBoundedInteger(
+  process.env.ACP_MAX_TRANSCRIPT_BYTES,
+  8 * 1024 * 1024,
+  1024 * 1024,
+  8 * 1024 * 1024,
+);
 const MAX_MESSAGE_TEXT_BYTES = 2 * 1024 * 1024;
 const MAX_PARTS_PER_MESSAGE = 512;
 const MAX_TOOL_ARGUMENT_BYTES = 512 * 1024;
@@ -257,11 +293,21 @@ const MAX_TOOL_OUTPUT_BYTES = 512 * 1024;
 const MAX_TOOL_INLINE_FILE_BYTES = 256 * 1024;
 const MAX_TOOL_DIFF_BYTES = 1024 * 1024;
 const MAX_TOOL_ID_BYTES = 512;
+// Matches the bound `session-config.ts` applies to a persisted `selectedModelId`,
+// so a model id cannot mean one length live and another in the transcript.
+const MAX_MODEL_ID_BYTES = 1_024;
 const MAX_TOOL_NAME_BYTES = 256;
 const MAX_TOOL_TITLE_BYTES = 4 * 1024;
 const MAX_TOOL_PATH_BYTES = 16 * 1024;
 /** Bounds both the time and the retained memory of `diffFileLines`. */
 const MAX_DIFF_EDIT_DISTANCE = 512;
+/**
+ * Unchanged lines kept either side of a change. Rendering every line instead
+ * billed the *whole file* per edit: a one-line change to a 200KiB source file
+ * produced a 4,993-line "diff" of which 4,989 lines were untouched context, and
+ * 58 such edits exhausted the 8MiB transcript budget in a single turn.
+ */
+const DIFF_CONTEXT_LINES = 3;
 const MAX_SESSIONS = parseBoundedInteger(process.env.ACP_MAX_SESSIONS, 256, 1, 256);
 const MAX_APPROVALS_PER_SESSION = 64;
 const MAX_STRUCTURED_RESULTS = 4;
@@ -1103,37 +1149,49 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     message = last;
   }
   if (!message) {
+    const modelId = role === "assistant"
+      ? boundedModelId(state.sessionConfig.composer.selectedModelId)
+      : undefined;
     message = {
       id: randomBytes(12).toString("hex"),
       role,
       content: "",
       parts: [],
       createdAt: new Date().toISOString(),
+      ...(modelId ? { modelId } : {}),
     };
     state.messages.push(message);
   }
   if (providerMessageId) rememberHistoryMessage(state, providerMessageId, message.id);
-  const previous = message.parts.at(-1);
+  const lastPart = message.parts.at(-1);
+  // The trim notice is a marker, not a stream. Appending a chunk to it would
+  // rewrite the notice into agent output and lose the announcement.
+  const previous = isTrimNotice(message, lastPart) ? undefined : lastPart;
   if (previous?.type !== partType && message.parts.length >= MAX_PARTS_PER_MESSAGE) {
-    state.outputTruncated = true;
-    state.status = "error";
-    state.error = `${provider} output exceeded the transcript limit`;
-    state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
-    state.revision += 1;
-    schedulePersist();
-    return;
+    if (turnRequiresCompleteOutput(state)) {
+      failTranscriptLimit(state);
+      return;
+    }
+    trimPartsTo(message, MAX_PARTS_PER_MESSAGE - 1);
   }
-  const currentPartText = previous?.type === partType ? previous.content : "";
-  const nextPartText = appendBounded(currentPartText, text, MAX_MESSAGE_TEXT_BYTES);
-  if (previous?.type === partType) previous.content = nextPartText.value;
-  else message.parts.push({
-    type: partType,
-    content: nextPartText.value,
-    sourcePartId: `${message.id}:${message.parts.length}`,
-    sourceMessageId: message.id,
-  });
+  const streaming = previous?.type === partType ? previous : undefined;
+  const currentPartText = streaming?.content ?? "";
+  const nextPartText = appendSaturating(streaming, currentPartText, text, MAX_MESSAGE_TEXT_BYTES);
+  if (streaming) streaming.content = nextPartText.value;
+  else {
+    const created: BridgeTextPart = {
+      type: partType,
+      content: nextPartText.value,
+      sourcePartId: `${message.id}:${message.parts.length}`,
+      sourceMessageId: message.id,
+    };
+    message.parts.push(created);
+    // A single chunk can exceed the cap on its own, so the freshly pushed part
+    // can already be saturated.
+    if (nextPartText.truncated) saturatedText.add(created);
+  }
   const nextContent = partType === "text"
-    ? appendBounded(message.content, text, MAX_MESSAGE_TEXT_BYTES)
+    ? appendSaturating(message, message.content, text, MAX_MESSAGE_TEXT_BYTES)
     : { value: message.content, truncated: false };
   message.content = nextContent.value;
   if (role === "assistant" && partType === "text" && state.currentTurnOutput !== null) {
@@ -1147,11 +1205,12 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     || state.uncheckedTranscriptBytes >= TRANSCRIPT_CHECK_INTERVAL_BYTES
     ? boundTranscript(state)
     : false;
-  if (nextPartText.truncated || nextContent.truncated || transcriptTruncated) {
-    state.outputTruncated = true;
-    state.status = "error";
-    state.error = `${provider} output exceeded the transcript limit`;
-    state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
+  if (
+    (nextPartText.truncated || nextContent.truncated || transcriptTruncated)
+    && turnRequiresCompleteOutput(state)
+  ) {
+    failTranscriptLimit(state);
+    return;
   }
   schedulePersist();
 }
@@ -1207,9 +1266,21 @@ function applyToolCallUpdate(
 
   if (!part) {
     owner = currentAssistantMessage(state);
+    const trimmed = trimmedToolCalls.get(owner);
+    if (trimmed?.has(toolCallId)) {
+      // This call's part was dropped on purpose. Rebuilding it from one late
+      // update would append an empty `Tool call` *after* the notice saying
+      // those steps went, with none of the title, arguments or output the
+      // original carried. A genuinely new call reusing the id still starts.
+      if (!isInitial) return;
+      trimmed.delete(toolCallId);
+    }
     if (owner.parts.length >= MAX_PARTS_PER_MESSAGE) {
-      failTranscriptLimit(state);
-      return;
+      if (turnRequiresCompleteOutput(state)) {
+        failTranscriptLimit(state);
+        return;
+      }
+      trimPartsTo(owner, MAX_PARTS_PER_MESSAGE - 1);
     }
     part = {
       type: "tool-invocation",
@@ -1245,7 +1316,7 @@ function applyToolCallUpdate(
     || state.uncheckedTranscriptBytes >= TRANSCRIPT_CHECK_INTERVAL_BYTES
     ? boundTranscript(state)
     : false;
-  if (transcriptTruncated) {
+  if (transcriptTruncated && turnRequiresCompleteOutput(state)) {
     failTranscriptLimit(state);
     return;
   }
@@ -1332,16 +1403,47 @@ function currentAssistantMessage(state: SessionState): BridgeMessage {
   // open a fresh, empty assistant message for every tool call in the history.
   if (!message || message.role !== "assistant"
     || (state.status !== "running" && state.historyReplay !== "hydrate")) {
+    const modelId = boundedModelId(state.sessionConfig.composer.selectedModelId);
     message = {
       id: randomBytes(12).toString("hex"),
       role: "assistant",
       content: "",
       parts: [],
       createdAt: new Date().toISOString(),
+      ...(modelId ? { modelId } : {}),
     };
     state.messages.push(message);
   }
   return message;
+}
+
+/**
+ * A model id is an identifier, not display text, so an oversized or non-string
+ * value is dropped rather than truncated — exactly as `session-config.ts`
+ * rejects an over-long `selectedModelId` instead of shortening it. A truncated
+ * id would match no catalogue entry and would render as a plausible-looking
+ * model the agent never actually ran; absent renders as "no model recorded".
+ */
+function boundedModelId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || Buffer.byteLength(trimmed) > MAX_MODEL_ID_BYTES) return undefined;
+  return trimmed;
+}
+
+/**
+ * Whether losing transcript content has to fail the turn.
+ *
+ * A structured turn is worth exactly its complete output, so any loss must
+ * fail: the caller would otherwise parse a truncated answer as a whole one. An
+ * interactive turn is a conversation, and trimming its oldest steps to stay
+ * inside the display budget is routine housekeeping. Failing the session there
+ * strands the *entire* conversation behind a "Connection Failed" screen —
+ * `HttpBridgeProvider.status()` turns any bridge error status into a thrown
+ * command — and the failure is persisted, so Retry only reads it back.
+ */
+function turnRequiresCompleteOutput(state: SessionState): boolean {
+  return state.currentTurnOutput !== null;
 }
 
 function failTranscriptLimit(state: SessionState): void {
@@ -1351,6 +1453,61 @@ function failTranscriptLimit(state: SessionState): void {
   state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
   state.revision += 1;
   schedulePersist();
+}
+
+const TRANSCRIPT_TRIM_NOTICE =
+  "[Earlier steps in this response were dropped: it reached the transcript display limit.]";
+
+function trimNoticePartId(message: BridgeMessage): string {
+  return `${message.id}:transcript-trimmed`;
+}
+
+function isTrimNotice(
+  message: BridgeMessage,
+  part: BridgeMessagePart | undefined,
+): boolean {
+  return part !== undefined && part.sourcePartId === trimNoticePartId(message);
+}
+
+/**
+ * Drop the oldest parts of `message` until it holds at most `targetLength`,
+ * leaving one notice in their place. Always drops at least one, so callers can
+ * loop on it, and counts the notice against the target so trimming for room
+ * cannot itself push the message back over a cap.
+ *
+ * The announcement matters more here than for the rest of the transcript: the
+ * parts most likely to be dropped are the tool calls that did the work, and a
+ * silent cut reads as a response that simply never took those steps. The notice
+ * is keyed by `sourcePartId`, so repeated trims replace it rather than stack.
+ */
+function trimPartsTo(message: BridgeMessage, targetLength: number): void {
+  if (isTrimNotice(message, message.parts[0])) message.parts.shift();
+  const keep = Math.max(0, targetLength - 1);
+  rememberTrimmedToolCalls(message, message.parts.splice(0, Math.max(1, message.parts.length - keep)));
+  message.parts.unshift({
+    type: "text",
+    content: TRANSCRIPT_TRIM_NOTICE,
+    sourcePartId: trimNoticePartId(message),
+    sourceMessageId: message.id,
+  });
+}
+
+/**
+ * Record the tool calls a trim just removed, so a late update cannot rebuild
+ * one as an empty part. Bounded by the number of parts a message may hold in
+ * the first place, oldest evicted first: a turn can trim an unlimited number of
+ * calls, and this must not become the unbounded thing that replaces them.
+ */
+function rememberTrimmedToolCalls(message: BridgeMessage, dropped: BridgeMessagePart[]): void {
+  const ids = trimmedToolCalls.get(message) ?? new Set<string>();
+  for (const part of dropped) {
+    if (part.type === "tool-invocation") ids.add(part.toolUseId);
+  }
+  for (const id of ids) {
+    if (ids.size <= MAX_PARTS_PER_MESSAGE) break;
+    ids.delete(id);
+  }
+  trimmedToolCalls.set(message, ids);
 }
 
 function boundedString(value: unknown, maximumBytes: number): string | undefined {
@@ -1447,11 +1604,16 @@ function normalizeAcpContentDiff(value: JsonObject): BridgeToolDiff | undefined 
   if (!filePath && rawBefore === undefined && rawAfter === undefined && diff === undefined) {
     return undefined;
   }
+  // The file states are only ever rendered as the fallback for a part that has
+  // no diff at all: the renderer treats `diff` as authoritative the moment it
+  // exists. Keeping them alongside one stored two more whole copies of the file
+  // per edit — 5.3MiB of one 8MiB transcript — that nothing would ever read.
+  const keepFileStates = keepInline && diff === undefined;
   return {
     ...(filePath ? { filePath } : {}),
     ...(stats ? { additions: stats.additions, deletions: stats.deletions } : {}),
-    ...(keepInline && rawBefore !== undefined ? { before: rawBefore } : {}),
-    ...(keepInline && rawAfter !== undefined ? { after: rawAfter } : {}),
+    ...(keepFileStates && rawBefore !== undefined ? { before: rawBefore } : {}),
+    ...(keepFileStates && rawAfter !== undefined ? { after: rawAfter } : {}),
     ...(diff !== undefined ? { diff } : {}),
   };
 }
@@ -1509,21 +1671,88 @@ function createDisplayDiff(
   const lines = diffFileLines(fileLines(before ?? ""), fileLines(after));
   let additions = 0;
   let deletions = 0;
-  const rendered = lines.map((line) => {
+  for (const line of lines) {
     if (line.type === "add") additions += 1;
     if (line.type === "remove") deletions += 1;
-    return `${line.type === "add" ? "+" : line.type === "remove" ? "-" : " "}${line.content}`;
-  });
+  }
   const path = safeDiffPath(filePath ?? "unknown-file");
   return {
     diff: truncateDisplayText(
-      [`--- ${before === undefined ? "/dev/null" : path}`, `+++ ${path}`, "@@", ...rendered].join("\n"),
+      [
+        `--- ${before === undefined ? "/dev/null" : path}`,
+        `+++ ${path}`,
+        ...renderDiffHunks(lines),
+      ].join("\n"),
       MAX_TOOL_DIFF_BYTES,
       "\n… file diff truncated",
     ),
     additions,
     deletions,
   };
+}
+
+/**
+ * Render the changed regions as unified hunks rather than the whole file.
+ *
+ * Runs of unchanged lines longer than twice the context are elided, and each
+ * surviving region gets a `@@` header carrying its line numbers so the reader
+ * can still place it in the file. A file with no changes at all renders as a
+ * single empty `@@` header, which is what it is: nothing to show.
+ */
+function renderDiffHunks(lines: DisplayDiffLine[]): string[] {
+  const changed = lines.reduce<number[]>((indexes, line, index) => {
+    if (line.type !== "context") indexes.push(index);
+    return indexes;
+  }, []);
+  if (changed.length === 0) return ["@@"];
+
+  const rendered: string[] = [];
+  let beforeLine = 1;
+  let afterLine = 1;
+  let cursor = 0;
+  let nextChange = 0;
+
+  while (nextChange < changed.length) {
+    const start = Math.max(cursor, changed[nextChange]! - DIFF_CONTEXT_LINES);
+    // Extend the hunk while the next change is close enough that the gap
+    // between them is cheaper to print than a second header.
+    let end = Math.min(lines.length - 1, changed[nextChange]! + DIFF_CONTEXT_LINES);
+    while (
+      nextChange + 1 < changed.length
+      && changed[nextChange + 1]! - DIFF_CONTEXT_LINES <= end + 1
+    ) {
+      nextChange += 1;
+      end = Math.min(lines.length - 1, changed[nextChange]! + DIFF_CONTEXT_LINES);
+    }
+    nextChange += 1;
+
+    // Advance the line counters across everything elided before this hunk.
+    for (let index = cursor; index < start; index += 1) {
+      const type = lines[index]!.type;
+      if (type !== "add") beforeLine += 1;
+      if (type !== "remove") afterLine += 1;
+    }
+
+    let beforeCount = 0;
+    let afterCount = 0;
+    const body: string[] = [];
+    for (let index = start; index <= end; index += 1) {
+      const line = lines[index]!;
+      if (line.type !== "add") beforeCount += 1;
+      if (line.type !== "remove") afterCount += 1;
+      body.push(
+        `${line.type === "add" ? "+" : line.type === "remove" ? "-" : " "}${line.content}`,
+      );
+    }
+    rendered.push(
+      `@@ -${beforeLine},${beforeCount} +${afterLine},${afterCount} @@`,
+      ...body,
+    );
+    beforeLine += beforeCount;
+    afterLine += afterCount;
+    cursor = end + 1;
+  }
+  return rendered;
 }
 
 function fileLines(value: string): string[] {
@@ -1652,6 +1881,34 @@ function contentText(value: unknown): string {
   return typeof value.text === "string" ? value.text : "";
 }
 
+/**
+ * `appendBounded`, memoised on the object that owns `current`.
+ *
+ * Once a target is saturated the answer can only ever be `current` unchanged,
+ * so returning it directly keeps a stream that overruns its cap O(1) per chunk
+ * instead of re-encoding and re-copying the capped buffer on the read loop for
+ * the rest of the turn.
+ *
+ * Truncation can leave a saturated buffer a few bytes short of the cap, where
+ * the two UTF-8 backoffs landed. Dropping a chunk that would fit in those bytes
+ * is deliberate: it would be appended *after* the marker, and a response that
+ * reads `…[output truncated by Orkestrator]y` looks corrupted rather than cut.
+ *
+ * `target` is absent when the caller is about to create the part that will own
+ * the result; it records the saturation itself in that case.
+ */
+function appendSaturating(
+  target: BridgeMessage | BridgeMessagePart | undefined,
+  current: string,
+  addition: string,
+  maximumBytes: number,
+): { value: string; truncated: boolean } {
+  if (target && saturatedText.has(target)) return { value: current, truncated: true };
+  const next = appendBounded(current, addition, maximumBytes);
+  if (next.truncated && target) saturatedText.add(target);
+  return next;
+}
+
 function appendBounded(current: string, addition: string, maximumBytes: number): {
   value: string;
   truncated: boolean;
@@ -1661,9 +1918,16 @@ function appendBounded(current: string, addition: string, maximumBytes: number):
   if (Buffer.byteLength(addition) <= remaining) return { value: current + addition, truncated: false };
   const marker = "\n[output truncated by Orkestrator]";
   const markerBytes = Buffer.byteLength(marker);
-  const usable = Math.max(0, remaining - markerBytes);
+  // Truncation is no longer fatal for an interactive turn, so the marker is
+  // part of the correctness contract rather than optional decoration. A prior
+  // stream chunk can leave fewer free bytes than the marker needs; reserve its
+  // space from the already-buffered prefix in that case instead of silently
+  // dropping this chunk and presenting the shortened response as complete.
+  const contentLimit = Math.max(0, maximumBytes - markerBytes);
+  const prefix = truncateUtf8(current, contentLimit);
+  const usable = Math.max(0, contentLimit - Buffer.byteLength(prefix));
   return {
-    value: current + truncateUtf8(addition, usable) + (remaining >= markerBytes ? marker : ""),
+    value: prefix + truncateUtf8(addition, usable) + truncateUtf8(marker, maximumBytes),
     truncated: true,
   };
 }
@@ -1672,7 +1936,11 @@ function truncateUtf8(value: string, maximumBytes: number): string {
   if (maximumBytes <= 0) return "";
   const encoded = Buffer.from(value);
   if (encoded.length <= maximumBytes) return value;
-  return new TextDecoder("utf-8", { fatal: false }).decode(encoded.subarray(0, maximumBytes));
+  // Back up over continuation bytes so decoding cannot replace a partial code
+  // point with U+FFFD (three bytes) and accidentally exceed the byte cap.
+  let end = maximumBytes;
+  while (end > 0 && (encoded[end]! & 0b1100_0000) === 0b1000_0000) end -= 1;
+  return encoded.subarray(0, end).toString("utf8");
 }
 
 function boundTranscript(state: SessionState): boolean {
@@ -1690,11 +1958,17 @@ function boundTranscript(state: SessionState): boolean {
   }
   const onlyMessage = state.messages[0];
   while (bytes > MAX_TRANSCRIPT_BYTES && onlyMessage && onlyMessage.parts.length > 1) {
-    onlyMessage.parts.shift();
+    // Strictly shorter every pass, so the loop still terminates once only the
+    // notice is left.
+    trimPartsTo(onlyMessage, onlyMessage.parts.length - 1);
     truncatedCurrentMessage = true;
     bytes = Buffer.byteLength(JSON.stringify(state.messages));
   }
   if (bytes > MAX_TRANSCRIPT_BYTES) {
+    // One part alone is over the whole-transcript budget, so nothing left to
+    // drop can bring it back under and the bound is genuinely unenforceable.
+    // Every part is individually capped well below 8MiB, so this is a backstop
+    // against a future cap being raised, not a state the agents can reach.
     state.outputTruncated = true;
     state.status = "error";
     state.error = `${provider} output exceeded the transcript limit`;
@@ -2619,14 +2893,24 @@ async function loadPersistedState(): Promise<void> {
       })
       .slice(-MAX_MESSAGES);
     const usage = restorePersistedUsage(candidate.usage);
+    // A session persisted by an older build's fatal transcript trim is healed
+    // rather than restored. Trimming an interactive turn is no longer a
+    // failure, `boundTranscript` below re-applies the bound to whatever was
+    // persisted, and the status is otherwise unclearable: the tab renders it as
+    // a connection failure whose only control reads the same state back.
+    const healed = candidate.status === "error"
+      && typeof candidate.error === "string"
+      && candidate.error.endsWith("output exceeded the transcript limit");
     const state: SessionState = {
       id: candidate.id.slice(0, 128),
       ...(typeof candidate.clientSessionKey === "string"
         ? { clientSessionKey: candidate.clientSessionKey.slice(0, 512) }
         : {}),
       acpSessionId: candidate.acpSessionId.slice(0, 512),
-      status: candidate.status === "idle" || candidate.status === "error" ? candidate.status : "error",
-      ...(typeof candidate.error === "string" ? { error: candidate.error.slice(0, 4_000) } : {}),
+      status: healed || candidate.status === "idle" ? "idle" : "error",
+      ...(!healed && typeof candidate.error === "string"
+        ? { error: candidate.error.slice(0, 4_000) }
+        : {}),
       messages,
       historyMessageIds: new Map(),
       child: null,
@@ -2707,6 +2991,7 @@ function normalizeBridgeMessage(value: unknown): BridgeMessage | null {
     && Array.isArray(value.parts)
     && typeof value.createdAt === "string")) return null;
   const messageId = value.id.slice(0, 256);
+  const modelId = boundedModelId(value.modelId);
   return {
     id: messageId,
     role: value.role,
@@ -2718,6 +3003,7 @@ function normalizeBridgeMessage(value: unknown): BridgeMessage | null {
         return normalized ? [normalized] : [];
       }),
     createdAt: value.createdAt.slice(0, 64),
+    ...(modelId ? { modelId } : {}),
   };
 }
 

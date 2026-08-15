@@ -3,6 +3,7 @@ import { CODEX_MODELS } from "@/lib/codex-client";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
+import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import type { DefaultAgent, Environment, GlobalConfig, RepositoryConfig } from "@/types";
 
 /**
@@ -110,11 +111,30 @@ export function buildReviewModelCatalog(
     reasoningEfforts: [...(model.variants ?? [])],
   }));
 
+  const cachedAcpCatalog = useAgentModelCatalogStore.getState();
+  const toLaunchOptions = (models: typeof cachedAcpCatalog.cursorModels) =>
+    models.map((model) => ({
+      id: model.id,
+      name: model.label,
+      description: model.description,
+      reasoningEfforts: Array.from(new Set(
+        model.reasoning
+          ?.map((option) => option.id)
+          .filter((id) => id !== "default") ?? [],
+      )),
+    }));
+  const cursor = toLaunchOptions(cachedAcpCatalog.cursorModels);
+  const grok = toLaunchOptions(cachedAcpCatalog.grokModels);
+
   return {
     claude: claude.length > 0 ? claude : CLAUDE_FALLBACK_MODELS,
     codex,
-    cursor: [{ id: "default", name: "Cursor automatic", reasoningEfforts: [] }],
-    grok: [{ id: "default", name: "Grok Build default", reasoningEfforts: [] }],
+    cursor: cursor.length > 0
+      ? cursor
+      : [{ id: "default", name: "Cursor automatic", reasoningEfforts: [] }],
+    grok: grok.length > 0
+      ? grok
+      : [{ id: "default", name: "Grok Build default", reasoningEfforts: [] }],
     opencode: opencode.length > 0
       ? opencode
       : [{ id: "default", name: "Default", reasoningEfforts: [] }],

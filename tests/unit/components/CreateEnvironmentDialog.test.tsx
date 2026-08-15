@@ -4,6 +4,7 @@ import { useConfigStore } from "@/stores/configStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
+import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { invoke } from "@/lib/native/backend";
 import { mockReadImage } from "../../mocks/clipboard";
 import {
@@ -63,7 +64,7 @@ function openAgentModelPicker() {
   return picker;
 }
 
-async function selectAgentPlatform(label: "Claude" | "Codex" | "OpenCode") {
+async function selectAgentPlatform(label: "Claude" | "Codex" | "Cursor" | "Grok" | "OpenCode") {
   openAgentModelPicker();
   fireEvent.click(
     await screen.findByRole("button", { name: `${label.toLowerCase()} models` }),
@@ -95,6 +96,7 @@ describe("resolveAgentDefaults", () => {
     useClaudeStore.setState({ models: defaultClaudeModels });
     useCodexStore.setState({ models: defaultCodexModels });
     useOpenCodeStore.setState({ models: new Map(defaultOpenCodeModels) });
+    useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [] });
     invokeMock.mockReset();
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_preferences") {
@@ -755,6 +757,59 @@ describe("resolveAgentDefaults", () => {
           reasoningEffort: "high",
         }),
       );
+    });
+  });
+
+  test("offers the durable Cursor catalogue when creating a new environment", async () => {
+    const config = structuredClone(defaultConfig);
+    config.global.defaultAgent = "cursor";
+    config.global.enabledAgentPlatforms = ["cursor"];
+    useConfigStore.setState({ config });
+    useAgentModelCatalogStore.getState().setAcpModels([
+      {
+        platform: "cursor",
+        id: "grok-4.6",
+        label: "Cursor Grok 4.6",
+        providerLabel: "Cursor",
+        reasoning: [
+          { id: "low", label: "Low" },
+          { id: "high", label: "High" },
+        ],
+      },
+      {
+        platform: "cursor",
+        id: "composer-2.5",
+        label: "Composer 2.5",
+        providerLabel: "Cursor",
+      },
+    ]);
+    const onCreate = mock(async () => {});
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(getAgentModelPicker().textContent).toContain("Cursor Grok 4.6")
+    );
+    openAgentModelPicker();
+    expect(screen.getByRole("menuitemradio", { name: /Cursor Grok 4\.6/ }))
+      .toBeTruthy();
+    expect(screen.getByRole("menuitemradio", { name: /Composer 2\.5/ }))
+      .toBeTruthy();
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
+        agentType: "cursor",
+        model: "grok-4.6",
+        reasoningEffort: "high",
+      }));
     });
   });
 

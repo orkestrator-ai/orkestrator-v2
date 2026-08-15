@@ -1187,7 +1187,7 @@ function FilePart({
         className={cn(
           "text-xs my-0 rounded-md border transition-colors",
           showThumbnailTile
-            ? "group relative block w-40 overflow-hidden bg-muted/50 border-border hover:border-foreground/25 cursor-zoom-in"
+            ? "group relative block w-40 max-w-full shrink-0 overflow-hidden bg-muted/50 border-border hover:border-foreground/25 cursor-zoom-in"
             : "inline-flex items-center gap-1.5 py-1.5 px-2.5",
           !showThumbnailTile && (isImage
             ? "bg-muted/50 border-border hover:bg-muted hover:border-border/80 cursor-zoom-in"
@@ -2098,18 +2098,50 @@ function renderMessageParts(
   message: NativeMessageType,
   options: { showTextCopy?: boolean; containerId?: string } = {},
 ) {
-  return message.parts.map((part, index) => (
-      <MessagePart
-        key={`${message.id}-part-${index}-${part.type}`}
-        part={part}
-        showTextCopy={options.showTextCopy ?? true}
-        truncateUserPrompt={message.role === "user"}
-        renderJsonPayload={message.role !== "user"}
-        containerId={options.containerId}
-        eagerImagePreview={message.role === "user"}
-        partKey={`${message.id}-part-${index}`}
-      />
-  ));
+  const renderPart = (part: NativeMessagePart, index: number) => (
+    <MessagePart
+      key={`${message.id}-part-${index}-${part.type}`}
+      part={part}
+      showTextCopy={options.showTextCopy ?? true}
+      truncateUserPrompt={message.role === "user"}
+      renderJsonPayload={message.role !== "user"}
+      containerId={options.containerId}
+      eagerImagePreview={message.role === "user"}
+      partKey={`${message.id}-part-${index}`}
+    />
+  );
+
+  const renderedParts: ReactNode[] = [];
+  let index = 0;
+
+  while (index < message.parts.length) {
+    const part = message.parts[index];
+    if (part?.type !== "file") {
+      if (part) renderedParts.push(renderPart(part, index));
+      index += 1;
+      continue;
+    }
+
+    const flowStart = index;
+    const flowParts: ReactNode[] = [];
+    while (index < message.parts.length && message.parts[index]?.type === "file") {
+      const flowPart = message.parts[index];
+      if (flowPart) flowParts.push(renderPart(flowPart, index));
+      index += 1;
+    }
+
+    renderedParts.push(
+      <div
+        key={`${message.id}-attachment-flow-${flowStart}`}
+        data-message-attachment-flow="true"
+        className="flex w-full min-w-0 flex-wrap items-start gap-3"
+      >
+        {flowParts}
+      </div>,
+    );
+  }
+
+  return renderedParts;
 }
 
 function formatTime(isoString: string): string {

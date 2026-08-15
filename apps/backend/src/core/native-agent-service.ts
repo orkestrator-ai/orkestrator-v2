@@ -53,6 +53,7 @@ import {
   createBuildPipelineProvider,
   PromptRejectedError,
   ProviderUnavailableError,
+  readProviderStatus,
   type BridgeConnection,
   type NativeAgentRuntimeProvider,
   type ProviderInteractionObservationEvent,
@@ -674,7 +675,18 @@ export class NativeAgentService {
         interactionPolicy: existing.interactionPolicy,
         phase: input.phase,
       });
-      const status = await provider.status(existing.providerSessionId);
+      /*
+       * Liveness only. A session whose last turn ended in a terminal error —
+       * "Selected model is at capacity", a usage limit, a transport fault — is
+       * still a live session with an intact rollout, and the user's next move is
+       * usually to change model and continue. Letting that error escape here
+       * failed every later ensure/dispatch on the *previous* turn's failure, so
+       * the tab could never send the message that would have cleared it.
+       */
+      const { status } = await readProviderStatus(
+        provider,
+        existing.providerSessionId,
+      );
       await this.assertEnvironmentLive(input.environmentId);
       if (status !== "missing") {
         void this.reconcileAgentInteractions().catch(() => undefined);
@@ -738,7 +750,9 @@ export class NativeAgentService {
           : INTERACTIVE_AGENT_INTERACTION_POLICY),
       phase: input.phase,
     });
-    const status = await provider.status(input.providerSessionId);
+    // Same liveness-only rule as ensureSession: a failed last turn is not a
+    // missing session, and adopting one must still succeed.
+    const { status } = await readProviderStatus(provider, input.providerSessionId);
     await this.assertEnvironmentLive(input.environmentId);
     if (status === "missing") {
       throw new Error("Native agent provider session was not found");
@@ -1465,7 +1479,13 @@ export class NativeAgentService {
             resolved.session.providerSessionId,
           )
         : {
-            status: await resolved.provider.status(resolved.session.providerSessionId),
+            // A terminal turn error belongs in the projection as `error` plus
+            // its detail, not as a thrown read that would report the whole
+            // runtime as unreachable.
+            ...await readProviderStatus(
+              resolved.provider,
+              resolved.session.providerSessionId,
+            ),
             messages: await resolved.provider.messages(resolved.session.providerSessionId),
           };
       if (snapshot.providerGeneration !== undefined) {
@@ -2551,7 +2571,11 @@ export class NativeAgentService {
               snapshot.requests.length > 0 ? "blocked" : "idle";
             if (snapshot.requests.length === 0) {
               try {
-                providerState = await provider.status(session.providerSessionId);
+                // A terminal turn error is an observation, not a read fault:
+                // it settles the withdrawn cards as `error` without putting the
+                // whole interaction scan into retry backoff.
+                providerState =
+                  (await readProviderStatus(provider, session.providerSessionId)).status;
               } catch (error) {
                 // The empty authoritative snapshot already proves withdrawal;
                 // a failed auxiliary status read must not preserve stale cards.
@@ -2732,13 +2756,14 @@ export class NativeAgentService {
               ? batchedActivity.get(session.providerSessionId)
               : provider.activity
                 ? await provider.activity(session.providerSessionId)
-                : await provider.status(session.providerSessionId).then((status) =>
-                    status === "missing"
-                      ? "missing"
-                      : status === "running"
-                        ? "working"
-                        : status === "blocked" ? "waiting" : "idle"
-                  );
+                : await readProviderStatus(provider, session.providerSessionId)
+                    .then(({ status }) =>
+                      status === "missing"
+                        ? "missing"
+                        : status === "running"
+                          ? "working"
+                          : status === "blocked" ? "waiting" : "idle"
+                    );
             if (!activity) {
               throw new ProviderUnavailableError(
                 `Provider activity snapshot omitted ${session.providerSessionId}`,
@@ -3279,18 +3304,42 @@ export class NativeAgentService {
     queueKey: string,
     reason: string,
     requestId?: string,
+    park?: {
+      /**
+       * Reserve the queue head so an exhausted deferral can park it even though
+       * no dispatch ever claimed it. Only for conditions the drain itself can
+       * never clear; a transient one must keep retrying instead.
+       */
+      reserveHead?: boolean;
+      /** Persisted for the user; `reason` is what reaches the log. */
+      message?: string;
+    },
   ): Promise<void> {
     const attempts = (this.queueAttempts.get(queueKey) ?? 0) + 1;
     this.queueAttempts.set(queueKey, attempts);
     if (attempts >= MAX_QUEUE_DISPATCH_ATTEMPTS) {
-      // The key and the reason are safe to log; the prompt itself never is.
+      // The key and the reason are safe to log; the prompt itself never is, and
+      // neither is provider-authored detail — that is persisted, not logged.
       console.warn(
         `[native-agent] Prompt queue ${queueKey} has failed ${attempts} times: ${reason}`,
       );
-      if (requestId !== undefined) {
+      // A head no dispatch ever reserved has no request id, so the park path a
+      // failed dispatch uses could not run: the prompt was neither sent nor
+      // failed and the queue stalled at the backoff ceiling with nothing shown
+      // to the user. Reserving it here gives that path its identity.
+      const parkedRequestId = requestId
+        ?? (park?.reserveHead
+          ? (await this.storage.reservePromptQueueHeadForDispatch(queueKey))
+            ?.requestId
+          : undefined);
+      if (parkedRequestId !== undefined) {
         this.queueAttempts.delete(queueKey);
         this.queueRetryAt.delete(queueKey);
-        await this.storage.failPromptQueueDispatch(queueKey, requestId, reason);
+        await this.storage.failPromptQueueDispatch(
+          queueKey,
+          parkedRequestId,
+          park?.message ?? reason,
+        );
         return;
       }
     }
@@ -3397,7 +3446,13 @@ export class NativeAgentService {
       reasoningEffort: this.queueReasoningEffort(head),
     });
     await this.assertEnvironmentLive(queue.environmentId);
-    const status = await provider.status(session.providerSessionId);
+    // Read as data: a failed last turn must defer with a bounded backoff and a
+    // reason, not escape as a throw that the outer handler can only report as
+    // an anonymous drain fault.
+    const { status, error: statusDetail } = await readProviderStatus(
+      provider,
+      session.providerSessionId,
+    );
     await this.assertEnvironmentLive(queue.environmentId);
     if (status === "running" || status === "blocked") return;
     if (status !== "idle") {
@@ -3405,6 +3460,24 @@ export class NativeAgentService {
         queueKey,
         `provider session is ${status}`,
         queue.inFlight?.requestId,
+        {
+          /*
+           * A terminal turn error is sticky until the next turn runs, and the
+           * drain is the only thing that would have run it — so retrying can
+           * never clear this on its own. Deferring alone left the prompt
+           * neither sent nor failed and told the user nothing. Park it instead:
+           * the composer shows the provider's own explanation and the existing
+           * retry control resends it once the model is changed. Auto-sending
+           * here would be worse than silence, because an at-capacity model
+           * fails every queued prompt in turn and burns the whole queue.
+           */
+          reserveHead: true,
+          message: statusDetail
+            ? `The ${agent} session failed before this prompt was sent: ${
+              statusDetail.slice(0, 500)
+            }`
+            : `The ${agent} session is ${status}; the queued prompt was not sent.`,
+        },
       );
       return;
     }

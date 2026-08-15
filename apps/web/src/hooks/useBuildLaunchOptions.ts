@@ -22,6 +22,7 @@ import {
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
+import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
 function normalizeCachedOpenCodeModels(value: unknown): CachedOpenCodeModel[] | null {
   if (!Array.isArray(value)) return null;
@@ -51,6 +52,8 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
   const codexModels = useCodexStore((state) => state.models);
   const openCodeModels = useOpenCodeStore((state) => state.models);
   const openCodeModelSources = useOpenCodeStore((state) => state.modelSource);
+  const cursorModels = useAgentModelCatalogStore((state) => state.cursorModels);
+  const grokModels = useAgentModelCatalogStore((state) => state.grokModels);
   const environments = useEnvironmentStore((state) => state.environments);
   const [cachedOpenCodeCatalog, setCachedOpenCodeCatalog] = useState<{
     projectId: string;
@@ -109,7 +112,7 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
         reasoningEfforts: [...(model.variants ?? [])],
       })),
     };
-  }, [claudeModels, codexModels, projectOpenCodeModels]);
+  }, [claudeModels, codexModels, cursorModels, grokModels, projectOpenCodeModels]);
 
   return catalog;
 }

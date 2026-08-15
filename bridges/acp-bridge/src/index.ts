@@ -137,6 +137,14 @@ interface PromptJournalEntry {
   acceptedAt: number;
 }
 
+interface ActiveSubagentDescriptor {
+  /** Bounded launch metadata used to correlate Grok's child-id notification. */
+  description?: string;
+  subagentType?: string;
+  /** Distinguishes a completed background launch from an abandoned pending one. */
+  toolState?: BridgeToolPart["toolState"];
+}
+
 interface SessionState {
   id: string;
   clientSessionKey?: string;
@@ -146,6 +154,14 @@ interface SessionState {
   messages: BridgeMessage[];
   /** Active background children, maintained incrementally for the hot activity route. */
   activeSubagentToolIds: Set<string>;
+  /**
+   * Authoritative, bounded correlation metadata for active children. This is
+   * intentionally independent of rendered parts: transcript retention is a
+   * display concern and must not decide whether background work still exists.
+   */
+  activeSubagentDescriptors: Map<string, ActiveSubagentDescriptor>;
+  /** Fatal latch: once the bound trips, later provider frames cannot reopen work. */
+  subagentLimitExceeded: boolean;
   /** Grok's terminal sub-agent notifications identify the child, not its tool call. */
   subagentToolIds: Map<string, string>;
   /** Provider message IDs seen during the current process, bounded with the transcript. */
@@ -218,6 +234,7 @@ interface PersistedSession {
   sessionConfig?: AcpNormalizedSessionConfig;
   usage?: PersistedUsage;
   commandCount?: number;
+  subagentLimitExceeded?: boolean;
 }
 
 interface PersistedState {
@@ -303,6 +320,12 @@ const MAX_TRANSCRIPT_BYTES = parseBoundedInteger(
 );
 const MAX_MESSAGE_TEXT_BYTES = 2 * 1024 * 1024;
 const MAX_PARTS_PER_MESSAGE = 512;
+/**
+ * A provider that attempts to exceed this bound is cancelled and every known
+ * child is failed explicitly. Dropping one active child silently could make
+ * `/activity` report idle while that child still writes to the workspace.
+ */
+const MAX_ACTIVE_SUBAGENTS_PER_SESSION = 512;
 const MAX_TOOL_ARGUMENT_BYTES = 512 * 1024;
 const MAX_TOOL_OUTPUT_BYTES = 512 * 1024;
 const MAX_TOOL_INLINE_FILE_BYTES = 256 * 1024;
@@ -803,6 +826,8 @@ async function resumeSessionReserved(
       status: "idle",
       messages: [],
       activeSubagentToolIds: new Set(),
+      activeSubagentDescriptors: new Map(),
+      subagentLimitExceeded: false,
       subagentToolIds: new Map(),
       historyMessageIds: new Map(),
       child,
@@ -827,6 +852,9 @@ async function resumeSessionReserved(
       sessionId: acpSessionId,
     }, RPC_TIMEOUT_MS, signal);
     state.historyReplay = false;
+    // session/load is a projection of work owned by another ACP process. Its
+    // historical active markers cannot describe children of this new process.
+    reconcileStaleToolParts(state, true);
     if (isObject(loaded)) {
       const sessionConfig = normalizeAcpSessionConfig(provider, {
         ...loaded,
@@ -909,6 +937,8 @@ async function createSessionReserved(
       status: "idle",
       messages: [],
       activeSubagentToolIds: new Set(),
+      activeSubagentDescriptors: new Map(),
+      subagentLimitExceeded: false,
       subagentToolIds: new Map(),
       historyMessageIds: new Map(),
       child,
@@ -994,6 +1024,7 @@ async function ensureSessionProcess(state: SessionState, signal?: AbortSignal): 
     }
     attachChild(state, child);
     state.historyReplay = state.messages.length === 0 ? "hydrate" : "ignore";
+    const hydratedHistory = state.historyReplay === "hydrate";
     const loaded = await child.request("session/load", {
       cwd: workingDirectory,
       additionalDirectories: [],
@@ -1001,6 +1032,7 @@ async function ensureSessionProcess(state: SessionState, signal?: AbortSignal): 
       sessionId: state.acpSessionId,
     }, RPC_TIMEOUT_MS, signal);
     state.historyReplay = false;
+    if (hydratedHistory) reconcileStaleToolParts(state, true);
     if (isObject(loaded)) {
       const sessionConfig = normalizeAcpSessionConfig(provider, {
         ...loaded,
@@ -1200,7 +1232,6 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
       return;
     }
     trimPartsTo(message, MAX_PARTS_PER_MESSAGE - 1);
-    rebuildActiveSubagentToolIds(state);
   }
   const streaming = previous?.type === partType ? previous : undefined;
   const currentPartText = streaming?.content ?? "";
@@ -1294,6 +1325,31 @@ function applyToolCallUpdate(
     )
     : undefined;
 
+  // A background child can outlive the turn and message that launched it.
+  // Terminal Cursor updates must target that launch part wherever it remains,
+  // while an evicted launch is settled through the authoritative registry
+  // below instead of being rebuilt as a context-free ghost part.
+  if (!part && state.activeSubagentToolIds.has(toolCallId)) {
+    for (let index = state.messages.length - 1; index >= 0 && !part; index -= 1) {
+      const candidateOwner = state.messages[index]!;
+      const candidate = candidateOwner.parts.find(
+        (messagePart): messagePart is BridgeToolPart =>
+          messagePart.type === "tool-invocation" && messagePart.toolUseId === toolCallId,
+      );
+      if (candidate) {
+        owner = candidateOwner;
+        part = candidate;
+      }
+    }
+    if (!part && !isInitial) {
+      if (settleEvictedSubagentFromToolUpdate(state, toolCallId, update)) {
+        state.revision += 1;
+        schedulePersist();
+      }
+      return;
+    }
+  }
+
   if (!part) {
     owner = currentAssistantMessage(state);
     const trimmed = trimmedToolCalls.get(owner);
@@ -1311,7 +1367,6 @@ function applyToolCallUpdate(
         return;
       }
       trimPartsTo(owner, MAX_PARTS_PER_MESSAGE - 1);
-      rebuildActiveSubagentToolIds(state);
     }
     part = {
       type: "tool-invocation",
@@ -1497,23 +1552,114 @@ function acpSubagentState(
 }
 
 function syncActiveSubagentTool(state: SessionState, part: BridgeToolPart): void {
-  if (part.agentState === "active") state.activeSubagentToolIds.add(part.toolUseId);
-  else state.activeSubagentToolIds.delete(part.toolUseId);
+  if (part.agentState === "active") {
+    const activated = activateSubagent(state, part.toolUseId, {
+      ...(typeof part.toolArgs?.description === "string"
+        ? { description: truncateUtf8(part.toolArgs.description.trim(), MAX_TOOL_TITLE_BYTES) }
+        : {}),
+      ...(typeof part.toolArgs?.subagent_type === "string"
+        ? { subagentType: truncateUtf8(part.toolArgs.subagent_type.trim(), MAX_TOOL_NAME_BYTES) }
+        : {}),
+      ...(part.toolState ? { toolState: part.toolState } : {}),
+    });
+    if (!activated) {
+      part.agentState = "failed";
+      const source = acpToolSourceStates.get(part);
+      if (source) source.agentState = "failed";
+    }
+  } else {
+    settleActiveSubagent(state, part.toolUseId);
+  }
 }
 
-function rebuildActiveSubagentToolIds(state: SessionState): void {
-  state.activeSubagentToolIds.clear();
+function indexActiveSubagentsFromTranscript(state: SessionState): void {
   for (const message of state.messages) {
     for (const part of message.parts) {
       if (part.type === "tool-invocation" && part.agentState === "active") {
-        state.activeSubagentToolIds.add(part.toolUseId);
+        syncActiveSubagentTool(state, part);
       }
     }
   }
-  for (const [subagentId, toolUseId] of state.subagentToolIds) {
-    if (!state.activeSubagentToolIds.has(toolUseId)) {
-      state.subagentToolIds.delete(subagentId);
+}
+
+function activateSubagent(
+  state: SessionState,
+  toolUseId: string,
+  descriptor: ActiveSubagentDescriptor,
+): boolean {
+  if (state.subagentLimitExceeded) return false;
+  if (!state.activeSubagentToolIds.has(toolUseId)
+    && state.activeSubagentToolIds.size >= MAX_ACTIVE_SUBAGENTS_PER_SESSION) {
+    state.subagentLimitExceeded = true;
+    failAllActiveSubagents(state);
+    state.status = "error";
+    state.error = `${provider} exceeded the active sub-agent limit`;
+    state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
+    return false;
+  }
+  state.activeSubagentToolIds.add(toolUseId);
+  state.activeSubagentDescriptors.set(toolUseId, descriptor);
+  return true;
+}
+
+function settleActiveSubagent(state: SessionState, toolUseId: string): void {
+  state.activeSubagentToolIds.delete(toolUseId);
+  state.activeSubagentDescriptors.delete(toolUseId);
+  for (const [subagentId, mappedToolUseId] of state.subagentToolIds) {
+    if (mappedToolUseId === toolUseId) state.subagentToolIds.delete(subagentId);
+  }
+}
+
+function failAllActiveSubagents(state: SessionState): void {
+  for (const message of state.messages) {
+    for (const part of message.parts) {
+      if (part.type !== "tool-invocation"
+        || !state.activeSubagentToolIds.has(part.toolUseId)) continue;
+      part.agentState = "failed";
+      const source = acpToolSourceStates.get(part);
+      if (source) source.agentState = "failed";
     }
+  }
+  state.activeSubagentToolIds.clear();
+  state.activeSubagentDescriptors.clear();
+  state.subagentToolIds.clear();
+}
+
+function settleEvictedSubagentFromToolUpdate(
+  state: SessionState,
+  toolUseId: string,
+  update: JsonObject,
+): boolean {
+  const toolState = mapAcpToolState(update.status);
+  if (toolState === "failure") {
+    settleActiveSubagent(state, toolUseId);
+    return true;
+  }
+  const lifecycle = isObject(update.rawOutput)
+    ? update.rawOutput
+    : toolCallLifecycle(update.rawOutput ?? update.content);
+  if (lifecycle?.isBackground === true) return false;
+  const reportedState = typeof lifecycle?.status === "string"
+    ? lifecycle.status
+    : typeof lifecycle?.state === "string"
+      ? lifecycle.state
+      : undefined;
+  if (lifecycle?.isBackground === false
+    || (reportedState && /^(completed|finished|done|success|failed|killed|cancelled|canceled|error)$/i.test(reportedState))) {
+    settleActiveSubagent(state, toolUseId);
+    return true;
+  }
+  return false;
+}
+
+function toolCallLifecycle(value: unknown): JsonObject | undefined {
+  const text = stringifyToolPayload(value);
+  if (!text) return undefined;
+  try {
+    const parsed = JSON.parse(text);
+    return isObject(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -1524,31 +1670,20 @@ function applySubagentSpawned(state: SessionState, update: JsonObject): void {
   const claimedToolIds = new Set(state.subagentToolIds.values());
   const description = boundedString(update.description, MAX_TOOL_TITLE_BYTES)?.trim();
   const subagentType = boundedString(update.subagent_type, MAX_TOOL_NAME_BYTES)?.trim();
-  const candidates: BridgeToolPart[] = [];
+  const candidates = [...state.activeSubagentDescriptors.entries()].filter(
+    ([toolUseId]) => !claimedToolIds.has(toolUseId),
+  );
+  const matched = candidates.find(([, descriptor]) =>
+    (!description || descriptor.description === description)
+    && (!subagentType || descriptor.subagentType === subagentType)
+  );
+  // With metadata present, a mismatch is not permission to claim an unrelated
+  // child. Metadata-free events are safe only when exactly one candidate exists.
+  const selected = matched ?? (!description && !subagentType && candidates.length === 1
+    ? candidates[0]
+    : undefined);
 
-  for (let messageIndex = state.messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
-    const message = state.messages[messageIndex]!;
-    for (let partIndex = message.parts.length - 1; partIndex >= 0; partIndex -= 1) {
-      const part = message.parts[partIndex]!;
-      if (part.type !== "tool-invocation"
-        || part.agentState !== "active"
-        || claimedToolIds.has(part.toolUseId)) continue;
-      candidates.push(part);
-    }
-  }
-
-  const matched = candidates.find((part) => {
-    const partDescription = typeof part.toolArgs?.description === "string"
-      ? part.toolArgs.description.trim()
-      : undefined;
-    const partType = typeof part.toolArgs?.subagent_type === "string"
-      ? part.toolArgs.subagent_type.trim()
-      : undefined;
-    return (!description || partDescription === description)
-      && (!subagentType || partType === subagentType);
-  }) ?? candidates[0];
-
-  if (matched) state.subagentToolIds.set(subagentId, matched.toolUseId);
+  if (selected) state.subagentToolIds.set(subagentId, selected[0]);
 }
 
 function applySubagentFinished(state: SessionState, update: JsonObject): void {
@@ -1563,15 +1698,16 @@ function applySubagentFinished(state: SessionState, update: JsonObject): void {
       candidate.type === "tool-invocation" && candidate.toolUseId === toolUseId
     );
   state.subagentToolIds.delete(subagentId);
-  if (!part) return;
-
   const status = typeof update.status === "string" ? update.status : "completed";
-  part.agentState = /^(failed|killed|cancelled|canceled|error)$/i.test(status)
+  const agentState = /^(failed|killed|cancelled|canceled|error)$/i.test(status)
     ? "failed"
     : "finished";
-  const source = acpToolSourceStates.get(part);
-  if (source) source.agentState = part.agentState;
-  syncActiveSubagentTool(state, part);
+  if (part) {
+    part.agentState = agentState;
+    const source = acpToolSourceStates.get(part);
+    if (source) source.agentState = agentState;
+  }
+  settleActiveSubagent(state, toolUseId);
   state.revision += 1;
   schedulePersist();
 }
@@ -2162,9 +2298,8 @@ function boundTranscript(state: SessionState): boolean {
     state.error = `${provider} output exceeded the transcript limit`;
     truncatedCurrentMessage = true;
   }
-  // Bounding can evict the tool that owned a background child. Keep the
-  // constant-time `/activity` index exactly aligned with the retained snapshot.
-  rebuildActiveSubagentToolIds(state);
+  // Transcript retention is presentation-only. Active child lifecycle stays
+  // in the separately bounded registry until a terminal event or process death.
   return truncatedCurrentMessage;
 }
 
@@ -2396,6 +2531,9 @@ async function route(
     if (!prompt && attachments.length === 0) {
       return json(response, 400, { error: "prompt or image attachment is required" });
     }
+    if (state.subagentLimitExceeded) {
+      return json(response, 409, { error: "Session exceeded the active sub-agent limit" });
+    }
     if (Buffer.byteLength(requestId) > 512) return json(response, 400, { error: "requestId is too long" });
     if (requestId && state.promptJournal.has(requestId)) {
       const journaled = state.promptJournal.get(requestId)!;
@@ -2492,7 +2630,7 @@ async function route(
         })),
       ],
     }, PROMPT_TIMEOUT_MS).then((result) => {
-      if (!state.outputTruncated) state.status = "idle";
+      if (!state.outputTruncated && state.status !== "error") state.status = "idle";
       // The result `_meta` is the last and most complete usage carrier, so it is
       // read before `turnStartedAt` is cleared and the elapsed time is lost.
       recordTurnUsage(state, isObject(result) ? result._meta : undefined);
@@ -2994,6 +3132,7 @@ function persistedSnapshot(): PersistedState {
       composer: state.sessionConfig.composer,
       ...(state.usage ? { usage: state.usage } : {}),
       ...(state.commandCount === undefined ? {} : { commandCount: state.commandCount }),
+      ...(state.subagentLimitExceeded ? { subagentLimitExceeded: true } : {}),
     })),
   };
 }
@@ -3110,6 +3249,8 @@ async function loadPersistedState(): Promise<void> {
         : {}),
       messages,
       activeSubagentToolIds: new Set(),
+      activeSubagentDescriptors: new Map(),
+      subagentLimitExceeded: candidate.subagentLimitExceeded === true,
       subagentToolIds: new Map(),
       historyMessageIds: new Map(),
       child: null,
@@ -3147,6 +3288,7 @@ async function loadPersistedState(): Promise<void> {
         state.promptJournal.set(entry.requestId, entry);
       }
     }
+    indexActiveSubagentsFromTranscript(state);
     boundTranscript(state);
     reconcileStaleToolParts(state, true);
     rememberCatalog(state.sessionConfig.composer);
@@ -3174,8 +3316,11 @@ function reconcileStaleToolParts(
   for (const message of state.messages) {
     for (const part of message.parts) {
       if (part.type !== "tool-invocation") continue;
-      if (failActiveSubagents && part.agentState === "active") {
+      const abandoned = part.toolState !== "success" && part.toolState !== "failure";
+      if ((failActiveSubagents || abandoned) && part.agentState === "active") {
         part.agentState = "failed";
+        const source = acpToolSourceStates.get(part);
+        if (source) source.agentState = "failed";
       }
       if (part.toolState === "success" || part.toolState === "failure") continue;
       part.toolState = "failure";
@@ -3186,7 +3331,20 @@ function reconcileStaleToolParts(
       if (source) source.toolState = "failure";
     }
   }
-  rebuildActiveSubagentToolIds(state);
+  if (failActiveSubagents) failAllActiveSubagents(state);
+  else {
+    for (const message of state.messages) {
+      for (const part of message.parts) {
+        if (part.type === "tool-invocation") syncActiveSubagentTool(state, part);
+      }
+    }
+    // The rendered launch may already have been evicted, but its bounded
+    // descriptor still records whether the foreground launch ever completed.
+    // Only successful launches may continue beyond the parent turn.
+    for (const [toolUseId, descriptor] of state.activeSubagentDescriptors) {
+      if (descriptor.toolState !== "success") settleActiveSubagent(state, toolUseId);
+    }
+  }
 }
 
 function normalizeBridgeMessage(value: unknown): BridgeMessage | null {

@@ -1205,7 +1205,7 @@ describe("AgentNativeTab", () => {
         }],
       });
 
-      const { rerender } = render(
+      const view = render(
         <AgentNativeTab tabId="tab-grok-subagent" data={identity("grok")} isActive={false} />,
       );
       await act(async () => {
@@ -1214,19 +1214,61 @@ describe("AgentNativeTab", () => {
       expect(screen.queryByTestId("active-subagent-rail")).toBeNull();
 
       await act(async () => {
-        rerender(<AgentNativeTab tabId="tab-grok-subagent" data={identity("grok")} isActive />);
+        view.rerender(<AgentNativeTab tabId="tab-grok-subagent" data={identity("grok")} isActive />);
       });
 
       const rail = await screen.findByRole("status", { name: "1 sub-agent working" });
       expect(within(rail).getByText("Validate the implementation")).toBeTruthy();
       expect(screen.getByTestId("active-subagent-spinner")).toBeTruthy();
       expect(screen.getByTestId("compose-dock").contains(rail)).toBe(true);
+
+      // Simulate leaving the environment and then reloading the renderer: the
+      // in-memory projection is gone, so the rail must rehydrate from the next
+      // authoritative snapshot rather than a live event the old tree observed.
+      view.unmount();
+      useNativeAgentProjectionStore.getState().reset();
+      getNativeAgentProjectionMock.mockClear();
+      render(<AgentNativeTab tabId="tab-grok-subagent" data={identity("grok")} isActive />);
+
+      expect(await screen.findByRole("status", { name: "1 sub-agent working" })).toBeTruthy();
+      expect(getNativeAgentProjectionMock).toHaveBeenCalledWith(expect.objectContaining({
+        agent: "grok",
+        logicalSessionKey: createSessionKey("env-1", "tab-grok-subagent"),
+      }));
     });
 
-    test("removes the sub-agent rail when Cursor reports the child terminal", async () => {
+    test("removes a mounted Cursor Task rail when the authoritative projection becomes terminal", async () => {
       seedProjection({
         messages: [{
-          id: "assistant-cursor-subagent-finished",
+          id: "assistant-cursor-subagent-transition",
+          role: "assistant",
+          content: "",
+          createdAt: "2026-08-15T10:00:00.000Z",
+          parts: [{
+            type: "tool-invocation",
+            content: "Task: Validate the implementation",
+            toolName: "task",
+            toolUseId: "cursor-subagent-1",
+            toolState: "success",
+            agentState: "active",
+            toolArgs: { description: "Validate the implementation" },
+          }],
+        }],
+      });
+
+      const view = render(
+        <AgentNativeTab
+          tabId="tab-cursor-subagent-transition"
+          data={identity("cursor")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+      expect(await screen.findByRole("status", { name: "1 sub-agent working" })).toBeTruthy();
+
+      seedProjection({
+        messages: [{
+          id: "assistant-cursor-subagent-transition",
           role: "assistant",
           content: "",
           createdAt: "2026-08-15T10:00:00.000Z",
@@ -1237,14 +1279,25 @@ describe("AgentNativeTab", () => {
             toolUseId: "cursor-subagent-1",
             toolState: "success",
             agentState: "finished",
+            toolArgs: { description: "Validate the implementation" },
           }],
         }],
       });
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-cursor-subagent-transition"
+          data={identity("cursor")}
+          isActive
+          refreshRequestId={1}
+        />,
+      );
 
-      render(<AgentNativeTab tabId="tab-cursor-subagent-finished" data={identity("cursor")} isActive />);
-
-      await screen.findByTestId("shared-native-compose-bar");
-      expect(screen.queryByTestId("active-subagent-rail")).toBeNull();
+      await waitFor(() => expect(screen.queryByTestId("active-subagent-rail")).toBeNull());
+      expect(useNativeAgentProjectionStore.getState().projections.get(
+        createSessionKey("env-1", "tab-cursor-subagent-transition"),
+      )?.messages[0]).toMatchObject({
+        parts: [expect.objectContaining({ agentState: "finished" })],
+      });
     });
 
     test("renders an unavailable context wheel when the provider reports no maximum", async () => {

@@ -130,6 +130,7 @@ export function normalizeClaudePart(part: ClaudeMessagePart): NativeMessagePart 
 function groupTaskParts(
   parts: NativeMessagePart[],
   shouldGroup: (part: Extract<NativeMessagePart, { type: "tool-invocation" }>) => boolean,
+  options: { implicitSequentialParenting: boolean },
 ): NativeMessagePart[] {
   const result: NativeMessagePart[] = [];
   const taskGroups = new Map<string, NativeTaskGroupPart>();
@@ -179,7 +180,9 @@ function groupTaskParts(
       continue;
     }
 
-    const parentTask = currentTask ?? undefined;
+    const parentTask = options.implicitSequentialParenting
+      ? currentTask ?? undefined
+      : undefined;
 
     if (parentTask) {
       parentTask.childTools.push(part);
@@ -198,7 +201,11 @@ function groupTaskParts(
  * Claude adapter.
  */
 function groupNativeSubagentTaskParts(parts: NativeMessagePart[]): NativeMessagePart[] {
-  return groupTaskParts(parts, (part) => part.agentState !== undefined);
+  return groupTaskParts(
+    parts,
+    (part) => part.agentState !== undefined,
+    { implicitSequentialParenting: false },
+  );
 }
 
 function isStreamCollapsibleTextPart(
@@ -554,7 +561,7 @@ function normalizeClaudeMessageUncached(message: ClaudeMessage): NativeMessage {
         .filter((part): part is NativeMessagePart => part !== null);
 
   const taskGroupedParts = message.role === "assistant"
-    ? groupTaskParts(rawParts, () => true)
+    ? groupTaskParts(rawParts, () => true, { implicitSequentialParenting: true })
     : rawParts;
 
   return {

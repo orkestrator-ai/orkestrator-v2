@@ -210,7 +210,7 @@ export function NativeComposeBar({
               </Button>
             ) : null}
 
-            {contextUsage !== null ? (
+            {contextUsage != null ? (
               <ContextUsageWheel usage={contextUsage} className="ml-1" />
             ) : null}
 

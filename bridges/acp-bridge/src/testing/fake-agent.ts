@@ -324,6 +324,16 @@ lines.on("line", (line) => {
         status: "completed",
       });
     }
+    if (process.env.FAKE_ACP_REPLAY_ACTIVE_SUBAGENT === "1") {
+      replay({
+        sessionUpdate: "tool_call",
+        toolCallId: "history-background-child",
+        title: "Task: Historical child",
+        status: "completed",
+        rawInput: { _toolName: "task", description: "Historical child" },
+        rawOutput: { isBackground: true },
+      });
+    }
     // The same history without provider message ids, which is all the bridge
     // gets from an agent that does not stamp them. Message boundaries then have
     // to come from chunk-versus-whole rather than from part type.
@@ -650,6 +660,284 @@ lines.on("line", (line) => {
             status: "completed",
             content: [{ type: "content", content: { type: "text", text: "Sub-agent launched." } }],
             rawOutput: { durationMs: 42, isBackground: true },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("PENDINGSUBAGENT")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "abandoned-subagent-1",
+            title: "Task: Never launched",
+            status: "in_progress",
+            rawInput: { _toolName: "task", description: "Never launched" },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("SUBAGENTOVERFLOW")) {
+      // These are protocol frames, not child OS processes. Two arrive after
+      // the 512-entry bound: one trips it and the next proves the fatal latch
+      // cannot be reopened by later buffered provider output.
+      for (let index = 0; index < 514; index += 1) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `overflow-subagent-${index}`,
+              title: `Task: Overflow child ${index}`,
+              status: "completed",
+              rawInput: {
+                _toolName: "task",
+                background: true,
+                description: `Overflow child ${index}`,
+              },
+            },
+          },
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FINISHCURSORSUBAGENT")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "cursor-subagent-1",
+            status: "completed",
+            rawOutput: { durationMs: 84, isBackground: false, status: "completed" },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FAILCURSORSUBAGENT")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "cursor-subagent-1",
+            status: "failed",
+            rawOutput: { status: "failed", error: "child failed" },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("GROKMULTISUBAGENT")) {
+      for (const [suffix, description, subagentType] of [
+        ["a", "Alpha task", "explore"],
+        ["b", "Beta task", "review"],
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `grok-multi-tool-${suffix}`,
+              title: `Agent: ${description}`,
+              status: "completed",
+              rawInput: {
+                _toolName: "task",
+                run_in_background: true,
+                description,
+                subagent_type: subagentType,
+              },
+            },
+          },
+        });
+      }
+      for (const [subagentId, description, subagentType] of [
+        ["grok-mismatch", "Unknown task", "explore"],
+        ["grok-child-b", "Beta task", "review"],
+        ["grok-child-a", "Alpha task", "explore"],
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "subagent_spawned",
+              subagent_id: subagentId,
+              description,
+              subagent_type: subagentType,
+            },
+          },
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FAILGROKSUBAGENT_B")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: { sessionUpdate: "subagent_finished", subagent_id: "grok-child-b", status: "failed" },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("CANCELGROKSUBAGENT_A")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: { sessionUpdate: "subagent_finished", subagent_id: "grok-child-a", status: "cancelled" },
+        },
+      });
+      // A mismatched spawn must still be uncorrelated and harmless.
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: { sessionUpdate: "subagent_finished", subagent_id: "grok-mismatch", status: "completed" },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("EVICTGROKSUBAGENT")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "grok-evicted-tool",
+            title: "Agent: Survive transcript eviction",
+            status: "completed",
+            rawInput: {
+              _toolName: "task",
+              run_in_background: true,
+              description: "Survive transcript eviction",
+              subagent_type: "explore",
+            },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "subagent_spawned",
+            subagent_id: "grok-evicted-child",
+            description: "Survive transcript eviction",
+            subagent_type: "explore",
+          },
+        },
+      });
+      for (const index of [0, 1]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `grok-eviction-filler-${index}`,
+              title: `Large retained output ${index}`,
+              status: "completed",
+              rawOutput: `${index}:`.padEnd(600 * 1024, "x"),
+            },
+          },
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FINISHEVICTEDGROKSUBAGENT")) {
+      // Push the launch's already-trimmed assistant message out of the byte
+      // window entirely before the terminal child notification arrives.
+      for (const index of [0, 1]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `grok-late-filler-${index}`,
+              title: `Late retained output ${index}`,
+              status: "completed",
+              rawOutput: `${index}:`.padEnd(600 * 1024, "y"),
+            },
+          },
+        });
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "subagent_finished",
+            subagent_id: "grok-evicted-child",
+            status: "completed",
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FINISHEVICTEDCURSORSUBAGENT")) {
+      for (const index of [0, 1]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `cursor-late-filler-${index}`,
+              title: `Late retained output ${index}`,
+              status: "completed",
+              rawOutput: `${index}:`.padEnd(600 * 1024, "z"),
+            },
+          },
+        });
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "cursor-subagent-1",
+            status: "completed",
+            rawOutput: { isBackground: false, status: "completed" },
           },
         },
       });

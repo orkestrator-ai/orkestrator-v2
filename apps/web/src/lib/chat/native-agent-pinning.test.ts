@@ -21,6 +21,49 @@ function assistantMessage(
 }
 
 describe("pinActiveNativeAgentParts", () => {
+  test.each([
+    ["active", true],
+    ["finished", false],
+  ] as const)(
+    "keeps an unparented sibling tool visible when the ACP Task is %s",
+    (agentState, shouldPinTask) => {
+      const normalized = normalizeOpenCodeNativeMessage(assistantMessage(
+        `assistant-${agentState}`,
+        [
+          {
+            type: "tool-invocation",
+            content: "Task: Validate the change",
+            toolName: "task",
+            toolUseId: "cursor-task-1",
+            toolState: "success",
+            agentState,
+          },
+          {
+            type: "tool-invocation",
+            content: "Parent edit",
+            toolName: "Edit",
+            toolUseId: "parent-edit-1",
+            toolState: "success",
+          },
+        ],
+      ));
+
+      const separated = separateActiveNativeAgentParts([normalized]);
+
+      expect(separated.activeAgents).toHaveLength(shouldPinTask ? 1 : 0);
+      expect(separated.messages).toHaveLength(1);
+      const visibleToolIds = separated.messages[0]!.parts.flatMap((part) =>
+        part.type === "tool-group"
+          ? part.parts.map((child) => child.toolUseId)
+          : part.type === "task-group"
+            ? [part.task.toolUseId]
+            : [],
+      );
+      expect(visibleToolIds).toContain("parent-edit-1");
+      expect(visibleToolIds.includes("cursor-task-1")).toBe(!shouldPinTask);
+    },
+  );
+
   test("separates active agents for a composer rail and retains surrounding transcript", () => {
     const activeTask = {
       type: "task-group" as const,

@@ -387,4 +387,3 @@ export function normalizeOpenCodeTerminalState(value: unknown): {
     message: boundedText(detail, "OpenCode session failed"),
   };
 }
-

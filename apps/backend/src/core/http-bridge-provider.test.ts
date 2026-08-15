@@ -574,4 +574,3 @@ describe("HTTP bridge provider", () => {
       .rejects.toBeInstanceOf(ProviderUnavailableError);
   });
 });
-

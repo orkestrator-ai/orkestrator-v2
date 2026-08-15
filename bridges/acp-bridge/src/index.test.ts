@@ -1024,6 +1024,38 @@ describe("ACP bridge", () => {
     expect(diff).not.toContain(" line 15");
   });
 
+  test("renders an edit with no changed lines as an empty hunk", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-noop-edit" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "NOOPEDIT: rewrite a file unchanged" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    const tool = session.messages[1]?.parts.find((part) => part.toolUseId === "noop-1");
+    const diff = tool?.toolDiff as Record<string, unknown> | undefined;
+    // Nothing changed, so there is no hunk to place: the headers and a bare
+    // `@@` say exactly that, where rendering every line said the opposite.
+    expect(diff?.diff).toBe("--- src/noop.ts\n+++ src/noop.ts\n@@");
+    expect(diff).toMatchObject({ filePath: "src/noop.ts", additions: 0, deletions: 0 });
+    expect(diff?.before).toBeUndefined();
+    expect(diff?.after).toBeUndefined();
+  });
+
   test("normalizes terminal and text tool content in protocol order", async () => {
     const { base, headers } = await spawnBridge();
     const created = await nativeFetch(`${base}/session/create`, {
@@ -1169,6 +1201,90 @@ describe("ACP bridge", () => {
     expect(session.messages[1]?.parts.slice(1).every((part) => part.type === "tool-invocation"))
       .toBe(true);
     expect(session.messages[1]?.parts.at(-1)).toMatchObject({ toolUseId: "many-512" });
+  });
+
+  test("does not rebuild a trimmed tool call from its own late update", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-trimmed-tool" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "TRIMMEDTOOLUPDATE: complete an evicted call" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    const parts = session.messages[1]?.parts ?? [];
+    expect(session.error).toBeUndefined();
+    expect(parts).toHaveLength(512);
+    expect(parts[0]).toMatchObject({
+      type: "text",
+      content: expect.stringContaining("Earlier steps in this response were dropped"),
+    });
+    // `early-1` was trimmed, and its completion arrived afterwards. Rebuilding
+    // it there would append an empty `Tool call` at the end of the turn, after
+    // the notice that says those steps went, with none of its title or output.
+    expect(parts.filter((part) => part.toolUseId === "early-1")).toEqual([]);
+    expect(parts.at(-1)).toMatchObject({ toolUseId: "filler-519" });
+    expect(parts.slice(1).every((part) => part.type === "tool-invocation")).toBe(true);
+  });
+
+  test("starts a new part when a chunk follows a message trimmed to its notice", async () => {
+    const { base, headers } = await spawnBridge({
+      // The floor is reached when two parts alone still exceed the budget, and
+      // at 8 MiB the per-part caps do not add up to that. Lowering the budget
+      // is the only way to exercise it; it can only ever move downwards.
+      env: { ACP_MAX_TRANSCRIPT_BYTES: String(1024 * 1024) },
+    });
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-trim-to-text" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "TRIMTOTEXT: empty the message, then speak" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ role: string; content: string; parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    // The lowered budget evicts whole messages before it trims parts, so the
+    // prompt itself is gone and the assistant message is all that is left.
+    const assistant = session.messages.at(-1)!;
+    expect(session.error).toBeUndefined();
+    expect(assistant.role).toBe("assistant");
+    // Both tool parts went, so the notice is the message's *only* part and
+    // therefore also its last. The chunk that follows must start its own part:
+    // streaming into the notice would rewrite the announcement as agent output
+    // and lose it.
+    expect(assistant.parts).toHaveLength(2);
+    expect(assistant.parts[0]).toMatchObject({
+      type: "text",
+      content: expect.stringContaining("Earlier steps in this response were dropped"),
+    });
+    expect(assistant.parts[1]).toMatchObject({ type: "text", content: "Recovered summary." });
+    expect(assistant.content).toBe("Recovered summary.");
   });
 
   test("bounds an aggregate interactive transcript and preserves its trim across restart", async () => {
@@ -2055,6 +2171,46 @@ describe("ACP bridge", () => {
     expect(textPart.content.endsWith("[output truncated by Orkestrator]")).toBe(true);
     expect(assistant.content).not.toContain("�");
     expect(textPart.content).not.toContain("�");
+  });
+
+  test("discards a chunk small enough to fit in what truncation left over", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "SATURATEDSTREAM: one chunk past the cap" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ content: string; parts: Array<{ type: string; content: string }> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    const assistant = session.messages[1]!;
+    const textPart = assistant.parts.find((part) => part.type === "text")!;
+    const marker = "[output truncated by Orkestrator]";
+    expect(session.error).toBeUndefined();
+    expect(Buffer.byteLength(assistant.content)).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(Buffer.byteLength(textPart.content)).toBeLessThanOrEqual(2 * 1024 * 1024);
+    // The cut is announced exactly once and the announcement stays terminal.
+    // Truncation leaves the buffer a byte under the cap, and a chunk small
+    // enough to fit in it must still be discarded: appending it would render
+    // as `…[output truncated by Orkestrator]!`, which reads as corruption
+    // rather than as a response that was cut short.
+    expect(assistant.content.split(marker)).toHaveLength(2);
+    expect(textPart.content.split(marker)).toHaveLength(2);
+    expect(assistant.content.endsWith(marker)).toBe(true);
+    expect(textPart.content.endsWith(marker)).toBe(true);
+    expect(assistant.content).not.toContain("!");
+    expect(textPart.content).not.toContain("!");
+    // The backed-off code point must not have decoded into a replacement char.
+    expect(assistant.content).not.toContain("�");
   });
 
   test("fails an oversized structured turn rather than parsing a cut answer", async () => {

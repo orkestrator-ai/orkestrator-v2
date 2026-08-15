@@ -630,6 +630,148 @@ lines.on("line", (line) => {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }
+    if (prompt.startsWith("TRIMTOTEXT")) {
+      // Two parts that together cross a lowered transcript budget, so the
+      // aggregate trim empties the message down to the notice alone — the one
+      // state in which the notice is also the *last* part. The text chunk that
+      // follows must start a new part rather than stream into the notice.
+      // Needs ACP_MAX_TRANSCRIPT_BYTES=1048576.
+      for (const index of [0, 1]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `bulk-${index}`,
+              // Widens each part beyond its output alone, so the pair clears
+              // the budget by kilobytes rather than by JSON punctuation.
+              title: `Bulk read ${index} `.padEnd(3 * 1024, "."),
+              kind: "read",
+              status: "completed",
+              rawOutput: `${index}:`.padEnd(600 * 1024, "x"),
+            },
+          },
+        });
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Recovered summary." },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("TRIMMEDTOOLUPDATE")) {
+      // A long-running early tool whose completion lands after the volume of
+      // the turn has already trimmed its part away.
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "early-1",
+            title: "Start the long build",
+            kind: "execute",
+            status: "pending",
+          },
+        },
+      });
+      for (let index = 0; index < 520; index += 1) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `filler-${index}`,
+              kind: "read",
+              status: "completed",
+            },
+          },
+        });
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "early-1",
+            status: "completed",
+            rawOutput: "build finished",
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("SATURATEDSTREAM")) {
+      // Fills the per-message cap, then sends one more chunk. Overflow no
+      // longer ends an interactive turn, so that chunk reaches a buffer which
+      // cannot grow and has to be discarded.
+      const maximumBytes = 2 * 1024 * 1024;
+      const markerBytes = Buffer.byteLength("\n[output truncated by Orkestrator]");
+      const contentLimit = maximumBytes - markerBytes;
+      // Truncating this at the content limit lands inside the emoji, so the
+      // bridge backs off a byte and the capped buffer settles one byte under
+      // the cap. That single free byte is what a plain "is there room?" test
+      // hands to the next chunk — placing it *after* the truncation marker.
+      // The one-byte chunk has to be last: any further chunk reclaims the
+      // prefix, rewrites the marker at the end, and hides the corruption.
+      const first = "s".repeat(contentLimit - 1) + "🙂" + "s".repeat(64);
+      for (const text of [first, "!"]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
+          },
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("NOOPEDIT")) {
+      // An edit tool that reports identical file states. There is no change to
+      // place in a hunk, so there is nothing to render.
+      const unchanged = Array.from({ length: 40 }, (_, index) => `const line_${index} = ${index};`)
+        .join("\n");
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "noop-1",
+            title: "Rewrite a file with the same contents",
+            kind: "edit",
+            status: "completed",
+            content: [{
+              type: "diff",
+              path: "src/noop.ts",
+              oldText: unchanged,
+              newText: unchanged,
+            }],
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
     if (prompt.startsWith("HANGTOOL")) {
       // Ends the turn with a tool still in flight. ACP has no cancelled tool
       // status, so this is what an interrupted or abandoned tool looks like.

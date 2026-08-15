@@ -221,6 +221,29 @@ const stateDirectory = process.env.ACP_STATE_DIR?.trim();
 const stateFile = stateDirectory ? resolve(stateDirectory, "state.json") : null;
 const sessions = new Map<string, SessionState>();
 const acpToolSourceStates = new WeakMap<BridgeToolPart, AcpToolSourceState>();
+/**
+ * Parts and messages whose text already sits at its byte cap, marker included.
+ *
+ * Overflow used to end the turn, so the cap was only ever reached once. An
+ * interactive turn now survives it, which means the agent keeps streaming into
+ * a buffer that can no longer grow — and `appendBounded` would re-encode and
+ * re-copy the whole 2MiB buffer for every remaining chunk, on the JSON-RPC read
+ * loop, only to hand back exactly what it was given. Saturation is recorded
+ * once and the append is skipped from then on.
+ *
+ * Weakly held, so a trimmed part or an evicted message takes its entry with it.
+ * A restart repopulates it from the first post-restore chunk.
+ */
+const saturatedText = new WeakSet<BridgeMessage | BridgeMessagePart>();
+/**
+ * Tool call ids whose parts a trim removed, per message.
+ *
+ * `applyToolCallUpdate` only searches the message's live parts, so a late update
+ * for a trimmed call would otherwise rebuild it from that one patch: an empty
+ * `Tool call` part, appended *after* the notice that says those steps were
+ * dropped, with none of the title or arguments the original carried.
+ */
+const trimmedToolCalls = new WeakMap<BridgeMessage, Set<string>>();
 const clientSessionKeys = new Map<string, string>();
 const sessionCreations = new Map<string, Promise<SessionState>>();
 let anonymousSessionCreations = 0;
@@ -244,7 +267,18 @@ interface AcpSpawnOptions {
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_LINE_BYTES = 4 * 1024 * 1024;
 const MAX_MESSAGES = 500;
-const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
+/**
+ * The rendered-transcript display budget. Overridable only *downwards*, and
+ * only inside a bounded range, so a test can reach the aggregate-trim floor
+ * without pushing eight megabytes through a fixture. Nothing can raise it past
+ * the reviewed cap.
+ */
+const MAX_TRANSCRIPT_BYTES = parseBoundedInteger(
+  process.env.ACP_MAX_TRANSCRIPT_BYTES,
+  8 * 1024 * 1024,
+  1024 * 1024,
+  8 * 1024 * 1024,
+);
 const MAX_MESSAGE_TEXT_BYTES = 2 * 1024 * 1024;
 const MAX_PARTS_PER_MESSAGE = 512;
 const MAX_TOOL_ARGUMENT_BYTES = 512 * 1024;
@@ -837,17 +871,24 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     }
     trimPartsTo(message, MAX_PARTS_PER_MESSAGE - 1);
   }
-  const currentPartText = previous?.type === partType ? previous.content : "";
-  const nextPartText = appendBounded(currentPartText, text, MAX_MESSAGE_TEXT_BYTES);
-  if (previous?.type === partType) previous.content = nextPartText.value;
-  else message.parts.push({
-    type: partType,
-    content: nextPartText.value,
-    sourcePartId: `${message.id}:${message.parts.length}`,
-    sourceMessageId: message.id,
-  });
+  const streaming = previous?.type === partType ? previous : undefined;
+  const currentPartText = streaming?.content ?? "";
+  const nextPartText = appendSaturating(streaming, currentPartText, text, MAX_MESSAGE_TEXT_BYTES);
+  if (streaming) streaming.content = nextPartText.value;
+  else {
+    const created: BridgeTextPart = {
+      type: partType,
+      content: nextPartText.value,
+      sourcePartId: `${message.id}:${message.parts.length}`,
+      sourceMessageId: message.id,
+    };
+    message.parts.push(created);
+    // A single chunk can exceed the cap on its own, so the freshly pushed part
+    // can already be saturated.
+    if (nextPartText.truncated) saturatedText.add(created);
+  }
   const nextContent = partType === "text"
-    ? appendBounded(message.content, text, MAX_MESSAGE_TEXT_BYTES)
+    ? appendSaturating(message, message.content, text, MAX_MESSAGE_TEXT_BYTES)
     : { value: message.content, truncated: false };
   message.content = nextContent.value;
   if (partType === "text" && state.currentTurnOutput !== null) {
@@ -893,6 +934,15 @@ function applyToolCallUpdate(
 
   if (!part) {
     owner = currentAssistantMessage(state);
+    const trimmed = trimmedToolCalls.get(owner);
+    if (trimmed?.has(toolCallId)) {
+      // This call's part was dropped on purpose. Rebuilding it from one late
+      // update would append an empty `Tool call` *after* the notice saying
+      // those steps went, with none of the title, arguments or output the
+      // original carried. A genuinely new call reusing the id still starts.
+      if (!isInitial) return;
+      trimmed.delete(toolCallId);
+    }
     if (owner.parts.length >= MAX_PARTS_PER_MESSAGE) {
       if (turnRequiresCompleteOutput(state)) {
         failTranscriptLimit(state);
@@ -1098,13 +1148,31 @@ function isTrimNotice(
 function trimPartsTo(message: BridgeMessage, targetLength: number): void {
   if (isTrimNotice(message, message.parts[0])) message.parts.shift();
   const keep = Math.max(0, targetLength - 1);
-  message.parts.splice(0, Math.max(1, message.parts.length - keep));
+  rememberTrimmedToolCalls(message, message.parts.splice(0, Math.max(1, message.parts.length - keep)));
   message.parts.unshift({
     type: "text",
     content: TRANSCRIPT_TRIM_NOTICE,
     sourcePartId: trimNoticePartId(message),
     sourceMessageId: message.id,
   });
+}
+
+/**
+ * Record the tool calls a trim just removed, so a late update cannot rebuild
+ * one as an empty part. Bounded by the number of parts a message may hold in
+ * the first place, oldest evicted first: a turn can trim an unlimited number of
+ * calls, and this must not become the unbounded thing that replaces them.
+ */
+function rememberTrimmedToolCalls(message: BridgeMessage, dropped: BridgeMessagePart[]): void {
+  const ids = trimmedToolCalls.get(message) ?? new Set<string>();
+  for (const part of dropped) {
+    if (part.type === "tool-invocation") ids.add(part.toolUseId);
+  }
+  for (const id of ids) {
+    if (ids.size <= MAX_PARTS_PER_MESSAGE) break;
+    ids.delete(id);
+  }
+  trimmedToolCalls.set(message, ids);
 }
 
 function boundedString(value: unknown, maximumBytes: number): string | undefined {
@@ -1475,6 +1543,34 @@ function contentText(value: unknown): string {
   if (typeof value === "string") return value;
   if (!isObject(value)) return "";
   return typeof value.text === "string" ? value.text : "";
+}
+
+/**
+ * `appendBounded`, memoised on the object that owns `current`.
+ *
+ * Once a target is saturated the answer can only ever be `current` unchanged,
+ * so returning it directly keeps a stream that overruns its cap O(1) per chunk
+ * instead of re-encoding and re-copying the capped buffer on the read loop for
+ * the rest of the turn.
+ *
+ * Truncation can leave a saturated buffer a few bytes short of the cap, where
+ * the two UTF-8 backoffs landed. Dropping a chunk that would fit in those bytes
+ * is deliberate: it would be appended *after* the marker, and a response that
+ * reads `…[output truncated by Orkestrator]y` looks corrupted rather than cut.
+ *
+ * `target` is absent when the caller is about to create the part that will own
+ * the result; it records the saturation itself in that case.
+ */
+function appendSaturating(
+  target: BridgeMessage | BridgeMessagePart | undefined,
+  current: string,
+  addition: string,
+  maximumBytes: number,
+): { value: string; truncated: boolean } {
+  if (target && saturatedText.has(target)) return { value: current, truncated: true };
+  const next = appendBounded(current, addition, maximumBytes);
+  if (next.truncated && target) saturatedText.add(target);
+  return next;
 }
 
 function appendBounded(current: string, addition: string, maximumBytes: number): {

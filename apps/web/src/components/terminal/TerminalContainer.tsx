@@ -935,6 +935,11 @@ export function TerminalContainer({
         return;
       }
       if (pendingNativeLaunch) return;
+      // Only an unconsumed backend intent may be projected optimistically. Once
+      // the backend has consumed it the durable pane is authoritative, so a
+      // missing startup tab means the user closed it — re-creating it here
+      // would resurrect it on every render and permanently defeat the close.
+      if (!environment.pendingAgentLaunch) return;
       const agentType = startupSession?.agent
         ?? environment.defaultAgent
         ?? config.global.defaultAgent

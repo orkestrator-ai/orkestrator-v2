@@ -4538,13 +4538,20 @@ export class StorageService {
    * converged. That keeps a renderer which was unmounted during setup from
    * being the only process capable of creating the tab. `existingOnly` is used
    * at startup to repair the historical Cursor/Grok bug without resurrecting a
-   * tab the user deliberately closed.
+   * tab the user deliberately closed, and `upgradeOnly` keeps that repair off a
+   * tab that already holds the native identity.
+   *
+   * The existing tab is merged into, never replaced: it carries user state this
+   * method does not own (`displayTitle`, `agentHandoffId`, the one-shot
+   * `initial*` selections) plus `nativeAgentData.hostPort`, and a wholesale
+   * rewrite silently discarded all of it on every backend start.
    */
   async ensureStartupNativeAgentTab(input: {
     environmentId: string;
     agent: BuildPipelineAgent;
     providerSessionId?: string;
     existingOnly?: boolean;
+    upgradeOnly?: boolean;
   }): Promise<PersistedPaneLayout | null> {
     return this.enqueuePaneLayoutMutation(async () => {
       const environment = await this.getEnvironment(input.environmentId);
@@ -4593,22 +4600,50 @@ export class StorageService {
         ?? leaves.find((leaf) => leaf.id === previous?.activePaneId)
         ?? leaves[0]!;
       const existingIndex = target.tabs.findIndex((tab) => tab.id === "startup-agent");
-      const nativeAgentData = {
+      const existingTab = existingIndex >= 0 ? target.tabs[existingIndex]! : undefined;
+      if (input.upgradeOnly && existingTab?.type === "agent-native") return previous ?? null;
+
+      const previousNativeAgentData =
+        existingTab?.nativeAgentData
+        && typeof existingTab.nativeAgentData === "object"
+        && !Array.isArray(existingTab.nativeAgentData)
+          ? existingTab.nativeAgentData as Record<string, unknown>
+          : undefined;
+      const nativeAgentData: Record<string, unknown> = {
+        ...previousNativeAgentData,
         platform: input.agent,
         environmentId: input.environmentId,
-        ...(environment.environmentType === "local"
-          ? { isLocal: true }
-          : {
-              isLocal: false,
-              ...(environment.containerId ? { containerId: environment.containerId } : {}),
-            }),
-        ...(input.providerSessionId ? { sessionId: input.providerSessionId } : {}),
       };
-      const tab = {
+      if (environment.environmentType === "local") {
+        nativeAgentData.isLocal = true;
+        // A worktree environment has no container, so a stale id carried over
+        // from a previous Docker incarnation must not survive the merge.
+        delete nativeAgentData.containerId;
+      } else {
+        nativeAgentData.isLocal = false;
+        if (environment.containerId) nativeAgentData.containerId = environment.containerId;
+        else delete nativeAgentData.containerId;
+      }
+      if (input.providerSessionId) nativeAgentData.sessionId = input.providerSessionId;
+
+      const tab: Record<string, unknown> = {
+        ...existingTab,
         id: "startup-agent",
         type: "agent-native",
         nativeAgentData,
       };
+      // The tab is definitively a native agent surface now, so payloads that
+      // belong to the other tab kinds cannot apply. Everything else the tab
+      // carried is user state and is preserved by the spread above.
+      for (const foreign of [
+        "fileData",
+        "claudeTmuxData",
+        "buildTabData",
+        "loopedReviewTabData",
+        "multiReviewTabData",
+        "browserData",
+        "initialCommands",
+      ]) delete tab[foreign];
       if (existingIndex >= 0) target.tabs[existingIndex] = tab;
       else {
         target.tabs.push(tab);

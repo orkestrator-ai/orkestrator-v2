@@ -672,7 +672,10 @@ export class NativeAgentService {
   /**
    * Upgrade only a still-present canonical startup tab from the historical
    * provider-specific terminal record to the native pane identity. Missing
-   * tabs are left missing because their absence may be an intentional close.
+   * tabs are left missing because their absence may be an intentional close,
+   * and a tab that already holds the native identity is left completely alone:
+   * this runs on every backend start, so touching a healthy tab would be a
+   * recurring rewrite of state this repair does not own.
    */
   private async repairPersistedStartupTabs(): Promise<void> {
     const sessions = (await this.storage.listNativeAgentSessions())
@@ -691,6 +694,7 @@ export class NativeAgentService {
         agent: session.agent,
         providerSessionId: session.providerSessionId,
         existingOnly: true,
+        upgradeOnly: true,
       }).catch(() => undefined);
     }
   }
@@ -3799,35 +3803,41 @@ export class NativeAgentService {
       ?? repository.defaultEffort
       ?? (agent === "codex" ? config.global.codexReasoningEffort : undefined);
 
-    // Publish both startup surfaces as soon as backend intent exists, including
-    // while setup is still running. Provider creation remains gated below, but
-    // the durable pane can already rehydrate in an inactive renderer.
-    await this.storage.ensureStartupNativeAgentTab({
-      environmentId: environment.id,
-      agent,
-    });
-    const startupSession = environment.startupAgentSession;
-    if (
-      !startupSession
-      || startupSession.agent !== agent
-      || startupSession.style !== "native"
-      || startupSession.status !== "starting"
-    ) {
-      await this.storage.updateEnvironment(environment.id, {
-        startupAgentSession: {
-          tabId: "startup-agent",
-          agent,
-          style: "native",
-          model,
-          reasoningEffort,
-          status: "starting",
-        },
-      });
-    }
-
-    if (!isEnvironmentReadyForAgents(environment)) return;
-
+    // Publishing runs inside the same failure handling as the launch itself. A
+    // throw here (an unwritable layout file, a root over the size bound) would
+    // otherwise escape before the catch below records the durable error and
+    // arms `launchRetryAt`, leaving the two-second sweep retrying forever with
+    // no backoff and nothing for the renderer to surface.
     try {
+      // Publish both startup surfaces as soon as backend intent exists,
+      // including while setup is still running. Provider creation remains gated
+      // below, but the durable pane can already rehydrate in an inactive
+      // renderer.
+      await this.storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent,
+      });
+      const startupSession = environment.startupAgentSession;
+      if (
+        !startupSession
+        || startupSession.agent !== agent
+        || startupSession.style !== "native"
+        || startupSession.status !== "starting"
+      ) {
+        await this.storage.updateEnvironment(environment.id, {
+          startupAgentSession: {
+            tabId: "startup-agent",
+            agent,
+            style: "native",
+            model,
+            reasoningEffort,
+            status: "starting",
+          },
+        });
+      }
+
+      if (!isEnvironmentReadyForAgents(environment)) return;
+
       const prompt = environment.initialPrompt?.trim();
       // Passed as base64 rather than staged here: the provider stages inside the
       // durable dispatch lock, so only the supervisor that actually wins the
@@ -3860,7 +3870,7 @@ export class NativeAgentService {
       // needs a durable pane projection even if every renderer was inactive
       // throughout setup. Publish it before consuming the launch intent so a
       // crash at either boundary is safely retried and converges by stable id.
-      await this.storage.ensureStartupNativeAgentTab({
+      const publishedLayout = await this.storage.ensureStartupNativeAgentTab({
         environmentId: environment.id,
         agent,
         providerSessionId: session.providerSessionId,
@@ -3871,16 +3881,23 @@ export class NativeAgentService {
         initialAgentModel: undefined,
         initialReasoningEffort: undefined,
         initialPromptAttachments: undefined,
-        startupAgentSession: {
-          tabId: "startup-agent",
-          agent,
-          style: "native",
-          model,
-          reasoningEffort,
-          providerSessionId: session.providerSessionId,
-          status: "running",
-          startedAt: new Date().toISOString(),
-        },
+        // Once the durable pane carries the provider session id, the snapshot
+        // has no remaining reader and must reach a terminal state. Leaving it
+        // set is not inert: every renderer keeps polling this environment for
+        // the life of the app, and the launch effect keeps re-projecting a
+        // startup tab the user has since closed.
+        startupAgentSession: publishedLayout
+          ? undefined
+          : {
+              tabId: "startup-agent",
+              agent,
+              style: "native",
+              model,
+              reasoningEffort,
+              providerSessionId: session.providerSessionId,
+              status: "running",
+              startedAt: new Date().toISOString(),
+            },
       });
       this.launchRetryAt.delete(environment.id);
     } catch (error) {

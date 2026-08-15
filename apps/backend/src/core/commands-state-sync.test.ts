@@ -1537,6 +1537,80 @@ describe("setup session wait command", () => {
   });
 });
 
+type Invoke = (command: string, args: Record<string, unknown>) => Promise<unknown>;
+
+/**
+ * The orphan sweep only trusts persisted panes, so publish the layout through
+ * the same command a renderer would use and hand back the new revision.
+ */
+async function savePaneTabs(
+  invoke: Invoke,
+  tabs: ReadonlyArray<{ id: string; type: string }>,
+  expectedRevision = 0,
+): Promise<number> {
+  const saved = await invoke("save_pane_layout", {
+    environmentId: "e1",
+    layout: {
+      version: 3,
+      containerId: null,
+      activePaneId: "pane-1",
+      root: {
+        kind: "leaf",
+        id: "pane-1",
+        tabs: [...tabs],
+        activeTabId: tabs[0]?.id ?? null,
+      },
+    },
+    expectedRevision,
+  }) as { revision: number };
+  return saved.revision;
+}
+
+async function adoptInteractiveNativeSession(
+  storage: StorageService,
+  tabId: string,
+  agent: "claude" | "codex" | "opencode" = "codex",
+): Promise<string> {
+  const logicalSessionKey = `env-e1:${tabId}`;
+  const key = nativeAgentSessionStorageKey("e1", agent, logicalSessionKey);
+  await storage.adoptNativeAgentSession({
+    key,
+    environmentId: "e1",
+    agent,
+    logicalSessionKey,
+    providerSessionId: `provider-${tabId}`,
+    origin: "interactive-native",
+    interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+  });
+  return key;
+}
+
+/**
+ * The orphan grace is an hour of wall clock measured from a durable timestamp,
+ * so move the clock rather than the record under test.
+ */
+async function pastOrphanGrace<T>(run: () => Promise<T>): Promise<T> {
+  const advanced = Date.now() + 61 * 60 * 1_000;
+  const now = spyOn(Date, "now").mockImplementation(() => advanced);
+  try {
+    return await run();
+  } finally {
+    now.mockRestore();
+  }
+}
+
+function hoursAgoIso(hours: number): string {
+  return new Date(Date.now() - hours * 60 * 60 * 1_000).toISOString();
+}
+
+const RUNNING_STARTUP_AGENT_SESSION = {
+  tabId: "startup-agent",
+  agent: "claude",
+  style: "native",
+  status: "running",
+  providerSessionId: "startup-provider",
+} as const;
+
 describe("durable tab teardown commands", () => {
   test("disconnects persistent terminal sessions and clears direct and replayed intents", async () => {
     await withCommands(async (invoke, storage) => {
@@ -1572,6 +1646,208 @@ describe("durable tab teardown commands", () => {
         tmuxSessions: 0,
         skipped: true,
       });
+    });
+  });
+
+  test("keeps a native session whose agent-native tab still exists in the layout", async () => {
+    const deleteRequest = mock(async () => new Response(null, { status: 204 }));
+    await withCommands(async (invoke, storage, _dataDir, commands) => {
+      commands.set("claude_tmux_reconcile_orphans", async () => ({ reaped: 0 }));
+      const key = await adoptInteractiveNativeSession(storage, "tab-native");
+      await savePaneTabs(invoke, [{ id: "tab-native", type: "agent-native" }]);
+
+      await expect(pastOrphanGrace(
+        () => invoke("reconcile_orphaned_tab_resources", {}),
+      )).resolves.toEqual({ terminals: 0, nativeSessions: 0, tmuxSessions: 0 });
+      expect(await storage.getNativeAgentSession(key)).not.toBeNull();
+      expect(deleteRequest).not.toHaveBeenCalled();
+    }, {
+      tabTeardown: {
+        peekBridge: async () => ({ port: 4000, authToken: "test-token" }),
+        fetch: deleteRequest as unknown as typeof fetch,
+      },
+    });
+  });
+
+  test("reaps an unreferenced native session only once the orphan grace elapses", async () => {
+    const deleteRequest = mock(async () => new Response(null, { status: 204 }));
+    await withCommands(async (invoke, storage, _dataDir, commands) => {
+      commands.set("claude_tmux_reconcile_orphans", async () => ({ reaped: 0 }));
+      const key = await adoptInteractiveNativeSession(storage, "tab-native");
+      await savePaneTabs(invoke, [{ id: "surviving-tab", type: "agent-native" }]);
+
+      await expect(invoke("reconcile_orphaned_tab_resources", {}))
+        .resolves.toEqual({ terminals: 0, nativeSessions: 0, tmuxSessions: 0 });
+      expect(await storage.getNativeAgentSession(key)).not.toBeNull();
+      expect(deleteRequest).not.toHaveBeenCalled();
+
+      await expect(pastOrphanGrace(
+        () => invoke("reconcile_orphaned_tab_resources", {}),
+      )).resolves.toEqual({ terminals: 0, nativeSessions: 1, tmuxSessions: 0 });
+      expect(deleteRequest).toHaveBeenCalledTimes(1);
+      expect(await storage.getNativeAgentSession(key)).toBeNull();
+      expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+    }, {
+      tabTeardown: {
+        peekBridge: async () => ({ port: 4000, authToken: "test-token" }),
+        fetch: deleteRequest as unknown as typeof fetch,
+      },
+    });
+  });
+
+  test("keeps stable terminals whose terminal-typed tabs still exist in the layout", async () => {
+    await withCommands(async (invoke, _storage, _dataDir, commands) => {
+      commands.set("claude_tmux_reconcile_orphans", async () => ({ reaped: 0 }));
+      const tabs = [
+        { id: "tab-plain", type: "plain" },
+        { id: "tab-cursor", type: "cursor" },
+        { id: "tab-grok", type: "grok" },
+      ];
+      const sessionIds: Record<string, string> = {};
+      for (const tab of tabs) {
+        const created = await invoke("create_local_terminal_session", {
+          environmentId: "e1",
+          terminalKey: tab.id,
+          cols: 80,
+          rows: 24,
+          trackEnvironmentActivity: false,
+        }) as { sessionId: string };
+        sessionIds[tab.id] = created.sessionId;
+      }
+      await savePaneTabs(invoke, tabs);
+
+      // The first sweep can only ever arm the grace, so prove both passes keep
+      // every referenced terminal rather than only the arming one.
+      await expect(invoke("reconcile_orphaned_tab_resources", {}))
+        .resolves.toEqual({ terminals: 0, nativeSessions: 0, tmuxSessions: 0 });
+      await expect(pastOrphanGrace(
+        () => invoke("reconcile_orphaned_tab_resources", {}),
+      )).resolves.toEqual({ terminals: 0, nativeSessions: 0, tmuxSessions: 0 });
+
+      for (const tab of tabs) {
+        expect(await invoke("create_local_terminal_session", {
+          environmentId: "e1",
+          terminalKey: tab.id,
+          cols: 80,
+          rows: 24,
+          trackEnvironmentActivity: false,
+        })).toEqual({
+          sessionId: sessionIds[tab.id],
+          created: false,
+          bootstrapped: false,
+        });
+        await invoke("close_local_terminal_session", { sessionId: sessionIds[tab.id] });
+      }
+    });
+  });
+
+  test("never lets one tab type protect the other type's orphaned resource", async () => {
+    const deleteRequest = mock(async () => new Response(null, { status: 204 }));
+    await withCommands(async (invoke, storage, _dataDir, commands) => {
+      commands.set("claude_tmux_reconcile_orphans", async () => ({ reaped: 0 }));
+      const terminal = await invoke("create_local_terminal_session", {
+        environmentId: "e1",
+        terminalKey: "shared-terminal",
+        cols: 80,
+        rows: 24,
+        trackEnvironmentActivity: false,
+      }) as { sessionId: string };
+      const nativeKey = await adoptInteractiveNativeSession(storage, "shared-native");
+      // Each live resource is named by a tab of the *other* type, which is the
+      // exact confusion a single referenced-tab set would have papered over.
+      await savePaneTabs(invoke, [
+        { id: "shared-terminal", type: "agent-native" },
+        { id: "shared-native", type: "plain" },
+      ]);
+
+      await expect(invoke("reconcile_orphaned_tab_resources", {}))
+        .resolves.toEqual({ terminals: 0, nativeSessions: 0, tmuxSessions: 0 });
+      await expect(pastOrphanGrace(
+        () => invoke("reconcile_orphaned_tab_resources", {}),
+      )).resolves.toEqual({ terminals: 1, nativeSessions: 1, tmuxSessions: 0 });
+
+      expect(await storage.getNativeAgentSession(nativeKey)).toBeNull();
+      const replacement = await invoke("create_local_terminal_session", {
+        environmentId: "e1",
+        terminalKey: "shared-terminal",
+        cols: 80,
+        rows: 24,
+        trackEnvironmentActivity: false,
+      }) as { sessionId: string; created: boolean };
+      expect(replacement.created).toBe(true);
+      expect(replacement.sessionId).not.toBe(terminal.sessionId);
+      await invoke("close_local_terminal_session", { sessionId: replacement.sessionId });
+    }, {
+      tabTeardown: {
+        peekBridge: async () => ({ port: 4000, authToken: "test-token" }),
+        fetch: deleteRequest as unknown as typeof fetch,
+      },
+    });
+  });
+
+  test("keeps a running startup agent session while its agent-native tab is persisted", async () => {
+    await withCommands(async (invoke, storage, _dataDir, commands) => {
+      commands.set("claude_tmux_reconcile_orphans", async () => ({ reaped: 0 }));
+      await storage.updateEnvironment("e1", {
+        startupAgentSession: {
+          ...RUNNING_STARTUP_AGENT_SESSION,
+          startedAt: hoursAgoIso(2),
+        },
+      });
+      await savePaneTabs(invoke, [{ id: "startup-agent", type: "agent-native" }]);
+
+      await expect(invoke("reconcile_orphaned_tab_resources", {}))
+        .resolves.toEqual({ terminals: 0, nativeSessions: 0, tmuxSessions: 0 });
+      expect((await storage.getEnvironment("e1"))?.startupAgentSession)
+        .toMatchObject({ status: "running", providerSessionId: "startup-provider" });
+    });
+  });
+
+  test("retires a running startup agent session whose agent-native tab is gone", async () => {
+    await withCommands(async (invoke, storage, _dataDir, commands) => {
+      commands.set("claude_tmux_reconcile_orphans", async () => ({ reaped: 0 }));
+      await storage.updateEnvironment("e1", {
+        startupAgentSession: {
+          ...RUNNING_STARTUP_AGENT_SESSION,
+          startedAt: new Date().toISOString(),
+        },
+      });
+      let revision = await savePaneTabs(invoke, [
+        { id: "other-tab", type: "agent-native" },
+      ]);
+
+      await expect(invoke("reconcile_orphaned_tab_resources", {}))
+        .resolves.toEqual({ terminals: 0, nativeSessions: 0, tmuxSessions: 0 });
+      expect((await storage.getEnvironment("e1"))?.startupAgentSession)
+        .toMatchObject({ status: "running" });
+
+      await storage.updateEnvironment("e1", {
+        startupAgentSession: {
+          ...RUNNING_STARTUP_AGENT_SESSION,
+          startedAt: hoursAgoIso(2),
+        },
+      });
+      await expect(invoke("reconcile_orphaned_tab_resources", {}))
+        .resolves.toEqual({ terminals: 0, nativeSessions: 1, tmuxSessions: 0 });
+      expect((await storage.getEnvironment("e1"))?.startupAgentSession).toBeUndefined();
+      expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+
+      // A terminal-typed tab of the same id is not the startup agent's pane.
+      await storage.updateEnvironment("e1", {
+        startupAgentSession: {
+          ...RUNNING_STARTUP_AGENT_SESSION,
+          startedAt: hoursAgoIso(2),
+        },
+      });
+      revision = await savePaneTabs(
+        invoke,
+        [{ id: "startup-agent", type: "plain" }],
+        revision,
+      );
+      expect(revision).toBe(2);
+      await expect(invoke("reconcile_orphaned_tab_resources", {}))
+        .resolves.toEqual({ terminals: 0, nativeSessions: 1, tmuxSessions: 0 });
+      expect((await storage.getEnvironment("e1"))?.startupAgentSession).toBeUndefined();
     });
   });
 

@@ -3881,6 +3881,90 @@ describe("TerminalContainer", () => {
     expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
   });
 
+  test("does not resurrect a startup tab the user closed after the launch converged", async () => {
+    // The state a converged backend launch leaves behind: the intent is
+    // consumed, and the user has since closed the startup tab. Re-projecting it
+    // here would recreate it on every render and make the close impossible.
+    setupDurableLaunchEnvironment({
+      defaultAgent: "codex",
+      codexMode: "native",
+      pendingAgentLaunch: false,
+      startupAgentSession: {
+        tabId: "startup-agent",
+        agent: "codex",
+        style: "native",
+        providerSessionId: "provider-session",
+        status: "running",
+        startedAt: "2026-07-29T12:00:00.000Z",
+      },
+    });
+
+    renderHiddenTerminal();
+    await act(async () => { await Promise.resolve(); });
+    // A rerender must not find a second chance to re-project it either.
+    await act(async () => {
+      useEnvironmentStore.getState().updateEnvironment("env-hidden", { branch: "rerender" });
+      await Promise.resolve();
+    });
+
+    expect(
+      useClaudeOptionsStore.getState().pendingNativeLaunches["env-hidden"],
+    ).toBeUndefined();
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-hidden")
+        .find((tab) => tab.id === "startup-agent"),
+    ).toBeUndefined();
+  });
+
+  test("still binds the backend session to a startup tab that is still open", async () => {
+    // The converged-launch guard must not cost the binding that a renderer
+    // which was inactive during the launch still depends on.
+    setupDurableLaunchEnvironment({
+      defaultAgent: "codex",
+      codexMode: "native",
+      pendingAgentLaunch: false,
+      startupAgentSession: {
+        tabId: "startup-agent",
+        agent: "codex",
+        style: "native",
+        providerSessionId: "provider-session",
+        status: "running",
+        startedAt: "2026-07-29T12:00:00.000Z",
+      },
+    });
+    usePaneLayoutStore.setState((state) => ({
+      environments: new Map(state.environments).set("env-hidden", {
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [
+            { id: "default", type: "plain", isSetupTab: true },
+            {
+              id: "startup-agent",
+              type: "agent-native",
+              nativeAgentData: {
+                platform: "codex",
+                environmentId: "env-hidden",
+                containerId: "container-hidden",
+              },
+            },
+          ],
+          activeTabId: "startup-agent",
+        },
+        activePaneId: "default",
+        containerId: "container-hidden",
+      }),
+    }));
+
+    renderHiddenTerminal();
+
+    await waitFor(() => {
+      const startupTab = usePaneLayoutStore.getState().getAllTabs("env-hidden")
+        .find((tab) => tab.id === "startup-agent");
+      expect(startupTab?.nativeAgentData?.sessionId).toBe("provider-session");
+    });
+  });
+
   test("does not reconstruct a durable launch while the environment is not running", async () => {
     setupDurableLaunchEnvironment({ defaultAgent: "codex", codexMode: "native" });
 

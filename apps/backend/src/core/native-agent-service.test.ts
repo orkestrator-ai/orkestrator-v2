@@ -707,6 +707,79 @@ describe("NativeAgentService", () => {
     });
   });
 
+  test("surfaces a Cursor session startup that stays unavailable for every attempt", async () => {
+    const delays: number[] = [];
+    const stub = createProviderStub("cursor", {
+      createSession: async () => {
+        throw new ProviderUnavailableError("Cursor never came up");
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-cursor-create-exhausted-",
+      provider: async () => stub.provider,
+      delay: async (milliseconds) => { delays.push(milliseconds); },
+    }, async ({ service }) => {
+      // The retry is bounded: a bridge that never starts must surface as an
+      // error rather than retrying inside one request forever.
+      await expect(service.ensureSession({
+        environmentId: "env-1",
+        agent: "cursor",
+        logicalSessionKey: "env-env-1:cursor-tab",
+      })).rejects.toThrow(ProviderUnavailableError);
+
+      expect(stub.createSession).toHaveBeenCalledTimes(4);
+      expect(delays).toEqual([250, 500, 1_000]);
+    });
+  });
+
+  test("does not retry a Cursor session startup the provider actually rejected", async () => {
+    const delays: number[] = [];
+    const stub = createProviderStub("cursor", {
+      createSession: async () => {
+        throw new Error("cursor refused this workspace");
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-cursor-create-fatal-",
+      provider: async () => stub.provider,
+      delay: async (milliseconds) => { delays.push(milliseconds); },
+    }, async ({ service }) => {
+      // Only "not up yet" is transient. Retrying a real rejection would hide
+      // the provider's verdict behind three pointless attempts.
+      await expect(service.ensureSession({
+        environmentId: "env-1",
+        agent: "cursor",
+        logicalSessionKey: "env-env-1:cursor-tab",
+      })).rejects.toThrow("cursor refused this workspace");
+
+      expect(stub.createSession).toHaveBeenCalledTimes(1);
+      expect(delays).toEqual([]);
+    });
+  });
+
+  test("does not retry a transient failure for a non-ACP agent", async () => {
+    const delays: number[] = [];
+    const stub = createProviderStub("codex", {
+      createSession: async () => {
+        throw new ProviderUnavailableError("codex bridge is down");
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-codex-create-no-retry-",
+      provider: async () => stub.provider,
+      delay: async (milliseconds) => { delays.push(milliseconds); },
+    }, async ({ service }) => {
+      await expect(service.ensureSession({
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "env-env-1:codex-tab",
+      })).rejects.toThrow(ProviderUnavailableError);
+
+      expect(stub.createSession).toHaveBeenCalledTimes(1);
+      expect(delays).toEqual([]);
+    });
+  });
+
   test("renders provider terminal states as uniform durable transcript rows", async () => {
     const stub = createProviderStub("opencode", {
       interactiveSnapshot: async () => ({
@@ -5836,15 +5909,20 @@ describe("NativeAgentService", () => {
           images: [{ filename: "reference.png", data: "cG5n" }],
         }),
       );
-      expect(await firstStorage.getEnvironment("env-1")).toMatchObject({
-        pendingAgentLaunch: false,
-        startupAgentSession: {
-          tabId: "startup-agent",
-          model: "gpt-startup",
-          reasoningEffort: "high",
-          providerSessionId: "provider-session",
-          status: "running",
-        },
+      const converged = await firstStorage.getEnvironment("env-1");
+      expect(converged).toMatchObject({ pendingAgentLaunch: false });
+      // The durable pane is what the launch converged on, so the transient
+      // snapshot has reached its terminal state rather than lingering forever.
+      expect(converged?.startupAgentSession).toBeUndefined();
+      expect((await firstStorage.getPaneLayout("env-1"))?.root).toMatchObject({
+        tabs: [
+          { id: "default" },
+          {
+            id: "startup-agent",
+            type: "agent-native",
+            nativeAgentData: { platform: "codex", sessionId: "provider-session" },
+          },
+        ],
       });
     } finally {
       await Promise.all([first.shutdown(), second.shutdown()]);
@@ -6962,14 +7040,11 @@ describe("NativeAgentService", () => {
       }, async ({ storage, service }) => {
         await service.reconcileInitialLaunch("env-1");
 
-        expect(await storage.getEnvironment("env-1")).toMatchObject({
-          pendingAgentLaunch: false,
-          startupAgentSession: {
-            agent: "cursor",
-            providerSessionId: "provider-session",
-            status: "running",
-          },
-        });
+        const converged = await storage.getEnvironment("env-1");
+        expect(converged).toMatchObject({ pendingAgentLaunch: false });
+        // Both halves of the launch are durable now, so the transient snapshot
+        // is cleared rather than left running for the life of the environment.
+        expect(converged?.startupAgentSession).toBeUndefined();
         expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
           activeTabId: "startup-agent",
           tabs: [
@@ -6984,6 +7059,50 @@ describe("NativeAgentService", () => {
             },
           ],
         });
+      });
+    });
+
+    test("records a durable error and backs off when publishing the startup pane fails", async () => {
+      const { provider, createSession } = createProviderStub("codex");
+      await withService({
+        prefix: "orkestrator-native-startup-publish-failure-",
+        environment: {
+          pendingAgentLaunch: true,
+          defaultAgent: "codex",
+          codexMode: "native",
+        },
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        const publish = storage.ensureStartupNativeAgentTab.bind(storage);
+        let failures = 0;
+        storage.ensureStartupNativeAgentTab = async (input) => {
+          if (failures === 0) {
+            failures += 1;
+            throw new Error("pane layout is unwritable");
+          }
+          return publish(input);
+        };
+
+        // The publish happens before the provider call, so its failure has to
+        // travel the same path as a launch failure: no provider session, a
+        // durable error for the renderer to surface, and an armed retry window.
+        await expect(service.reconcileInitialLaunch("env-1")).rejects.toThrow(
+          "pane layout is unwritable",
+        );
+        expect(createSession).not.toHaveBeenCalled();
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          pendingAgentLaunch: true,
+          startupAgentSession: {
+            agent: "codex",
+            status: "error",
+            error: "Agent launch failed; the backend will retry.",
+          },
+        });
+
+        // Armed backoff means the very next sweep is a no-op rather than an
+        // unthrottled retry every two seconds.
+        await internals(service).reconcilePendingLaunches();
+        expect(createSession).not.toHaveBeenCalled();
       });
     });
 
@@ -7092,14 +7211,9 @@ describe("NativeAgentService", () => {
 
         await service.reconcileInitialLaunch("env-1");
 
-        expect(await storage.getEnvironment("env-1")).toMatchObject({
-          startupAgentSession: {
-            agent: "codex",
-            model: "repo-model",
-            reasoningEffort: "repo-effort",
-            status: "running",
-          },
-        });
+        // The resolved selection is observed where it is actually consumed —
+        // the provider call and the durable pane — because the transient
+        // startup snapshot is cleared once the launch converges.
         expect(createSession).toHaveBeenCalledWith(
           "build",
           "Agent Session",
@@ -7108,11 +7222,21 @@ describe("NativeAgentService", () => {
             effort: "repo-effort",
           }),
         );
+        expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
+          tabs: [
+            { id: "default" },
+            {
+              id: "startup-agent",
+              type: "agent-native",
+              nativeAgentData: { platform: "codex", sessionId: "provider-session" },
+            },
+          ],
+        });
       });
     });
 
     test("falls back to the global codex model and reasoning effort", async () => {
-      const { provider } = createProviderStub("codex");
+      const { provider, createSession } = createProviderStub("codex");
       await withService({
         prefix: "orkestrator-native-launch-global-codex-",
         environment: { pendingAgentLaunch: true },
@@ -7129,18 +7253,22 @@ describe("NativeAgentService", () => {
 
         await service.reconcileInitialLaunch("env-1");
 
-        expect(await storage.getEnvironment("env-1")).toMatchObject({
-          startupAgentSession: {
-            agent: "codex",
-            model: "global-codex",
-            reasoningEffort: "xhigh",
-          },
+        expect(createSession).toHaveBeenCalledWith(
+          "build",
+          "Agent Session",
+          expect.objectContaining({ model: "global-codex", effort: "xhigh" }),
+        );
+        expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
+          tabs: [
+            { id: "default" },
+            { id: "startup-agent", nativeAgentData: { platform: "codex" } },
+          ],
         });
       });
     });
 
     test("falls back to the global claude model and no reasoning effort", async () => {
-      const { provider } = createProviderStub("claude");
+      const { provider, createSession } = createProviderStub("claude");
       await withService({
         prefix: "orkestrator-native-launch-global-claude-",
         environment: { pendingAgentLaunch: true, claudeMode: "native" },
@@ -7155,18 +7283,24 @@ describe("NativeAgentService", () => {
 
         await service.reconcileInitialLaunch("env-1");
 
-        const environment = await storage.getEnvironment("env-1");
-        expect(environment).toMatchObject({
-          startupAgentSession: { agent: "claude", model: "global-claude" },
-        });
         // Only codex has a global effort tier; inventing one for claude would
         // send an unsupported field to its bridge.
-        expect(environment?.startupAgentSession?.reasoningEffort).toBeUndefined();
+        expect(createSession).toHaveBeenCalledWith(
+          "build",
+          "Agent Session",
+          expect.objectContaining({ model: "global-claude", effort: undefined }),
+        );
+        expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
+          tabs: [
+            { id: "default" },
+            { id: "startup-agent", nativeAgentData: { platform: "claude" } },
+          ],
+        });
       });
     });
 
     test("prefers the environment's own agent, model and effort", async () => {
-      const { provider } = createProviderStub("codex");
+      const { provider, createSession } = createProviderStub("codex");
       await withService({
         prefix: "orkestrator-native-launch-precedence-",
         environment: {
@@ -7188,12 +7322,16 @@ describe("NativeAgentService", () => {
 
         await service.reconcileInitialLaunch("env-1");
 
-        expect(await storage.getEnvironment("env-1")).toMatchObject({
-          startupAgentSession: {
-            agent: "codex",
-            model: "env-model",
-            reasoningEffort: "env-effort",
-          },
+        expect(createSession).toHaveBeenCalledWith(
+          "build",
+          "Agent Session",
+          expect.objectContaining({ model: "env-model", effort: "env-effort" }),
+        );
+        expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
+          tabs: [
+            { id: "default" },
+            { id: "startup-agent", nativeAgentData: { platform: "codex" } },
+          ],
         });
       });
     });
@@ -7226,15 +7364,19 @@ describe("NativeAgentService", () => {
             images: [{ filename: "reference.png", data: "cG5n" }],
           }),
         );
-        expect(await storage.getEnvironment("env-1")).toMatchObject({
-          pendingAgentLaunch: false,
-          startupAgentSession: {
-            providerSessionId: "provider-session",
-            status: "running",
-          },
+        const converged = await storage.getEnvironment("env-1");
+        expect(converged).toMatchObject({ pendingAgentLaunch: false });
+        expect(converged?.startupAgentSession).toBeUndefined();
+        expect(converged?.initialPromptAttachments).toBeUndefined();
+        expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
+          tabs: [
+            { id: "default" },
+            {
+              id: "startup-agent",
+              nativeAgentData: { sessionId: "provider-session" },
+            },
+          ],
         });
-        expect((await storage.getEnvironment("env-1"))?.initialPromptAttachments)
-          .toBeUndefined();
       });
     });
 
@@ -7274,9 +7416,18 @@ describe("NativeAgentService", () => {
               images: [{ filename: "reference.png", data: "cG5n" }],
             }),
           );
-          expect(await storage.getEnvironment("env-1")).toMatchObject({
-            pendingAgentLaunch: false,
-            startupAgentSession: { agent, status: "running" },
+          const converged = await storage.getEnvironment("env-1");
+          expect(converged).toMatchObject({ pendingAgentLaunch: false });
+          expect(converged?.startupAgentSession).toBeUndefined();
+          expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
+            tabs: [
+              { id: "default" },
+              {
+                id: "startup-agent",
+                type: "agent-native",
+                nativeAgentData: { platform: agent, sessionId: "provider-session" },
+              },
+            ],
           });
         });
       },

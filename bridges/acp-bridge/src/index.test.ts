@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:net";
 import { promises as fs } from "node:fs";
@@ -13,6 +13,18 @@ const here = dirname(fileURLToPath(import.meta.url));
 const nativeFetch = Bun.fetch;
 const children = new Set<ChildProcessWithoutNullStreams>();
 const temporaryDirectories = new Set<string>();
+/**
+ * Bun's 5 s default per-test budget is smaller than what these tests actually
+ * do. `spawnBridge` alone may spend up to `DEFAULT_WAIT_TIMEOUT_MS` waiting on
+ * the child's health endpoint before a test body starts, and nearly every body
+ * then polls with one or more further `waitFor` calls. Under aggregate-suite
+ * spawn contention the health wait consumed the whole budget, which is the
+ * flake recorded in `docs/flaky-tests.md`. Raise it once for the file rather
+ * than per test, so the next case to hit that contention does not need its own
+ * one-off timeout to be discovered first.
+ */
+const BRIDGE_TEST_TIMEOUT_MS = 20_000;
+jest.setTimeout(BRIDGE_TEST_TIMEOUT_MS);
 /** Smallest valid PNG, so attachment tests exercise real image bytes. */
 const ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
@@ -66,13 +78,21 @@ function isRetryableWaitError(error: unknown): boolean {
   return error.code === "ConnectionRefused" || error.code === "ECONNREFUSED";
 }
 
+/**
+ * Deliberately below {@link BRIDGE_TEST_TIMEOUT_MS}. A wait that could outlast
+ * the per-test budget loses the race to Bun's generic "test timed out", and the
+ * bounded diagnostic below — the whole reason this helper exists — never prints.
+ */
+const DEFAULT_WAIT_TIMEOUT_MS = 5_000;
+
 async function waitFor<T>(
   read: () => Promise<T>,
   accept: (value: T) => boolean,
-  timeoutMs = 5_000,
+  timeoutMs = DEFAULT_WAIT_TIMEOUT_MS,
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   let latest: T | undefined;
+  let lastRetryableCode: string | undefined;
   while (Date.now() < deadline) {
     try {
       latest = await read();
@@ -82,10 +102,15 @@ async function waitFor<T>(
       // after a test timeout. Retry until the deadline so a refused connection
       // becomes a bounded wait diagnostic instead of an unhandled rejection.
       if (!isRetryableWaitError(error)) throw error;
+      lastRetryableCode = String((error as { code: unknown }).code);
     }
     await Bun.sleep(20);
   }
-  throw new Error(`Timed out waiting for ACP state: ${describeWaitValue(latest)}`);
+  // Report the swallowed code as well. When every read was refused `latest` was
+  // never assigned, so without this the message is a bare `undefined` — which is
+  // exactly the case where the retried error is the only useful evidence.
+  const cause = lastRetryableCode ? ` (last error: ${lastRetryableCode})` : "";
+  throw new Error(`Timed out waiting for ACP state: ${describeWaitValue(latest)}${cause}`);
 }
 
 function codedError(code: string): Error & { code: string } {
@@ -177,16 +202,35 @@ describe("waitFor", () => {
     expect(attempts).toBe(2);
   });
 
-  test("retries a real Bun fetch ConnectionRefused until the read succeeds", async () => {
+  test("retries a real Bun fetch connection failure until the read succeeds", async () => {
     const port = await unusedPort();
     let attempts = 0;
     const value = await waitFor(async () => {
       attempts += 1;
-      if (attempts < 3) await nativeFetch(`http://127.0.0.1:${port}/health`);
-      return "recovered";
+      if (attempts >= 3) return "recovered";
+      // `unusedPort` releases the port before returning, so a parallel worker
+      // could in principle bind it between then and now. Convert that into an
+      // explicit non-retryable error, which `waitFor` rethrows on the spot and
+      // names, instead of letting it surface as a bare `expect(1).toBe(3)`.
+      // Reaching attempt 3 therefore also proves Bun's own error shape is what
+      // `isRetryableWaitError` classifies as retryable.
+      throw await nativeFetch(`http://127.0.0.1:${port}/health`).then(
+        () => new Error(`Expected 127.0.0.1:${port} to refuse the connection, but it answered`),
+        (reason: unknown) => reason,
+      );
     }, (current) => current === "recovered");
     expect(value).toBe("recovered");
     expect(attempts).toBe(3);
+  });
+
+  test("polls until accept is satisfied and returns the accepted value", async () => {
+    let reads = 0;
+    const value = await waitFor(async () => {
+      reads += 1;
+      return { status: reads < 3 ? "running" : "idle" };
+    }, (current) => current.status === "idle");
+    expect(value).toEqual({ status: "idle" });
+    expect(reads).toBe(3);
   });
 
   test("rethrows a non-retryable coded error on the first attempt", async () => {
@@ -209,13 +253,50 @@ describe("waitFor", () => {
     expect(attempts).toBe(1);
   });
 
-  test("times out when ConnectionRefused never recovers", async () => {
+  test("rethrows non-object rejections on the first attempt", async () => {
+    // `isRetryableWaitError` reads `error.code`, so a bare string that merely
+    // *names* a retryable code — and a nullish rejection — must fail fast
+    // rather than spin until the deadline.
+    for (const rejection of ["ConnectionRefused", null]) {
+      let attempts = 0;
+      await expect(waitFor(async () => {
+        attempts += 1;
+        throw rejection;
+      }, () => true)).rejects.toBe(rejection);
+      expect(attempts).toBe(1);
+    }
+  });
+
+  test("times out when ConnectionRefused never recovers and names the code", async () => {
     let attempts = 0;
+    // 400 ms rather than a value just above the 20 ms poll interval: the
+    // assertion below is about retrying, and one scheduler stall on a loaded
+    // parallel run must not be able to consume the budget before attempt two.
     await expect(waitFor(async () => {
       attempts += 1;
       throw codedError("ConnectionRefused");
-    }, () => true, 80)).rejects.toThrow("Timed out waiting for ACP state: undefined");
+    }, () => true, 400)).rejects.toThrow(
+      "Timed out waiting for ACP state: undefined (last error: ConnectionRefused)",
+    );
     expect(attempts).toBeGreaterThan(1);
+  });
+
+  test("reports the last read value when accept is never satisfied", async () => {
+    await expect(waitFor(
+      async () => ({ status: "running" }),
+      (current) => current.status === "idle",
+      200,
+    )).rejects.toThrow('Timed out waiting for ACP state: {"status":"running"}');
+  });
+
+  test("truncates an oversized diagnostic instead of logging the whole snapshot", async () => {
+    const oversized = "x".repeat(MAX_WAIT_DIAGNOSTIC_BYTES * 2);
+    const rejection = await waitFor(async () => oversized, () => false, 200)
+      .then(() => null, (error: unknown) => error);
+    expect(rejection).toBeInstanceOf(Error);
+    const { message } = rejection as Error;
+    expect(message).toContain("chars, truncated)");
+    expect(message.length).toBeLessThan(oversized.length);
   });
 });
 
@@ -1514,8 +1595,6 @@ describe("ACP bridge", () => {
       .toEqual({ error: "Session exceeded the active sub-agent limit" });
   });
 
-  // spawnBridge already waits up to 5s for health; the two follow-up waitFors
-  // need remaining room when the aggregate suite is spawning other bridges.
   for (const terminal of [
     { prompt: "FINISHCURSORSUBAGENT", agentState: "finished", toolState: "success" },
     { prompt: "FAILCURSORSUBAGENT", agentState: "failed", toolState: "failure" },
@@ -1558,7 +1637,7 @@ describe("ACP bridge", () => {
       )).toMatchObject({ toolState: terminal.toolState, agentState: terminal.agentState });
       expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
         .then((response) => response.json())).toEqual({ activity: "idle" });
-    }, 20_000);
+    });
   }
 
   test("tracks Grok's metadata-described sub-agent until its terminal notification", async () => {

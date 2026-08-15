@@ -302,7 +302,7 @@ apps/backend/   Standalone Bun service and authoritative long-running state
 apps/desktop/   Electron shell, preload API, native IPC, and backend supervision
 apps/web/       React/Vite application used by Electron and remote browsers
 packages/       Shared cross-runtime contracts and validation
-bridges/        Claude and Codex native-mode bridge services
+bridges/        Claude, Codex, and ACP (Cursor Agent / Grok Build) bridge services
 ```
 
 The web application is independently built. Electron loads it as its renderer while the Electron-supervised backend serves the same renderer to authenticated browsers. The same backend can instead run standalone without Electron.
@@ -326,6 +326,23 @@ The web application is independently built. Electron loads it as its renderer wh
 │  └────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────┘
 ```
+
+### Agent engines
+
+Orkestrator supports five coding agents — Claude Code, Codex, OpenCode, Cursor
+Agent, and Grok Build — and they do not share one integration mechanism. Each
+vendor exposes a different surface (a TypeScript SDK, a JSON-RPC app-server, an
+HTTP server, or a raw stdio protocol), so each gets its own adapter behind a
+common contract.
+
+[**docs/technical-architecture/agent-engines.md**](docs/technical-architecture/agent-engines.md)
+explains how all five work: process topology, transport, session and approval
+handling, and the invariants they share.
+
+| Related | Document |
+| --- | --- |
+| Bumping an agent SDK, CLI, or pinned binary | [`docs/upgrade-agents.md`](docs/upgrade-agents.md) |
+| Contributing agent guidance and invariants | [`AGENTS.md`](AGENTS.md) |
 
 ## Network Security
 

@@ -226,7 +226,7 @@ The bridge supervises one persistent `codex app-server --stdio` child per
 environment and talks to it over JSON-RPC on private stdio. There is no second
 engine and no feature flag: the per-turn `codex exec` path and the
 `@openai/codex-sdk` dependency were both removed once app-server reached parity.
-See [`docs/adr/0001-codex-app-server-engine.md`](docs/adr/0001-codex-app-server-engine.md).
+See [`docs/technical-architecture/agent-engines.md`](docs/technical-architecture/agent-engines.md).
 
 `session-titles.ts` is the deliberate exception — it still spawns its own hermetic
 `codex exec` with a custom model catalog, read-only sandbox and user config

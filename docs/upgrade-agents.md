@@ -359,8 +359,8 @@ hermetic `codex exec` exception.
    update them only when the assertion is intended to represent the current
    binary.
 
-See `docs/adr/0001-codex-app-server-engine.md` for the architectural and safety
-constraints behind this process. Upstream release source:
+See `docs/technical-architecture/agent-engines.md` for the architectural and
+safety constraints behind this process. Upstream release source:
 [OpenAI Codex](https://github.com/openai/codex).
 
 ## OpenCode
@@ -383,9 +383,15 @@ package root:
 - `apps/web/src/lib/opencode-client.ts` is the renderer wrapper. It normalizes
   OpenCode messages and exposes session, event, model/provider, command, agent,
   skill, question, permission, MCP, formatter, and LSP operations.
-- `apps/backend/src/core/build-pipeline-provider.ts` creates a v2 client for
-  durable build pipelines and uses sessions, async prompts, status/messages,
-  event subscriptions, aborts, questions, and permissions.
+- `apps/backend/src/core/opencode-provider.ts` is the only backend file that
+  calls `createOpencodeClient`. It uses sessions, async prompts,
+  status/messages, event subscriptions, aborts, questions, and permissions, and
+  serves both interactive native chat and durable build pipelines.
+  `native-agent-provider.ts` selects it for the `opencode` platform, and
+  `build-pipeline-provider.ts` re-exports a smaller slice of that contract for
+  pipeline code — neither of those two constructs a client itself, so a v2
+  signature change lands in `opencode-provider.ts`. The remaining backend
+  `opencode-*.ts` files import v2 *types* only.
 
 The backend imports the SDK at runtime, so updating only the web workspace can
 leave native chat apparently healthy while build pipelines remain on the old
@@ -439,11 +445,15 @@ and [OpenCode SDK documentation](https://opencode.ai/docs/sdk/).
 
 ## Cursor and Grok (ACP)
 
+### Where the CLI contract lives
+
 These two are pinned in `apps/desktop/electron/toolchain-manifest.ts` and
 `docker/Dockerfile` like the others, but they have no SDK: the ACP bridge
 spawns the CLI directly and speaks ACP over its stdio. That makes their
 **command-line flags a versioned contract**, and it is the part of an upgrade
-nothing in CI can check.
+nothing in CI can check. See
+`docs/technical-architecture/agent-engines.md` for how the shared ACP bridge
+drives both of them.
 
 `bridges/acp-bridge/src/index.ts` builds one of two argument vectors:
 
@@ -472,7 +482,8 @@ grok --always-approve agent stdio </dev/null
 
 Run these against the pinned version, not whatever is on `PATH` — compare
 `cursor-agent --version` and `grok --version` against
-`PINNED_TOOLCHAIN_VERSIONS` and `CURSOR_AGENT_VERSION` first. `acp` is an
+`PINNED_TOOLCHAIN_VERSIONS`, `CURSOR_AGENT_VERSION`, and `GROK_BUILD_VERSION`
+first. `acp` is an
 undocumented `cursor-agent` subcommand and does not appear in `--help` output,
 so the start check above is the only evidence it still exists.
 
@@ -481,6 +492,39 @@ interactive session and matches the Claude bridge's local `bypassPermissions`
 default. `--approve-mcps` is deliberately narrower, because `.cursor/mcp.json`
 is repository-controlled and would otherwise execute on the host without any
 model or user involvement. Preserve that asymmetry when adjusting flags.
+
+### How to upgrade Cursor or Grok
+
+Neither has an SDK or a lockfile entry, so nothing resolves a version for you.
+Every pin below is a literal that has to be edited by hand, and the container
+digests are not derived from the manifest ones — they are a second, independent
+set.
+
+1. Set the exact version in `PINNED_TOOLCHAIN_VERSIONS.cursor` or
+   `PINNED_TOOLCHAIN_VERSIONS.grok` in
+   `apps/desktop/electron/toolchain-manifest.ts`. Both entries interpolate that
+   value into their download URLs, so the URLs themselves need no edit.
+2. Mirror the same value into `docker/Dockerfile`:
+
+   - `CURSOR_AGENT_VERSION` for Cursor Agent
+   - `GROK_BUILD_VERSION` for Grok Build
+
+3. Update the container digests in the same `RUN` block, which are **not**
+   covered by the manifest refresh in the next step. Each architecture branch
+   pins its own literal: `CURSOR_SHA` for `amd64` and `arm64`, and `GROK_SHA`
+   for the same two. They are verified by `sha256sum -c -` during the image
+   build, so a version bumped without them fails `bun run docker:build` rather
+   than shipping an unverified binary.
+4. Refresh and verify the desktop artifact records using the shared binary
+   procedure above. Cursor's entries carry `bundleIntegrity` (file count, total
+   size, and digest for the whole extracted `dist-package/` tree) as well as the
+   archive and executable digests, because its CLI ships an adjacent Node
+   runtime rather than a single file. Grok's entries are `format: "raw"`, so the
+   archive and executable digests are the same value.
+5. Confirm the argv contract by hand using the two checks above. This is the
+   step nothing else covers.
+6. Smoke-test one interactive tab per upgraded provider, including a permission
+   request and the inactive-environment path.
 
 ## Repository-wide validation
 

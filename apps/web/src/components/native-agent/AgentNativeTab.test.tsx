@@ -1785,6 +1785,27 @@ describe("AgentNativeTab", () => {
       expect(screen.getByRole("button", { name: "Context window 42% used" })).toBeTruthy();
     });
 
+    test("renders the context wheel before the stop button during a running turn", async () => {
+      seedProjection({
+        phase: "running",
+        contextUsage: {
+          usedTokens: 210_000,
+          maximumTokens: 500_000,
+          percentage: 42,
+          source: "provider",
+        },
+      });
+      render(<AgentNativeTab tabId="tab-running-usage" data={identity("grok")} isActive />);
+
+      const contextWheel = await screen.findByRole("button", {
+        name: "Context window 42% used",
+      });
+      const stopButton = screen.getByTitle("Stop current query");
+      expect(
+        contextWheel.compareDocumentPosition(stopButton) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    });
+
     test("derives the context wheel percentage when the provider reports only a maximum", async () => {
       seedProjection({
         contextUsage: {

@@ -6847,6 +6847,150 @@ describe("NativeAgentService", () => {
       });
     });
 
+    test("dispatches an attachment-only startup prompt before clearing its images", async () => {
+      const { provider, send } = createProviderStub("codex");
+      await withService({
+        prefix: "orkestrator-native-launch-image-only-",
+        environment: {
+          pendingAgentLaunch: true,
+          defaultAgent: "codex",
+          codexMode: "native",
+          initialPrompt: "   ",
+          initialPromptAttachments: [{
+            id: "image-1",
+            name: "reference.png",
+            previewUrl: "data:image/png;base64,cG5n",
+            base64Data: "cG5n",
+          }],
+        },
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        await service.reconcileInitialLaunch("env-1");
+
+        expect(send).toHaveBeenCalledWith(
+          "provider-session",
+          "",
+          expect.objectContaining({
+            requestId: "initial-prompt:env-1:startup-agent",
+            images: [{ filename: "reference.png", data: "cG5n" }],
+          }),
+        );
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          pendingAgentLaunch: false,
+          startupAgentSession: {
+            providerSessionId: "provider-session",
+            status: "running",
+          },
+        });
+        expect((await storage.getEnvironment("env-1"))?.initialPromptAttachments)
+          .toBeUndefined();
+      });
+    });
+
+    test.each([
+      ["claude", { claudeMode: "native" }] as const,
+      ["opencode", { opencodeMode: "native" }] as const,
+    ])(
+      "dispatches an attachment-only startup prompt for %s too",
+      async (agent, modes) => {
+        // The blank-prompt relaxation is agent-neutral: every native agent that
+        // accepts an attachment-only turn must reach the same dispatch, not
+        // only the codex path the fix was written against.
+        const { provider, send } = createProviderStub(agent);
+        await withService({
+          prefix: `orkestrator-native-launch-image-only-${agent}-`,
+          environment: {
+            pendingAgentLaunch: true,
+            defaultAgent: agent,
+            ...modes,
+            initialPrompt: "",
+            initialPromptAttachments: [{
+              id: "image-1",
+              name: "reference.png",
+              previewUrl: "data:image/png;base64,cG5n",
+              base64Data: "cG5n",
+            }],
+          },
+          provider: async () => provider,
+        }, async ({ storage, service }) => {
+          await service.reconcileInitialLaunch("env-1");
+
+          expect(send).toHaveBeenCalledWith(
+            "provider-session",
+            "",
+            expect.objectContaining({
+              requestId: "initial-prompt:env-1:startup-agent",
+              images: [{ filename: "reference.png", data: "cG5n" }],
+            }),
+          );
+          expect(await storage.getEnvironment("env-1")).toMatchObject({
+            pendingAgentLaunch: false,
+            startupAgentSession: { agent, status: "running" },
+          });
+        });
+      },
+    );
+
+    test("dispatches a launch the repository's agent style makes native", async () => {
+      // The renderer resolves the Claude style through the repository tier when
+      // it decides whether to leave the initial prompt's images alone. This
+      // side has to agree: if it declined here, a launch the renderer stood
+      // down for would never deliver its attachments.
+      const { provider, send } = createProviderStub("claude");
+      await withService({
+        prefix: "orkestrator-native-launch-repo-style-",
+        environment: {
+          pendingAgentLaunch: true,
+          defaultAgent: "claude",
+          initialPrompt: "Inspect this screenshot",
+        },
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        const config = await storage.loadConfig();
+        await storage.updateGlobalConfig({ ...config.global, claudeMode: "terminal" });
+        await storage.updateRepositoryConfig("project-1", {
+          defaultBranch: "main",
+          prBaseBranch: "main",
+          agentStyle: "native",
+        });
+
+        await service.reconcileInitialLaunch("env-1");
+
+        expect(send).toHaveBeenCalledWith(
+          "provider-session",
+          "Inspect this screenshot",
+          expect.objectContaining({
+            requestId: "initial-prompt:env-1:startup-agent",
+          }),
+        );
+      });
+    });
+
+    test("leaves a tmux-backed native Claude launch to the terminal coordinator", async () => {
+      const { provider, send, createSession } = createProviderStub("claude");
+      await withService({
+        prefix: "orkestrator-native-launch-tmux-",
+        environment: {
+          pendingAgentLaunch: true,
+          defaultAgent: "claude",
+          claudeMode: "native",
+          claudeNativeBackend: "tmux",
+          initialPrompt: "Inspect this screenshot",
+        },
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        await service.reconcileInitialLaunch("env-1");
+
+        expect(send).not.toHaveBeenCalled();
+        expect(createSession).not.toHaveBeenCalled();
+        // Still pending: the terminal coordinator owns this launch and the
+        // renderer is the side that will deliver its attachments.
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          pendingAgentLaunch: true,
+        });
+      });
+    });
+
     test("shares one launch task between concurrent reconciliations", async () => {
       let releaseCreate: (() => void) | undefined;
       const createBarrier = new Promise<void>((resolve) => {
@@ -7152,7 +7296,7 @@ describe("NativeAgentService", () => {
           prompt: "Do it",
           requestId: "request-1",
           ...override,
-        })).rejects.toThrow("prompt and request ID must not be blank");
+        })).rejects.toThrow("prompt or attachment and request ID must not be blank");
         expect(send).not.toHaveBeenCalled();
       });
     });

@@ -40,6 +40,7 @@ import type {
   NativeAgentSlashCommand,
 } from "@orkestrator/protocol/native-agent";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
+import { resolveStartupLaunch } from "@orkestrator/protocol/startup-launch";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import type {
   Environment,
@@ -1897,8 +1898,12 @@ export class NativeAgentService {
     persistAmbiguousDispatch = false,
   ): Promise<PersistedNativeAgentSession> {
     this.assertAcceptingWork();
-    if (!nonBlank(input.prompt) || !nonBlank(input.requestId)) {
-      throw new Error("Native agent prompt and request ID must not be blank");
+    const hasAttachments = (input.images?.length ?? 0) > 0
+      || (input.attachments?.length ?? 0) > 0;
+    if ((!nonBlank(input.prompt) && !hasAttachments) || !nonBlank(input.requestId)) {
+      throw new Error(
+        "Native agent prompt or attachment and request ID must not be blank",
+      );
     }
     const session = await this.ensureSession(input);
     const provider = await this.provider(input);
@@ -3724,27 +3729,20 @@ export class NativeAgentService {
     const repository = await this.storage.getRepositoryConfig(
       environment.projectId,
     );
-    const agent =
-      environment.defaultAgent
-      ?? repository.defaultAgent
-      ?? config.global.defaultAgent;
-    const mode = agent === "claude"
-      ? environment.claudeMode ?? config.global.claudeMode
-      : agent === "codex"
-        ? environment.codexMode ?? config.global.codexMode
-        : environment.opencodeMode ?? config.global.opencodeMode;
-    const claudeBackend =
-      environment.claudeNativeBackend
-      ?? repository.claudeNativeBackend
-      ?? config.global.claudeNativeBackend;
+    // Shared with the renderer rather than reimplemented here: the renderer has
+    // to predict this exact decision to know whether it may still stage the
+    // initial prompt's images itself, and any divergence silently costs the
+    // user the attachment. See `resolveStartupLaunch`.
+    const { agent, dispatchedByBackend } = resolveStartupLaunch({
+      environment,
+      repository,
+      global: config.global,
+    });
 
     // Terminal and Claude-tmux launches still need a PTY/tmux projection. They
     // are left pending for the backend terminal coordinator rather than being
     // falsely marked consumed by this native-session service.
-    if (
-      mode !== "native"
-      || (agent === "claude" && claudeBackend === "tmux")
-    ) {
+    if (!dispatchedByBackend) {
       return;
     }
 
@@ -3785,14 +3783,14 @@ export class NativeAgentService {
         filename: attachment.name,
         data: attachment.base64Data,
       }));
-      const session = prompt
+      const session = prompt || (images?.length ?? 0) > 0
         ? await this.dispatchPrompt({
             environmentId: environment.id,
             agent,
             logicalSessionKey,
             model,
             reasoningEffort,
-            prompt,
+            prompt: prompt ?? "",
             requestId: `initial-prompt:${environment.id}:startup-agent`,
             images,
           })

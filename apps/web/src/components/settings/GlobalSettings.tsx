@@ -107,7 +107,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [cpuCores, setCpuCores] = useState(global.containerResources.cpuCores);
   const [memoryGb, setMemoryGb] = useState(global.containerResources.memoryGb);
   const [envPatterns, setEnvPatterns] = useState(global.envFilePatterns.join(", "));
-  const [anthropicApiKey, setAnthropicApiKey] = useState(global.anthropicApiKey || "");
+  const [anthropicApiKey, setAnthropicApiKey] = useState("");
+  const [clearAnthropicApiKey, setClearAnthropicApiKey] = useState(false);
   const [cursorApiKey, setCursorApiKey] = useState("");
   const [clearCursorApiKey, setClearCursorApiKey] = useState(false);
   const [useHostGitHubCredentials, setUseHostGitHubCredentials] = useState(
@@ -214,13 +215,18 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     apiKey: string;
     clear: boolean;
   } | null>(null);
+  const pendingAnthropicCredentialEditRef = useRef<{
+    apiKey: string;
+    clear: boolean;
+  } | null>(null);
 
   // Sync local state when config changes in the store
   useEffect(() => {
     setCpuCores(global.containerResources.cpuCores);
     setMemoryGb(global.containerResources.memoryGb);
     setEnvPatterns(global.envFilePatterns.join(", "));
-    setAnthropicApiKey(global.anthropicApiKey || "");
+    setAnthropicApiKey(pendingAnthropicCredentialEditRef.current?.apiKey ?? "");
+    setClearAnthropicApiKey(pendingAnthropicCredentialEditRef.current?.clear ?? false);
     setCursorApiKey(pendingCursorCredentialEditRef.current?.apiKey ?? "");
     setClearCursorApiKey(pendingCursorCredentialEditRef.current?.clear ?? false);
     setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
@@ -325,7 +331,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       cpuCores !== global.containerResources.cpuCores ||
       memoryGb !== global.containerResources.memoryGb ||
       envPatterns !== global.envFilePatterns.join(", ") ||
-      anthropicApiKey !== (global.anthropicApiKey || "") ||
+      anthropicApiKey.trim().length > 0 ||
+      clearAnthropicApiKey ||
       cursorApiKey.trim().length > 0 ||
       clearCursorApiKey ||
       useHostGitHubCredentials !== (global.useHostGitHubCredentials ?? true) ||
@@ -362,7 +369,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     if (changed) {
       setSaveSuccess(false);
     }
-  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, cursorApiKey, clearCursorApiKey, useHostGitHubCredentials, useHostClaudeCredentials, githubToken, clearGithubToken, githubCredentialPropagationPending, allowedDomains, preferredEditor, enabledAgentPlatforms, defaultAgent, opencodeModel, opencodeMode, openCodeModelProviders, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, codexMaxConcurrentThreads, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewInstruction, webClientApplyError, gatewayToken, savedGatewayToken, global]);
+  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, clearAnthropicApiKey, cursorApiKey, clearCursorApiKey, useHostGitHubCredentials, useHostClaudeCredentials, githubToken, clearGithubToken, githubCredentialPropagationPending, allowedDomains, preferredEditor, enabledAgentPlatforms, defaultAgent, opencodeModel, opencodeMode, openCodeModelProviders, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, codexMaxConcurrentThreads, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewInstruction, webClientApplyError, gatewayToken, savedGatewayToken, global]);
 
   // Validate domains on change
   const validateDomainsLocally = useCallback((domainsText: string) => {
@@ -440,7 +447,6 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         containerResources: { cpuCores: number; memoryGb: number };
         envFilePatterns: string[];
         allowedDomains: string[];
-        anthropicApiKey?: string;
         useHostGitHubCredentials: boolean;
         useHostClaudeCredentials: boolean;
         preferredEditor?: PreferredEditor;
@@ -505,12 +511,13 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         webClientEnabled,
       };
 
-      if (anthropicApiKey) newGlobal.anthropicApiKey = anthropicApiKey;
       if (reviewInstruction !== DEFAULT_REVIEW_INSTRUCTION) {
         newGlobal.reviewInstruction = reviewInstruction;
       }
 
       let newConfig = await backend.updateGlobalConfig(newGlobal);
+      const nextAnthropicApiKey = anthropicApiKey.trim();
+      const anthropicApiKeyChanged = clearAnthropicApiKey || nextAnthropicApiKey.length > 0;
       const nextCursorApiKey = cursorApiKey.trim();
       const cursorApiKeyChanged = clearCursorApiKey || nextCursorApiKey.length > 0;
       const nextGitHubToken = githubToken.trim();
@@ -518,6 +525,12 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         useHostGitHubCredentials !== (global.useHostGitHubCredentials ?? true);
       const githubTokenChanged = clearGithubToken || nextGitHubToken.length > 0;
       const githubCredentialChanged = githubCredentialSourceChanged || githubTokenChanged;
+      if (anthropicApiKeyChanged) {
+        pendingAnthropicCredentialEditRef.current = {
+          apiKey: anthropicApiKey,
+          clear: clearAnthropicApiKey,
+        };
+      }
       if (cursorApiKeyChanged) {
         pendingCursorCredentialEditRef.current = {
           apiKey: cursorApiKey,
@@ -534,6 +547,13 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         };
       }
       setConfig(newConfig);
+      if (anthropicApiKeyChanged) {
+        newConfig = await backend.setAnthropicApiKey(
+          clearAnthropicApiKey ? null : nextAnthropicApiKey,
+        );
+        pendingAnthropicCredentialEditRef.current = null;
+        setConfig(newConfig);
+      }
       if (cursorApiKeyChanged) {
         newConfig = await backend.setCursorApiKey(
           clearCursorApiKey ? null : nextCursorApiKey,
@@ -615,6 +635,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         }
       }
 
+      setAnthropicApiKey("");
+      setClearAnthropicApiKey(false);
+      pendingAnthropicCredentialEditRef.current = null;
       setCursorApiKey("");
       setClearCursorApiKey(false);
       pendingCursorCredentialEditRef.current = null;
@@ -640,7 +663,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setCpuCores(global.containerResources.cpuCores);
     setMemoryGb(global.containerResources.memoryGb);
     setEnvPatterns(global.envFilePatterns.join(", "));
-    setAnthropicApiKey(global.anthropicApiKey || "");
+    setAnthropicApiKey("");
+    setClearAnthropicApiKey(false);
+    pendingAnthropicCredentialEditRef.current = null;
     setCursorApiKey("");
     setClearCursorApiKey(false);
     pendingCursorCredentialEditRef.current = null;
@@ -1245,14 +1270,21 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
             <Key className="h-4 w-4" />
             Anthropic API Key
           </h3>
-          <p className="text-xs text-muted-foreground mt-1">Required for Claude Code inside containers</p>
+          <p className="text-xs text-muted-foreground mt-1">Optional API-key override for Claude Code in containers</p>
         </div>
         <div className="relative">
           <Input
             type={showApiKey ? "text" : "password"}
             value={anthropicApiKey}
-            onChange={(e) => setAnthropicApiKey(e.target.value)}
-            placeholder="sk-ant-..."
+            onChange={(event) => {
+              setAnthropicApiKey(event.target.value);
+              if (event.target.value) setClearAnthropicApiKey(false);
+            }}
+            placeholder={
+              global.anthropicApiKeyConfigured && !clearAnthropicApiKey
+                ? "API key configured — enter a replacement"
+                : "sk-ant-..."
+            }
             className="pr-10 font-mono"
           />
           <Button
@@ -1265,6 +1297,31 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
             {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
           </Button>
         </div>
+        {global.anthropicApiKeyConfigured && !clearAnthropicApiKey && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setAnthropicApiKey("");
+              setClearAnthropicApiKey(true);
+            }}
+          >
+            Clear stored Anthropic API key
+          </Button>
+        )}
+        {clearAnthropicApiKey && (
+          <p className="text-xs text-amber-500">
+            The stored Anthropic API key will be cleared when you save.
+          </p>
+        )}
+        {global.anthropicApiKeySource === "host-env" && (
+          <p className="text-xs text-amber-500">
+            No key is stored, but Orkestrator inherited ANTHROPIC_API_KEY from its own
+            environment and forwards it to new containers. Unset the variable and restart
+            Orkestrator to stop using it; a stored key overrides it.
+          </p>
+        )}
         <p className="text-xs text-muted-foreground">
           Get key from{" "}
           <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">

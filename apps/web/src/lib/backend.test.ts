@@ -59,6 +59,7 @@ const {
   setWebClientEnabled,
   setGatewayToken,
   setGitHubToken,
+  setAnthropicApiKey,
   setCursorApiKey,
   setEnvironmentUnread,
   setEnvironmentPendingAgentLaunch,
@@ -1075,6 +1076,28 @@ describe("backend setup wrappers", () => {
     ]);
   });
 
+  test("uses the write-only Anthropic API key command for replacement and clearing", async () => {
+    const configured = {
+      version: "1.0",
+      global: { anthropicApiKeyConfigured: true },
+      repositories: {},
+    } as AppConfig;
+    const cleared = {
+      version: "1.0",
+      global: { anthropicApiKeyConfigured: false },
+      repositories: {},
+    } as AppConfig;
+    invokeMock.mockResolvedValueOnce(configured).mockResolvedValueOnce(cleared);
+
+    await expect(setAnthropicApiKey("anthropic_replacement")).resolves.toBe(configured);
+    await expect(setAnthropicApiKey(null)).resolves.toBe(cleared);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["set_anthropic_api_key", { apiKey: "anthropic_replacement" }],
+      ["set_anthropic_api_key", { apiKey: null }],
+    ]);
+  });
+
   test("refreshes running containers from the backend-selected GitHub credential source", async () => {
     const result = { updated: ["env-1"], failed: [] };
     invokeMock.mockResolvedValueOnce(result);
@@ -1374,6 +1397,8 @@ describe("backend native agent and looped review wrappers", () => {
       expectedProviderSessionId: "provider-old",
       model: "open-model",
       reasoningEffort: "medium",
+      sessionMode: "build" as const,
+      fastMode: true,
     };
     await expect(
       backendWrappers.adoptNativeAgentSession(fullInput),
@@ -1400,6 +1425,8 @@ describe("backend native agent and looped review wrappers", () => {
     expect(minimalPayload).not.toHaveProperty("interactionPolicy");
     expect(minimalPayload).not.toHaveProperty("model");
     expect(minimalPayload).not.toHaveProperty("reasoningEffort");
+    expect(minimalPayload).not.toHaveProperty("sessionMode");
+    expect(minimalPayload).not.toHaveProperty("fastMode");
   });
 
   test("reads native sessions", async () => {

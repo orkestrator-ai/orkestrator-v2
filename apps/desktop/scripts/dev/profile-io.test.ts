@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { parseRuntimeStatusManifest, resolveRuntimeProfile, statusManifestPath } from "../../electron/runtime-profile.js";
-import { atomicWriteJson, initializeProfile, processMatches, processStartTime, readAndValidateSentinel, reserveLoopbackPorts, seedInstalledModelCatalogCaches } from "./profile-io.js";
+import { atomicWriteJson, initializeProfile, processMatches, processStartTime, readAndValidateSentinel, reserveLoopbackPorts, seedAgentTestProviderCredentials, seedInstalledModelCatalogCaches } from "./profile-io.js";
 import { createBoundedLogWriter, orphanedRuntimeProcesses, stoppedRuntimeStatusIfUnchanged, stopTrackedRuntimeProcesses } from "./lifecycle.js";
 
 const directories: string[] = [];
@@ -139,6 +139,33 @@ describe("development profile lifecycle primitives", () => {
     for (const destination of Object.values(destinations)) {
       expect(await readFile(destination, "utf8")).toBe("profile-live-cache");
     }
+  });
+
+  test("copies only an explicitly enabled Grok credential and refreshes it on restart", async () => {
+    const { roots, profile } = await modelCacheFixture();
+    const source = path.join(roots.homeDir, ".grok", "auth.json");
+    const destination = path.join(
+      profile.dataDir,
+      "agent-credentials",
+      "home",
+      ".grok",
+      "auth.json",
+    );
+    await writeFile(source, "host-auth-v1");
+
+    await expect(seedAgentTestProviderCredentials(profile, { roots })).resolves.toEqual([]);
+    await expect(readFile(destination)).rejects.toThrow();
+
+    const enabled = { ...profile, credentialSources: ["grok" as const] };
+    await expect(seedAgentTestProviderCredentials(enabled, { roots }))
+      .resolves.toEqual(["grok/auth.json"]);
+    expect(await readFile(destination, "utf8")).toBe("host-auth-v1");
+    expect((await stat(destination)).mode & 0o777).toBe(0o600);
+
+    await writeFile(source, "host-auth-v2");
+    await expect(seedAgentTestProviderCredentials(enabled, { roots }))
+      .resolves.toEqual(["grok/auth.json"]);
+    expect(await readFile(destination, "utf8")).toBe("host-auth-v2");
   });
 
   test("skips missing, symlinked, and oversized model cache sources", async () => {

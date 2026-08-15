@@ -514,6 +514,10 @@ export async function setCursorApiKey(apiKey: string | null): Promise<AppConfig>
   return invoke<AppConfig>("set_cursor_api_key", { apiKey });
 }
 
+export async function setAnthropicApiKey(apiKey: string | null): Promise<AppConfig> {
+  return invoke<AppConfig>("set_anthropic_api_key", { apiKey });
+}
+
 export async function getWebClientStatus(): Promise<WebClientStatus> {
   if (window.orkestrator?.webClient) {
     return window.orkestrator.webClient.getStatus();
@@ -2125,6 +2129,8 @@ export async function adoptNativeAgentSession(input: {
   expectedProviderSessionId?: string;
   model?: string;
   reasoningEffort?: string;
+  sessionMode?: "plan" | "build";
+  fastMode?: boolean;
 }): Promise<PersistedNativeAgentSession> {
   return invoke<PersistedNativeAgentSession>(
     "adopt_native_agent_session",

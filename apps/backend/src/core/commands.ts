@@ -12,6 +12,7 @@ import {
 } from "@orkestrator/protocol/codex-background-task";
 import {
   AGENT_INTERACTION_ORIGINS,
+  INTERACTIVE_AGENT_INTERACTION_POLICY,
   isAgentInteractionPolicy,
   type AgentInteractionOrigin,
   type AgentInteractionPolicy,
@@ -185,6 +186,7 @@ import {
 import {
   AGENT_PLATFORM_LABELS,
   isAgentPlatform,
+  type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
 import {
   fallbackReasoningId,
@@ -219,6 +221,7 @@ import {
   type StartLoopedReviewInput,
 } from "@orkestrator/protocol/review-workflow";
 import {
+  MULTI_REVIEW_ADDRESS_PROMPT,
   isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
   isStartMultiReviewInput,
@@ -242,7 +245,7 @@ export type CommandContext = {
   worktreeDir?: string;
   dockerImage?: string;
   strictDockerOwner?: boolean;
-  credentialSources?: ReadonlySet<"claude" | "codex" | "opencode">;
+  credentialSources?: ReadonlySet<AgentPlatform>;
   environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
   toolchainBinDir?: string;
   agentTools?: {
@@ -1164,11 +1167,13 @@ async function requireGitHubProject(
 
 type RendererGlobalConfig = Omit<
   AppConfig["global"],
-  "githubToken" | "cursorApiKey"
+  "githubToken" | "anthropicApiKey" | "cursorApiKey"
 > & {
   githubTokenConfigured: boolean;
+  anthropicApiKeyConfigured: boolean;
+  anthropicApiKeySource: ApiKeySource;
   cursorApiKeyConfigured: boolean;
-  cursorApiKeySource: CursorApiKeySource;
+  cursorApiKeySource: ApiKeySource;
 };
 
 type RendererAppConfig = Omit<AppConfig, "global"> & {
@@ -1195,7 +1200,27 @@ function asAgentModelConfigKey(value: unknown): AgentModelConfigKey {
  * pane that a container is being handed a key inherited from this process's own
  * environment — and clearing the stored key does not stop that one.
  */
-export type CursorApiKeySource = "config" | "host-env" | "none";
+export type ApiKeySource = "config" | "host-env" | "none";
+
+function resolveStoredOrInheritedApiKey(
+  configuredValue: string | undefined,
+  inheritedValue: string | undefined,
+): { apiKey?: string; source: ApiKeySource } {
+  const configured = configuredValue?.trim();
+  if (configured) return { apiKey: configured, source: "config" };
+  const inherited = inheritedValue?.trim();
+  if (inherited) return { apiKey: inherited, source: "host-env" };
+  return { source: "none" };
+}
+
+function resolveAnthropicApiKey(
+  global: AppConfig["global"],
+): { apiKey?: string; source: ApiKeySource } {
+  return resolveStoredOrInheritedApiKey(
+    global.anthropicApiKey,
+    process.env.ANTHROPIC_API_KEY,
+  );
+}
 
 /**
  * Single source of truth for the Cursor key. `createDockerContainer` forwards
@@ -1203,12 +1228,11 @@ export type CursorApiKeySource = "config" | "host-env" | "none";
  */
 function resolveCursorApiKey(
   global: AppConfig["global"],
-): { apiKey?: string; source: CursorApiKeySource } {
-  const configured = global.cursorApiKey?.trim();
-  if (configured) return { apiKey: configured, source: "config" };
-  const inherited = process.env.CURSOR_API_KEY?.trim();
-  if (inherited) return { apiKey: inherited, source: "host-env" };
-  return { source: "none" };
+): { apiKey?: string; source: ApiKeySource } {
+  return resolveStoredOrInheritedApiKey(
+    global.cursorApiKey,
+    process.env.CURSOR_API_KEY,
+  );
 }
 
 function cursorApiKeyFingerprint(apiKey: string | undefined): string {
@@ -1218,13 +1242,16 @@ function cursorApiKeyFingerprint(apiKey: string | undefined): string {
 }
 
 function redactGlobalConfig(global: AppConfig["global"]): RendererGlobalConfig {
-  const { source } = resolveCursorApiKey(global);
-  const { githubToken, cursorApiKey, ...safeGlobal } = global;
+  const { source: anthropicApiKeySource } = resolveAnthropicApiKey(global);
+  const { source: cursorApiKeySource } = resolveCursorApiKey(global);
+  const { githubToken, anthropicApiKey, cursorApiKey, ...safeGlobal } = global;
   return {
     ...safeGlobal,
     githubTokenConfigured: Boolean(githubToken?.trim()),
+    anthropicApiKeyConfigured: Boolean(anthropicApiKey?.trim()),
+    anthropicApiKeySource,
     cursorApiKeyConfigured: Boolean(cursorApiKey?.trim()),
-    cursorApiKeySource: source,
+    cursorApiKeySource,
   };
 }
 
@@ -1239,6 +1266,9 @@ function stripRendererCredentials(global: Record<string, unknown>): AppConfig["g
   const {
     githubToken: _ignoredToken,
     githubTokenConfigured: _ignoredConfigured,
+    anthropicApiKey: _ignoredAnthropicApiKey,
+    anthropicApiKeyConfigured: _ignoredAnthropicConfigured,
+    anthropicApiKeySource: _ignoredAnthropicSource,
     cursorApiKey: _ignoredCursorApiKey,
     cursorApiKeyConfigured: _ignoredCursorConfigured,
     cursorApiKeySource: _ignoredCursorSource,
@@ -8712,7 +8742,7 @@ async function createDockerContainer(environment: Environment, context: CommandC
   const allowClaudeCredentials = context.runtimeFlavor !== "agent-test"
     || context.credentialSources?.has("claude");
   const anthropicApiKey = allowClaudeCredentials
-    ? config.global.anthropicApiKey?.trim()
+    ? resolveAnthropicApiKey(config.global).apiKey
     : undefined;
   if (anthropicApiKey) {
     dockerEnvironment.ANTHROPIC_API_KEY = anthropicApiKey;
@@ -8727,6 +8757,7 @@ async function createDockerContainer(environment: Environment, context: CommandC
   // headless runs, and the same helper reports its `source` to the settings pane
   // so an inherited key is never forwarded invisibly.
   const { apiKey: cursorApiKey } = context.runtimeFlavor === "agent-test"
+    && !context.credentialSources?.has("cursor")
     ? { apiKey: undefined }
     : resolveCursorApiKey(config.global);
   if (cursorApiKey) {
@@ -8773,10 +8804,18 @@ async function createDockerContainer(environment: Environment, context: CommandC
   // Grok creates session databases during ACP startup, so mounting the host
   // directories directly over their homes makes both bridges fail immediately.
   // Mount portable inputs separately; entrypoint.sh copies a bounded allowlist.
-  if (context.runtimeFlavor !== "agent-test") {
-    await bindIfExists(path.join(home, ".cursor"), "/cursor-config");
-    await bindIfExists(path.join(home, ".grok"), "/grok-home");
-    await bindIfExists(path.join(home, ".config", "grok"), "/grok-config");
+  if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("cursor")) {
+    const cursorHome = context.runtimeFlavor === "agent-test" && agentTestHostHome
+      ? agentTestHostHome
+      : home;
+    await bindIfExists(path.join(cursorHome, ".cursor"), "/cursor-config");
+  }
+  if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("grok")) {
+    const grokHome = context.runtimeFlavor === "agent-test" && agentTestHostHome
+      ? agentTestHostHome
+      : home;
+    await bindIfExists(path.join(grokHome, ".grok"), "/grok-home");
+    await bindIfExists(path.join(grokHome, ".config", "grok"), "/grok-config");
   }
   if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("opencode")) {
     const configHome = context.runtimeFlavor === "agent-test"
@@ -8790,7 +8829,12 @@ async function createDockerContainer(environment: Environment, context: CommandC
       : path.join(home, ".local", "state");
     if (configHome) await bindIfExists(path.join(configHome, "opencode"), "/opencode-config");
     if (dataHome) await bindIfExists(path.join(dataHome, "opencode"), "/opencode-data");
-    if (stateHome) await bindIfExists(path.join(stateHome, "opencode"), "/opencode-state");
+    if (stateHome) {
+      await bindIfExists(
+        path.join(stateHome, "opencode", "model.json"),
+        "/opencode-state/model.json",
+      );
+    }
   }
   if (context.runtimeFlavor !== "agent-test") {
     await bindIfExists(path.join(home, ".gitconfig"), "/tmp/gitconfig");
@@ -10048,6 +10092,13 @@ export function createCommandRegistry(
       throw new Error("Cursor API key cannot be empty. Use null to clear it.");
     }
     return redactAppConfig(await storage.setCursorApiKey(nextApiKey));
+  });
+  register("set_anthropic_api_key", async ({ apiKey }, { storage }) => {
+    const nextApiKey = apiKey === null ? null : asString(apiKey, "apiKey").trim();
+    if (nextApiKey !== null && !nextApiKey) {
+      throw new Error("Anthropic API key cannot be empty. Use null to clear it.");
+    }
+    return redactAppConfig(await storage.setAnthropicApiKey(nextApiKey));
   });
   register("get_repository_config", ({ projectId }, { storage }) => storage.getRepositoryConfig(asString(projectId, "projectId")));
   register("update_repository_config", async ({ projectId, repoConfig }, context) => {
@@ -11758,6 +11809,10 @@ export function createCommandRegistry(
         typeof args.phase === "string"
           ? args.phase as import("@orkestrator/protocol/build-pipeline").PipelineSessionPhase
           : undefined,
+      ...(args.sessionMode === "plan" || args.sessionMode === "build"
+        ? { sessionMode: args.sessionMode }
+        : {}),
+      ...(typeof args.fastMode === "boolean" ? { fastMode: args.fastMode } : {}),
     });
   });
 
@@ -12143,10 +12198,52 @@ export function createCommandRegistry(
     return context.multiReviews.start(args as unknown as StartMultiReviewInput)
       .then(stripLoopedReviewSnapshotSecrets);
   });
-  register("address_multi_review", ({ workflowId }, context) => {
+  register("address_multi_review", async ({ workflowId }, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
-    return context.multiReviews.address(asNonBlankString(workflowId, "workflowId"))
-      .then(stripLoopedReviewSnapshotSecrets);
+    const id = asNonBlankString(workflowId, "workflowId");
+    let workflow = await context.multiReviews.address(id);
+    if (workflow.addressPromptPending !== true) {
+      return stripLoopedReviewSnapshotSecrets(workflow);
+    }
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    const session = workflow.fixSession;
+    if (!session) throw new Error("The consolidation session is no longer available");
+    const logicalSessionKey = `multi-review:${workflow.id}:interactive`;
+    const model = workflow.fixModel.model === "default"
+      ? undefined
+      : workflow.fixModel.model;
+    await context.nativeAgents.adoptSession({
+      environmentId: workflow.environmentId,
+      agent: workflow.fixModel.agent,
+      logicalSessionKey,
+      origin: "interactive-native",
+      interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+      providerSessionId: session.providerSessionId,
+      title: "Multi Review · Fix",
+      model,
+      reasoningEffort: workflow.fixModel.reasoningEffort,
+      phase: "fix",
+      sessionMode: "build",
+    });
+    const outcome = await context.nativeAgents.dispatchIntent({
+      environmentId: workflow.environmentId,
+      agent: workflow.fixModel.agent,
+      logicalSessionKey,
+      origin: "interactive-native",
+      interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+      title: "Multi Review · Fix",
+      model,
+      reasoningEffort: workflow.fixModel.reasoningEffort,
+      phase: "fix",
+      prompt: MULTI_REVIEW_ADDRESS_PROMPT,
+      requestId: `multi-review-address:${workflow.id}`,
+      mode: "build",
+    });
+    if (outcome.outcome !== "accepted") {
+      throw new Error(outcome.error ?? "The address prompt dispatch was not confirmed");
+    }
+    workflow = await context.multiReviews.acknowledgeAddressPrompt(id);
+    return stripLoopedReviewSnapshotSecrets(workflow);
   });
   register("retry_multi_review", ({ workflowId }, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");

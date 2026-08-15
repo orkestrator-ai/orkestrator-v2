@@ -708,6 +708,10 @@ function SharedNativeAgentController({
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const initialPromptSentRef = useRef(false);
+  // The projection rewrites `data.sessionId` to whatever session the tab ends
+  // up connected to, so the id the tab was *asked* to resume has to be captured
+  // before that can happen.
+  const requestedResumeSessionIdRef = useRef(data.sessionId);
   const [optimisticPrompt, setOptimisticPrompt] = useState<{
     text: string;
     providerText: string;
@@ -761,11 +765,14 @@ function SharedNativeAgentController({
     platform,
     environmentId: data.environmentId,
     tabId,
-    initialAgentModel: initialAgentModel ?? configuredModel,
-    initialReasoningEffort: initialReasoningEffort ?? configuredReasoning,
+    initialAgentModel,
+    initialReasoningEffort,
+    defaultAgentModel: configuredModel,
+    defaultReasoningEffort: configuredReasoning,
     initialProviderSessionId: data.sessionId,
     initialConversationMode,
-    initialFastMode: initialFastMode ?? configuredFastMode,
+    initialFastMode,
+    defaultFastMode: configuredFastMode,
     isActive,
     enabled: !setupPending,
   });
@@ -1548,6 +1555,26 @@ function SharedNativeAgentController({
       || initialPromptSentRef.current
       || !initialPrompt?.trim()
     ) return;
+    // A tab that asked to resume a specific conversation carries a prompt that
+    // only makes sense inside it — "address every finding" means nothing in an
+    // empty session. Adoption falls back to creating a fresh session when the
+    // provider has forgotten the rollout, so refuse to fire the startup prompt
+    // at whatever session we actually landed in and say why instead.
+    const requestedSessionId = requestedResumeSessionIdRef.current;
+    if (
+      requestedSessionId
+      && projection.sessionId
+      && projection.sessionId !== requestedSessionId
+    ) {
+      initialPromptSentRef.current = true;
+      clearTabInitialPrompt(tabId, data.environmentId);
+      setSendError(
+        "The conversation this tab was opened to resume is no longer available, "
+        + "so its opening message was not sent. Send it yourself to continue in "
+        + "this new session.",
+      );
+      return;
+    }
     initialPromptSentRef.current = true;
     void submit(
       initialPrompt,
@@ -1563,6 +1590,7 @@ function SharedNativeAgentController({
     data.environmentId,
     initialPrompt,
     projection,
+    setSendError,
     submit,
     tabId,
   ]);

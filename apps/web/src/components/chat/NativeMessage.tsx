@@ -66,6 +66,7 @@ import {
   getNativeAgentStatus,
   type NativeAgentStatus,
 } from "@/lib/chat/native-agent-status";
+import { nativeAgentLatestActivity } from "@/lib/chat/native-agent-preview";
 import {
   isBackgroundTaskActionTool,
   isBackgroundTaskStopTool,
@@ -1362,29 +1363,6 @@ function isTerminalAgentStatus(status: NativeAgentStatus): boolean {
   return status === "finished" || status === "failed";
 }
 
-function getLatestActionPreview(action: NativeMessagePart): string {
-  if (action.type === "text") {
-    return action.content.trim() || "Response";
-  }
-  if (action.type === "thinking") {
-    return "Thinking";
-  }
-  if (action.type === "file") {
-    return action.content.trim() || "File";
-  }
-
-  const command =
-    typeof action.toolArgs?.command === "string" ? action.toolArgs.command : null;
-  if (command) {
-    return command;
-  }
-
-  return (
-    getToolTitleDisplayName(action.toolTitle, action.toolName, action.content)
-    || getToolDisplayName(action.toolName, action.content)
-  );
-}
-
 interface SubagentPreview {
   text: string;
   /** True when the text is the spawn prompt rather than live activity. */
@@ -1409,8 +1387,8 @@ function getSubagentPreview(
     return { text: task, isTask: true };
   }
 
-  const latestAction = actions.at(-1);
-  if (!latestAction) {
+  const latestActivity = nativeAgentLatestActivity(part);
+  if (!latestActivity) {
     return {
       text: isTerminalAgentStatus(status)
         ? "No activity captured."
@@ -1419,7 +1397,7 @@ function getSubagentPreview(
     };
   }
 
-  return { text: getLatestActionPreview(latestAction), isTask: false };
+  return { text: latestActivity, isTask: false };
 }
 
 function stringToolArg(
@@ -1707,36 +1685,12 @@ function TaskGroupPart({
     ? `${toolCount} ${toolCount === 1 ? "tool use" : "tool uses"}`
     : `${toolCount} ${toolCount === 1 ? "tool" : "tools"}`;
   const preview = useMemo(() => {
-    const latestChild = part.childTools.at(-1);
-    if (!latestChild) {
-      return description ?? (
-        isTerminalAgentStatus(status)
-          ? "No activity captured."
-          : "Waiting for activity."
-      );
-    }
-
-    if (latestChild.type === "thinking") return "Thinking";
-    if (latestChild.type === "text") {
-      return latestChild.content.trim() || "Response";
-    }
-    if (latestChild.type === "file") return latestChild.content;
-
-    const command =
-      typeof latestChild.toolArgs?.command === "string"
-        ? latestChild.toolArgs.command
-        : null;
-    if (command) return command;
-
-    return (
-      getToolTitleDisplayName(
-        latestChild.toolTitle,
-        latestChild.toolName,
-        latestChild.content,
-      ) ||
-      getToolDisplayName(latestChild.toolName, latestChild.content)
+    return nativeAgentLatestActivity(part) ?? description ?? (
+      isTerminalAgentStatus(status)
+        ? "No activity captured."
+        : "Waiting for activity."
     );
-  }, [description, part.childTools, status]);
+  }, [description, part, status]);
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className={agentCardClassName}>

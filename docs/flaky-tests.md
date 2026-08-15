@@ -219,7 +219,7 @@ history rather than two partial ones.
 
 ## `MultiReviewService > keeps a provider alive while a transcript read overlaps fix execution` (`apps/backend/src/core/multi-review-service.test.ts`)
 
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-full-tests4.log`; also `set -o pipefail; bun test --cwd apps/backend src/core --parallel 2>&1 | tee /tmp/ork-be-core-tests.log`
 - **Worker configuration:** Observed both as the backend workspace package (`bun test src tests --parallel` while the other workspace, root, bridge, and protocol-lockfile groups ran concurrently) and as a standalone `bun test --cwd apps/backend src/core --parallel` group of 49 files with no other group running concurrently.
@@ -228,6 +228,9 @@ history rather than two partial ones.
 - **Isolated rerun:** `bun test --cwd apps/backend src/core/multi-review-service.test.ts` -> 32 passed, 0 failed in one isolated run; another isolated first attempt was 31 passed, 1 failed, then five consecutive repetitions of the same command failed once and passed four times (32 passed, 0 failed).
 - **Pre-existing:** confirmed independent of the OpenCode provider-filter change and of later reviewed work. The working tree was stashed (`git stash push --include-untracked`) and the same parallel command rerun on the clean checkout: 1,584 passed, 1 failed, failing on this same test at the same assertion (215.41 ms and 128.45 ms).
 - **Hypothesis:** the test releases the blocked status call, polls `snapshot(started.id)` until `phase === "completed"`, and then immediately asserts the final dispose count. Reaching the completed phase and running the provider's teardown appear to be separate awaits, so the assertion can observe the phase transition before the release-path disposal has run. The failure is a timing boundary in the test's completion signal, not evidence of a leaked provider; the durable phase is already correct when it fires. An explicit wait on the dispose count (or an instrumented teardown signal) should be evaluated before changing the service's disposal ordering.
+- **Root cause:** Address-all no longer starts a supervised unattended fix turn, so the test was asserting a teardown that the product path no longer performs. The race was between `phase === "completed"` becoming visible and the asynchronous provider dispose after that turn.
+- **Fix:** Replace the overlapping-fix-execution case with `MultiReviewService hands the idle consolidation session to interactive addressing`. The handoff takes a bounded provider lease for one liveness read and releases it synchronously, so the test asserts exact call and disposal counts at a deterministic boundary instead of polling for a phase and then racing an asynchronous teardown.
+- **Verification:** Owning-file coverage for the rewritten handoff case is included in this change's Multi Review test run.
 
 ## `StorageService prompt queues > live lease timer restores and announces a sole claimed head` (`apps/backend/src/core/storage-prompt-queues.test.ts`)
 
@@ -424,7 +427,7 @@ history rather than two partial ones.
 
 ## `MultiReviewService keeps a provider alive while a transcript read overlaps fix execution` (`apps/backend/src/core/multi-review-service.test.ts`)
 
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-picker-fixes-full-tests.log`
 - **Worker configuration:** The backend workspace ran `bun test src tests --parallel` while the web, root, bridge, and protocol-lockfile groups ran concurrently.
@@ -432,6 +435,9 @@ history rather than two partial ones.
 - **Suite counts:** Backend package: 1,684 total, 1,682 passed, 2 failed across 55 files. Root/agent-support and the protocol lockfile passed; the bridge group had one separate aggregate-only failure.
 - **Isolated rerun:** `bun test ./src/core/multi-review-service.test.ts --parallel` from `apps/backend` -> 32 passed, 0 failed in 3.16 seconds; the target passed in 56.74 ms. Evidence: `/tmp/orkestrator-picker-fixes-isolated-multi-review.log`.
 - **Hypothesis:** The workflow reached its durable completed phase before the asynchronous provider-disposal observation became visible under aggregate scheduling. The isolated run proves the production path can satisfy the assertion, but this occurrence does not establish whether the test needs an explicit disposal boundary or the service is publishing completion before cleanup settles.
+- **Root cause:** Same overlapping-fix-execution teardown race as the entry above. Address-all no longer starts that supervised turn.
+- **Fix:** Same replacement case as the entry above.
+- **Verification:** Owning-file coverage for the rewritten handoff case is included in this change's Multi Review test run.
 
 ## `titles > a generated title is persisted for every tab sharing the thread` (`bridges/codex-bridge/src/app-server-runtime.test.ts`)
 
@@ -928,6 +934,20 @@ Post-fix stress verification:
 - **Isolated rerun:** `bun test --cwd apps/web ./src/components/layout/ActionBar.test.tsx --parallel` -> 145 passed, 0 failed, 558 assertions in 15.95 seconds; the target passed in 587.91 ms.
 - **Recurrence (attachment-only startup review, 2026-08-15):** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-review-dfc3ad3f-full-tests.log` reproduced the identical signature — no accessible `dialog` named `Configure code review` at `ActionBar.test.tsx:2474` (duration: 608.50 ms) — with the web workspace package running alongside the root, bridge, and protocol-lockfile groups. Web package: 4,851 total, 4,849 passed, 1 skipped, 1 failed across 211 files; every other group passed and Turbo reported `11 successful, 12 total`. The immediate isolated rerun, `bun test --cwd apps/web ./src/components/layout/ActionBar.test.tsx`, passed 145/0 with 558 assertions in 12.79 seconds. Evidence: `/tmp/orkestrator-review-dfc3ad3f-full-tests.log` and `/tmp/orkestrator-review-dfc3ad3f-actionbar-isolated.log`.
 - **Hypothesis:** The aggregate-only result shows the expected long-press dialog was absent when queried, while the full owning file recreates it in isolation. Two occurrences now share the same line and a sub-second duration, so the long press is firing but the dialog has not mounted by the time the query runs — consistent with scheduling contention rather than a product failure. No narrower trigger is established; a further recurrence should capture the long-press timer, pointer events, and unmount/remount state before changing the product behavior or assertion.
+
+## `ActionBar workflow tabs > opens the PR modal after a mobile long press without launching a default PR` (`apps/web/src/components/layout/ActionBar.test.tsx`)
+
+- **Status:** resolved
+- **Date observed:** 2026-08-15
+- **Original command:** `bun --cwd=apps/web test --parallel=4`
+- **Worker configuration:** The whole web package ran as one four-worker pool (216 files); the root, bridge, and protocol groups were not running concurrently.
+- **Failure:** Testing Library could not find an accessible `dialog` named `Configure pull request` at `ActionBar.test.tsx:2586` after the fixed 575 ms long-press wait (duration: 735.93 ms; also observed at 741.62 ms and 747.05 ms).
+- **Suite counts:** Web package: 4,928 passed, 1 skipped, 1 failed across 4,930 tests in 216 files. Reproduced on 3 of 6 aggregate runs; the other 3 runs passed 4,929/0.
+- **Isolated rerun:** `bun --cwd=apps/web test src/components/layout/ActionBar.test.tsx` -> 156 passed, 0 failed in 18.68 s; the target passed every time.
+- **Hypothesis:** This is the PR-modal twin of the code-review case resolved below, and it was the only long-press dialog assertion in the file still querying immediately after the fixed sleep instead of through `waitFor` (compare `ActionBar.test.tsx:2673` and `:2712`, both already wrapped). Under aggregate scheduling the 550 ms production timer can land after the 575 ms test sleep, so the query runs before the dialog mounts. The failure predates the change under which it was observed; it is a timing-sensitive assertion, not a product defect.
+- **Root cause:** The assertion was made immediately after a fixed sleep instead of waiting for the timer-driven dialog state transition — identical to the resolved twin below, which was missed when that fix was applied.
+- **Fix:** Wrap the `Configure pull request` dialog assertion in `waitFor` with a 10-second budget, matching the twin's remedy from commit `9065ed7f`.
+- **Verification:** `bun --cwd=apps/web test src/components/layout/ActionBar.test.tsx` -> 156 passed, 0 failed; the target completed in 660.98 ms. Two subsequent full web-package aggregates (`bun --cwd=apps/web test --parallel=4`) passed 4,929/0 across 216 files.
 
 ## `ActionBar workflow tabs > opens the review modal after a mobile long press without launching the default review` (`apps/web/src/components/layout/ActionBar.test.tsx`)
 

@@ -16,7 +16,7 @@ import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { getNativeAgentData } from "@/types/paneLayout";
+import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
 import { createSessionKey } from "@/lib/utils";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { dispatchResourceChange } from "@/lib/resource-sync";
@@ -221,6 +221,8 @@ afterEach(() => {
   useEnvironmentStore.setState({ environments: [] });
   useConfigStore.getState().updateGlobalConfig({
     enabledAgentPlatforms: ["claude", "codex", "opencode"],
+    claudeModel: "claude-sonnet-5",
+    claudeNativeFastModeDefault: false,
   });
   usePaneLayoutStore.setState({
     environments: new Map(),
@@ -304,6 +306,33 @@ function seedUnassignedPane(tabId: string) {
         },
         activePaneId: "default",
         containerId: null,
+      }],
+    ]),
+    hydration: new Map([["env-1", "done"]]),
+    activeEnvironmentId: "env-1",
+  });
+}
+
+function seedAssignedPane(
+  tabId: string,
+  initial: Pick<TabInfo, "initialConversationMode" | "initialFastMode">,
+) {
+  usePaneLayoutStore.setState({
+    environments: new Map([
+      ["env-1", {
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [{
+            id: tabId,
+            type: "agent-native",
+            nativeAgentData: identity("claude"),
+            ...initial,
+          }],
+          activeTabId: tabId,
+        },
+        activePaneId: "default",
+        containerId: "container-1",
       }],
     ]),
     hydration: new Map([["env-1", "done"]]),
@@ -928,6 +957,135 @@ describe("AgentNativeTab", () => {
       }));
     });
   }
+
+  test("carries one-shot launch options into the adoption of a resumed session", async () => {
+    // Multi Review hands its consolidation session over as a Build-mode tab, so
+    // the mode has to reach adoption; adopting without it would leave the fix
+    // agent in whatever mode consolidation left behind (plan).
+    render(
+      <AgentNativeTab
+        tabId="tab-resume-controls"
+        data={identity("claude")}
+        isActive
+        initialAgentModel="opus"
+        initialReasoningEffort="high"
+        initialConversationMode="build"
+        initialFastMode={false}
+      />,
+    );
+
+    await waitFor(() => expect(adoptNativeAgentSessionMock).toHaveBeenCalled());
+    expect(adoptNativeAgentSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      providerSessionId: "claude-session",
+      model: "opus",
+      reasoningEffort: "high",
+      sessionMode: "build",
+      fastMode: false,
+    });
+  });
+
+  test("does not overwrite a resumed session with configured defaults", async () => {
+    useConfigStore.getState().updateGlobalConfig({
+      claudeModel: "configured-default",
+      claudeNativeFastModeDefault: true,
+    });
+
+    render(
+      <AgentNativeTab
+        tabId="tab-resume-preserve-controls"
+        data={identity("claude")}
+        isActive
+      />,
+    );
+
+    await waitFor(() => expect(adoptNativeAgentSessionMock).toHaveBeenCalled());
+    const adopted = adoptNativeAgentSessionMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(adopted).not.toHaveProperty("model");
+    expect(adopted).not.toHaveProperty("reasoningEffort");
+    expect(adopted).not.toHaveProperty("sessionMode");
+    expect(adopted).not.toHaveProperty("fastMode");
+
+    useConfigStore.getState().updateGlobalConfig({
+      claudeModel: "claude-sonnet-5",
+      claudeNativeFastModeDefault: false,
+    });
+  });
+
+  test("consumes a mode-only launch option before a resumed tab remounts", async () => {
+    const tabId = "tab-mode-only";
+    seedAssignedPane(tabId, { initialConversationMode: "build" });
+    const first = render(<PaneBackedAgentNativeTab tabId={tabId} />);
+
+    await waitFor(() => {
+      const tab = usePaneLayoutStore.getState().getAllTabs("env-1")
+        .find((candidate) => candidate.id === tabId);
+      expect(tab?.initialConversationMode).toBeUndefined();
+    });
+    expect(adoptNativeAgentSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      sessionMode: "build",
+    });
+
+    first.unmount();
+    adoptNativeAgentSessionMock.mockClear();
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    await waitFor(() => expect(adoptNativeAgentSessionMock).toHaveBeenCalled());
+    expect(adoptNativeAgentSessionMock.mock.calls.at(-1)?.[0])
+      .not.toHaveProperty("sessionMode");
+  });
+
+  test("consumes an explicit false fast-mode option", async () => {
+    const tabId = "tab-fast-only";
+    seedAssignedPane(tabId, { initialFastMode: false });
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+
+    await waitFor(() => {
+      const tab = usePaneLayoutStore.getState().getAllTabs("env-1")
+        .find((candidate) => candidate.id === tabId);
+      expect(tab?.initialFastMode).toBeUndefined();
+    });
+    expect(adoptNativeAgentSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      fastMode: false,
+    });
+  });
+
+  test("sends a resumed tab's opening prompt once it is in the session it asked for", async () => {
+    render(
+      <AgentNativeTab
+        tabId="tab-resume-prompt"
+        data={identity("claude")}
+        isActive
+        initialPrompt={ADDRESS_ALL_REVIEW_PROMPT}
+      />,
+    );
+
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalled());
+    expect(dispatchNativeAgentIntentMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      prompt: ADDRESS_ALL_REVIEW_PROMPT,
+    });
+  });
+
+  test("withholds a resumed tab's opening prompt when the session was substituted", async () => {
+    // Adoption falls back to creating a fresh session when the provider has
+    // forgotten the rollout. "Address every finding" carries no findings of its
+    // own, so firing it into an empty conversation asks the agent to act on a
+    // review it cannot see.
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as Parameters<typeof defaultProjection>[0])),
+      sessionId: "a-replacement-session",
+    }));
+
+    render(
+      <AgentNativeTab
+        tabId="tab-resume-substituted"
+        data={identity("claude")}
+        isActive
+        initialPrompt={ADDRESS_ALL_REVIEW_PROMPT}
+      />,
+    );
+
+    expect(await screen.findByText(/opening message was not sent/)).toBeTruthy();
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+  });
 
   test("waits for environment setup before starting the shared provider", async () => {
     useEnvironmentStore.setState({
@@ -1781,6 +1939,27 @@ describe("AgentNativeTab", () => {
 
       expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
       expect(screen.getByRole("button", { name: "Context window 42% used" })).toBeTruthy();
+    });
+
+    test("renders the context wheel before the stop button during a running turn", async () => {
+      seedProjection({
+        phase: "running",
+        contextUsage: {
+          usedTokens: 210_000,
+          maximumTokens: 500_000,
+          percentage: 42,
+          source: "provider",
+        },
+      });
+      render(<AgentNativeTab tabId="tab-running-usage" data={identity("grok")} isActive />);
+
+      const contextWheel = await screen.findByRole("button", {
+        name: "Context window 42% used",
+      });
+      const stopButton = screen.getByTitle("Stop current query");
+      expect(
+        contextWheel.compareDocumentPosition(stopButton) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     });
 
     test("derives the context wheel percentage when the provider reports only a maximum", async () => {

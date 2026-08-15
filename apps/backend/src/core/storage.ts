@@ -3922,6 +3922,9 @@ export class StorageService {
               ...(current.global.githubToken
                 ? { githubToken: current.global.githubToken }
                 : {}),
+              ...(current.global.anthropicApiKey
+                ? { anthropicApiKey: current.global.anthropicApiKey }
+                : {}),
               ...(current.global.cursorApiKey
                 ? { cursorApiKey: current.global.cursorApiKey }
                 : {}),
@@ -4188,6 +4191,9 @@ export class StorageService {
             ...(config.global.githubToken
               ? { githubToken: config.global.githubToken }
               : {}),
+            ...(config.global.anthropicApiKey
+              ? { anthropicApiKey: config.global.anthropicApiKey }
+              : {}),
             ...(config.global.cursorApiKey
               ? { cursorApiKey: config.global.cursorApiKey }
               : {}),
@@ -4231,6 +4237,17 @@ export class StorageService {
       const config = await this.loadConfig();
       if (apiKey === null) delete config.global.cursorApiKey;
       else config.global.cursorApiKey = apiKey;
+      await this.saveJson(this.configFile(), config);
+      this.announce("config", "app");
+      return config;
+    });
+  }
+
+  async setAnthropicApiKey(apiKey: string | null): Promise<AppConfig> {
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadConfig();
+      if (apiKey === null) delete config.global.anthropicApiKey;
+      else config.global.anthropicApiKey = apiKey;
       await this.saveJson(this.configFile(), config);
       this.announce("config", "app");
       return config;

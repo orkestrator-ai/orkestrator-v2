@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   MULTI_REVIEW_MAX_REVIEWERS,
   MULTI_REVIEW_WORKFLOW_VERSION,
+  isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
   isStartMultiReviewInput,
 } from "./multi-review";
@@ -53,7 +54,43 @@ describe("multi review protocol", () => {
       backendRevision: 2,
     };
     expect(isMultiReviewWorkflow(workflow)).toBe(true);
+    expect(isMultiReviewWorkflow({ ...workflow, phase: "interactive" })).toBe(true);
     expect(isMultiReviewWorkflow({ ...workflow, consolidatedReport: undefined })).toBe(false);
+    expect(isMultiReviewWorkflow({
+      ...workflow, phase: "interactive", consolidatedReport: undefined,
+    })).toBe(false);
+  });
+
+  test("treats an interactive handoff as a terminal workflow", () => {
+    expect(isMultiReviewTerminalPhase("interactive")).toBe(true);
+    expect(isMultiReviewTerminalPhase("completed")).toBe(true);
+    expect(isMultiReviewTerminalPhase("cancelled")).toBe(true);
+    expect(isMultiReviewTerminalPhase("ready")).toBe(false);
+    expect(isMultiReviewTerminalPhase("fixing")).toBe(false);
+  });
+
+  test("accepts a pending address dispatch only on an interactive workflow", () => {
+    const workflow = {
+      version: MULTI_REVIEW_WORKFLOW_VERSION,
+      controller: "backend",
+      id: "workflow-address", environmentId: "env-1", projectId: "project-1",
+      targetBranch: "main",
+      reviewers: [{ id: "reviewer-1", agent: "claude", model: "opus", status: "completed", report }],
+      fixModel: { agent: "codex", model: "gpt-5.6" },
+      fixSession: {
+        agent: "codex", model: "gpt-5.6", sessionKey: "fix-session",
+        providerSessionId: "provider-fix", requestIds: ["request-1"], status: "idle",
+        startedAt: new Date(0).toISOString(),
+      },
+      phase: "interactive",
+      consolidatedReport: report,
+      addressPromptPending: true,
+      createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
+      backendRevision: 2,
+    };
+    expect(isMultiReviewWorkflow(workflow)).toBe(true);
+    expect(isMultiReviewWorkflow({ ...workflow, phase: "ready" })).toBe(false);
+    expect(isMultiReviewWorkflow({ ...workflow, addressPromptPending: "yes" })).toBe(false);
   });
 
   test("rejects unsafe branches, empty instructions, and duplicate reviewer identities", () => {

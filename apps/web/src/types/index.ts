@@ -454,7 +454,10 @@ export interface GlobalConfig {
   favoriteModels?: Array<{ platform: AgentPlatform; modelId: string }>;
   containerResources: ContainerResources;
   envFilePatterns: string[];
-  anthropicApiKey?: string;
+  /** Whether a write-only Anthropic API key is stored by the backend. */
+  anthropicApiKeyConfigured?: boolean;
+  /** Effective key source for new containers; the key value is never returned. */
+  anthropicApiKeySource?: "config" | "host-env" | "none";
   /** Whether a write-only Cursor API key is stored by the backend. */
   cursorApiKeyConfigured?: boolean;
   /**

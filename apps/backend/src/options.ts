@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { type AgentPlatform, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { APP_SLUG } from "./core/constants.js";
 import {
   parseGatewayCompressionMode,
@@ -35,7 +36,7 @@ export type BackendOptions = {
   dockerImage: string;
   strictDockerOwner: boolean;
   strictGatewayPort: boolean;
-  credentialSources: Array<"claude" | "codex" | "opencode">;
+  credentialSources: AgentPlatform[];
 };
 
 export function assertSupportedPlatform(platform: NodeJS.Platform = process.platform): void {
@@ -91,7 +92,7 @@ function parseCredentialSources(value: string | undefined): BackendOptions["cred
   if (!value?.trim()) return [];
   const values = [...new Set(value.split(",").map((entry) => entry.trim()).filter(Boolean))];
   for (const entry of values) {
-    if (entry !== "claude" && entry !== "codex" && entry !== "opencode") {
+    if (!isAgentPlatform(entry)) {
       throw new Error(`Invalid --credential-source value: ${entry}`);
     }
   }

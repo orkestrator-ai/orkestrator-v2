@@ -5,6 +5,21 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
+/**
+ * Accessible name of the collapsed tools trigger.
+ *
+ * Exported because the toolbar lives inside the tools popover: when a dialog
+ * launched from there closes, the popover has usually collapsed and focus has
+ * to land here instead of on a trigger the user can no longer see. Sharing the
+ * label keeps that lookup from silently missing if this button is renamed.
+ */
+export const MOBILE_TOOLS_TRIGGER_LABEL = "Open tools";
+export const MOBILE_TOOLS_TRIGGER_SELECTOR =
+  `button[aria-label="${MOBILE_TOOLS_TRIGGER_LABEL}"]`;
+
+/** The breakpoint at which `AppShell` swaps in this layout. */
+export const MOBILE_SHELL_MEDIA_QUERY = "(max-width: 767px)";
+
 interface MobileAppShellLayoutProps {
   selectedProjectId: string | null;
   selectedEnvironmentId: string | null;
@@ -193,7 +208,7 @@ export function MobileAppShellLayout({
           style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
           onMouseDown={(event) => event.stopPropagation()}
           onClick={() => setToolsOpen((open) => !open)}
-          aria-label={toolsOpen ? "Close tools" : "Open tools"}
+          aria-label={toolsOpen ? "Close tools" : MOBILE_TOOLS_TRIGGER_LABEL}
           aria-expanded={toolsOpen}
           aria-haspopup="dialog"
           aria-controls="mobile-tools-popover"

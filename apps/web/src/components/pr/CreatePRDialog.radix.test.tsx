@@ -91,6 +91,34 @@ function DisconnectedTriggerHarness() {
   );
 }
 
+/**
+ * The mobile case: the trigger is still mounted, but inside a collapsed tools
+ * popover the user cannot see. The fallback therefore has to outrank a
+ * perfectly connected `returnFocusRef`.
+ */
+function CollapsedTriggerHarness() {
+  const [open, setOpen] = useState(true);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const fallbackRef = useRef<HTMLButtonElement>(null);
+  return (
+    <>
+      <button ref={triggerRef} type="button">Create PR</button>
+      <button ref={fallbackRef} type="button">Open tools</button>
+      <CreatePRDialog
+        open={open}
+        onOpenChange={setOpen}
+        defaultAgent="claude"
+        catalog={catalog}
+        enabledAgents={["claude", "codex", "opencode"]}
+        targetBranch="main"
+        returnFocusRef={triggerRef}
+        returnFocusFallback={() => fallbackRef.current}
+        onConfirm={() => undefined}
+      />
+    </>
+  );
+}
+
 describe("CreatePRDialog with real Radix primitives", () => {
   test("keeps the narrow picker accessible and restores trigger focus on close", async () => {
     render(<Harness />);
@@ -112,6 +140,22 @@ describe("CreatePRDialog with real Radix primitives", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  test("prefers the fallback over a still-connected trigger", async () => {
+    render(<CollapsedTriggerHarness />);
+    await screen.findByRole("dialog", { name: "Configure pull request" });
+
+    // An open modal hides everything outside it from the accessibility tree, so
+    // both buttons are only queryable once the dialog has gone.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    const trigger = screen.getByRole("button", { name: "Create PR" });
+    const fallback = screen.getByRole("button", { name: "Open tools" });
+    expect(trigger.isConnected).toBe(true);
+    await waitFor(() => expect(document.activeElement).toBe(fallback));
+    expect(document.activeElement).not.toBe(trigger);
   });
 
   test("restores focus to a fallback when the original trigger has unmounted", async () => {

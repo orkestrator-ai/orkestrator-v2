@@ -173,6 +173,12 @@ let currentRepositoryConfig: Record<string, { prBaseBranch?: string }> = {
 let currentWorkspaceReady = false;
 let currentSetupScriptsRunning = false;
 let currentTabCount = 0;
+/**
+ * Whether a terminal container has registered a tab factory. It is null
+ * whenever the environment's terminal is not mounted or ready, which is a
+ * distinct condition from having reached the tab limit.
+ */
+let currentCreateTabRegistered = true;
 let currentKanbanNotes = "";
 let currentKanbanNotesProjectId: string | null = null;
 let currentTaskAssociation: {
@@ -587,7 +593,7 @@ mock.module("@/contexts", () => ({
   MAX_TABS: 10,
   useTerminalContext: () => ({
     closeActiveTab: closeActiveTabMock,
-    createTab: createTabMock,
+    createTab: currentCreateTabRegistered ? createTabMock : null,
     selectTab: selectTabMock,
     tabCount: currentTabCount,
   }),
@@ -743,6 +749,7 @@ beforeEach(() => {
   currentWorkspaceReady = false;
   currentSetupScriptsRunning = false;
   currentTabCount = 0;
+  currentCreateTabRegistered = true;
   currentKanbanNotes = "";
   currentKanbanNotesProjectId = null;
   currentTaskAssociation = { task: undefined, taskId: undefined };
@@ -2411,6 +2418,132 @@ describe("ActionBar workflow tabs", () => {
     expect(screen.queryByRole("dialog", { name: "Configure pull request" })).toBeNull();
     expect(createTabMock).toHaveBeenCalledTimes(2);
     expect(setModeCreatePendingMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("leaves PR monitoring idle when a plain-click launch is rejected", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    createTabMock.mockReturnValueOnce(false);
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
+
+    // Arming create-pending here would leave the backend polling every five
+    // seconds for a PR that no agent was ever launched to create.
+    expect(createTabMock).toHaveBeenCalledTimes(1);
+    expect(setModeCreatePendingMock).not.toHaveBeenCalled();
+  });
+
+  test("falls back to main when the repository stores an empty PR base branch", () => {
+    // Repository settings persist a cleared "PR Base Branch" field verbatim,
+    // so an empty string has to be treated as unset rather than as a branch.
+    currentRepositoryConfig = { "project-1": { prBaseBranch: "" } };
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
+
+    const [, options] = createTabMock.mock.calls[0] as [string, { initialPrompt: string }];
+    expect(options.initialPrompt).toContain("gh pr create --base main --fill");
+    expect(options.initialPrompt).not.toContain("--base  ");
+    expect(options.initialPrompt).not.toContain("git diff origin/...HEAD");
+  });
+
+  test("launches against the base branch pinned when the modal opened", () => {
+    currentRepositoryConfig = { "project-1": { prBaseBranch: "release" } };
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    const view = render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+    expect(screen.getByText(/into release/)).toBeTruthy();
+
+    // Repository settings can be saved while the modal is open. The launch must
+    // use the branch the user reviewed, not the one that replaced it.
+    currentRepositoryConfig = { "project-1": { prBaseBranch: "develop" } };
+    view.rerender(<ActionBar />);
+    expect(screen.getByText(/into release/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
+
+    const [, options] = createTabMock.mock.calls[0] as [string, { initialPrompt: string }];
+    expect(options.initialPrompt).toContain("gh pr create --base release --fill");
+    expect(options.initialPrompt).not.toContain("develop");
+  });
+
+  test("disables a pinned PR launch when the environment stops running", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    const view = render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+    currentEnvironment = { ...currentEnvironment, status: "stopped" };
+    view.rerender(<ActionBar />);
+
+    expect(screen.getByRole("alert").textContent).toContain("no longer running");
+    expect((screen.getByRole("button", { name: "Create pull request" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect(createTabMock).not.toHaveBeenCalled();
+    expect(setModeCreatePendingMock).not.toHaveBeenCalled();
+  });
+
+  test("disables a pinned PR launch when the tab limit is reached", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    const view = render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+    currentTabCount = 10;
+    view.rerender(<ActionBar />);
+
+    expect(screen.getByRole("alert").textContent).toContain("maximum number of tabs");
+    expect((screen.getByRole("button", { name: "Create pull request" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
+
+  test("distinguishes an unready terminal from the tab limit", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    const view = render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+    // No terminal container has registered a tab factory. Reporting the tab
+    // limit here would be false and would send the user looking for tabs to close.
+    currentCreateTabRegistered = false;
+    view.rerender(<ActionBar />);
+
+    const alert = screen.getByRole("alert").textContent ?? "";
+    expect(alert).toContain("not ready to open a new tab");
+    expect(alert).not.toContain("maximum number of tabs");
+    expect((screen.getByRole("button", { name: "Create pull request" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect(createTabMock).not.toHaveBeenCalled();
   });
 
   test("opens the PR modal after a mobile long press without launching a default PR", async () => {

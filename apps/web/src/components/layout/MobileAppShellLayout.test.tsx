@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createPortal } from "react-dom";
-import { MobileAppShellLayout } from "./MobileAppShellLayout";
+import {
+  MOBILE_TOOLS_TRIGGER_LABEL,
+  MOBILE_TOOLS_TRIGGER_SELECTOR,
+  MobileAppShellLayout,
+} from "./MobileAppShellLayout";
 
 const originalOrkestrator = window.orkestrator;
 const originalGateway = window.orkestratorGateway;
@@ -57,6 +61,23 @@ function getTitleBarSidebarTrigger(container: HTMLElement): HTMLButtonElement {
 }
 
 describe("MobileAppShellLayout", () => {
+  test("exposes the collapsed tools trigger under its published selector", () => {
+    /*
+     * `ActionBar` returns focus here by query selector when a dialog launched
+     * from inside the tools popover closes, because the toolbar's own trigger
+     * is still mounted but hidden. Renaming this button would silently strand
+     * focus, so assert the two agree — and that the selector deliberately stops
+     * matching once the popover is open and the toolbar is reachable again.
+     */
+    const { container } = renderLayout();
+
+    expect(container.ownerDocument.querySelector(MOBILE_TOOLS_TRIGGER_SELECTOR))
+      .toBe(screen.getByRole("button", { name: MOBILE_TOOLS_TRIGGER_LABEL }));
+
+    fireEvent.click(screen.getByRole("button", { name: MOBILE_TOOLS_TRIGGER_LABEL }));
+    expect(container.ownerDocument.querySelector(MOBILE_TOOLS_TRIGGER_SELECTOR)).toBeNull();
+  });
+
   test("places agent information immediately left of the tools spanner", () => {
     /*
      * No CSS is compiled under `bun test`, so restating the Tailwind offset

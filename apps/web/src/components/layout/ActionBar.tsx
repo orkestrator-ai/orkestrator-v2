@@ -101,6 +101,10 @@ import {
 } from "@/lib/review-launch-options";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { useLongPressAction } from "@/hooks/useLongPressAction";
+import {
+  MOBILE_SHELL_MEDIA_QUERY,
+  MOBILE_TOOLS_TRIGGER_SELECTOR,
+} from "./MobileAppShellLayout";
 import { promptQueueKey } from "@/lib/prompt-queue-persistence";
 import { createSessionKey } from "@/lib/utils";
 import { createUuid } from "@/lib/uuid";
@@ -1138,7 +1142,9 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     ) return false;
 
     const repoConfig = config.repositories[selectedProjectId];
-    const targetBranch = targetBranchOverride ?? repoConfig?.prBaseBranch ?? "main";
+    // Falsy, not nullish: repository settings persist a cleared PR base branch
+    // as "", and an empty base would reach the agent as `gh pr create --base `.
+    const targetBranch = targetBranchOverride || repoConfig?.prBaseBranch || "main";
     const prPrompt = createPRPrompt(targetBranch);
 
     const created = createTab(agentOverride || defaultAgent, {
@@ -1198,9 +1204,14 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         ? "A pull request now exists for this environment."
         : !isRunning
           ? "The environment is no longer running."
-          : !canCreateTab
+          // `canCreateTab` folds two distinct causes together, so report them
+          // separately: an unregistered `createTab` means the environment's
+          // terminal is not ready, which the tab limit wording would misdescribe.
+          : tabCount >= MAX_TABS
             ? "The maximum number of tabs has been reached."
-            : null;
+            : !canCreateTab
+              ? "This environment is not ready to open a new tab yet."
+              : null;
 
   const handleConfiguredCreatePR = useCallback((selection: CreatePRSelection) => {
     if (!prDialogTarget || prEligibilityError) return;
@@ -2395,9 +2406,14 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         }}
         targetBranch={prDialogTarget?.targetBranch ?? targetBranch}
         returnFocusRef={createPrButtonRef}
+        // Below the mobile breakpoint this toolbar lives inside the tools
+        // popover, which collapses as the dialog opens. The trigger stays
+        // mounted but hidden, so focus has to return to the popover's own
+        // trigger; the selector only matches while the popover is closed, which
+        // is exactly when the Create PR button is unreachable.
         returnFocusFallback={() =>
-          window.matchMedia("(max-width: 767px)").matches
-            ? document.querySelector<HTMLButtonElement>('button[aria-label="Open tools"]')
+          window.matchMedia(MOBILE_SHELL_MEDIA_QUERY).matches
+            ? document.querySelector<HTMLButtonElement>(MOBILE_TOOLS_TRIGGER_SELECTOR)
             : null
         }
         confirmDisabled={Boolean(prEligibilityError)}

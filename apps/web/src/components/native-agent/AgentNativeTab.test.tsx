@@ -318,6 +318,31 @@ describe("AgentNativeTab", () => {
     },
   );
 
+  test.each(AGENT_PLATFORMS.map((platform) => [platform] as const))(
+    "renders the context-window control in the %s compose bar once usage arrives",
+    async (platform) => {
+      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+        ...(await defaultProjection(input)),
+        contextUsage: { usedTokens: 4_000, maximumTokens: 16_000, percentage: 25 },
+      }));
+
+      render(
+        <AgentNativeTab
+          tabId={`tab-context-present-${platform}`}
+          data={identity(platform)}
+          isActive
+        />,
+      );
+
+      // The control is conditional, so absence before usage arrives must not be
+      // allowed to become permanent absence after it does.
+      const contextButton = await screen.findByRole("button", {
+        name: "Context window 25% used",
+      });
+      expect(contextButton.nextElementSibling).toBe(screen.getByTitle("Send"));
+    },
+  );
+
   test("keeps an unassigned tab composer-only without loading a bridge controller", () => {
     const { container } = render(
       <AgentNativeTab

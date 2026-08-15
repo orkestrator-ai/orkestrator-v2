@@ -276,6 +276,23 @@ describe("HTTP build pipeline provider", () => {
       await expect(malformedResume.provider.resumeSession?.("opaque-session"))
         .rejects.toBeInstanceOf(ProviderUnavailableError);
     });
+
+    test(`surfaces why ${agent} cannot list its own ACP sessions`, async () => {
+      const { provider } = httpProvider(
+        (url) => url.endsWith("/session/list")
+          ? Response.json(
+            { error: `${agent} cannot list resumable ACP sessions` },
+            { status: 410 },
+          )
+          : new Response(null, { status: 404 }),
+        connection,
+      );
+
+      // A bare "HTTP 410" tells the user nothing actionable; the bridge's own
+      // explanation has to survive the hop.
+      await expect(provider.listResumableSessions?.())
+        .rejects.toThrow(`${agent} cannot list resumable ACP sessions`);
+    });
   }
 
   test("treats a successful empty structured result as pending", async () => {

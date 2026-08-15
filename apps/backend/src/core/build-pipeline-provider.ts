@@ -2884,7 +2884,10 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       {},
       this.fetchImpl,
     );
-    assertOk(response, `${this.agent} resumable session list`);
+    // The ACP bridge answers 410 with the reason the agent cannot list its own
+    // history. Dropping that body would reduce a specific, actionable message
+    // to a bare status code in front of the user.
+    await assertOkWithErrorDetail(response, `${this.agent} resumable session list`);
     const payload = asRecord(await boundedJson(
       response,
       `${this.agent} resumable session list`,

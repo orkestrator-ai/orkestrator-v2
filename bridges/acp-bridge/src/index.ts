@@ -681,10 +681,18 @@ async function resumeSession(
   if (existing) return resumeExistingSession(existing, signal, patch);
   const acpSessionId = parseExternalSessionToken(selectedSessionId);
   if (!acpSessionId) throw new HttpError(404, "ACP session was not found");
+  // Checked before the `sessions` scan below: an adoption registers its state
+  // before `session/load` returns, so a racing caller would otherwise find a
+  // still-dispatching session and be told 409 for work it should simply join.
+  // The in-flight adoption also carries the *first* caller's controls, so this
+  // caller has to apply its own rather than inherit them silently.
+  const pending = sessionResumes.get(acpSessionId);
+  if (pending) {
+    const adopted = await pending;
+    return patch ? resumeExistingSession(adopted, signal, patch) : adopted;
+  }
   const alreadyLoaded = [...sessions.values()].find((state) => state.acpSessionId === acpSessionId);
   if (alreadyLoaded) return resumeExistingSession(alreadyLoaded, signal, patch);
-  const pending = sessionResumes.get(acpSessionId);
-  if (pending) return pending;
   if (activeSessionReservations() >= MAX_SESSIONS) throw new HttpError(429, "ACP session limit reached");
   const operation = resumeSessionReserved(acpSessionId, signal, patch);
   sessionResumes.set(acpSessionId, operation);
@@ -1050,13 +1058,11 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     return;
   }
   if (state.outputTruncated) return;
-  if (state.historyReplay === "ignore" && (
-    kind === "user_message"
-    || kind === "user_message_chunk"
-    || kind === "agent_message"
-    || kind === "agent_message_chunk"
-    || kind === "agent_thought_chunk"
-  )) return;
+  // A reconnect replays a transcript the bridge already holds, so every update
+  // that would mutate it has to be dropped — tool calls included. `tool_call`
+  // upserts by id against the *trailing* message only, so a replayed historical
+  // call finds no owner and appends a duplicate to whatever is at the tail.
+  if (state.historyReplay === "ignore" && isTranscriptUpdateKind(kind)) return;
   if (kind === "tool_call" || kind === "tool_call_update") {
     applyToolCallUpdate(state, update, kind === "tool_call");
     return;
@@ -1066,23 +1072,34 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     && kind !== "agent_message"
     && kind !== "agent_message_chunk"
     && kind !== "agent_thought_chunk") return;
+  // User content is authored by `/session/prompt`, which pushes the
+  // authoritative message before dispatching the turn. An agent that echoes the
+  // prompt back mid-turn would append the same text onto that message a second
+  // time — and for a structured turn the echo carries the appended JSON Schema
+  // instructions too. Only a `session/load` replay, where the bridge has no
+  // record of its own, may introduce user messages.
+  if ((kind === "user_message" || kind === "user_message_chunk")
+    && state.historyReplay !== "hydrate") return;
   const text = contentText(update.content);
   if (!text) return;
   const role = kind === "user_message" || kind === "user_message_chunk" ? "user" : "assistant";
   const partType = kind === "agent_thought_chunk" ? "thinking" : "text";
+  // A non-chunk update carries a complete message, so it always begins one.
+  // Only chunks continue the message before them.
+  const isChunk = kind === "user_message_chunk"
+    || kind === "agent_message_chunk"
+    || kind === "agent_thought_chunk";
   const providerMessageId = boundedString(update.messageId, MAX_TOOL_ID_BYTES)?.trim();
   let message = providerMessageId
     ? findHistoryMessage(state, providerMessageId)
     : undefined;
   const last = state.messages.at(-1);
-  const canAdoptLiveUser = providerMessageId
-    && role === "user"
-    && state.status === "running"
-    && state.historyReplay === false;
-  if (!message && last?.role === role && (canAdoptLiveUser || (!providerMessageId && (
-    state.status === "running"
-    || (state.historyReplay === "hydrate" && last.parts.at(-1)?.type === partType)
-  )))) {
+  // With no provider message id there is no explicit boundary, so a chunk
+  // continues the message before it regardless of part type: a thought chunk
+  // followed by a text chunk is one assistant turn, not two.
+  if (!message && !providerMessageId && isChunk && last?.role === role && (
+    state.status === "running" || state.historyReplay === "hydrate"
+  )) {
     message = last;
   }
   if (!message) {
@@ -1137,6 +1154,21 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
   }
   schedulePersist();
+}
+
+/** Every `session/update` kind that appends to or mutates the transcript. */
+const TRANSCRIPT_UPDATE_KINDS = new Set([
+  "user_message",
+  "user_message_chunk",
+  "agent_message",
+  "agent_message_chunk",
+  "agent_thought_chunk",
+  "tool_call",
+  "tool_call_update",
+]);
+
+function isTranscriptUpdateKind(kind: string): boolean {
+  return TRANSCRIPT_UPDATE_KINDS.has(kind);
 }
 
 function findHistoryMessage(state: SessionState, providerMessageId: string): BridgeMessage | undefined {
@@ -1296,7 +1328,10 @@ function setOptionalPartField<TKey extends keyof BridgeToolPart>(
 
 function currentAssistantMessage(state: SessionState): BridgeMessage {
   let message = state.messages.at(-1);
-  if (!message || message.role !== "assistant" || state.status !== "running") {
+  // A hydrating replay is idle by definition, so requiring "running" here would
+  // open a fresh, empty assistant message for every tool call in the history.
+  if (!message || message.role !== "assistant"
+    || (state.status !== "running" && state.historyReplay !== "hydrate")) {
     message = {
       id: randomBytes(12).toString("hex"),
       role: "assistant",

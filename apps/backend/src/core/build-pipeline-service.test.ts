@@ -3858,10 +3858,12 @@ describe("BuildPipelineService", () => {
           ) => Promise<BuildPipelineProvider>;
         }).provider(restored, "claude");
         const registration = (provider as unknown as {
-          interactionTracker: {
-            registration: (sessionId: string) => ProviderSessionRegistration;
+          interactionAdapter: {
+            interactionTracker: {
+              registration: (sessionId: string) => ProviderSessionRegistration;
+            };
           };
-        }).interactionTracker.registration("build-1");
+        }).interactionAdapter.interactionTracker.registration("build-1");
         expect(registration).toEqual(expect.objectContaining({
           origin: "build-pipeline",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,

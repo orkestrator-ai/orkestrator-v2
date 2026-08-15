@@ -47,6 +47,10 @@ describe("defaultConfig", () => {
     expect(defaultConfig().global.webClientEnabled).toBe(true);
   });
 
+  test("uses native Claude sessions by default", () => {
+    expect(defaultConfig().global.claudeMode).toBe("native");
+  });
+
   test("uses host GitHub CLI credentials by default", () => {
     expect(defaultConfig().global.useHostGitHubCredentials).toBe(true);
     expectTypeOf<AppConfig["global"]["useHostGitHubCredentials"]>()
@@ -129,6 +133,42 @@ describe("first-run agent platform selection", () => {
       });
       expect(updated.global.enabledAgentPlatforms).toEqual(["cursor", "grok"]);
       expect(updated.global.defaultAgent).toBe("cursor");
+    });
+  });
+});
+
+describe("Claude mode normalization", () => {
+  test("upgrades a legacy config without a Claude mode to native", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const { claudeMode: _absent, ...legacyGlobal } = defaultConfig().global;
+      await fs.writeFile(
+        path.join(dataDir, "config.json"),
+        JSON.stringify({
+          ...defaultConfig(),
+          global: legacyGlobal,
+        }),
+        "utf8",
+      );
+
+      expect((await storage.loadConfig()).global.claudeMode).toBe("native");
+    });
+  });
+
+  test("preserves an explicit terminal choice", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await fs.writeFile(
+        path.join(dataDir, "config.json"),
+        JSON.stringify({
+          ...defaultConfig(),
+          global: {
+            ...defaultConfig().global,
+            claudeMode: "terminal",
+          },
+        }),
+        "utf8",
+      );
+
+      expect((await storage.loadConfig()).global.claudeMode).toBe("terminal");
     });
   });
 });

@@ -70,6 +70,7 @@ import {
   MAX_OPENCODE_MODEL_PROVIDERS,
   normalizeOpenCodeModelProviders,
 } from "@orkestrator/protocol/native-agent";
+import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
 
 // Domain validation regex
 const DOMAIN_REGEX = /^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
@@ -142,7 +143,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   );
   const [openCodeProviderDraft, setOpenCodeProviderDraft] = useState("");
   const [claudeMode, setClaudeMode] = useState<ClaudeMode>(
-    global.claudeMode || "terminal"
+    global.claudeMode || DEFAULT_CLAUDE_MODE
   );
   const [claudeNativeBackend, setClaudeNativeBackend] = useState<ClaudeNativeBackend>(
     global.claudeNativeBackend || "sdk"
@@ -243,7 +244,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       normalizeOpenCodeModelProviders(global.openCodeModelProviders),
     );
     setOpenCodeProviderDraft("");
-    setClaudeMode(global.claudeMode || "terminal");
+    setClaudeMode(global.claudeMode || DEFAULT_CLAUDE_MODE);
     setClaudeNativeBackend(global.claudeNativeBackend || "sdk");
     setClaudeNativeFastModeDefault(global.claudeNativeFastModeDefault ?? false);
     setCodexMode(global.codexMode || "native");
@@ -348,7 +349,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       opencodeMode !== (global.opencodeMode || "terminal") ||
       JSON.stringify(openCodeModelProviders)
         !== JSON.stringify(normalizeOpenCodeModelProviders(global.openCodeModelProviders)) ||
-      claudeMode !== (global.claudeMode || "terminal") ||
+      claudeMode !== (global.claudeMode || DEFAULT_CLAUDE_MODE) ||
       claudeNativeBackend !== (global.claudeNativeBackend || "sdk") ||
       claudeNativeFastModeDefault !== (global.claudeNativeFastModeDefault ?? false) ||
       codexMode !== (global.codexMode || "native") ||
@@ -687,7 +688,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       normalizeOpenCodeModelProviders(global.openCodeModelProviders),
     );
     setOpenCodeProviderDraft("");
-    setClaudeMode(global.claudeMode || "terminal");
+    setClaudeMode(global.claudeMode || DEFAULT_CLAUDE_MODE);
     setClaudeNativeBackend(global.claudeNativeBackend || "sdk");
     setClaudeNativeFastModeDefault(global.claudeNativeFastModeDefault ?? false);
     setCodexMode(global.codexMode || "native");

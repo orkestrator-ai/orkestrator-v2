@@ -15,6 +15,7 @@ describe("configStore DEFAULT_CONFIG defaults", () => {
     expect(initialGlobal.codexReasoningEffort).toBe("high");
     expect(initialGlobal.codexMaxConcurrentThreads).toBe(5);
     expect(initialGlobal.useHostGitHubCredentials).toBe(true);
+    expect(initialGlobal.claudeMode).toBe("native");
     expectTypeOf<GlobalConfig["codexMaxConcurrentThreads"]>()
       .toEqualTypeOf<number | undefined>();
     expectTypeOf<GlobalConfig["useHostGitHubCredentials"]>()
@@ -47,6 +48,7 @@ describe("configStore DEFAULT_CONFIG defaults", () => {
     expect(initialGlobal.codexReasoningEffort).toBe(backendGlobal.codexReasoningEffort);
     expect(initialGlobal.codexMaxConcurrentThreads).toBe(backendGlobal.codexMaxConcurrentThreads);
     expect(initialGlobal.defaultAgent).toBe(backendGlobal.defaultAgent);
+    expect(initialGlobal.claudeMode).toBe(backendGlobal.claudeMode);
     expect(initialGlobal.webClientEnabled).toBe(backendGlobal.webClientEnabled);
     expect(initialGlobal.reviewInstruction).toBe(backendGlobal.reviewInstruction);
     expect(initialGlobal.useHostGitHubCredentials)

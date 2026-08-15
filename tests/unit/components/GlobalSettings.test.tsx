@@ -1663,6 +1663,38 @@ describe("GlobalSettings", () => {
     });
   });
 
+  test("treats a missing legacy Claude mode as native and saves explicit terminal", async () => {
+    useConfigStore.setState((state) => {
+      const global = { ...state.config.global };
+      delete (global as { claudeMode?: "terminal" | "native" }).claudeMode;
+      return {
+        config: {
+          ...state.config,
+          global,
+        },
+      };
+    });
+    render(<GlobalSettings activeSection="claude" />);
+
+    const section = screen.getByText("Choose how Claude runs in environments").parentElement;
+    if (!section) throw new Error("Expected Claude settings section");
+    const nativeButton = within(section).getByRole("button", { name: "Native" });
+    const terminalButton = within(section).getByRole("button", { name: "Terminal" });
+    const saveButton = screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement;
+
+    expect(nativeButton.className).toContain("border-primary");
+    expect(terminalButton.className).not.toContain("border-primary");
+    expect(saveButton.disabled).toBe(true);
+
+    fireEvent.click(terminalButton);
+    expect(saveButton.disabled).toBe(false);
+    fireEvent.click(saveButton);
+
+    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ claudeMode: "terminal" }),
+    ));
+  });
+
   test("saves the Claude native backend selection", async () => {
     render(<GlobalSettings activeSection="claude" />);
 

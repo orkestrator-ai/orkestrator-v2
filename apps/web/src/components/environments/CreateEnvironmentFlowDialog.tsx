@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   getContainerGitHubCredentialStatus,
+  rememberEnvironmentAgentSelection,
   updateEnvironmentAgentSettings,
   type GitHubCredentialStatus,
 } from "@/lib/backend";
@@ -36,6 +37,7 @@ import type {
 import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
+import { selectedAgentMode } from "@/lib/create-environment-agent-defaults";
 
 export interface CreateEnvironmentFlowOperations {
   createEnvironment: (
@@ -282,6 +284,29 @@ export function CreateEnvironmentFlowDialog({
       ).catch((startError) => {
         console.error("Failed to auto-start environment:", startError);
       });
+
+      // Remembering the selection is a convenience for the *next* create, so it
+      // runs after the modal has closed and the start is under way. Awaiting it
+      // here would let a slow or hung config write hold the dialog open with the
+      // environment already created but not yet starting.
+      if (options.launchAgent) {
+        void rememberEnvironmentAgentSelection(projectId, {
+          platform: options.agentType,
+          mode: selectedAgentMode(options.agentType, options),
+          ...(options.model ? { model: options.model } : {}),
+          ...(options.reasoningEffort
+            ? { reasoningEffort: options.reasoningEffort }
+            : {}),
+        }).then((updatedConfig) => {
+          useConfigStore.getState().setConfig(updatedConfig);
+        }).catch((preferenceError) => {
+          console.warn(
+            "[CreateEnvironmentFlowDialog] Failed to remember agent selection:",
+            preferenceError,
+          );
+          toast.warning("Environment created, but agent preference was not saved");
+        });
+      }
       return true;
     } finally {
       setIsCreating(false);

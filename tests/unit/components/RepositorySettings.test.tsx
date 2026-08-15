@@ -879,7 +879,18 @@ describe("RepositorySettings", () => {
       expect(savedConfig.prBaseBranch).toBe("release");
     });
 
-    test("preserves the last environment type when saving repository settings", async () => {
+    test("uses the authoritative response to preserve backend-owned environment state", async () => {
+      updateRepositoryConfigImpl = (_projectId: string, repoConfig: unknown) =>
+        Promise.resolve({
+          version: "1.0",
+          global: makeConfig().global,
+          repositories: {
+            "project-1": {
+              ...(repoConfig as Record<string, unknown>),
+              lastEnvironmentType: "local",
+            },
+          },
+        });
       renderSettings({
         section: "branches",
         config: {
@@ -898,7 +909,13 @@ describe("RepositorySettings", () => {
 
       await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
 
-      expect(getSavedConfig().lastEnvironmentType).toBe("local");
+      expect(getSavedConfig().lastEnvironmentType).toBeUndefined();
+      await waitFor(() => {
+        expect(
+          useConfigStore.getState().config.repositories["project-1"]
+            ?.lastEnvironmentType,
+        ).toBe("local");
+      });
     });
   });
 

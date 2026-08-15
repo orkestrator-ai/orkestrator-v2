@@ -77,7 +77,6 @@ export function RepositorySettings({
   onUpdateProject,
 }: RepositorySettingsProps) {
   const getRepositoryConfig = useConfigStore((state) => state.getRepositoryConfig);
-  const setRepositoryConfig = useConfigStore((state) => state.setRepositoryConfig);
   const setConfig = useConfigStore((state) => state.setConfig);
   const config = useConfigStore((state) => state.config);
   const globalDefaultAgent = config.global.defaultAgent || "claude";
@@ -334,11 +333,9 @@ export function RepositorySettings({
       // Update repository config - filter out empty file paths
       const cleanedFilesToCopy = filesToCopy.filter((f) => f.trim() !== "");
       const parsedEntryPort = entryPort.trim() ? parseInt(entryPort.trim(), 10) : undefined;
-      const currentRepoConfig = getRepositoryConfig(project.id);
       const repoConfig: RepositoryConfig = {
         defaultBranch,
         prBaseBranch,
-        lastEnvironmentType: currentRepoConfig?.lastEnvironmentType,
         defaultPortMappings: portMappings.length > 0 ? portMappings : undefined,
         filesToCopy: cleanedFilesToCopy.length > 0 ? cleanedFilesToCopy : undefined,
         defaultModel: defaultModel || undefined,
@@ -355,9 +352,6 @@ export function RepositorySettings({
       // Update backend
       const newConfig = await backend.updateRepositoryConfig(project.id, repoConfig);
       setConfig(newConfig);
-
-      // Also update local store
-      setRepositoryConfig(project.id, repoConfig);
 
       toast.success("Settings saved");
       onOpenChange(false);

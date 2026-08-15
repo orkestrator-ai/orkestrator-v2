@@ -72,6 +72,7 @@ import { useOpenCodeStore } from "@/stores/openCodeStore";
 import type { InitialPromptImageAttachment } from "@/lib/initial-prompt-attachments";
 import { buildReviewModelCatalog } from "@/lib/review-launch-options";
 import { effortLabel, modelsForAgent } from "@/lib/agent-launch";
+import { resolveCreateEnvironmentAgentDefaults } from "@/lib/create-environment-agent-defaults";
 import {
   getCachedOpenCodeModelCatalog,
   type CachedOpenCodeModel,
@@ -217,8 +218,14 @@ export function CreateEnvironmentDialog({
 
   // Resolve effective defaults: project-level overrides > app-level
   const resolved = resolveAgentDefaults(config.global, repoConfig);
+  const enabledAgentPlatforms = useMemo(
+    () => (
+      config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]
+    ) as AgentPlatform[],
+    [config.global.enabledAgentPlatforms],
+  );
   const configDefaultAgent = firstEnabledAgentPlatform(
-    config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
+    enabledAgentPlatforms,
     resolved.defaultAgent as AgentType,
   );
   const configClaudeMode = resolved.claudeMode as ClaudeMode;
@@ -335,65 +342,75 @@ export function CreateEnvironmentDialog({
     ],
   );
 
-  const getInitialAgentSelection = useCallback(
-    (nextAgent: AgentType) => {
-      const models = modelsForAgent(modelCatalog, nextAgent);
-      const globalPreferredModel =
-        nextAgent === "claude"
-          ? config.global.claudeModel
-          : nextAgent === "codex"
-            ? config.global.codexModel
-            : nextAgent === "opencode"
-              ? config.global.opencodeModel
-              : undefined;
-      const projectPreferredModel =
-        nextAgent === configDefaultAgent ? repoConfig?.defaultModel : undefined;
-      const preferredModel = projectPreferredModel || globalPreferredModel;
-      const selectedModel =
-        models.find((candidate) => candidate.id === preferredModel)?.id ??
-        models[0]?.id ??
-        "default";
-      const supportedEfforts =
-        models.find((candidate) => candidate.id === selectedModel)?.reasoningEfforts ?? [];
-      const projectPreferredEffort =
-        nextAgent === configDefaultAgent ? repoConfig?.defaultEffort : undefined;
-      const preferredEffort =
-        projectPreferredEffort
-        ?? (nextAgent === "codex"
-          ? config.global.codexReasoningEffort
-          : undefined);
-
-      return {
-        model: selectedModel,
-        reasoningEffort:
-          preferredEffort && supportedEfforts.includes(preferredEffort)
-            ? preferredEffort
-            : "default",
-      };
+  const configuredAgentDefaults = useMemo(() => ({
+    agent: configDefaultAgent,
+    claudeMode: configClaudeMode,
+    opencodeMode: configOpencodeMode,
+    codexMode: configCodexMode,
+    models: {
+      ...(config.global.claudeModel ? { claude: config.global.claudeModel } : {}),
+      codex: config.global.codexModel,
+      opencode: config.global.opencodeModel,
+      ...(repoConfig?.defaultModel
+        ? { [configDefaultAgent]: repoConfig.defaultModel }
+        : {}),
     },
+    reasoningEfforts: {
+      codex: config.global.codexReasoningEffort,
+      ...(repoConfig?.defaultEffort
+        ? { [configDefaultAgent]: repoConfig.defaultEffort }
+        : {}),
+    },
+  }), [
+    config.global.claudeModel,
+    config.global.codexModel,
+    config.global.codexReasoningEffort,
+    config.global.opencodeModel,
+    configClaudeMode,
+    configCodexMode,
+    configDefaultAgent,
+    configOpencodeMode,
+    repoConfig?.defaultEffort,
+    repoConfig?.defaultModel,
+  ]);
+  const initialAgentDefaults = useMemo(
+    () => resolveCreateEnvironmentAgentDefaults({
+      catalog: modelCatalog,
+      enabledAgents: enabledAgentPlatforms,
+      configured: configuredAgentDefaults,
+      remembered: repoConfig?.lastEnvironmentAgentSelection,
+    }),
     [
-      config.global.claudeModel,
-      config.global.codexModel,
-      config.global.codexReasoningEffort,
-      config.global.opencodeModel,
-      configDefaultAgent,
+      configuredAgentDefaults,
+      enabledAgentPlatforms,
       modelCatalog,
-      repoConfig?.defaultEffort,
-      repoConfig?.defaultModel,
+      repoConfig?.lastEnvironmentAgentSelection,
     ],
   );
-  const initialAgentSelection = getInitialAgentSelection(configDefaultAgent);
+  const getInitialAgentSelection = useCallback(
+    (nextAgent: AgentType) => {
+      const defaults = resolveCreateEnvironmentAgentDefaults({
+        catalog: modelCatalog,
+        enabledAgents: [nextAgent],
+        configured: { ...configuredAgentDefaults, agent: nextAgent },
+        remembered: repoConfig?.lastEnvironmentAgentSelection,
+      });
+      return {
+        model: defaults.model,
+        reasoningEffort: defaults.reasoningEffort,
+      };
+    }, [configuredAgentDefaults, modelCatalog, repoConfig?.lastEnvironmentAgentSelection]);
 
   const [environmentType, setEnvironmentType] = useState<EnvironmentType>(effectiveDefaultEnvironmentType);
   const [environmentName, setEnvironmentName] = useState("");
   const [launchAgent, setLaunchAgent] = useState(true);
-  const [agentType, setAgentType] = useState<AgentType>(configDefaultAgent);
-  const [claudeMode, setClaudeMode] = useState<ClaudeMode>(configClaudeMode);
-  const [opencodeMode, setOpencodeMode] = useState<OpenCodeMode>(configOpencodeMode);
-  const [codexMode, setCodexMode] = useState<CodexMode>(configCodexMode);
-  const [model, setModel] = useState(initialAgentSelection.model);
+  const [agentType, setAgentType] = useState<AgentType>(initialAgentDefaults.agent);
+  const [claudeMode, setClaudeMode] = useState<ClaudeMode>(initialAgentDefaults.claudeMode);
+  const [opencodeMode, setOpencodeMode] = useState<OpenCodeMode>(initialAgentDefaults.opencodeMode);
+  const [codexMode, setCodexMode] = useState<CodexMode>(initialAgentDefaults.codexMode);
+  const [model, setModel] = useState(initialAgentDefaults.model);
   const [reasoningEffort, setReasoningEffort] = useState(
-    initialAgentSelection.reasoningEffort,
+    initialAgentDefaults.reasoningEffort,
   );
   const [initialPrompt, setInitialPrompt] = useState("");
   const [initialPromptAttachments, setInitialPromptAttachments] = useState<InitialPromptImageAttachment[]>([]);
@@ -406,6 +423,7 @@ export function CreateEnvironmentDialog({
   const formRef = useRef<HTMLFormElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const promptPasteRequestIdRef = useRef(0);
+  const agentSelectionTouchedRef = useRef(false);
 
   useEffect(() => {
     if (
@@ -488,13 +506,13 @@ export function CreateEnvironmentDialog({
     setEnvironmentType(effectiveDefaultEnvironmentType);
     setEnvironmentName("");
     setLaunchAgent(true);
-    setAgentType(configDefaultAgent);
-    setClaudeMode(configClaudeMode);
-    setOpencodeMode(configOpencodeMode);
-    setCodexMode(configCodexMode);
-    const nextSelection = getInitialAgentSelection(configDefaultAgent);
-    setModel(nextSelection.model);
-    setReasoningEffort(nextSelection.reasoningEffort);
+    setAgentType(initialAgentDefaults.agent);
+    setClaudeMode(initialAgentDefaults.claudeMode);
+    setOpencodeMode(initialAgentDefaults.opencodeMode);
+    setCodexMode(initialAgentDefaults.codexMode);
+    setModel(initialAgentDefaults.model);
+    setReasoningEffort(initialAgentDefaults.reasoningEffort);
+    agentSelectionTouchedRef.current = false;
     setInitialPrompt("");
     setInitialPromptAttachments([]);
     setNetworkAccessMode("full");
@@ -504,12 +522,8 @@ export function CreateEnvironmentDialog({
     setMobileTabTransitionDirection(null);
   }, [
     defaultPortMappings,
-    configClaudeMode,
-    configCodexMode,
-    configDefaultAgent,
     effectiveDefaultEnvironmentType,
-    configOpencodeMode,
-    getInitialAgentSelection,
+    initialAgentDefaults,
   ]);
 
   const handlePromptPaste = useCallback(async (event: ClipboardEvent) => {
@@ -604,16 +618,23 @@ export function CreateEnvironmentDialog({
       setPortMappings(defaultPortMappings);
       setShowPortConfig(defaultPortMappings.length > 0);
       setEnvironmentType(effectiveDefaultEnvironmentType);
-      setAgentType(configDefaultAgent);
-      setClaudeMode(configClaudeMode);
-      setOpencodeMode(configOpencodeMode);
-      setCodexMode(configCodexMode);
-      const nextSelection = getInitialAgentSelection(configDefaultAgent);
-      setModel(nextSelection.model);
-      setReasoningEffort(nextSelection.reasoningEffort);
+      agentSelectionTouchedRef.current = false;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- read current defaults only when the dialog opens
   }, [open]);
+
+  // Model catalogues can arrive after the dialog opens (especially OpenCode's
+  // project-scoped cache). Keep applying the remembered/default selection until
+  // the user changes an agent control, then leave their in-progress choice alone.
+  useEffect(() => {
+    if (!open || agentSelectionTouchedRef.current) return;
+    setAgentType(initialAgentDefaults.agent);
+    setClaudeMode(initialAgentDefaults.claudeMode);
+    setOpencodeMode(initialAgentDefaults.opencodeMode);
+    setCodexMode(initialAgentDefaults.codexMode);
+    setModel(initialAgentDefaults.model);
+    setReasoningEffort(initialAgentDefaults.reasoningEffort);
+  }, [initialAgentDefaults, open]);
 
   const selectedMode =
     agentType === "claude"
@@ -624,9 +645,6 @@ export function CreateEnvironmentDialog({
           ? codexMode
           : "native";
   const availableModels = modelsForAgent(modelCatalog, agentType);
-  const enabledAgentPlatforms = (
-    config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]
-  ) as AgentPlatform[];
   const pickerModels = enabledAgentPlatforms.flatMap((platform) =>
     modelsForAgent(modelCatalog, platform).map((option) => ({
       platform,
@@ -677,6 +695,7 @@ export function CreateEnvironmentDialog({
   const selectAgent = useCallback(
     (nextAgent: AgentType) => {
       if (nextAgent === agentType) return;
+      agentSelectionTouchedRef.current = true;
       setAgentType(nextAgent);
       const nextSelection = getInitialAgentSelection(nextAgent);
       setModel(nextSelection.model);
@@ -687,6 +706,7 @@ export function CreateEnvironmentDialog({
 
   const setUseTui = useCallback(
     (checked: boolean | "indeterminate") => {
+      agentSelectionTouchedRef.current = true;
       const nextMode = checked === true ? "terminal" : "native";
       if (agentType === "claude") {
         setClaudeMode(nextMode);
@@ -701,6 +721,7 @@ export function CreateEnvironmentDialog({
 
   const selectAgentModel = useCallback(
     (nextModel: AgentModel) => {
+      agentSelectionTouchedRef.current = true;
       const targetModels = modelsForAgent(modelCatalog, nextModel.platform);
       const supportedEfforts =
         targetModels.find((candidate) => candidate.id === nextModel.id)?.reasoningEfforts ?? [];
@@ -728,6 +749,11 @@ export function CreateEnvironmentDialog({
     },
     [agentType, selectAgentModel],
   );
+
+  const selectReasoningEffort = useCallback((nextEffort: string) => {
+    agentSelectionTouchedRef.current = true;
+    setReasoningEffort(nextEffort);
+  }, []);
 
   const selectMobileSection = useCallback(
     (nextSection: MobileSection) => {
@@ -1153,7 +1179,7 @@ export function CreateEnvironmentDialog({
                 selectedReasoningLabel={
                   reasoningOptions.find((option) => option.id === reasoningEffort)?.label
                 }
-                onReasoningChange={setReasoningEffort}
+                onReasoningChange={selectReasoningEffort}
                 disabled={isLoading || !launchAgent}
                 title="Choose agent, model, and reasoning"
                 className="min-h-9 w-full max-w-none justify-start md:max-w-none md:flex-1"

@@ -1650,7 +1650,7 @@ export function defaultConfig(): AppConfig {
       opencodeModel: "opencode/claude-sonnet-5",
       claudeModel: "claude-sonnet-5",
       codexModel: "gpt-5.4",
-      codexReasoningEffort: "medium",
+      codexReasoningEffort: "high",
       opencodeMode: "terminal",
       claudeMode: "terminal",
       claudeNativeBackend: "sdk",

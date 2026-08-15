@@ -183,11 +183,12 @@ import {
   type StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
-import type {
-  AgentModel,
-  AgentReasoningOption,
-  NativeAgentControlUpdate,
-  NativeAgentSessionAction,
+import {
+  fallbackReasoningId,
+  type AgentModel,
+  type AgentReasoningOption,
+  type NativeAgentControlUpdate,
+  type NativeAgentSessionAction,
 } from "@orkestrator/protocol/native-agent";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import { isTabTeardownKind } from "@orkestrator/protocol/tab-teardown";
@@ -9869,46 +9870,56 @@ export function createCommandRegistry(
     const reasoning = (ids: readonly string[]): AgentReasoningOption[] =>
       ids.map((effort) => ({ id: effort, label: effortLabel(effort) }));
     const result: AgentModel[] = [
-      ...claudeModels.map((model): AgentModel => ({
-        platform: "claude",
-        id: model.id,
-        label: model.name,
-        providerLabel: "Claude",
-        reasoning: reasoning(model.supportedEffortLevels ?? ["low", "medium", "high"]),
-        defaultReasoningId: "high",
-        supportsSpeed: model.supportsFastMode !== false,
-        supportsMode: true,
-      })),
-      ...codexModels.map((model): AgentModel => ({
-        platform: "codex",
-        id: model.id,
-        label: model.name,
-        providerLabel: "Codex",
-        reasoning: model.reasoningOptions?.map((option) => ({
+      ...claudeModels.map((model): AgentModel => {
+        const efforts = model.supportedEffortLevels ?? ["low", "medium", "high"];
+        return {
+          platform: "claude",
+          id: model.id,
+          label: model.name,
+          providerLabel: "Claude",
+          reasoning: reasoning(efforts),
+          defaultReasoningId: fallbackReasoningId(efforts) ?? "high",
+          supportsSpeed: model.supportsFastMode !== false,
+          supportsMode: true,
+        };
+      }),
+      ...codexModels.map((model): AgentModel => {
+        const reasoningOptions = model.reasoningOptions?.map((option) => ({
           id: option.effort,
           label: option.label,
-        })) ?? reasoning(model.reasoningEfforts ?? ["medium", "high"]),
-        defaultReasoningId: model.defaultReasoningEffort,
-        supportsSpeed: true,
-        supportsMode: true,
-      })),
-      ...(liveOpenCodeModels.length > 0 ? liveOpenCodeModels : openCodeModels.map((model): AgentModel => ({
+        })) ?? reasoning(model.reasoningEfforts ?? ["medium", "high"]);
+        return {
+          platform: "codex",
+          id: model.id,
+          label: model.name,
+          providerLabel: "Codex",
+          reasoning: reasoningOptions,
+          defaultReasoningId: fallbackReasoningId(reasoningOptions, model.defaultReasoningEffort)
+            ?? model.defaultReasoningEffort,
+          supportsSpeed: true,
+          supportsMode: true,
+        };
+      }),
+      ...(liveOpenCodeModels.length > 0 ? liveOpenCodeModels : openCodeModels.map((model): AgentModel => {
+          const reasoningOptions = [
+            { id: "default", label: "Default" },
+            ...reasoning(model.variants ?? []),
+          ];
+          return {
           platform: "opencode",
           id: model.id,
           label: model.name,
           providerLabel: `OpenCode/${model.provider}`,
-          reasoning: [
-            { id: "default", label: "Default" },
-            ...reasoning(model.variants ?? []),
-          ],
-          defaultReasoningId: "default",
+          reasoning: reasoningOptions,
+          defaultReasoningId: fallbackReasoningId(reasoningOptions) ?? "default",
           supportsSpeed: false,
           supportsMode: true,
           ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
           ...(typeof model.supportsImageInput === "boolean"
             ? { supportsImageInput: model.supportsImageInput }
             : {}),
-        }))),
+          };
+        })),
       ...(cursorModels.length > 0 ? cursorModels : cache.cursor?.models ?? []),
       ...(grokModels.length > 0 ? grokModels : cache.grok?.models ?? []),
     ];

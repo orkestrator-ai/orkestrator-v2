@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, History, X } from "lucide-react";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type { AgentModel } from "@orkestrator/protocol/native-agent";
+import { resolveReasoningId, type AgentModel } from "@orkestrator/protocol/native-agent";
 import {
   isProviderSlashCommand,
   resolveSessionActionCommand,
@@ -296,7 +296,11 @@ function UnassignedNativeAgentComposer({
     ?? platformModels[0];
   const canConfigureReasoning = selectedAdapter?.capabilities.composer.reasoning === true;
   const canConfigureMode = selectedAdapter?.capabilities.composer.mode === true;
-  const selectedReasoningId = draft.reasoningId ?? selectedModel?.defaultReasoningId;
+  const selectedReasoningId = resolveReasoningId(
+    selectedModel?.reasoning ?? [],
+    draft.reasoningId,
+    selectedModel?.defaultReasoningId,
+  ) ?? selectedModel?.defaultReasoningId;
   const selectedReasoningLabel = selectedModel?.reasoning?.find(
     (option) => option.id === selectedReasoningId,
   )?.label ?? "Default";
@@ -519,7 +523,11 @@ function UnassignedNativeAgentComposer({
                   updateDraft(sessionKey, {
                     modelId,
                     platform: selectedPlatform,
-                    reasoningId: model?.defaultReasoningId,
+                    reasoningId: resolveReasoningId(
+                      model?.reasoning ?? [],
+                      draft.reasoningId,
+                      model?.defaultReasoningId,
+                    ) ?? model?.defaultReasoningId,
                   });
                 }}
                 reasoningOptions={selectedModel?.reasoning ?? []}
@@ -1779,11 +1787,10 @@ function SharedNativeAgentController({
                 onModelChange={(modelId) => {
                   const nextModel = composer.models.find((model) => model.id === modelId);
                   const supportedReasoning = nextModel?.reasoning ?? [];
-                  const nextReasoningId = supportedReasoning.some(
-                    (option) => option.id === selectedReasoningId,
-                  )
-                    ? selectedReasoningId
-                    : nextModel?.defaultReasoningId ?? supportedReasoning[0]?.id;
+                  const nextReasoningId = resolveReasoningId(
+                    supportedReasoning,
+                    selectedReasoningId,
+                  ) ?? nextModel?.defaultReasoningId;
                   void updateControlsSafely({
                     modelId,
                     ...(nextReasoningId ? { reasoningId: nextReasoningId } : {}),

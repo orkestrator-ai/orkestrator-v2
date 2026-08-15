@@ -12,7 +12,7 @@ describe("configStore DEFAULT_CONFIG defaults", () => {
     expect(initialGlobal.opencodeModel).toBe("opencode/claude-sonnet-5");
     expect(initialGlobal.claudeModel).toBe("claude-sonnet-5");
     expect(initialGlobal.codexModel).toBe("gpt-5.4");
-    expect(initialGlobal.codexReasoningEffort).toBe("medium");
+    expect(initialGlobal.codexReasoningEffort).toBe("high");
     expect(initialGlobal.codexMaxConcurrentThreads).toBe(5);
     expect(initialGlobal.useHostGitHubCredentials).toBe(true);
     expectTypeOf<GlobalConfig["codexMaxConcurrentThreads"]>()

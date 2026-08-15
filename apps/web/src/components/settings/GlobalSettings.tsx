@@ -458,7 +458,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         opencodeModel,
         claudeModel: global.claudeModel || "claude-sonnet-5",
         codexModel: global.codexModel || "gpt-5.4",
-        codexReasoningEffort: global.codexReasoningEffort || "medium",
+        codexReasoningEffort: global.codexReasoningEffort || "high",
         opencodeMode,
         claudeMode,
         claudeNativeBackend,

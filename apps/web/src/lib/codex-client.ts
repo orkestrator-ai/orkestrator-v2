@@ -38,14 +38,14 @@ export const CODEX_MODELS: CodexModel[] = [
     name: "gpt-5.4",
     description: "Latest frontier agentic coding model.",
     reasoningEfforts: ["low", "medium", "high", "xhigh"],
-    defaultReasoningEffort: "medium",
+    defaultReasoningEffort: "high",
   },
   {
     id: "gpt-5.4-mini",
     name: "GPT-5.4-Mini",
     description: "Smaller frontier agentic coding model.",
     reasoningEfforts: ["low", "medium", "high", "xhigh"],
-    defaultReasoningEffort: "medium",
+    defaultReasoningEffort: "high",
   },
 ];
 

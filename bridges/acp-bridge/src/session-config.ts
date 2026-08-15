@@ -1,3 +1,4 @@
+import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
 import type {
   AgentConversationMode,
   AgentModel,
@@ -529,8 +530,8 @@ function composerFromGrokModels(
       providerLabel: PLATFORM_LABEL[provider],
       reasoning: reasoning.length > 0 ? reasoning : undefined,
       defaultReasoningId: shared.options.length > 0
-        ? shared.selectedId ?? reasoning[0]?.id
-        : entry.reasoningEffort ?? reasoning[0]?.id,
+        ? shared.selectedId ?? fallbackReasoningId(reasoning)
+        : entry.reasoningEffort ?? fallbackReasoningId(reasoning),
       supportsSpeed: fastSibling || Boolean(fastOption),
       supportsMode: Object.keys(availableModeIds).length > 0,
       ...(entry.contextWindow === undefined ? {} : { contextWindow: entry.contextWindow }),

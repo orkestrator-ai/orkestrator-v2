@@ -550,7 +550,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             text: reviewPrompt,
             attachments: [],
             model,
-            reasoningEffort: reasoningEffort ?? "medium",
+            reasoningEffort: reasoningEffort ?? "high",
             mode: "build" as const,
             fastMode: config.global.codexNativeFastModeDefault ?? false,
           }

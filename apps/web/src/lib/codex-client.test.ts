@@ -1257,7 +1257,7 @@ describe("CODEX_MODELS catalog", () => {
   test("bundled fallback models expose only their supported reasoning efforts", () => {
     for (const model of CODEX_MODELS) {
       expect(model.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh"]);
-      expect(model.defaultReasoningEffort).toBe("medium");
+      expect(model.defaultReasoningEffort).toBe("high");
       expect(model.reasoningEfforts).not.toContain("max");
       expect(model.reasoningEfforts).not.toContain("ultra");
     }

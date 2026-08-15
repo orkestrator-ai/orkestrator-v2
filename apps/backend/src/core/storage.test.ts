@@ -40,7 +40,7 @@ describe("defaultConfig", () => {
     expect(global.opencodeModel).toBe("opencode/claude-sonnet-5");
     expect(global.claudeModel).toBe("claude-sonnet-5");
     expect(global.codexModel).toBe("gpt-5.4");
-    expect(global.codexReasoningEffort).toBe("medium");
+    expect(global.codexReasoningEffort).toBe("high");
   });
 
   test("keeps the existing web client behavior enabled by default", () => {

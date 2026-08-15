@@ -1,7 +1,8 @@
 import { DEFAULT_CODEX_MODEL, type CodexModel, type CodexReasoningEffort } from "@/lib/codex-client";
 import type { AppConfig, GlobalConfig } from "@/types";
+import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
 
-const DEFAULT_REASONING_EFFORT: CodexReasoningEffort = "medium";
+const DEFAULT_REASONING_EFFORT: CodexReasoningEffort = "high";
 
 export interface CodexPreferenceSelection {
   model: string;
@@ -28,6 +29,11 @@ export function resolveReasoningEffort(
 
   if (storedEffort && supportedEfforts.includes(storedEffort)) {
     return storedEffort;
+  }
+
+  const fallback = fallbackReasoningId(supportedEfforts, model?.defaultReasoningEffort);
+  if (fallback && supportedEfforts.includes(fallback as CodexReasoningEffort)) {
+    return fallback as CodexReasoningEffort;
   }
 
   if (

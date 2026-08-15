@@ -104,6 +104,7 @@ import {
   type JsonSchema,
   type StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
+import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
 
 export interface RuntimeSseEvent {
   type:
@@ -4978,7 +4979,10 @@ function toBridgeModel(model: {
       label: entry.effort.charAt(0).toUpperCase() + entry.effort.slice(1),
       description: entry.description,
     })),
-    defaultReasoningEffort: model.defaultReasoningEffort as BridgeModel["defaultReasoningEffort"],
+    defaultReasoningEffort: (fallbackReasoningId(
+      model.supportedReasoningEfforts.map((entry) => entry.effort),
+      model.defaultReasoningEffort,
+    ) ?? model.defaultReasoningEffort) as BridgeModel["defaultReasoningEffort"],
   };
 }
 

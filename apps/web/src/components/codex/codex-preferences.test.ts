@@ -58,8 +58,9 @@ describe("codex-preferences resolveReasoningEffort", () => {
     expect(resolveReasoningEffort("gpt-5.4-codex", MODELS, "xhigh")).toBe("xhigh");
   });
 
-  test("falls back to the model default when stored effort is unsupported", () => {
+  test("falls back to high when stored effort is unsupported and the model offers it", () => {
     expect(resolveReasoningEffort("gpt-5.4-codex", MODELS, "low")).toBe("high");
+    expect(resolveReasoningEffort("gpt-5.3-codex", MODELS, "xhigh")).toBe("high");
   });
 });
 
@@ -101,7 +102,7 @@ describe("codex-preferences resolveCodexPreferenceSelection", () => {
 
     expect(resolved).toEqual({
       model: "gpt-5.3-codex",
-      reasoningEffort: "medium",
+      reasoningEffort: "high",
     });
   });
 });
@@ -192,7 +193,7 @@ describe("codex-preferences getPersistedCodexPreferences", () => {
 
     expect(getPersistedCodexPreferences(config)).toEqual({
       model: "gpt-5.4",
-      reasoningEffort: "medium",
+      reasoningEffort: "high",
     });
   });
 });

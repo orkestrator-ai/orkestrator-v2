@@ -381,6 +381,65 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
     ]);
   });
 
+  test("labels an owned native child generically when its transcript is unreachable", async () => {
+    // The child's session metadata is not always indexed yet. The row must not
+    // fall back to printing the raw thread id as its title: collab
+    // reconciliation still gets to supply a task name afterwards.
+    const parts = await deriveTranscriptSubagentPartsForTurn({
+      threadId: "thread-1",
+      currentTurnStartedAt: "2026-08-11T12:00:00.000Z",
+      ownedSubagentIds: ["019-abcd-thread-uuid"],
+      loadSessionMeta: async (id: string) => id === "thread-1"
+        ? { transcriptPath: "/tmp/parent.jsonl" }
+        : null,
+      loadTranscript: async () => transcript([]),
+    });
+
+    expect(parts).toEqual([
+      expect.objectContaining({
+        content: "subagent",
+        subagentId: "019-abcd-thread-uuid",
+        toolState: "pending",
+      }),
+    ]);
+    expect(parts[0]?.content).not.toContain("019-abcd-thread-uuid");
+  });
+
+  test("refuses positional pairing when a steered row spans another row's spawns", async () => {
+    // Two spawns in the turn window but only one owned id: the positional index
+    // no longer lines up, so pairing would attach this row's child to the other
+    // row's spawn call. No card is better than the wrong card.
+    const spawn = (callId: string, timestamp: string): TranscriptRecord => ({
+      timestamp,
+      type: "response_item",
+      payload: {
+        type: "function_call",
+        name: "spawn_agent",
+        arguments: JSON.stringify({ task_name: "review", message: "opaque" }),
+        call_id: callId,
+      },
+    });
+
+    const parts = await deriveTranscriptSubagentPartsForTurn({
+      threadId: "thread-1",
+      currentTurnStartedAt: "2026-08-11T12:00:00.000Z",
+      ownedSubagentIds: ["agent-second"],
+      fallbackAgentIdsInSpawnOrder: ["agent-second"],
+      loadSessionMeta: async (id: string) => id === "thread-1"
+        ? { transcriptPath: "/tmp/parent.jsonl" }
+        : null,
+      loadTranscript: async () => transcript([
+        spawn("spawn-first", "2026-08-11T12:00:01.000Z"),
+        spawn("spawn-second", "2026-08-11T12:00:02.000Z"),
+      ]),
+    });
+
+    // Neither spawn call may claim `agent-second` by position; the only row left
+    // is the owned-id hydration fallback, which cannot be misattributed.
+    expect(parts.map((part) => part.subagentId)).toEqual(["agent-second"]);
+    expect(parts[0]?.content).toBe("subagent");
+  });
+
   test("loads child transcripts and derives completed subagent activity", async () => {
     const parentRecords: TranscriptRecord[] = [
       {

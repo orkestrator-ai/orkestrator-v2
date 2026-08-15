@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, History, X } from "lucide-react";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { resolveReasoningId, type AgentModel } from "@orkestrator/protocol/native-agent";
@@ -124,16 +124,33 @@ function activeAgentSummary(snapshots: NativeAgentActivitySnapshot[]): string {
   return `${active.length} ${noun} working: ${active.map((snapshot) => snapshot.label).join(", ")}.`;
 }
 
+interface NativeAgentActivityAnnouncement {
+  text: string;
+  /**
+   * Increments on every announcement, including one identical to the last.
+   * Two children can share a label — `nativeAgentActivityLabel` falls back to a
+   * constant — so `setState` would bail out on the repeated string, leave the
+   * live region's text node untouched, and silently drop the second
+   * announcement. The shell keys the region on this instead.
+   */
+  seq: number;
+}
+
 function useNativeAgentActivityAnnouncement(
   messages: NativeMessage[],
   scope: string,
-): string {
+): NativeAgentActivityAnnouncement {
   const snapshots = useMemo(() => snapshotNativeAgentActivity(messages), [messages]);
   const previousRef = useRef<{
     scope: string;
     snapshots: Map<string, NativeAgentActivitySnapshot>;
   } | null>(null);
-  const [announcement, setAnnouncement] = useState("");
+  const [announcement, setAnnouncement] = useState<NativeAgentActivityAnnouncement>(
+    { text: "", seq: 0 },
+  );
+  const announce = useCallback((text: string) => {
+    setAnnouncement((previous) => ({ text, seq: previous.seq + 1 }));
+  }, []);
 
   useEffect(() => {
     const current = new Map(snapshots.map((snapshot) => [snapshot.id, snapshot]));
@@ -141,7 +158,7 @@ function useNativeAgentActivityAnnouncement(
     previousRef.current = { scope, snapshots: current };
 
     if (!previousState || previousState.scope !== scope) {
-      setAnnouncement(activeAgentSummary(snapshots));
+      announce(activeAgentSummary(snapshots));
       return;
     }
 
@@ -159,8 +176,8 @@ function useNativeAgentActivityAnnouncement(
     });
     const summary = activeChanged ? activeAgentSummary(snapshots) : "";
     const nextAnnouncement = [...lifecycleUpdates, summary].filter(Boolean).join(" ");
-    if (nextAnnouncement) setAnnouncement(nextAnnouncement);
-  }, [scope, snapshots]);
+    if (nextAnnouncement) announce(nextAnnouncement);
+  }, [announce, scope, snapshots]);
 
   return announcement;
 }
@@ -1578,6 +1595,93 @@ function SharedNativeAgentController({
     );
   }
 
+  /**
+   * The rendered list is also what decides whether anything is pinned at all, so
+   * a card added here cannot be left out of the count. `NativeChatShell` measures
+   * this with `Children.count`, where a non-empty fragment always counts as one —
+   * an unconditional wrapper would permanently reserve pinned clearance for a tab
+   * that has nothing pinned.
+   */
+  const pinnedCards: ReactNode[] = [
+    showPlanReview ? (
+      <CodexPlanModeCard
+        key="plan-review"
+        className="mx-0 my-0"
+        isSubmitting={planTransitionPending}
+        onApproveAndBuild={() => switchPlanToBuild(true)}
+        onSwitchToBuild={() => switchPlanToBuild(false)}
+        onDismiss={() => setDismissedPlanReviewId(
+          latestAssistantMessage?.id ?? null,
+        )}
+      />
+    ) : null,
+    platform === "claude" && liveBackgroundTasks.length > 0 ? (
+      <ClaudeBackgroundTaskHoldCard
+        key="background-tasks"
+        tasks={liveBackgroundTasks}
+        responseInProgress={isTurnActive}
+        responseFailed={phase === "error"}
+        onStopTask={async (taskId) => {
+          try {
+            await stopBackgroundTask(taskId);
+            return true;
+          } catch (error) {
+            toast.error(error instanceof Error ? error.message : "Failed to stop background task");
+            return false;
+          }
+        }}
+      />
+    ) : null,
+    ...(projection?.notices ?? []).map((notice, index) => (
+      <div
+        key={`notice:${notice.kind}:${index}`}
+        role="status"
+        className={notice.kind === "error"
+          ? "rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+          : "rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-100"}
+      >
+        {notice.message}
+      </div>
+    )),
+    projection?.recoverableDispatch ? (
+      <div
+        key="recoverable-dispatch"
+        role="alert"
+        className="flex items-center justify-between gap-3 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-100"
+      >
+        <span>The previous dispatch could not be confirmed. Retrying is idempotent.</span>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={isDispatching}
+          onClick={() => {
+            void retryRecoverableDispatch().then((outcome) => {
+              if (outcome.outcome === "accepted") {
+                setSendError(null);
+                setOptimisticPrompt(null);
+              } else if (outcome.outcome === "rejected") {
+                setSendError(outcome.error);
+              } else {
+                setSendError(outcome.error ?? "The dispatch is still being reconciled.");
+              }
+            });
+          }}
+        >
+          Retry send
+        </Button>
+      </div>
+    ) : null,
+    sendError ? (
+      <div
+        key="send-error"
+        className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+      >
+        {sendError}
+      </div>
+    ) : null,
+  ].filter(Boolean);
+
   return (
     <NativeChatShell
       agentExpansionScope={data.environmentId}
@@ -1633,87 +1737,7 @@ function SharedNativeAgentController({
           onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
         />
       ))}
-      pinnedAccessory={(
-        showPlanReview
-        || (platform === "claude" && liveBackgroundTasks.length > 0)
-        || (projection?.notices?.length ?? 0) > 0
-        || Boolean(projection?.recoverableDispatch)
-        || Boolean(sendError)
-      ) ? (
-        <>
-          {showPlanReview ? (
-            <CodexPlanModeCard
-              className="mx-0 my-0"
-              isSubmitting={planTransitionPending}
-              onApproveAndBuild={() => switchPlanToBuild(true)}
-              onSwitchToBuild={() => switchPlanToBuild(false)}
-              onDismiss={() => setDismissedPlanReviewId(
-                latestAssistantMessage?.id ?? null,
-              )}
-            />
-          ) : null}
-          {platform === "claude" && liveBackgroundTasks.length > 0 ? (
-            <ClaudeBackgroundTaskHoldCard
-              tasks={liveBackgroundTasks}
-              responseInProgress={isTurnActive}
-              responseFailed={phase === "error"}
-              onStopTask={async (taskId) => {
-                try {
-                  await stopBackgroundTask(taskId);
-                  return true;
-                } catch (error) {
-                  toast.error(error instanceof Error ? error.message : "Failed to stop background task");
-                  return false;
-                }
-              }}
-            />
-          ) : null}
-          {(projection?.notices ?? []).map((notice, index) => (
-            <div
-              key={`${notice.kind}:${index}`}
-              role="status"
-              className={notice.kind === "error"
-                ? "rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-                : "rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-100"}
-            >
-              {notice.message}
-            </div>
-          ))}
-          {projection?.recoverableDispatch ? (
-            <div
-              role="alert"
-              className="flex items-center justify-between gap-3 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-100"
-            >
-              <span>The previous dispatch could not be confirmed. Retrying is idempotent.</span>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={isDispatching}
-                onClick={() => {
-                  void retryRecoverableDispatch().then((outcome) => {
-                    if (outcome.outcome === "accepted") {
-                      setSendError(null);
-                      setOptimisticPrompt(null);
-                    } else if (outcome.outcome === "rejected") {
-                      setSendError(outcome.error);
-                    } else {
-                      setSendError(outcome.error ?? "The dispatch is still being reconciled.");
-                    }
-                  });
-                }}
-              >
-                Retry send
-              </Button>
-            </div>
-          ) : null}
-          {sendError ? (
-            <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-              {sendError}
-            </div>
-          ) : null}
-        </>
-      ) : null}
+      pinnedAccessory={pinnedCards.length > 0 ? <>{pinnedCards}</> : null}
       topAccessory={projection?.suggestedPrompt ? (
         <div className="flex items-center gap-1">
           <Button

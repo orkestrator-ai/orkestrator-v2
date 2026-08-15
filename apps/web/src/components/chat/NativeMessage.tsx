@@ -1362,47 +1362,64 @@ function isTerminalAgentStatus(status: NativeAgentStatus): boolean {
   return status === "finished" || status === "failed";
 }
 
-function getSubagentPreview(
-  part: Extract<NativeMessagePart, { type: "subagent" }>,
-  status: NativeAgentStatus,
-): string {
-  const task = part.subagentPrompt?.trim();
-  if (task) return task;
-
-  const actions = part.subagentActions ?? [];
-  const latestAction = actions.at(-1);
-
-  if (!latestAction) {
-    return isTerminalAgentStatus(status)
-      ? "No activity captured."
-      : "Waiting for activity.";
+function getLatestActionPreview(action: NativeMessagePart): string {
+  if (action.type === "text") {
+    return action.content.trim() || "Response";
   }
-
-  if (latestAction.type === "text") {
-    return latestAction.content.trim() || "Response";
-  }
-  if (latestAction.type === "thinking") {
+  if (action.type === "thinking") {
     return "Thinking";
   }
-  if (latestAction.type === "file") {
-    return latestAction.content.trim() || "File";
+  if (action.type === "file") {
+    return action.content.trim() || "File";
   }
 
   const command =
-    typeof latestAction.toolArgs?.command === "string"
-      ? latestAction.toolArgs.command
-      : null;
+    typeof action.toolArgs?.command === "string" ? action.toolArgs.command : null;
   if (command) {
     return command;
   }
 
   return (
-    getToolTitleDisplayName(
-      latestAction.toolTitle,
-      latestAction.toolName,
-      latestAction.content,
-    ) || getToolDisplayName(latestAction.toolName, latestAction.content)
+    getToolTitleDisplayName(action.toolTitle, action.toolName, action.content)
+    || getToolDisplayName(action.toolName, action.content)
   );
+}
+
+interface SubagentPreview {
+  text: string;
+  /** True when the text is the spawn prompt rather than live activity. */
+  isTask: boolean;
+}
+
+/**
+ * The spawn prompt identifies a child that has not reported anything yet, and it
+ * is the useful record for one that has already finished. While the child is
+ * actively working the latest action is what the collapsed row is for, so the
+ * prompt stays in the expanded body only — otherwise a running agent shows the
+ * same static line for its entire lifetime.
+ */
+function getSubagentPreview(
+  part: Extract<NativeMessagePart, { type: "subagent" }>,
+  status: NativeAgentStatus,
+): SubagentPreview {
+  const task = part.subagentPrompt?.trim();
+  const actions = part.subagentActions ?? [];
+
+  if (task && (isTerminalAgentStatus(status) || actions.length === 0)) {
+    return { text: task, isTask: true };
+  }
+
+  const latestAction = actions.at(-1);
+  if (!latestAction) {
+    return {
+      text: isTerminalAgentStatus(status)
+        ? "No activity captured."
+        : "Waiting for activity.",
+      isTask: false,
+    };
+  }
+
+  return { text: getLatestActionPreview(latestAction), isTask: false };
 }
 
 function stringToolArg(
@@ -1501,10 +1518,10 @@ function SubagentPart({
               </span>
             </div>
             <div className="mt-1 flex min-w-0 items-center gap-1 text-xs text-muted-foreground/80">
-              {part.subagentPrompt?.trim() ? (
+              {preview.isTask ? (
                 <span className="shrink-0 font-medium text-muted-foreground">Task ·</span>
               ) : null}
-              <span className="truncate">{preview}</span>
+              <span className="truncate">{preview.text}</span>
             </div>
           </div>
           <div className="shrink-0 text-right text-[11px] text-muted-foreground/70">

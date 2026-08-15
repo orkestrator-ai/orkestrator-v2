@@ -798,6 +798,13 @@ export function deriveSubagentPartFromChildRecords(
 ): TranscriptSubagentPart {
   const { reopenedAfterTerminal: _reopenedAfterTerminal, ...part } =
     parseChildTranscript(records, { callId: `native:${agentId}`, agentId });
+  // The child's session metadata may not be reachable yet, in which case the
+  // parse has no nickname or role and `content` falls through to the thread id.
+  // A raw UUID is not a title: leave the generic label so collab reconciliation
+  // — which learns the task name from `agent_path` — still owns the display name.
+  if (!part.subagentName && !part.subagentRole) {
+    return { ...part, content: "subagent" };
+  }
   return part;
 }
 

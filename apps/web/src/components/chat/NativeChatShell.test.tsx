@@ -162,7 +162,7 @@ describe("NativeChatShell", () => {
     render(
       <NativeChatShell
         {...shellProps()}
-        agentActivityAnnouncement="1 sub-agent working: Reviewer."
+        agentActivityAnnouncement={{ text: "1 sub-agent working: Reviewer.", seq: 1 }}
       />,
     );
 
@@ -172,6 +172,48 @@ describe("NativeChatShell", () => {
     expect(status.getAttribute("aria-live")).toBe("polite");
     expect(status.getAttribute("aria-atomic")).toBe("true");
     expect(status.closest("button") === null).toBe(true);
+  });
+
+  test("replaces the announced text node when the same message repeats", () => {
+    /**
+     * Two children can share a label, so "Sub-agent finished." can legitimately
+     * be announced twice in a row. An unchanged text node is not a mutation, so
+     * the region must be re-created from `seq` or the second one is never spoken.
+     */
+    const announcement = { text: "Sub-agent finished.", seq: 4 };
+    const view = render(
+      <NativeChatShell {...shellProps()} agentActivityAnnouncement={announcement} />,
+    );
+
+    const region = screen.getByRole("status", { name: "Sub-agent finished." });
+    const firstNode = region.firstElementChild;
+    expect(firstNode?.textContent).toBe("Sub-agent finished.");
+
+    view.rerender(
+      <NativeChatShell
+        {...shellProps()}
+        agentActivityAnnouncement={{ ...announcement, seq: 5 }}
+      />,
+    );
+
+    const repeated = screen.getByRole("status", { name: "Sub-agent finished." });
+    // The live region itself must survive; only its content is replaced.
+    expect(repeated).toBe(region);
+    expect(repeated.firstElementChild === firstNode).toBe(false);
+    expect(repeated.firstElementChild?.textContent).toBe("Sub-agent finished.");
+  });
+
+  test("stays a silent live region until an announcement arrives", () => {
+    // The region must already be in the accessibility tree before the first
+    // message: a live region created at the same moment its text appears is
+    // unreliable across screen readers.
+    const { container } = render(<NativeChatShell {...shellProps()} />);
+
+    const region = container.firstElementChild?.firstElementChild;
+    expect(region?.getAttribute("aria-live")).toBe("polite");
+    expect(region?.getAttribute("aria-atomic")).toBe("true");
+    expect(region?.textContent).toBe("");
+    expect(region?.getAttribute("role") === null).toBe(true);
   });
 
   test("shows the desync warning while the composer is centered", () => {

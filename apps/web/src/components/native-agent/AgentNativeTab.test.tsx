@@ -1371,6 +1371,7 @@ describe("AgentNativeTab", () => {
       promptSuggestions?: boolean;
       messages?: NativeMessage[];
       recoverableDispatch?: NativeAgentSessionProjection["recoverableDispatch"];
+      notices?: NativeAgentSessionProjection["notices"];
       composer?: Partial<NonNullable<NativeAgentSessionProjection["composer"]>>;
       contextUsage?: NativeAgentSessionProjection["contextUsage"];
     } = {}) {
@@ -1396,6 +1397,7 @@ describe("AgentNativeTab", () => {
           ? { suggestedPrompt: overrides.suggestedPrompt }
           : {}),
         ...(overrides.contextUsage ? { contextUsage: overrides.contextUsage } : {}),
+        ...(overrides.notices ? { notices: overrides.notices } : {}),
         interactions: [],
         composerControls: [],
         composer: {
@@ -1612,6 +1614,139 @@ describe("AgentNativeTab", () => {
         name: `Validate the implementation ${announcementState}.`,
       })).toBeTruthy();
       expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true);
+    });
+
+    /** One assistant row carrying `count` identically-labelled active children. */
+    function subagentMessage(
+      count: number,
+      state: (index: number) => "active" | "finished" | "failed",
+    ): NativeMessage {
+      return {
+        id: "assistant-many-subagents",
+        role: "assistant",
+        content: "Parent response complete",
+        createdAt: "2026-08-15T10:00:00.000Z",
+        parts: Array.from({ length: count }, (_unused, index) => ({
+          type: "tool-invocation" as const,
+          content: "Task",
+          toolName: "task",
+          toolUseId: `shared-label-task-${index}`,
+          toolState: "success" as const,
+          agentState: state(index),
+          toolArgs: { description: "Sub-agent" },
+        })),
+      };
+    }
+
+    test("announces the plural active summary and a simultaneous finish and start", async () => {
+      seedProjection({
+        messages: [subagentMessage(2, () => "active")],
+      });
+
+      const view = render(
+        <AgentNativeTab
+          tabId="tab-plural-subagents"
+          data={identity("cursor")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+
+      expect(await screen.findByRole("status", {
+        name: "2 sub-agents working: Sub-agent, Sub-agent.",
+      })).toBeTruthy();
+
+      // The first child finishes in the same update that starts a third one, so
+      // the lifecycle line and the refreshed summary must both be announced.
+      seedProjection({
+        messages: [subagentMessage(3, (index) => index === 0 ? "finished" : "active")],
+      });
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-plural-subagents"
+          data={identity("cursor")}
+          isActive
+          refreshRequestId={1}
+        />,
+      );
+
+      expect(await screen.findByRole("status", {
+        name: "Sub-agent finished. 2 sub-agents working: Sub-agent, Sub-agent.",
+      })).toBeTruthy();
+    });
+
+    test("re-announces an identical lifecycle message for a second child", async () => {
+      // Both children resolve to the same label, so the second "finished" line is
+      // byte-identical to the first. It still has to reach the live region.
+      seedProjection({ messages: [subagentMessage(2, () => "active")] });
+
+      const view = render(
+        <AgentNativeTab
+          tabId="tab-repeat-announcement"
+          data={identity("cursor")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+      await screen.findByRole("status", {
+        name: "2 sub-agents working: Sub-agent, Sub-agent.",
+      });
+
+      const liveRegionText = () => screen
+        .getByRole("status", { name: /Sub-agent/ })
+        .firstElementChild;
+
+      seedProjection({
+        messages: [subagentMessage(2, (index) => index === 0 ? "finished" : "active")],
+      });
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-repeat-announcement"
+          data={identity("cursor")}
+          isActive
+          refreshRequestId={1}
+        />,
+      );
+      const firstFinish = await screen.findByRole("status", {
+        name: "Sub-agent finished.",
+      });
+      const firstNode = liveRegionText();
+
+      seedProjection({ messages: [subagentMessage(2, () => "finished")] });
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-repeat-announcement"
+          data={identity("cursor")}
+          isActive
+          refreshRequestId={2}
+        />,
+      );
+
+      await waitFor(() => expect(liveRegionText() === firstNode).toBe(false));
+      expect(screen.getByRole("status", { name: "Sub-agent finished." })).toBe(firstFinish);
+      expect(liveRegionText()?.textContent).toBe("Sub-agent finished.");
+    });
+
+    test("keeps pinned cards rendered and reserves their clearance", async () => {
+      // The guard that stops an empty pinned wrapper reserving dock height must
+      // not also hide real cards; it is derived from the same list that renders.
+      seedProjection({
+        notices: [{ kind: "warning", message: "Recovered provider notice" }],
+      });
+
+      render(
+        <AgentNativeTab
+          tabId="tab-pinned-notice"
+          data={identity("cursor")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+
+      const notice = await screen.findByText("Recovered provider notice");
+      expect(screen.getByTestId("compose-dock").contains(notice)).toBe(true);
+      expect(screen.getByTestId("transcript-bottom-spacer").className)
+        .not.toContain("h-32");
     });
 
     test("renders an unavailable context wheel when the provider reports no maximum", async () => {

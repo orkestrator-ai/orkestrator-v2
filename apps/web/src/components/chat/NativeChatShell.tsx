@@ -52,8 +52,14 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
 
   messages: TMessage[];
   isLoading: boolean;
-  /** Stable, non-interactive announcement for background-agent lifecycle changes. */
-  agentActivityAnnouncement?: string;
+  /**
+   * Stable, non-interactive announcement for background-agent lifecycle changes.
+   *
+   * `seq` must change on every announcement, including a repeat of the previous
+   * text: the live region is keyed on it so an identical message still replaces
+   * the text node and is spoken again.
+   */
+  agentActivityAnnouncement?: { text: string; seq: number };
   /**
    * Replaces the thinking indicator when the turn is in a distinct phase
    * (Codex's "Stopping…" / "Reconnecting…").
@@ -263,14 +269,24 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
 
   return (
     <div className="@container relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
+      {/*
+        The region itself never unmounts, so it is already a live region before
+        any text arrives. Only its child is keyed on `seq`, which replaces the
+        text node even when the message repeats verbatim — two children can share
+        a label, and an unchanged node is not a mutation the AT would announce.
+      */}
       <span
-        role={agentActivityAnnouncement ? "status" : undefined}
-        aria-label={agentActivityAnnouncement || undefined}
+        role={agentActivityAnnouncement?.text ? "status" : undefined}
+        aria-label={agentActivityAnnouncement?.text || undefined}
         aria-live="polite"
         aria-atomic="true"
         className="sr-only"
       >
-        {agentActivityAnnouncement}
+        {agentActivityAnnouncement?.text ? (
+          <span key={agentActivityAnnouncement.seq}>
+            {agentActivityAnnouncement.text}
+          </span>
+        ) : null}
       </span>
       <div
         className={cn(

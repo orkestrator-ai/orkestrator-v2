@@ -40,7 +40,10 @@ import type {
   NativeAgentSlashCommand,
   NativeAgentToolDetails,
 } from "@orkestrator/protocol/native-agent";
-import { resolveReasoningId } from "@orkestrator/protocol/native-agent";
+import {
+  nativeAgentCapabilities,
+  resolveReasoningId,
+} from "@orkestrator/protocol/native-agent";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
 import { boundTranscriptResponse } from "@orkestrator/protocol/transcript-window";
 import { resolveStartupLaunch } from "@orkestrator/protocol/startup-launch";
@@ -302,69 +305,13 @@ const NATIVE_SLASH_COMMAND_CACHE_LIMIT = 256;
 /** Prevent a failed optional discovery endpoint from being retried every poll. */
 const NATIVE_DISCOVERY_RETRY_MS = 5_000;
 
-const RICH_NATIVE_CAPABILITIES: NativeAgentCapabilities = Object.freeze({
-  attachments: { files: true, images: true },
-  queue: true,
-  resume: true,
-  fork: true,
-  slashCommands: true,
-  backgroundTasks: false,
-  composer: {
-    provider: true,
-    model: true,
-    reasoning: true,
-    speed: true,
-    mode: true,
-    executionProfile: false,
-    localSettings: false,
-    promptSuggestions: false,
-  },
-  actions: { compact: true },
-});
-
+/**
+ * Shared with the renderer rather than reimplemented here. The projection's
+ * `capabilities.queue` and the composer's decision to enqueue have to agree, so
+ * they read the same protocol table instead of two copies that can drift.
+ */
 function nativeCapabilities(agent: BuildPipelineAgent): NativeAgentCapabilities {
-  if (agent === "cursor" || agent === "grok") {
-    return {
-      // Both ACP agents read inline image content blocks; neither takes files.
-      attachments: { files: false, images: true },
-      queue: true,
-      resume: true,
-      fork: false,
-      slashCommands: false,
-      backgroundTasks: false,
-      composer: { ...RICH_NATIVE_CAPABILITIES.composer },
-      actions: {},
-    };
-  }
-  if (agent === "claude") {
-    return {
-      ...RICH_NATIVE_CAPABILITIES,
-      backgroundTasks: true,
-      composer: {
-        ...RICH_NATIVE_CAPABILITIES.composer,
-        executionProfile: true,
-        localSettings: true,
-        promptSuggestions: true,
-      },
-      actions: { compact: true, rewindFiles: true },
-    };
-  }
-  if (agent === "opencode") {
-    return {
-      ...RICH_NATIVE_CAPABILITIES,
-      composer: {
-        ...RICH_NATIVE_CAPABILITIES.composer,
-        speed: false,
-        executionProfile: true,
-      },
-      actions: { compact: true, undo: true, redo: true, share: true },
-    };
-  }
-  return {
-    ...RICH_NATIVE_CAPABILITIES,
-    attachments: { files: false, images: true },
-    actions: { compact: true, steer: true, review: true },
-  };
+  return nativeAgentCapabilities(agent);
 }
 
 function nativeComposerControls(
@@ -4529,10 +4476,18 @@ export class NativeAgentService {
     // Native compose queues persist the shared `fastMode` field for every
     // provider. Keep accepting Claude's legacy `fastModeEnabled` shape while
     // forwarding the shared field to Codex and both ACP agents.
-    const value = agent === "claude"
-      ? record.fastModeEnabled ?? record.fastMode
-      : record.fastMode;
-    return typeof value === "boolean" ? value : undefined;
+    //
+    // Each candidate is type-checked before the next is considered rather than
+    // coalesced first: `??` only falls through on null/undefined, so a garbage
+    // legacy value would otherwise shadow a perfectly good shared field and
+    // silently drop the user's speed selection.
+    const candidates = agent === "claude"
+      ? [record.fastModeEnabled, record.fastMode]
+      : [record.fastMode];
+    for (const candidate of candidates) {
+      if (typeof candidate === "boolean") return candidate;
+    }
+    return undefined;
   }
 
   private queueExecutionMode(

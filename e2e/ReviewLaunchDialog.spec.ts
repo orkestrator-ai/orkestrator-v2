@@ -59,7 +59,6 @@ test("short mobile viewports scroll configuration while keeping actions visible"
   await expect(page.getByTestId("review-launch-selection"))
     .toHaveText("claude|claude-sonnet|default");
 });
-
 test("one picker chooses the provider, the model, and the reasoning effort", async ({
   page,
 }, testInfo) => {
@@ -232,4 +231,3 @@ test("the phone layout reaches every choice through its drill-in views", async (
   await expect(page.getByTestId("review-launch-selection"))
     .toHaveText("codex|codex-review|high");
 });
-

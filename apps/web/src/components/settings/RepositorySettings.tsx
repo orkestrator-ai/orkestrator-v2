@@ -77,7 +77,6 @@ export function RepositorySettings({
   onUpdateProject,
 }: RepositorySettingsProps) {
   const getRepositoryConfig = useConfigStore((state) => state.getRepositoryConfig);
-  const setRepositoryConfig = useConfigStore((state) => state.setRepositoryConfig);
   const setConfig = useConfigStore((state) => state.setConfig);
   const config = useConfigStore((state) => state.config);
   const globalDefaultAgent = config.global.defaultAgent || "claude";
@@ -334,11 +333,9 @@ export function RepositorySettings({
       // Update repository config - filter out empty file paths
       const cleanedFilesToCopy = filesToCopy.filter((f) => f.trim() !== "");
       const parsedEntryPort = entryPort.trim() ? parseInt(entryPort.trim(), 10) : undefined;
-      const currentRepoConfig = getRepositoryConfig(project.id);
       const repoConfig: RepositoryConfig = {
         defaultBranch,
         prBaseBranch,
-        lastEnvironmentType: currentRepoConfig?.lastEnvironmentType,
         defaultPortMappings: portMappings.length > 0 ? portMappings : undefined,
         filesToCopy: cleanedFilesToCopy.length > 0 ? cleanedFilesToCopy : undefined,
         defaultModel: defaultModel || undefined,
@@ -355,9 +352,6 @@ export function RepositorySettings({
       // Update backend
       const newConfig = await backend.updateRepositoryConfig(project.id, repoConfig);
       setConfig(newConfig);
-
-      // Also update local store
-      setRepositoryConfig(project.id, repoConfig);
 
       toast.success("Settings saved");
       onOpenChange(false);
@@ -414,10 +408,18 @@ export function RepositorySettings({
         const models = codexModels.length > 0 ? codexModels : CODEX_MODELS;
         return models.map((m) => ({ id: m.id, name: m.name }));
       }
+      case "cursor":
+      case "grok":
+        return (projectModelCatalog[effectiveAgent] ?? [])
+          .filter((model) => model.id !== "default")
+          .map((model) => ({
+            id: model.id,
+            name: model.name,
+          }));
       default:
         return [];
     }
-  }, [effectiveAgent, claudeModels, projectModelCatalog.opencode, codexModels]);
+  }, [effectiveAgent, claudeModels, projectModelCatalog, codexModels]);
 
   const selectedCodexModel = useMemo(() => {
     if (effectiveAgent !== "codex") return undefined;
@@ -425,6 +427,13 @@ export function RepositorySettings({
     const effectiveModel = defaultModel || config.global.codexModel;
     return models.find((model) => model.id === effectiveModel);
   }, [codexModels, config.global.codexModel, defaultModel, effectiveAgent]);
+
+  const selectedAcpModel = useMemo(() => {
+    if (effectiveAgent !== "cursor" && effectiveAgent !== "grok") return undefined;
+    return (projectModelCatalog[effectiveAgent] ?? []).find(
+      (model) => model.id === defaultModel,
+    );
+  }, [defaultModel, effectiveAgent, projectModelCatalog]);
 
   const availableEffortLevels = useMemo((): { value: string; label: string }[] => {
     switch (effectiveAgent) {
@@ -457,10 +466,23 @@ export function RepositorySettings({
           ? CODEX_EFFORT_LEVELS.filter((effort) => supportedEfforts.includes(effort.value))
           : CODEX_EFFORT_LEVELS;
       }
+      case "cursor":
+      case "grok":
+        return (selectedAcpModel?.reasoningEfforts ?? []).map((effort) => ({
+          value: effort,
+          label: effort.charAt(0).toUpperCase() + effort.slice(1),
+        }));
       default:
         return [];
     }
-  }, [effectiveAgent, defaultModel, claudeModels, projectModelCatalog.opencode, selectedCodexModel]);
+  }, [
+    effectiveAgent,
+    defaultModel,
+    claudeModels,
+    projectModelCatalog,
+    selectedAcpModel,
+    selectedCodexModel,
+  ]);
 
   useEffect(() => {
     if (
@@ -471,8 +493,17 @@ export function RepositorySettings({
       && !selectedCodexModel.reasoningEfforts.includes(defaultEffort as CodexReasoningEffort)
     ) {
       setDefaultEffort("");
+      return;
     }
-  }, [defaultEffort, effectiveAgent, selectedCodexModel]);
+    if (
+      (effectiveAgent === "cursor" || effectiveAgent === "grok")
+      && selectedAcpModel
+      && defaultEffort
+      && !selectedAcpModel.reasoningEfforts.includes(defaultEffort)
+    ) {
+      setDefaultEffort("");
+    }
+  }, [defaultEffort, effectiveAgent, selectedAcpModel, selectedCodexModel]);
 
   const agentLabel = AGENT_PLATFORM_LABELS[effectiveAgent];
   const appDefaultAgentLabel = AGENT_PLATFORM_LABELS[globalDefaultAgent];

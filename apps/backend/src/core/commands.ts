@@ -182,7 +182,10 @@ import {
   isStartBuildPipelineInput,
   type StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
-import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
+import {
+  AGENT_PLATFORM_LABELS,
+  isAgentPlatform,
+} from "@orkestrator/protocol/agent-platforms";
 import type {
   AgentModel,
   AgentReasoningOption,
@@ -10001,7 +10004,7 @@ export function createCommandRegistry(
   });
   register("get_repository_config", ({ projectId }, { storage }) => storage.getRepositoryConfig(asString(projectId, "projectId")));
   register("update_repository_config", async ({ projectId, repoConfig }, context) => {
-    const updated = await context.storage.updateRepositoryConfig(
+    const updated = await context.storage.updateRepositorySettings(
       asString(projectId, "projectId"),
       repoConfig as never,
     );
@@ -10011,6 +10014,37 @@ export function createCommandRegistry(
     // the setting the user just changed.
     void syncDiffStatsTracking(context).catch(() => undefined);
     return redactAppConfig(updated);
+  });
+  register("remember_environment_agent_selection", async ({
+    projectId,
+    platform,
+    mode,
+    model,
+    reasoningEffort,
+  }, { storage }) => {
+    if (!isAgentPlatform(platform)) {
+      throw new Error("Expected platform to be a supported agent platform");
+    }
+    const selectedPlatform = platform;
+    const selectedMode = asString(mode, "mode");
+    if (selectedMode !== "terminal" && selectedMode !== "native") {
+      throw new Error("Expected mode to be terminal or native");
+    }
+    const selectedModel = asOptionalString(model)?.trim();
+    const selectedReasoningEffort = asOptionalString(reasoningEffort)?.trim();
+    return redactAppConfig(await storage.patchRepositoryConfig(
+      asString(projectId, "projectId"),
+      {
+        lastEnvironmentAgentSelection: {
+          platform: selectedPlatform,
+          mode: selectedMode,
+          ...(selectedModel ? { model: selectedModel } : {}),
+          ...(selectedReasoningEffort
+            ? { reasoningEffort: selectedReasoningEffort }
+            : {}),
+        },
+      },
+    ));
   });
   register("get_linear_connection", async (_args, context) => {
     const auth = await context.storage.getLinearAuth();
@@ -10390,7 +10424,9 @@ export function createCommandRegistry(
       entryPort: repoConfig.entryPort,
       pendingRenamePrompt,
     });
-    await storage.updateRepositoryConfig(project.id, { ...repoConfig, lastEnvironmentType: env.environmentType });
+    await storage.patchRepositoryConfig(project.id, {
+      lastEnvironmentType: env.environmentType,
+    });
     return toClientEnvironment(await storage.addEnvironment(env));
   });
   register("delete_environment", async ({ environmentId }, context) => {
@@ -10650,7 +10686,7 @@ export function createCommandRegistry(
       { portMappings: asPortMappings(portMappings) ?? [] },
     ).then(toClientEnvironment),
   );
-  register("update_environment_agent_settings", ({
+  register("update_environment_agent_settings", async ({
     environmentId,
     defaultAgent,
     claudeMode,
@@ -10662,6 +10698,7 @@ export function createCommandRegistry(
     initialReasoningEffort,
     initialPromptAttachments,
   }, { storage }) => {
+    const id = asString(environmentId, "environmentId");
     const updates = {
       defaultAgent,
       claudeMode,
@@ -10687,8 +10724,7 @@ export function createCommandRegistry(
       updates.initialPromptAttachments =
         initialPromptAttachments as Environment["initialPromptAttachments"];
     }
-    return storage.updateEnvironment(asString(environmentId, "environmentId"), updates)
-      .then(toClientEnvironment);
+    return toClientEnvironment(await storage.updateEnvironment(id, updates));
   });
   register("set_environment_pending_agent_launch", ({ environmentId, pending }, { storage }) => {
     const nextPending = asRequiredBoolean(pending, "pending");

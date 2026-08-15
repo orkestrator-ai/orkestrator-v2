@@ -459,6 +459,30 @@ function createContext(
         config.repositories[projectId as "project-1"] = nextConfig;
         return config;
       }),
+      updateRepositorySettings: mock(async (projectId: string, nextConfig: RepositoryConfig) => {
+        const current = config.repositories[projectId as "project-1"];
+        config.repositories[projectId as "project-1"] = {
+          ...nextConfig,
+          ...(current?.lastEnvironmentType !== undefined
+            ? { lastEnvironmentType: current.lastEnvironmentType }
+            : {}),
+          ...(current?.lastEnvironmentAgentSelection !== undefined
+            ? {
+                lastEnvironmentAgentSelection:
+                  current.lastEnvironmentAgentSelection,
+              }
+            : {}),
+        };
+        return config;
+      }),
+      patchRepositoryConfig: mock(async (projectId: string, updates: Partial<RepositoryConfig>) => {
+        config.repositories[projectId as "project-1"] = {
+          ...repositoryConfig,
+          ...config.repositories[projectId as "project-1"],
+          ...updates,
+        };
+        return config;
+      }),
       getDesktopConnections: mock(async () => desktopConnections),
       saveDesktopConnections: mock(async (nextConnections: typeof desktopConnections) => {
         desktopConnections = nextConnections;
@@ -17550,6 +17574,10 @@ describe("storage-backed command delegation", () => {
         config = { ...config, repositories: { ...config.repositories, [id]: value } };
         return config;
       }),
+      updateRepositorySettings: mock(async (id: string, value: RepositoryConfig) => {
+        config = { ...config, repositories: { ...config.repositories, [id]: value } };
+        return config;
+      }),
     };
     const context = { storage } as unknown as CommandContext;
     const commands = createCommandRegistry();
@@ -17722,7 +17750,8 @@ describe("storage-backed command delegation", () => {
 
     expect(storage.removeProject).toHaveBeenCalledWith("project-1");
     expect(storage.updateProject).toHaveBeenCalledWith("project-1", { name: "renamed" });
-    expect(storage.updateRepositoryConfig).toHaveBeenCalledWith("project-1", repositoryConfig);
+    expect(storage.updateRepositorySettings).toHaveBeenCalledWith("project-1", repositoryConfig);
+    expect(storage.updateRepositoryConfig).not.toHaveBeenCalled();
   });
 
   test("delegates session lifecycle, synchronization, and buffer commands", async () => {

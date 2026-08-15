@@ -7,6 +7,10 @@ export { useClaudeOptionsStore } from "./claudeOptionsStore";
 export type { ClaudeOptions, AgentType } from "./claudeOptionsStore";
 export { useAgentActivityStore } from "./agentActivityStore";
 export type { AgentActivityState } from "./agentActivityStore";
+export {
+  syncCachedAcpModels,
+  useAgentModelCatalogStore,
+} from "./agentModelCatalogStore";
 export { useFilesPanelStore } from "./filesPanelStore";
 export type { FilesPanelTab } from "./filesPanelStore";
 export { usePaneLayoutStore, getAllLeaves } from "./paneLayoutStore";

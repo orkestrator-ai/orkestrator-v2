@@ -334,6 +334,52 @@ export class ProviderUnavailableError extends Error {
 }
 
 /**
+ * The provider session is alive but its last turn ended in a terminal error.
+ *
+ * Thrown by `status()` so a pipeline stage fails with the provider's own
+ * explanation instead of a bare status. It is deliberately *not* a session
+ * death: the thread, its rollout and its configuration are all still there, and
+ * the next prompt clears the state — which is why interactive callers that only
+ * need liveness must read `detail` through `readProviderStatus()` rather than
+ * letting this escape. Treating it as fatal there left a tab that hit, say,
+ * "Selected model is at capacity" unable to change model and continue, because
+ * every later `ensureSession` threw on the previous turn's error.
+ */
+export class ProviderSessionFailedError extends Error {
+  readonly agent: BuildPipelineAgent;
+  readonly detail: string;
+
+  constructor(agent: BuildPipelineAgent, detail: string) {
+    super(`The ${agent} session failed: ${detail}`);
+    this.name = "ProviderSessionFailedError";
+    this.agent = agent;
+    this.detail = detail;
+  }
+}
+
+/**
+ * Read a provider status without a terminal turn error escaping as a throw.
+ *
+ * Liveness callers ("does this session still exist?", "may I dispatch?") need
+ * the `error` status and its detail as data. Only `ProviderSessionFailedError`
+ * is absorbed; transport faults still reject, because those genuinely leave the
+ * answer unknown.
+ */
+export async function readProviderStatus(
+  provider: Pick<BuildPipelineProvider, "status">,
+  sessionId: string,
+): Promise<{ status: ProviderStatus; error?: string }> {
+  try {
+    return { status: await provider.status(sessionId) };
+  } catch (error) {
+    if (error instanceof ProviderSessionFailedError) {
+      return { status: "error", error: error.detail };
+    }
+    throw error;
+  }
+}
+
+/**
  * A prompt transport failed without proving whether the provider accepted it.
  *
  * Callers retain the durable request id and reconcile provider status before
@@ -1709,6 +1755,18 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     }
   }
 
+  /**
+   * Read the session's lifecycle state.
+   *
+   * The failed-turn contract is split, so read it before branching on the
+   * result: a terminal turn error is delivered as a `ProviderSessionFailedError`
+   * **throw** when the bridge supplied a detail, and returned as `"error"` only
+   * when it did not. A caller that branches on `status === "error"` therefore
+   * reaches that branch exactly when the provider declined to explain itself —
+   * which is backwards. Any such caller must read through `readProviderStatus`,
+   * which turns the throw back into `{ status: "error", error }` so the branch
+   * fires either way and the detail is available to it.
+   */
   async status(sessionId: string): Promise<ProviderStatus> {
     const path = this.agent === "claude"
       ? `/session/${encodeURIComponent(sessionId)}`
@@ -1725,7 +1783,7 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     if (body.status === "error" && typeof body.error === "string") {
       const detail = body.error.trim().slice(0, 4_000);
       if (detail) {
-        throw new Error(`The ${this.agent} session failed: ${detail}`);
+        throw new ProviderSessionFailedError(this.agent, detail);
       }
     }
     return body.status === "running" || body.status === "idle" || body.status === "error"
@@ -2878,14 +2936,16 @@ class HttpBridgeProvider implements BuildPipelineProvider {
   }
 
   async listResumableSessions(): Promise<NativeAgentResumeEntry[]> {
-    if (this.agent === "cursor" || this.agent === "grok") return [];
     const response = await bridgeFetch(
       this.connection,
       "/session/list",
       {},
       this.fetchImpl,
     );
-    assertOk(response, `${this.agent} resumable session list`);
+    // The ACP bridge answers 410 with the reason the agent cannot list its own
+    // history. Dropping that body would reduce a specific, actionable message
+    // to a bare status code in front of the user.
+    await assertOkWithErrorDetail(response, `${this.agent} resumable session list`);
     const payload = asRecord(await boundedJson(
       response,
       `${this.agent} resumable session list`,
@@ -2993,7 +3053,28 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     controls?: NativeAgentControlUpdate,
   ): Promise<string> {
     if (this.agent === "cursor" || this.agent === "grok") {
-      throw new PromptRejectedError(`${this.agent} does not support session resume`);
+      const response = await bridgeFetch(
+        this.connection,
+        "/session/resume",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            sessionId,
+            ...(controls?.modelId ? { modelId: controls.modelId } : {}),
+            ...(controls?.reasoningId ? { reasoningId: controls.reasoningId } : {}),
+            ...(controls?.mode ? { mode: controls.mode } : {}),
+            ...(controls?.fastMode === undefined ? {} : { fastMode: controls.fastMode }),
+          }),
+        },
+        this.fetchImpl,
+      );
+      await assertOkWithErrorDetail(response, `${this.agent} session resume`);
+      const payload = asRecord(await boundedJson(response, `${this.agent} session resume`));
+      const resumedId = nonEmptyString(payload?.sessionId);
+      if (!resumedId) {
+        throw new ProviderUnavailableError(`${this.agent} returned a malformed resumed session`);
+      }
+      return resumedId;
     }
     if (this.agent === "claude") {
       const response = await bridgeFetch(

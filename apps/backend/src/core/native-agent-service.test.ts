@@ -16,6 +16,7 @@ import {
   createBuildPipelineProvider,
   AmbiguousPromptDispatchError,
   PromptRejectedError,
+  ProviderSessionFailedError,
   ProviderUnavailableError,
   type BridgeConnection,
   type BuildPipelineProvider,
@@ -761,6 +762,108 @@ describe("NativeAgentService", () => {
     });
   });
 
+  test("keeps an at-capacity session usable so a new model can continue it", async () => {
+    // Codex answers a turn it could not run with a terminal session error. The
+    // thread, rollout and config all survive it, and the fix is to pick another
+    // model and send again — so neither the liveness probe nor the dispatch may
+    // treat the previous turn's failure as a dead session.
+    const stub = createProviderStub("codex", {
+      status: async () => {
+        throw new ProviderSessionFailedError(
+          "codex",
+          "Selected model is at capacity. Please try a different model.",
+        );
+      },
+      interactiveSnapshot: async () => ({
+        status: "error",
+        messages: [],
+        error: "Selected model is at capacity. Please try a different model.",
+      }),
+    });
+    await withService({
+      prefix: "orkestrator-native-at-capacity-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-capacity",
+      };
+      const created = await service.ensureSession({ ...identity, model: "gpt-5.6-sol" });
+
+      const reused = await service.ensureSession({ ...identity, model: "gpt-5.6-luna" });
+      expect(reused.providerSessionId).toBe(created.providerSessionId);
+      expect(stub.createSession).toHaveBeenCalledTimes(1);
+
+      await service.dispatchPrompt({
+        ...identity,
+        prompt: "Please continue",
+        requestId: "request-after-capacity",
+        model: "gpt-5.6-luna",
+      });
+      expect(stub.send).toHaveBeenCalledTimes(1);
+      expect(stub.send.mock.calls[0]?.[1]).toBe("Please continue");
+      // The point of reusing the session is that the *replacement* model runs.
+      // Reuse alone would still be broken if the new model were dropped here.
+      expect(stub.send.mock.calls[0]?.[2]).toMatchObject({ model: "gpt-5.6-luna" });
+
+      // The failure is still reported — it just no longer blocks the composer.
+      const projection = await service.getProjection(identity);
+      expect(projection?.turn).toMatchObject({
+        phase: "error",
+        error: "Selected model is at capacity. Please try a different model.",
+      });
+    });
+  });
+
+  test("projects a terminal turn failure through the status fallback", async () => {
+    const detail = "Selected model is at capacity. Please try a different model.";
+    const stub = createProviderStub("codex", {
+      status: async () => {
+        throw new ProviderSessionFailedError("codex", detail);
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-terminal-projection-fallback-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-terminal-projection",
+      };
+      await service.ensureSession(identity);
+
+      const projection = await service.getProjection(identity);
+
+      expect(stub.status).toHaveBeenCalledWith("provider-session");
+      expect(projection).toMatchObject({
+        connection: "connected",
+        turn: { phase: "error", error: detail },
+        messages: [{ role: "system", content: detail }],
+      });
+    });
+  });
+
+  test("adopts a session whose last turn failed rather than calling it missing", async () => {
+    const stub = createProviderStub("codex", {
+      status: async () => {
+        throw new ProviderSessionFailedError("codex", "usage limit reached");
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-adopt-failed-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      await expect(service.adoptSession({
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "env-env-1:tab-adopt-failed",
+        providerSessionId: "provider-existing",
+      })).resolves.toMatchObject({ providerSessionId: "provider-existing" });
+    });
+  });
+
   test("reclaims projection epochs once a key is neither cached nor being read", async () => {
     const stub = createProviderStub("codex", {
       interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
@@ -1009,6 +1112,27 @@ describe("NativeAgentService", () => {
       });
     });
   });
+
+  for (const agent of ["cursor", "grok"] as const) {
+    test(`advertises ${agent} session resume through the native projection`, async () => {
+      const stub = createProviderStub(agent, {
+        interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+      });
+      await withService({
+        prefix: `orkestrator-native-${agent}-resume-capability-`,
+        provider: async () => stub.provider,
+      }, async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent,
+          logicalSessionKey: `env-env-1:tab-${agent}-resume`,
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        expect(projection?.capabilities.resume).toBe(true);
+      });
+    });
+  }
 
   test("orders resumable sessions by most recent activity", async () => {
     const stub = createProviderStub("claude", {
@@ -2161,6 +2285,59 @@ describe("NativeAgentService", () => {
         eventualOutcome: "expired",
       });
       expect(internals(service).trackedInteractions.size).toBe(0);
+    });
+  });
+
+  test("settles an empty interaction snapshot from a terminal turn without backoff", async () => {
+    let pending = true;
+    const { provider, status } = createProviderStub("codex", {
+      status: async () => {
+        throw new ProviderSessionFailedError("codex", "usage limit reached");
+      },
+      interactions: {
+        listPendingInteractions: async () => pending
+          ? pendingInteractionSnapshot(10_000, ["question"])
+          : { version: AGENT_INTERACTION_CONTRACT_VERSION, revision: 2, requests: [] },
+        resolveInteraction: async () => {
+          throw new Error("observe-only must never resolve");
+        },
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-interaction-terminal-status-",
+      provider: async () => provider,
+      now: () => 10_000,
+      interactionMonitorMode: "observe-only",
+    }, async ({ storage, service }) => {
+      const logicalSessionKey = "looped-review:workflow:terminal-status:Review";
+      const key = nativeAgentSessionStorageKey(
+        "env-1",
+        "codex",
+        logicalSessionKey,
+      );
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey,
+        providerSessionId: "provider-session",
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+      await service.reconcileAgentInteractions();
+      pending = false;
+
+      const warnings = await captureWarnings(() => service.reconcileAgentInteractions());
+
+      expect(warnings).toEqual([]);
+      expect(status).toHaveBeenCalledTimes(1);
+      expect(service.getInteractionObservations()[0]).toMatchObject({
+        providerState: "error",
+        eventualOutcome: "withdrawn",
+      });
+      expect(internals(service).trackedInteractions.size).toBe(0);
+      expect(internals(service).interactionAttempts.has(key)).toBe(false);
+      expect(internals(service).interactionRetryAt.has(key)).toBe(false);
     });
   });
 
@@ -4371,6 +4548,49 @@ describe("NativeAgentService", () => {
         agentActivitySources: { "native-agent": { state: expectedState } },
       });
       expect(await storage.getNativeAgentSession(key)).not.toBeNull();
+    });
+  });
+
+  test("maps a terminal turn failure onto idle activity without retry backoff", async () => {
+    const { provider, status, activity, activityBatch } = createProviderStub(
+      "codex",
+      {
+        status: async () => {
+          throw new ProviderSessionFailedError("codex", "usage limit reached");
+        },
+      },
+    );
+    await withService({
+      prefix: "orkestrator-native-activity-terminal-status-",
+      provider: async () => provider,
+    }, async ({ storage, service }) => {
+      const key = nativeAgentSessionStorageKey("env-1", "codex", "tab-1");
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "tab-1",
+        providerSessionId: "provider-1",
+      });
+      await storage.setEnvironmentAgentActivity(
+        "env-1",
+        "working",
+        new Date().toISOString(),
+        "native-agent",
+      );
+
+      const warnings = await captureWarnings(() => service.reconcileAgentActivity());
+
+      expect(warnings).toEqual([]);
+      expect(activity).toBeUndefined();
+      expect(activityBatch).toBeUndefined();
+      expect(status).toHaveBeenCalledWith("provider-1");
+      expect(await storage.getEnvironment("env-1")).toMatchObject({
+        agentActivitySources: { "native-agent": { state: "idle" } },
+      });
+      expect(await storage.getNativeAgentSession(key)).not.toBeNull();
+      expect(internals(service).activityAttempts.size).toBe(0);
+      expect(internals(service).activityRetryAt.size).toBe(0);
     });
   });
 
@@ -7102,6 +7322,104 @@ describe("NativeAgentService", () => {
         });
         expect(internals(service).queueRetryAt.get(queueKey))
           .toBeGreaterThan(Date.now());
+      });
+    });
+
+    test("backs off a terminal session error as provider status data", async () => {
+      const stub = createProviderStub("codex", {
+        status: async () => {
+          throw new ProviderSessionFailedError("codex", "usage limit reached");
+        },
+      });
+      await withService({
+        prefix: "orkestrator-native-drain-terminal-status-",
+        provider: async () => stub.provider,
+      }, async ({ storage, service }) => {
+        const queueKey = "codex\u0000env-env-1:tab-1";
+        await storage.savePromptQueue(queueKey, "env-1", [
+          { id: "row-1", text: "Do it" },
+        ]);
+
+        for (let attempt = 1; attempt < 5; attempt += 1) {
+          await internals(service).drainPromptQueues();
+          expect(internals(service).queueAttempts.get(queueKey)).toBe(attempt);
+          // The prompt is held, not burned: an at-capacity model would fail
+          // every queued prompt in turn if the drain sent them anyway.
+          expect(stub.send).not.toHaveBeenCalled();
+          expect(await storage.getPromptQueue(queueKey)).toMatchObject({
+            messages: [{ id: "row-1" }],
+          });
+          expect((await storage.getPromptQueue(queueKey))?.dispatchError)
+            .toBeUndefined();
+          internals(service).queueRetryAt.delete(queueKey);
+        }
+        const warnings = await captureWarnings(() =>
+          internals(service).drainPromptQueues()
+        );
+
+        expect(warnings.join(" ")).toContain("provider session is error");
+        expect(warnings.join(" ")).not.toContain("ProviderSessionFailedError");
+        // Provider-authored detail is persisted for the user, never logged.
+        expect(warnings.join(" ")).not.toContain("usage limit reached");
+        expect(stub.send).not.toHaveBeenCalled();
+        expect(stub.dispose).not.toHaveBeenCalled();
+        // Parked, not silently stalled. The drain is the only thing that would
+        // have run the turn that clears a sticky terminal status, so deferring
+        // forever left the prompt neither sent nor failed, and told the user
+        // nothing.
+        const parked = await storage.getPromptQueue(queueKey);
+        expect(parked).toMatchObject({ messages: [{ id: "row-1" }] });
+        expect(parked?.inFlight).toBeUndefined();
+        expect(parked?.dispatchError).toMatchObject({
+          requestId: "row-1",
+          messageId: "row-1",
+          message:
+            "The codex session failed before this prompt was sent: usage limit reached",
+        });
+        expect(internals(service).queueAttempts.has(queueKey)).toBe(false);
+        expect(internals(service).queueRetryAt.has(queueKey)).toBe(false);
+
+        // The park is a latch, not a loop: a further sweep must not re-read the
+        // provider or park a second time, and the retry control clears it.
+        stub.status.mockClear();
+        await internals(service).drainPromptQueues();
+        expect(stub.status).not.toHaveBeenCalled();
+
+        await storage.retryPromptQueueDispatch(queueKey);
+        expect((await storage.getPromptQueue(queueKey))?.dispatchError)
+          .toBeUndefined();
+      });
+    });
+
+    test("parks a terminal session error reported without a detail", async () => {
+      // The bridge reports `error` with no explanation, so `status()` returns it
+      // instead of throwing. The queued prompt must still park, not stall.
+      const stub = createProviderStub("codex", {
+        status: async () => "error" as ProviderStatus,
+      });
+      await withService({
+        prefix: "orkestrator-native-drain-bare-error-",
+        provider: async () => stub.provider,
+      }, async ({ storage, service }) => {
+        // Same key shape as its siblings: agent and logical session key joined
+        // by a NUL.
+        const queueKey = ["codex", "env-env-1:tab-1"].join(String.fromCharCode(0));
+        await storage.savePromptQueue(queueKey, "env-1", [
+          { id: "row-1", text: "Do it" },
+        ]);
+
+        for (let attempt = 1; attempt < 5; attempt += 1) {
+          await internals(service).drainPromptQueues();
+          internals(service).queueRetryAt.delete(queueKey);
+        }
+        await captureWarnings(() => internals(service).drainPromptQueues());
+
+        expect(stub.send).not.toHaveBeenCalled();
+        expect((await storage.getPromptQueue(queueKey))?.dispatchError)
+          .toMatchObject({
+            messageId: "row-1",
+            message: "The codex session is error; the queued prompt was not sent.",
+          });
       });
     });
 

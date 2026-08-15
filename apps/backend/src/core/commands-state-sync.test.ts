@@ -103,6 +103,180 @@ async function setOpenCodeModelProviders(
   });
 }
 
+describe("create-environment agent preference command", () => {
+  test("persists a successful agent-enabled create selection without replacing repository settings", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.updateRepositoryConfig("proj-1", {
+        defaultBranch: "develop",
+        prBaseBranch: "release",
+        lastEnvironmentType: "local",
+      });
+
+      await invoke("remember_environment_agent_selection", {
+        projectId: "proj-1",
+        platform: "codex",
+        mode: "terminal",
+        model: "gpt-remembered",
+        reasoningEffort: "xhigh",
+      });
+
+      expect(await storage.getRepositoryConfig("proj-1")).toEqual({
+        defaultBranch: "develop",
+        prBaseBranch: "release",
+        lastEnvironmentType: "local",
+        lastEnvironmentAgentSelection: {
+          platform: "codex",
+          mode: "terminal",
+          model: "gpt-remembered",
+          reasoningEffort: "xhigh",
+        },
+      });
+
+      await invoke("update_environment_agent_settings", {
+        environmentId: "e1",
+        defaultAgent: "claude",
+        claudeMode: "native",
+        claudeNativeBackend: null,
+        opencodeMode: null,
+        codexMode: null,
+        pendingAgentLaunch: false,
+      });
+
+      expect((await storage.getRepositoryConfig("proj-1"))
+        .lastEnvironmentAgentSelection?.platform).toBe("codex");
+    });
+  });
+
+  test("records provider-default model and reasoning choices as omitted fields", async () => {
+    await withCommands(async (invoke, storage) => {
+      await invoke("remember_environment_agent_selection", {
+        projectId: "proj-1",
+        platform: "opencode",
+        mode: "native",
+      });
+
+      expect((await storage.getRepositoryConfig("proj-1"))
+        .lastEnvironmentAgentSelection).toEqual({
+          platform: "opencode",
+          mode: "native",
+        });
+    });
+  });
+
+  test("preserves backend-owned create state when stale repository settings are saved", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.updateRepositoryConfig("proj-1", {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+        lastEnvironmentType: "local",
+        lastEnvironmentAgentSelection: {
+          platform: "codex",
+          mode: "terminal",
+          model: "gpt-current",
+        },
+      });
+
+      await invoke("update_repository_config", {
+        projectId: "proj-1",
+        repoConfig: {
+          defaultBranch: "develop",
+          prBaseBranch: "release",
+          lastEnvironmentType: "containerized",
+          lastEnvironmentAgentSelection: {
+            platform: "claude",
+            mode: "native",
+            model: "stale-model",
+          },
+        },
+      });
+
+      expect(await storage.getRepositoryConfig("proj-1")).toEqual({
+        defaultBranch: "develop",
+        prBaseBranch: "release",
+        lastEnvironmentType: "local",
+        lastEnvironmentAgentSelection: {
+          platform: "codex",
+          mode: "terminal",
+          model: "gpt-current",
+        },
+      });
+    });
+  });
+
+  test("serializes concurrent repository settings and remembered-selection writes", async () => {
+    await withCommands(async (_invoke, storage) => {
+      await storage.updateRepositoryConfig("proj-1", {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+        lastEnvironmentType: "local",
+      });
+
+      await Promise.all([
+        storage.updateRepositorySettings("proj-1", {
+          defaultBranch: "develop",
+          prBaseBranch: "release",
+        }),
+        storage.patchRepositoryConfig("proj-1", {
+          lastEnvironmentAgentSelection: {
+            platform: "codex",
+            mode: "terminal",
+            model: "gpt-concurrent",
+          },
+        }),
+      ]);
+
+      expect(await storage.getRepositoryConfig("proj-1")).toEqual({
+        defaultBranch: "develop",
+        prBaseBranch: "release",
+        lastEnvironmentType: "local",
+        lastEnvironmentAgentSelection: {
+          platform: "codex",
+          mode: "terminal",
+          model: "gpt-concurrent",
+        },
+      });
+    });
+  });
+
+  // `patchRepositoryConfig` seeds `defaultRepositoryConfig()` when the project
+  // has never been saved. Without that seed the patch would write a repository
+  // entry with no `defaultBranch`/`prBaseBranch`, which every later reader treats
+  // as configured rather than defaulted.
+  test("seeds repository defaults when remembering against an unsaved project", async () => {
+    await withCommands(async (invoke, storage) => {
+      const untouched = await storage.getRepositoryConfig("proj-never-saved");
+
+      await invoke("remember_environment_agent_selection", {
+        projectId: "proj-never-saved",
+        platform: "claude",
+        mode: "native",
+      });
+
+      expect(await storage.getRepositoryConfig("proj-never-saved")).toEqual({
+        ...untouched,
+        lastEnvironmentAgentSelection: { platform: "claude", mode: "native" },
+      });
+      expect(untouched.defaultBranch).toBe("main");
+      expect(untouched.prBaseBranch).toBe("main");
+    });
+  });
+
+  test("rejects malformed remembered agent selections", async () => {
+    await withCommands(async (invoke) => {
+      await expect(invoke("remember_environment_agent_selection", {
+        projectId: "proj-1",
+        platform: "codex",
+        mode: "background",
+      })).rejects.toThrow("Expected mode to be terminal or native");
+      await expect(invoke("remember_environment_agent_selection", {
+        projectId: "proj-1",
+        platform: "unknown",
+        mode: "native",
+      })).rejects.toThrow("Expected platform to be a supported agent platform");
+    });
+  });
+});
+
 describe("native agent model catalogue command", () => {
   test("normalizes provider catalogues and filters OpenCode to the configured providers", async () => {
     await withCommands(async (invoke, storage) => {

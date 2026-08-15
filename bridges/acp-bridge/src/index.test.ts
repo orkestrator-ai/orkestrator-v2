@@ -1245,6 +1245,214 @@ describe("ACP bridge", () => {
     expect(late.contextUsage?.durationMs).toBe(settledDurationMs);
   });
 
+  test("reads ACP usage_update occupancy and PromptResponse.usage without Grok _meta", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const first = await spawnBridge({ stateDirectory });
+    const created = await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ clientSessionKey: "env-usage-acp:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    type UsageSnapshot = {
+      status: string;
+      contextUsage?: Record<string, unknown>;
+    };
+    const readSession = async (base: string, headers: Record<string, string>) =>
+      await nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as UsageSnapshot;
+
+    expect((await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ prompt: "USAGE_ACP: report occupancy over ACP" }),
+    })).status).toBe(202);
+
+    const session = await waitFor(
+      () => readSession(first.base, first.headers),
+      (value) => value.status === "idle" && value.contextUsage !== undefined,
+    );
+    expect(session.contextUsage).toMatchObject({
+      usedTokens: 15_675,
+      maximumTokens: 200_000,
+      inputTokens: 10_000,
+      outputTokens: 2_000,
+      reasoningTokens: 300,
+      cacheReadTokens: 5_000,
+      cacheWriteTokens: 45,
+      costUsd: 0.042,
+      source: "provider",
+    });
+    expect(session.contextUsage?.percentage).toBeCloseTo(7.8375);
+
+    first.child.kill("SIGTERM");
+    await Bun.sleep(200);
+    const second = await spawnBridge({ stateDirectory });
+    const restored = await readSession(second.base, second.headers);
+    expect(restored.contextUsage).toMatchObject({
+      usedTokens: 15_675,
+      maximumTokens: 200_000,
+      inputTokens: 10_000,
+      outputTokens: 2_000,
+      reasoningTokens: 300,
+      cacheReadTokens: 5_000,
+      cacheWriteTokens: 45,
+      costUsd: 0.042,
+      source: "provider",
+    });
+    expect(restored.contextUsage?.percentage).toBeCloseTo(7.8375);
+  });
+
+  test("reads ACP v2 idle state_update.usage without PromptResponse.usage", async () => {
+    const bridge = await spawnBridge({ stateDirectory: await temporaryDirectory() });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-usage-state:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    const readSession = async () =>
+      await nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as {
+          status: string;
+          contextUsage?: Record<string, unknown>;
+        };
+
+    expect((await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "USAGE_STATE: complete over idle usage" }),
+    })).status).toBe(202);
+
+    const session = await waitFor(
+      readSession,
+      (value) => value.status === "idle" && value.contextUsage !== undefined,
+    );
+    expect(session.contextUsage).toMatchObject({
+      usedTokens: 8_000,
+      inputTokens: 7_000,
+      outputTokens: 1_000,
+      reasoningTokens: 50,
+      cacheReadTokens: 4_000,
+      // Only the mid-turn `running` frame reported the cache write. The idle
+      // frame that closes the turn omits it, so this value proves the two
+      // reports merged instead of the later one replacing the earlier.
+      cacheWriteTokens: 20,
+      source: "provider",
+    });
+    expect(session.contextUsage).not.toHaveProperty("maximumTokens");
+    expect(session.contextUsage).not.toHaveProperty("percentage");
+    expect(session.contextUsage).not.toHaveProperty("costUsd");
+  });
+
+  test("reads occupancy from a usage_update that uses type instead of sessionUpdate", async () => {
+    const bridge = await spawnBridge({ stateDirectory: await temporaryDirectory() });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-usage-typed:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "USAGE_TYPED: report occupancy under type" }),
+    })).status).toBe(202);
+
+    // The bridge routes an update on `sessionUpdate` or `type`; the parser has
+    // to read the discriminator the same way, or a `type`-spelled occupancy
+    // report reaches the usage path and is then silently dropped as a generic
+    // `used`/`size` pair.
+    const session = await waitFor(
+      async () => nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          contextUsage?: Record<string, unknown>;
+        }>,
+      (value) => value.status === "idle" && value.contextUsage !== undefined,
+    );
+    expect(session.contextUsage).toMatchObject({
+      usedTokens: 1_500,
+      maximumTokens: 30_000,
+      source: "provider",
+    });
+    expect(session.contextUsage?.percentage).toBeCloseTo(5);
+  });
+
+  test("hydrates usage replayed by session/load when the bridge holds no snapshot", async () => {
+    const bridge = await spawnBridge({ env: { FAKE_ACP_REPLAY_USAGE: "1" } });
+    const listed = await nativeFetch(`${bridge.base}/session/list`, { headers: bridge.headers })
+      .then((response) => response.json()) as { sessions: Array<{ id: string; title?: string }> };
+    const external = listed.sessions.find((session) => session.title === "Previous ACP work");
+
+    const resumed = await nativeFetch(`${bridge.base}/session/resume`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ sessionId: external!.id }),
+    });
+    expect(resumed.status).toBe(201);
+    const session = await resumed.json() as {
+      id: string;
+      contextUsage?: Record<string, unknown>;
+    };
+
+    // This session has no accounting of its own: the load is the only report
+    // the panel will ever see for the turn that produced it.
+    expect(session.contextUsage).toMatchObject({
+      usedTokens: 4_321,
+      inputTokens: 4_000,
+      outputTokens: 321,
+      source: "provider",
+    });
+  });
+
+  test("does not re-latch usage replayed into a session that already counted it", async () => {
+    const directory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "reconnect-usage-replay.log");
+    const bridge = await spawnBridge({ env: {
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+      FAKE_ACP_REPLAY_USAGE: "1",
+    } });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+    }).then((response) => response.json()) as { id: string };
+    const readSession = async () =>
+      nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          contextUsage?: Record<string, unknown>;
+        }>;
+
+    await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "USAGE_STATE: count this turn once" }),
+    });
+    const before = await waitFor(
+      readSession,
+      (value) => value.status === "idle" && value.contextUsage !== undefined,
+    );
+    expect(before.contextUsage).toMatchObject({ usedTokens: 8_000 });
+
+    const firstPid = Number(/^start:(\d+)$/m.exec(await fs.readFile(lifecycleFile, "utf8"))?.[1]);
+    process.kill(firstPid, "SIGKILL");
+    await waitFor(readSession, (value) => value.status === "error");
+
+    const resumed = await nativeFetch(`${bridge.base}/session/resume`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ sessionId: created.id }),
+    });
+    expect(resumed.status).toBe(201);
+
+    // The replayed report describes the same turn this session already counted.
+    // Latching it would swap in the replay's numbers and stamp `updatedAt` with
+    // the reconnect, dating a measurement to a moment no turn ran.
+    const after = await readSession();
+    expect(after.contextUsage).toEqual(before.contextUsage);
+  });
+
   test("normalizes ACP tool calls, upserts updates, and rehydrates them after restart", async () => {
     const stateDirectory = await temporaryDirectory();
     const first = await spawnBridge({ stateDirectory });

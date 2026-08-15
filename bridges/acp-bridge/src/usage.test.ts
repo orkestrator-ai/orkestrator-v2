@@ -63,11 +63,151 @@ describe("parseAcpTurnUsage", () => {
   });
 
   test("reports nothing for a payload without token counts", () => {
-    // Cursor's prompt result. A zeroed snapshot here would render as a usage
-    // meter claiming a measurement the agent never made.
+    // Cursor's prompt result today. A zeroed snapshot here would render as a
+    // usage meter claiming a measurement the agent never made.
     expect(parseAcpTurnUsage({ stopReason: "end_turn" })).toBeNull();
     expect(parseAcpTurnUsage(undefined)).toBeNull();
     expect(parseAcpTurnUsage("15675")).toBeNull();
+  });
+
+  test("reads ACP PromptResponse.usage, including thoughtTokens", () => {
+    expect(parseAcpTurnUsage({
+      stopReason: "end_turn",
+      usage: {
+        totalTokens: 12_345,
+        inputTokens: 10_000,
+        outputTokens: 2_000,
+        thoughtTokens: 300,
+        cachedReadTokens: 5_000,
+        cachedWriteTokens: 45,
+      },
+    })).toEqual({
+      totalTokens: 12_345,
+      inputTokens: 10_000,
+      outputTokens: 2_000,
+      reasoningTokens: 300,
+      cacheReadTokens: 5_000,
+      cacheWriteTokens: 45,
+    });
+  });
+
+  test("reads occupancy and USD cost from an ACP usage_update", () => {
+    expect(parseAcpTurnUsage({
+      sessionUpdate: "usage_update",
+      used: 15_675,
+      size: 200_000,
+      cost: { amount: 0.042, currency: "USD" },
+    })).toEqual({
+      contextUsedTokens: 15_675,
+      contextWindow: 200_000,
+      costUsd: 0.042,
+    });
+  });
+
+  test("does not treat a generic used/size pair as occupancy", () => {
+    expect(parseAcpTurnUsage({ used: 10, size: 100 })).toBeNull();
+  });
+
+  test("reads occupancy when the update uses type instead of sessionUpdate", () => {
+    expect(parseAcpTurnUsage({
+      type: "usage_update",
+      used: 15_675,
+      size: 200_000,
+    })).toEqual({
+      contextUsedTokens: 15_675,
+      contextWindow: 200_000,
+    });
+  });
+
+  test("reads ACP v2 idle state_update.usage, including thoughtTokens", () => {
+    expect(parseAcpTurnUsage({
+      sessionUpdate: "state_update",
+      state: "idle",
+      stopReason: "end_turn",
+      usage: {
+        totalTokens: 8_000,
+        inputTokens: 7_000,
+        outputTokens: 1_000,
+        thoughtTokens: 50,
+        cachedReadTokens: 4_000,
+        cachedWriteTokens: 20,
+      },
+    })).toEqual({
+      totalTokens: 8_000,
+      inputTokens: 7_000,
+      outputTokens: 1_000,
+      reasoningTokens: 50,
+      cacheReadTokens: 4_000,
+      cacheWriteTokens: 20,
+    });
+  });
+
+  test("reports nothing for a running state_update without usage", () => {
+    expect(parseAcpTurnUsage({
+      sessionUpdate: "state_update",
+      state: "running",
+    })).toBeNull();
+  });
+
+  test("reads a running state_update that already carries part of the count", () => {
+    // `state` is deliberately not a gate. A turn may report its cache split
+    // while it is still running and the rest of the breakdown when it settles,
+    // and the caller merges the two; refusing the first report would lose the
+    // fields the second one never repeats.
+    expect(parseAcpTurnUsage({
+      sessionUpdate: "state_update",
+      state: "running",
+      usage: { cachedWriteTokens: 20 },
+    })).toEqual({ cacheWriteTokens: 20 });
+  });
+
+  test("ignores a usage_update cost that is not USD", () => {
+    expect(parseAcpTurnUsage({
+      sessionUpdate: "usage_update",
+      used: 10,
+      size: 100,
+      cost: { amount: 12, currency: "EUR" },
+    })).toEqual({
+      contextUsedTokens: 10,
+      contextWindow: 100,
+    });
+  });
+
+  test("merges PromptResponse.usage over the Grok _meta copy beside it", () => {
+    expect(parseAcpTurnUsage({
+      stopReason: "end_turn",
+      usage: { totalTokens: 222, inputTokens: 200, outputTokens: 22 },
+      _meta: { totalTokens: 15_675, usage: { inputTokens: 15_639, outputTokens: 36 } },
+    })).toEqual({
+      totalTokens: 222,
+      inputTokens: 200,
+      outputTokens: 22,
+    });
+  });
+
+  test("still reads Grok usage when the whole PromptResponse is passed", () => {
+    expect(parseAcpTurnUsage({
+      stopReason: "end_turn",
+      _meta: { totalTokens: 15_675, usage: { inputTokens: 15_639, outputTokens: 36 } },
+    })).toEqual({
+      totalTokens: 15_675,
+      inputTokens: 15_639,
+      outputTokens: 36,
+    });
+  });
+
+  test("round-trips persisted occupancy fields under their stored names", () => {
+    expect(parseAcpTurnUsage({
+      contextUsedTokens: 15_675,
+      contextWindow: 200_000,
+      costUsd: 0.042,
+      inputTokens: 10_000,
+    })).toEqual({
+      contextUsedTokens: 15_675,
+      contextWindow: 200_000,
+      costUsd: 0.042,
+      inputTokens: 10_000,
+    });
   });
 
   test("rejects counts that are not finite, non-negative numbers", () => {
@@ -115,11 +255,40 @@ describe("acpContextUsage", () => {
     expect(acpContextUsage({ apiDurationMs: 1_448 }, { updatedAt: UPDATED_AT })).toBeNull();
   });
 
-  test("omits cost entirely", () => {
+  test("omits Grok costUsdTicks", () => {
     // Grok reports `costUsdTicks` without documenting the tick. A dollar figure
     // derived from a guessed scale is indistinguishable from a correct one.
     const usage = acpContextUsage({ totalTokens: 15_675 }, { updatedAt: UPDATED_AT });
     expect(usage).not.toBeNull();
     expect(usage).not.toHaveProperty("costUsd");
+  });
+
+  test("uses usage_update occupancy as the context meter, with the window as denominator", () => {
+    expect(acpContextUsage({
+      contextUsedTokens: 15_675,
+      contextWindow: 200_000,
+      inputTokens: 10_000,
+      outputTokens: 2_000,
+      costUsd: 0.042,
+    }, { updatedAt: UPDATED_AT })).toEqual({
+      usedTokens: 15_675,
+      maximumTokens: 200_000,
+      percentage: 7.8375,
+      inputTokens: 10_000,
+      outputTokens: 2_000,
+      costUsd: 0.042,
+      source: "provider",
+      updatedAt: UPDATED_AT,
+    });
+  });
+
+  test("does not invent a context window from a zero size", () => {
+    const usage = acpContextUsage(
+      { contextUsedTokens: 10, contextWindow: 0 },
+      { updatedAt: UPDATED_AT },
+    );
+    expect(usage).toMatchObject({ usedTokens: 10 });
+    expect(usage).not.toHaveProperty("maximumTokens");
+    expect(usage).not.toHaveProperty("percentage");
   });
 });

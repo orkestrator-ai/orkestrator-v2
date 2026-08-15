@@ -44,6 +44,42 @@ history rather than two partial ones.
   failures. The `waitFor` retry policy itself now has direct unit coverage in
   the same file (`describe("waitFor")`), including the timeout diagnostic.
 
+## `ACP bridge > settles Cursor's in-process child as failed` (`bridges/acp-bridge/src/index.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-16
+- **Original command:** `bun run test`
+- **Worker configuration:** bridges group used two workers while the workspace,
+  root, and protocol-lockfile groups ran concurrently.
+- **Failure:** the second `waitFor` in the case — the one polling `/session/:id`
+  for the sub-agent part to reach `agentState: "failed"` — exhausted its own
+  5,000 ms deadline (`5095.93 ms`) and threw the bounded diagnostic
+  `Timed out waiting for ACP state: {…"status":"idle"…}` from
+  `index.test.ts:113`, raised at `index.test.ts:1721`. The snapshot in the
+  diagnostic shows the session already idle with the sub-agent part still
+  `agentState: "active"`.
+- **Suite counts:** bridges group: 2,540 passed, 11 skipped, 1 failed. The root
+  and agent-support group failed the same run for two unrelated reasons
+  (`test-diagnostic-bounds` and `CreateEnvironmentFlowDialog`), both of which
+  reproduce on `main`.
+- **Isolated rerun:** `bun test bridges/acp-bridge/src/index.test.ts` → passed in
+  31.8 s, and again in 31.9 s after the usage changes in the same commit.
+- **Relationship to the resolved entry above:** this is the sibling case of
+  `…as finished` in the same `for` loop, and the earlier fix held — Bun's 20 s
+  per-test budget was not exceeded and the retry policy produced a useful
+  diagnostic instead of an unhandled `ConnectionRefused`. What expired this time
+  is `waitFor`'s own 5 s default, so the previous root cause (the health wait
+  eating the whole test budget) is not sufficient to explain it.
+- **Hypothesis:** contention, not a product regression. The case starts a
+  background sub-agent, then a second prompt whose terminal notification must
+  land within 5 s; under aggregate load the spawned bridge and its fake agent
+  share CPU with three other groups. Nothing in the failing path touches usage
+  accounting, which is the only bridge behaviour the commit that observed this
+  changed. A recurrence should capture whether the background child had settled
+  in the agent (the fake agent's own write ordering) or only the bridge's
+  observation of it was late, before raising the wait deadline — a longer
+  deadline would hide an ordering bug as easily as it would absorb contention.
+
 ## Test bootstrap mock-registration cascade (`apps/web` and root renderer tests)
 
 - **Status:** resolved
@@ -123,6 +159,7 @@ history rather than two partial ones.
 - **Hypothesis:** The first failure is a bare five-second timeout in a process-heavy fixture while four aggregate groups compete for process startup. Because the file shares fake runtime/module state across its lifecycle tests, interruption of that first case's cleanup plausibly caused the four later missing-runtime and ordering failures; the complete file rebuilt and cleaned every fixture successfully in a fresh isolated process. No product code touched by the ACP image change appears in these stacks.
 - **Recurrence (ACP `waitFor` coverage and engine docs, 2026-08-15):** `bun run test:logged -- --name full-suite-3 -- bun run test` ran the root group at six Bun workers while the workspace, bridges, and protocol-lockfile groups ran concurrently; those three groups all passed. `serializes stop behind an in-flight start so no tmux session is orphaned` failed at 2,026.74 ms, this time with a functional error rather than a bare timeout: `Installed claude CLI does not support --session-id`, thrown from `startAfterHooksInstalled` (`apps/backend/src/core/tmux.ts:2013`) after the fake runtime's `claude --help` probe returned help text without the flag. `keeps per-environment hook state under the shared runtime root and removes it on stop` then failed in 0.42 ms. The root group reported 3,696 passed, 1 skipped, 3 failed across 147 files in 223.68 s; the third failure is recorded separately below. The same command had passed completely on the immediately preceding run, and the isolated rerun `bun test tests/unit/electron/tmux-backend.test.ts` -> 173 passed, 0 failed, 615 assertions in 62.95 s.
 - **Note on the probe variant:** the `--session-id` message is a new surface for this cluster and is worth distinguishing from the earlier missing-executable failures. It means the fake `claude` shim was found and executed but produced help output that did not contain the flag, which is consistent with a truncated or empty probe result under contention rather than with a missing fixture.
+- **Recurrence (ACP usage replay guard, 2026-08-16):** `bun run test:logged -- --name full-suite2 -- bun run test` failed the same pair — `serializes stop behind an in-flight start so no tmux session is orphaned` (2,025.50 ms) and `keeps per-environment hook state under the shared runtime root and removes it on stop` (61.70 ms). Root group: 3,695 passed, 1 skip, 5 fail; the workspace and protocol-lockfile groups passed. Isolated rerun `bun test tests/unit/electron/tmux-backend.test.ts` -> passed in 99.4 s. The same command had passed this file completely on the immediately preceding run of the same tree, which failed a different cluster instead. Contention was higher than usual: the host had run three full aggregate suites plus several owning-file reruns back to back.
 
 ## `standalone backend service` process-shutdown timeouts (`apps/backend/tests/standalone.test.ts`)
 
@@ -158,6 +195,7 @@ history rather than two partial ones.
 - **Suite counts:** root and agent-support group: 3,696 passed, 1 skipped, 3 failed, 16,678 assertions across 147 files in 223.68 s. The other two failures are the tmux cluster recorded above.
 - **Isolated rerun:** `bun test tests/unit/electron/commands.test.ts` -> 405 passed, 1 skipped, 0 failed, 2,411 assertions in 65.78 s; the affected case passed.
 - **Hypothesis:** the case asserts that two concurrent starts collapse into one by waiting for a real fake-Docker child to finish inside a three-second budget. The same aggregate run was simultaneously timing out two process-heavy tmux cases, so process-startup contention is the most likely cause; no assertion mismatch was reported before the wait expired. Distinct from the `deterministically generates refs, diff, Git-object contents, hashes, and validation evidence` entry above, which is a different test in the same file and expired against Bun's outer budget instead.
+- **Recurrence (ACP usage replay guard, 2026-08-16):** `bun run test:logged -- --name full-suite2 -- bun run test` failed it again at 3,009.54 ms — the same three-second `waitForCondition` budget, in the same run that failed the tmux pair above. Root group: 3,695 passed, 1 skip, 5 fail. Isolated rerun `bun test tests/unit/electron/commands.test.ts` -> passed in 71.6 s. The pairing with the tmux cluster has now held across three separate aggregate runs, which continues to point at shared process-startup contention rather than at anything in this file.
 
 ## `download-claude.sh > downloads, extracts, probes, and cleans up on Darwin/x86_64` (`tests/unit/download-scripts.test.ts`)
 
@@ -496,6 +534,7 @@ history rather than two partial ones.
 - **Suite counts:** Bridge group: 2,383 total, 2,371 passed, 11 skipped, 1 failed across 67 files. Root/agent-support and the protocol lockfile passed; the backend workspace had two separate aggregate-only failures.
 - **Isolated rerun:** `bun test ./src/app-server-runtime.test.ts --parallel` from `bridges/codex-bridge` -> 271 passed, 0 failed in 3.54 seconds; the target passed in 29.91 ms. Evidence: `/tmp/orkestrator-picker-fixes-isolated-app-server-runtime.log`.
 - **Hypothesis:** Another aggregate bridge test appears to have populated optional session metadata before this assertion read the shared persisted record. The isolated owner file preserves the expected partial state, but the available diff does not identify the cross-file writer, so no product assertion has been weakened.
+- **Recurrence (ACP usage replay guard, 2026-08-16):** `bun run test:logged -- --name full-suite2 -- bun run test` failed it again at 146.22 ms; bridges group: 2,544 passed, 11 skipped, 1 failed. Isolated rerun `bun test bridges/codex-bridge/src/app-server-runtime.test.ts` -> passed in 4.2 s. The change under validation touches only `bridges/acp-bridge`, which shares no persisted metadata with the codex bridge, so the cross-file writer remains unidentified. Worth noting for the next investigation: the immediately preceding aggregate run of the same tree passed this file and failed an acp-bridge case instead, so which bridge test loses this race also varies between runs.
 
 ## `NativeAgentService > starts and stops the observe-only timer with the service lifecycle` (`apps/backend/src/core/native-agent-service.test.ts`)
 

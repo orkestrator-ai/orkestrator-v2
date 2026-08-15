@@ -1442,7 +1442,7 @@ describe("AgentNativeTab", () => {
       }));
     }
 
-    test("shows an active Cursor Task as a sub-agent rail above the composer", async () => {
+    test("shows an active Cursor Task at the end of the transcript", async () => {
       seedProjection({
         messages: [{
           id: "assistant-cursor-subagent",
@@ -1464,16 +1464,12 @@ describe("AgentNativeTab", () => {
 
       render(<AgentNativeTab tabId="tab-cursor-subagent" data={identity("cursor")} isActive />);
 
-      const rail = await screen.findByRole("status", { name: "1 sub-agent working" });
-      const composeDock = screen.getByTestId("compose-dock");
-      const composeBar = screen.getByTestId("shared-native-compose-bar");
-      expect(within(rail).getByText("Validate the implementation")).toBeTruthy();
-      expect(composeDock.contains(rail)).toBe(true);
-      expect(rail.compareDocumentPosition(composeBar) & Node.DOCUMENT_POSITION_FOLLOWING)
-        .toBeTruthy();
+      await screen.findByRole("textbox");
+      expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true);
+      expect(screen.getByTestId("transcript-bottom-spacer").className).toContain("h-32");
     });
 
-    test("shows an active Grok Build sub-agent in the shared composer rail", async () => {
+    test("shows and rehydrates an active Grok Build sub-agent in the transcript", async () => {
       seedProjection({
         messages: [{
           id: "assistant-grok-subagent",
@@ -1504,33 +1500,34 @@ describe("AgentNativeTab", () => {
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 25));
       });
-      expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true);
+      expect(screen.queryByRole("button", { name: /Validate the implementation/i }) === null)
+        .toBe(true);
 
       await act(async () => {
         view.rerender(<AgentNativeTab tabId="tab-grok-subagent" data={identity("grok")} isActive />);
       });
 
-      const rail = await screen.findByRole("status", { name: "1 sub-agent working" });
-      expect(within(rail).getByText("Validate the implementation")).toBeTruthy();
-      expect(screen.getByTestId("active-subagent-spinner")).toBeTruthy();
-      expect(screen.getByTestId("compose-dock").contains(rail)).toBe(true);
+      await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+      expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true);
+      expect(screen.getByTestId("transcript-bottom-spacer").className).toContain("h-32");
 
       // Simulate leaving the environment and then reloading the renderer: the
-      // in-memory projection is gone, so the rail must rehydrate from the next
-      // authoritative snapshot rather than a live event the old tree observed.
+      // in-memory projection is gone, so the transcript row must rehydrate from
+      // the next authoritative snapshot rather than a live event the old tree observed.
       view.unmount();
       useNativeAgentProjectionStore.getState().reset();
       getNativeAgentProjectionMock.mockClear();
       render(<AgentNativeTab tabId="tab-grok-subagent" data={identity("grok")} isActive />);
 
-      expect(await screen.findByRole("status", { name: "1 sub-agent working" })).toBeTruthy();
+      await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+      expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true);
       expect(getNativeAgentProjectionMock).toHaveBeenCalledWith(expect.objectContaining({
         agent: "grok",
         logicalSessionKey: createSessionKey("env-1", "tab-grok-subagent"),
       }));
     });
 
-    test("removes a mounted Cursor Task rail when the authoritative projection becomes terminal", async () => {
+    test("rehydrates a terminal Cursor Task lifecycle into the transcript", async () => {
       seedProjection({
         messages: [{
           id: "assistant-cursor-subagent-transition",
@@ -1557,7 +1554,7 @@ describe("AgentNativeTab", () => {
           refreshRequestId={0}
         />,
       );
-      expect(await screen.findByRole("status", { name: "1 sub-agent working" })).toBeTruthy();
+      await screen.findByRole("textbox");
 
       seedProjection({
         messages: [{
@@ -1585,12 +1582,14 @@ describe("AgentNativeTab", () => {
         />,
       );
 
-      await waitFor(() => expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true));
-      expect(useNativeAgentProjectionStore.getState().projections.get(
-        createSessionKey("env-1", "tab-cursor-subagent-transition"),
-      )?.messages[0]).toMatchObject({
+      await waitFor(() => expect(
+        useNativeAgentProjectionStore.getState().projections.get(
+          createSessionKey("env-1", "tab-cursor-subagent-transition"),
+        )?.messages[0],
+      ).toMatchObject({
         parts: [expect.objectContaining({ agentState: "finished" })],
-      });
+      }));
+      expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true);
     });
 
     test("renders an unavailable context wheel when the provider reports no maximum", async () => {

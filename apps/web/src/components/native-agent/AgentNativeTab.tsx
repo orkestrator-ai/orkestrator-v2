@@ -68,11 +68,7 @@ import {
   createOptimisticNativeMessage,
   TURN_STOPPED_BY_USER,
 } from "@/lib/chat/client-only-messages";
-import {
-  pinActiveNativeAgentParts,
-  separateActiveNativeAgentParts,
-} from "@/lib/chat/native-agent-pinning";
-import { ActiveSubagentRail } from "@/components/chat/ActiveSubagentRail";
+import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { persistAgentModelDefault } from "@/lib/chat/agent-model-preferences";
 import { persistCodexGlobalPreferences } from "@/components/codex/codex-preferences";
@@ -831,16 +827,10 @@ function SharedNativeAgentController({
     transcriptEchoedOptimistic,
     turnStopMarker,
   ]);
-  const activeAgentPresentation = useMemo(() => {
-    if (platform === "claude") {
-      return {
-        messages: pinActiveNativeAgentParts(displayMessages),
-        activeAgents: [],
-      };
-    }
-    return separateActiveNativeAgentParts(displayMessages);
-  }, [displayMessages, platform]);
-  const messages = activeAgentPresentation.messages;
+  const messages = useMemo(
+    () => pinActiveNativeAgentParts(displayMessages),
+    [displayMessages],
+  );
   const latestAssistantMessage = [...normalizedMessages].reverse().find(
     (message) => message.role === "assistant",
   );
@@ -1587,6 +1577,12 @@ function SharedNativeAgentController({
         />
       ))}
       pinnedAccessory={(
+        showPlanReview
+        || (platform === "claude" && liveBackgroundTasks.length > 0)
+        || (projection?.notices?.length ?? 0) > 0
+        || Boolean(projection?.recoverableDispatch)
+        || Boolean(sendError)
+      ) ? (
         <>
           {showPlanReview ? (
             <CodexPlanModeCard
@@ -1659,9 +1655,8 @@ function SharedNativeAgentController({
               {sendError}
             </div>
           ) : null}
-          <ActiveSubagentRail agents={activeAgentPresentation.activeAgents} />
         </>
-      )}
+      ) : null}
       topAccessory={projection?.suggestedPrompt ? (
         <div className="flex items-center gap-1">
           <Button

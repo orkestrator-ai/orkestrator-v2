@@ -92,40 +92,6 @@ function createPinnedAgentMessage(
   };
 }
 
-export interface SeparatedActiveNativeAgents {
-  /** Transcript with currently active child-agent rows removed. */
-  messages: NativeMessage[];
-  /** Active child agents in transcript order, ready for a composer accessory. */
-  activeAgents: NativeAgentActivityPart[];
-}
-
-/**
- * Lift active child agents out of the scrolling transcript without losing the
- * surrounding message. The composer can then present one durable work surface
- * while the parent turn itself is already idle.
- */
-export function separateActiveNativeAgentParts(
-  messages: NativeMessage[],
-): SeparatedActiveNativeAgents {
-  const renderedMessages: NativeMessage[] = [];
-  const activeAgents: NativeAgentActivityPart[] = [];
-
-  for (const message of messages) {
-    const { retainedParts, pinnedParts } = extractActiveAgentParts(message.parts);
-    activeAgents.push(...pinnedParts);
-
-    if (pinnedParts.length === 0) {
-      renderedMessages.push(message);
-      continue;
-    }
-
-    const retainedMessage = { ...message, parts: retainedParts };
-    if (hasRenderableContent(retainedMessage)) renderedMessages.push(retainedMessage);
-  }
-
-  return { messages: renderedMessages, activeAgents };
-}
-
 export function pinActiveNativeAgentParts(
   messages: NativeMessage[],
 ): NativeMessage[] {

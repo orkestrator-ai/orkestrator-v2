@@ -31,6 +31,7 @@ export interface CodexCollabToolCallItem {
 interface LatestCollabAgentState {
   state?: CodexCollabAgentState;
   spawnPrompt?: string;
+  taskName?: string;
 }
 
 interface CodexSubagentActivityItem {
@@ -38,6 +39,7 @@ interface CodexSubagentActivityItem {
   type: "subagent_activity";
   activity: "started" | "interacted" | "interrupted";
   agent_thread_id: string;
+  agent_path?: string;
 }
 
 export const CODEX_TIMELINE_ITEM_PREFIX = "item:";
@@ -97,6 +99,7 @@ function normalizeSubagentActivityItem(
   const id = normalizeNonEmptyString(value.id);
   const agentThreadId = normalizeNonEmptyString(value.agent_thread_id);
   const activity = value.activity;
+  const agentPath = normalizeNonEmptyString(value.agent_path);
   if (
     !id
     || !agentThreadId
@@ -109,7 +112,13 @@ function normalizeSubagentActivityItem(
     type: "subagent_activity",
     activity,
     agent_thread_id: agentThreadId,
+    ...(agentPath ? { agent_path: agentPath } : {}),
   };
+}
+
+function taskNameFromAgentPath(agentPath: string | undefined): string | undefined {
+  if (!agentPath) return undefined;
+  return agentPath.split("/").filter(Boolean).at(-1);
 }
 
 /**
@@ -248,10 +257,12 @@ function makeSubagentPart(
   agentId: string,
   latest: LatestCollabAgentState | undefined,
 ): TranscriptSubagentPart {
+  const taskName = latest?.taskName;
   return {
     type: "subagent",
-    content: "subagent",
+    content: taskName ?? "subagent",
     subagentId: agentId,
+    subagentRole: taskName,
     subagentPrompt: latest?.spawnPrompt,
     subagentActions: appendFinalCollabMessage([], latest?.state?.message),
     subagentActionCount: 0,
@@ -301,6 +312,7 @@ export function applyCodexCollabStateToSubagentParts(
       if (item.activity !== "started" && !previous) continue;
       latestByAgentId.set(item.agent_thread_id, {
         ...previous,
+        taskName: previous?.taskName ?? taskNameFromAgentPath(item.agent_path),
         // Keep any final message so an earlier-turn agent does not lose its
         // only transcript text when the old terminal status is invalidated.
         state: previous?.state?.message !== undefined
@@ -317,6 +329,7 @@ export function applyCodexCollabStateToSubagentParts(
       latestByAgentId.set(agentId, {
         state: item.agents_states?.[agentId] ?? previous?.state,
         spawnPrompt: previous?.spawnPrompt ?? spawnPrompt,
+        taskName: previous?.taskName,
       });
     }
   }
@@ -388,6 +401,7 @@ export function applyCodexCollabStateToSubagentParts(
     seenAgentIds.add(agentId);
     const latest = latestByAgentId.get(agentId);
     if (!latest) continue;
+    part.subagentRole ??= latest.taskName;
     part.subagentPrompt ??= latest.spawnPrompt;
     part.toolState = toToolState(latest.state?.status) ?? part.toolState;
     if (failedSpawnAgentIds.has(agentId)) part.toolState = "failure";

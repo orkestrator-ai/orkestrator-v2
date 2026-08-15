@@ -23,6 +23,7 @@ import {
   Pencil,
   ExternalLink as ExternalLinkIcon,
   Layers,
+  Loader2,
 } from "lucide-react";
 import { type Components } from "react-markdown";
 import { cn } from "@/lib/utils";
@@ -1365,6 +1366,9 @@ function getSubagentPreview(
   part: Extract<NativeMessagePart, { type: "subagent" }>,
   status: NativeAgentStatus,
 ): string {
+  const task = part.subagentPrompt?.trim();
+  if (task) return task;
+
   const actions = part.subagentActions ?? [];
   const latestAction = actions.at(-1);
 
@@ -1416,12 +1420,38 @@ function stringToolArg(
 }
 
 function buildAgentDisplayLabel(name: string, role?: string): string {
-  return role ? `${name} (${role})` : name;
+  if (!role || role.localeCompare(name, undefined, { sensitivity: "accent" }) === 0) {
+    return name;
+  }
+  return `${name} (${role})`;
 }
 
 function shouldShowTokenOnlyAgentUsage(part: NativeMessagePart): boolean {
   return part.agentUsageDisplay === "token-only" && Boolean(part.tokenCountText);
 }
+
+function AgentActivityIcon({ status }: { status: NativeAgentStatus }) {
+  return (
+    <span
+      className={cn(
+        "flex size-7 shrink-0 items-center justify-center rounded-full",
+        status === "active" && "bg-cyan-400/10 text-cyan-300",
+        status === "finished" && "bg-emerald-400/10 text-emerald-300",
+        status === "failed" && "bg-red-400/10 text-red-300",
+      )}
+      aria-hidden="true"
+    >
+      {status === "active" ? (
+        <Loader2 className="size-4 animate-spin motion-reduce:animate-none" />
+      ) : (
+        <Layers className="size-4" />
+      )}
+    </span>
+  );
+}
+
+const agentCardClassName =
+  "my-0 overflow-hidden rounded-2xl border border-border/70 bg-zinc-900/90 shadow-sm shadow-black/15";
 
 function SubagentPart({
   part,
@@ -1447,18 +1477,12 @@ function SubagentPart({
     : `${toolCount} ${toolCount === 1 ? "tool" : "tools"}`;
 
   return (
-    <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0">
+    <Collapsible open={isOpen} onOpenChange={setIsOpen} className={agentCardClassName}>
       <CollapsibleTrigger
-        className="w-full rounded-md px-2 py-2 text-left transition-colors hover:text-foreground cursor-pointer"
+        className="w-full px-3 py-2.5 text-left transition-colors hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 cursor-pointer"
       >
         <div className="flex items-start gap-3">
-          <ChevronRight
-            className={cn(
-              "mt-0.5 h-3.5 w-3.5 shrink-0 transition-transform",
-              isOpen && "rotate-90",
-            )}
-          />
-          <Layers className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+          <AgentActivityIcon status={status} />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-xs">
               <span className="shrink-0 font-medium uppercase tracking-wide text-muted-foreground/80">
@@ -1476,8 +1500,11 @@ function SubagentPart({
                 {statusLabel}
               </span>
             </div>
-            <div className="mt-1 truncate text-xs text-muted-foreground/80">
-              {preview}
+            <div className="mt-1 flex min-w-0 items-center gap-1 text-xs text-muted-foreground/80">
+              {part.subagentPrompt?.trim() ? (
+                <span className="shrink-0 font-medium text-muted-foreground">Task ·</span>
+              ) : null}
+              <span className="truncate">{preview}</span>
             </div>
           </div>
           <div className="shrink-0 text-right text-[11px] text-muted-foreground/70">
@@ -1493,11 +1520,17 @@ function SubagentPart({
               </>
             )}
           </div>
+          <ChevronRight
+            className={cn(
+              "mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+              isOpen && "rotate-90",
+            )}
+          />
         </div>
       </CollapsibleTrigger>
 
-      <CollapsibleContent className="mt-1">
-        <div className="border-l border-border/40 pl-3">
+      <CollapsibleContent>
+        <div className="border-t border-border/40 px-3 py-3">
           {part.subagentPrompt?.trim() ? (
             <div className="mb-3 border-l border-border/30 pl-3">
               <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
@@ -1553,7 +1586,7 @@ function AgentGroupPart({
   return (
     <section
       aria-label={`${part.parts.length} agents`}
-      className="relative my-1 border-l border-primary/30 pl-2"
+      className="relative my-1"
     >
       <div className="flex h-6 items-center gap-1.5 px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">
         <Layers className="h-3 w-3" />
@@ -1567,7 +1600,7 @@ function AgentGroupPart({
           </span>
         ) : null}
       </div>
-      <div className="divide-y divide-border/30 rounded-r-md bg-muted/[0.08]">
+      <div className="space-y-2">
         {part.parts.map((child, index) => (
           <MessagePart
             key={`agent-group-part-${index}-${child.type}`}
@@ -1689,16 +1722,10 @@ function TaskGroupPart({
   }, [description, part.childTools, status]);
 
   return (
-    <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0">
-      <CollapsibleTrigger className="w-full rounded-md px-2 py-2 text-left transition-colors hover:text-foreground cursor-pointer">
+    <Collapsible open={isOpen} onOpenChange={setIsOpen} className={agentCardClassName}>
+      <CollapsibleTrigger className="w-full px-3 py-2.5 text-left transition-colors hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 cursor-pointer">
         <div className="flex items-start gap-3">
-          <ChevronRight
-            className={cn(
-              "mt-0.5 h-3.5 w-3.5 shrink-0 transition-transform",
-              isOpen && "rotate-90",
-            )}
-          />
-          <Layers className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+          <AgentActivityIcon status={status} />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-xs">
               <span className="shrink-0 font-medium uppercase tracking-wide text-muted-foreground/80">
@@ -1738,10 +1765,16 @@ function TaskGroupPart({
               </>
             )}
           </div>
+          <ChevronRight
+            className={cn(
+              "mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+              isOpen && "rotate-90",
+            )}
+          />
         </div>
       </CollapsibleTrigger>
-      <CollapsibleContent className="mt-1">
-        <div className="border-l border-border/40 pl-3">
+      <CollapsibleContent>
+        <div className="border-t border-border/40 px-3 py-3">
           {prompt ? (
             <div className="mb-3 border-l border-border/30 pl-3">
               <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">

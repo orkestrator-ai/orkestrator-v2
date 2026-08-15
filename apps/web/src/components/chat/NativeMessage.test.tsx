@@ -1692,7 +1692,7 @@ describe("NativeMessage task list rendering", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /reviewer/i }));
-    expect(screen.getByText("Inspect the original task details")).toBeTruthy();
+    expect(screen.getAllByText("Inspect the original task details")).toHaveLength(2);
 
     rerender(
       <NativeMessage
@@ -1711,7 +1711,7 @@ describe("NativeMessage task list rendering", () => {
     );
 
     expect(screen.getByRole("region", { name: "2 agents" })).toBeTruthy();
-    expect(screen.getByText("Inspect the original task details")).toBeTruthy();
+    expect(screen.getAllByText("Inspect the original task details")).toHaveLength(2);
     expect(
       screen.getByRole("button", { name: /reviewer/i }).getAttribute("aria-expanded"),
     ).toBe("true");
@@ -1741,7 +1741,7 @@ describe("NativeMessage task list rendering", () => {
 
     const remountedTrigger = screen.getByRole("button", { name: /reviewer/i });
     expect(remountedTrigger.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByText("Inspect the streaming transcript")).toBeTruthy();
+    expect(screen.getAllByText("Inspect the streaming transcript")).toHaveLength(2);
 
     fireEvent.click(remountedTrigger);
     expect(remountedTrigger.getAttribute("aria-expanded")).toBe("false");
@@ -2086,6 +2086,44 @@ describe("NativeMessage task list rendering", () => {
     render(<NativeMessage message={message} />);
 
     expect(await screen.findByAltText("Thumbnail: diagram.png")).toBeTruthy();
+  });
+
+  test("shows Codex agent identity, task name, counts, and expandable updates", () => {
+    const message = makeMessage([{
+      type: "subagent",
+      content: "Heisenberg",
+      subagentId: "codex-reviewer",
+      subagentName: "Heisenberg",
+      subagentRole: "correctness_review",
+      subagentPrompt: "Review the transcript ordering change.",
+      toolState: "pending",
+      subagentActionCount: 1,
+      subagentActions: [
+        { type: "text", content: "Checking the message ordering." },
+        {
+          type: "tool-invocation",
+          content: "Inspect the renderer",
+          toolName: "read",
+          toolState: "success",
+        },
+      ],
+    }]);
+
+    render(<NativeMessage message={message} />);
+
+    const agent = screen.getByRole("button", {
+      name: /Heisenberg \(correctness_review\)/i,
+    });
+    expect(screen.getByText("1 tool")).toBeTruthy();
+    expect(screen.getByText("2 updates")).toBeTruthy();
+    expect(screen.getByText("Review the transcript ordering change.")).toBeTruthy();
+
+    fireEvent.click(agent);
+
+    expect(agent.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getAllByText("Review the transcript ordering change.")).toHaveLength(2);
+    expect(screen.getByText("Checking the message ordering.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Read success$/i })).toBeTruthy();
   });
 
   test("can render Claude tmux agent usage as tokens only", () => {

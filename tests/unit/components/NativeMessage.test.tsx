@@ -1981,12 +1981,12 @@ describe("NativeMessage", () => {
     expect(screen.getByText("Active")).toBeTruthy();
     expect(screen.getByText("1 tool")).toBeTruthy();
     expect(screen.getByText("1 update")).toBeTruthy();
-    expect(screen.getByText('rg -n "codex" src')).toBeTruthy();
-    expect(screen.queryByText("Inspect the Codex integration") === null).toBe(true);
+    expect(screen.getByText("Inspect the Codex integration")).toBeTruthy();
+    expect(screen.queryByText('rg -n "codex" src') === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: /lovelace/i }));
 
-    expect(screen.getByText("Inspect the Codex integration")).toBeTruthy();
+    expect(screen.getAllByText("Inspect the Codex integration")).toHaveLength(2);
     expect(screen.getByRole("button", { name: /Exec Command rg -n "codex" src success/i })).toBeTruthy();
     fireEvent.click(screen.getAllByText("Exec Command")[0]!);
     expect(screen.getByText("$ rg -n \"codex\" src")).toBeTruthy();

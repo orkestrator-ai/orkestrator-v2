@@ -301,6 +301,86 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
     expect(parts.map((part) => part.subagentId)).toEqual(["agent-unnamed"]);
   });
 
+  test("pairs an owned v2 spawn with its native receiver id when the row aligns", async () => {
+    const parentRecords: TranscriptRecord[] = [
+      {
+        timestamp: "2026-08-11T12:00:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          arguments: JSON.stringify({
+            task_name: "metadata_review",
+            message: "opaque",
+          }),
+          call_id: "spawn-v2",
+        },
+      },
+      {
+        timestamp: "2026-08-11T12:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "spawn-v2",
+          output: JSON.stringify({ task_name: "/root/metadata_review" }),
+        },
+      },
+    ];
+
+    const parts = await deriveTranscriptSubagentPartsForTurn({
+      threadId: "thread-1",
+      currentTurnStartedAt: "2026-08-11T12:00:00.000Z",
+      ownedSubagentIds: ["agent-native"],
+      fallbackAgentIdsInSpawnOrder: ["agent-native"],
+      loadSessionMeta: async (id: string) => ({
+        transcriptPath: id === "thread-1" ? "/tmp/parent.jsonl" : "/tmp/child.jsonl",
+      }),
+      loadTranscript: async (path) => path.endsWith("parent.jsonl")
+        ? transcript(parentRecords)
+        : transcript([]),
+    });
+
+    expect(parts).toEqual([
+      expect.objectContaining({
+        content: "metadata_review",
+        subagentId: "agent-native",
+        subagentRole: "metadata_review",
+        toolState: "pending",
+      }),
+    ]);
+  });
+
+  test("hydrates an owned native child when the parent has no direct spawn record", async () => {
+    const parts = await deriveTranscriptSubagentPartsForTurn({
+      threadId: "thread-1",
+      currentTurnStartedAt: "2026-08-11T12:00:00.000Z",
+      ownedSubagentIds: ["agent-native"],
+      fallbackAgentIdsInSpawnOrder: ["agent-native"],
+      loadSessionMeta: async (id: string) => ({
+        transcriptPath: id === "thread-1" ? "/tmp/parent.jsonl" : "/tmp/child.jsonl",
+      }),
+      loadTranscript: async (path) => path.endsWith("parent.jsonl")
+        ? transcript([])
+        : transcript([{
+            timestamp: "2026-08-11T12:00:01.000Z",
+            type: "session_meta",
+            payload: {
+              id: "agent-native",
+              agent_nickname: "Lovelace",
+            },
+          }]),
+    });
+
+    expect(parts).toEqual([
+      expect.objectContaining({
+        content: "Lovelace",
+        subagentId: "agent-native",
+        subagentName: "Lovelace",
+        toolState: "pending",
+      }),
+    ]);
+  });
+
   test("loads child transcripts and derives completed subagent activity", async () => {
     const parentRecords: TranscriptRecord[] = [
       {

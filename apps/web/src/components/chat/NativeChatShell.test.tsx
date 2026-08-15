@@ -245,7 +245,7 @@ describe("NativeChatShell", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /reviewer/i }));
-    expect(screen.getByText("Inspect the original task details")).toBeTruthy();
+    expect(screen.getAllByText("Inspect the original task details")).toHaveLength(2);
 
     view.rerender(
       <NativeChatShell
@@ -255,7 +255,7 @@ describe("NativeChatShell", () => {
     );
 
     expect(screen.getByRole("region", { name: "2 agents" })).toBeTruthy();
-    expect(screen.getByText("Inspect the original task details")).toBeTruthy();
+    expect(screen.getAllByText("Inspect the original task details")).toHaveLength(2);
     expect(
       screen.getByRole("button", { name: /reviewer/i }).getAttribute("aria-expanded"),
     ).toBe("true");
@@ -271,7 +271,7 @@ describe("NativeChatShell", () => {
     );
 
     expect(screen.queryByRole("region", { name: "2 agents" }) === null).toBe(true);
-    expect(screen.getByText("Inspect the original task details")).toBeTruthy();
+    expect(screen.getAllByText("Inspect the original task details")).toHaveLength(2);
     expect(
       screen.getByRole("button", { name: /reviewer/i }).getAttribute("aria-expanded"),
     ).toBe("true");

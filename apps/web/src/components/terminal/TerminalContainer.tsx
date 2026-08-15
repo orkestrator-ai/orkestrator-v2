@@ -901,9 +901,10 @@ export function TerminalContainer({
     environment?.startupAgentSession?.status,
   ]);
 
-  // Reconstruct the post-setup agent launch from backend-owned environment
-  // state after a mobile page reload. The transient options store is only an
-  // optimization for the uninterrupted creation path.
+  // Represent backend-owned launch state after a mobile page reload. Native
+  // launches are projected durably by the backend; this effect binds their
+  // provider identity (and provides a short-lived optimistic representation)
+  // while still materializing the remaining PTY/tmux launches.
   useEffect(() => {
     if (!environment) return;
     const startupSession = environment.startupAgentSession;
@@ -911,11 +912,47 @@ export function TerminalContainer({
     // pendingAgentLaunch is the backend's retry intent after an error, so a
     // renderer must not project an ordinary text-only launch and clear it.
     if (startupSession && startupSession.status !== "running") return;
-    const backendLaunch = startupSession;
     if (
-      (!environment.pendingAgentLaunch && !backendLaunch)
-      || !currentEnvState
+      startupLaunchDispatchedByBackend
+      && (environment.pendingAgentLaunch || startupSession)
     ) {
+      if (
+        !currentEnvState
+        || !isEnvironmentRunning
+        || (!setupReady && environment.setupScriptsComplete !== true)
+      ) return;
+      const existingStartupTabId = findStartupAgentTabId(currentEnvState);
+      if (existingStartupTabId) {
+        if (startupSession?.providerSessionId) {
+          usePaneLayoutStore.getState().updateTabNativeSessionId(
+            existingStartupTabId,
+            startupSession.providerSessionId,
+            environmentId,
+          );
+          if (pendingNativeLaunch) clearPendingNativeLaunch(environmentId);
+          if (claudeOptions?.launchAgent) clearOptions(environmentId);
+        }
+        return;
+      }
+      if (pendingNativeLaunch) return;
+      const agentType = startupSession?.agent
+        ?? environment.defaultAgent
+        ?? config.global.defaultAgent
+        ?? "claude";
+      setPendingNativeLaunch(environmentId, {
+        containerId: isLocalEnvironment ? null : containerId,
+        environmentId,
+        targetPaneId: currentEnvState.activePaneId,
+        agentType,
+        launchMode: "native",
+        providerSessionId: startupSession?.providerSessionId,
+        model: startupSession?.model ?? environment.initialAgentModel,
+        reasoningEffort:
+          startupSession?.reasoningEffort ?? environment.initialReasoningEffort,
+      });
+      return;
+    }
+    if (!environment.pendingAgentLaunch || !currentEnvState) {
       return;
     }
 
@@ -923,15 +960,6 @@ export function TerminalContainer({
     if (existingStartupTabId) {
       if (durableLaunchClearInFlightRef.current) return;
       durableLaunchClearInFlightRef.current = true;
-      if (backendLaunch?.providerSessionId) {
-        // Bind the backend's session to whichever tab actually satisfies this
-        // launch, including a legacy generated id.
-        usePaneLayoutStore.getState().updateTabNativeSessionId(
-          existingStartupTabId,
-          backendLaunch.providerSessionId,
-          environmentId,
-        );
-      }
       const durablePaneState =
         usePaneLayoutStore.getState().environments.get(environmentId)
         ?? currentEnvState;
@@ -956,11 +984,7 @@ export function TerminalContainer({
         environmentId,
         createPersistedPaneLayoutInput(durablePaneState),
       )
-        .then(() =>
-          backendLaunch
-            ? backend.acknowledgeStartupAgentSession(environmentId, backendLaunch)
-            : backend.setEnvironmentPendingAgentLaunch(environmentId, false)
-        )
+        .then(() => backend.setEnvironmentPendingAgentLaunch(environmentId, false))
         .then((updatedEnvironment) => {
           useEnvironmentStore.getState().updateEnvironment(environmentId, updatedEnvironment);
         })
@@ -982,48 +1006,11 @@ export function TerminalContainer({
     // backend intent at the same time queues the older text-only prompt; once
     // staging finishes, both paths create an agent tab. A renderer reload has no
     // transient options, so durable recovery continues through the branch below.
-    if (!backendLaunch && claudeOptions?.launchAgent) return;
-    if (backendLaunch && claudeOptions?.launchAgent) {
-      // The backend has already created the provider session and consumed the
-      // initial prompt (including attachments). Discard the renderer-only
-      // launch copy so it cannot race a second direct dispatch.
-      clearOptions(environmentId);
-    }
-
-    if (backendLaunch && pendingNativeLaunch) {
-      if (
-        pendingNativeLaunch.providerSessionId !== backendLaunch.providerSessionId
-        || pendingNativeLaunch.initialPrompt !== undefined
-        || pendingNativeLaunch.agentType !== backendLaunch.agent
-        || pendingNativeLaunch.launchMode !== "native"
-      ) {
-        // A renderer can stage the old client-owned launch during the short
-        // interval between setup completion and the backend publishing its
-        // provider session. Replace that stale copy before the launch effect is
-        // allowed to materialize it.
-        setPendingNativeLaunch(environmentId, {
-          ...pendingNativeLaunch,
-          containerId: isLocalEnvironment ? null : containerId,
-          environmentId,
-          targetPaneId: currentEnvState.activePaneId,
-          agentType: backendLaunch.agent,
-          launchMode: "native",
-          providerSessionId: backendLaunch.providerSessionId,
-          initialPrompt: undefined,
-          model: backendLaunch.model ?? pendingNativeLaunch.model,
-          reasoningEffort:
-            backendLaunch.reasoningEffort
-            ?? pendingNativeLaunch.reasoningEffort,
-        });
-      }
-      return;
-    }
-
+    if (claudeOptions?.launchAgent) return;
     if (!isEnvironmentRunning || pendingNativeLaunch) return;
 
     const agentType =
-      backendLaunch?.agent
-      ?? environment.defaultAgent
+      environment.defaultAgent
       ?? config.global.defaultAgent
       ?? "claude";
     const launchMode =
@@ -1036,10 +1023,7 @@ export function TerminalContainer({
     setPendingNativeLaunch(environmentId, {
       containerId: isLocalEnvironment ? null : containerId,
       environmentId,
-      initialPrompt:
-        backendLaunch
-          ? undefined
-          : environment.initialPrompt?.trim() || undefined,
+      initialPrompt: environment.initialPrompt?.trim() || undefined,
       targetPaneId: currentEnvState.activePaneId,
       agentType,
       launchMode,
@@ -1047,11 +1031,8 @@ export function TerminalContainer({
         agentType === "claude" && launchMode === "native"
           ? claudeNativeBackend
           : undefined,
-      model: backendLaunch?.model ?? environment.initialAgentModel,
-      reasoningEffort:
-        backendLaunch?.reasoningEffort
-        ?? environment.initialReasoningEffort,
-      providerSessionId: backendLaunch?.providerSessionId,
+      model: environment.initialAgentModel,
+      reasoningEffort: environment.initialReasoningEffort,
     });
   }, [
     claudeMode,
@@ -1061,12 +1042,15 @@ export function TerminalContainer({
     config.global.defaultAgent,
     containerId,
     currentEnvState,
+    clearPendingNativeLaunch,
     environment,
     environmentId,
     isEnvironmentRunning,
     isLocalEnvironment,
     opencodeMode,
     pendingNativeLaunch,
+    setupReady,
+    startupLaunchDispatchedByBackend,
     clearOptions,
     setPendingNativeLaunch,
   ]);
@@ -1262,6 +1246,17 @@ export function TerminalContainer({
         if (hydrationStatus !== "done") finishHydration(environmentId);
       }
 
+      // A native startup surface is a backend-owned pane projection. Once
+      // setup has finished, an empty renderer waits for that authoritative
+      // snapshot/event instead of manufacturing a competing tab locally.
+      if (
+        !backendSetupRunning
+        && environment?.pendingAgentLaunch === true
+        && startupLaunchDispatchedByBackend
+      ) {
+        return;
+      }
+
       const pendingAttachments = claudeOptions?.initialPromptAttachments ?? [];
       /*
        * A native launch is dispatched by the backend, which stages these images
@@ -1381,7 +1376,11 @@ export function TerminalContainer({
           tabId: "default",
           hasDefaultSetupSession: hasBoundSetupSession("default"),
         });
-        if (launchAgent && initialTabType !== "plain") {
+        if (
+          launchAgent
+          && initialTabType !== "plain"
+          && !startupLaunchDispatchedByBackend
+        ) {
           setPendingNativeLaunch(environmentId, {
             containerId: isLocalEnvironment ? null : containerId,
             environmentId,

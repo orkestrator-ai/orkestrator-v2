@@ -223,6 +223,8 @@ export interface NativeAgentServiceOptions {
    * retry schedule without sleeping through a 60-second ceiling.
    */
   now?: () => number;
+  /** Injectable for bounded provider-start retries. */
+  delay?: (milliseconds: number) => Promise<void>;
   /** Disabled by default. Milestone 3 observes and never resolves. */
   interactionMonitorMode?: "disabled" | "observe-only";
   interactionMonitorAdoptionEnabled?: boolean;
@@ -254,6 +256,8 @@ const QUEUE_RETRY_BASE_MS = 2_000;
 const QUEUE_RETRY_CEILING_MS = 60_000;
 const MAX_QUEUE_DISPATCH_ATTEMPTS = 5;
 const LAUNCH_RETRY_MS = 10_000;
+const ACP_SESSION_CREATE_ATTEMPTS = 4;
+const ACP_SESSION_CREATE_RETRY_BASE_MS = 250;
 const ACTIVITY_STATUS_CONCURRENCY = 8;
 const ACTIVITY_RETRY_BASE_MS = 2_000;
 const ACTIVITY_RETRY_CEILING_MS = 60_000;
@@ -643,6 +647,7 @@ export class NativeAgentService {
   }
 
   private async initialize(): Promise<void> {
+    await this.repairPersistedStartupTabs().catch(() => undefined);
     await Promise.allSettled([
       this.trackScan(this.reconcilePendingLaunches()),
       this.trackScan(this.drainPromptQueues()),
@@ -661,6 +666,32 @@ export class NativeAgentService {
         void this.reconcileAgentInteractions().catch(() => undefined);
       }, Math.max(100, this.options.interactionMonitorIntervalMs ?? 2_000));
       this.interactionTimer.unref?.();
+    }
+  }
+
+  /**
+   * Upgrade only a still-present canonical startup tab from the historical
+   * provider-specific terminal record to the native pane identity. Missing
+   * tabs are left missing because their absence may be an intentional close.
+   */
+  private async repairPersistedStartupTabs(): Promise<void> {
+    const sessions = (await this.storage.listNativeAgentSessions())
+      .filter((session) =>
+        session.origin === "interactive-native"
+        && session.logicalSessionKey === `env-${session.environmentId}:startup-agent`
+      )
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    const repairedEnvironments = new Set<string>();
+    for (const session of sessions) {
+      if (this.stopped) return;
+      if (repairedEnvironments.has(session.environmentId)) continue;
+      repairedEnvironments.add(session.environmentId);
+      await this.storage.ensureStartupNativeAgentTab({
+        environmentId: session.environmentId,
+        agent: session.agent,
+        providerSessionId: session.providerSessionId,
+        existingOnly: true,
+      }).catch(() => undefined);
     }
   }
 
@@ -3410,7 +3441,7 @@ export class NativeAgentService {
       environments
         .filter((environment) =>
           environment.pendingAgentLaunch
-          && isEnvironmentReadyForAgents(environment)
+          && (environment.status === "creating" || environment.status === "running")
           && (this.launchRetryAt.get(environment.id) ?? 0) <= now
         )
         .map((environment) => this.reconcileInitialLaunch(environment.id)),
@@ -3727,7 +3758,7 @@ export class NativeAgentService {
     if (
       !environment
       || !environment.pendingAgentLaunch
-      || !isEnvironmentReadyForAgents(environment)
+      || (environment.status !== "creating" && environment.status !== "running")
     ) {
       return;
     }
@@ -3768,16 +3799,33 @@ export class NativeAgentService {
       ?? repository.defaultEffort
       ?? (agent === "codex" ? config.global.codexReasoningEffort : undefined);
 
-    await this.storage.updateEnvironment(environment.id, {
-      startupAgentSession: {
-        tabId: "startup-agent",
-        agent,
-        style: "native",
-        model,
-        reasoningEffort,
-        status: "starting",
-      },
+    // Publish both startup surfaces as soon as backend intent exists, including
+    // while setup is still running. Provider creation remains gated below, but
+    // the durable pane can already rehydrate in an inactive renderer.
+    await this.storage.ensureStartupNativeAgentTab({
+      environmentId: environment.id,
+      agent,
     });
+    const startupSession = environment.startupAgentSession;
+    if (
+      !startupSession
+      || startupSession.agent !== agent
+      || startupSession.style !== "native"
+      || startupSession.status !== "starting"
+    ) {
+      await this.storage.updateEnvironment(environment.id, {
+        startupAgentSession: {
+          tabId: "startup-agent",
+          agent,
+          style: "native",
+          model,
+          reasoningEffort,
+          status: "starting",
+        },
+      });
+    }
+
+    if (!isEnvironmentReadyForAgents(environment)) return;
 
     try {
       const prompt = environment.initialPrompt?.trim();
@@ -3807,6 +3855,16 @@ export class NativeAgentService {
             model,
             reasoningEffort,
           });
+
+      // The provider mapping is not enough to satisfy the launch: the user
+      // needs a durable pane projection even if every renderer was inactive
+      // throughout setup. Publish it before consuming the launch intent so a
+      // crash at either boundary is safely retried and converges by stable id.
+      await this.storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent,
+        providerSessionId: session.providerSessionId,
+      });
 
       await this.storage.updateEnvironment(environment.id, {
         pendingAgentLaunch: false,
@@ -4145,25 +4203,50 @@ export class NativeAgentService {
     input: EnsureNativeAgentSessionInput,
   ): Promise<string> {
     await this.assertEnvironmentLive(input.environmentId);
-    const providerSessionId = await provider.createSession(
-      input.phase ?? "build",
-      input.title?.trim() || "Agent Session",
-      {
-        clientSessionKey: input.logicalSessionKey,
-        model: input.model,
-        effort: input.reasoningEffort,
-        mode: input.sessionMode,
-        fastMode: input.fastMode,
-        interaction: {
-          origin: input.origin ?? "interactive-native",
-          interactionPolicy: input.interactionPolicy
-            ?? ((input.origin === "build-pipeline" || input.origin === "looped-review")
-              ? UNATTENDED_AGENT_INTERACTION_POLICY
-              : INTERACTIVE_AGENT_INTERACTION_POLICY),
-          phase: input.phase,
-        },
+    const options = {
+      clientSessionKey: input.logicalSessionKey,
+      model: input.model,
+      effort: input.reasoningEffort,
+      mode: input.sessionMode,
+      fastMode: input.fastMode,
+      interaction: {
+        origin: input.origin ?? "interactive-native",
+        interactionPolicy: input.interactionPolicy
+          ?? ((input.origin === "build-pipeline" || input.origin === "looped-review")
+            ? UNATTENDED_AGENT_INTERACTION_POLICY
+            : INTERACTIVE_AGENT_INTERACTION_POLICY),
+        phase: input.phase,
       },
-    );
+    };
+    const maxAttempts = input.agent === "cursor" || input.agent === "grok"
+      ? ACP_SESSION_CREATE_ATTEMPTS
+      : 1;
+    let providerSessionId: string | undefined;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        providerSessionId = await provider.createSession(
+          input.phase ?? "build",
+          input.title?.trim() || "Agent Session",
+          options,
+        );
+        break;
+      } catch (error) {
+        if (!(error instanceof ProviderUnavailableError) || attempt === maxAttempts) {
+          throw error;
+        }
+        // ACP session/create is idempotent by clientSessionKey. Retrying here
+        // keeps a short bridge/agent initialization race represented as
+        // "connecting" by the waiting renderer, without risking two sessions.
+        await this.assertEnvironmentLive(input.environmentId);
+        const delay = ACP_SESSION_CREATE_RETRY_BASE_MS * 2 ** (attempt - 1);
+        await (this.options.delay
+          ? this.options.delay(delay)
+          : new Promise<void>((resolve) => setTimeout(resolve, delay)));
+      }
+    }
+    if (!providerSessionId) {
+      throw new ProviderUnavailableError(`${input.agent} session creation did not complete`);
+    }
     await this.assertEnvironmentLive(input.environmentId);
     return providerSessionId;
   }

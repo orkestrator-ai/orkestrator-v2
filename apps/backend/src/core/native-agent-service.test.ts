@@ -259,6 +259,7 @@ async function withService(
     provider?: NativeAgentServiceOptions["provider"];
     invoke?: Invoke;
     now?: NativeAgentServiceOptions["now"];
+    delay?: NativeAgentServiceOptions["delay"];
     interactionMonitorMode?: NativeAgentServiceOptions["interactionMonitorMode"];
     interactionMonitorAdoptionEnabled?: boolean;
     interactionMonitorIntervalMs?: number;
@@ -283,6 +284,7 @@ async function withService(
     {
       ...(setup.provider ? { provider: setup.provider } : {}),
       ...(setup.now ? { now: setup.now } : {}),
+      ...(setup.delay ? { delay: setup.delay } : {}),
       ...(setup.interactionMonitorMode
         ? { interactionMonitorMode: setup.interactionMonitorMode }
         : {}),
@@ -676,6 +678,32 @@ describe("NativeAgentService", () => {
         cursor: "in-process:cursor:2",
       });
       expect(stub.interactiveSnapshot).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  test("keeps a transient Cursor session startup in the connecting request", async () => {
+    let attempts = 0;
+    const delays: number[] = [];
+    const stub = createProviderStub("cursor", {
+      createSession: async () => {
+        attempts += 1;
+        if (attempts < 3) throw new ProviderUnavailableError("Cursor is still starting");
+        return "cursor-session";
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-cursor-create-retry-",
+      provider: async () => stub.provider,
+      delay: async (milliseconds) => { delays.push(milliseconds); },
+    }, async ({ service }) => {
+      await expect(service.ensureSession({
+        environmentId: "env-1",
+        agent: "cursor",
+        logicalSessionKey: "env-env-1:cursor-tab",
+      })).resolves.toMatchObject({ providerSessionId: "cursor-session" });
+
+      expect(stub.createSession).toHaveBeenCalledTimes(3);
+      expect(delays).toEqual([250, 500]);
     });
   });
 
@@ -6881,6 +6909,128 @@ describe("NativeAgentService", () => {
   });
 
   describe("startup launch reconciliation", () => {
+    test("publishes setup and Cursor tabs before setup is ready without starting the provider", async () => {
+      const { provider, createSession } = createProviderStub("cursor");
+      await withService({
+        prefix: "orkestrator-native-cursor-startup-during-setup-",
+        environment: {
+          pendingAgentLaunch: true,
+          defaultAgent: "cursor",
+          opencodeMode: "native",
+          setupPhase: "running",
+          setupScriptsComplete: false,
+        },
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        await internals(service).reconcilePendingLaunches();
+
+        expect(createSession).not.toHaveBeenCalled();
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          pendingAgentLaunch: true,
+          startupAgentSession: {
+            agent: "cursor",
+            status: "starting",
+          },
+        });
+        expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
+          activeTabId: "startup-agent",
+          tabs: [
+            { id: "default", type: "plain", isSetupTab: true },
+            {
+              id: "startup-agent",
+              type: "agent-native",
+              nativeAgentData: {
+                platform: "cursor",
+                environmentId: "env-1",
+              },
+            },
+          ],
+        });
+      });
+    });
+
+    test("publishes Cursor's native startup tab before consuming the launch", async () => {
+      const { provider } = createProviderStub("cursor");
+      await withService({
+        prefix: "orkestrator-native-cursor-startup-tab-",
+        environment: {
+          pendingAgentLaunch: true,
+          defaultAgent: "cursor",
+          opencodeMode: "native",
+        },
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        await service.reconcileInitialLaunch("env-1");
+
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          pendingAgentLaunch: false,
+          startupAgentSession: {
+            agent: "cursor",
+            providerSessionId: "provider-session",
+            status: "running",
+          },
+        });
+        expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
+          activeTabId: "startup-agent",
+          tabs: [
+            { id: "default", type: "plain", isSetupTab: true },
+            {
+              id: "startup-agent",
+              type: "agent-native",
+              nativeAgentData: {
+                platform: "cursor",
+                sessionId: "provider-session",
+              },
+            },
+          ],
+        });
+      });
+    });
+
+    test("repairs a persisted provider-specific startup tab on backend init", async () => {
+      const { provider } = createProviderStub("cursor");
+      await withService({
+        prefix: "orkestrator-native-cursor-startup-repair-",
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        await service.ensureSession({
+          environmentId: "env-1",
+          agent: "cursor",
+          logicalSessionKey: "env-env-1:startup-agent",
+        });
+        await storage.savePaneLayout("env-1", {
+          version: 3,
+          containerId: null,
+          activePaneId: "default",
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              { id: "default", type: "plain", isSetupTab: true },
+              { id: "startup-agent", type: "cursor" },
+            ],
+            activeTabId: "startup-agent",
+          },
+        }, 0);
+
+        await service.init();
+
+        expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
+          tabs: [
+            { id: "default", type: "plain" },
+            {
+              id: "startup-agent",
+              type: "agent-native",
+              nativeAgentData: {
+                platform: "cursor",
+                sessionId: "provider-session",
+              },
+            },
+          ],
+        });
+      });
+    });
+
     test.each([
       ["a terminal-mode codex agent", { defaultAgent: "codex", codexMode: "terminal" }],
       ["a terminal-mode opencode agent", {

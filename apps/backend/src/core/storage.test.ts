@@ -478,6 +478,106 @@ describe("backend-owned setup and build surfaces", () => {
     });
   });
 
+  test("publishes a backend-owned native startup tab beside the setup terminal", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-cursor-startup";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      await storage.addEnvironment(environment);
+
+      const layout = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "cursor",
+        providerSessionId: "cursor-session-1",
+      });
+
+      expect(layout?.root).toMatchObject({
+        kind: "leaf",
+        activeTabId: "startup-agent",
+        tabs: [
+          { id: "default", type: "plain", isSetupTab: true },
+          {
+            id: "startup-agent",
+            type: "agent-native",
+            nativeAgentData: {
+              platform: "cursor",
+              environmentId: environment.id,
+              sessionId: "cursor-session-1",
+              isLocal: true,
+            },
+          },
+        ],
+      });
+    });
+  });
+
+  test("repairs a malformed Cursor startup tab in place without resurrecting a closed tab", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-cursor-repair";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      await storage.addEnvironment(environment);
+      await storage.savePaneLayout(environment.id, {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "default",
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [
+            { id: "default", type: "plain", isSetupTab: true },
+            { id: "startup-agent", type: "cursor" },
+          ],
+          activeTabId: "startup-agent",
+        },
+      }, 0);
+
+      const repaired = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "cursor",
+        providerSessionId: "cursor-session-1",
+        existingOnly: true,
+      });
+      expect(repaired?.revision).toBe(2);
+      expect(repaired?.root).toMatchObject({
+        tabs: [
+          { id: "default", type: "plain", isSetupTab: true },
+          {
+            id: "startup-agent",
+            type: "agent-native",
+            nativeAgentData: { platform: "cursor", sessionId: "cursor-session-1" },
+          },
+        ],
+      });
+
+      const withoutStartup = createEnvironment("project-1");
+      withoutStartup.id = "env-closed-startup";
+      withoutStartup.environmentType = "local";
+      withoutStartup.containerId = null;
+      await storage.addEnvironment(withoutStartup);
+      await storage.savePaneLayout(withoutStartup.id, {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "default",
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [{ id: "default", type: "plain" }],
+          activeTabId: "default",
+        },
+      }, 0);
+      await expect(storage.ensureStartupNativeAgentTab({
+        environmentId: withoutStartup.id,
+        agent: "cursor",
+        providerSessionId: "closed-session",
+        existingOnly: true,
+      })).resolves.toBeNull();
+      expect((await storage.getPaneLayout(withoutStartup.id))?.revision).toBe(1);
+    });
+  });
+
   test("refuses a backend-owned build tab that would exceed the layout bound", async () => {
     await withTemporaryStorage(async (storage) => {
       const environment = createEnvironment("project-1");

@@ -2298,6 +2298,8 @@ describe("TerminalContainer", () => {
               containerId: null,
               environmentType: "local",
               worktreePath: "/tmp/env-hidden-worktree",
+              setupPhase: "ready",
+              setupScriptsComplete: true,
               defaultAgent: "codex",
               codexMode: "native",
               initialPrompt: "Inspect this screenshot",
@@ -2336,12 +2338,7 @@ describe("TerminalContainer", () => {
       </TerminalProvider>,
     );
 
-    await waitFor(() => {
-      const codexTabs = usePaneLayoutStore.getState().getAllTabs("env-hidden")
-        .filter((tab) => tab.type === "agent-native");
-      expect(codexTabs).toHaveLength(1);
-      expect(codexTabs[0]?.id).toBe("startup-agent");
-    });
+    await act(async () => { await Promise.resolve(); });
 
     // The backend dispatches this launch and stages the images itself, so the
     // renderer must not rewrite the prompt into a list of paths — doing so also
@@ -2352,10 +2349,10 @@ describe("TerminalContainer", () => {
     expect(
       useClaudeOptionsStore.getState().getOptions("env-hidden")?.initialPromptAttachments,
     ).toEqual(attachments);
-    expect(
-      usePaneLayoutStore.getState().getAllTabs("env-hidden")
-        .find((tab) => tab.id === "startup-agent")?.initialPrompt,
-    ).not.toContain(".orkestrator/initial-prompt");
+    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden"))
+      .not.toContainEqual(expect.objectContaining({ initialPrompt: expect.stringContaining(
+        ".orkestrator/initial-prompt",
+      ) }));
   });
 
   test("leaves an attachment-only native launch to the backend", async () => {
@@ -2368,6 +2365,8 @@ describe("TerminalContainer", () => {
               containerId: null,
               environmentType: "local",
               worktreePath: "/tmp/env-hidden-worktree",
+              setupPhase: "ready",
+              setupScriptsComplete: true,
               defaultAgent: "codex",
               codexMode: "native",
               initialPrompt: "",
@@ -2404,12 +2403,7 @@ describe("TerminalContainer", () => {
       </TerminalProvider>,
     );
 
-    await waitFor(() => {
-      const startupTab = usePaneLayoutStore.getState().getAllTabs("env-hidden")
-        .find((tab) => tab.id === "startup-agent");
-      expect(startupTab?.type).toBe("agent-native");
-      expect(startupTab?.initialPrompt).toBeUndefined();
-    });
+    await act(async () => { await Promise.resolve(); });
 
     expect(writeLocalFileMock).not.toHaveBeenCalled();
     expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
@@ -2431,6 +2425,8 @@ describe("TerminalContainer", () => {
               containerId: null,
               environmentType: "local",
               worktreePath: "/tmp/env-hidden-worktree",
+              setupPhase: "ready",
+              setupScriptsComplete: true,
               defaultAgent: "claude",
               claudeMode: "native",
               claudeNativeBackend: "tmux",
@@ -2506,6 +2502,8 @@ describe("TerminalContainer", () => {
               containerId: null,
               environmentType: "local",
               worktreePath: "/tmp/env-hidden-worktree",
+              setupPhase: "ready",
+              setupScriptsComplete: true,
               defaultAgent: "claude",
               claudeMode: undefined,
               claudeNativeBackend: undefined,
@@ -2542,11 +2540,7 @@ describe("TerminalContainer", () => {
       </TerminalProvider>,
     );
 
-    await waitFor(() => {
-      const startupTab = usePaneLayoutStore.getState().getAllTabs("env-hidden")
-        .find((tab) => tab.id === "startup-agent");
-      expect(startupTab?.type).toBe("agent-native");
-    });
+    await act(async () => { await Promise.resolve(); });
     expect(writeLocalFileMock).not.toHaveBeenCalled();
     expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
   });
@@ -3345,6 +3339,7 @@ describe("TerminalContainer", () => {
         environment.id === "env-hidden"
           ? {
               ...environment,
+              setupPhase: "ready",
               setupScriptsComplete: true,
               pendingAgentLaunch: true,
               initialPrompt: "Recover after mobile reload",
@@ -3393,7 +3388,7 @@ describe("TerminalContainer", () => {
     return tabId!;
   };
 
-  test("reconstructs and clears a durable agent launch after a full renderer reload", async () => {
+  test("renders a durable native launch without consuming the backend intent", async () => {
     usePaneLayoutStore.setState({
       environments: new Map([[
         "env-hidden",
@@ -3450,38 +3445,23 @@ describe("TerminalContainer", () => {
       // Every renderer must choose the same logical tab so pane-layout merging,
       // Codex session creation, and initial-prompt dispatch are idempotent.
       expect(codexTab?.id).toBe("startup-agent");
-      expect(codexTab?.initialPrompt).toBe("Recover after mobile reload");
+      // The backend dispatches the prompt; the renderer only represents the
+      // launch and must not dispatch a second copy from the tab.
+      expect(codexTab?.initialPrompt).toBeUndefined();
       expect(codexTab?.initialAgentModel).toBe("gpt-5.6-sol");
       expect(codexTab?.initialReasoningEffort).toBe("high");
     });
 
-    await waitFor(() => {
-      expect(setEnvironmentPendingAgentLaunchMock).toHaveBeenCalledWith(
-        "env-hidden",
-        false,
-      );
-      expect(
-        useEnvironmentStore.getState().getEnvironmentById("env-hidden")
-          ?.pendingAgentLaunch,
-      ).toBe(false);
-    });
-
-    // Handing ownership from the backend flag to the tab is only safe if the
-    // options are on disk first. Assert the flushed layout that preceded the
-    // clear actually carried them — this is the invariant that lets a renderer
-    // reload rehydrate the user's model choice instead of silently falling back
-    // to the configured default.
-    const clearOrder = setEnvironmentPendingAgentLaunchMock.mock.invocationCallOrder[0]!;
-    const flushIndex = savePaneLayoutMock.mock.invocationCallOrder
-      .findIndex((order) => order < clearOrder);
-    expect(flushIndex).toBeGreaterThanOrEqual(0);
-    const flushedLayout = savePaneLayoutMock.mock.calls[flushIndex]?.[1];
-    expect(JSON.stringify(flushedLayout)).toContain("agent-native");
-    expect(JSON.stringify(flushedLayout)).toContain('"initialAgentModel":"gpt-5.6-sol"');
-    expect(JSON.stringify(flushedLayout)).toContain('"initialReasoningEffort":"high"');
+    // The frontend may optimistically represent the intent, but only the
+    // backend may consume it after the provider session and pane are durable.
+    expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
+    expect(
+      useEnvironmentStore.getState().getEnvironmentById("env-hidden")
+        ?.pendingAgentLaunch,
+    ).toBe(true);
   });
 
-  test("projects a backend-created session into one stable tab before acknowledging it", async () => {
+  test("projects a backend-created session into one stable tab without acknowledging it", async () => {
     setupDurableLaunchEnvironment({
       defaultAgent: "codex",
       codexMode: "native",
@@ -3500,6 +3480,32 @@ describe("TerminalContainer", () => {
         startedAt: "2026-07-29T12:00:00.000Z",
       },
     });
+    usePaneLayoutStore.setState((state) => ({
+      environments: new Map(state.environments).set("env-hidden", {
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [
+            { id: "default", type: "plain", isSetupTab: true },
+            {
+              id: "startup-agent",
+              type: "agent-native",
+              nativeAgentData: {
+                platform: "codex",
+                environmentId: "env-hidden",
+                containerId: "container-hidden",
+                sessionId: "provider-session",
+              },
+              initialAgentModel: "gpt-5.6-sol",
+              initialReasoningEffort: "high",
+            },
+          ],
+          activeTabId: "startup-agent",
+        },
+        activePaneId: "default",
+        containerId: "container-hidden",
+      }),
+    }));
 
     renderHiddenTerminal();
 
@@ -3513,16 +3519,7 @@ describe("TerminalContainer", () => {
         initialReasoningEffort: "high",
       });
     });
-    await waitFor(() => {
-      expect(savePaneLayoutMock).toHaveBeenCalled();
-      expect(acknowledgeStartupAgentSessionMock).toHaveBeenCalledWith(
-        "env-hidden",
-        expect.objectContaining({
-          providerSessionId: "provider-session",
-          startedAt: "2026-07-29T12:00:00.000Z",
-        }),
-      );
-    });
+    expect(acknowledgeStartupAgentSessionMock).not.toHaveBeenCalled();
     expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
   });
 
@@ -3542,6 +3539,32 @@ describe("TerminalContainer", () => {
         startedAt: "2026-07-29T12:00:00.000Z",
       },
     });
+    usePaneLayoutStore.setState((state) => ({
+      environments: new Map(state.environments).set("env-hidden", {
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [
+            { id: "default", type: "plain", isSetupTab: true },
+            {
+              id: "startup-agent",
+              type: "agent-native",
+              nativeAgentData: {
+                platform: "codex",
+                environmentId: "env-hidden",
+                containerId: "container-hidden",
+                sessionId: "backend-provider-session",
+              },
+              initialAgentModel: "backend-model",
+              initialReasoningEffort: "high",
+            },
+          ],
+          activeTabId: "startup-agent",
+        },
+        activePaneId: "default",
+        containerId: "container-hidden",
+      }),
+    }));
     useClaudeOptionsStore.setState({
       options: {},
       pendingNativeLaunches: {
@@ -3765,6 +3788,10 @@ describe("TerminalContainer", () => {
       expect(agentTab?.initialReasoningEffort).toBe("high");
     });
 
+    if (expectedType === "agent-native") {
+      expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
+      return;
+    }
     await waitFor(() => {
       expect(setEnvironmentPendingAgentLaunchMock).toHaveBeenCalledWith("env-hidden", false);
     });
@@ -3815,83 +3842,43 @@ describe("TerminalContainer", () => {
     }
   });
 
-  test("keeps the durable launch pending when persisting the layout fails", async () => {
+  test("does not make a backend-owned native launch depend on renderer persistence", async () => {
     setupDurableLaunchEnvironment({ defaultAgent: "codex", codexMode: "native" });
-    const originalWarn = console.warn;
-    const warned = mock(() => undefined);
-    console.warn = warned;
+    renderHiddenTerminal();
+    await waitForDurableAgentTab();
 
-    try {
-      // Arm the failure before rendering: the flush now fires as soon as the
-      // reconstructed tab exists, so there is no window to install it later.
-      savePaneLayoutMock.mockRejectedValueOnce(new Error("offline"));
-      renderHiddenTerminal();
-      await waitForDurableAgentTab();
-
-      await waitFor(() => {
-        expect(savePaneLayoutMock).toHaveBeenCalled();
-        expect(warned).toHaveBeenCalled();
-      });
-      // The clear must not happen on a layout that was never persisted, and the
-      // flag must stay set so the next render retries.
-      expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
-      expect(
-        useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.pendingAgentLaunch,
-      ).toBe(true);
-    } finally {
-      console.warn = originalWarn;
-    }
+    expect(savePaneLayoutMock).not.toHaveBeenCalled();
+    expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
+    expect(
+      useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.pendingAgentLaunch,
+    ).toBe(true);
   });
 
-  test("keeps the durable launch pending when clearing it fails, then retries", async () => {
+  test("leaves native launch consumption to the backend across rerenders", async () => {
     setupDurableLaunchEnvironment({ defaultAgent: "codex", codexMode: "native" });
-    setEnvironmentPendingAgentLaunchMock.mockRejectedValueOnce(new Error("offline"));
-    const originalWarn = console.warn;
-    console.warn = mock(() => undefined);
+    renderHiddenTerminal();
+    await waitForDurableAgentTab();
+    await act(async () => {
+      useEnvironmentStore.getState().updateEnvironment("env-hidden", { branch: "rerender" });
+      await Promise.resolve();
+    });
 
-    try {
-      renderHiddenTerminal();
-      await waitForDurableAgentTab();
-
-      await waitFor(() => {
-        expect(setEnvironmentPendingAgentLaunchMock).toHaveBeenCalledTimes(1);
-      });
-      expect(
-        useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.pendingAgentLaunch,
-      ).toBe(true);
-
-      // The in-flight guard must have been released, so a later change retries
-      // rather than leaving the flag stranded.
-      await act(async () => {
-        useEnvironmentStore.getState().updateEnvironment("env-hidden", { branch: "retry-branch" });
-        await Promise.resolve();
-      });
-      await waitFor(() => {
-        expect(setEnvironmentPendingAgentLaunchMock.mock.calls.length).toBeGreaterThan(1);
-        expect(
-          useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.pendingAgentLaunch,
-        ).toBe(false);
-      });
-    } finally {
-      console.warn = originalWarn;
-    }
+    expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
+    expect(
+      useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.pendingAgentLaunch,
+    ).toBe(true);
   });
 
-  test("keeps the authoritative setup phase while clearing a durable launch", async () => {
+  test("keeps the authoritative setup phase while representing a durable launch", async () => {
     setupDurableLaunchEnvironment({ defaultAgent: "codex", codexMode: "native" });
-    setEnvironmentPendingAgentLaunchMock.mockImplementationOnce(async (environmentId: string) => ({
-      ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
-      pendingAgentLaunch: false,
-    }));
 
     renderHiddenTerminal();
     await waitForDurableAgentTab();
 
-    await waitFor(() => {
-      const environment = useEnvironmentStore.getState().getEnvironmentById("env-hidden");
-      expect(environment?.pendingAgentLaunch).toBe(false);
-      expect(environment?.setupPhase).toBe("ready");
-    });
+    const environment = useEnvironmentStore.getState().getEnvironmentById("env-hidden");
+    expect(environment?.pendingAgentLaunch).toBe(true);
+    expect(environment?.setupPhase).toBe("ready");
+    expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
   });
 
   test("does not reconstruct a durable launch while the environment is not running", async () => {
@@ -4048,7 +4035,7 @@ describe("TerminalContainer", () => {
     });
   });
 
-  test("finds an agent tab nested in a split pane and clears without relaunching", async () => {
+  test("finds a backend-owned agent tab nested in a split pane without relaunching", async () => {
     setupDurableLaunchEnvironment({ defaultAgent: "codex", codexMode: "native" });
     // The agent lives in the second leaf of a split, so the check must walk the
     // whole tree rather than only the root leaf.
@@ -4086,9 +4073,8 @@ describe("TerminalContainer", () => {
 
     renderHiddenTerminal();
 
-    await waitFor(() => {
-      expect(setEnvironmentPendingAgentLaunchMock).toHaveBeenCalledWith("env-hidden", false);
-    });
+    await act(async () => { await Promise.resolve(); });
+    expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
     expect(
       useClaudeOptionsStore.getState().pendingNativeLaunches["env-hidden"],
     ).toBeUndefined();

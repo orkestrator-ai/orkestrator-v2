@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { parseRuntimeStatusManifest, resolveRuntimeProfile, statusManifestPath } from "../../electron/runtime-profile.js";
-import { atomicWriteJson, initializeProfile, processMatches, processStartTime, readAndValidateSentinel, reserveLoopbackPorts } from "./profile-io.js";
+import { atomicWriteJson, initializeProfile, processMatches, processStartTime, readAndValidateSentinel, reserveLoopbackPorts, seedInstalledModelCatalogCaches } from "./profile-io.js";
 import { orphanedRuntimeProcesses, stoppedRuntimeStatusIfUnchanged, stopTrackedRuntimeProcesses } from "./lifecycle.js";
 
 const directories: string[] = [];
@@ -45,6 +45,46 @@ describe("development profile lifecycle primitives", () => {
     const profilePath = await initializeProfile(profile);
     expect((await stat(profilePath)).mode & 0o777).toBe(0o600);
     await expect(readAndValidateSentinel(profile, roots)).resolves.toEqual({ version: 1, profile: "qa" });
+  });
+
+  test("copies only bounded installed model catalogue caches into the isolated profile", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ork-profile-caches-"));
+    directories.push(root);
+    const roots = {
+      developmentRoot: path.join(root, "dev"),
+      productionDataDir: path.join(root, "production"),
+      homeDir: path.join(root, "home"),
+    };
+    const profile = resolveRuntimeProfile({
+      repositoryRoot: path.join(root, "repo"),
+      requestedId: "qa",
+      roots,
+    });
+    await initializeProfile(profile);
+    await mkdir(roots.productionDataDir, { recursive: true });
+    await mkdir(path.join(roots.homeDir, ".codex", "orkestrator-bridge"), { recursive: true });
+    await mkdir(path.join(roots.homeDir, ".grok"), { recursive: true });
+    await writeFile(path.join(roots.productionDataDir, "agent-model-catalog.json"), "agent-cache");
+    await writeFile(path.join(roots.productionDataDir, "opencode-model-catalog.json"), "opencode-cache");
+    await writeFile(path.join(roots.homeDir, ".codex", "models_cache.json"), "codex-cache");
+    await writeFile(path.join(roots.homeDir, ".codex", "orkestrator-bridge", "models-cache.json"), "bridge-cache");
+    await writeFile(path.join(roots.homeDir, ".grok", "models_cache.json"), "grok-cache");
+
+    await expect(seedInstalledModelCatalogCaches(profile, { roots, env: {} })).resolves.toEqual([
+      "agent-model-catalog.json",
+      "opencode-model-catalog.json",
+      "codex/models_cache.json",
+      "codex/orkestrator-bridge/models-cache.json",
+      "grok/models_cache.json",
+    ]);
+    expect(await readFile(path.join(profile.dataDir, "agent-model-catalog.json"), "utf8")).toBe("agent-cache");
+    expect(await readFile(path.join(profile.dataDir, "opencode-model-catalog.json"), "utf8")).toBe("opencode-cache");
+    expect(await readFile(path.join(profile.dataDir, "agent-credentials", "codex", "models_cache.json"), "utf8"))
+      .toBe("codex-cache");
+    expect(await readFile(path.join(profile.dataDir, "agent-credentials", "codex", "orkestrator-bridge", "models-cache.json"), "utf8"))
+      .toBe("bridge-cache");
+    expect(await readFile(path.join(profile.dataDir, "agent-credentials", "home", ".grok", "models_cache.json"), "utf8"))
+      .toBe("grok-cache");
   });
 
   test("validates process identity with PID and start time", () => {

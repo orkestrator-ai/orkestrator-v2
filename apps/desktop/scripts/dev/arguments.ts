@@ -7,8 +7,15 @@ export type DevArguments = {
   json: boolean;
   keepToolchains: boolean;
   stopFirst: boolean;
+  agentCredentialsDisabled: boolean;
   credentialSources: RuntimeProfile["credentialSources"];
 };
+
+const ALL_AGENT_CREDENTIAL_SOURCES: RuntimeProfile["credentialSources"] = [
+  "claude",
+  "codex",
+  "opencode",
+];
 
 export function parseDevArguments(args: string[]): DevArguments {
   const result: DevArguments = {
@@ -17,6 +24,7 @@ export function parseDevArguments(args: string[]): DevArguments {
     json: false,
     keepToolchains: false,
     stopFirst: false,
+    agentCredentialsDisabled: false,
     credentialSources: [],
   };
   const valueAfter = (index: number, name: string): string => {
@@ -31,6 +39,7 @@ export function parseDevArguments(args: string[]): DevArguments {
     else if (argument === "--json") result.json = true;
     else if (argument === "--keep-toolchains") result.keepToolchains = true;
     else if (argument === "--stop-first") result.stopFirst = true;
+    else if (argument === "--no-agent-credentials") result.agentCredentialsDisabled = true;
     else if (argument === "--fixture-environments") {
       const values = valueAfter(index++, argument).split(",").filter(Boolean);
       if (values.some((value) => value !== "local" && value !== "container")) {
@@ -51,5 +60,18 @@ export function parseDevArguments(args: string[]): DevArguments {
     }
   }
   result.credentialSources = [...new Set(result.credentialSources)];
+  if (result.agentCredentialsDisabled && result.credentialSources.length > 0) {
+    throw new Error("--no-agent-credentials cannot be combined with --credential-source");
+  }
   return result;
+}
+
+/**
+ * Agent-driven QA is expected to exercise live providers. Keep `dev` itself
+ * credential-free, while making `dev:test` useful for real agent sessions
+ * without relying on every caller to remember three flags.
+ */
+export function applyAgentTestDefaults(args: DevArguments): DevArguments {
+  if (args.agentCredentialsDisabled || args.credentialSources.length > 0) return args;
+  return { ...args, credentialSources: [...ALL_AGENT_CREDENTIAL_SOURCES] };
 }

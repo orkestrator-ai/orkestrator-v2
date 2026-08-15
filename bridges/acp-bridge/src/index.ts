@@ -1538,10 +1538,8 @@ function applyToolCallUpdate(
   if (state.historyReplay === false
     && state.status === "running"
     && !turnRequiresCompleteOutput(state)
-    && part.toolState !== undefined
-    && part.toolState !== "pending"
-    && isGenericCursorToolTitle(part.toolTitle)
-    && !hasToolArguments(part.toolArgs)) {
+    && isSettledToolPart(part)
+    && isGenericCursorToolPart(part)) {
     scheduleCursorToolMetadataReconcile(state);
   }
 }
@@ -1669,6 +1667,14 @@ function isGenericCursorToolTitle(value: string | undefined): boolean {
     || normalized === "find";
 }
 
+function isSettledToolPart(part: BridgeToolPart): boolean {
+  return part.toolState === "success" || part.toolState === "failure";
+}
+
+function isGenericCursorToolPart(part: BridgeToolPart): boolean {
+  return isGenericCursorToolTitle(part.toolTitle) && !hasToolArguments(part.toolArgs);
+}
+
 /**
  * The tool parts a replay may still improve, as a *contiguous suffix* of the
  * transcript's tool calls starting at the oldest one that is still generic.
@@ -1682,14 +1688,13 @@ function isGenericCursorToolTitle(value: string | undefined): boolean {
  * same window, and including the already-enriched parts inside it lets them
  * consume their own replay entries instead of leaving them as false candidates.
  *
- * `requireSettled` is what makes a *live* pass safe. Cursor indexes a call when
- * it settles, so a call still in flight has no replay entry to claim — but it
- * is also generic and argument-less, which is exactly the shape the join treats
- * as a candidate. It would take a settled sibling's entry through the
- * single-candidate fallback and keep it, because an enriched part no longer
- * looks generic and every later pass skips it. Rather than guess, a live pass
- * refuses the whole window while anything in it is unsettled; the next settle,
- * or the final pass, sees a window that lines up again.
+ * A live pass (`requireSettled`) drops parts that are still in flight rather
+ * than refusing the whole suffix. Cursor indexes a call when it settles, so a
+ * pending generic sibling has no replay entry — and used to claim a settled
+ * neighbour's through the single-candidate kind fallback. Omitting it, and
+ * disabling that fallback on the live join, lets completed reads keep their
+ * titles while the agent still has a tool in flight. The final pass keeps the
+ * unsettled parts and the fallback so the turn still ends fully enriched.
  */
 function cursorToolReplayTargets(
   state: SessionState,
@@ -1697,34 +1702,38 @@ function cursorToolReplayTargets(
 ): BridgeToolPart[] {
   if (provider !== "cursor") return [];
   const parts = transcriptToolParts(state).slice(-MAX_REPLAY_RECONCILE_TOOLS);
-  const firstGeneric = parts.findIndex((part) =>
-    isGenericCursorToolTitle(part.toolTitle)
-    && !hasToolArguments(part.toolArgs)
-  );
+  const firstGeneric = parts.findIndex((part) => isGenericCursorToolPart(part));
   if (firstGeneric === -1) return [];
   const targets = parts.slice(firstGeneric);
-  if (options.requireSettled && targets.some(
-    (part) => part.toolState !== "success" && part.toolState !== "failure",
-  )) return [];
-  return targets;
+  if (!options.requireSettled) return targets;
+  const settled = targets.filter((part) => isSettledToolPart(part));
+  // A window of only already-enriched parts would spawn a child that cannot
+  // apply anything, which is how the per-turn live budget burns on no-ops.
+  if (!settled.some((part) => isGenericCursorToolPart(part))) return [];
+  return settled;
 }
 
 function applyReplayToolMetadata(
   state: SessionState,
   capturedTargets: readonly BridgeToolPart[],
   collector: AcpToolReplayCollector,
+  options: { allowKindFallback?: boolean } = {},
 ): boolean {
   const liveToolParts = new Set(transcriptToolParts(state));
   const targets = capturedTargets.filter((part) => liveToolParts.has(part));
   const replayed = orderedReplayTools(collector);
   if (targets.length === 0 || replayed.length === 0) return false;
   const unused = new Set(replayed.keys());
+  const allowKindFallback = options.allowKindFallback !== false;
 
   let changed = false;
   // Cursor replays concurrent calls in completion order, while the live stream
   // starts them in launch order. Join on a unique path or normalized output,
-  // with a unique tool kind as the final safe fallback; ambiguous calls stay
-  // generic rather than borrowing a neighbour's filename or search pattern.
+  // with a unique tool kind as the final safe fallback on the *final* pass;
+  // ambiguous calls stay generic rather than borrowing a neighbour's filename
+  // or search pattern. A live pass disables that fallback: a same-kind sibling
+  // still in flight has no replay entry yet, so the settled call would look
+  // like the only candidate and keep the wrong file permanently.
   for (const part of targets) {
     const targetKind = normalizedToolKind(part.toolName);
     const targetOutputHash = replayOutputHash(part.toolOutput);
@@ -1755,7 +1764,7 @@ function applyReplayToolMetadata(
     const candidateIndexes = pathMatches.length > 0 ? pathMatches : outputMatches;
     const replayIndex = candidateIndexes.length === 1
       ? candidateIndexes[0]
-      : sameKind.length === 1
+      : allowKindFallback && sameKind.length === 1
         ? sameKind[0]
         : undefined;
     if (replayIndex === undefined) continue;
@@ -1798,6 +1807,7 @@ async function reconcileCursorToolMetadata(
   child: AcpProcess,
   targets: readonly BridgeToolPart[],
   promptSequence: number,
+  options: { allowKindFallback?: boolean } = {},
 ): Promise<void> {
   if (provider !== "cursor"
     || shuttingDown
@@ -1860,7 +1870,7 @@ async function reconcileCursorToolMetadata(
       && sessions.get(state.id) === state
       && state.child === child
       && state.promptSequence === promptSequence
-      && applyReplayToolMetadata(state, targets, collector)) {
+      && applyReplayToolMetadata(state, targets, collector, options)) {
       state.revision += 1;
       schedulePersist();
     }
@@ -1905,8 +1915,8 @@ function recordCursorToolReplayRun(state: SessionState): void {
  *
  * The pending request carries its own mode rather than the caller's urgency,
  * because the two differ: a follow-up scheduled from a finishing replay runs
- * immediately but may still be a *live* pass, and a live pass has strictly
- * narrower targets than the final one.
+ * immediately but may still be a *live* pass, and a live pass omits in-flight
+ * parts and the kind fallback that the final pass still uses.
  */
 function scheduleCursorToolMetadataReconcile(
   state: SessionState,
@@ -1947,7 +1957,9 @@ function scheduleCursorToolMetadataReconcile(
     const promptSequence = state.promptSequence;
     recordCursorToolReplayRun(state);
     state.cursorToolReplayRunning = true;
-    void reconcileCursorToolMetadata(state, child, targets, promptSequence)
+    void reconcileCursorToolMetadata(state, child, targets, promptSequence, {
+      allowKindFallback: mode === "final",
+    })
       .catch(() => undefined)
       .finally(() => {
         state.cursorToolReplayRunning = false;

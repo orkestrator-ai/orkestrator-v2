@@ -83,8 +83,8 @@ function sessionPayload(sessionId = "fake-session"): JsonObject {
   // messages must carry no model attribution.
   const withoutModel = provider !== "grok" && process.env.FAKE_ACP_NO_MODEL_OPTION === "1"
     ? {
-        ...config,
-        configOptions: config.configOptions.filter((option) => option.id !== "model"),
+        ...cursorConfig,
+        configOptions: cursorConfig.configOptions.filter((option) => option.id !== "model"),
       }
     : config;
   return {
@@ -323,6 +323,183 @@ lines.on("line", (line) => {
         title: "Read earlier file",
         status: "completed",
       });
+    }
+    if (process.env.FAKE_ACP_REPLAY_CURSOR_TOOL_METADATA === "1") {
+      replay({
+        sessionUpdate: "tool_call",
+        toolCallId: "replay-search-1",
+        title: "grep --include=\"*.json\" \"scripts\"",
+        kind: "search",
+        status: "pending",
+        rawInput: { pattern: "scripts", path: "/workspace" },
+      });
+      replay({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "replay-search-1",
+        status: "completed",
+        rawOutput: { totalMatches: 1, truncated: false },
+      });
+      replay({
+        sessionUpdate: "tool_call",
+        toolCallId: "replay-read-1",
+        title: "Read package.json (1 - 80)",
+        kind: "read",
+        status: "pending",
+        rawInput: { path: "/workspace/package.json" },
+      });
+      replay({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "replay-read-1",
+        status: "completed",
+        rawOutput: { content: "package contents" },
+      });
+    }
+    // The same first turn as above, preceded by tool calls from turns the live
+    // transcript has already enriched or never held. Exercises the collector's
+    // count bound: only the trailing `capacity` calls may survive.
+    if (process.env.FAKE_ACP_REPLAY_CURSOR_HISTORY_TOOL_METADATA === "1") {
+      for (const stale of [
+        { id: "replay-stale-1", title: "Read stale-one.json", path: "/workspace/stale-one.json" },
+        { id: "replay-stale-2", title: "Read stale-two.json", path: "/workspace/stale-two.json" },
+      ]) {
+        replay({
+          sessionUpdate: "tool_call",
+          toolCallId: stale.id,
+          title: stale.title,
+          kind: "read",
+          status: "pending",
+          rawInput: { path: stale.path },
+        });
+        replay({
+          sessionUpdate: "tool_call_update",
+          toolCallId: stale.id,
+          status: "completed",
+          rawOutput: { content: "stale contents" },
+        });
+      }
+      replay({
+        sessionUpdate: "tool_call",
+        toolCallId: "replay-search-1",
+        title: "grep --include=\"*.json\" \"scripts\"",
+        kind: "search",
+        status: "pending",
+        rawInput: { pattern: "scripts", path: "/workspace" },
+      });
+      replay({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "replay-search-1",
+        status: "completed",
+        rawOutput: { totalMatches: 1, truncated: false },
+      });
+      replay({
+        sessionUpdate: "tool_call",
+        toolCallId: "replay-read-1",
+        title: "Read package.json (1 - 80)",
+        kind: "read",
+        status: "pending",
+        rawInput: { path: "/workspace/package.json" },
+      });
+      replay({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "replay-read-1",
+        status: "completed",
+        rawOutput: { content: "package contents" },
+      });
+    }
+    // Two complete turns' worth of tool calls, so a replay that loads late
+    // enough to see the *second* turn can be caught handing its paths and
+    // titles to the first turn's parts.
+    if (process.env.FAKE_ACP_REPLAY_CURSOR_TWO_TURN_METADATA === "1") {
+      for (const replayed of [
+        {
+          id: "replay-search-1",
+          title: "grep --include=\"*.json\" \"scripts\"",
+          kind: "search",
+          rawInput: { pattern: "scripts", path: "/workspace" },
+          rawOutput: { totalMatches: 1, truncated: false },
+        },
+        {
+          id: "replay-read-1",
+          title: "Read package.json (1 - 80)",
+          kind: "read",
+          rawInput: { path: "/workspace/package.json" },
+          rawOutput: { content: "package contents" },
+        },
+        {
+          id: "replay-read-2",
+          title: "Read tsconfig.json (1 - 40)",
+          kind: "read",
+          rawInput: { path: "/workspace/tsconfig.json" },
+          rawOutput: { content: "tsconfig contents" },
+        },
+        {
+          id: "replay-search-2",
+          title: "grep --include=\"*.ts\" \"strict\"",
+          kind: "search",
+          rawInput: { pattern: "strict", path: "/workspace/src" },
+          rawOutput: { totalMatches: 2, truncated: false },
+        },
+      ]) {
+        replay({
+          sessionUpdate: "tool_call",
+          toolCallId: replayed.id,
+          title: replayed.title,
+          kind: replayed.kind,
+          status: "pending",
+          rawInput: replayed.rawInput,
+        });
+        replay({
+          sessionUpdate: "tool_call_update",
+          toolCallId: replayed.id,
+          status: "completed",
+          rawOutput: replayed.rawOutput,
+        });
+      }
+    }
+    if (process.env.FAKE_ACP_REPLAY_CURSOR_SAME_KIND_METADATA === "1") {
+      for (const replayed of [
+        { id: "replay-read-c", title: "Read c.json", path: "/workspace/c.json", output: "shared" },
+        { id: "replay-read-b", title: "Read b.json", path: "/workspace/b.json", output: "b" },
+        { id: "replay-read-d", title: "Read d.json", path: "/workspace/d.json", output: "shared" },
+        { id: "replay-read-a", title: "Read a.json", path: "/workspace/a.json", output: "a" },
+      ]) {
+        replay({
+          sessionUpdate: "tool_call",
+          toolCallId: replayed.id,
+          title: replayed.title,
+          kind: "read",
+          status: "pending",
+          rawInput: { path: replayed.path },
+        });
+        replay({
+          sessionUpdate: "tool_call_update",
+          toolCallId: replayed.id,
+          status: "completed",
+          rawOutput: { content: replayed.output },
+        });
+      }
+    }
+    if (process.env.FAKE_ACP_REPLAY_CURSOR_OVERSIZED_METADATA === "1") {
+      for (const replayed of [
+        { id: "replay-huge-b", title: "Read huge-b.json", path: "/workspace/huge-b.json", output: "huge-b" },
+        { id: "replay-huge-a", title: "Read huge-a.json", path: "/workspace/huge-a.json", output: "huge-a" },
+        { id: "replay-huge-c", title: "Read huge-c.json", path: "/workspace/huge-c.json", output: "huge-c" },
+      ]) {
+        replay({
+          sessionUpdate: "tool_call",
+          toolCallId: replayed.id,
+          title: replayed.title,
+          kind: "read",
+          status: "pending",
+          rawInput: { path: replayed.path, payload: "x".repeat(480 * 1024) },
+        });
+        replay({
+          sessionUpdate: "tool_call_update",
+          toolCallId: replayed.id,
+          status: "completed",
+          rawOutput: { content: replayed.output },
+        });
+      }
     }
     // The same history without provider message ids, which is all the bridge
     // gets from an agent that does not stamp them. Message boundaries then have
@@ -1365,6 +1542,191 @@ lines.on("line", (line) => {
           _meta: { totalTokens: 15_675, usage: { inputTokens: 15_639, outputTokens: 36 } },
         },
       });
+      return;
+    }
+    if (prompt.startsWith("CURSOR_GENERIC_TOOLS")) {
+      for (const update of [
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-read-1",
+          title: "Read File",
+          kind: "read",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "live-read-1",
+          status: "completed",
+          rawOutput: { content: "package contents" },
+        },
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-search-1",
+          title: "grep",
+          kind: "search",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "live-search-1",
+          status: "completed",
+          rawOutput: { totalMatches: 1, truncated: false },
+        },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: "fake-session", update },
+        });
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Done." },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    // A second turn's worth of generic Cursor tool calls, distinguishable from
+    // `CURSOR_GENERIC_TOOLS` only by their outputs — which is exactly what the
+    // replay join has to key on to keep the two turns apart.
+    if (prompt.startsWith("CURSOR_SECOND_TURN_TOOLS")) {
+      for (const update of [
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-read-2",
+          title: "Read File",
+          kind: "read",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "live-read-2",
+          status: "completed",
+          rawOutput: { content: "tsconfig contents" },
+        },
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-search-2",
+          title: "grep",
+          kind: "search",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "live-search-2",
+          status: "completed",
+          rawOutput: { totalMatches: 2, truncated: false },
+        },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: "fake-session", update },
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("CURSOR_SAME_KIND_TOOLS")) {
+      for (const live of [
+        { id: "live-read-a", output: "a" },
+        { id: "live-read-b", output: "b" },
+        { id: "live-read-c", output: "shared" },
+        { id: "live-read-d", output: "shared" },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: live.id,
+              title: "Read File",
+              kind: "read",
+              status: "pending",
+              rawInput: {},
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: live.id,
+              status: "completed",
+              rawOutput: { content: live.output },
+            },
+          },
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("CURSOR_OVERSIZED_REPLAY")) {
+      // Lead with enough ordinary response text that replay enrichment pushes
+      // the aggregate over its budget. When the bridge trims, the notice and
+      // the final enriched tool remain observable for the persistence check.
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "s".repeat(128 * 1024) },
+          },
+        },
+      });
+      for (const live of [
+        { id: "live-huge-a", output: "huge-a" },
+        { id: "live-huge-b", output: "huge-b" },
+        { id: "live-huge-c", output: "huge-c" },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: live.id,
+              title: "Read File",
+              kind: "read",
+              status: "pending",
+              rawInput: {},
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: live.id,
+              status: "completed",
+              rawOutput: { content: live.output },
+            },
+          },
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }
     if (prompt.startsWith("TOOLS")) {

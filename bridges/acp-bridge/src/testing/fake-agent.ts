@@ -909,6 +909,58 @@ lines.on("line", (line) => {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }
+    if (prompt.startsWith("NESTEDSUBAGENT")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "cursor-subagent-1",
+            title: "Task: Subagent task",
+            kind: "other",
+            status: "in_progress",
+            rawInput: {
+              _toolName: "task",
+              description: "Subagent task",
+            },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "cursor-subagent-1",
+            status: "completed",
+            content: [{ type: "content", content: { type: "text", text: "Sub-agent launched." } }],
+            rawOutput: { durationMs: 42, isBackground: true },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "cursor-child-grep-1",
+            title: "Search Find",
+            kind: "search",
+            status: "in_progress",
+            rawInput: { _toolName: "grep", pattern: "ActiveSubagentRail" },
+            _meta: { parentToolCallId: "cursor-subagent-1" },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
     if (prompt.startsWith("PENDINGSUBAGENT")) {
       write({
         jsonrpc: "2.0",

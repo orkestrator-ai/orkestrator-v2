@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render, screen } from "@testing-library/react";
-import { ActiveSubagentRail, activeSubagentLabel } from "./ActiveSubagentRail";
+import { ActiveSubagentRail, activeSubagentDetail, activeSubagentLabel } from "./ActiveSubagentRail";
 
 afterEach(cleanup);
 
@@ -66,6 +66,44 @@ describe("ActiveSubagentRail", () => {
       },
       childTools: [],
     })).toBe("worker");
+  });
+
+  test("appends the latest child action when the transcript has captured one", () => {
+    render(<ActiveSubagentRail agents={[{
+      type: "task-group",
+      content: "Task: Subagent task",
+      task: {
+        type: "tool-invocation",
+        content: "Task: Subagent task",
+        toolName: "task",
+        toolTitle: "Task: Subagent task",
+        toolState: "success",
+        agentState: "active",
+      },
+      childTools: [{
+        type: "tool-invocation",
+        content: "Search Find",
+        toolName: "grep",
+        toolTitle: "Search Find",
+        toolArgs: { pattern: "ActiveSubagentRail" },
+        toolState: "pending",
+      }],
+    }]} />);
+
+    expect(screen.getByText("Subagent task: Search Find")).toBeTruthy();
+  });
+
+  test("keeps the launch label when child activity has not arrived yet", () => {
+    expect(activeSubagentDetail({
+      type: "task-group",
+      content: "Task: Subagent task",
+      task: {
+        type: "tool-invocation",
+        content: "Task: Subagent task",
+        toolTitle: "Task: Subagent task",
+      },
+      childTools: [],
+    })).toBe("Subagent task");
   });
 
   test("renders nothing when no child work is active", () => {

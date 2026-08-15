@@ -65,6 +65,7 @@ import {
   getNativeAgentStatus,
   type NativeAgentStatus,
 } from "@/lib/chat/native-agent-status";
+import { nativeAgentLatestActivity } from "@/lib/chat/native-agent-preview";
 import {
   isBackgroundTaskActionTool,
   isBackgroundTaskStopTool,
@@ -1365,39 +1366,10 @@ function getSubagentPreview(
   part: Extract<NativeMessagePart, { type: "subagent" }>,
   status: NativeAgentStatus,
 ): string {
-  const actions = part.subagentActions ?? [];
-  const latestAction = actions.at(-1);
-
-  if (!latestAction) {
-    return isTerminalAgentStatus(status)
+  return nativeAgentLatestActivity(part) ?? (
+    isTerminalAgentStatus(status)
       ? "No activity captured."
-      : "Waiting for activity.";
-  }
-
-  if (latestAction.type === "text") {
-    return latestAction.content.trim() || "Response";
-  }
-  if (latestAction.type === "thinking") {
-    return "Thinking";
-  }
-  if (latestAction.type === "file") {
-    return latestAction.content.trim() || "File";
-  }
-
-  const command =
-    typeof latestAction.toolArgs?.command === "string"
-      ? latestAction.toolArgs.command
-      : null;
-  if (command) {
-    return command;
-  }
-
-  return (
-    getToolTitleDisplayName(
-      latestAction.toolTitle,
-      latestAction.toolName,
-      latestAction.content,
-    ) || getToolDisplayName(latestAction.toolName, latestAction.content)
+      : "Waiting for activity."
   );
 }
 
@@ -1657,36 +1629,12 @@ function TaskGroupPart({
     ? `${toolCount} ${toolCount === 1 ? "tool use" : "tool uses"}`
     : `${toolCount} ${toolCount === 1 ? "tool" : "tools"}`;
   const preview = useMemo(() => {
-    const latestChild = part.childTools.at(-1);
-    if (!latestChild) {
-      return description ?? (
-        isTerminalAgentStatus(status)
-          ? "No activity captured."
-          : "Waiting for activity."
-      );
-    }
-
-    if (latestChild.type === "thinking") return "Thinking";
-    if (latestChild.type === "text") {
-      return latestChild.content.trim() || "Response";
-    }
-    if (latestChild.type === "file") return latestChild.content;
-
-    const command =
-      typeof latestChild.toolArgs?.command === "string"
-        ? latestChild.toolArgs.command
-        : null;
-    if (command) return command;
-
-    return (
-      getToolTitleDisplayName(
-        latestChild.toolTitle,
-        latestChild.toolName,
-        latestChild.content,
-      ) ||
-      getToolDisplayName(latestChild.toolName, latestChild.content)
+    return nativeAgentLatestActivity(part) ?? description ?? (
+      isTerminalAgentStatus(status)
+        ? "No activity captured."
+        : "Waiting for activity."
     );
-  }, [description, part.childTools, status]);
+  }, [description, part, status]);
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0">

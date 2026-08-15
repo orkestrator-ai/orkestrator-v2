@@ -1221,6 +1221,40 @@ describe("ACP bridge", () => {
     }).then((response) => response.json())).toEqual({ activity: "idle" });
   });
 
+  test("preserves ACP nested child parentToolCallId as parentTaskUseId", async () => {
+    const bridge = await spawnBridge();
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-nested-subagent:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "NESTEDSUBAGENT: inspect" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    const parts = settled.messages.flatMap((message) => message.parts);
+    expect(parts.find((part) => part.toolUseId === "cursor-subagent-1")).toMatchObject({
+      toolName: "task",
+      agentState: "active",
+    });
+    expect(parts.find((part) => part.toolUseId === "cursor-child-grep-1")).toMatchObject({
+      toolTitle: "Search Find",
+      parentTaskUseId: "cursor-subagent-1",
+    });
+    expect(JSON.stringify(settled)).not.toContain("_meta");
+  });
+
   test("fails active child markers replayed while adopting provider history", async () => {
     const bridge = await spawnBridge({ env: { FAKE_ACP_REPLAY_ACTIVE_SUBAGENT: "1" } });
     const listed = await nativeFetch(`${bridge.base}/session/list`, {

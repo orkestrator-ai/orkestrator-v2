@@ -1,4 +1,5 @@
 import { Loader2 } from "lucide-react";
+import { nativeAgentLatestActivity } from "@/lib/chat/native-agent-preview";
 import type { NativeAgentActivityPart } from "@/lib/chat/native-message-types";
 
 interface ActiveSubagentRailProps {
@@ -43,11 +44,19 @@ export function activeSubagentLabel(part: NativeAgentActivityPart): string {
     || "Sub-agent";
 }
 
+export function activeSubagentDetail(part: NativeAgentActivityPart): string {
+  const label = activeSubagentLabel(part);
+  const activity = nativeAgentLatestActivity(part);
+  if (!activity || activity === label) return label;
+  return `${label}: ${activity}`;
+}
+
 /** A compact, composer-themed indication that child work remains active. */
 export function ActiveSubagentRail({ agents }: ActiveSubagentRailProps) {
   if (agents.length === 0) return null;
 
   const noun = agents.length === 1 ? "sub-agent" : "sub-agents";
+  const details = agents.map(activeSubagentDetail);
   return (
     <section
       data-testid="active-subagent-rail"
@@ -68,8 +77,8 @@ export function ActiveSubagentRail({ agents }: ActiveSubagentRailProps) {
           <p className="text-xs font-medium text-foreground">
             {agents.length} {noun} working
           </p>
-          <p className="truncate text-xs text-muted-foreground" title={agents.map(activeSubagentLabel).join(", ")}>
-            {agents.map(activeSubagentLabel).join(" · ")}
+          <p className="truncate text-xs text-muted-foreground" title={details.join(", ")}>
+            {details.join(" · ")}
           </p>
         </div>
         <span className="shrink-0 rounded-full border border-cyan-400/20 bg-cyan-400/5 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-cyan-200/80">

@@ -321,6 +321,31 @@ body[data-orkestrator-dev-profile]::before {
   }
 }
 
+@keyframes agent-connecting-pulse {
+  0%, 100% {
+    opacity: 0.42;
+    filter: brightness(0.7);
+  }
+
+  50% {
+    opacity: 1;
+    filter: brightness(1.35);
+  }
+}
+
+.agent-connecting-logo {
+  color: #fff;
+  animation: agent-connecting-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-connecting-logo {
+    animation: none;
+    opacity: 1;
+    filter: none;
+  }
+}
+
 @media (forced-colors: active) {
   .agent-thinking-shimmer {
     color: CanvasText;

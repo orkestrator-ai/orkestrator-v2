@@ -634,6 +634,14 @@ export type ProviderDependencies = {
 };
 
 const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 30_000;
+/**
+ * Cursor and Grok session create runs `initialize` then `session/new` in one
+ * HTTP request. Each RPC is allowed 30s on the bridge, so a 30s fetch timeout
+ * fires while the agent is still coming up — the tab flashes Connection Failed
+ * and then attaches about a second later when the next refresh finds the
+ * session. Cover both RPCs plus a small margin.
+ */
+const ACP_SESSION_START_TIMEOUT_MS = 75_000;
 const DEFAULT_MONITOR_RETRY_MS = 1_000;
 
 const DEFAULT_SESSION_REGISTRATION: ProviderSessionRegistration = Object.freeze({
@@ -1384,18 +1392,32 @@ function authHeaders(connection: BridgeConnection): Headers {
   return headers;
 }
 
+function bridgeRequestTimeoutMs(
+  connection: BridgeConnection,
+  kind: "default" | "session-start" = "default",
+): number {
+  if (connection.requestTimeoutMs !== undefined) {
+    return Math.max(1, connection.requestTimeoutMs);
+  }
+  if (
+    kind === "session-start"
+    && (connection.agent === "cursor" || connection.agent === "grok")
+  ) {
+    return ACP_SESSION_START_TIMEOUT_MS;
+  }
+  return DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS;
+}
+
 async function bridgeFetch(
   connection: BridgeConnection,
   path: string,
   init: RequestInit = {},
   fetchImpl: typeof fetch = fetch,
+  timeoutKind: "default" | "session-start" = "default",
 ): Promise<Response> {
   const headers = authHeaders(connection);
   new Headers(init.headers).forEach((value, key) => headers.set(key, value));
-  const timeoutMs = Math.max(
-    1,
-    connection.requestTimeoutMs ?? DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS,
-  );
+  const timeoutMs = bridgeRequestTimeoutMs(connection, timeoutKind);
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const signal = init.signal
     ? AbortSignal.any([init.signal, timeoutSignal])
@@ -1577,6 +1599,7 @@ class HttpBridgeProvider implements BuildPipelineProvider {
             : { title: label, clientSessionKey }),
       },
       this.fetchImpl,
+      "session-start",
     );
     await assertOkWithErrorDetail(response, `${this.agent} session creation`);
     const body = await response.json() as { sessionId?: unknown };

@@ -2028,7 +2028,15 @@ lines.on("line", (line) => {
           },
         },
       });
-      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      const finish = () => write({
+        jsonrpc: "2.0",
+        id: message.id as number,
+        result: { stopReason: "end_turn" },
+      });
+      // Keep the authoritative turn running long enough for a detached replay
+      // to prove it can enrich completed calls before the final response.
+      if (prompt.startsWith("CURSOR_GENERIC_TOOLS_RUNNING")) setTimeout(finish, 1_000);
+      else finish();
       return;
     }
     // A second turn's worth of generic Cursor tool calls, distinguishable from

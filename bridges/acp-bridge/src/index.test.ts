@@ -1623,6 +1623,50 @@ describe("ACP bridge", () => {
     ]);
   });
 
+  test("enriches completed Cursor tool titles while the turn is still running", async () => {
+    const bridge = await spawnBridge({
+      env: { FAKE_ACP_REPLAY_CURSOR_TOOL_METADATA: "1" },
+    });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-live-tools:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    const promptResponse = await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "CURSOR_GENERIC_TOOLS_RUNNING" }),
+    });
+    expect(promptResponse.status).toBe(202);
+
+    const enriched = await waitFor(
+      async () => nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "running"
+        && value.messages[1]?.parts.some(
+          (part) => part.toolTitle === "Read package.json (1 - 80)",
+        ) === true,
+    );
+    expect(enriched.status).toBe("running");
+    expect(enriched.messages[1]?.parts.filter((part) => part.type === "tool-invocation"))
+      .toEqual([
+        expect.objectContaining({
+          toolUseId: "live-read-1",
+          toolTitle: "Read package.json (1 - 80)",
+          toolArgs: { path: "/workspace/package.json" },
+        }),
+        expect.objectContaining({
+          toolUseId: "live-search-1",
+          toolTitle: "grep --include=\"*.json\" \"scripts\"",
+          toolArgs: { pattern: "scripts", path: "/workspace" },
+        }),
+      ]);
+  });
+
   test("settles the turn before a delayed Cursor replay and enriches only its captured tools", async () => {
     const stateDirectory = await temporaryDirectory();
     const lifecycleFile = resolve(stateDirectory, "cursor-replay-delay.log");

@@ -199,6 +199,10 @@ interface SessionState {
    * would only invite comparing sequences across two different processes.
    */
   promptSequence: number;
+  /** Coalesces best-effort Cursor metadata replays within one live session. */
+  cursorToolReplayTimer?: ReturnType<typeof setTimeout>;
+  cursorToolReplayRunning?: boolean;
+  cursorToolReplayDirty?: boolean;
   /** Messages evicted from the front, so absolute indices stay stable. */
   droppedMessages: number;
   /**
@@ -366,6 +370,7 @@ const MAX_TOOL_TITLE_BYTES = 4 * 1024;
 const MAX_TOOL_PATH_BYTES = 16 * 1024;
 const MAX_REPLAY_RECONCILE_TOOLS = 4_096;
 const MAX_CURSOR_TOOL_REPLAY_PROCESSES = 8;
+const CURSOR_TOOL_REPLAY_DELAY_MS = 150;
 /** Bounds both the time and the retained memory of `diffFileLines`. */
 const MAX_DIFF_EDIT_DISTANCE = 512;
 /**
@@ -1303,6 +1308,7 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     return;
   }
   schedulePersist();
+
 }
 
 /** Every `session/update` kind that appends to or mutates the transcript. */
@@ -1440,6 +1446,22 @@ function applyToolCallUpdate(
     return;
   }
   schedulePersist();
+
+  // Cursor's live ACP stream intentionally reduces read/search calls to
+  // generic labels such as `Read File` and `grep`. Its indexed session replay
+  // already has the path, pattern, and descriptive title as soon as the call
+  // settles, even while the turn keeps running. Reconcile then so a long turn
+  // does not leave every completed call anonymous until the final response.
+  // Hydration has the rich replay metadata already and must not recursively
+  // spawn another replay process of its own.
+  if (state.historyReplay === false
+    && state.status === "running"
+    && part.toolState !== undefined
+    && part.toolState !== "pending"
+    && isGenericCursorToolTitle(part.toolTitle)
+    && !hasToolArguments(part.toolArgs)) {
+    scheduleCursorToolMetadataReconcile(state);
+  }
 }
 
 function collectReplayToolMetadata(
@@ -1752,6 +1774,62 @@ async function reconcileCursorToolMetadata(
       activeCursorToolReplays -= 1;
     }
   }
+}
+
+/**
+ * Coalesces live and end-of-turn Cursor metadata reconciliation per session.
+ *
+ * A turn can complete several parallel tools in one stdout burst. One detached
+ * replay is enough to enrich all of them, so starting a child for every status
+ * update would multiply processes and race several identical transcript joins.
+ * A call that settles while a replay is already running marks the session dirty
+ * and receives one follow-up pass after that child closes.
+ */
+function scheduleCursorToolMetadataReconcile(
+  state: SessionState,
+  options: { immediate?: boolean } = {},
+): void {
+  if (provider !== "cursor" || shuttingDown || sessions.get(state.id) !== state) return;
+  state.cursorToolReplayDirty = true;
+  if (state.cursorToolReplayRunning) return;
+
+  if (state.cursorToolReplayTimer) {
+    if (!options.immediate) return;
+    clearTimeout(state.cursorToolReplayTimer);
+    state.cursorToolReplayTimer = undefined;
+  }
+
+  const run = () => {
+    state.cursorToolReplayTimer = undefined;
+    if (shuttingDown || sessions.get(state.id) !== state) return;
+    state.cursorToolReplayDirty = false;
+    const child = state.child;
+    const targets = cursorToolReplayTargets(state);
+    if (!child || targets.length === 0) return;
+
+    const promptSequence = state.promptSequence;
+    state.cursorToolReplayRunning = true;
+    void reconcileCursorToolMetadata(state, child, targets, promptSequence)
+      .catch(() => undefined)
+      .finally(() => {
+        state.cursorToolReplayRunning = false;
+        if (state.cursorToolReplayDirty) {
+          scheduleCursorToolMetadataReconcile(state, { immediate: true });
+        }
+      });
+  };
+
+  state.cursorToolReplayTimer = setTimeout(
+    run,
+    options.immediate ? 0 : CURSOR_TOOL_REPLAY_DELAY_MS,
+  );
+  state.cursorToolReplayTimer.unref();
+}
+
+function cancelCursorToolMetadataReconcile(state: SessionState): void {
+  if (state.cursorToolReplayTimer) clearTimeout(state.cursorToolReplayTimer);
+  state.cursorToolReplayTimer = undefined;
+  state.cursorToolReplayDirty = false;
 }
 
 function applyAcpToolSourcePatch(source: AcpToolSourceState, update: JsonObject): void {
@@ -3008,23 +3086,18 @@ async function route(
       // by the agent — ACP has no status for that, so settle it explicitly.
       reconcileStaleToolParts(state);
       state.currentTurnOutput = null;
-      const replayTargets = cursorToolReplayTargets(state);
-      const replaySequence = state.promptSequence;
       if (!state.outputTruncated && state.child === child && state.status !== "error") {
         state.status = "idle";
       }
       state.revision += 1;
       schedulePersist();
-      // Cursor's display enrichment is deliberately outside the authoritative
-      // turn lifecycle. A slow or incompatible replay cannot keep the session
-      // working, block the next prompt, or persist a completed turn as
-      // ambiguous. Captured part references keep a late replay scoped to the
-      // parts that requested it, and `replaySequence` lets it notice that the
-      // session moved on to another turn while it was loading.
-      if (replayTargets.length > 0) {
-        void reconcileCursorToolMetadata(state, child, replayTargets, replaySequence)
-          .catch(() => undefined);
-      }
+      // The final pass is the safety net for a title that Cursor had not yet
+      // indexed during its live completion update. It remains outside the
+      // authoritative turn lifecycle: a slow or incompatible replay cannot
+      // keep the session working, block the next prompt, or make completion
+      // ambiguous. The per-session scheduler also prevents this pass from
+      // racing an in-flight live enrichment.
+      scheduleCursorToolMetadataReconcile(state, { immediate: true });
     }, (error: unknown) => {
       state.status = "error";
       state.error = error instanceof Error ? error.message : String(error);
@@ -3049,6 +3122,7 @@ async function route(
   }
   if (!action && request.method === "DELETE") {
     for (const approval of [...state.approvals.values()]) approval.respond();
+    cancelCursorToolMetadataReconcile(state);
     await state.child?.close();
     sessions.delete(state.id);
     if (state.clientSessionKey) clientSessionKeys.delete(state.clientSessionKey);
@@ -3877,6 +3951,7 @@ function shutdown(): Promise<void> {
   shutdownPromise = (async () => {
     for (const state of sessions.values()) {
       for (const approval of [...state.approvals.values()]) approval.respond();
+      cancelCursorToolMetadataReconcile(state);
     }
     await Promise.allSettled([
       ...[...sessions.values()].map((state) => state.child?.close()),

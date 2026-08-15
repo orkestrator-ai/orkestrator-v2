@@ -5610,6 +5610,35 @@ describe("HTTP build pipeline provider (ACP)", () => {
     expect(snapshot.notices).toBeUndefined();
   });
 
+  test("keeps ACP transcript messages paired with their own status revision", async () => {
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) {
+        return Response.json({
+          messages: [{ id: "m-2", role: "assistant", content: "latest", parts: [] }],
+          messageWindow: { truncated: false },
+          status: "running",
+          revision: 8,
+        });
+      }
+      return Response.json({
+        // This response was captured one revision earlier than the transcript.
+        status: "idle",
+        revision: 7,
+        error: "stale failure",
+        composer: { models: [], modes: [], fastModeEnabled: null, fastModeAvailable: false },
+      });
+    }, cursorConnection);
+
+    const snapshot = await provider.interactiveSnapshot!("cursor-1");
+
+    expect(snapshot.status).toBe("running");
+    expect(snapshot.providerRevision).toBe(8);
+    expect(snapshot.error).toBeUndefined();
+    expect(snapshot.messages).toEqual([
+      { id: "m-2", role: "assistant", content: "latest", parts: [] },
+    ]);
+  });
+
   test("advertises gzip on ACP transcript reads and still decodes the body", async () => {
     // Server-to-server fetch does not negotiate compression on its own, and the
     // transcript body is the largest thing this bridge hop ever moves.

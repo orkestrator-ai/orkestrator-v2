@@ -11,10 +11,14 @@ also reduces both serialized size and transfer bandwidth:
 
 - Cursor and Grok fetch bounded `/messages` and `/status` responses separately,
   so composer/runtime metadata no longer consumes the transcript body budget.
-- ACP re-bounds persisted state on every transcript read and reserves envelope
-  headroom below the 16 MiB consumer cap. The re-bound is skipped when nothing
-  has been appended since the last check, so polling a large idle session does
-  not re-serialize the whole transcript on every request.
+- ACP re-bounds transcripts on reads and reserves envelope headroom below the
+  16 MiB consumer cap. Persistence applies a second global budget across every
+  session in the shared state file, including bounded pools for structured
+  results, prompt journals, and reloadable composer catalogues. Truncation
+  counters are persisted with the retained tail, so a restart cannot make an
+  incomplete transcript look complete. A steady-state read is skipped when
+  nothing was appended, so polling a large idle session does not re-serialize
+  the whole transcript on every request.
 - Codex and Claude bound aggregate `/messages` responses to 16 MiB as well.
   All three ceilings run through one implementation,
   `@orkestrator/protocol/transcript-window`, which drops whole messages
@@ -46,8 +50,10 @@ part trimming, UTF-8-safe content fallback, linear-time trimming of a
 many-part message, persistence and restart, repeat reads leaving a bounded
 transcript untouched, exact response-size bounds, deferred-detail loading and
 its cross-session rejection, eviction recovery, the per-entry detail cap,
-the split ACP status/transcript read with its truncation notice, and
-compressed transcript responses on all three bridges.
+the revision-consistent ACP status/transcript read with its truncation notice,
+global persisted-state pressure across multiple sessions, restart-stable
+omission metadata, and compressed transcript responses (including explicit
+gzip refusal) on all three bridges.
 
 This document records why a live Cursor native tab can render **Connection
 Failed** with the exact message `cursor interactive snapshot is oversized`, even

@@ -932,8 +932,8 @@ describe("NativeMessage task list rendering", () => {
       />,
     );
 
-    expect(screen.queryByText(/Details load when expanded/i)).toBeNull();
-    expect(screen.queryByText(/Loading tool details/i)).toBeNull();
+    expect(screen.queryByText(/Details load when expanded/i) === null).toBe(true);
+    expect(screen.queryByText(/Loading tool details/i) === null).toBe(true);
   });
 
   test("keeps a deferred row expandable when it has no other content to show", () => {
@@ -958,6 +958,31 @@ describe("NativeMessage task list rendering", () => {
 
     const trigger = screen.getByRole("button", { name: /cursor.shell/i });
     expect(trigger.hasAttribute("disabled")).toBe(false);
+  });
+
+  test("loads deferred Todo errors through the Todo row's own expansion", async () => {
+    const loadToolDetails = mock(async (detailRef: string) => ({
+      detailRef,
+      toolError: "Task update failed after dispatch",
+    }));
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "TodoWrite",
+          toolName: "TodoWrite",
+          toolState: "failure",
+          detailRef: "detail-todo-error",
+        }])}
+        loadToolDetails={loadToolDetails}
+      />,
+    );
+
+    const trigger = screen.getByRole("button", { name: /Todo Write/i });
+    expect(trigger.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(trigger);
+    await waitFor(() => expect(loadToolDetails).toHaveBeenCalledWith("detail-todo-error"));
+    expect(await screen.findByText("Task update failed after dispatch")).toBeTruthy();
   });
 
   test("keeps the edit treatment on a deferred diff from a non-edit tool name", async () => {
@@ -1021,7 +1046,7 @@ describe("NativeMessage task list rendering", () => {
       />,
     );
 
-    expect(screen.queryByText("a.ts")).toBeNull();
+    expect(screen.queryByText("a.ts") === null).toBe(true);
   });
 
   test("surfaces a failed detail load as an error rather than an empty body", async () => {
@@ -2490,6 +2515,7 @@ describe("NativeMessage task list rendering", () => {
 describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
   afterEach(() => {
     cleanup();
+    useMessagePartExpansionStore.getState().reset();
   });
 
   test("routes TodoWrite tool-invocation to TodoToolPart", () => {

@@ -269,6 +269,8 @@ async function withService(
     interactionMonitorMaxRetries?: number;
     onActivityTransition?: NativeAgentServiceOptions["onActivityTransition"];
     onInteractionObservation?: NativeAgentServiceOptions["onInteractionObservation"];
+    toolDetailCacheMaxEntries?: number;
+    toolDetailCacheMaxBytes?: number;
   },
   run: (context: {
     storage: StorageService;
@@ -314,6 +316,12 @@ async function withService(
       ...(setup.onInteractionObservation
         ? { onInteractionObservation: setup.onInteractionObservation }
         : {}),
+      ...(setup.toolDetailCacheMaxEntries === undefined
+        ? {}
+        : { toolDetailCacheMaxEntries: setup.toolDetailCacheMaxEntries }),
+      ...(setup.toolDetailCacheMaxBytes === undefined
+        ? {}
+        : { toolDetailCacheMaxBytes: setup.toolDetailCacheMaxBytes }),
     },
   );
   try {
@@ -1899,6 +1907,50 @@ describe("NativeAgentService", () => {
       expect(await service.getProjectionToolDetails({ ...identity, detailRef: detailRef! }))
         .toMatchObject({ toolOutput: "recovered after eviction" });
       expect(snapshots).toBeGreaterThan(snapshotsBefore);
+    });
+  });
+
+  test("pins a requested visible detail while capacity recovery rebuilds the cache", async () => {
+    const messages = [{
+      id: "assistant-capacity",
+      role: "assistant" as const,
+      content: "done",
+      parts: Array.from({ length: 3 }, (_, index) => ({
+        type: "tool-invocation",
+        content: `tool-${index}`,
+        toolName: "bash",
+        toolState: "success" as const,
+        toolOutput: `${index}:${"x".repeat(1_200)}`,
+      })),
+      createdAt: "2026-08-15T10:00:00.000Z",
+    }];
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages }),
+    });
+    await withService({
+      prefix: "orkestrator-native-detail-capacity-",
+      provider: async () => stub.provider,
+      toolDetailCacheMaxBytes: 2_700,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-capacity",
+      };
+      await service.ensureSession(identity);
+      const projection = await service.getProjection(identity);
+      const refs = (projection?.messages[0] as {
+        parts: Array<{ detailRef?: string }>;
+      }).parts.map((part) => part.detailRef!);
+      const cache = (service as unknown as {
+        toolDetailCache: Map<string, unknown>;
+      }).toolDetailCache;
+      expect(cache.has(refs[0]!)).toBe(false);
+
+      await expect(service.getProjectionToolDetails({
+        ...identity,
+        detailRef: refs[0]!,
+      })).resolves.toMatchObject({ toolOutput: expect.stringMatching(/^0:/) });
     });
   });
 
@@ -3556,7 +3608,9 @@ describe("NativeAgentService", () => {
       expect(internals(service).interactionTimer).toBe(timer);
       const afterInit = listPendingInteractions.mock.calls.length;
       expect(afterInit).toBeGreaterThan(0);
-      await new Promise((resolve) => setTimeout(resolve, 130));
+      await waitForCondition(
+        () => listPendingInteractions.mock.calls.length > afterInit,
+      );
       expect(listPendingInteractions.mock.calls.length).toBeGreaterThan(afterInit);
       await service.shutdown();
       const afterShutdown = listPendingInteractions.mock.calls.length;

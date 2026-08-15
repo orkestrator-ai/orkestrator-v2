@@ -2009,12 +2009,14 @@ function MessagePart({
       if (isTodoTool(part.toolName)) {
         return (
           <TodoToolPart
+            expansionKey={toolExpansionKey}
             toolName={part.toolName}
             toolState={part.toolState}
             toolArgs={part.toolArgs}
             toolOutput={part.toolOutput}
             toolError={part.toolError}
             taskSnapshot={part.taskSnapshot}
+            deferredDetails={deferredDetails}
           />
         );
       }

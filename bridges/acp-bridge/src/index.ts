@@ -10,6 +10,7 @@ import {
   parseParentPid,
   startParentWatchdog,
 } from "@orkestrator/protocol/parent-watchdog";
+import { boundTranscriptResponse } from "@orkestrator/protocol/transcript-window";
 import type {
   NativeAgentComposerState,
   NativeAgentRuntimeSummary,
@@ -215,6 +216,10 @@ interface SessionState {
   cursorToolReplayRuns?: number;
   /** Messages evicted from the front, so absolute indices stay stable. */
   droppedMessages: number;
+  /** Parts evicted from retained messages over the lifetime of this window. */
+  droppedParts: number;
+  /** Durable signal for content/parts trimmed without dropping a whole message. */
+  transcriptTruncated: boolean;
   /**
    * Vendor ACP wire (configOptions, Grok models._meta, Cursor modes) lives on
    * `sessionConfig.wire` only. Public HTTP snapshots expose `composer`.
@@ -266,6 +271,9 @@ interface PersistedSession {
   status: SessionStatus;
   error?: string;
   messages: BridgeMessage[];
+  droppedMessages?: number;
+  droppedParts?: number;
+  transcriptTruncated?: boolean;
   revision: number;
   structured: Array<[string, unknown]>;
   promptJournal: PromptJournalEntry[];
@@ -414,7 +422,32 @@ const MAX_STRUCTURED_RESULTS = 4;
 const MAX_STRUCTURED_RESULT_BYTES = 1024 * 1024;
 const TRANSCRIPT_CHECK_INTERVAL_BYTES = 64 * 1024;
 const MAX_PROMPT_JOURNAL = 512;
-const MAX_STATE_FILE_BYTES = 16 * 1024 * 1024;
+const MAX_STATE_FILE_BYTES = parseBoundedInteger(
+  process.env.ACP_MAX_STATE_FILE_BYTES,
+  16 * 1024 * 1024,
+  512 * 1024,
+  16 * 1024 * 1024,
+);
+/** Structured results share one persisted file, so their budget must be global. */
+const MAX_PERSISTED_STRUCTURED_BYTES = Math.min(
+  4 * 1024 * 1024,
+  Math.floor(MAX_STATE_FILE_BYTES / 4),
+);
+/** At-most-once journals are retained newest-first within one global file budget. */
+const MAX_PERSISTED_PROMPT_JOURNAL_BYTES = Math.min(
+  2 * 1024 * 1024,
+  Math.floor(MAX_STATE_FILE_BYTES / 8),
+);
+/** Composer catalogues are reloadable caches and cannot crowd out transcripts. */
+const MAX_PERSISTED_SESSION_CONFIG_BYTES = Math.min(
+  2 * 1024 * 1024,
+  Math.floor(MAX_STATE_FILE_BYTES / 8),
+);
+/** Room for omission counters added while transcript arrays are windowed. */
+const PERSISTED_WINDOW_METADATA_RESERVE_BYTES = Math.min(
+  128 * 1024,
+  Math.floor(MAX_STATE_FILE_BYTES / 16),
+);
 const MAX_RESUMABLE_SESSIONS = 512;
 const MAX_SESSION_LIST_PAGES = 64;
 const RPC_TIMEOUT_MS = parseDuration(process.env.ACP_RPC_TIMEOUT_MS, 30_000);
@@ -902,6 +935,8 @@ async function resumeSessionReserved(
       currentTurnOutput: null,
       promptSequence: 0,
       droppedMessages: 0,
+      droppedParts: 0,
+      transcriptTruncated: false,
       sessionConfig: emptySessionConfig(),
       dispatching: true,
       historyReplay: "hydrate",
@@ -1014,6 +1049,8 @@ async function createSessionReserved(
       currentTurnOutput: null,
       promptSequence: 0,
       droppedMessages: 0,
+      droppedParts: 0,
+      transcriptTruncated: false,
       sessionConfig,
       // The session is reachable from `sessions` before its initial
       // configuration finishes, so hold the same claim the config and prompt
@@ -1295,7 +1332,8 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
       failTranscriptLimit(state);
       return;
     }
-    trimPartsTo(message, MAX_PARTS_PER_MESSAGE - 1);
+    state.droppedParts += trimPartsTo(message, MAX_PARTS_PER_MESSAGE - 1);
+    state.transcriptTruncated = true;
   }
   const streaming = previous?.type === partType ? previous : undefined;
   const currentPartText = streaming?.content ?? "";
@@ -1430,7 +1468,8 @@ function applyToolCallUpdate(
         failTranscriptLimit(state);
         return;
       }
-      trimPartsTo(owner, MAX_PARTS_PER_MESSAGE - 1);
+      state.droppedParts += trimPartsTo(owner, MAX_PARTS_PER_MESSAGE - 1);
+      state.transcriptTruncated = true;
     }
     part = {
       type: "tool-invocation",
@@ -2313,16 +2352,18 @@ function isTrimNotice(
  * silent cut reads as a response that simply never took those steps. The notice
  * is keyed by `sourcePartId`, so repeated trims replace it rather than stack.
  */
-function trimPartsTo(message: BridgeMessage, targetLength: number): void {
+function trimPartsTo(message: BridgeMessage, targetLength: number): number {
   if (isTrimNotice(message, message.parts[0])) message.parts.shift();
   const keep = Math.max(0, targetLength - 1);
-  rememberTrimmedToolCalls(message, message.parts.splice(0, Math.max(1, message.parts.length - keep)));
+  const dropped = message.parts.splice(0, Math.max(1, message.parts.length - keep));
+  rememberTrimmedToolCalls(message, dropped);
   message.parts.unshift({
     type: "text",
     content: TRANSCRIPT_TRIM_NOTICE,
     sourcePartId: trimNoticePartId(message),
     sourceMessageId: message.id,
   });
+  return dropped.length;
 }
 
 /**
@@ -2782,18 +2823,21 @@ function boundTranscript(state: SessionState): boolean {
   while (state.messages.length > MAX_MESSAGES) {
     state.messages.shift();
     state.droppedMessages += 1;
+    state.transcriptTruncated = true;
   }
   let bytes = Buffer.byteLength(JSON.stringify(state.messages));
   while (bytes > MAX_TRANSCRIPT_BYTES && state.messages.length > 1) {
     state.messages.shift();
     state.droppedMessages += 1;
+    state.transcriptTruncated = true;
     bytes = Buffer.byteLength(JSON.stringify(state.messages));
   }
   const onlyMessage = state.messages[0];
   while (bytes > MAX_TRANSCRIPT_BYTES && onlyMessage && onlyMessage.parts.length > 1) {
     // Strictly shorter every pass, so the loop still terminates once only the
     // notice is left.
-    trimPartsTo(onlyMessage, onlyMessage.parts.length - 1);
+    state.droppedParts += trimPartsTo(onlyMessage, onlyMessage.parts.length - 1);
+    state.transcriptTruncated = true;
     truncatedCurrentMessage = true;
     bytes = Buffer.byteLength(JSON.stringify(state.messages));
   }
@@ -2806,6 +2850,7 @@ function boundTranscript(state: SessionState): boolean {
     state.status = "error";
     state.error = `${provider} output exceeded the transcript limit`;
     truncatedCurrentMessage = true;
+    state.transcriptTruncated = true;
   }
   // Transcript retention is presentation-only. Active child lifecycle stays
   // in the separately bounded registry until a terminal event or process death.
@@ -2892,10 +2937,11 @@ function messageWindow(state: SessionState, fromIndex: number | null): JsonObjec
     baseIndex: state.droppedMessages + start,
     totalMessages: state.droppedMessages + state.messages.length,
     messageWindow: {
-      truncated: state.droppedMessages + start > 0,
+      truncated: state.transcriptTruncated || state.droppedMessages + start > 0,
       ...(state.droppedMessages + start > 0
         ? { omittedMessages: state.droppedMessages + start }
         : {}),
+      ...(state.droppedParts > 0 ? { omittedParts: state.droppedParts } : {}),
     },
     revision: state.revision,
     status: state.status,
@@ -3367,14 +3413,24 @@ const RESPONSE_ACCEPTS_GZIP = Symbol("responseAcceptsGzip");
 
 function acceptsGzip(value: string | string[] | undefined): boolean {
   const header = Array.isArray(value) ? value.join(",") : value ?? "";
-  return header.split(",").some((entry) => {
+  let wildcardQuality: number | undefined;
+  for (const entry of header.split(",")) {
     const [name, ...parameters] = entry.trim().toLowerCase().split(";");
-    if (name !== "gzip" && name !== "*") return false;
-    const quality = parameters
+    if (name !== "gzip" && name !== "*") continue;
+    const qualityParameter = parameters
       .map((parameter) => parameter.trim())
       .find((parameter) => parameter.startsWith("q="));
-    return quality === undefined || Number(quality.slice(2)) > 0;
-  });
+    const rawQuality = qualityParameter?.slice(2);
+    const quality = rawQuality === undefined
+      ? 1
+      : /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(rawQuality)
+        ? Number(rawQuality)
+        : 0;
+    // An explicit coding always overrides a wildcard, including q=0.
+    if (name === "gzip") return quality > 0;
+    wildcardQuality = quality;
+  }
+  return (wildcardQuality ?? 0) > 0;
 }
 
 function sendJson(
@@ -3740,7 +3796,52 @@ function emptySessionConfig(): AcpNormalizedSessionConfig {
 }
 
 function persistedSnapshot(): PersistedState {
-  return {
+  let retainedStructuredBytes = 0;
+  let retainedPromptJournalBytes = 0;
+  let retainedSessionConfigBytes = 0;
+  const structuredBySession = new Map<string, Array<[string, unknown]>>();
+  const promptJournalBySession = new Map<string, PromptJournalEntry[]>();
+  const sessionConfigBySession = new Map<string, AcpNormalizedSessionConfig>();
+  const newestSessions = [...sessions.values()].reverse();
+  // Prefer the newest sessions and newest results while enforcing one global
+  // budget for the single state file that owns all of them.
+  for (const state of newestSessions) {
+    const retained: Array<[string, unknown]> = [];
+    for (const entry of [...state.structured.entries()].reverse()) {
+      const bytes = Buffer.byteLength(JSON.stringify(entry));
+      if (retainedStructuredBytes + bytes > MAX_PERSISTED_STRUCTURED_BYTES) continue;
+      retained.unshift(entry);
+      retainedStructuredBytes += bytes;
+    }
+    structuredBySession.set(state.id, retained);
+    promptJournalBySession.set(state.id, []);
+
+    const configBytes = Buffer.byteLength(JSON.stringify(state.sessionConfig));
+    if (retainedSessionConfigBytes + configBytes <= MAX_PERSISTED_SESSION_CONFIG_BYTES) {
+      sessionConfigBySession.set(state.id, state.sessionConfig);
+      retainedSessionConfigBytes += configBytes;
+    }
+  }
+  const retainJournalEntries = (accepted: boolean): void => {
+    for (const state of newestSessions) {
+      const retained = promptJournalBySession.get(state.id)!;
+      for (const rawEntry of [...state.promptJournal.values()].reverse()) {
+        if ((rawEntry.state === "accepted") !== accepted) continue;
+        const entry = rawEntry.state === "accepted"
+          ? { ...rawEntry, state: "ambiguous" as const }
+          : rawEntry;
+        const bytes = Buffer.byteLength(JSON.stringify(entry));
+        if (retainedPromptJournalBytes + bytes > MAX_PERSISTED_PROMPT_JOURNAL_BYTES) continue;
+        retained.unshift(entry);
+        retainedPromptJournalBytes += bytes;
+      }
+    }
+  };
+  // A live accepted dispatch becomes ambiguous after restart and must win over
+  // completed history: dropping it could execute the same prompt a second time.
+  retainJournalEntries(true);
+  retainJournalEntries(false);
+  const snapshot: PersistedState = {
     version: 3,
     provider,
     sessions: [...sessions.values()].map((state) => ({
@@ -3752,18 +3853,92 @@ function persistedSnapshot(): PersistedState {
         ? { error: `${provider} prompt outcome is unknown after bridge restart` }
         : state.error ? { error: state.error } : {}),
       messages: state.messages,
+      ...(state.droppedMessages > 0 ? { droppedMessages: state.droppedMessages } : {}),
+      ...(state.droppedParts > 0 ? { droppedParts: state.droppedParts } : {}),
+      ...(state.transcriptTruncated ? { transcriptTruncated: true } : {}),
       revision: state.revision,
-      structured: [...state.structured.entries()],
-      promptJournal: [...state.promptJournal.values()].map((entry) =>
-        entry.state === "accepted" ? { ...entry, state: "ambiguous" as const } : entry
-      ),
-      sessionConfig: state.sessionConfig,
-      composer: state.sessionConfig.composer,
+      structured: structuredBySession.get(state.id) ?? [],
+      promptJournal: promptJournalBySession.get(state.id) ?? [],
+      ...(sessionConfigBySession.has(state.id)
+        ? { sessionConfig: sessionConfigBySession.get(state.id)! }
+        : {}),
       ...(state.usage ? { usage: state.usage } : {}),
       ...(state.commandCount === undefined ? {} : { commandCount: state.commandCount }),
       ...(state.subagentLimitExceeded ? { subagentLimitExceeded: true } : {}),
     })),
   };
+  return boundPersistedSnapshot(snapshot);
+}
+
+function boundPersistedSnapshot(snapshot: PersistedState): PersistedState {
+  const bounded: PersistedState = {
+    ...snapshot,
+    sessions: snapshot.sessions.map((session) => ({
+      ...session,
+      messages: [...session.messages],
+      structured: [...session.structured],
+    })),
+  };
+  const metadataOnly: PersistedState = {
+    ...bounded,
+    sessions: bounded.sessions.map((session) => ({ ...session, messages: [] })),
+  };
+  const metadataBytes = Buffer.byteLength(JSON.stringify(metadataOnly)) + 1;
+  if (metadataBytes > MAX_STATE_FILE_BYTES) {
+    throw new Error("ACP persisted session metadata exceeds its byte limit");
+  }
+
+  const candidates = bounded.sessions.map((session, index) => ({
+    index,
+    extraBytes: Math.max(0, Buffer.byteLength(JSON.stringify(session.messages)) - 2),
+  }));
+  let remaining = Math.max(
+    0,
+    MAX_STATE_FILE_BYTES - metadataBytes - PERSISTED_WINDOW_METADATA_RESERVE_BYTES,
+  );
+  const allocations = new Map<number, number>();
+  let pending = candidates.filter((candidate) => candidate.extraBytes > 0);
+  while (pending.length > 0) {
+    const share = Math.floor(remaining / pending.length);
+    const fitting = pending.filter((candidate) => candidate.extraBytes <= share);
+    if (fitting.length === 0) {
+      for (const candidate of pending) allocations.set(candidate.index, share);
+      remaining = 0;
+      break;
+    }
+    const fittingIndexes = new Set(fitting.map((candidate) => candidate.index));
+    for (const candidate of fitting) {
+      allocations.set(candidate.index, candidate.extraBytes);
+      remaining -= candidate.extraBytes;
+    }
+    pending = pending.filter((candidate) => !fittingIndexes.has(candidate.index));
+  }
+
+  for (const candidate of candidates) {
+    const session = bounded.sessions[candidate.index]!;
+    const allocation = allocations.get(candidate.index) ?? 0;
+    if (candidate.extraBytes <= allocation) continue;
+    const targetBytes = allocation + 2;
+    const originalCount = session.messages.length;
+    const windowed = boundTranscriptResponse(session.messages, targetBytes, {
+      envelopeReserveBytes: 0,
+      contentFallbackBytes: Math.max(0, Math.min(
+        1024 * 1024,
+        targetBytes - 4 * 1024,
+      )),
+    });
+    session.messages = windowed.overflowed ? [] : windowed.messages;
+    const omittedMessages = windowed.overflowed
+      ? originalCount
+      : windowed.messageWindow.omittedMessages ?? 0;
+    const omittedParts = windowed.overflowed
+      ? 0
+      : windowed.messageWindow.omittedParts ?? 0;
+    session.droppedMessages = (session.droppedMessages ?? 0) + omittedMessages;
+    session.droppedParts = (session.droppedParts ?? 0) + omittedParts;
+    session.transcriptTruncated = true;
+  }
+  return bounded;
 }
 
 function schedulePersist(): void {
@@ -3780,7 +3955,11 @@ function schedulePersist(): void {
     persistenceScheduled = false;
     await writePersistedState();
   });
-  persistenceTail = operation.catch(() => undefined);
+  persistenceTail = operation.catch((error) => {
+    console.warn(
+      `[acp-bridge] Failed to persist bounded state: ${error instanceof Error ? error.message : "unknown error"}`,
+    );
+  });
 }
 
 function persistState(): Promise<void> {
@@ -3896,7 +4075,19 @@ async function loadPersistedState(): Promise<void> {
       uncheckedTranscriptBytes: 0,
       currentTurnOutput: null,
       promptSequence: 0,
-      droppedMessages: 0,
+      droppedMessages: Number.isSafeInteger(candidate.droppedMessages)
+        && Number(candidate.droppedMessages) >= 0
+        ? Number(candidate.droppedMessages)
+        : 0,
+      droppedParts: Number.isSafeInteger(candidate.droppedParts)
+        && Number(candidate.droppedParts) >= 0
+        ? Number(candidate.droppedParts)
+        : 0,
+      transcriptTruncated: candidate.transcriptTruncated === true
+        || (Number.isSafeInteger(candidate.droppedMessages)
+          && Number(candidate.droppedMessages) > 0)
+        || (Number.isSafeInteger(candidate.droppedParts)
+          && Number(candidate.droppedParts) > 0),
       sessionConfig: restoreSessionConfig(candidate),
       dispatching: false,
       historyReplay: false,

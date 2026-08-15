@@ -237,6 +237,10 @@ export interface NativeAgentServiceOptions {
     observation: AgentInteractionObservation,
   ) => void | Promise<void>;
   onActivityTransition?: (event: NativeAgentActivityTransition) => void;
+  /** Test seam for exercising deterministic detail-cache capacity eviction. */
+  toolDetailCacheMaxEntries?: number;
+  /** Test seam for exercising deterministic detail-cache byte eviction. */
+  toolDetailCacheMaxBytes?: number;
 }
 
 export interface AgentInteractionObservation {
@@ -532,6 +536,8 @@ export class NativeAgentService {
     details: NativeAgentToolDetails;
     bytes: number;
   }>();
+  /** Entries temporarily protected while an authoritative refresh recreates them. */
+  private readonly pinnedToolDetailRefs = new Set<string>();
   private toolDetailCacheBytes = 0;
   private readonly modelCatalogCache = new Map<
     string,
@@ -1269,17 +1275,25 @@ export class NativeAgentService {
     this.toolDetailCache.delete(detailRef);
     this.toolDetailCache.set(detailRef, { sessionKey, details: stored, bytes });
     this.toolDetailCacheBytes += bytes;
+    this.pruneToolDetailCache();
+    return detailRef;
+  }
+
+  private pruneToolDetailCache(): void {
     while (
-      this.toolDetailCache.size > NATIVE_TOOL_DETAIL_CACHE_MAX_ENTRIES
-      || this.toolDetailCacheBytes > NATIVE_TOOL_DETAIL_CACHE_MAX_BYTES
+      this.toolDetailCache.size
+        > (this.options.toolDetailCacheMaxEntries ?? NATIVE_TOOL_DETAIL_CACHE_MAX_ENTRIES)
+      || this.toolDetailCacheBytes
+        > (this.options.toolDetailCacheMaxBytes ?? NATIVE_TOOL_DETAIL_CACHE_MAX_BYTES)
     ) {
-      const oldest = this.toolDetailCache.keys().next().value as string | undefined;
+      const oldest = [...this.toolDetailCache.keys()].find(
+        (candidate) => !this.pinnedToolDetailRefs.has(candidate),
+      );
       if (!oldest) break;
       const entry = this.toolDetailCache.get(oldest);
       if (entry) this.toolDetailCacheBytes -= entry.bytes;
       this.toolDetailCache.delete(oldest);
     }
-    return detailRef;
   }
 
   private projectionPart(
@@ -1460,8 +1474,14 @@ export class NativeAgentService {
     );
     let entry = this.toolDetailCache.get(input.detailRef);
     if (!entry || entry.sessionKey !== sessionKey) {
-      await this.refreshProjection(input, true);
-      entry = this.toolDetailCache.get(input.detailRef);
+      this.pinnedToolDetailRefs.add(input.detailRef);
+      try {
+        await this.refreshProjection(input, true);
+        entry = this.toolDetailCache.get(input.detailRef);
+      } finally {
+        this.pinnedToolDetailRefs.delete(input.detailRef);
+        this.pruneToolDetailCache();
+      }
     }
     if (!entry || entry.sessionKey !== sessionKey) {
       throw new Error("Native agent tool details are no longer available");
@@ -2321,6 +2341,7 @@ export class NativeAgentService {
     this.slashCommandRefreshes.clear();
     this.projectionCache.clear();
     this.toolDetailCache.clear();
+    this.pinnedToolDetailRefs.clear();
     this.toolDetailCacheBytes = 0;
     this.projectionRefreshes.clear();
     this.projectionEpochs.clear();

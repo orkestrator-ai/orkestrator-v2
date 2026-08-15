@@ -2628,6 +2628,9 @@ class HttpBridgeProvider implements BuildPipelineProvider {
   private async readTranscript(sessionId: string): Promise<{
     messages: unknown[];
     truncated: boolean;
+    revision?: number;
+    status?: "idle" | "running" | "error";
+    error?: string;
   }> {
     const response = await bridgeFetch(
       this.connection,
@@ -2643,9 +2646,20 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       { remaining: 16 * 1024 * 1024 },
     ));
     const messageWindow = asRecord(body?.messageWindow);
+    const transcriptStatus = body?.status;
+    const transcriptRevision = body?.revision;
     return {
       messages: Array.isArray(body?.messages) ? body.messages : [],
       truncated: messageWindow?.truncated === true,
+      ...(Number.isSafeInteger(transcriptRevision)
+        ? { revision: transcriptRevision as number }
+        : {}),
+      ...(transcriptStatus === "idle"
+        || transcriptStatus === "running"
+        || transcriptStatus === "error"
+        ? { status: transcriptStatus }
+        : {}),
+      ...(typeof body?.error === "string" ? { error: body.error } : {}),
     };
   }
 
@@ -2754,11 +2768,16 @@ class HttpBridgeProvider implements BuildPipelineProvider {
         `${this.agent} interactive status`,
         { remaining: 512 * 1024 },
       ));
-      const status = payload?.status;
+      // `/messages` returns status and revision from the same synchronous ACP
+      // snapshot as its transcript. Prefer that pair so a turn transition
+      // between the parallel requests cannot combine two different revisions.
+      const hasTranscriptSnapshot = transcript.status !== undefined
+        && transcript.revision !== undefined;
+      const status = hasTranscriptSnapshot ? transcript.status : payload?.status;
       const messages = transcript.messages;
       const composer = asRecord(payload?.composer);
-      const providerRevision = payload?.revision;
-      const providerError = payload?.error;
+      const providerRevision = hasTranscriptSnapshot ? transcript.revision : payload?.revision;
+      const providerError = hasTranscriptSnapshot ? transcript.error : payload?.error;
       if (
         (status !== "idle" && status !== "running" && status !== "error")
         || !Array.isArray(messages)

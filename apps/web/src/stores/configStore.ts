@@ -77,7 +77,7 @@ const DEFAULT_CONFIG: AppConfig = {
     codexModel: "gpt-5.4",
     codexReasoningEffort: "high",
     opencodeMode: "terminal",
-    claudeMode: "terminal",
+    claudeMode: "native",
     claudeNativeBackend: "sdk",
     claudeNativeFastModeDefault: false,
     codexMode: "native",

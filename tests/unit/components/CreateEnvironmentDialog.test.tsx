@@ -255,7 +255,7 @@ describe("resolveAgentDefaults", () => {
   test("falls back to hardcoded defaults when both levels are undefined", () => {
     const result = resolveAgentDefaults({}, undefined);
     expect(result.defaultAgent).toBe("claude");
-    expect(result.claudeMode).toBe("terminal");
+    expect(result.claudeMode).toBe("native");
     expect(result.opencodeMode).toBe("terminal");
     expect(result.codexMode).toBe("native");
   });
@@ -304,7 +304,7 @@ describe("resolveAgentDefaults", () => {
     expect(
       (screen.getByRole("checkbox", { name: "Use TUI" }) as HTMLButtonElement)
         .getAttribute("data-state"),
-    ).toBe(defaultConfig.global.claudeMode === "terminal" ? "checked" : "unchecked");
+    ).toBe("unchecked");
   });
 
   test("starts on the prompt tab and preserves values while moving between mobile sections", () => {

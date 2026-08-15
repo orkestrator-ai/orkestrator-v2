@@ -142,7 +142,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   );
   const [openCodeProviderDraft, setOpenCodeProviderDraft] = useState("");
   const [claudeMode, setClaudeMode] = useState<ClaudeMode>(
-    global.claudeMode || "terminal"
+    global.claudeMode || "native"
   );
   const [claudeNativeBackend, setClaudeNativeBackend] = useState<ClaudeNativeBackend>(
     global.claudeNativeBackend || "sdk"
@@ -243,7 +243,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       normalizeOpenCodeModelProviders(global.openCodeModelProviders),
     );
     setOpenCodeProviderDraft("");
-    setClaudeMode(global.claudeMode || "terminal");
+    setClaudeMode(global.claudeMode || "native");
     setClaudeNativeBackend(global.claudeNativeBackend || "sdk");
     setClaudeNativeFastModeDefault(global.claudeNativeFastModeDefault ?? false);
     setCodexMode(global.codexMode || "native");
@@ -348,7 +348,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       opencodeMode !== (global.opencodeMode || "terminal") ||
       JSON.stringify(openCodeModelProviders)
         !== JSON.stringify(normalizeOpenCodeModelProviders(global.openCodeModelProviders)) ||
-      claudeMode !== (global.claudeMode || "terminal") ||
+      claudeMode !== (global.claudeMode || "native") ||
       claudeNativeBackend !== (global.claudeNativeBackend || "sdk") ||
       claudeNativeFastModeDefault !== (global.claudeNativeFastModeDefault ?? false) ||
       codexMode !== (global.codexMode || "native") ||
@@ -687,7 +687,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       normalizeOpenCodeModelProviders(global.openCodeModelProviders),
     );
     setOpenCodeProviderDraft("");
-    setClaudeMode(global.claudeMode || "terminal");
+    setClaudeMode(global.claudeMode || "native");
     setClaudeNativeBackend(global.claudeNativeBackend || "sdk");
     setClaudeNativeFastModeDefault(global.claudeNativeFastModeDefault ?? false);
     setCodexMode(global.codexMode || "native");

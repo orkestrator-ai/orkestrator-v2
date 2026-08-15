@@ -47,6 +47,10 @@ describe("defaultConfig", () => {
     expect(defaultConfig().global.webClientEnabled).toBe(true);
   });
 
+  test("uses native Claude sessions by default", () => {
+    expect(defaultConfig().global.claudeMode).toBe("native");
+  });
+
   test("uses host GitHub CLI credentials by default", () => {
     expect(defaultConfig().global.useHostGitHubCredentials).toBe(true);
     expectTypeOf<AppConfig["global"]["useHostGitHubCredentials"]>()

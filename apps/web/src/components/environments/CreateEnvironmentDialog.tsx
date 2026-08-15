@@ -122,7 +122,7 @@ export function resolveAgentDefaults(
   repoConfig?: { defaultAgent?: string; agentStyle?: string },
 ) {
   const defaultAgent = repoConfig?.defaultAgent || globalConfig.defaultAgent || "claude";
-  const claudeMode = repoConfig?.agentStyle || globalConfig.claudeMode || "terminal";
+  const claudeMode = repoConfig?.agentStyle || globalConfig.claudeMode || "native";
   const opencodeMode = repoConfig?.agentStyle || globalConfig.opencodeMode || "terminal";
   const codexMode = repoConfig?.agentStyle || globalConfig.codexMode || "native";
   return { defaultAgent, claudeMode, opencodeMode, codexMode } as const;

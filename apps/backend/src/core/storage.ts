@@ -1703,7 +1703,7 @@ export function defaultConfig(): AppConfig {
       codexReasoningEffort: "high",
       opencodeMode: "terminal",
       openCodeModelProviders: [...DEFAULT_OPENCODE_MODEL_PROVIDERS],
-      claudeMode: "terminal",
+      claudeMode: "native",
       claudeNativeBackend: "sdk",
       claudeNativeFastModeDefault: false,
       codexMode: "native",

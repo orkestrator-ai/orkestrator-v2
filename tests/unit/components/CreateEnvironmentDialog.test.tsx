@@ -61,6 +61,14 @@ function openAgentModelPicker() {
   if (picker.getAttribute("aria-expanded") !== "true") {
     fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
   }
+  const platform = picker.querySelector("[data-native-model-platform]")
+    ?.getAttribute("data-native-model-platform");
+  if (platform) {
+    const catalog = screen.queryByRole("button", { name: `${platform} models` });
+    if (catalog && catalog.getAttribute("aria-pressed") !== "true") {
+      fireEvent.click(catalog);
+    }
+  }
   return picker;
 }
 
@@ -76,7 +84,12 @@ async function selectAgentPlatform(label: "Claude" | "Codex" | "Cursor" | "Grok"
 }
 
 async function selectAgentModel(name: string | RegExp) {
-  openAgentModelPicker();
+  const picker = openAgentModelPicker();
+  const platform = picker.querySelector("[data-native-model-platform]")
+    ?.getAttribute("data-native-model-platform");
+  if (platform) {
+    fireEvent.click(screen.getByRole("button", { name: `${platform} models` }));
+  }
   fireEvent.click(await screen.findByRole("menuitemradio", { name }));
 }
 
@@ -255,7 +268,7 @@ describe("resolveAgentDefaults", () => {
   test("falls back to hardcoded defaults when both levels are undefined", () => {
     const result = resolveAgentDefaults({}, undefined);
     expect(result.defaultAgent).toBe("claude");
-    expect(result.claudeMode).toBe("terminal");
+    expect(result.claudeMode).toBe("native");
     expect(result.opencodeMode).toBe("terminal");
     expect(result.codexMode).toBe("native");
   });
@@ -304,7 +317,7 @@ describe("resolveAgentDefaults", () => {
     expect(
       (screen.getByRole("checkbox", { name: "Use TUI" }) as HTMLButtonElement)
         .getAttribute("data-state"),
-    ).toBe(defaultConfig.global.claudeMode === "terminal" ? "checked" : "unchecked");
+    ).toBe("unchecked");
   });
 
   test("starts on the prompt tab and preserves values while moving between mobile sections", () => {
@@ -1198,6 +1211,9 @@ describe("resolveAgentDefaults", () => {
       button: 0,
       ctrlKey: false,
     });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "opencode models" }),
+    );
     expect(
       await screen.findByRole("menuitemradio", { name: /Model A/ }),
     ).toBeTruthy();
@@ -1280,6 +1296,9 @@ describe("resolveAgentDefaults", () => {
       button: 0,
       ctrlKey: false,
     });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "opencode models" }),
+    );
     fireEvent.click(
       await screen.findByRole("menuitemradio", { name: /Durable Model B/ }),
     );
@@ -1469,10 +1488,7 @@ describe("resolveAgentDefaults", () => {
       expect(getAgentModelPicker().textContent)
         .toContain("Live Model")
     );
-    fireEvent.pointerDown(getAgentModelPicker(), {
-      button: 0,
-      ctrlKey: false,
-    });
+    openAgentModelPicker();
     expect(await screen.findByRole("menuitemradio", { name: /Live Model/ }))
       .toBeTruthy();
     expect(screen.queryByRole("menuitemradio", { name: /Cached Model/ }) === null).toBe(true);
@@ -1710,10 +1726,7 @@ describe("resolveAgentDefaults", () => {
       expect(getAgentModelPicker().textContent)
         .toContain("Turbo");
     });
-    fireEvent.pointerDown(getAgentModelPicker(), {
-      button: 0,
-      ctrlKey: false,
-    });
+    openAgentModelPicker();
     const configuredOption = await screen.findByRole("menuitemradio", {
       name: /configured\/missing-model/,
     });
@@ -1824,10 +1837,7 @@ describe("resolveAgentDefaults", () => {
       expect(getAgentModelPicker().textContent)
         .toContain("Durable Model A")
     );
-    fireEvent.pointerDown(getAgentModelPicker(), {
-      button: 0,
-      ctrlKey: false,
-    });
+    openAgentModelPicker();
     // The catalogue still renders; there is simply no Favorites section.
     expect(
       await screen.findByRole("menuitemradio", { name: /Durable Model A/ }),
@@ -1878,10 +1888,7 @@ describe("resolveAgentDefaults", () => {
       expect(getAgentModelPicker().textContent)
         .toContain("Durable Model A")
     );
-    fireEvent.pointerDown(getAgentModelPicker(), {
-      button: 0,
-      ctrlKey: false,
-    });
+    openAgentModelPicker();
     expect(
       await screen.findByRole("menuitemradio", { name: /Durable Model A/ }),
     ).toBeTruthy();

@@ -737,7 +737,7 @@ const modelCatalogCache = new ModelCatalogCache({
  * There is one Codex engine: a persistent `codex app-server --stdio` child per
  * environment, supervised by this bridge. The per-turn `codex exec` path
  * was removed once app-server reached parity — see
- * docs/adr/0001-codex-app-server-engine.md.
+ * docs/technical-architecture/agent-engines.md.
  */
 type AppServerEngineFactory = (options: AppServerEngineOptions) => AppServerEngine;
 

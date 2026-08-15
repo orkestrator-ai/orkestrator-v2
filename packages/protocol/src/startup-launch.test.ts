@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  DEFAULT_CLAUDE_MODE,
   DEFAULT_STARTUP_LAUNCH_AGENT,
   resolveStartupLaunch,
 } from "./startup-launch.js";
@@ -25,12 +26,12 @@ describe("resolveStartupLaunch", () => {
     }).agent).toBe("codex");
   });
 
-  test("falls back to Claude in terminal mode when nothing is configured", () => {
+  test("falls back to the native Claude default when nothing is configured", () => {
     expect(resolveStartupLaunch({})).toEqual({
       agent: DEFAULT_STARTUP_LAUNCH_AGENT,
-      mode: "terminal",
+      mode: DEFAULT_CLAUDE_MODE,
       claudeNativeBackend: "sdk",
-      dispatchedByBackend: false,
+      dispatchedByBackend: true,
     });
   });
 
@@ -92,9 +93,7 @@ describe("resolveStartupLaunch", () => {
     }).dispatchedByBackend).toBe(false);
   });
 
-  test("treats an unset mode as terminal rather than guessing native", () => {
-    // An unset mode must not make the renderer stand down for a backend that
-    // will decline the launch; that combination loses the attachments.
+  test("keeps the conservative terminal fallback for non-Claude agents", () => {
     expect(resolveStartupLaunch({
       environment: { defaultAgent: "codex" },
       global: { defaultAgent: "codex" },

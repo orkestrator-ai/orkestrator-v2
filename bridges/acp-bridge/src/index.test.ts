@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:net";
 import { promises as fs } from "node:fs";
@@ -13,6 +13,18 @@ const here = dirname(fileURLToPath(import.meta.url));
 const nativeFetch = Bun.fetch;
 const children = new Set<ChildProcessWithoutNullStreams>();
 const temporaryDirectories = new Set<string>();
+/**
+ * Bun's 5 s default per-test budget is smaller than what these tests actually
+ * do. `spawnBridge` alone may spend up to `DEFAULT_WAIT_TIMEOUT_MS` waiting on
+ * the child's health endpoint before a test body starts, and nearly every body
+ * then polls with one or more further `waitFor` calls. Under aggregate-suite
+ * spawn contention the health wait consumed the whole budget, which is the
+ * flake recorded in `docs/flaky-tests.md`. Raise it once for the file rather
+ * than per test, so the next case to hit that contention does not need its own
+ * one-off timeout to be discovered first.
+ */
+const BRIDGE_TEST_TIMEOUT_MS = 20_000;
+jest.setTimeout(BRIDGE_TEST_TIMEOUT_MS);
 /** Smallest valid PNG, so attachment tests exercise real image bytes. */
 const ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
@@ -61,15 +73,48 @@ function describeWaitValue(value: unknown): string {
     : `${serialized.slice(0, MAX_WAIT_DIAGNOSTIC_BYTES)}… (${serialized.length} chars, truncated)`;
 }
 
-async function waitFor<T>(read: () => Promise<T>, accept: (value: T) => boolean): Promise<T> {
-  const deadline = Date.now() + 5_000;
-  let latest!: T;
+function isRetryableWaitError(error: unknown): boolean {
+  if (!error || typeof error !== "object" || !("code" in error)) return false;
+  return error.code === "ConnectionRefused" || error.code === "ECONNREFUSED";
+}
+
+/**
+ * Deliberately below {@link BRIDGE_TEST_TIMEOUT_MS}. A wait that could outlast
+ * the per-test budget loses the race to Bun's generic "test timed out", and the
+ * bounded diagnostic below — the whole reason this helper exists — never prints.
+ */
+const DEFAULT_WAIT_TIMEOUT_MS = 5_000;
+
+async function waitFor<T>(
+  read: () => Promise<T>,
+  accept: (value: T) => boolean,
+  timeoutMs = DEFAULT_WAIT_TIMEOUT_MS,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  let latest: T | undefined;
+  let lastRetryableCode: string | undefined;
   while (Date.now() < deadline) {
-    latest = await read();
-    if (accept(latest)) return latest;
+    try {
+      latest = await read();
+      if (accept(latest)) return latest;
+    } catch (error) {
+      // The bridge child can still be binding, or Bun may already have killed it
+      // after a test timeout. Retry until the deadline so a refused connection
+      // becomes a bounded wait diagnostic instead of an unhandled rejection.
+      if (!isRetryableWaitError(error)) throw error;
+      lastRetryableCode = String((error as { code: unknown }).code);
+    }
     await Bun.sleep(20);
   }
-  throw new Error(`Timed out waiting for ACP state: ${describeWaitValue(latest)}`);
+  // Report the swallowed code as well. When every read was refused `latest` was
+  // never assigned, so without this the message is a bare `undefined` — which is
+  // exactly the case where the retried error is the only useful evidence.
+  const cause = lastRetryableCode ? ` (last error: ${lastRetryableCode})` : "";
+  throw new Error(`Timed out waiting for ACP state: ${describeWaitValue(latest)}${cause}`);
+}
+
+function codedError(code: string): Error & { code: string } {
+  return Object.assign(new Error(code), { code });
 }
 
 async function spawnBridge(options: {
@@ -133,6 +178,127 @@ async function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void>
   if (child.exitCode !== null || child.signalCode !== null) return;
   await new Promise<void>((resolvePromise) => child.once("exit", () => resolvePromise()));
 }
+
+describe("waitFor", () => {
+  test("retries ConnectionRefused until the read succeeds", async () => {
+    let attempts = 0;
+    const value = await waitFor(async () => {
+      attempts += 1;
+      if (attempts < 3) throw codedError("ConnectionRefused");
+      return { ready: true };
+    }, (current) => current.ready);
+    expect(value).toEqual({ ready: true });
+    expect(attempts).toBe(3);
+  });
+
+  test("retries ECONNREFUSED until the read succeeds", async () => {
+    let attempts = 0;
+    const value = await waitFor(async () => {
+      attempts += 1;
+      if (attempts < 2) throw codedError("ECONNREFUSED");
+      return "up";
+    }, (current) => current === "up");
+    expect(value).toBe("up");
+    expect(attempts).toBe(2);
+  });
+
+  test("retries a real Bun fetch connection failure until the read succeeds", async () => {
+    const port = await unusedPort();
+    let attempts = 0;
+    const value = await waitFor(async () => {
+      attempts += 1;
+      if (attempts >= 3) return "recovered";
+      // `unusedPort` releases the port before returning, so a parallel worker
+      // could in principle bind it between then and now. Convert that into an
+      // explicit non-retryable error, which `waitFor` rethrows on the spot and
+      // names, instead of letting it surface as a bare `expect(1).toBe(3)`.
+      // Reaching attempt 3 therefore also proves Bun's own error shape is what
+      // `isRetryableWaitError` classifies as retryable.
+      throw await nativeFetch(`http://127.0.0.1:${port}/health`).then(
+        () => new Error(`Expected 127.0.0.1:${port} to refuse the connection, but it answered`),
+        (reason: unknown) => reason,
+      );
+    }, (current) => current === "recovered");
+    expect(value).toBe("recovered");
+    expect(attempts).toBe(3);
+  });
+
+  test("polls until accept is satisfied and returns the accepted value", async () => {
+    let reads = 0;
+    const value = await waitFor(async () => {
+      reads += 1;
+      return { status: reads < 3 ? "running" : "idle" };
+    }, (current) => current.status === "idle");
+    expect(value).toEqual({ status: "idle" });
+    expect(reads).toBe(3);
+  });
+
+  test("rethrows a non-retryable coded error on the first attempt", async () => {
+    const error = codedError("EPERM");
+    let attempts = 0;
+    await expect(waitFor(async () => {
+      attempts += 1;
+      throw error;
+    }, () => true)).rejects.toBe(error);
+    expect(attempts).toBe(1);
+  });
+
+  test("rethrows errors that have no code on the first attempt", async () => {
+    const error = new Error("parse failed");
+    let attempts = 0;
+    await expect(waitFor(async () => {
+      attempts += 1;
+      throw error;
+    }, () => true)).rejects.toBe(error);
+    expect(attempts).toBe(1);
+  });
+
+  test("rethrows non-object rejections on the first attempt", async () => {
+    // `isRetryableWaitError` reads `error.code`, so a bare string that merely
+    // *names* a retryable code — and a nullish rejection — must fail fast
+    // rather than spin until the deadline.
+    for (const rejection of ["ConnectionRefused", null]) {
+      let attempts = 0;
+      await expect(waitFor(async () => {
+        attempts += 1;
+        throw rejection;
+      }, () => true)).rejects.toBe(rejection);
+      expect(attempts).toBe(1);
+    }
+  });
+
+  test("times out when ConnectionRefused never recovers and names the code", async () => {
+    let attempts = 0;
+    // 400 ms rather than a value just above the 20 ms poll interval: the
+    // assertion below is about retrying, and one scheduler stall on a loaded
+    // parallel run must not be able to consume the budget before attempt two.
+    await expect(waitFor(async () => {
+      attempts += 1;
+      throw codedError("ConnectionRefused");
+    }, () => true, 400)).rejects.toThrow(
+      "Timed out waiting for ACP state: undefined (last error: ConnectionRefused)",
+    );
+    expect(attempts).toBeGreaterThan(1);
+  });
+
+  test("reports the last read value when accept is never satisfied", async () => {
+    await expect(waitFor(
+      async () => ({ status: "running" }),
+      (current) => current.status === "idle",
+      200,
+    )).rejects.toThrow('Timed out waiting for ACP state: {"status":"running"}');
+  });
+
+  test("truncates an oversized diagnostic instead of logging the whole snapshot", async () => {
+    const oversized = "x".repeat(MAX_WAIT_DIAGNOSTIC_BYTES * 2);
+    const rejection = await waitFor(async () => oversized, () => false, 200)
+      .then(() => null, (error: unknown) => error);
+    expect(rejection).toBeInstanceOf(Error);
+    const { message } = rejection as Error;
+    expect(message).toContain("chars, truncated)");
+    expect(message.length).toBeLessThan(oversized.length);
+  });
+});
 
 describe("ACP bridge", () => {
   test("allows authenticated renderer requests from trusted local origins", async () => {
@@ -1219,6 +1385,107 @@ describe("ACP bridge", () => {
     expect(await nativeFetch(`${restarted.base}/session/${created.id}/activity`, {
       headers: restarted.headers,
     }).then((response) => response.json())).toEqual({ activity: "idle" });
+  });
+
+  test("preserves ACP nested child parentToolCallId as parentTaskUseId", async () => {
+    const bridge = await spawnBridge();
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-nested-subagent:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "NESTEDSUBAGENT: inspect" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    const parts = settled.messages.flatMap((message) => message.parts);
+    expect(parts.find((part) => part.toolUseId === "cursor-subagent-1")).toMatchObject({
+      toolName: "task",
+      agentState: "active",
+    });
+    // Every vendor spelling the bridge claims to accept, proven individually.
+    expect(new Map(parts
+      .filter((part) => typeof part.toolUseId === "string"
+        && part.toolUseId.startsWith("cursor-child-"))
+      .map((part) => [part.toolUseId, part.parentTaskUseId]))).toEqual(new Map([
+        ["cursor-child-grep-1", "cursor-subagent-1"],
+        ["cursor-child-read-2", "cursor-subagent-1"],
+        ["cursor-child-edit-3", "cursor-subagent-1"],
+        ["cursor-child-list-4", "cursor-subagent-1"],
+        ["cursor-child-claude-5", "cursor-subagent-1"],
+        ["cursor-child-claude-6", "cursor-subagent-1"],
+        // A call naming itself is dropped rather than self-parented.
+        ["cursor-child-self-7", undefined],
+      ]));
+    expect(parts.find((part) => part.toolUseId === "cursor-child-grep-1")).toMatchObject({
+      toolTitle: "Search Find",
+      parentTaskUseId: "cursor-subagent-1",
+    });
+    expect(JSON.stringify(settled)).not.toContain("_meta");
+    expect(JSON.stringify(settled)).not.toContain("parentToolCallId");
+  });
+
+  // The rail and the nested agent row both key off `parentTaskUseId`, so losing
+  // it across a bridge restart would silently flatten a restored transcript
+  // back into unattributed top-level tool rows.
+  test("restores nested child parentTaskUseId after a bridge restart", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const first = await spawnBridge({ stateDirectory });
+    const created = await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ clientSessionKey: "env-nested-restart:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ prompt: "NESTEDSUBAGENT: inspect" }),
+    })).status).toBe(202);
+
+    await waitFor(
+      async () => nativeFetch(`${first.base}/session/${created.id}`, { headers: first.headers })
+        .then((response) => response.json()) as Promise<{ status: string }>,
+      (value) => value.status === "idle",
+    );
+    // Persistence is debounced, so the restart has to wait for the writer
+    // rather than for the turn that produced the parts.
+    await waitFor(
+      () => fs.readFile(resolve(stateDirectory, "state.json"), "utf8")
+        .then((contents) => contents)
+        .catch(() => ""),
+      (contents) => contents.includes("cursor-child-grep-1"),
+    );
+    await stopChild(first.child);
+
+    const restarted = await spawnBridge({ stateDirectory });
+    const restored = await nativeFetch(`${restarted.base}/session/${created.id}`, {
+      headers: restarted.headers,
+    }).then((response) => response.json()) as {
+      messages: Array<{ parts: Array<Record<string, unknown>> }>;
+    };
+    const restoredParts = restored.messages.flatMap((message) => message.parts);
+    expect(restoredParts.find((part) => part.toolUseId === "cursor-child-grep-1"))
+      .toMatchObject({ parentTaskUseId: "cursor-subagent-1" });
+    expect(restoredParts.find((part) => part.toolUseId === "cursor-child-claude-5"))
+      .toMatchObject({ parentTaskUseId: "cursor-subagent-1" });
+    expect(restoredParts.find((part) => part.toolUseId === "cursor-child-self-7"))
+      .not.toHaveProperty("parentTaskUseId");
+    // The launch part still has to be findable, or the restored children would
+    // have a parent id pointing at nothing.
+    expect(restoredParts.find((part) => part.toolUseId === "cursor-subagent-1"))
+      .toMatchObject({ toolName: "task" });
   });
 
   test("fails active child markers replayed while adopting provider history", async () => {
@@ -3521,6 +3788,433 @@ describe("ACP bridge", () => {
     expect(diff).toMatchObject({ filePath: "src/empty.ts", additions: 1, deletions: 1 });
     expect(diff?.diff).toContain("-const value = 1;");
     expect(diff?.diff).toContain("+const value = 2;");
+  });
+
+  test("resumes a flattened resource-exhausted turn with exponential backoff", async () => {
+    const directory = await temporaryDirectory();
+    const counterFile = resolve(directory, "resource-retry-prompts.log");
+    const promptBlocksFile = resolve(directory, "resource-retry-blocks.log");
+    const { base, headers } = await spawnBridge({ env: {
+      ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_PROMPT_BLOCKS_FILE: promptBlocksFile,
+      FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "2",
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: "RESOURCEEXHAUSTED: finish without repeating completed work",
+        requestId: "resource-retry-1",
+      }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{
+            role: string;
+            content: string;
+            parts: Array<Record<string, unknown>>;
+          }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    expect(session.error).toBeUndefined();
+    expect(session.messages.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(session.messages.at(-1)?.content).toContain("Recovered and finished the original request.");
+    expect(session.messages.at(-1)?.content).not.toContain("resource_exhausted");
+    expect(session.messages.at(-1)?.parts.find((part) => part.toolUseId === "resource-safe-1"))
+      .toMatchObject({ toolState: "success" });
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(3);
+
+    const promptBlocks = (await fs.readFile(promptBlocksFile, "utf8")).trim().split("\n")
+      .map((line) => JSON.parse(line) as Array<{ type?: string; text?: string }>);
+    expect(promptBlocks[0]?.[0]?.text).toBe(
+      "RESOURCEEXHAUSTED: finish without repeating completed work",
+    );
+    expect(promptBlocks.slice(1).every((blocks) =>
+      blocks[0]?.text?.startsWith("Continue from where the interrupted turn stopped.")))
+      .toBe(true);
+  });
+
+  test("retries a structured ACP resource-exhausted response", async () => {
+    const directory = await temporaryDirectory();
+    const counterFile = resolve(directory, "resource-rpc-retry-prompts.log");
+    const { base, headers } = await spawnBridge({ env: {
+      ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_RPC_RESOURCE_EXHAUSTED_ATTEMPTS: "2",
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: "RESOURCEEXHAUSTEDRPC: retry the typed failure",
+        requestId: "resource-rpc-retry-1",
+      }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ role: string; content: string }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    expect(session.error).toBeUndefined();
+    expect(session.messages.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(session.messages.at(-1)?.content).toBe("Recovered from the structured RPC error.");
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(3);
+  });
+
+  test("fails visibly after three resource-exhausted retries", async () => {
+    const directory = await temporaryDirectory();
+    const counterFile = resolve(directory, "resource-retry-exhausted.log");
+    const { base, headers } = await spawnBridge({ env: {
+      ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "4",
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "RESOURCEEXHAUSTED: keep failing", requestId: "resource-retry-2" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ role: string; content: string }>;
+        }>,
+      (value) => value.status === "error",
+    );
+
+    expect(session.error).toBe("cursor remained resource exhausted after 3 retries");
+    expect(session.messages.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(session.messages.at(-1)?.content).toContain(
+      "Error: RetriableError: [resource_exhausted] Error",
+    );
+    // Initial dispatch plus exactly three retries.
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(4);
+  });
+
+  test("cancels a resource-exhausted turn while it is in backoff", async () => {
+    const directory = await temporaryDirectory();
+    const counterFile = resolve(directory, "resource-retry-cancelled.log");
+    const { base, headers } = await spawnBridge({ env: {
+      ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "500",
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "4",
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "RESOURCEEXHAUSTED: cancel me", requestId: "resource-retry-3" }),
+    });
+    await waitFor(
+      () => fs.readFile(counterFile, "utf8").catch(() => ""),
+      (contents) => contents.trim().split("\n").filter(Boolean).length === 1,
+    );
+    const cancelled = await nativeFetch(`${base}/session/${created.id}/cancel`, {
+      method: "POST",
+      headers,
+    });
+    expect(cancelled.status).toBe(202);
+    await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{ status: string }>,
+      (value) => value.status === "idle",
+    );
+    await Bun.sleep(100);
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(1);
+  });
+
+  test("retries a flattened error whose class name is not RetriableError", async () => {
+    const directory = await temporaryDirectory();
+    const counterFile = resolve(directory, "resource-retry-other-class.log");
+    const { base, headers } = await spawnBridge({ env: {
+      ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "1",
+      // The class name is whatever the provider's error carried. Matching only
+      // `RetriableError` would leave every other name dead in the transcript.
+      FAKE_ACP_FLATTENED_ERROR_NAME: "GoogleGenerativeAIFetchError",
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: "RESOURCEEXHAUSTED: unfamiliar error class",
+        requestId: "resource-retry-class-1",
+      }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ role: string; content: string }>;
+        }>,
+      (value) => value.status === "idle" || value.status === "error",
+    );
+
+    expect(session.status).toBe("idle");
+    expect(session.error).toBeUndefined();
+    expect(session.messages.at(-1)?.content).toContain("Recovered and finished the original request.");
+    expect(session.messages.at(-1)?.content).not.toContain("resource_exhausted");
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(2);
+  });
+
+  test("recovers a structured turn without replaying the interrupted attempt's output", async () => {
+    const directory = await temporaryDirectory();
+    const promptBlocksFile = resolve(directory, "structured-rpc-retry-blocks.log");
+    const { base, headers } = await spawnBridge({ env: {
+      ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
+      FAKE_ACP_PROMPT_BLOCKS_FILE: promptBlocksFile,
+      FAKE_ACP_RPC_RESOURCE_EXHAUSTED_ATTEMPTS: "1",
+      // The interrupted attempt streams a JSON prefix. Carrying it into the
+      // continuation would concatenate into a value that cannot parse.
+      FAKE_ACP_RESOURCE_EXHAUSTED_PARTIAL: "{\"answer\":\"par",
+      FAKE_ACP_RESOURCE_EXHAUSTED_FINAL: "{\"answer\":\"recovered\"}",
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: "RESOURCEEXHAUSTEDRPC: produce the structured value",
+        requestId: "structured-retry-1",
+        outputSchema: { type: "object", properties: { answer: { type: "string" } } },
+      }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{ status: string; error?: string }>,
+      (value) => value.status === "idle" || value.status === "error",
+    );
+    expect(session.status).toBe("idle");
+    expect(session.error).toBeUndefined();
+
+    const structured = await waitFor(
+      async () => nativeFetch(
+        `${base}/session/${created.id}/structured-output?requestId=structured-retry-1`,
+        { headers },
+      ).then((response) => response.json()) as Promise<{ structuredOutput: unknown }>,
+      (value) => value.structuredOutput !== null,
+    );
+    expect(structured.structuredOutput).toMatchObject({
+      ok: true,
+      value: { answer: "recovered" },
+    });
+
+    // The continuation replaces the original prompt on the wire, so it has to
+    // restate the contract the structured turn must still satisfy.
+    const promptBlocks = (await fs.readFile(promptBlocksFile, "utf8")).trim().split("\n")
+      .map((line) => JSON.parse(line) as Array<{ type?: string; text?: string }>);
+    expect(promptBlocks).toHaveLength(2);
+    expect(promptBlocks[1]?.[0]?.text).toContain(
+      "Return only one JSON value matching this JSON Schema.",
+    );
+    expect(promptBlocks[1]?.[0]?.text).toContain("\"answer\"");
+  });
+
+  test("recovers a structured turn interrupted by a flattened resource-exhausted error", async () => {
+    const directory = await temporaryDirectory();
+    const { base, headers } = await spawnBridge({ env: {
+      ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
+      FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "1",
+      FAKE_ACP_RESOURCE_EXHAUSTED_PARTIAL: "{\"answer\":\"par",
+      FAKE_ACP_RESOURCE_EXHAUSTED_FINAL: "{\"answer\":\"flattened-recovered\"}",
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: "RESOURCEEXHAUSTED: produce the structured value",
+        requestId: "structured-retry-2",
+        outputSchema: { type: "object", properties: { answer: { type: "string" } } },
+      }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{ status: string; error?: string }>,
+      (value) => value.status === "idle" || value.status === "error",
+    );
+    expect(session.status).toBe("idle");
+    expect(session.error).toBeUndefined();
+
+    const structured = await waitFor(
+      async () => nativeFetch(
+        `${base}/session/${created.id}/structured-output?requestId=structured-retry-2`,
+        { headers },
+      ).then((response) => response.json()) as Promise<{ structuredOutput: unknown }>,
+      (value) => value.structuredOutput !== null,
+    );
+    expect(structured.structuredOutput).toMatchObject({
+      ok: true,
+      value: { answer: "flattened-recovered" },
+    });
+  });
+
+  test("rejects a concurrent prompt while a resource-exhausted turn is in backoff", async () => {
+    const directory = await temporaryDirectory();
+    const counterFile = resolve(directory, "resource-retry-busy.log");
+    const { base, headers } = await spawnBridge({ env: {
+      ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "800",
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "1",
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "RESOURCEEXHAUSTED: stay busy", requestId: "resource-busy-1" }),
+    });
+    await waitFor(
+      () => fs.readFile(counterFile, "utf8").catch(() => ""),
+      (contents) => contents.trim().split("\n").filter(Boolean).length === 1,
+    );
+
+    // A turn parked in backoff still owns the session: it has not finished, and
+    // a second dispatch would race the continuation onto the same thread.
+    const busy = await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "second turn", requestId: "resource-busy-2" }),
+    });
+    expect(busy.status).toBe(409);
+    expect(await busy.json()).toMatchObject({ error: "Session is already running" });
+
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ role: string; content: string }>;
+        }>,
+      (value) => value.status === "idle" || value.status === "error",
+    );
+    expect(session.status).toBe("idle");
+    expect(session.messages.at(-1)?.content).toContain("Recovered and finished the original request.");
+    expect(session.messages.filter((message) => message.role === "user")).toHaveLength(1);
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(2);
+  });
+
+  test("surfaces the agent exit that happened during resource-exhausted backoff", async () => {
+    const directory = await temporaryDirectory();
+    const counterFile = resolve(directory, "resource-retry-child-died.log");
+    const { base, headers } = await spawnBridge({ env: {
+      ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "400",
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "4",
+      FAKE_ACP_RESOURCE_EXHAUSTED_DIE_AFTER_MS: "20",
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: "RESOURCEEXHAUSTED: die during backoff",
+        requestId: "resource-retry-died-1",
+      }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{ status: string; error?: string }>,
+      (value) => value.status === "error",
+    );
+
+    // The child's exit is the real cause, so the retry must not overwrite it
+    // with a generic "lost its live session".
+    expect(session.error).toContain("ACP process exited");
+    // The continuation is never dispatched into a dead child.
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(1);
+  });
+
+  test("suppresses resource-exhausted retries for a turn cancelled while it was dispatching", async () => {
+    const directory = await temporaryDirectory();
+    const counterFile = resolve(directory, "resource-retry-cancel-dispatch.log");
+    const { base, headers } = await spawnBridge({ env: {
+      ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "4",
+      // Holds `session/load` open, so the respawn below keeps the prompt claim
+      // in its dispatching window long enough to cancel inside it.
+      FAKE_ACP_LOAD_DELAY_MS: "800",
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    // Kill the child so the next prompt has to respawn, which is what makes the
+    // dispatching window wide instead of a single microtask.
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CRASH now", requestId: "resource-dispatch-crash" }),
+    });
+    await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{ status: string }>,
+      (value) => value.status === "error",
+    );
+
+    // Deliberately not awaited: the response only arrives once the turn has been
+    // dispatched, and the cancel has to land before that.
+    const dispatched = nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: "RESOURCEEXHAUSTED: cancel during dispatch",
+        requestId: "resource-dispatch-1",
+      }),
+    });
+    await Bun.sleep(200);
+    const cancelled = await nativeFetch(`${base}/session/${created.id}/cancel`, {
+      method: "POST",
+      headers,
+    });
+    expect(cancelled.status).toBe(202);
+    expect((await dispatched).status).toBe(202);
+
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{ status: string }>,
+      (value) => value.status === "idle" || value.status === "error",
+    );
+    expect(session.status).toBe("idle");
+    await Bun.sleep(100);
+    // One dispatch, no retries: the cancel that arrived before the turn took its
+    // sequence still applies to it.
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(1);
   });
 
   test("deduplicates session creation and prompt dispatch by durable keys", async () => {

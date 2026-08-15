@@ -338,8 +338,14 @@ describe("Codex collaboration state", () => {
       type: "subagent_activity",
       activity: "started",
       agent_thread_id: "agent-1",
+      agent_path: "/root/fixture_review",
     }]);
-    expect(orphan).toMatchObject({ subagentId: "agent-1", toolState: "pending" });
+    expect(orphan).toMatchObject({
+      content: "fixture_review",
+      subagentId: "agent-1",
+      subagentRole: "fixture_review",
+      toolState: "pending",
+    });
 
     const [interrupted] = applyCodexCollabStateToSubagentParts(
       [makeAgent("agent-1", { toolState: "success" })],

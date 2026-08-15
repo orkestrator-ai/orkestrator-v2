@@ -10,6 +10,40 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `ACP bridge > settles Cursor's in-process child as finished` (`bridges/acp-bridge/src/index.test.ts`)
+
+- **Status:** resolved
+- **Date observed:** 2026-08-15
+- **Original command:** `bun run test`
+- **Worker configuration:** bridges group used two workers while workspace, root,
+  and protocol-lockfile groups ran concurrently.
+- **Failure:** the test exceeded Bun's default 5,000 ms timeout (`5000.79 ms`).
+  Bun then killed the spawned bridge (`killed 1 dangling process`), and the
+  in-flight `waitFor` fetch failed as an unhandled `ConnectionRefused` against
+  `/session/:id`.
+- **Suite counts:** bridges group: 2,503 passed, 11 skipped, 1 failed, 1 error
+  across 70 files.
+- **Isolated rerun:** `bun test bridges/acp-bridge/src/index.test.ts -t "settles Cursor's in-process child"`
+  → passed in 0.3 s.
+- **Root cause:** `spawnBridge` already waits up to 5 s for health, then this
+  case runs two more 5 s `waitFor` polls, all inside Bun's 5 s default test
+  budget. Under aggregate spawn contention the health wait consumed the budget
+  before the child could settle. `waitFor` also rethrew connection errors
+  immediately, so the killed child became a second unhandled error.
+- **Fix:** retry `ConnectionRefused` inside `waitFor` until the deadline so a
+  refused connection becomes a bounded wait diagnostic that names the retried
+  code, and raise the per-test budget to 20 s. The budget is set once for the
+  whole file with `jest.setTimeout`, not on the two tests that happened to fail
+  first: the root cause is structural — 138 of the file's `spawnBridge` calls
+  are followed by at least one further `waitFor` — so a per-test timeout would
+  only have moved the flake to the next case to lose the race. `waitFor`'s own
+  default stays at 5 s, deliberately below the test budget, so its diagnostic
+  wins against Bun's generic timeout instead of being pre-empted by it.
+- **Verification:** focused settle tests passed in 0.3 s, the owning file passed
+  in 29.2 s, and the complete concurrent suite passed in 138.5 s with no
+  failures. The `waitFor` retry policy itself now has direct unit coverage in
+  the same file (`describe("waitFor")`), including the timeout diagnostic.
+
 ## Test bootstrap mock-registration cascade (`apps/web` and root renderer tests)
 
 - **Status:** resolved
@@ -87,6 +121,8 @@ history rather than two partial ones.
 - **Recurrence (2026-08-15):** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-fix-full-tests.log` ran the root group at four Bun workers while the workspace, bridge, and protocol-lockfile groups ran concurrently. The same five cases failed: the first exhausted Bun's 5,000 ms budget, and the later cases reported the same missing fake executable, forbidden connection, wait timeout, and missing fixture artifacts seen after an interrupted cleanup. The root group reported 3,657 passed, 1 skipped, 6 failed, and 3 between-test errors; its sixth failure is recorded separately below.
 - **Recurrence isolated rerun:** `set -o pipefail; bun test ./tests/unit/electron/tmux-backend.test.ts --parallel 2>&1 | tee /tmp/orkestrator-fix-tmux-backend-isolated.log` -> 173 passed, 0 failed, 615 assertions in 63.02 seconds; all five affected cases passed.
 - **Hypothesis:** The first failure is a bare five-second timeout in a process-heavy fixture while four aggregate groups compete for process startup. Because the file shares fake runtime/module state across its lifecycle tests, interruption of that first case's cleanup plausibly caused the four later missing-runtime and ordering failures; the complete file rebuilt and cleaned every fixture successfully in a fresh isolated process. No product code touched by the ACP image change appears in these stacks.
+- **Recurrence (ACP `waitFor` coverage and engine docs, 2026-08-15):** `bun run test:logged -- --name full-suite-3 -- bun run test` ran the root group at six Bun workers while the workspace, bridges, and protocol-lockfile groups ran concurrently; those three groups all passed. `serializes stop behind an in-flight start so no tmux session is orphaned` failed at 2,026.74 ms, this time with a functional error rather than a bare timeout: `Installed claude CLI does not support --session-id`, thrown from `startAfterHooksInstalled` (`apps/backend/src/core/tmux.ts:2013`) after the fake runtime's `claude --help` probe returned help text without the flag. `keeps per-environment hook state under the shared runtime root and removes it on stop` then failed in 0.42 ms. The root group reported 3,696 passed, 1 skipped, 3 failed across 147 files in 223.68 s; the third failure is recorded separately below. The same command had passed completely on the immediately preceding run, and the isolated rerun `bun test tests/unit/electron/tmux-backend.test.ts` -> 173 passed, 0 failed, 615 assertions in 62.95 s.
+- **Note on the probe variant:** the `--session-id` message is a new surface for this cluster and is worth distinguishing from the earlier missing-executable failures. It means the fake `claude` shim was found and executed but produced help output that did not contain the flag, which is consistent with a truncated or empty probe result under contention rather than with a missing fixture.
 
 ## `standalone backend service` process-shutdown timeouts (`apps/backend/tests/standalone.test.ts`)
 
@@ -111,6 +147,17 @@ history rather than two partial ones.
 - **Suite counts:** root and agent-support group: 3,657 passed, 1 skipped, 6 failed, and 3 between-test errors across 145 files; the other five failures are the tmux cluster recorded above.
 - **Isolated rerun:** `set -o pipefail; bun test ./tests/unit/electron/commands.test.ts --parallel 2>&1 | tee /tmp/orkestrator-fix-commands-isolated.log` -> 398 passed, 1 skipped, 0 failed, 2,385 assertions in 73.77 seconds; the target passed in 1,787.61 ms.
 - **Hypothesis:** this case performs several real Git subprocess operations inside one five-second outer budget. It completed in under two seconds when isolated, while the aggregate run was simultaneously timing out other process-heavy backend and tmux tests; no assertion mismatch was observed before the timeout.
+
+## `Electron backend command registry > deduplicates concurrent background starts for one environment` (`tests/unit/electron/commands.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-15
+- **Original command:** `bun run test:logged -- --name full-suite-3 -- bun run test`
+- **Worker configuration:** the root and agent-support group ran at six Bun workers while the workspace, bridges, and protocol-lockfile groups ran concurrently; those three groups passed.
+- **Failure:** `error: Timed out waiting for deduplicated background start to finish`, raised by the file's own `waitForCondition` helper (`commands.test.ts` line 1139) after 3,004.38 ms, reached through the nested `withFakeGh` -> `withFakeDocker` fixtures at `commands.test.ts:4358`. The helper polls every 5 ms against its own three-second budget, so this expired inside the fixture rather than against Bun's outer per-test budget.
+- **Suite counts:** root and agent-support group: 3,696 passed, 1 skipped, 3 failed, 16,678 assertions across 147 files in 223.68 s. The other two failures are the tmux cluster recorded above.
+- **Isolated rerun:** `bun test tests/unit/electron/commands.test.ts` -> 405 passed, 1 skipped, 0 failed, 2,411 assertions in 65.78 s; the affected case passed.
+- **Hypothesis:** the case asserts that two concurrent starts collapse into one by waiting for a real fake-Docker child to finish inside a three-second budget. The same aggregate run was simultaneously timing out two process-heavy tmux cases, so process-startup contention is the most likely cause; no assertion mismatch was reported before the wait expired. Distinct from the `deterministically generates refs, diff, Git-object contents, hashes, and validation evidence` entry above, which is a different test in the same file and expired against Bun's outer budget instead.
 
 ## `download-claude.sh > downloads, extracts, probes, and cleans up on Darwin/x86_64` (`tests/unit/download-scripts.test.ts`)
 
@@ -962,6 +1009,20 @@ Post-fix stress verification:
 - **Isolated rerun:** `bun test --cwd apps/web ./src/components/layout/ActionBar.test.tsx --parallel` -> 145 passed, 0 failed, 558 assertions in 15.95 seconds; the target passed in 587.91 ms.
 - **Recurrence (attachment-only startup review, 2026-08-15):** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-review-dfc3ad3f-full-tests.log` reproduced the identical signature — no accessible `dialog` named `Configure code review` at `ActionBar.test.tsx:2474` (duration: 608.50 ms) — with the web workspace package running alongside the root, bridge, and protocol-lockfile groups. Web package: 4,851 total, 4,849 passed, 1 skipped, 1 failed across 211 files; every other group passed and Turbo reported `11 successful, 12 total`. The immediate isolated rerun, `bun test --cwd apps/web ./src/components/layout/ActionBar.test.tsx`, passed 145/0 with 558 assertions in 12.79 seconds. Evidence: `/tmp/orkestrator-review-dfc3ad3f-full-tests.log` and `/tmp/orkestrator-review-dfc3ad3f-actionbar-isolated.log`.
 - **Hypothesis:** The aggregate-only result shows the expected long-press dialog was absent when queried, while the full owning file recreates it in isolation. Two occurrences now share the same line and a sub-second duration, so the long press is firing but the dialog has not mounted by the time the query runs — consistent with scheduling contention rather than a product failure. No narrower trigger is established; a further recurrence should capture the long-press timer, pointer events, and unmount/remount state before changing the product behavior or assertion.
+
+## `ActionBar workflow tabs > opens the PR modal after a mobile long press without launching a default PR` (`apps/web/src/components/layout/ActionBar.test.tsx`)
+
+- **Status:** resolved
+- **Date observed:** 2026-08-15
+- **Original command:** `bun --cwd=apps/web test --parallel=4`
+- **Worker configuration:** The whole web package ran as one four-worker pool (216 files); the root, bridge, and protocol groups were not running concurrently.
+- **Failure:** Testing Library could not find an accessible `dialog` named `Configure pull request` at `ActionBar.test.tsx:2586` after the fixed 575 ms long-press wait (duration: 735.93 ms; also observed at 741.62 ms and 747.05 ms).
+- **Suite counts:** Web package: 4,928 passed, 1 skipped, 1 failed across 4,930 tests in 216 files. Reproduced on 3 of 6 aggregate runs; the other 3 runs passed 4,929/0.
+- **Isolated rerun:** `bun --cwd=apps/web test src/components/layout/ActionBar.test.tsx` -> 156 passed, 0 failed in 18.68 s; the target passed every time.
+- **Hypothesis:** This is the PR-modal twin of the code-review case resolved below, and it was the only long-press dialog assertion in the file still querying immediately after the fixed sleep instead of through `waitFor` (compare `ActionBar.test.tsx:2673` and `:2712`, both already wrapped). Under aggregate scheduling the 550 ms production timer can land after the 575 ms test sleep, so the query runs before the dialog mounts. The failure predates the change under which it was observed; it is a timing-sensitive assertion, not a product defect.
+- **Root cause:** The assertion was made immediately after a fixed sleep instead of waiting for the timer-driven dialog state transition — identical to the resolved twin below, which was missed when that fix was applied.
+- **Fix:** Wrap the `Configure pull request` dialog assertion in `waitFor` with a 10-second budget, matching the twin's remedy from commit `9065ed7f`.
+- **Verification:** `bun --cwd=apps/web test src/components/layout/ActionBar.test.tsx` -> 156 passed, 0 failed; the target completed in 660.98 ms. Two subsequent full web-package aggregates (`bun --cwd=apps/web test --parallel=4`) passed 4,929/0 across 216 files.
 
 ## `ActionBar workflow tabs > opens the review modal after a mobile long press without launching the default review` (`apps/web/src/components/layout/ActionBar.test.tsx`)
 

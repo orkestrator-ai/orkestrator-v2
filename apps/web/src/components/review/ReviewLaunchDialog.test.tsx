@@ -79,6 +79,7 @@ import {
   type ReviewModelCatalog,
   type ReviewTabType,
 } from "./ReviewLaunchDialog";
+import { mergeReorderedFavoriteModels } from "@/hooks/useAgentModelFavorites";
 import { useConfigStore } from "@/stores/configStore";
 
 /**
@@ -205,7 +206,7 @@ const showProviderModels = (agent: string) => {
 
 const chooseModel = (name: RegExp, agent?: string) => {
   openPicker();
-  if (agent) showProviderModels(agent);
+  showProviderModels(agent ?? "claude");
   fireEvent.click(modelItem(name));
 };
 
@@ -356,6 +357,20 @@ describe("ReviewLaunchDialog", () => {
     closePicker();
   });
 
+  test("preserves disabled-provider favorites when visible review favorites reorder", () => {
+    const hidden = { platform: "opencode" as const, modelId: "provider/model-a" };
+    const first = { platform: "claude" as const, modelId: "claude-a" };
+    const second = { platform: "claude" as const, modelId: "claude-b" };
+
+    expect(
+      mergeReorderedFavoriteModels(
+        [first, hidden, second],
+        [first, second],
+        [second, first],
+      ),
+    ).toEqual([second, hidden, first]);
+  });
+
   test("keeps the chosen model after a keyboard glance at favourites", () => {
     const { onConfirm } = renderDialog();
 
@@ -366,11 +381,13 @@ describe("ReviewLaunchDialog", () => {
 
     openPicker();
     const list = document.querySelector("[data-native-model-list]")!;
-    fireEvent.keyDown(list, { key: "ArrowLeft" });
     expect(screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"))
       .toBe("true");
     fireEvent.keyDown(list, { key: "ArrowRight" });
     expect(screen.getByRole("button", { name: "claude models" }).getAttribute("aria-pressed"))
+      .toBe("true");
+    fireEvent.keyDown(list, { key: "ArrowLeft" });
+    expect(screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"))
       .toBe("true");
     closePicker();
 
@@ -401,6 +418,7 @@ describe("ReviewLaunchDialog", () => {
     });
 
     openPicker();
+    showProviderModels("claude");
     // The caption the old model list showed has to survive the move into the
     // picker, where a row's second line is the provider label.
     expect(modelItem(/Claude A/).textContent)
@@ -960,6 +978,7 @@ describe("ReviewLaunchDialog on a phone", () => {
     renderDialog({ catalog: sparseCatalog });
 
     openPicker();
+    fireEvent.click(screen.getByRole("button", { name: "claude models" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: /Claude Fixed/ }));
 
     expect(screen.getByText("This model uses its default reasoning setting.")).toBeTruthy();

@@ -54,7 +54,7 @@ import type {
 import type { StorageService } from "./storage.js";
 import {
   AmbiguousPromptDispatchError,
-  createBuildPipelineProvider,
+  createNativeAgentProvider,
   PromptRejectedError,
   ProviderUnavailableError,
   readProviderStatus,
@@ -63,7 +63,7 @@ import {
   type ProviderInteractiveSnapshot,
   type ProviderInteractionObservationEvent,
   type ProviderExecutionMode,
-} from "./build-pipeline-provider.js";
+} from "./native-agent-provider.js";
 import {
   assertValidPromptAttachments,
   INITIAL_PROMPT_STAGING_DIRECTORY,
@@ -4143,7 +4143,7 @@ export class NativeAgentService {
     ) return cached;
     await this.assertEnvironmentLive(input.environmentId);
     this.assertAcceptingWork();
-    const provider = createBuildPipelineProvider(connection, {
+    const provider = createNativeAgentProvider(connection, {
       // Interactive sessions belong to a tab that renders approvals and
       // questions. Answering them here would run a command the user never saw
       // and cancel the card that exists to answer it.
@@ -4234,7 +4234,7 @@ export class NativeAgentService {
     }
     await this.assertEnvironmentLive(input.environmentId);
     this.assertAcceptingWork();
-    const provider = createBuildPipelineProvider(connection, {
+    const provider = createNativeAgentProvider(connection, {
       autoAnswerRequests: false,
       stageImages: (images) =>
         this.stageImages(input.environmentId, images),

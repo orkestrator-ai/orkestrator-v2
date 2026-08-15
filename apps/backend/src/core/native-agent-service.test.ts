@@ -13,20 +13,20 @@ import {
   type AgentInteractionSnapshot,
 } from "@orkestrator/protocol/agent-interactions";
 import {
-  createBuildPipelineProvider,
+  createNativeAgentProvider,
   AmbiguousPromptDispatchError,
   PromptRejectedError,
   ProviderSessionFailedError,
   ProviderUnavailableError,
   type BridgeConnection,
-  type BuildPipelineProvider,
+  type AgentSessionProvider,
   type NativeAgentRuntimeProvider,
   type ProviderSendOptions,
   type ProviderActivityState,
   type ProviderInteractiveSnapshot,
   type AgentInteractionProviderCapability,
   type ProviderStatus,
-} from "./build-pipeline-provider.js";
+} from "./native-agent-provider.js";
 import type { Environment } from "./models.js";
 import {
   isAgentTurnEndTransition,
@@ -192,7 +192,7 @@ function createOpenCodeLifecycleProvider(existingSessionIds: readonly string[]) 
     question: { async list() { return { data: [] }; } },
     permission: { async list() { return { data: [] }; } },
   };
-  return createBuildPipelineProvider(
+  return createNativeAgentProvider(
     {
       agent: "opencode",
       baseUrl: "http://opencode.test",
@@ -209,14 +209,14 @@ function internals(service: NativeAgentService) {
     drainPromptQueues(): Promise<void>;
     drainPromptQueueOnce(queueKey: string): Promise<void>;
     reconcilePendingLaunches(): Promise<void>;
-    provider(input: EnsureNativeAgentSessionInput): Promise<BuildPipelineProvider>;
+    provider(input: EnsureNativeAgentSessionInput): Promise<AgentSessionProvider>;
     bridgeConnection(
       agent: BuildPipelineAgent,
       environment: Environment,
       model?: string,
       effort?: string,
     ): Promise<BridgeConnection>;
-    providers: Map<string, BuildPipelineProvider>;
+    providers: Map<string, AgentSessionProvider>;
     activityRetryAt: Map<string, number>;
     activityAttempts: Map<string, number>;
     absentBridgeUntil: Map<string, number>;
@@ -495,6 +495,86 @@ function activePipeline(
 }
 
 describe("NativeAgentService", () => {
+  test("rejects a disconnected OpenCode model on the interactive tab path", async () => {
+    const messageCalls = mock(async () => ({ data: [] }));
+    const promptCalls = mock(async () => ({ data: true }));
+    const client = {
+      provider: {
+        async list() {
+          return {
+            data: {
+              all: [
+                {
+                  id: "hpc-ai",
+                  models: {
+                    "deepseek/deepseek-v4-flash": { name: "DeepSeek V4 Flash" },
+                  },
+                },
+                {
+                  id: "opencode",
+                  models: { "kimi-k2.7": { name: "Kimi K2.7" } },
+                },
+              ],
+              connected: ["opencode"],
+            },
+          };
+        },
+      },
+      session: {
+        async create() {
+          return { data: { id: "provider-session" } };
+        },
+        async status() {
+          return { data: { "provider-session": { type: "idle" } } };
+        },
+        messages: messageCalls,
+        promptAsync: promptCalls,
+      },
+    };
+    const provider = createNativeAgentProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "test-token",
+        directory: "/workspace",
+      },
+      {
+        openCodeClient: client as never,
+        autoAnswerRequests: false,
+        resolveOpenCodeModelProviders: () => ["hpc-ai", "opencode"],
+      },
+    );
+
+    await withService({
+      prefix: "orkestrator-native-opencode-disconnected-model-",
+      provider: async () => provider,
+    }, async ({ service }) => {
+      const input = {
+        environmentId: "env-1",
+        agent: "opencode" as const,
+        logicalSessionKey: "env-env-1:tab-opencode",
+        origin: "interactive-native" as const,
+        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+        prompt: "Please continue",
+        requestId: "request-1",
+        model: "hpc-ai/deepseek/deepseek-v4-flash",
+        mode: "build" as const,
+      };
+
+      await expect(service.dispatchIntent(input)).resolves.toEqual({
+        outcome: "rejected",
+        error: "The selected OpenCode model is not connected or is no longer available. Choose an available model and retry.",
+      });
+      // `promptAsync` would persist the user message before resolving the model.
+      // The interactive path must reject before either transcript or dispatch.
+      expect(messageCalls).not.toHaveBeenCalled();
+      expect(promptCalls).not.toHaveBeenCalled();
+      await expect(service.listProjectionModels(input)).resolves.toEqual([
+        expect.objectContaining({ id: "opencode/kimi-k2.7" }),
+      ]);
+    });
+  });
+
   test("uses the provider's raw OpenCode catalogue for durable cache refreshes", async () => {
     const filtered = [{ platform: "opencode" as const, id: "opencode/a", label: "A" }];
     const raw = [
@@ -2886,7 +2966,7 @@ describe("NativeAgentService", () => {
     const provider = async (
       _input: EnsureNativeAgentSessionInput,
       environment: Environment,
-    ): Promise<BuildPipelineProvider> => createProviderStub("codex", {
+    ): Promise<AgentSessionProvider> => createProviderStub("codex", {
       interactions: {
         listPendingInteractions: async () => {
           inFlight += 1;
@@ -6067,7 +6147,7 @@ describe("NativeAgentService", () => {
       messages: async () => [],
       structured: async () => null,
       abort: async () => undefined,
-    } as BuildPipelineProvider;
+    } as AgentSessionProvider;
     const invoke = async <T>(): Promise<T> => {
       throw new Error("The injected provider should avoid backend commands");
     };
@@ -6123,7 +6203,7 @@ describe("NativeAgentService", () => {
       messages: async () => [],
       structured: async () => null,
       abort: async () => undefined,
-    } as BuildPipelineProvider;
+    } as AgentSessionProvider;
     const invoke = async <T>(command: string): Promise<T> => {
       // Staging happens inside the provider, under the dispatch lock, so the
       // supervisor that loses the launch must never reach a backend command.
@@ -6193,7 +6273,7 @@ describe("NativeAgentService", () => {
       messages: async () => [],
       structured: async () => null,
       abort: async () => undefined,
-    } as BuildPipelineProvider;
+    } as AgentSessionProvider;
     const service = new NativeAgentService(storage, async <T>(): Promise<T> => {
       throw new Error("unused");
     }, { provider: async () => provider });
@@ -6242,7 +6322,7 @@ describe("NativeAgentService", () => {
       messages: async () => [],
       structured: async () => null,
       abort: async () => undefined,
-    } as BuildPipelineProvider;
+    } as AgentSessionProvider;
     const service = new NativeAgentService(
       storage,
       async <T>(): Promise<T> => {
@@ -6365,7 +6445,7 @@ describe("NativeAgentService", () => {
       messages: async () => [],
       structured: async () => null,
       abort: async () => undefined,
-    } as BuildPipelineProvider;
+    } as AgentSessionProvider;
     const service = new NativeAgentService(storage, async <T>(): Promise<T> => {
       throw new Error("unused");
     }, { provider: async () => provider });
@@ -6413,7 +6493,7 @@ describe("NativeAgentService", () => {
       messages: async () => [],
       structured: async () => null,
       abort: async () => undefined,
-    } as BuildPipelineProvider;
+    } as AgentSessionProvider;
     const service = new NativeAgentService(storage, async <T>(): Promise<T> => {
       throw new Error("unused");
     }, { provider: async () => provider });
@@ -6466,7 +6546,7 @@ describe("NativeAgentService", () => {
       messages: async () => [],
       structured: async () => null,
       abort: async () => undefined,
-    } as BuildPipelineProvider;
+    } as AgentSessionProvider;
     const service = new NativeAgentService(storage, async <T>(): Promise<T> => {
       throw new Error("unused");
     }, { provider: async () => provider });
@@ -6521,7 +6601,7 @@ describe("NativeAgentService", () => {
       messages: async () => [],
       structured: async () => null,
       abort: async () => undefined,
-    } as BuildPipelineProvider;
+    } as AgentSessionProvider;
     const service = new NativeAgentService(storage, async <T>(): Promise<T> => {
       throw new Error("unused");
     }, { provider: async () => provider });
@@ -6565,7 +6645,7 @@ describe("NativeAgentService", () => {
       messages: async () => [],
       structured: async () => null,
       abort: async () => undefined,
-    } as BuildPipelineProvider;
+    } as AgentSessionProvider;
     const service = new NativeAgentService(storage, async <T>(): Promise<T> => {
       throw new Error("unused");
     }, { provider: async () => provider });
@@ -6604,7 +6684,7 @@ describe("NativeAgentService", () => {
         messages: async () => [],
         structured: async () => null,
         abort: async () => undefined,
-      } as BuildPipelineProvider;
+      } as AgentSessionProvider;
       const service = new NativeAgentService(storage, async <T>(): Promise<T> => {
         throw new Error("unused");
       }, { provider: async () => provider });
@@ -6657,7 +6737,7 @@ describe("NativeAgentService", () => {
       messages: async () => [],
       structured: async () => null,
       abort: async () => undefined,
-    } as BuildPipelineProvider;
+    } as AgentSessionProvider;
     const service = new NativeAgentService(storage, async <T>(): Promise<T> => {
       throw new Error("unused");
     }, { provider: async () => provider });
@@ -6702,7 +6782,7 @@ describe("NativeAgentService", () => {
       messages: async () => [],
       structured: async () => null,
       abort: async () => undefined,
-    } as BuildPipelineProvider;
+    } as AgentSessionProvider;
     const service = new NativeAgentService(storage, async <T>(): Promise<T> => {
       throw new Error("unused");
     }, { provider: async () => provider });
@@ -6750,7 +6830,7 @@ describe("NativeAgentService", () => {
       messages: async () => [],
       structured: async () => null,
       abort: async () => undefined,
-    } as BuildPipelineProvider;
+    } as AgentSessionProvider;
     const service = new NativeAgentService(storage, async <T>(): Promise<T> => {
       throw new Error("unused");
     }, { provider: async () => provider });
@@ -6804,7 +6884,7 @@ describe("NativeAgentService", () => {
       messages: async () => [],
       structured: async () => null,
       abort: async () => undefined,
-    } as BuildPipelineProvider;
+    } as AgentSessionProvider;
     const service = new NativeAgentService(storage, async <T>(): Promise<T> => {
       throw new Error("unused");
     }, { provider: async () => provider });
@@ -6850,7 +6930,7 @@ describe("NativeAgentService", () => {
       messages: async () => [],
       structured: async () => null,
       abort: async () => undefined,
-    } as BuildPipelineProvider;
+    } as AgentSessionProvider;
     const service = new NativeAgentService(storage, async <T>(): Promise<T> => {
       throw new Error("unused");
     }, { provider: async () => provider });
@@ -6900,7 +6980,7 @@ describe("NativeAgentService", () => {
       messages: async () => [],
       structured: async () => null,
       abort: async () => undefined,
-    } as BuildPipelineProvider;
+    } as AgentSessionProvider;
     const service = new NativeAgentService(storage, async <T>(): Promise<T> => {
       throw new Error("unused");
     }, { provider: async () => provider });
@@ -6965,7 +7045,7 @@ describe("NativeAgentService", () => {
       messages: async () => [],
       structured: async () => null,
       abort: async () => undefined,
-    } as BuildPipelineProvider;
+    } as AgentSessionProvider;
     const service = new NativeAgentService(storage, async <T>(): Promise<T> => {
       throw new Error("unused");
     }, { provider: async () => provider });
@@ -8689,7 +8769,7 @@ describe("NativeAgentService", () => {
       messages: async () => [],
       structured: async () => null,
       abort: async () => undefined,
-    } as BuildPipelineProvider;
+    } as AgentSessionProvider;
     const service = new NativeAgentService(storage, async <T>(): Promise<T> => {
       throw new Error("unused");
     }, { provider: async () => provider });

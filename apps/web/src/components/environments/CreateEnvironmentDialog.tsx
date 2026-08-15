@@ -83,6 +83,7 @@ import {
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
+import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
 // Stable empty array reference to prevent infinite re-renders when no default port mappings are provided
@@ -122,7 +123,7 @@ export function resolveAgentDefaults(
   repoConfig?: { defaultAgent?: string; agentStyle?: string },
 ) {
   const defaultAgent = repoConfig?.defaultAgent || globalConfig.defaultAgent || "claude";
-  const claudeMode = repoConfig?.agentStyle || globalConfig.claudeMode || "terminal";
+  const claudeMode = repoConfig?.agentStyle || globalConfig.claudeMode || DEFAULT_CLAUDE_MODE;
   const opencodeMode = repoConfig?.agentStyle || globalConfig.opencodeMode || "terminal";
   const codexMode = repoConfig?.agentStyle || globalConfig.codexMode || "native";
   return { defaultAgent, claudeMode, opencodeMode, codexMode } as const;
@@ -248,7 +249,7 @@ export function CreateEnvironmentDialog({
   const [cachedOpenCodeModels, setCachedOpenCodeModels] = useState<
     CachedOpenCodeModel[]
   >([]);
-  const { favorites: favoriteModels, toggleFavorite: toggleFavoriteModel } = useAgentModelFavorites();
+  const { favorites: favoriteModels, toggleFavorite: toggleFavoriteModel, reorderFavorites } = useAgentModelFavorites();
   const configuredOpenCodeModel =
     (configDefaultAgent === "opencode" ? repoConfig?.defaultModel : undefined)
     ?? config.global.opencodeModel;
@@ -1170,6 +1171,7 @@ export function CreateEnvironmentDialog({
                 favorites={favoriteModels}
                 onPlatformChange={selectAgent}
                 onToggleFavorite={toggleFavoriteModel}
+                onReorderFavorites={reorderFavorites}
                 selectedModelId={model}
                 selectedModelLabel={selectedModel?.name ?? "Select model"}
                 onModelChange={selectModel}

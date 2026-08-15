@@ -474,8 +474,20 @@ describe("renderTurn", () => {
     // set, or the ones it failed to name would vanish.
     await derive([spawn("a", "child-1"), spawn("b")]);
     await derive([]);
+    await derive([{
+      id: "wait",
+      type: "collab_tool_call",
+      tool: "wait",
+      receiver_thread_ids: ["child-wrapper"],
+      status: "completed",
+    }]);
 
-    expect(seen).toEqual([["child-1", "child-2"], undefined, undefined]);
+    expect(seen).toEqual([
+      ["child-1", "child-2"],
+      undefined,
+      undefined,
+      ["child-wrapper"],
+    ]);
   });
 
   test("maps transcript fields and folds live collaboration state with injected dependencies", async () => {

@@ -12,6 +12,7 @@ import type {
   GlobalConfig,
   RepositoryConfig,
 } from "@/types";
+import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
 
 export interface ResolvedClaudeConfig {
   /** Effective mode after applying overrides. */
@@ -39,7 +40,7 @@ export function resolveClaudeConfig(
     environment?.claudeMode ??
     repositoryConfig?.agentStyle ??
     global.claudeMode ??
-    "terminal";
+    DEFAULT_CLAUDE_MODE;
   const nativeBackend: ClaudeNativeBackend =
     environment?.claudeNativeBackend ??
     repositoryConfig?.claudeNativeBackend ??

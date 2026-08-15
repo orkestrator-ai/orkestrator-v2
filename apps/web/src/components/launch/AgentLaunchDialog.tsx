@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { GitPullRequest } from "lucide-react";
+import { AlertTriangle, GitPullRequest, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -23,13 +23,17 @@ import {
 } from "@/lib/agent-launch";
 import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
 
-export interface CreatePRSelection {
+export interface AgentLaunchSelection {
   agent: LaunchAgent;
   model: string;
   reasoningEffort?: string;
 }
 
-interface CreatePRDialogProps {
+/** The workflow being launched. Every entry restyles the same picker. */
+export type AgentLaunchKind = "create-pr" | "resolve-conflicts";
+
+interface AgentLaunchDialogProps {
+  kind?: AgentLaunchKind;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Agent the toolbar would have used for a plain click. */
@@ -39,13 +43,15 @@ interface CreatePRDialogProps {
   enabledAgents: LaunchAgent[];
   preferredModels?: Partial<Record<LaunchAgent, string>>;
   preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
-  /** Base branch the pull request will target, shown so it can be verified. */
+  /** Base branch the launch targets, shown so it can be verified. */
   targetBranch: string;
   returnFocusRef?: RefObject<HTMLElement | null>;
   returnFocusFallback?: () => HTMLElement | null;
   confirmDisabled?: boolean;
+  /** Blocks confirmation and shows neutral busy text rather than an error. */
+  busy?: boolean;
   error?: string | null;
-  onConfirm: (selection: CreatePRSelection) => void;
+  onConfirm: (selection: AgentLaunchSelection) => void;
 }
 
 function agentLabel(agent: LaunchAgent): string {
@@ -53,13 +59,16 @@ function agentLabel(agent: LaunchAgent): string {
 }
 
 /**
- * Configures the agent, model and reasoning effort for a PR-creation run.
+ * Configures the agent, model and reasoning effort for a toolbar launch.
  *
- * The single unified picker is deliberate: provider, model and effort are one
- * decision, and splitting them across controls lets a user leave an effort
- * selected that the newly chosen model does not offer.
+ * Shared by every workflow that launches a configured agent — `kind` restyles
+ * the copy and the confirm label, nothing else. The single unified picker is
+ * deliberate: provider, model and effort are one decision, and splitting them
+ * across controls lets a user leave an effort selected that the newly chosen
+ * model does not offer.
  */
-export function CreatePRDialog({
+export function AgentLaunchDialog({
+  kind = "create-pr",
   open,
   onOpenChange,
   defaultAgent,
@@ -71,10 +80,11 @@ export function CreatePRDialog({
   returnFocusRef,
   returnFocusFallback,
   confirmDisabled = false,
+  busy = false,
   error,
   onConfirm,
-}: CreatePRDialogProps) {
-  const { favorites, toggleFavorite } = useAgentModelFavorites();
+}: AgentLaunchDialogProps) {
+  const { favorites, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
   const initialModel = firstModelFor(defaultAgent, catalog, preferredModels);
   const [agent, setAgent] = useState<LaunchAgent>(defaultAgent);
   const [model, setModel] = useState(initialModel);
@@ -152,15 +162,25 @@ export function CreatePRDialog({
     );
   };
 
+  const isResolve = kind === "resolve-conflicts";
   const summary = [
     agentLabel(agent),
     selectedModel?.name ?? model,
     effectiveEffort === "default" ? "default effort" : `${effectiveEffort} effort`,
-    `into ${targetBranch}`,
+    `${isResolve ? "against" : "into"} ${targetBranch}`,
   ].join(" · ");
+  const pickerId = isResolve ? "resolve-conflicts-model" : "create-pr-model";
+  const confirmLabel = isResolve ? "Resolve conflicts" : "Create pull request";
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        // A launch already in flight must keep this surface mounted: the
+        // parent reports refusal here, and dismissing would swallow it.
+        if (!busy) onOpenChange(nextOpen);
+      }}
+    >
       <DialogContent
         className="flex w-[min(calc(100%-1rem),34rem)] flex-col gap-0 overflow-hidden border-zinc-700/80 bg-[#111113] p-0 sm:max-w-[34rem]"
         onCloseAutoFocus={(event) => {
@@ -176,20 +196,33 @@ export function CreatePRDialog({
         <DialogHeader className="shrink-0 border-b border-zinc-800 bg-gradient-to-br from-cyan-500/[0.08] via-transparent to-transparent px-5 pb-4 pt-5 sm:px-6">
           <DialogTitle className="flex items-center gap-2 text-base">
             <span className="grid size-8 shrink-0 place-items-center rounded-full border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
-              <GitPullRequest className="size-4" />
+              {isResolve
+                ? <AlertTriangle className="size-4" />
+                : <GitPullRequest className="size-4" />}
             </span>
-            Configure pull request
+            {isResolve ? "Configure conflict resolution" : "Configure pull request"}
           </DialogTitle>
           <DialogDescription>
-            Launch an agent that commits the work, pushes the branch, and opens a
-            pull request against <span className="text-zinc-300">{targetBranch}</span>.
+            {isResolve ? (
+              <>
+                Launch an agent to resolve this pull request&apos;s merge conflicts against{" "}
+                <span className="text-zinc-300">{targetBranch}</span>, then commit and push the result.
+              </>
+            ) : (
+              <>
+                Launch an agent that commits the work, pushes the branch, and opens a
+                pull request against <span className="text-zinc-300">{targetBranch}</span>.
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
 
         <form
           className="flex min-h-0 flex-1 flex-col overflow-hidden"
+          aria-busy={busy}
           onSubmit={(event) => {
             event.preventDefault();
+            if (busy || confirmDisabled) return;
             onConfirm({
               agent,
               model: selectedModel?.id ?? model,
@@ -198,15 +231,25 @@ export function CreatePRDialog({
             });
           }}
         >
+          {/*
+            `display: contents` rather than a flex column: a rendered fieldset
+            wraps its children in an anonymous content box that sizes to
+            content, so a `flex-1 min-h-0` child resolves against that box
+            instead of the fieldset's own constrained height and the scroll
+            region grows until it pushes the footer out of the dialog. Removing
+            the box makes the region and footer direct children of the form.
+            `disabled` still propagates — that is a DOM rule, not a layout one.
+          */}
+          <fieldset disabled={busy} className="contents">
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-6">
             <Label
-              htmlFor="create-pr-model"
+              htmlFor={pickerId}
               className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400"
             >
               Agent, model and reasoning
             </Label>
             <AgentModelPicker
-              id="create-pr-model"
+              id={pickerId}
               ariaLabel="Agent, model and reasoning"
               models={pickerModels}
               enabledPlatforms={enabledAgents}
@@ -214,6 +257,7 @@ export function CreatePRDialog({
               favorites={favorites}
               onPlatformChange={selectAgent}
               onToggleFavorite={toggleFavorite}
+              onReorderFavorites={reorderFavorites}
               selectedModelId={selectedModel?.id ?? model}
               selectedModelLabel={selectedModel?.name ?? "Choose a model"}
               onModelChange={(nextModelId) =>
@@ -237,22 +281,36 @@ export function CreatePRDialog({
             <div className="mt-5 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-400">
               <span className="text-zinc-500">Launch:</span> {summary}
             </div>
-            {error && (
+            {/* A launch in flight is progress, not a fault: reporting it through
+                the destructive alert would tell the user their own successful
+                submission had failed for as long as the launch took. */}
+            {busy ? (
+              <p
+                role="status"
+                className="mt-3 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-400"
+              >
+                <Loader2 className="size-3.5 animate-spin" />
+                Launching…
+              </p>
+            ) : error ? (
               <p
                 role="alert"
                 className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
               >
                 {error}
               </p>
-            )}
+            ) : null}
           </div>
 
           <DialogFooter className="shrink-0 flex-row justify-end border-t border-zinc-800 bg-zinc-950/40 px-5 py-4 sm:px-6">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            <Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={confirmDisabled}>Create pull request</Button>
+            <Button type="submit" disabled={confirmDisabled || busy}>
+              {confirmLabel}
+            </Button>
           </DialogFooter>
+          </fieldset>
         </form>
       </DialogContent>
     </Dialog>

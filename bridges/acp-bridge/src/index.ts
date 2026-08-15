@@ -106,6 +106,8 @@ interface BridgeToolPart {
   toolOutput?: string;
   toolError?: string;
   toolDiff?: BridgeToolDiff;
+  /** Launch tool this nested call belongs to, when the provider names a parent. */
+  parentTaskUseId?: string;
 }
 
 interface AcpToolSourceState {
@@ -241,6 +243,8 @@ interface SessionState {
   currentTurnUsage?: AcpTurnUsage;
   /** Wall clock of the in-flight turn, used for the elapsed metric. */
   turnStartedAt?: number;
+  /** A user cancellation suppresses any resource-exhaustion retry still in backoff. */
+  retryCancelledPromptSequence?: number;
   /** `available_commands_update` size; both agents advertise their commands. */
   commandCount?: number;
   /** Whether session/load is replaying transcript updates into this state. */
@@ -452,6 +456,11 @@ const MAX_RESUMABLE_SESSIONS = 512;
 const MAX_SESSION_LIST_PAGES = 64;
 const RPC_TIMEOUT_MS = parseDuration(process.env.ACP_RPC_TIMEOUT_MS, 30_000);
 const PROMPT_TIMEOUT_MS = parseDuration(process.env.ACP_PROMPT_TIMEOUT_MS, 30 * 60_000);
+const RESOURCE_EXHAUSTED_MAX_RETRIES = 3;
+const RESOURCE_EXHAUSTED_RETRY_BASE_MS = parseDuration(
+  process.env.ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS,
+  1_000,
+);
 const PARENT_WATCHDOG_INTERVAL_MS = parseDuration(
   process.env.ACP_PARENT_WATCHDOG_INTERVAL_MS,
   15_000,
@@ -1497,6 +1506,10 @@ function applyToolCallUpdate(
   }
   applyAcpToolSourcePatch(source, update);
   renderAcpToolSource(part, source);
+  const parentTaskUseId = acpParentTaskUseId(update);
+  if (parentTaskUseId && parentTaskUseId !== toolCallId) {
+    part.parentTaskUseId = parentTaskUseId;
+  }
   syncActiveSubagentTool(state, part);
 
   state.revision += 1;
@@ -1957,6 +1970,30 @@ function cancelCursorToolMetadataReconcile(state: SessionState): void {
   if (state.cursorToolReplayTimer) clearTimeout(state.cursorToolReplayTimer);
   state.cursorToolReplayTimer = undefined;
   state.cursorToolReplayPending = undefined;
+}
+
+/**
+ * Nested child tools name their launch call through several vendor `_meta`
+ * shapes. The standard ACP schema has no parent field, so this is best-effort
+ * capture of ids the frontend already groups on.
+ */
+function acpParentTaskUseId(update: JsonObject): string | undefined {
+  const candidates: unknown[] = [
+    update.parentToolCallId,
+    update.parent_tool_call_id,
+  ];
+  if (isObject(update._meta)) {
+    candidates.push(update._meta.parentToolCallId, update._meta.parent_tool_call_id);
+    const claudeCode = isObject(update._meta.claudeCode) ? update._meta.claudeCode : undefined;
+    if (claudeCode) {
+      candidates.push(claudeCode.parentToolUseId, claudeCode.parent_tool_use_id);
+    }
+  }
+  for (const candidate of candidates) {
+    const value = boundedString(candidate, MAX_TOOL_ID_BYTES)?.trim();
+    if (value) return value;
+  }
+  return undefined;
 }
 
 function applyAcpToolSourcePatch(source: AcpToolSourceState, update: JsonObject): void {
@@ -2985,6 +3022,147 @@ function setPromptJournal(state: SessionState, entry: PromptJournalEntry): void 
   state.promptJournal.set(entry.requestId, entry);
 }
 
+const RESOURCE_EXHAUSTED_ERROR = /\[resource_exhausted\]\s+Error/i;
+// The class name is whatever the provider's own error carried — `RetriableError`
+// is only the one Cursor happens to emit today. Matching a single character here
+// would silently exclude every other name and leave the turn dead, so the
+// identifier is quantified and the flag set matches `RESOURCE_EXHAUSTED_ERROR`.
+const FLATTENED_RESOURCE_EXHAUSTED_SUFFIX =
+  /(?:^|\n\n)Error: [A-Za-z_$][\w$]*: \[resource_exhausted\] Error\s*$/i;
+const RESOURCE_EXHAUSTED_CONTINUATION =
+  "Continue from where the interrupted turn stopped. A transient provider capacity error ended the previous attempt. Do not repeat work or tool calls that already completed; inspect the session history and finish the original request.";
+
+function flattenedResourceExhaustedTail(state: SessionState): {
+  message: BridgeMessage;
+  part: BridgeTextPart;
+} | null {
+  const message = state.messages.at(-1);
+  const part = message?.parts.at(-1);
+  if (message?.role !== "assistant" || part?.type !== "text") return null;
+  return FLATTENED_RESOURCE_EXHAUSTED_SUFFIX.test(part.content)
+    && FLATTENED_RESOURCE_EXHAUSTED_SUFFIX.test(message.content)
+    ? { message, part }
+    : null;
+}
+
+function stripFlattenedResourceExhaustedTail(
+  state: SessionState,
+  tail: { message: BridgeMessage; part: BridgeTextPart },
+): void {
+  tail.part.content = tail.part.content.replace(FLATTENED_RESOURCE_EXHAUSTED_SUFFIX, "");
+  tail.message.content = tail.message.content.replace(FLATTENED_RESOURCE_EXHAUSTED_SUFFIX, "");
+  if (!tail.part.content) tail.message.parts.pop();
+  // Interim provider serialization is not part of the transcript users should
+  // have to interpret. The final marker is retained if all retries exhaust.
+  state.revision += 1;
+  schedulePersist();
+}
+
+function structuredPromptInstruction(schema: JsonObject): string {
+  return `Return only one JSON value matching this JSON Schema. Do not use a Markdown fence or add commentary.\n\n${JSON.stringify(schema)}`;
+}
+
+function resourceExhaustedError(error: unknown): error is Error {
+  return error instanceof Error && RESOURCE_EXHAUSTED_ERROR.test(error.message);
+}
+
+function retryDelay(milliseconds: number): Promise<void> {
+  return new Promise((resolvePromise) => {
+    const timer = setTimeout(resolvePromise, milliseconds);
+    timer.unref();
+  });
+}
+
+function retryStillOwned(
+  state: SessionState,
+  child: AcpProcess,
+  promptSequence: number,
+): boolean {
+  return !shuttingDown
+    && sessions.get(state.id) === state
+    && state.child === child
+    && state.status === "running"
+    && state.promptSequence === promptSequence
+    && state.retryCancelledPromptSequence !== promptSequence;
+}
+
+function retryOwnershipLostError(state: SessionState): Error {
+  // A child exit or a transcript-limit failure records the real cause before the
+  // retry wakes up, and `/prompt` clears `error` per turn so anything here
+  // belongs to this one. Preserve it rather than hiding "the agent died" behind
+  // the generic message.
+  return new Error(state.error || `${provider} prompt retry lost its live session`);
+}
+
+async function requestPromptWithResourceExhaustedRetries(
+  state: SessionState,
+  child: AcpProcess,
+  initialPrompt: JsonObject,
+  promptSequence: number,
+  schema: JsonObject | undefined,
+): Promise<unknown> {
+  let prompt = initialPrompt;
+  let retries = 0;
+
+  while (true) {
+    let result: unknown;
+    let requestError: Error | undefined;
+    try {
+      result = await child.request("session/prompt", prompt, PROMPT_TIMEOUT_MS);
+    } catch (error) {
+      if (!resourceExhaustedError(error)) throw error;
+      requestError = error;
+    }
+
+    const flattened = requestError ? null : flattenedResourceExhaustedTail(state);
+    if (!requestError && !flattened) return result;
+    if (!retryStillOwned(state, child, promptSequence)) {
+      if (state.retryCancelledPromptSequence === promptSequence) {
+        return { stopReason: "cancelled" };
+      }
+      throw requestError ?? retryOwnershipLostError(state);
+    }
+    if (retries >= RESOURCE_EXHAUSTED_MAX_RETRIES) {
+      throw new Error(
+        `${provider} remained resource exhausted after ${RESOURCE_EXHAUSTED_MAX_RETRIES} retries`,
+        requestError ? { cause: requestError } : undefined,
+      );
+    }
+
+    if (flattened) stripFlattenedResourceExhaustedTail(state, flattened);
+    // Discard every attempt's partial structured output, on both the flattened
+    // and the typed-RPC path. The continuation re-emits the whole value, so a
+    // retained prefix would concatenate into unparseable JSON and fail a turn
+    // that actually recovered.
+    if (state.currentTurnOutput !== null) state.currentTurnOutput = "";
+    // A provider can stop between a tool's start and terminal update. Settle
+    // that attempt before the continuation starts; completed tools remain
+    // successful and the continuation is explicitly told not to repeat them.
+    reconcileStaleToolParts(state);
+    retries += 1;
+    await retryDelay(RESOURCE_EXHAUSTED_RETRY_BASE_MS * (2 ** (retries - 1)));
+
+    if (!retryStillOwned(state, child, promptSequence)) {
+      if (state.retryCancelledPromptSequence === promptSequence) {
+        return { stopReason: "cancelled" };
+      }
+      throw retryOwnershipLostError(state);
+    }
+    prompt = {
+      sessionId: state.acpSessionId,
+      // The schema instruction rides every attempt. The continuation replaces
+      // the original prompt on the wire, so omitting it would ask a structured
+      // turn to finish without restating the contract it must satisfy.
+      prompt: [{
+        type: "text",
+        text: schema
+          ? `${RESOURCE_EXHAUSTED_CONTINUATION}\n\n${structuredPromptInstruction(schema)}`
+          : RESOURCE_EXHAUSTED_CONTINUATION,
+      }],
+    };
+  }
+}
+
 async function route(
   request: IncomingMessage,
   response: ServerResponse,
@@ -3173,6 +3351,12 @@ async function route(
       // The turn definitely did not run, so release the claim and let the
       // caller retry with the same requestId.
       state.dispatching = false;
+      // A cancel that landed in this window reserved the sequence this turn was
+      // about to take. The turn never took it, so drop the reservation rather
+      // than let it suppress retries for whichever turn claims it next.
+      if (state.retryCancelledPromptSequence === state.promptSequence + 1) {
+        state.retryCancelledPromptSequence = undefined;
+      }
       if (requestId) state.promptJournal.delete(requestId);
       if (error instanceof PromptAttachmentError) {
         return json(response, 400, { error: error.message });
@@ -3202,19 +3386,18 @@ async function route(
     state.error = undefined;
     state.outputTruncated = false;
     state.promptSequence += 1;
+    const promptSequence = state.promptSequence;
     state.turnStartedAt = Date.now();
     state.currentTurnUsage = {};
     state.currentTurnOutput = schema ? "" : null;
     state.revision += 1;
     boundTranscript(state);
     await persistState();
-    const acpPrompt = schema
-      ? `${prompt}\n\nReturn only one JSON value matching this JSON Schema. Do not use a Markdown fence or add commentary.\n\n${JSON.stringify(schema)}`
-      : prompt;
+    const acpPrompt = schema ? `${prompt}\n\n${structuredPromptInstruction(schema)}` : prompt;
     // The turn is now dispatched and `status` is "running", so the busy check
     // is authoritative again and the claim can be released.
     state.dispatching = false;
-    void child.request("session/prompt", {
+    void requestPromptWithResourceExhaustedRetries(state, child, {
       sessionId: state.acpSessionId,
       prompt: [
         ...(acpPrompt ? [{ type: "text", text: acpPrompt }] : []),
@@ -3227,7 +3410,7 @@ async function route(
           data: image.data,
         })),
       ],
-    }, PROMPT_TIMEOUT_MS).then((result) => {
+    }, promptSequence, schema).then((result) => {
       // The result `_meta` is the last and most complete usage carrier, so it is
       // read before `turnStartedAt` is cleared and the elapsed time is lost.
       recordTurnUsage(state, isObject(result) ? result._meta : undefined);
@@ -3299,6 +3482,15 @@ async function route(
   }
   if ((action === "cancel" || action === "abort") && request.method === "POST") {
     for (const approval of [...state.approvals.values()]) approval.respond();
+    if (state.dispatching) {
+      // The turn is claimed but has not taken its sequence yet, and dispatch can
+      // sit in a process spawn for seconds. Record the sequence it is about to
+      // take so a cancel in that window still stops the retry loop instead of
+      // costing the user four dispatches of a turn they already stopped.
+      state.retryCancelledPromptSequence = state.promptSequence + 1;
+    } else if (state.status === "running") {
+      state.retryCancelledPromptSequence = state.promptSequence;
+    }
     state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
     return json(response, 202, { accepted: true });
   }
@@ -4251,6 +4443,7 @@ function normalizeBridgePart(
   const toolDiff = normalizeBridgeToolDiff(value.toolDiff);
   const toolName = boundedString(value.toolName, MAX_TOOL_NAME_BYTES);
   const toolTitle = boundedString(value.toolTitle, MAX_TOOL_TITLE_BYTES);
+  const parentTaskUseId = boundedString(value.parentTaskUseId, MAX_TOOL_ID_BYTES)?.trim();
   return {
     type: "tool-invocation",
     content: boundedString(value.content, MAX_TOOL_TITLE_BYTES) ?? "Tool call",
@@ -4265,6 +4458,7 @@ function normalizeBridgePart(
     ...(toolOutput !== undefined ? { toolOutput } : {}),
     ...(toolError !== undefined ? { toolError } : {}),
     ...(toolDiff ? { toolDiff } : {}),
+    ...(parentTaskUseId ? { parentTaskUseId } : {}),
   };
 }
 

@@ -171,7 +171,7 @@ export function startStoreResourceSync(
     const environment = useEnvironmentStore
       .getState()
       .getEnvironmentById(environmentId);
-    if (!environment || !paneStore.environments.has(environmentId)) return;
+    if (!environment) return;
     const requestedContainerId = environment.environmentType === "local"
       ? null
       : environment.containerId;
@@ -205,7 +205,6 @@ export function startStoreResourceSync(
       .getEnvironmentById(environmentId);
     if (
       latestPaneStore.hydration.get(environmentId) !== "done"
-      || !current
       || !latestEnvironment
     ) {
       return;
@@ -217,7 +216,7 @@ export function startStoreResourceSync(
       latestEnvironment.environmentType !== requestedEnvironmentType
       || latestContainerId !== requestedContainerId
       || latestEnvironment.worktreePath !== requestedWorktreePath
-      || current.containerId !== latestContainerId
+      || (current != null && current.containerId !== latestContainerId)
     ) {
       return;
     }
@@ -226,7 +225,11 @@ export function startStoreResourceSync(
     const selected = reconcileAuthoritativePaneLayout(
       environmentId,
       saved,
-      current,
+      current ?? {
+        root: { kind: "leaf", id: "default", tabs: [], activeTabId: null },
+        activePaneId: "default",
+        containerId: latestContainerId,
+      },
     );
     if (!selected) return;
 

@@ -1118,32 +1118,41 @@ export function TerminalContainer({
                 multiReviewResult.reason,
               );
             }
+            const latestEnvironment = useEnvironmentStore
+              .getState()
+              .getEnvironmentById(environmentId);
+            const latestContainerId = latestEnvironment
+              ? (latestEnvironment.environmentType === "local"
+                ? null
+                : latestEnvironment.containerId)
+              : (isLocalEnvironment ? null : containerId);
+
             if (layoutResult.status === "rejected") {
               console.warn(
                 "[TerminalContainer] Failed to restore pane layout:",
                 layoutResult.reason,
               );
+              // Register the environment so a later pane-layout announcement
+              // can apply. finishHydration without a snapshot does not.
+              // Skip when a local record already exists: rewriting it would
+              // retrigger setup-session binding for a tab this renderer seeded.
+              if (!paneStore.environments.has(environmentId)) {
+                paneStore.initialize(latestContainerId, environmentId);
+              }
               paneStore.finishHydration(environmentId);
               return;
             }
 
-            const latestEnvironment = useEnvironmentStore
-              .getState()
-              .getEnvironmentById(environmentId);
             if (!latestEnvironment) {
               paneStore.finishHydration(environmentId);
               return;
             }
 
-            const latestIsLocal = latestEnvironment.environmentType === "local";
-            const latestContainerId = latestIsLocal
-              ? null
-              : latestEnvironment.containerId;
             const persisted = layoutResult.value;
             const restoredSnapshot = reconcilePersistedLayout(persisted, {
               environmentId,
               containerId: latestContainerId,
-              isLocal: latestIsLocal,
+              isLocal: latestEnvironment.environmentType === "local",
               worktreePath: latestEnvironment.worktreePath,
               hasBuildPipeline: (pipelineId) =>
                 useBuildPipelineStore.getState().pipelines.has(pipelineId),
@@ -1165,6 +1174,12 @@ export function TerminalContainer({
                     readStoredPaneSelection(environmentId),
                   )
                 : restoredSnapshot;
+            if (!restored && !paneStore.environments.has(environmentId)) {
+              // Same empty-hydration contract as a rejected fetch: the
+              // pane-store record must exist before hydration is marked done,
+              // or deferred pane-layout refreshes no-op.
+              paneStore.initialize(latestContainerId, environmentId);
+            }
             paneStore.finishHydration(environmentId, restored ?? undefined);
 
             // A successful migration may have been performed by this renderer
@@ -1254,11 +1269,17 @@ export function TerminalContainer({
       // A native startup surface is a backend-owned pane projection. Once
       // setup has finished, an empty renderer waits for that authoritative
       // snapshot/event instead of manufacturing a competing tab locally.
+      // initialize() still runs: finishHydration without a restored snapshot
+      // does not create a pane-store record, and later pane-layout events
+      // cannot apply to an environment that was never registered.
       if (
         !backendSetupRunning
         && environment?.pendingAgentLaunch === true
         && startupLaunchDispatchedByBackend
       ) {
+        if (!usePaneLayoutStore.getState().environments.has(environmentId)) {
+          initialize(containerId, environmentId);
+        }
         return;
       }
 

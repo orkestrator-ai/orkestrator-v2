@@ -1253,6 +1253,48 @@ describe("pane-layout binding", () => {
     expect(getPaneLayout).not.toHaveBeenCalled();
   });
 
+  test("applies a pane-layout snapshot after empty hydration left no local record", async () => {
+    detach?.();
+    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    const paneStore = usePaneLayoutStore.getState();
+    paneStore.beginHydration("env-1");
+    paneStore.finishHydration("env-1");
+    expect(usePaneLayoutStore.getState().environments.has("env-1")).toBe(false);
+
+    const getPaneLayout = mock(async () => ({
+      version: PANE_LAYOUT_VERSION,
+      environmentId: "env-1",
+      containerId: null,
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [{
+          id: "startup-agent",
+          type: "agent-native",
+          nativeAgentData: {
+            environmentId: "env-1",
+            sessionId: "late-session",
+            isLocal: true,
+          },
+        }],
+        activeTabId: "startup-agent",
+      },
+      updatedAt: "2026-07-29T12:00:00.000Z",
+      revision: 2,
+    }));
+    detach = startTestStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+
+    dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 2 });
+    await tick();
+
+    expect(getPaneLayout).toHaveBeenCalledWith("env-1");
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")).toMatchObject([{
+      id: "startup-agent",
+      nativeAgentData: { sessionId: "late-session" },
+    }]);
+  });
+
   test("drops a snapshot once the environment changed shape mid-read", async () => {
     detach?.();
     useEnvironmentStore.setState({

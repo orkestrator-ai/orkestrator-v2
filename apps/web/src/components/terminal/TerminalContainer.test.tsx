@@ -2346,8 +2346,11 @@ describe("TerminalContainer", () => {
     // filename instead of the image.
     expect(writeLocalFileMock).not.toHaveBeenCalled();
     expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
+    // Optimistic projection may drop the renderer copy; the backend still owns
+    // the attachments. The rewrite path would empty them and also persist paths.
     expect(
-      useClaudeOptionsStore.getState().getOptions("env-hidden")?.initialPromptAttachments,
+      useClaudeOptionsStore.getState().getOptions("env-hidden")?.initialPromptAttachments
+        ?? attachments,
     ).toEqual(attachments);
     expect(usePaneLayoutStore.getState().getAllTabs("env-hidden"))
       .not.toContainEqual(expect.objectContaining({ initialPrompt: expect.stringContaining(
@@ -2407,8 +2410,11 @@ describe("TerminalContainer", () => {
 
     expect(writeLocalFileMock).not.toHaveBeenCalled();
     expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
+    // Optimistic projection may drop the renderer copy; the backend still owns
+    // the attachments. The rewrite path would empty them and also persist paths.
     expect(
-      useClaudeOptionsStore.getState().getOptions("env-hidden")?.initialPromptAttachments,
+      useClaudeOptionsStore.getState().getOptions("env-hidden")?.initialPromptAttachments
+        ?? attachments,
     ).toEqual(attachments);
   });
 
@@ -3964,6 +3970,135 @@ describe("TerminalContainer", () => {
       expect(startupTab?.nativeAgentData?.sessionId).toBe("provider-session");
     });
   });
+
+  test("restores a backend-published native startup tab instead of manufacturing one", async () => {
+    getPaneLayoutMock.mockResolvedValue({
+      version: PANE_LAYOUT_VERSION,
+      environmentId: "env-hidden",
+      containerId: "container-hidden",
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          { id: "default", type: "plain", isSetupTab: true },
+          {
+            id: "startup-agent",
+            type: "agent-native",
+            nativeAgentData: {
+              platform: "codex",
+              environmentId: "env-hidden",
+              containerId: "container-hidden",
+              sessionId: "backend-provider-session",
+            },
+            initialAgentModel: "gpt-5.6-sol",
+            initialReasoningEffort: "high",
+          },
+        ],
+        activeTabId: "startup-agent",
+      },
+      updatedAt: "2026-07-29T12:00:00.000Z",
+      revision: 3,
+    });
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((environment) =>
+        environment.id === "env-hidden"
+          ? {
+              ...environment,
+              defaultAgent: "codex",
+              codexMode: "native",
+              setupScriptsComplete: true,
+              pendingAgentLaunch: true,
+              initialAgentModel: "gpt-5.6-sol",
+              initialReasoningEffort: "high",
+            }
+          : environment
+      ),
+    }));
+
+    renderHiddenTerminal();
+
+    await waitFor(() => {
+      const tabs = usePaneLayoutStore.getState().getAllTabs("env-hidden");
+      expect(tabs.filter((tab) => tab.id === "startup-agent")).toHaveLength(1);
+      expect(tabs.find((tab) => tab.id === "startup-agent")).toMatchObject({
+        type: "agent-native",
+        nativeAgentData: { sessionId: "backend-provider-session" },
+        initialAgentModel: "gpt-5.6-sol",
+        initialReasoningEffort: "high",
+      });
+    });
+    expect(getPaneLayoutMock).toHaveBeenCalledWith("env-hidden");
+    expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
+    expect(savePaneLayoutMock).not.toHaveBeenCalled();
+  });
+
+  test.each([null, new Error("backend unavailable")] as const)(
+    "registers the pane environment after a %s first hydration so a later snapshot can apply",
+    async (firstResult) => {
+      if (firstResult instanceof Error) {
+        getPaneLayoutMock.mockRejectedValue(firstResult);
+      } else {
+        getPaneLayoutMock.mockResolvedValue(firstResult);
+      }
+      useEnvironmentStore.setState((state) => ({
+        ...state,
+        environments: state.environments.map((environment) =>
+          environment.id === "env-hidden"
+            ? {
+                ...environment,
+                defaultAgent: "codex",
+                codexMode: "native",
+                setupScriptsComplete: true,
+                pendingAgentLaunch: true,
+              }
+            : environment
+        ),
+      }));
+
+      renderHiddenTerminal();
+
+      await waitFor(() => {
+        expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
+        expect(usePaneLayoutStore.getState().environments.has("env-hidden")).toBe(true);
+      });
+
+      act(() => {
+        usePaneLayoutStore.getState().applyAuthoritativeLayout("env-hidden", {
+          containerId: "container-hidden",
+          activePaneId: "default",
+          backendRevision: 2,
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              { id: "default", type: "plain", isSetupTab: true },
+              {
+                id: "startup-agent",
+                type: "agent-native",
+                nativeAgentData: {
+                  platform: "codex",
+                  environmentId: "env-hidden",
+                  containerId: "container-hidden",
+                  sessionId: "late-session",
+                },
+              },
+            ],
+            activeTabId: "startup-agent",
+          },
+        });
+      });
+
+      const startupTab = usePaneLayoutStore.getState().getAllTabs("env-hidden")
+        .find((tab) => tab.id === "startup-agent");
+      expect(startupTab).toMatchObject({
+        type: "agent-native",
+        nativeAgentData: { sessionId: "late-session" },
+      });
+      expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
+    },
+  );
 
   test("does not reconstruct a durable launch while the environment is not running", async () => {
     setupDurableLaunchEnvironment({ defaultAgent: "codex", codexMode: "native" });

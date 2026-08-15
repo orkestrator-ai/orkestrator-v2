@@ -617,30 +617,33 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
 
   applyAuthoritativeLayout: (environmentId, restored) => {
     const state = get();
-    if (
-      state.hydration.get(environmentId) !== "done"
-      || !state.environments.has(environmentId)
-    ) {
+    // Hydration must have settled so a snapshot cannot clobber an in-flight
+    // restore. A missing local record is still installable: a backend-owned
+    // native launch can finish hydrating to null, then a later pane-layout
+    // announcement has to be able to create the environment rather than
+    // no-op forever.
+    if (state.hydration.get(environmentId) !== "done") {
       return;
     }
 
     const current = state.environments.get(environmentId);
-    if (!current) return;
-
     const restoredTabs = getAllLeaves(restored.root).flatMap((leaf) => leaf.tabs);
     const restoredTabIds = new Set(restoredTabs.map((tab) => tab.id));
-    const removedTabs = getAllLeaves(current.root)
-      .flatMap((leaf) => leaf.tabs)
-      .filter((tab) => !restoredTabIds.has(tab.id));
-
-    for (const tab of removedTabs) {
-      cleanupLocalTabResources(environmentId, current.containerId, tab);
+    if (current) {
+      const removedTabs = getAllLeaves(current.root)
+        .flatMap((leaf) => leaf.tabs)
+        .filter((tab) => !restoredTabIds.has(tab.id));
+      for (const tab of removedTabs) {
+        cleanupLocalTabResources(environmentId, current.containerId, tab);
+      }
     }
 
     const environments = new Map(state.environments);
     environments.set(environmentId, restored);
     set({ environments });
-    forgetUnreferencedAgentHandoffs(current.root, restored.root);
+    if (current) {
+      forgetUnreferencedAgentHandoffs(current.root, restored.root);
+    }
     pruneUnreferencedAgentHandoffs(environmentId, restored.root);
   },
 

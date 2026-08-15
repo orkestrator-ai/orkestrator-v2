@@ -82,6 +82,8 @@ function MultiReviewOverviewTab({
   const replaceWorkflow = useMultiReviewStore((state) => state.replaceWorkflow);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  /** The handoff committed but its tab never opened, so nothing sent the prompt. */
+  const [addressPromptPending, setAddressPromptPending] = useState(false);
 
   const hydrate = useCallback(async () => {
     setError(null);
@@ -97,20 +99,22 @@ function MultiReviewOverviewTab({
     void hydrate();
   }, [hydrate, isActive]);
 
-  const openFixSession = (sendAddressPrompt: boolean): boolean => {
-    if (!workflow) return false;
-    const options = multiReviewFixSessionTabOptions(workflow, sendAddressPrompt);
-    if (!options) {
-      setError("The consolidation session is no longer available");
-      return false;
-    }
-    const created = createTab?.(workflow.fixModel.agent, options);
-    if (!created) {
-      setError("The environment is not ready or the maximum tab count was reached.");
-      return false;
-    }
-    return true;
+  const openFixSession = (
+    sendAddressPrompt: boolean,
+    target: MultiReviewWorkflow | undefined = workflow,
+  ): "opened" | "no-session" | "tab-unavailable" => {
+    if (!target) return "no-session";
+    const options = multiReviewFixSessionTabOptions(target, sendAddressPrompt);
+    if (!options) return "no-session";
+    return createTab?.(target.fixModel.agent, options) === true
+      ? "opened"
+      : "tab-unavailable";
   };
+
+  const openFixSessionError = (outcome: "no-session" | "tab-unavailable"): string =>
+    outcome === "no-session"
+      ? "The consolidation session is no longer available"
+      : "The environment is not ready or the maximum tab count was reached.";
 
   const run = async (command: () => Promise<NonNullable<typeof workflow>>) => {
     if (pending) return;
@@ -125,13 +129,32 @@ function MultiReviewOverviewTab({
     }
   };
 
+  // Creating the tab dispatches the address prompt, so it has to be the last
+  // step. Opening first left a window where the fix agent was already editing
+  // the worktree while the durable workflow still said `ready` — which keeps
+  // Address all clickable (a second tab, a second prompt, one session) and
+  // keeps Abandon offered, and abandoning a `ready` workflow aborts nothing
+  // because the fix session is idle. Committing first cannot strand the user:
+  // `interactive` renders Open fix session, which carries the prompt whenever
+  // the handoff has not managed to dispatch one yet.
   const addressAll = async () => {
     if (pending || !workflow) return;
     setPending(true);
     setError(null);
     try {
-      if (!openFixSession(true)) return;
-      replaceWorkflow(await commands.address(workflow.id));
+      if (!multiReviewFixSessionTabOptions(workflow, true)) {
+        setError("The consolidation session is no longer available");
+        return;
+      }
+      const handedOff = await commands.address(workflow.id);
+      replaceWorkflow(handedOff);
+      if (openFixSession(true, handedOff) !== "opened") {
+        setAddressPromptPending(true);
+        setError(
+          "The fix session was handed off, but a tab could not be opened. "
+          + "Close a tab, then use Open fix session to continue.",
+        );
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -257,7 +280,12 @@ function MultiReviewOverviewTab({
           <Button
             variant="outline"
             disabled={pending || !createTab}
-            onClick={() => { openFixSession(false); }}
+            onClick={() => {
+              setError(null);
+              const outcome = openFixSession(addressPromptPending);
+              if (outcome === "opened") setAddressPromptPending(false);
+              else setError(openFixSessionError(outcome));
+            }}
           >
             Open fix session
           </Button>

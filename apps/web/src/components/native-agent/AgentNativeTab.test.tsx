@@ -810,6 +810,71 @@ describe("AgentNativeTab", () => {
     });
   }
 
+  test("carries one-shot launch options into the adoption of a resumed session", async () => {
+    // Multi Review hands its consolidation session over as a Build-mode tab, so
+    // the mode has to reach adoption; adopting without it would leave the fix
+    // agent in whatever mode consolidation left behind (plan).
+    render(
+      <AgentNativeTab
+        tabId="tab-resume-controls"
+        data={identity("claude")}
+        isActive
+        initialAgentModel="opus"
+        initialReasoningEffort="high"
+        initialConversationMode="build"
+        initialFastMode={false}
+      />,
+    );
+
+    await waitFor(() => expect(adoptNativeAgentSessionMock).toHaveBeenCalled());
+    expect(adoptNativeAgentSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      providerSessionId: "claude-session",
+      model: "opus",
+      reasoningEffort: "high",
+      sessionMode: "build",
+      fastMode: false,
+    });
+  });
+
+  test("sends a resumed tab's opening prompt once it is in the session it asked for", async () => {
+    render(
+      <AgentNativeTab
+        tabId="tab-resume-prompt"
+        data={identity("claude")}
+        isActive
+        initialPrompt={ADDRESS_ALL_REVIEW_PROMPT}
+      />,
+    );
+
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalled());
+    expect(dispatchNativeAgentIntentMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      prompt: ADDRESS_ALL_REVIEW_PROMPT,
+    });
+  });
+
+  test("withholds a resumed tab's opening prompt when the session was substituted", async () => {
+    // Adoption falls back to creating a fresh session when the provider has
+    // forgotten the rollout. "Address every finding" carries no findings of its
+    // own, so firing it into an empty conversation asks the agent to act on a
+    // review it cannot see.
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as Parameters<typeof defaultProjection>[0])),
+      sessionId: "a-replacement-session",
+    }));
+
+    render(
+      <AgentNativeTab
+        tabId="tab-resume-substituted"
+        data={identity("claude")}
+        isActive
+        initialPrompt={ADDRESS_ALL_REVIEW_PROMPT}
+      />,
+    );
+
+    expect(await screen.findByText(/opening message was not sent/)).toBeTruthy();
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+  });
+
   test("waits for environment setup before starting the shared provider", async () => {
     useEnvironmentStore.setState({
       environments: [{

@@ -279,14 +279,40 @@ export class MultiReviewService {
       if (workflow.phase !== "ready" || !workflow.consolidatedReport || !workflow.fixSession) {
         throw new Error("The consolidated review is not ready to address");
       }
-      // The renderer adopts this idle consolidation session as an interactive
-      // native tab and sends the address prompt there. Supervising a structured
-      // fix turn would steal the same provider session back into unattended mode.
-      workflow.phase = "interactive";
-      workflow.fixSession.status = "idle";
-      delete workflow.activeRequest;
-      delete workflow.error;
-      return this.save(workflow, token);
+      // The whole point of the handoff is that the adopted session already
+      // holds the consolidated report. A renderer that resumes a rollout the
+      // provider has forgotten silently falls back to creating an empty
+      // session, which would then receive "address every finding" with no
+      // findings in context. Prove liveness here, before anything is dispatched.
+      //
+      // Reading status does not register the session, so this cannot pull the
+      // conversation back into the unattended policy the renderer is about to
+      // replace. A failed last turn is not a missing session, and a transport
+      // failure is not evidence of deletion: only `missing` blocks the handoff.
+      const provider = await this.provider(workflow, workflow.fixModel);
+      try {
+        await this.assertFence(workflow.id, token);
+        const { status } = await readProviderStatus(
+          provider, workflow.fixSession.providerSessionId,
+        );
+        await this.assertFence(workflow.id, token);
+        if (status === "missing") {
+          throw new Error("The consolidation session is no longer available");
+        }
+        // The renderer adopts this idle consolidation session as an interactive
+        // native tab and sends the address prompt there. Supervising a structured
+        // fix turn would steal the same provider session back into unattended mode.
+        workflow.phase = "interactive";
+        workflow.fixSession.status = "idle";
+        delete workflow.activeRequest;
+        delete workflow.error;
+        return await this.save(workflow, token);
+      } finally {
+        // `interactive` is terminal, so nothing advances this workflow again.
+        // Without this the controller lease stays in `this.leases` and
+        // `renewLeases` rewrites the workflow store for it forever.
+        await this.release(workflow, token);
+      }
     });
   }
 

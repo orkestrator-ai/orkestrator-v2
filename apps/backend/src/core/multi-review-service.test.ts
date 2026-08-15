@@ -10,9 +10,10 @@ import type {
   StructuredOutputFailureCode,
   StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
-import type {
-  MultiReviewModelSelection,
-  MultiReviewWorkflow,
+import {
+  MULTI_REVIEW_WORKFLOW_VERSION,
+  type MultiReviewModelSelection,
+  type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import type {
   BuildPipelineProvider,
@@ -272,6 +273,7 @@ test("MultiReviewService hands the idle consolidation session to interactive add
     const reviewer = ready.reviewers[0]!;
     const disposalsAfterReady = provider.disposeCalls;
     const statusCallsAfterReady = provider.statusCalls;
+    const sendsAfterReady = provider.sends.size;
 
     const releaseMessages = provider.blockMessages();
     const transcript = service.reviewerTranscript(started.id, reviewer.id);
@@ -283,15 +285,82 @@ test("MultiReviewService hands the idle consolidation session to interactive add
       fixSession: { status: "idle", providerSessionId: ready.fixSession?.providerSessionId },
     });
     expect(addressed.activeRequest).toBeUndefined();
-    expect(provider.statusCalls).toBe(statusCallsAfterReady);
+    // Exactly one liveness read, and no send: proving the rollout still exists
+    // must not pull the conversation back into a supervised turn.
+    expect(provider.statusCalls).toBe(statusCallsAfterReady + 1);
+    expect(provider.sends.size).toBe(sendsAfterReady);
     expect(provider.disposeCalls).toBe(disposalsAfterReady);
 
     releaseMessages();
     await transcript;
-    // Address no longer holds the provider; the transcript reader is the last
-    // lease, so finishing that read is what disposes it.
+    // Address released its own lease, so the transcript reader is the last one
+    // and finishing that read is what disposes the provider.
     expect(provider.disposeCalls).toBe(disposalsAfterReady + 1);
     expect(provider.aborted).toEqual([]);
+  });
+});
+
+test("MultiReviewService releases the controller lease when it hands off", async () => {
+  const provider = new Provider();
+  await withService("env-address-lease", provider, async ({ service, storage, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+
+    await service.address(started.id);
+    // `interactive` is terminal, so nothing advances this workflow again. A
+    // retained lease would be renewed — and rewrite the workflow store — for the
+    // life of the process, and would fence every other controller out meanwhile.
+    const claimed = await storage.claimMultiReviewController(started.id, "other-owner", 15_000);
+    expect(claimed.granted).toBe(true);
+  });
+});
+
+test("MultiReviewService refuses to hand off a consolidation session the provider forgot", async () => {
+  const provider = new Provider();
+  await withService("env-address-missing", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+    const ready = (await snapshot(started.id))!;
+    const sendsAfterReady = provider.sends.size;
+
+    // The renderer's adoption falls back to creating an empty session here, so
+    // the handoff has to fail loudly rather than let the address prompt land in
+    // a conversation that never saw the consolidated report.
+    provider.statusOverrides.set(ready.fixSession!.providerSessionId, "missing");
+    await expect(service.address(started.id))
+      .rejects.toThrow("The consolidation session is no longer available");
+
+    // The refusal is recoverable: the workflow is still addressable, and nothing
+    // was dispatched to the session.
+    expect((await snapshot(started.id))?.phase).toBe("ready");
+    expect(provider.sends.size).toBe(sendsAfterReady);
+    expect(provider.aborted).toEqual([]);
+
+    provider.statusOverrides.delete(ready.fixSession!.providerSessionId);
+    expect((await service.address(started.id)).phase).toBe("interactive");
+  });
+});
+
+test("MultiReviewService hands off a consolidation session whose last turn failed", async () => {
+  const provider = new Provider();
+  await withService("env-address-failed-turn", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+    const ready = (await snapshot(started.id))!;
+
+    // Same liveness-only rule the native adoption path uses: a failed last turn
+    // is not a missing session, and the user can still drive it interactively.
+    provider.sessionFailures.set(ready.fixSession!.providerSessionId, "the last turn failed");
+    expect((await service.address(started.id)).phase).toBe("interactive");
   });
 });
 
@@ -444,6 +513,141 @@ test("MultiReviewService refuses to address a review that is not ready", async (
   await withService("env-address-not-ready", provider, async ({ service, start }) => {
     const started = await start();
     await expect(service.address(started.id)).rejects.toThrow("not ready to address");
+  });
+});
+
+/**
+ * A snapshot in the shape the pre-handoff `address()` used to persist.
+ *
+ * Nothing writes `fixing` any more, but the supervisor still advances it so a
+ * workflow caught mid-fix by an upgrade finishes instead of stalling forever.
+ * That path is only reachable from durable state, so seed it directly.
+ */
+async function seedLegacyFixingWorkflow(
+  storage: StorageService,
+  environmentId: string,
+): Promise<string> {
+  const workflowId = `legacy-fixing-${environmentId}`;
+  const timestamp = new Date(0).toISOString();
+  const snapshot: MultiReviewWorkflow = {
+    version: MULTI_REVIEW_WORKFLOW_VERSION,
+    controller: "backend",
+    id: workflowId,
+    environmentId,
+    projectId: "project-1",
+    targetBranch: "main",
+    reviewers: [{
+      id: "reviewer-1", agent: "claude", model: "opus",
+      status: "completed", report: cleanReport,
+      sessionKey: `multi-review:${workflowId}:reviewer-1`,
+      providerSessionId: "session-1",
+    }],
+    fixModel: { agent: "claude", model: "opus" },
+    consolidatedReport,
+    fixSession: {
+      agent: "claude", model: "opus",
+      sessionKey: `multi-review:${workflowId}:fix`,
+      providerSessionId: "session-legacy-fix",
+      requestIds: ["consolidate-1", "fix-1"],
+      status: "running",
+      startedAt: timestamp,
+    },
+    activeRequest: { kind: "fix", requestId: "fix-1", state: "prepared", createdAt: timestamp },
+    phase: "fixing",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    backendRevision: 0,
+  };
+  const saved = await storage.createMultiReviewWorkflowIfNoActive(
+    workflowId, environmentId, MULTI_REVIEW_WORKFLOW_VERSION, snapshot,
+  );
+  expect(saved).not.toBeNull();
+  return workflowId;
+}
+
+test("MultiReviewService finishes a fix turn persisted before the interactive handoff", async () => {
+  const provider = new Provider();
+  await withService("env-legacy-fixing", provider, async ({ service, storage, snapshot }) => {
+    const workflowId = await seedLegacyFixingWorkflow(storage, "env-legacy-fixing");
+    await waitUntil(async () => {
+      await service.advanceNow(workflowId);
+      return (await snapshot(workflowId))?.phase === "completed";
+    });
+
+    expect(await snapshot(workflowId)).toMatchObject({
+      phase: "completed",
+      fixResult: { complete: true, summary: "Addressed every finding" },
+      fixSession: { status: "idle" },
+    });
+    expect(provider.fixSends).toBe(1);
+  });
+});
+
+test("MultiReviewService asks the fix model to correct an invalid fix result", async () => {
+  const provider = new Provider();
+  provider.invalidFixResults = 1;
+  await withService("env-legacy-fix-repair", provider, async ({ service, storage, snapshot }) => {
+    const workflowId = await seedLegacyFixingWorkflow(storage, "env-legacy-fix-repair");
+    await waitUntil(async () => {
+      await service.advanceNow(workflowId);
+      return (await snapshot(workflowId))?.phase === "completed";
+    });
+
+    const completed = await snapshot(workflowId);
+    expect(completed?.fixResult).toMatchObject({ complete: true });
+    expect(completed?.fixSession?.requestIds).toHaveLength(3);
+    const repair = [...provider.sends.values()].find((sent) =>
+      sent.options.schema === REVIEW_FIX_RESULT_JSON_SCHEMA
+      && sent.prompt.includes("repair attempt 1 of 3"));
+    expect(repair?.prompt).toContain("fix result");
+    expect(repair?.prompt).toContain("Fix result cannot be complete");
+    expect(repair?.prompt).toContain('"complete"');
+    expect(repair?.prompt).toContain("<structured-review-expected-schema-json>");
+  });
+});
+
+test("MultiReviewService does not treat provider fix failures as schema repair work", async () => {
+  for (const code of ["provider_error", "interrupted"] as const) {
+    const provider = new Provider();
+    provider.fixStructuredFailure = code;
+    await withService(`env-legacy-fix-${code}`, provider, async ({ service, storage, snapshot }) => {
+      const workflowId = await seedLegacyFixingWorkflow(storage, `env-legacy-fix-${code}`);
+      await waitUntil(async () => {
+        await service.advanceNow(workflowId);
+        return (await snapshot(workflowId))?.phase === "failed";
+      });
+
+      const failed = await snapshot(workflowId);
+      expect(failed?.error).toBe(`Fix result failed with ${code}`);
+      expect(failed?.activeRequest?.schemaRepairAttempts).toBeUndefined();
+      expect(failed?.activeRequest?.schemaRepairPrompt).toBeUndefined();
+      expect(failed?.fixSession?.requestIds).toHaveLength(2);
+    });
+  }
+});
+
+test("MultiReviewService retries an incomplete legacy fix turn from the consolidated report", async () => {
+  const provider = new Provider();
+  provider.fixComplete = false;
+  await withService("env-legacy-fix-retry", provider, async ({ service, storage, snapshot }) => {
+    const workflowId = await seedLegacyFixingWorkflow(storage, "env-legacy-fix-retry");
+    await waitUntil(async () => {
+      await service.advanceNow(workflowId);
+      return (await snapshot(workflowId))?.phase === "failed";
+    });
+
+    const failed = await snapshot(workflowId);
+    expect(failed?.fixSession?.status).toBe("failed");
+    expect(failed?.error).toContain("could not address every finding");
+
+    const retried = await service.retry(workflowId);
+    expect(retried.phase).toBe("ready");
+    expect(retried.fixSession?.status).toBe("idle");
+    expect(retried.activeRequest).toBeUndefined();
+    expect(retried.error).toBeUndefined();
+    expect(retried.consolidatedReport).toBeDefined();
+    // The consolidated session is reused for the next attempt, never abandoned.
+    expect(provider.aborted).toEqual([]);
   });
 });
 

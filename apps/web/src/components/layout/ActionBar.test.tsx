@@ -2090,7 +2090,7 @@ describe("ActionBar workflow tabs", () => {
     expect((resolveButton as HTMLButtonElement).disabled).toBe(false);
   });
 
-  test("disables every Resolve provider while a launch is being armed", async () => {
+  test("disables the configured Resolve launch while it is being armed", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prState: "open",
@@ -2103,14 +2103,12 @@ describe("ActionBar workflow tabs", () => {
     render(<ActionBar />);
 
     const resolveButton = screen.getByRole("button", { name: "Resolve" });
-    fireEvent.click(resolveButton);
     fireEvent.contextMenu(resolveButton);
+    const confirm = screen.getByRole("button", { name: "Resolve conflicts" }) as HTMLButtonElement;
+    fireEvent.click(confirm);
 
-    for (const name of ["Resolve with Claude", "Resolve with Codex", "Resolve with OpenCode"]) {
-      const item = screen.getByRole("button", { name }) as HTMLButtonElement;
-      expect(item.disabled).toBe(true);
-      fireEvent.click(item);
-    }
+    expect(confirm.disabled).toBe(true);
+    fireEvent.click(confirm);
     expect(armRefreshAfterAgentCompletionMock).toHaveBeenCalledTimes(1);
     resolveArm("armed-after-menu-check");
     await waitFor(() => expect(createTabMock).toHaveBeenCalledTimes(1));
@@ -2298,12 +2296,18 @@ describe("ActionBar workflow tabs", () => {
     };
     rerender(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
-    fireEvent.click(screen.getByRole("button", { name: "Resolve with Codex" }));
+    expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy();
+    chooseReviewProvider("codex");
+    fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
     await waitFor(() => {
       expect(armRefreshAfterAgentCompletionMock).toHaveBeenCalledTimes(1);
       expect(createTabMock).toHaveBeenLastCalledWith(
         "codex",
-        expect.objectContaining({ displayTitle: "Resolve" }),
+        expect.objectContaining({
+          agentLaunchMode: "native",
+          displayTitle: "Resolve",
+          initialAgentModel: expect.any(String),
+        }),
       );
     });
 
@@ -2599,36 +2603,31 @@ describe("ActionBar workflow tabs", () => {
     );
   }, 20_000);
 
-  test("routes every PR workflow context-menu provider", async () => {
+  test("opens a configuration modal instead of a provider menu for Resolve", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prState: "open",
       hasMergeConflicts: true,
     };
-    const view = render(<ActionBar />);
+    render(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
-    expectProviderMenuOrder("Resolve with");
+    expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Resolve with Claude" }) === null).toBe(true);
+    expect(screen.getByRole("combobox", { name: "Agent, model and reasoning" })).toBeTruthy();
 
-    for (const [label, agent] of [
-      ["Claude", "claude"],
-      ["OpenCode", "opencode"],
-    ] as const) {
-      fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
-      fireEvent.click(screen.getByRole("button", { name: `Resolve with ${label}` }));
-      await waitFor(() => {
-        expect(createTabMock).toHaveBeenLastCalledWith(
-          agent,
-          expect.objectContaining({ displayTitle: "Resolve" }),
-        );
-      });
-    }
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
 
+  test("routes every Push Changes context-menu provider", () => {
     currentEnvironment = {
-      ...currentEnvironment,
+      ...selectedEnvironment,
+      prState: "open",
       hasMergeConflicts: false,
     };
-    view.rerender(<ActionBar />);
+    currentChanges = [{ path: "src/example.ts" }];
+    render(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Push Changes" }));
     expectProviderMenuOrder("Push with");

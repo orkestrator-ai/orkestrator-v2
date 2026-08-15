@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { GitPullRequest } from "lucide-react";
+import { AlertTriangle, GitPullRequest } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -30,6 +30,7 @@ export interface CreatePRSelection {
 }
 
 interface CreatePRDialogProps {
+  kind?: "create-pr" | "resolve-conflicts";
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Agent the toolbar would have used for a plain click. */
@@ -60,6 +61,7 @@ function agentLabel(agent: LaunchAgent): string {
  * selected that the newly chosen model does not offer.
  */
 export function CreatePRDialog({
+  kind = "create-pr",
   open,
   onOpenChange,
   defaultAgent,
@@ -152,12 +154,14 @@ export function CreatePRDialog({
     );
   };
 
+  const isResolve = kind === "resolve-conflicts";
   const summary = [
     agentLabel(agent),
     selectedModel?.name ?? model,
     effectiveEffort === "default" ? "default effort" : `${effectiveEffort} effort`,
-    `into ${targetBranch}`,
+    `${isResolve ? "against" : "into"} ${targetBranch}`,
   ].join(" · ");
+  const pickerId = isResolve ? "resolve-conflicts-model" : "create-pr-model";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -176,13 +180,24 @@ export function CreatePRDialog({
         <DialogHeader className="shrink-0 border-b border-zinc-800 bg-gradient-to-br from-cyan-500/[0.08] via-transparent to-transparent px-5 pb-4 pt-5 sm:px-6">
           <DialogTitle className="flex items-center gap-2 text-base">
             <span className="grid size-8 shrink-0 place-items-center rounded-full border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
-              <GitPullRequest className="size-4" />
+              {isResolve
+                ? <AlertTriangle className="size-4" />
+                : <GitPullRequest className="size-4" />}
             </span>
-            Configure pull request
+            {isResolve ? "Configure conflict resolution" : "Configure pull request"}
           </DialogTitle>
           <DialogDescription>
-            Launch an agent that commits the work, pushes the branch, and opens a
-            pull request against <span className="text-zinc-300">{targetBranch}</span>.
+            {isResolve ? (
+              <>
+                Launch an agent to resolve this pull request&apos;s merge conflicts against{" "}
+                <span className="text-zinc-300">{targetBranch}</span>, then commit and push the result.
+              </>
+            ) : (
+              <>
+                Launch an agent that commits the work, pushes the branch, and opens a
+                pull request against <span className="text-zinc-300">{targetBranch}</span>.
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
 
@@ -200,13 +215,13 @@ export function CreatePRDialog({
         >
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-6">
             <Label
-              htmlFor="create-pr-model"
+              htmlFor={pickerId}
               className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400"
             >
               Agent, model and reasoning
             </Label>
             <AgentModelPicker
-              id="create-pr-model"
+              id={pickerId}
               ariaLabel="Agent, model and reasoning"
               models={pickerModels}
               enabledPlatforms={enabledAgents}
@@ -251,7 +266,9 @@ export function CreatePRDialog({
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={confirmDisabled}>Create pull request</Button>
+            <Button type="submit" disabled={confirmDisabled}>
+              {isResolve ? "Resolve conflicts" : "Create pull request"}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

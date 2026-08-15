@@ -93,6 +93,22 @@ function submit() {
 }
 
 describe("CreatePRDialog", () => {
+  test("adapts the shared model picker for conflict resolution", () => {
+    const { onConfirm } = renderDialog({
+      kind: "resolve-conflicts",
+      targetBranch: "release",
+    });
+
+    expect(screen.getByRole("heading", { name: "Configure conflict resolution" })).toBeTruthy();
+    expect(screen.getByText(/merge conflicts against/).textContent).toContain("release");
+    expect(screen.getByText(/against release/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({
+      agent: "claude",
+      model: "claude-a",
+    }));
+  });
+
   test("launches the preferred model and effort of the default agent", () => {
     const { onConfirm } = renderDialog({
       preferredModels: { claude: "claude-a" },

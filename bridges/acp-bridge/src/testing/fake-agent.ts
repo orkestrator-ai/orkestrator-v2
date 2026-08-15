@@ -354,6 +354,51 @@ lines.on("line", (line) => {
         rawOutput: { content: "package contents" },
       });
     }
+    if (process.env.FAKE_ACP_REPLAY_CURSOR_SAME_KIND_METADATA === "1") {
+      for (const replayed of [
+        { id: "replay-read-c", title: "Read c.json", path: "/workspace/c.json", output: "shared" },
+        { id: "replay-read-b", title: "Read b.json", path: "/workspace/b.json", output: "b" },
+        { id: "replay-read-d", title: "Read d.json", path: "/workspace/d.json", output: "shared" },
+        { id: "replay-read-a", title: "Read a.json", path: "/workspace/a.json", output: "a" },
+      ]) {
+        replay({
+          sessionUpdate: "tool_call",
+          toolCallId: replayed.id,
+          title: replayed.title,
+          kind: "read",
+          status: "pending",
+          rawInput: { path: replayed.path },
+        });
+        replay({
+          sessionUpdate: "tool_call_update",
+          toolCallId: replayed.id,
+          status: "completed",
+          rawOutput: { content: replayed.output },
+        });
+      }
+    }
+    if (process.env.FAKE_ACP_REPLAY_CURSOR_OVERSIZED_METADATA === "1") {
+      for (const replayed of [
+        { id: "replay-huge-b", title: "Read huge-b.json", path: "/workspace/huge-b.json", output: "huge-b" },
+        { id: "replay-huge-a", title: "Read huge-a.json", path: "/workspace/huge-a.json", output: "huge-a" },
+        { id: "replay-huge-c", title: "Read huge-c.json", path: "/workspace/huge-c.json", output: "huge-c" },
+      ]) {
+        replay({
+          sessionUpdate: "tool_call",
+          toolCallId: replayed.id,
+          title: replayed.title,
+          kind: "read",
+          status: "pending",
+          rawInput: { path: replayed.path, payload: "x".repeat(480 * 1024) },
+        });
+        replay({
+          sessionUpdate: "tool_call_update",
+          toolCallId: replayed.id,
+          status: "completed",
+          rawOutput: { content: replayed.output },
+        });
+      }
+    }
     // The same history without provider message ids, which is all the bridge
     // gets from an agent that does not stamp them. Message boundaries then have
     // to come from chunk-versus-whole rather than from part type.
@@ -1445,6 +1490,97 @@ lines.on("line", (line) => {
           },
         },
       });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("CURSOR_SAME_KIND_TOOLS")) {
+      for (const live of [
+        { id: "live-read-a", output: "a" },
+        { id: "live-read-b", output: "b" },
+        { id: "live-read-c", output: "shared" },
+        { id: "live-read-d", output: "shared" },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: live.id,
+              title: "Read File",
+              kind: "read",
+              status: "pending",
+              rawInput: {},
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: live.id,
+              status: "completed",
+              rawOutput: { content: live.output },
+            },
+          },
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("CURSOR_OVERSIZED_REPLAY")) {
+      // Lead with enough ordinary response text that replay enrichment pushes
+      // the aggregate over its budget. When the bridge trims, the notice and
+      // the final enriched tool remain observable for the persistence check.
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "s".repeat(128 * 1024) },
+          },
+        },
+      });
+      for (const live of [
+        { id: "live-huge-a", output: "huge-a" },
+        { id: "live-huge-b", output: "huge-b" },
+        { id: "live-huge-c", output: "huge-c" },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: live.id,
+              title: "Read File",
+              kind: "read",
+              status: "pending",
+              rawInput: {},
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: live.id,
+              status: "completed",
+              rawOutput: { content: live.output },
+            },
+          },
+        });
+      }
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }

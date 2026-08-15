@@ -1165,7 +1165,10 @@ describe("ACP bridge", () => {
           status: string;
           messages: Array<{ parts: Array<Record<string, unknown>> }>;
         }>,
-      (value) => value.status === "idle",
+      (value) => value.status === "idle"
+        && value.messages[1]?.parts.some(
+          (part) => part.toolTitle === "Read package.json (1 - 80)",
+        ) === true,
     );
     const tools = session.messages[1]?.parts.filter((part) => part.type === "tool-invocation");
     expect(tools).toEqual([
@@ -1186,6 +1189,285 @@ describe("ACP bridge", () => {
         toolState: "success",
       }),
     ]);
+  });
+
+  test("settles the turn before a delayed Cursor replay and enriches only its captured tools", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const lifecycleFile = resolve(stateDirectory, "cursor-replay-delay.log");
+    const bridge = await spawnBridge({
+      stateDirectory,
+      env: {
+        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+        FAKE_ACP_LOAD_DELAY_MS: "800",
+        FAKE_ACP_REPLAY_CURSOR_TOOL_METADATA: "1",
+      },
+    });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-delay:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "CURSOR_GENERIC_TOOLS" }),
+    });
+    await waitFor(
+      () => fs.readFile(lifecycleFile, "utf8").catch(() => ""),
+      (value) => value.includes("load:"),
+    );
+
+    const whileReplayLoads = await nativeFetch(`${bridge.base}/session/${created.id}`, {
+      headers: bridge.headers,
+    }).then((response) => response.json()) as { status: string };
+    expect(whileReplayLoads.status).toBe("idle");
+    const activity = await nativeFetch(`${bridge.base}/session/${created.id}/activity`, {
+      headers: bridge.headers,
+    }).then((response) => response.json()) as { activity: string };
+    expect(activity.activity).toBe("idle");
+
+    const followUp = await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "DIRECT:second turn" }),
+    });
+    expect(followUp.status).toBe(202);
+
+    const enriched = await waitFor(
+      async () => nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ content: string; parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle"
+        && value.messages.some((message) => message.content === "second turn")
+        && value.messages[1]?.parts.some(
+          (part) => part.toolTitle === "Read package.json (1 - 80)",
+        ) === true,
+    );
+    expect(enriched.messages[1]?.parts.find((part) => part.toolUseId === "live-read-1"))
+      .toMatchObject({ toolArgs: { path: "/workspace/package.json" } });
+
+    const persisted = await waitFor(
+      async () => JSON.parse(
+        await fs.readFile(resolve(stateDirectory, "state.json"), "utf8"),
+      ) as {
+        sessions: Array<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>;
+      },
+      (value) => value.sessions[0]?.status === "idle"
+        && value.sessions[0]?.messages[1]?.parts.some(
+          (part) => part.toolTitle === "Read package.json (1 - 80)",
+        ) === true,
+    );
+    expect(persisted.sessions[0]?.status).toBe("idle");
+  });
+
+  test.each([
+    ["failed", { FAKE_ACP_FAIL_LOAD_SESSION: "1" }],
+    ["unsupported", { FAKE_ACP_NO_LOAD_SESSION: "1" }],
+  ] as const)("keeps a completed turn idle when Cursor replay is %s", async (_label, replayEnv) => {
+    const stateDirectory = await temporaryDirectory();
+    const lifecycleFile = resolve(stateDirectory, "cursor-replay-unavailable.log");
+    const bridge = await spawnBridge({
+      stateDirectory,
+      env: {
+        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+        FAKE_ACP_REPLAY_CURSOR_TOOL_METADATA: "1",
+        ...replayEnv,
+      },
+    });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: `env-cursor-${_label}:tab-1` }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "CURSOR_GENERIC_TOOLS" }),
+    });
+    await waitFor(
+      () => fs.readFile(lifecycleFile, "utf8").catch(() => ""),
+      (value) => value.includes("stop:"),
+    );
+    const session = await nativeFetch(`${bridge.base}/session/${created.id}`, {
+      headers: bridge.headers,
+    }).then((response) => response.json()) as {
+      status: string;
+      error?: string;
+      messages: Array<{ parts: Array<Record<string, unknown>> }>;
+    };
+    expect(session.status).toBe("idle");
+    expect(session.error).toBeUndefined();
+    expect(session.messages[1]?.parts.find((part) => part.toolUseId === "live-read-1"))
+      .toMatchObject({ toolTitle: "Read File", toolArgs: {} });
+
+    const persisted = await waitFor(
+      async () => JSON.parse(
+        await fs.readFile(resolve(stateDirectory, "state.json"), "utf8"),
+      ) as { sessions: Array<{ status: string; error?: string }> },
+      (value) => value.sessions[0]?.status === "idle",
+    );
+    expect(persisted.sessions[0]?.error).toBeUndefined();
+  });
+
+  test("matches reordered same-kind replay tools by output and leaves ambiguous calls generic", async () => {
+    const bridge = await spawnBridge({
+      env: { FAKE_ACP_REPLAY_CURSOR_SAME_KIND_METADATA: "1" },
+    });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-same-kind:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "CURSOR_SAME_KIND_TOOLS" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.messages[1]?.parts.some(
+        (part) => part.toolTitle === "Read a.json",
+      ) === true,
+    );
+    const tools = session.messages[1]?.parts.filter((part) => part.type === "tool-invocation") ?? [];
+    expect(tools.find((part) => part.toolUseId === "live-read-a"))
+      .toMatchObject({ toolTitle: "Read a.json", toolArgs: { path: "/workspace/a.json" } });
+    expect(tools.find((part) => part.toolUseId === "live-read-b"))
+      .toMatchObject({ toolTitle: "Read b.json", toolArgs: { path: "/workspace/b.json" } });
+    expect(tools.find((part) => part.toolUseId === "live-read-c"))
+      .toMatchObject({ toolTitle: "Read File", toolArgs: {} });
+    expect(tools.find((part) => part.toolUseId === "live-read-d"))
+      .toMatchObject({ toolTitle: "Read File", toolArgs: {} });
+  });
+
+  test("bounds replay metadata before publishing and persists the trimmed transcript", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const lifecycleFile = resolve(stateDirectory, "cursor-replay-bounds.log");
+    const maximumTranscriptBytes = 1024 * 1024;
+    const first = await spawnBridge({
+      stateDirectory,
+      env: {
+        ACP_MAX_TRANSCRIPT_BYTES: String(maximumTranscriptBytes),
+        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+        FAKE_ACP_REPLAY_CURSOR_OVERSIZED_METADATA: "1",
+      },
+    });
+    const created = await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-bounds:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ prompt: "CURSOR_OVERSIZED_REPLAY" }),
+    });
+    await waitFor(
+      () => fs.readFile(lifecycleFile, "utf8").catch(() => ""),
+      (value) => value.includes("stop:"),
+    );
+    const session = await nativeFetch(`${first.base}/session/${created.id}`, {
+      headers: first.headers,
+    }).then((response) => response.json()) as {
+      status: string;
+      baseIndex: number;
+      messages: Array<{ parts: Array<Record<string, unknown>> }>;
+    };
+    expect(session.status).toBe("idle");
+    expect(Buffer.byteLength(JSON.stringify(session.messages))).toBeLessThanOrEqual(maximumTranscriptBytes);
+    expect(session.baseIndex).toBeGreaterThan(0);
+    expect(session.messages.flatMap((message) => message.parts).some(
+      (part) => typeof part.content === "string"
+        && part.content.includes("Earlier steps in this response were dropped"),
+    )).toBe(true);
+    const retainedTool = session.messages.flatMap((message) => message.parts).find(
+      (part) => part.toolTitle === "Read huge-b.json",
+    );
+    expect((retainedTool?.toolArgs as { payload?: string } | undefined)?.payload?.length)
+      .toBe(480 * 1024);
+    expect(session.messages.flatMap((message) => message.parts).find(
+      (part) => part.toolUseId === "live-huge-c",
+    )).toMatchObject({ toolTitle: "Read File", toolArgs: {} });
+
+    const persisted = await waitFor(
+      async () => JSON.parse(
+        await fs.readFile(resolve(stateDirectory, "state.json"), "utf8"),
+      ) as {
+        sessions: Array<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>;
+      },
+      (value) => value.sessions[0]?.messages.flatMap((message) => message.parts).some(
+        (part) => part.toolTitle === "Read huge-b.json",
+      ) === true,
+    );
+    expect(persisted.sessions[0]?.status).toBe("idle");
+    expect(Buffer.byteLength(JSON.stringify(persisted.sessions[0]?.messages)))
+      .toBeLessThanOrEqual(maximumTranscriptBytes);
+
+    await stopChild(first.child);
+    const restarted = await spawnBridge({
+      stateDirectory,
+      env: { ACP_MAX_TRANSCRIPT_BYTES: String(maximumTranscriptBytes) },
+    });
+    const restored = await nativeFetch(`${restarted.base}/session/${created.id}`, {
+      headers: restarted.headers,
+    }).then((response) => response.json()) as {
+      status: string;
+      messages: Array<{ parts: Array<Record<string, unknown>> }>;
+    };
+    expect(restored.status).toBe("idle");
+    expect(Buffer.byteLength(JSON.stringify(restored.messages))).toBeLessThanOrEqual(maximumTranscriptBytes);
+  });
+
+  test("keeps all turns settled when the Cursor replay process cap is saturated", async () => {
+    const directory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "cursor-replay-cap.log");
+    const bridge = await spawnBridge({
+      env: {
+        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+        FAKE_ACP_LOAD_DELAY_MS: "800",
+        FAKE_ACP_REPLAY_CURSOR_TOOL_METADATA: "1",
+      },
+    });
+    const created = await Promise.all(Array.from({ length: 9 }, async (_, index) =>
+      nativeFetch(`${bridge.base}/session/create`, {
+        method: "POST",
+        headers: bridge.headers,
+        body: JSON.stringify({ clientSessionKey: `env-cursor-cap:tab-${index}` }),
+      }).then((response) => response.json()) as Promise<{ id: string }>
+    ));
+    const promptResponses = await Promise.all(created.map((session) =>
+      nativeFetch(`${bridge.base}/session/${session.id}/prompt`, {
+        method: "POST",
+        headers: bridge.headers,
+        body: JSON.stringify({ prompt: "CURSOR_GENERIC_TOOLS" }),
+      })
+    ));
+    expect(promptResponses.every((response) => response.status === 202)).toBe(true);
+    await waitFor(
+      () => fs.readFile(lifecycleFile, "utf8").catch(() => ""),
+      (value) => (value.match(/^load:/gm)?.length ?? 0) === 8,
+    );
+    const statuses = await Promise.all(created.map((session) =>
+      nativeFetch(`${bridge.base}/session/${session.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{ status: string }>
+    ));
+    expect(statuses.every((session) => session.status === "idle")).toBe(true);
   });
 
   test("normalizes failing tool calls into failed parts with an error message", async () => {

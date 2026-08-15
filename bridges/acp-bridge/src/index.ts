@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, resolve } from "node:path";
@@ -123,15 +123,15 @@ interface AcpReplayToolMetadata {
   title?: string;
   toolName?: string;
   toolArgs?: JsonObject;
-  contentOutput?: string;
-  rawOutput?: string;
+  contentOutputHash?: string;
+  rawOutputHash?: string;
+  retainedBytes: number;
 }
 
 interface AcpToolReplayCollector {
   capacity: number;
-  calls: AcpReplayToolMetadata[];
-  next: number;
-  total: number;
+  maximumBytes: number;
+  retainedBytes: number;
   byId: Map<string, AcpReplayToolMetadata>;
 }
 
@@ -270,6 +270,7 @@ const sessionCreations = new Map<string, Promise<SessionState>>();
 const sessionResumes = new Map<string, Promise<SessionState>>();
 let anonymousSessionCreations = 0;
 let activeCursorToolReplays = 0;
+const cursorToolReplayProcesses = new Set<AcpProcess>();
 let sessionListProbe: Promise<JsonObject[]> | null = null;
 let persistenceTail = Promise.resolve();
 let persistenceScheduled = false;
@@ -1353,49 +1354,72 @@ function collectReplayToolMetadata(
 
   let call = collector.byId.get(id);
   if (!call && isInitial) {
-    call = { id };
-    if (collector.calls.length < collector.capacity) {
-      collector.calls.push(call);
-    } else {
-      const replaced = collector.calls[collector.next];
-      if (replaced) collector.byId.delete(replaced.id);
-      collector.calls[collector.next] = call;
-      collector.next = (collector.next + 1) % collector.capacity;
+    call = { id, retainedBytes: 0 };
+    call.retainedBytes = replayToolMetadataBytes(call);
+    while (collector.byId.size > 0 && (
+      collector.byId.size >= collector.capacity
+      || collector.retainedBytes + call.retainedBytes > collector.maximumBytes
+    )) {
+      const oldest = collector.byId.entries().next().value as
+        | [string, AcpReplayToolMetadata]
+        | undefined;
+      if (!oldest) break;
+      collector.byId.delete(oldest[0]);
+      collector.retainedBytes -= oldest[1].retainedBytes;
     }
-    collector.total += 1;
+    if (collector.retainedBytes + call.retainedBytes > collector.maximumBytes) return;
+    collector.retainedBytes += call.retainedBytes;
     collector.byId.set(id, call);
   }
   if (!call) return;
 
+  const candidate: AcpReplayToolMetadata = { ...call };
   if ("title" in update) {
-    call.title = boundedNullableString(update.title, MAX_TOOL_TITLE_BYTES);
+    candidate.title = boundedNullableString(update.title, MAX_TOOL_TITLE_BYTES);
   }
   if ("name" in update) {
-    call.toolName = boundedNullableString(update.name, MAX_TOOL_NAME_BYTES);
+    candidate.toolName = boundedNullableString(update.name, MAX_TOOL_NAME_BYTES);
   }
-  if ("kind" in update && !call.toolName) {
-    call.toolName = boundedNullableString(update.kind, MAX_TOOL_NAME_BYTES);
+  if ("kind" in update && !candidate.toolName) {
+    candidate.toolName = boundedNullableString(update.kind, MAX_TOOL_NAME_BYTES);
   }
   if ("rawInput" in update && isObject(update.rawInput)) {
-    call.toolName ??= boundedString(update.rawInput._toolName, MAX_TOOL_NAME_BYTES);
-    call.toolArgs = boundedToolArguments(update.rawInput);
+    candidate.toolName ??= boundedString(update.rawInput._toolName, MAX_TOOL_NAME_BYTES);
+    candidate.toolArgs = boundedToolArguments(update.rawInput);
   }
   if ("content" in update) {
-    call.contentOutput = toolCallContentText(update.content);
+    candidate.contentOutputHash = replayOutputHash(toolCallContentText(update.content));
   }
   if ("rawOutput" in update) {
-    call.rawOutput = update.rawOutput === null
+    const rawOutput = update.rawOutput === null
       ? undefined
       : stringifyToolPayload(update.rawOutput);
+    candidate.rawOutputHash = replayOutputHash(rawOutput);
   }
+  candidate.retainedBytes = replayToolMetadataBytes(candidate);
+  const nextRetainedBytes = collector.retainedBytes - call.retainedBytes + candidate.retainedBytes;
+  if (nextRetainedBytes > collector.maximumBytes) return;
+  collector.retainedBytes = nextRetainedBytes;
+  Object.assign(call, candidate);
+}
+
+function replayOutputHash(value: string | undefined): string | undefined {
+  return value === undefined ? undefined : createHash("sha256").update(value).digest("hex");
+}
+
+function replayToolMetadataBytes(call: AcpReplayToolMetadata): number {
+  return Buffer.byteLength(JSON.stringify({
+    id: call.id,
+    title: call.title,
+    toolName: call.toolName,
+    toolArgs: call.toolArgs,
+    contentOutputHash: call.contentOutputHash,
+    rawOutputHash: call.rawOutputHash,
+  }));
 }
 
 function orderedReplayTools(collector: AcpToolReplayCollector): AcpReplayToolMetadata[] {
-  if (collector.total <= collector.capacity || collector.next === 0) return collector.calls;
-  return [
-    ...collector.calls.slice(collector.next),
-    ...collector.calls.slice(0, collector.next),
-  ];
+  return [...collector.byId.values()];
 }
 
 function currentTurnToolParts(state: SessionState): BridgeToolPart[] {
@@ -1428,18 +1452,24 @@ function isGenericCursorToolTitle(value: string | undefined): boolean {
     || normalized === "find";
 }
 
-function needsCursorToolReplay(state: SessionState): boolean {
-  return currentTurnToolParts(state).some((part) =>
+function cursorToolReplayTargets(state: SessionState): BridgeToolPart[] {
+  if (provider !== "cursor") return [];
+  const targets = currentTurnToolParts(state).slice(-MAX_REPLAY_RECONCILE_TOOLS);
+  return targets.some((part) =>
     isGenericCursorToolTitle(part.toolTitle)
     && !hasToolArguments(part.toolArgs)
-  );
+  ) ? targets : [];
 }
 
 function applyReplayToolMetadata(
   state: SessionState,
+  capturedTargets: readonly BridgeToolPart[],
   collector: AcpToolReplayCollector,
 ): boolean {
-  const targets = currentTurnToolParts(state).slice(-collector.capacity);
+  const liveToolParts = new Set(state.messages.flatMap((message) => message.parts.flatMap(
+    (part) => part.type === "tool-invocation" ? [part] : [],
+  )));
+  const targets = capturedTargets.filter((part) => liveToolParts.has(part));
   const replayed = orderedReplayTools(collector);
   if (targets.length === 0 || replayed.length === 0) return false;
   const unused = new Set(replayed.keys());
@@ -1458,10 +1488,12 @@ function applyReplayToolMetadata(
     const pathMatches = targetPath
       ? sameKind.filter((index) => toolArgumentPath(replayed[index]?.toolArgs) === targetPath)
       : [];
-    const outputMatches = part.toolOutput
+    const targetOutputHash = replayOutputHash(part.toolOutput);
+    const outputMatches = targetOutputHash
       ? sameKind.filter((index) => {
           const replay = replayed[index];
-          return (replay?.contentOutput ?? replay?.rawOutput) === part.toolOutput;
+          const replayHash = replay?.contentOutputHash ?? replay?.rawOutputHash;
+          return replayHash !== undefined && replayHash === targetOutputHash;
         })
       : [];
     const candidateIndexes = pathMatches.length > 0 ? pathMatches : outputMatches;
@@ -1494,19 +1526,30 @@ function applyReplayToolMetadata(
       acpToolSourceStates.delete(part);
     }
   }
+  if (changed) {
+    const transcriptTruncated = boundTranscript(state);
+    if (transcriptTruncated && turnRequiresCompleteOutput(state)) failTranscriptLimit(state);
+  }
   return changed;
 }
 
-async function reconcileCursorToolMetadata(state: SessionState, child: AcpProcess): Promise<void> {
-  if (provider !== "cursor" || state.child !== child || !needsCursorToolReplay(state)) return;
+async function reconcileCursorToolMetadata(
+  state: SessionState,
+  child: AcpProcess,
+  targets: readonly BridgeToolPart[],
+): Promise<void> {
+  if (provider !== "cursor"
+    || shuttingDown
+    || sessions.get(state.id) !== state
+    || state.child !== child
+    || targets.length === 0) return;
   if (activeCursorToolReplays >= MAX_CURSOR_TOOL_REPLAY_PROCESSES) return;
-  const capacity = Math.min(currentTurnToolParts(state).length, MAX_REPLAY_RECONCILE_TOOLS);
+  const capacity = Math.min(targets.length, MAX_REPLAY_RECONCILE_TOOLS);
   if (capacity === 0) return;
   const collector: AcpToolReplayCollector = {
     capacity,
-    calls: [],
-    next: 0,
-    total: 0,
+    maximumBytes: MAX_TRANSCRIPT_BYTES,
+    retainedBytes: 0,
     byId: new Map(),
   };
   activeCursorToolReplays += 1;
@@ -1518,6 +1561,7 @@ async function reconcileCursorToolMetadata(state: SessionState, child: AcpProces
     // not. Concurrency is capped above so simultaneous turns cannot double the
     // bridge's process count without bound.
     replayChild = new AcpProcess();
+    cursorToolReplayProcesses.add(replayChild);
     replayChild.onUpdate = (params) => {
       if (params.sessionId !== state.acpSessionId || !isObject(params.update)) return;
       const update = params.update;
@@ -1541,15 +1585,23 @@ async function reconcileCursorToolMetadata(state: SessionState, child: AcpProces
       mcpServers: [],
       sessionId: state.acpSessionId,
     });
-    if (state.child === child && applyReplayToolMetadata(state, collector)) {
+    if (!shuttingDown
+      && sessions.get(state.id) === state
+      && state.child === child
+      && applyReplayToolMetadata(state, targets, collector)) {
       state.revision += 1;
+      schedulePersist();
     }
   } catch {
     // Display enrichment is best-effort. The completed turn remains valid even
     // when an older Cursor build cannot replay its session from a fresh child.
   } finally {
-    await replayChild?.close();
-    activeCursorToolReplays -= 1;
+    try {
+      await replayChild?.close();
+    } finally {
+      if (replayChild) cursorToolReplayProcesses.delete(replayChild);
+      activeCursorToolReplays -= 1;
+    }
   }
 }
 
@@ -2524,7 +2576,7 @@ async function route(
           data: image.data,
         })),
       ],
-    }, PROMPT_TIMEOUT_MS).then(async (result) => {
+    }, PROMPT_TIMEOUT_MS).then((result) => {
       // The result `_meta` is the last and most complete usage carrier, so it is
       // read before `turnStartedAt` is cleared and the elapsed time is lost.
       recordTurnUsage(state, isObject(result) ? result._meta : undefined);
@@ -2559,10 +2611,18 @@ async function route(
       // by the agent — ACP has no status for that, so settle it explicitly.
       reconcileStaleToolParts(state);
       state.currentTurnOutput = null;
-      await reconcileCursorToolMetadata(state, child);
+      const replayTargets = cursorToolReplayTargets(state);
       if (!state.outputTruncated && state.child === child) state.status = "idle";
       state.revision += 1;
       schedulePersist();
+      // Cursor's display enrichment is deliberately outside the authoritative
+      // turn lifecycle. A slow or incompatible replay cannot keep the session
+      // working, block the next prompt, or persist a completed turn as
+      // ambiguous. Captured part references keep a late replay scoped to the
+      // turn that requested it even if another turn starts meanwhile.
+      if (replayTargets.length > 0) {
+        void reconcileCursorToolMetadata(state, child, replayTargets).catch(() => undefined);
+      }
     }, (error: unknown) => {
       state.status = "error";
       state.error = error instanceof Error ? error.message : String(error);
@@ -3380,7 +3440,10 @@ function shutdown(): Promise<void> {
     for (const state of sessions.values()) {
       for (const approval of [...state.approvals.values()]) approval.respond();
     }
-    await Promise.allSettled([...sessions.values()].map((state) => state.child?.close()));
+    await Promise.allSettled([
+      ...[...sessions.values()].map((state) => state.child?.close()),
+      ...[...cursorToolReplayProcesses].map((child) => child.close()),
+    ]);
     await persistenceTail.catch(() => undefined);
     await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
   })();

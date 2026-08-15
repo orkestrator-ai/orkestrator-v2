@@ -11747,6 +11747,10 @@ export function createCommandRegistry(
         typeof args.phase === "string"
           ? args.phase as import("@orkestrator/protocol/build-pipeline").PipelineSessionPhase
           : undefined,
+      ...(args.sessionMode === "plan" || args.sessionMode === "build"
+        ? { sessionMode: args.sessionMode }
+        : {}),
+      ...(typeof args.fastMode === "boolean" ? { fastMode: args.fastMode } : {}),
     });
   });
 

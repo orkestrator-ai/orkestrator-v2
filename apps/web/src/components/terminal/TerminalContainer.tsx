@@ -342,6 +342,7 @@ function createClaudeNativeLikeTab({
   isReviewTab,
   initialAgentModel,
   initialReasoningEffort,
+  initialConversationMode,
   sessionId,
   deferPlatform = false,
 }: {
@@ -355,6 +356,7 @@ function createClaudeNativeLikeTab({
   isReviewTab?: boolean;
   initialAgentModel?: string;
   initialReasoningEffort?: string;
+  initialConversationMode?: "build" | "plan";
   sessionId?: string;
   deferPlatform?: boolean;
 }): TabInfo {
@@ -390,6 +392,7 @@ function createClaudeNativeLikeTab({
     isReviewTab,
     initialAgentModel,
     initialReasoningEffort,
+    initialConversationMode,
   };
 }
 
@@ -405,6 +408,7 @@ function createAgentNativeTab({
   isReviewTab,
   initialAgentModel,
   initialReasoningEffort,
+  initialConversationMode,
 }: {
   id: string;
   platform: AgentPlatform | undefined;
@@ -417,6 +421,7 @@ function createAgentNativeTab({
   isReviewTab?: boolean;
   initialAgentModel?: string;
   initialReasoningEffort?: string;
+  initialConversationMode?: "build" | "plan";
 }): TabInfo {
   return {
     id,
@@ -433,6 +438,7 @@ function createAgentNativeTab({
     isReviewTab,
     initialAgentModel,
     initialReasoningEffort,
+    initialConversationMode,
   };
 }
 
@@ -1775,7 +1781,8 @@ export function TerminalContainer({
         || options?.isReviewTab
         || options?.resumeSessionId
         || options?.initialAgentModel
-        || options?.initialReasoningEffort,
+        || options?.initialReasoningEffort
+        || options?.initialConversationMode,
       );
 
       // Check if we should create an opencode-native tab instead
@@ -1792,6 +1799,7 @@ export function TerminalContainer({
           isReviewTab: options?.isReviewTab,
           initialAgentModel: options?.initialAgentModel,
           initialReasoningEffort: options?.initialReasoningEffort,
+          initialConversationMode: options?.initialConversationMode,
         });
         console.debug("[TerminalContainer] Creating opencode-native tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
         seedDeferredNativePlatform(newTab, "opencode");
@@ -1818,6 +1826,7 @@ export function TerminalContainer({
           isReviewTab: options?.isReviewTab,
           initialAgentModel: options?.initialAgentModel,
           initialReasoningEffort: options?.initialReasoningEffort,
+          initialConversationMode: options?.initialConversationMode,
           sessionId: options?.resumeSessionId,
           deferPlatform: !prelockNativePlatform,
         });
@@ -1840,6 +1849,7 @@ export function TerminalContainer({
           isReviewTab: options?.isReviewTab,
           initialAgentModel: options?.initialAgentModel,
           initialReasoningEffort: options?.initialReasoningEffort,
+          initialConversationMode: options?.initialConversationMode,
         });
         console.debug("[TerminalContainer] Creating codex-native tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
         seedDeferredNativePlatform(newTab, "codex");
@@ -1861,6 +1871,7 @@ export function TerminalContainer({
           isReviewTab: options?.isReviewTab,
           initialAgentModel: options?.initialAgentModel,
           initialReasoningEffort: options?.initialReasoningEffort,
+          initialConversationMode: options?.initialConversationMode,
         });
         seedDeferredNativePlatform(newTab, provider);
         addTab(activePaneId, newTab, environmentId);
@@ -1876,6 +1887,7 @@ export function TerminalContainer({
         isReviewTab: options?.isReviewTab,
         initialAgentModel: options?.initialAgentModel,
         initialReasoningEffort: options?.initialReasoningEffort,
+        initialConversationMode: options?.initialConversationMode,
       };
 
       console.debug("[TerminalContainer] Creating new tab:", newTabId, "type:", type, "for environment:", environmentId);

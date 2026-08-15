@@ -38,6 +38,8 @@ export interface CreateTabOptions {
   initialAgentModel?: string;
   /** Optional one-shot reasoning effort or provider variant for this agent tab. */
   initialReasoningEffort?: string;
+  /** One-shot Build/Plan selection applied when the agent tab is locked. */
+  initialConversationMode?: "build" | "plan";
   /** Initial backend-local address for browser tabs. */
   initialUrl?: string;
   /** Existing authoritative workflow opened by a looped-review tab. */

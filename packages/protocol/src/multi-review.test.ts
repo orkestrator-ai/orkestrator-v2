@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   MULTI_REVIEW_MAX_REVIEWERS,
   MULTI_REVIEW_WORKFLOW_VERSION,
+  isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
   isStartMultiReviewInput,
 } from "./multi-review";
@@ -53,7 +54,19 @@ describe("multi review protocol", () => {
       backendRevision: 2,
     };
     expect(isMultiReviewWorkflow(workflow)).toBe(true);
+    expect(isMultiReviewWorkflow({ ...workflow, phase: "interactive" })).toBe(true);
     expect(isMultiReviewWorkflow({ ...workflow, consolidatedReport: undefined })).toBe(false);
+    expect(isMultiReviewWorkflow({
+      ...workflow, phase: "interactive", consolidatedReport: undefined,
+    })).toBe(false);
+  });
+
+  test("treats an interactive handoff as a terminal workflow", () => {
+    expect(isMultiReviewTerminalPhase("interactive")).toBe(true);
+    expect(isMultiReviewTerminalPhase("completed")).toBe(true);
+    expect(isMultiReviewTerminalPhase("cancelled")).toBe(true);
+    expect(isMultiReviewTerminalPhase("ready")).toBe(false);
+    expect(isMultiReviewTerminalPhase("fixing")).toBe(false);
   });
 
   test("rejects unsafe branches, empty instructions, and duplicate reviewer identities", () => {

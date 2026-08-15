@@ -246,7 +246,7 @@ export function DraggableTab({
         : `Looped Review ${tabNumber}`;
     }
     if (tab.type === "multi-review") {
-      return multiReviewPhase === "completed"
+      return multiReviewPhase === "completed" || multiReviewPhase === "interactive"
         ? "Multi Review ✓"
         : `Multi Review ${tabNumber}`;
     }

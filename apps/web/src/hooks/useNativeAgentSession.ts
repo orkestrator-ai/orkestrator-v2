@@ -284,6 +284,10 @@ export function useNativeAgentSession<TMessage = unknown>({
           await adoptNativeAgentSession({
             ...identity,
             providerSessionId: initialProviderSessionId,
+            ...(initialAgentModel ? { model: initialAgentModel } : {}),
+            ...(initialReasoningEffort ? { reasoningEffort: initialReasoningEffort } : {}),
+            ...(initialConversationMode ? { sessionMode: initialConversationMode } : {}),
+            ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);

@@ -2125,6 +2125,8 @@ export async function adoptNativeAgentSession(input: {
   expectedProviderSessionId?: string;
   model?: string;
   reasoningEffort?: string;
+  sessionMode?: "plan" | "build";
+  fastMode?: boolean;
 }): Promise<PersistedNativeAgentSession> {
   return invoke<PersistedNativeAgentSession>(
     "adopt_native_agent_session",

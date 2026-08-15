@@ -6500,6 +6500,38 @@ describe("TerminalContainer", () => {
         })));
     });
 
+    test("applies a one-shot build mode when resuming a provider session", async () => {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateTabHarness
+            type="codex"
+            options={{
+              agentLaunchMode: "native",
+              resumeSessionId: "provider-thread-1",
+              initialPrompt: "Please address all the issues and coverage gaps",
+              initialConversationMode: "build",
+              isReviewTab: true,
+            }}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => expect(usePaneLayoutStore.getState().getAllTabs("env-visible"))
+        .toContainEqual(expect.objectContaining({
+          type: "agent-native",
+          isReviewTab: true,
+          initialPrompt: "Please address all the issues and coverage gaps",
+          initialConversationMode: "build",
+          nativeAgentData: expect.objectContaining({ sessionId: "provider-thread-1" }),
+        })));
+    });
+
     test("propagates provider session identity to Claude native tabs", async () => {
       render(
         <TerminalProvider>

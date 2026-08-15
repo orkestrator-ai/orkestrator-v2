@@ -279,17 +279,14 @@ export class MultiReviewService {
       if (workflow.phase !== "ready" || !workflow.consolidatedReport || !workflow.fixSession) {
         throw new Error("The consolidated review is not ready to address");
       }
-      const requestId = randomUUID();
-      workflow.phase = "fixing";
-      workflow.fixSession.status = "running";
-      workflow.fixSession.requestIds.push(requestId);
-      workflow.activeRequest = {
-        kind: "fix", requestId, state: "prepared", createdAt: nowIso(),
-      };
+      // The renderer adopts this idle consolidation session as an interactive
+      // native tab and sends the address prompt there. Supervising a structured
+      // fix turn would steal the same provider session back into unattended mode.
+      workflow.phase = "interactive";
+      workflow.fixSession.status = "idle";
+      delete workflow.activeRequest;
       delete workflow.error;
-      const saved = await this.save(workflow, token);
-      void this.advanceNow(workflowId);
-      return saved;
+      return this.save(workflow, token);
     });
   }
 

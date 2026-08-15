@@ -60,6 +60,7 @@ export type MultiReviewPhase =
   | "consolidating"
   | "ready"
   | "fixing"
+  | "interactive"
   | "completed"
   | "cancelling"
   | "cancelled"
@@ -169,7 +170,7 @@ export function isStartMultiReviewInput(value: unknown): value is StartMultiRevi
 }
 
 const PHASES = new Set<MultiReviewPhase>([
-  "reviewing", "consolidating", "ready", "fixing", "completed",
+  "reviewing", "consolidating", "ready", "fixing", "interactive", "completed",
   "cancelling", "cancelled", "failed",
 ]);
 const REVIEWER_STATUSES = new Set<MultiReviewReviewerStatus>([
@@ -314,7 +315,8 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
   }
   if (new Set(value.reviewers.map((entry) => entry.id)).size !== value.reviewers.length) return false;
   if (value.reviewers.some((entry) => entry.status === "completed" && !isStructuredReviewReport(entry.report))) return false;
-  if ((value.phase === "ready" || value.phase === "fixing" || value.phase === "completed")
+  if ((value.phase === "ready" || value.phase === "fixing" || value.phase === "interactive"
+    || value.phase === "completed")
     && (!isStructuredReviewReport(value.consolidatedReport) || !isFixSession(value.fixSession))) {
     return false;
   }
@@ -327,5 +329,5 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
 }
 
 export function isMultiReviewTerminalPhase(phase: MultiReviewPhase): boolean {
-  return phase === "completed" || phase === "cancelled";
+  return phase === "interactive" || phase === "completed" || phase === "cancelled";
 }

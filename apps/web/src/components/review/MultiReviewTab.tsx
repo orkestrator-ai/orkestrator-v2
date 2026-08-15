@@ -9,7 +9,10 @@ import { StackedEyes } from "./MultiReviewLaunchDialog";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { hydrateMultiReviewWorkflow } from "@/lib/multi-review-persistence";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
-import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
+import {
+  useOptionalTerminalContext,
+  type CreateTabOptions,
+} from "@/contexts/TerminalContext";
 import { MultiReviewReviewerTab } from "./MultiReviewReviewerTab";
 import * as backend from "@/lib/backend";
 
@@ -39,12 +42,32 @@ function phaseCopy(phase: MultiReviewPhase): string {
     consolidating: "The fix model is consolidating findings",
     ready: "Consolidated report ready",
     fixing: "The fix model is addressing every finding",
+    interactive: "The fix model is working interactively",
     completed: "All findings were addressed",
     cancelling: "Cancelling Multi Review",
     cancelled: "Multi Review cancelled",
     failed: "Multi Review needs attention",
   } as const;
   return labels[phase];
+}
+
+/** Opens the idle consolidation session as a normal native agent tab. */
+export function multiReviewFixSessionTabOptions(
+  workflow: MultiReviewWorkflow,
+  sendAddressPrompt: boolean,
+): CreateTabOptions | null {
+  const session = workflow.fixSession;
+  if (!session?.providerSessionId) return null;
+  return {
+    agentLaunchMode: "native",
+    resumeSessionId: session.providerSessionId,
+    ...(sendAddressPrompt ? { initialPrompt: ADDRESS_ALL_REVIEW_PROMPT } : {}),
+    displayTitle: "Multi Review · Fix",
+    isReviewTab: true,
+    initialAgentModel: workflow.fixModel.model === "default" ? undefined : workflow.fixModel.model,
+    initialReasoningEffort: workflow.fixModel.reasoningEffort,
+    initialConversationMode: "build",
+  };
 }
 
 function MultiReviewOverviewTab({
@@ -74,12 +97,41 @@ function MultiReviewOverviewTab({
     void hydrate();
   }, [hydrate, isActive]);
 
+  const openFixSession = (sendAddressPrompt: boolean): boolean => {
+    if (!workflow) return false;
+    const options = multiReviewFixSessionTabOptions(workflow, sendAddressPrompt);
+    if (!options) {
+      setError("The consolidation session is no longer available");
+      return false;
+    }
+    const created = createTab?.(workflow.fixModel.agent, options);
+    if (!created) {
+      setError("The environment is not ready or the maximum tab count was reached.");
+      return false;
+    }
+    return true;
+  };
+
   const run = async (command: () => Promise<NonNullable<typeof workflow>>) => {
     if (pending) return;
     setPending(true);
     setError(null);
     try {
       replaceWorkflow(await command());
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const addressAll = async () => {
+    if (pending || !workflow) return;
+    setPending(true);
+    setError(null);
+    try {
+      if (!openFixSession(true)) return;
+      replaceWorkflow(await commands.address(workflow.id));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -102,7 +154,7 @@ function MultiReviewOverviewTab({
   const busy = workflow.phase === "reviewing" || workflow.phase === "consolidating"
     || workflow.phase === "fixing" || workflow.phase === "cancelling";
   const canCancel = workflow.phase !== "completed" && workflow.phase !== "cancelled"
-    && workflow.phase !== "cancelling";
+    && workflow.phase !== "cancelling" && workflow.phase !== "interactive";
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -201,8 +253,20 @@ function MultiReviewOverviewTab({
             {workflow.phase === "ready" || workflow.phase === "failed" ? "Abandon" : "Cancel"}
           </Button>
         )}
+        {workflow.phase === "interactive" && workflow.fixSession?.providerSessionId && (
+          <Button
+            variant="outline"
+            disabled={pending || !createTab}
+            onClick={() => { openFixSession(false); }}
+          >
+            Open fix session
+          </Button>
+        )}
         {workflow.phase === "ready" && (
-          <Button disabled={pending} onClick={() => void run(() => commands.address(workflow.id))}>
+          <Button
+            disabled={pending || !createTab}
+            onClick={() => void addressAll()}
+          >
             <Wrench className="mr-2 size-4" />{ADDRESS_ALL_REVIEW_PROMPT}
           </Button>
         )}

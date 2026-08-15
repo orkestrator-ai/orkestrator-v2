@@ -1375,6 +1375,47 @@ describe("session routes", () => {
     });
   });
 
+  // --- GET /session/:id/dispatch ---
+  describe("GET /session/:id/dispatch", () => {
+    test("reports a turn this process is running or has finished", async () => {
+      for (const state of ["processing", "already-processed"] as const) {
+        mockGetPromptDispatchState.mockReturnValueOnce(state);
+        const res = await app.request("/session/s-1/dispatch?requestId=r-1");
+        expect(res.status).toBe(200);
+        expect(await jsonBody(res)).toEqual({ dispatch: "dispatched" });
+      }
+      expect(mockGetPromptDispatchState).toHaveBeenCalledWith("s-1", "r-1");
+    });
+
+    test("never reports a lost record as proof the prompt was not sent", async () => {
+      // "new" and "not-found" cannot distinguish a prompt that was never sent
+      // from one sent to a bridge process that has since restarted, and calling
+      // the second never-sent would have the caller run the turn twice.
+      for (const state of ["new", "not-found"] as const) {
+        mockGetPromptDispatchState.mockReturnValueOnce(state);
+        const res = await app.request("/session/s-1/dispatch?requestId=r-1");
+        expect(res.status).toBe(200);
+        expect(await jsonBody(res)).toEqual({ dispatch: "unknown" });
+      }
+    });
+
+    test("answers a blank request id without consulting dispatch state", async () => {
+      mockGetPromptDispatchState.mockClear();
+      for (const query of ["", "?requestId=", "?requestId=%20%20"]) {
+        const res = await app.request(`/session/s-1/dispatch${query}`);
+        expect(res.status).toBe(200);
+        expect(await jsonBody(res)).toEqual({ dispatch: "unknown" });
+      }
+      expect(mockGetPromptDispatchState).not.toHaveBeenCalled();
+    });
+
+    test("is not shadowed by GET /session/:id", async () => {
+      mockGetPromptDispatchState.mockReturnValueOnce("processing");
+      const res = await app.request("/session/s-1/dispatch?requestId=r-1");
+      expect(await jsonBody(res)).toEqual({ dispatch: "dispatched" });
+    });
+  });
+
   // --- GET /session/:id/activity ---
   describe("GET /session/:id/activity", () => {
     test("returns the session's activity state", async () => {

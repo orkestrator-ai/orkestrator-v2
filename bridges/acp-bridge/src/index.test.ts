@@ -4292,6 +4292,151 @@ describe("ACP bridge", () => {
     );
   });
 
+  test("answers whether a request id was ever dispatched", async () => {
+    const bridge = await spawnBridge();
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+    }).then((response) => response.json()) as { id: string };
+    const dispatchStatus = (requestId: string) => nativeFetch(
+      `${bridge.base}/session/${created.id}/dispatch?requestId=${encodeURIComponent(requestId)}`,
+      { headers: bridge.headers },
+    ).then((response) => response.json()) as Promise<{ dispatch: string }>;
+
+    expect(await dispatchStatus("never-sent")).toEqual({ dispatch: "unknown" });
+    // A blank id is a caller bug, not a claim about any turn.
+    expect(await nativeFetch(
+      `${bridge.base}/session/${created.id}/dispatch`,
+      { headers: bridge.headers },
+    ).then((response) => response.json())).toEqual({ dispatch: "unknown" });
+
+    expect((await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "DIRECT:done", requestId: "sent-1" }),
+    })).status).toBe(202);
+    // True while the turn runs and after it finishes: both mean the bridge took
+    // the prompt, which is the whole question.
+    expect(await dispatchStatus("sent-1")).toEqual({ dispatch: "dispatched" });
+    await waitFor(
+      async () => nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{ status: string }>,
+      (session) => session.status === "idle",
+    );
+    expect(await dispatchStatus("sent-1")).toEqual({ dispatch: "dispatched" });
+  });
+
+  test("reports a turn lost to a bridge restart as unknown, not dispatched", async () => {
+    const directory = await temporaryDirectory();
+    const stateDirectory = await temporaryDirectory();
+    const first = await spawnBridge({
+      stateDirectory,
+      env: { FAKE_ACP_HOLD_TURN_FILE: resolve(directory, "release-turn") },
+    });
+    const created = await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ clientSessionKey: "env-1:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+    // The fake agent holds this turn open, so the journal persists it as
+    // accepted and the restart below rewrites that record to ambiguous.
+    expect((await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({
+        prompt: "CURSOR_GENERIC_TOOLS_RUNNING",
+        requestId: "in-flight-1",
+      }),
+    })).status).toBe(202);
+    await waitFor(
+      async () => nativeFetch(`${first.base}/session/${created.id}`, { headers: first.headers })
+        .then((response) => response.json()) as Promise<{ status: string }>,
+      (session) => session.status === "running",
+    );
+    // SIGKILL, not SIGTERM. A graceful stop rejects the in-flight prompt RPC,
+    // and that rejection journals the turn as failed — which is a real answer
+    // ("it reached the agent and ended"). Only a process that dies without
+    // running any handler leaves the record genuinely unresolved.
+    const exited = new Promise<void>((resolvePromise) =>
+      first.child.once("exit", () => resolvePromise()));
+    first.child.kill("SIGKILL");
+    await exited;
+    children.delete(first.child);
+
+    const second = await spawnBridge({ stateDirectory });
+    await nativeFetch(`${second.base}/session/create`, {
+      method: "POST",
+      headers: second.headers,
+      body: JSON.stringify({ clientSessionKey: "env-1:tab-1" }),
+    });
+    // The record survived, but it records the ambiguity rather than resolving
+    // it. Answering "dispatched" here would let a caller drop a prompt that
+    // this process will never run.
+    expect(await nativeFetch(
+      `${second.base}/session/${created.id}/dispatch?requestId=in-flight-1`,
+      { headers: second.headers },
+    ).then((response) => response.json())).toEqual({ dispatch: "unknown" });
+  });
+
+  test("attaches the agent process without dispatching a turn", async () => {
+    const directory = await temporaryDirectory();
+    const stateDirectory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "attach-lifecycle.log");
+    const counterFile = resolve(directory, "attach-prompts.log");
+    const env = {
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+      FAKE_ACP_COUNTER_FILE: counterFile,
+    };
+    const first = await spawnBridge({ stateDirectory, env });
+    const created = await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ clientSessionKey: "env-1:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+    await stopChild(first.child);
+
+    // A restored session has no child, which is exactly the cold start that
+    // used to run inside the prompt request's at-most-once window.
+    const second = await spawnBridge({ stateDirectory, env });
+    await nativeFetch(`${second.base}/session/create`, {
+      method: "POST",
+      headers: second.headers,
+      body: JSON.stringify({ clientSessionKey: "env-1:tab-1" }),
+    });
+    const attach = () => nativeFetch(`${second.base}/session/${created.id}/attach`, {
+      method: "POST",
+      headers: second.headers,
+      body: "{}",
+    });
+    // Concurrent attaches share one spawn; without that they would each start
+    // an agent and orphan the loser's process.
+    const [a, b] = await Promise.all([attach(), attach()]);
+    expect([a.status, b.status]).toEqual([200, 200]);
+    expect(await a.json()).toEqual({ attached: true });
+
+    const lifecycle = await fs.readFile(lifecycleFile, "utf8");
+    expect(lifecycle.match(/^load:/gm)?.length ?? 0).toBe(1);
+    // Attaching is not dispatching: no turn may have been handed to the agent.
+    expect(await fs.readFile(counterFile, "utf8").catch(() => "")).toBe("");
+    await expect(nativeFetch(`${second.base}/session/${created.id}`, {
+      headers: second.headers,
+    }).then((response) => response.json())).resolves.toMatchObject({
+      status: "idle",
+    });
+  });
+
+  test("answers attach for a session this bridge does not hold", async () => {
+    const bridge = await spawnBridge();
+    // The backend reads 404 here as "nothing to warm" and lets the prompt
+    // request answer authoritatively, so it must not be a hard failure.
+    const response = await nativeFetch(`${bridge.base}/session/missing/attach`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: "{}",
+    });
+    expect(response.status).toBe(404);
+  });
+
   test("rejects unsupported vendor requests instead of acknowledging them", async () => {
     const directory = await temporaryDirectory();
     const responseFile = resolve(directory, "vendor-response.log");

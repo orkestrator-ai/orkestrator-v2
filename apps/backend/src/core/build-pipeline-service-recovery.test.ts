@@ -125,6 +125,9 @@ class ScriptedProvider implements BuildPipelineProvider {
   statusOverride: ProviderStatus | null = null;
   /** Queue of errors; each send() shifts one and throws it when present. */
   sendErrors: unknown[] = [];
+  /** Ordered attach/send trace, so the two can be asserted against each other. */
+  readonly dispatchTrace: string[] = [];
+  prepareDispatchError: unknown = null;
   statusError: unknown = null;
   structuredResult: StructuredOutputResult<unknown> | null | "absent" = "absent";
   messagesBySession = new Map<string, unknown[]>();
@@ -142,6 +145,11 @@ class ScriptedProvider implements BuildPipelineProvider {
     return id;
   }
 
+  async prepareDispatch(sessionId: string): Promise<void> {
+    this.dispatchTrace.push(`attach:${sessionId}`);
+    if (this.prepareDispatchError) throw this.prepareDispatchError;
+  }
+
   async send(
     sessionId: string,
     prompt: string,
@@ -151,6 +159,7 @@ class ScriptedProvider implements BuildPipelineProvider {
       mode?: ProviderExecutionMode;
     },
   ): Promise<void> {
+    this.dispatchTrace.push(`send:${sessionId}`);
     const error = this.sendErrors.shift();
     if (error) throw error;
     this.sent.push({
@@ -425,6 +434,42 @@ describe("BuildPipelineService reconnect", () => {
 });
 
 describe("BuildPipelineService prompt dispatch", () => {
+  test("attaches the agent before every prompt, including a redispatch", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const staged = await startAtSetup(service, storage);
+      provider.sendErrors = [new AmbiguousPromptDispatchError("response lost")];
+      await service.advanceNow(staged.id);
+      const sessionId = (await snapshot(storage, staged.id))
+        .pendingPromptAttempt!.sessionId;
+      await service.advanceNow(staged.id);
+
+      // The cold start is the slowest part of a dispatch and the part whose
+      // outcome is unknowable if the connection drops, so it belongs before
+      // the prompt on the first attempt and on the retry alike.
+      expect(provider.dispatchTrace).toEqual([
+        `attach:${sessionId}`,
+        `send:${sessionId}`,
+        `attach:${sessionId}`,
+        `send:${sessionId}`,
+      ]);
+    });
+  });
+
+  test("dispatches anyway when attaching the agent fails", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const staged = await startAtSetup(service, storage);
+      // Best-effort by contract: the prompt performs the same work and is the
+      // one that gets to report authoritatively.
+      provider.prepareDispatchError = new Error("attach failed");
+      await service.advanceNow(staged.id);
+
+      const dispatched = await snapshot(storage, staged.id);
+      expect(dispatched.phase).toBe("building");
+      expect(dispatched.pendingPromptAttempt).toBeUndefined();
+      expect(provider.sent).toHaveLength(1);
+    });
+  });
+
   test("retains the attempt and retries the same request id after a lost response", async () => {
     await withService(async ({ service, storage, provider }) => {
       const staged = await startAtSetup(service, storage);

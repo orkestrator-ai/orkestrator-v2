@@ -5,6 +5,7 @@ import {
   PromptRejectedError,
   type ProviderSendOptions,
   ProviderUnavailableError,
+  ProviderUnreachableError,
 } from "./agent-provider-contract.js";
 import {
   asRecord,
@@ -14,6 +15,74 @@ import {
 
 const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 30_000;
 const ACP_SESSION_START_TIMEOUT_MS = 75_000;
+/**
+ * Prompt dispatch and session attach share one budget, because they do the same
+ * work.
+ *
+ * A bridge whose agent process is not attached performs the full cold start on
+ * whichever request arrives first: spawn, `initialize`, `session/load`, and any
+ * composer RPCs, each with its own 30s ceiling on the bridge side. Session
+ * creation was already given 75s for exactly this reason; capping the prompt
+ * request at the 30s default meant a cold dispatch could be aborted mid-flight
+ * and reported to the user as an unresolvable ambiguous dispatch, even though
+ * the bridge went on to run the turn. Attach is budgeted the same because it is
+ * that cold start, just outside the at-most-once window.
+ */
+const BRIDGE_ATTACH_TIMEOUT_MS = 90_000;
+
+/**
+ * Which ceiling a request gets. `prompt` and `attach` are separate names for
+ * the same budget so call sites read as what they do.
+ */
+export type BridgeRequestTimeoutKind =
+  | "default"
+  | "session-start"
+  | "attach"
+  | "prompt";
+
+/**
+ * Transport failures that are proven to precede the first written byte.
+ *
+ * Bun reports a refused connection *and* a failed DNS lookup as
+ * `code: "ConnectionRefused"`; Node/undici wraps the underlying `cause` with a
+ * POSIX code. Both are listed because the backend runs on Bun while tests and
+ * embedders may supply a Node `fetch`. Nothing that can occur after the request
+ * headers are on the wire belongs here — `ECONNRESET`, a truncated response and
+ * a timeout all stay ambiguous.
+ */
+const CONNECT_PHASE_ERROR_CODES = new Set([
+  "ConnectionRefused",
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "EADDRNOTAVAIL",
+  "ERR_SOCKET_BAD_PORT",
+]);
+
+function errorCode(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const code = (value as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
+
+/**
+ * True when the request provably never reached the bridge.
+ *
+ * Deliberately conservative: an unrecognised failure is treated as though the
+ * bridge may have seen it. Guessing the other way would let a prompt that did
+ * run be reported as never sent, and the caller would dispatch it twice.
+ */
+export function isConnectPhaseFailure(error: unknown): boolean {
+  const direct = errorCode(error);
+  if (direct && CONNECT_PHASE_ERROR_CODES.has(direct)) return true;
+  const cause = typeof error === "object" && error !== null
+    ? (error as { cause?: unknown }).cause
+    : undefined;
+  const nested = errorCode(cause);
+  return nested !== undefined && CONNECT_PHASE_ERROR_CODES.has(nested);
+}
 
 export interface HttpBridgeProviderDependencies {
   fetch?: typeof fetch;
@@ -70,7 +139,7 @@ function authHeaders(connection: BridgeConnection): Headers {
 
 function bridgeRequestTimeoutMs(
   connection: BridgeConnection,
-  kind: "default" | "session-start" = "default",
+  kind: BridgeRequestTimeoutKind = "default",
 ): number {
   if (connection.requestTimeoutMs !== undefined) {
     return Math.max(1, connection.requestTimeoutMs);
@@ -81,6 +150,10 @@ function bridgeRequestTimeoutMs(
   ) {
     return ACP_SESSION_START_TIMEOUT_MS;
   }
+  // Unlike session start this is not narrowed to the ACP agents: every bridge
+  // can reattach a detached session on its prompt route, and none of them
+  // benefits from the caller giving up while that work is still running.
+  if (kind === "attach" || kind === "prompt") return BRIDGE_ATTACH_TIMEOUT_MS;
   return DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS;
 }
 
@@ -89,7 +162,7 @@ export async function bridgeFetch(
   path: string,
   init: RequestInit = {},
   fetchImpl: typeof fetch = fetch,
-  timeoutKind: "default" | "session-start" = "default",
+  timeoutKind: BridgeRequestTimeoutKind = "default",
 ): Promise<Response> {
   const headers = authHeaders(connection);
   new Headers(init.headers).forEach((value, key) => headers.set(key, value));
@@ -105,6 +178,14 @@ export async function bridgeFetch(
       signal,
     });
   } catch (error) {
+    // A bridge that was never reached is a different fact from one that stopped
+    // answering mid-request, and prompt dispatch resolves the two differently.
+    if (isConnectPhaseFailure(error)) {
+      throw new ProviderUnreachableError(
+        `${connection.agent} bridge is not reachable`,
+        { cause: error },
+      );
+    }
     throw new ProviderUnavailableError(
       `${connection.agent} bridge is unavailable`,
       { cause: error },

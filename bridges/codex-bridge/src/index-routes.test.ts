@@ -478,6 +478,51 @@ describe("session detail route outcomes", () => {
     });
   });
 
+  test("answers dispatch status only on an explicit journal positive", async () => {
+    const lookups: string[] = [];
+    const records: Record<string, { state: string; bridgeSessionId: string }> = {
+      running: { state: "accepted", bridgeSessionId: "session-1" },
+      finished: { state: "terminal", bridgeSessionId: "session-1" },
+      // Intent was recorded and the outcome never learned — that is exactly the
+      // question being asked, so it cannot answer itself.
+      unresolved: { state: "prepared", bridgeSessionId: "session-1" },
+      "never-ran": { state: "retryable", bridgeSessionId: "session-1" },
+      // A finished turn, but somebody else's.
+      "other-session": { state: "terminal", bridgeSessionId: "session-2" },
+    };
+    await withRuntimeMethod("getJournal", () => ({
+      get: (requestId: string) => {
+        lookups.push(requestId);
+        return records[requestId];
+      },
+    }), async () => {
+      const status = async (query: string) => {
+        const response = await app.request(`/session/session-1/dispatch${query}`);
+        expect(response.status).toBe(200);
+        return response.json();
+      };
+      expect(await status("?requestId=running")).toEqual({ dispatch: "dispatched" });
+      expect(await status("?requestId=finished")).toEqual({ dispatch: "dispatched" });
+      expect(await status("?requestId=unresolved")).toEqual({ dispatch: "unknown" });
+      expect(await status("?requestId=never-ran")).toEqual({ dispatch: "unknown" });
+      expect(await status("?requestId=absent")).toEqual({ dispatch: "unknown" });
+      // This journal is process-global, so a record belonging to another
+      // session must never settle this one's parked dispatch.
+      expect(await status("?requestId=other-session")).toEqual({ dispatch: "unknown" });
+      // A blank id never reaches the journal at all.
+      expect(await status("")).toEqual({ dispatch: "unknown" });
+      expect(await status("?requestId=%20%20")).toEqual({ dispatch: "unknown" });
+    });
+    expect(lookups).toEqual([
+      "running",
+      "finished",
+      "unresolved",
+      "never-ran",
+      "absent",
+      "other-session",
+    ]);
+  });
+
   test("serves structured output and trims the optional request identifier", async () => {
     const calls: Array<{ sessionId: string; requestId?: string }> = [];
     let outcome: unknown = {

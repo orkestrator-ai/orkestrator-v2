@@ -234,6 +234,18 @@ interface SessionState {
    */
   dispatching: boolean;
   /**
+   * The in-flight `ensureSessionProcess` call, shared by every caller that
+   * wants this session attached.
+   *
+   * Without it the attach is a check-then-act race: `ensureSessionProcess`
+   * reads `state.child` and then awaits a spawn, so two concurrent callers each
+   * see null and each start an agent process. The prompt route's `dispatching`
+   * claim only covers prompts, and attach is reachable from the config route
+   * and the explicit attach route as well. Never persisted — a promise from a
+   * dead process means nothing to its successor.
+   */
+  attaching?: Promise<AcpProcess>;
+  /**
    * Token accounting for the most recently completed turn, or undefined while
    * the agent has never reported any. Persisted so the agent info panel still
    * has something authoritative to show after a bridge restart.
@@ -1121,11 +1133,61 @@ function attachChild(state: SessionState, child: AcpProcess): void {
   };
 }
 
+/**
+ * Wait for `promise`, but stop waiting if `signal` aborts.
+ *
+ * The work itself is deliberately left running: an attach is shared between
+ * callers, so one client disconnecting must not cancel the spawn another is
+ * waiting on, and a finished attach is exactly what the next request needs.
+ */
+async function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) throw signal.reason ?? new Error("Request aborted");
+  let onAbort = (): void => undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(signal.reason ?? new Error("Request aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([promise, aborted]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
+
+/**
+ * The one attach in flight for this session, created on demand.
+ *
+ * `spawnAndLoadSession` reads `state.child` and then awaits a spawn, so without
+ * a shared promise two concurrent callers would each start an agent process and
+ * the loser's child would be orphaned. The prompt route's `dispatching` claim
+ * does not cover this: the config route and the attach route reach the same
+ * code without it.
+ */
+function attachSessionProcess(state: SessionState): Promise<AcpProcess> {
+  if (state.attaching) return state.attaching;
+  const attach = spawnAndLoadSession(state);
+  state.attaching = attach;
+  const clear = (): void => {
+    if (state.attaching === attach) state.attaching = undefined;
+  };
+  // Settling here also owns the rejection. A caller that gave up on its own
+  // signal leaves this promise with no waiter, and an unhandled rejection under
+  // Node semantics would take the bridge down with every session on it.
+  attach.then(clear, clear);
+  return attach;
+}
+
 async function ensureSessionProcess(state: SessionState, signal?: AbortSignal): Promise<AcpProcess> {
+  if (state.child) return state.child;
+  const attach = attachSessionProcess(state);
+  return signal ? raceAbort(attach, signal) : attach;
+}
+
+async function spawnAndLoadSession(state: SessionState): Promise<AcpProcess> {
   if (state.child) return state.child;
   const child = new AcpProcess();
   try {
-    const initialized = await child.initialize(signal);
+    const initialized = await child.initialize();
     const capabilities = isObject(initialized.agentCapabilities)
       ? initialized.agentCapabilities
       : undefined;
@@ -1140,7 +1202,7 @@ async function ensureSessionProcess(state: SessionState, signal?: AbortSignal): 
       additionalDirectories: [],
       mcpServers: [],
       sessionId: state.acpSessionId,
-    }, RPC_TIMEOUT_MS, signal);
+    }, RPC_TIMEOUT_MS);
     state.historyReplay = false;
     if (hydratedHistory) reconcileStaleToolParts(state, true);
     if (isObject(loaded)) {
@@ -3212,7 +3274,7 @@ async function route(
     });
     return json(response, 201, publicSession(state));
   }
-  const match = /^\/session\/([^/]+)(?:\/(messages|status|activity|prompt|cancel|abort|structured-output|interactions|config|approvals(?:\/[^/]+)?))?$/.exec(url.pathname);
+  const match = /^\/session\/([^/]+)(?:\/(messages|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions|config|approvals(?:\/[^/]+)?))?$/.exec(url.pathname);
   if (!match) return json(response, 404, { error: "Not found" });
   const state = sessions.get(match[1]!);
   if (!state) {
@@ -3267,6 +3329,36 @@ async function route(
         ? "working"
         : "idle",
     });
+  }
+  /**
+   * Did this bridge ever take this request id?
+   *
+   * Read-only, and never spawns: it exists so a caller whose prompt request
+   * lost its acknowledgement can settle the question from the journal instead
+   * of asking the user to. `dispatched` is only ever an explicit positive.
+   */
+  if (action === "dispatch" && request.method === "GET") {
+    const requestId = url.searchParams.get("requestId") || "";
+    const entry = requestId ? state.promptJournal.get(requestId) : undefined;
+    return json(response, 200, {
+      // An `ambiguous` record is a previous process saying it died mid-turn.
+      // That is the question this route is being asked, not an answer to it.
+      dispatch: entry && entry.state !== "ambiguous" ? "dispatched" : "unknown",
+    });
+  }
+  /**
+   * Attach the agent process without dispatching anything.
+   *
+   * The prompt route performs the full cold start — spawn, `initialize`,
+   * `session/load` — when no child is attached, and every second of that runs
+   * inside the window where a caller can no longer tell whether its prompt was
+   * accepted. Doing it here first makes that window short and, when it fails,
+   * unambiguously empty: nothing was journaled and no prompt was written.
+   */
+  if (action === "attach" && request.method === "POST") {
+    if (state.child) return json(response, 200, { attached: true });
+    await ensureSessionProcess(state, clientSignal);
+    return json(response, 200, { attached: true });
   }
   if (action === "approvals" && request.method === "GET") return json(response, 200, { approvals: publicApprovals(state), revision: state.revision });
   if (action === "interactions" && request.method === "GET") return json(response, 200, { interactions: [], revision: state.revision });

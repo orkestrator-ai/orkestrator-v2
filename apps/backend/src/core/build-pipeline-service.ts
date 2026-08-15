@@ -445,6 +445,33 @@ function transcriptFingerprint(messages: unknown[]): string {
   return `${messages.length}:${tail}`;
 }
 
+/**
+ * Attach the provider's agent process before a prompt is written.
+ *
+ * A cold agent process is the slowest thing a dispatch can wait on, and time
+ * spent on it inside the request is time the outcome is unknowable if the
+ * connection drops. The pipeline recovers from that — it keeps
+ * `pendingPromptAttempt` and retries the same request id — but recovery is a
+ * whole tick, and one that reports the stage as reconnecting on the way. Paying
+ * the cold start here instead keeps the send short.
+ *
+ * Best-effort by contract: the prompt request performs the same work, so a
+ * failure is left for it to report rather than pre-empting it here.
+ */
+async function attachBeforeDispatch(
+  provider: BuildPipelineProvider,
+  sessionId: string,
+): Promise<void> {
+  try {
+    await provider.prepareDispatch?.(sessionId);
+  } catch (error) {
+    console.warn(
+      "[build-pipeline] Attaching the agent before dispatch failed:",
+      errorMessage(error),
+    );
+  }
+}
+
 function elapsedSince(timestamp: string | undefined): number | null {
   if (!timestamp) return null;
   const parsed = Date.parse(timestamp);
@@ -1937,6 +1964,7 @@ export class BuildPipelineService {
       throw new PreSessionStageStartError(error, phase);
     });
     const { provider, sessionId, prompt, requestId, images, schema, model, effort, mode } = dispatch;
+    await attachBeforeDispatch(provider, sessionId);
     try {
       await provider.send(sessionId, prompt, {
         requestId,
@@ -1986,6 +2014,7 @@ export class BuildPipelineService {
       ?? (sessionPhase && step
         ? executionModeForSessionPhase(sessionPhase, step.agent)
         : undefined);
+    await attachBeforeDispatch(provider, attempt.sessionId);
     try {
       await provider.send(attempt.sessionId, attempt.prompt, {
         requestId: attempt.requestId,

@@ -87,6 +87,23 @@ export class ProviderUnavailableError extends Error {
   }
 }
 
+/**
+ * The request provably never reached the provider.
+ *
+ * This is a strict subset of "unavailable": the transport failed while opening
+ * the connection, so no byte of the request was written. That distinction is
+ * the difference between a retryable rejection and a dispatch whose outcome is
+ * genuinely unknown — see `AmbiguousPromptDispatchError`. Only failures that
+ * can be proven to precede the first written byte may use this class; anything
+ * that could have been observed by the provider stays ambiguous.
+ */
+export class ProviderUnreachableError extends ProviderUnavailableError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ProviderUnreachableError";
+  }
+}
+
 export class ProviderSessionFailedError extends Error {
   readonly agent: ProviderAgent;
   readonly detail: string;
@@ -119,6 +136,16 @@ export class AmbiguousPromptDispatchError extends ProviderUnavailableError {
     this.name = "AmbiguousPromptDispatchError";
   }
 }
+
+/**
+ * What a provider can still prove about one dispatch request id.
+ *
+ * `dispatched` is an assertion, not a guess: the provider holds a durable
+ * record that this exact id was accepted. Everything else — no record, a record
+ * that predates a provider restart, an unreadable journal — is `unknown`, so a
+ * lost record can never be mistaken for a prompt that was never sent.
+ */
+export type ProviderDispatchStatus = "dispatched" | "unknown";
 
 export interface ProviderCreateSessionOptions {
   clientSessionKey?: string;
@@ -188,6 +215,31 @@ export interface AgentSessionProvider {
     prompt: string,
     options: ProviderSendOptions,
   ): Promise<void>;
+  /**
+   * Do the provider's cold-start work *before* the at-most-once dispatch window
+   * opens.
+   *
+   * Attaching an agent process can take longer than a prompt request is allowed
+   * to, and every second of it is spent inside the window where a lost
+   * acknowledgement becomes an ambiguous dispatch the user has to resolve by
+   * hand. Failing here is unambiguous by construction — nothing was journaled
+   * and no prompt was written — so callers may treat it as a plain rejection.
+   *
+   * Optional, and best-effort: a provider that has no cold start omits it, and
+   * a failure must never block the dispatch that follows, because the prompt
+   * request performs the same work itself.
+   */
+  prepareDispatch?(sessionId: string): Promise<void>;
+  /**
+   * Ask whether the provider already holds this request id.
+   *
+   * Read-only. It exists so an ambiguous dispatch can be settled from the
+   * provider's own durable journal instead of being parked for the user.
+   */
+  dispatchStatus?(
+    sessionId: string,
+    requestId: string,
+  ): Promise<ProviderDispatchStatus>;
   status(sessionId: string): Promise<ProviderStatus>;
   /**
    * Authoritative activity including input parked at the provider. Optional so

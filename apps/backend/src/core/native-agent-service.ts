@@ -42,6 +42,7 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 import { resolveReasoningId } from "@orkestrator/protocol/native-agent";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
+import { boundTranscriptResponse } from "@orkestrator/protocol/transcript-window";
 import { resolveStartupLaunch } from "@orkestrator/protocol/startup-launch";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import type {
@@ -1333,6 +1334,11 @@ export class NativeAgentService {
           ...(typeof rawDiff.filePath === "string" ? { filePath: rawDiff.filePath } : {}),
           ...(typeof rawDiff.additions === "number" ? { additions: rawDiff.additions } : {}),
           ...(typeof rawDiff.deletions === "number" ? { deletions: rawDiff.deletions } : {}),
+          // Without this the renderer cannot tell a stripped diff from a
+          // location-only hint, and every provider that identifies a file
+          // mutation by diff content rather than tool name loses its edit
+          // treatment until the row is expanded.
+          ...(hasHeavyDiff ? { deferred: true } : {}),
         };
       }
     }
@@ -1389,45 +1395,40 @@ export class NativeAgentService {
         ...(typeof message.planReview === "boolean" ? { planReview: message.planReview } : {}),
       };
     });
-    const messageBytes = requested.map((message) => {
-      try {
-        return Buffer.byteLength(JSON.stringify(message));
-      } catch {
-        throw new ProviderUnavailableError(
-          "Provider returned a non-serializable native transcript",
-        );
-      }
-    });
-    let start = 0;
-    let bytes = 2 + messageBytes.reduce((total, size) => total + size, 0)
-      + Math.max(0, messageBytes.length - 1);
-    while (bytes > NATIVE_PROJECTION_MAX_BYTES && start < requested.length - 1) {
-      bytes -= messageBytes[start]! + 1;
-      start += 1;
+    let boundedTranscript;
+    try {
+      boundedTranscript = boundTranscriptResponse(requested, NATIVE_PROJECTION_MAX_BYTES, {
+        // The bound applies to the bare message array; the surrounding
+        // projection is not what this ceiling protects.
+        envelopeReserveBytes: 0,
+        // A half-rendered final message is worse than an explicit failure here:
+        // the renderer has a recovery path for an unavailable projection, and
+        // the bridges have already bounded their own responses well below this.
+        contentFallbackBytes: null,
+      });
+    } catch (error) {
+      /*
+       * The bound's only failure mode is the `JSON.stringify` it uses to
+       * measure, which throws a `TypeError` on a circular structure or a
+       * BigInt. The normalized provider contract is JSON, so that is a
+       * transport violation rather than something to leak to a renderer.
+       * Measuring separately up front just to say so would serialize the whole
+       * transcript twice on every refresh.
+       */
+      if (!(error instanceof TypeError)) throw error;
+      throw new ProviderUnavailableError(
+        "Provider returned a non-serializable native transcript",
+      );
     }
-
-    let omittedParts = 0;
-    if (bytes > NATIVE_PROJECTION_MAX_BYTES && requested[start]) {
-      const message = requested[start] as Record<string, unknown>;
-      const parts = Array.isArray(message.parts) ? [...message.parts] : [];
-      while (parts.length > 0 && bytes > NATIVE_PROJECTION_MAX_BYTES) {
-        parts.shift();
-        omittedParts += 1;
-        requested[start] = {
-          ...message,
-          parts,
-        } as (typeof requested)[number];
-        bytes = Buffer.byteLength(JSON.stringify([requested[start]]));
-      }
-    }
-    if (bytes > NATIVE_PROJECTION_MAX_BYTES) {
+    const { messages: bounded, messageWindow, overflowed } = boundedTranscript;
+    if (overflowed) {
       throw new ProviderUnavailableError(
         "Provider transcript contains one message body larger than 16 MiB",
       );
     }
-    const bounded = requested.slice(start);
+    const omittedParts = messageWindow.omittedParts ?? 0;
     const truncatedByCount = messages.length > requested.length;
-    const truncatedByBytes = start > 0 || omittedParts > 0;
+    const truncatedByBytes = bounded.length < requested.length || omittedParts > 0;
     const omittedMessages = messages.length - bounded.length;
     return {
       messages: bounded,

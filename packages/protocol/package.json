@@ -37,6 +37,7 @@
     "./terminal-websocket": "./src/terminal-websocket.ts",
     "./tmux-prompt": "./src/tmux-prompt.ts",
     "./tmux-observation": "./src/tmux-observation.ts",
+    "./transcript-window": "./src/transcript-window.ts",
     "./web-client": "./src/web-client.ts"
   },
   "scripts": {

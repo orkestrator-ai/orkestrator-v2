@@ -5572,6 +5572,103 @@ describe("HTTP build pipeline provider (ACP)", () => {
     expect(snapshot.runtime).toBeUndefined();
   });
 
+  test("reads the ACP snapshot as a small status plus a bounded transcript", async () => {
+    /*
+     * The whole-session route returned composer, runtime and the entire
+     * transcript in one body, so metadata competed with messages for the same
+     * byte budget and a large transcript failed the read outright. Status now
+     * comes from its own small response and the messages from the bounded
+     * transcript route.
+     */
+    const { provider, requests } = httpProvider((url) => {
+      if (url.endsWith("/messages")) {
+        return Response.json({
+          messages: [{ id: "m-1", role: "assistant", content: "from transcript", parts: [] }],
+          messageWindow: { truncated: false },
+        });
+      }
+      return Response.json({
+        status: "idle",
+        revision: 7,
+        composer: { models: [], modes: [], fastModeEnabled: null, fastModeAvailable: false },
+        // A status body that still carried messages must not be the source: it
+        // is the transcript route that applies the byte ceiling.
+        messages: [{ id: "stale", role: "assistant", content: "from status", parts: [] }],
+      });
+    }, cursorConnection);
+
+    const snapshot = await provider.interactiveSnapshot!("cursor-1");
+
+    expect(requests.map((request) => request.url).sort()).toEqual([
+      "http://cursor.test/session/cursor-1/messages",
+      "http://cursor.test/session/cursor-1/status",
+    ]);
+    expect(snapshot.messages).toEqual([
+      { id: "m-1", role: "assistant", content: "from transcript", parts: [] },
+    ]);
+    expect(snapshot.providerRevision).toBe(7);
+    expect(snapshot.notices).toBeUndefined();
+  });
+
+  test("advertises gzip on ACP transcript reads and still decodes the body", async () => {
+    // Server-to-server fetch does not negotiate compression on its own, and the
+    // transcript body is the largest thing this bridge hop ever moves.
+    const { provider, requests } = httpProvider((url) => {
+      if (url.endsWith("/messages")) {
+        return Response.json({ messages: [], messageWindow: { truncated: false } });
+      }
+      return Response.json({
+        status: "idle",
+        revision: 1,
+        composer: { models: [], modes: [], fastModeEnabled: null, fastModeAvailable: false },
+      });
+    }, cursorConnection);
+
+    await provider.interactiveSnapshot!("cursor-1");
+
+    for (const request of requests) {
+      const headers = new Headers(request.init.headers);
+      expect(headers.get("Accept-Encoding")).toBe("gzip");
+    }
+  });
+
+  test("surfaces a warning notice when the ACP bridge truncated the transcript", async () => {
+    // A silently shortened transcript reads as a complete one. The tab has to
+    // be told that earlier content exists but was not transported.
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) {
+        return Response.json({
+          messages: [{ id: "m-9", role: "assistant", content: "tail", parts: [] }],
+          messageWindow: { truncated: true, omittedMessages: 12 },
+        });
+      }
+      return Response.json({
+        status: "idle",
+        revision: 3,
+        composer: { models: [], modes: [], fastModeEnabled: null, fastModeAvailable: false },
+      });
+    }, cursorConnection);
+
+    const snapshot = await provider.interactiveSnapshot!("cursor-1");
+
+    expect(snapshot.notices).toEqual([{
+      kind: "warning",
+      message:
+        "Earlier transcript content was omitted to stay within the 16 MiB transport limit.",
+    }]);
+  });
+
+  test("reports a missing ACP session without reading its transcript as content", async () => {
+    const { provider } = httpProvider((url) =>
+      url.endsWith("/messages")
+        ? Response.json({ error: "Session not found" }, { status: 404 })
+        : Response.json({ error: "Session not found" }, { status: 404 }), cursorConnection);
+
+    const snapshot = await provider.interactiveSnapshot!("cursor-1");
+
+    expect(snapshot).toEqual({ status: "missing", messages: [] });
+  });
+
   test("forwards ACP composer options on session creation and prompt dispatch", async () => {
     const { provider, requests } = httpProvider((url) =>
       url.endsWith("/session/create")

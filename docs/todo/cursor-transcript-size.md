@@ -12,11 +12,22 @@ also reduces both serialized size and transfer bandwidth:
 - Cursor and Grok fetch bounded `/messages` and `/status` responses separately,
   so composer/runtime metadata no longer consumes the transcript body budget.
 - ACP re-bounds persisted state on every transcript read and reserves envelope
-  headroom below the 16 MiB consumer cap.
+  headroom below the 16 MiB consumer cap. The re-bound is skipped when nothing
+  has been appended since the last check, so polling a large idle session does
+  not re-serialize the whole transcript on every request.
 - Codex and Claude bound aggregate `/messages` responses to 16 MiB as well.
+  All three ceilings run through one implementation,
+  `@orkestrator/protocol/transcript-window`, which drops whole messages
+  oldest-first, then parts off the front of the oldest message left, then the
+  head of that message's own content. Part sizes are measured once and
+  subtracted as parts are shed; re-measuring the message per shift made the
+  overflow path quadratic in the number of parts.
 - Large tool output, errors, and diff bodies are omitted from ordinary renderer
   projections and loaded through an opaque, session-scoped reference only when
-  the user expands that tool row.
+  the user expands that tool row. A deferred diff keeps a `deferred` marker on
+  its metadata: providers that identify a file mutation by diff content rather
+  than tool name would otherwise be indistinguishable from a location-only hint
+  on a read tool and would lose the edit treatment while collapsed.
 - A unified diff is no longer accompanied by redundant full before/after file
   snapshots, and failed-command output is no longer duplicated as both output
   and error.
@@ -24,10 +35,19 @@ also reduces both serialized size and transfer bandwidth:
   every projection.
 - Transcript HTTP responses negotiate gzip internally. The browser gateway's
   existing Brotli/gzip compression continues to cover the renderer hop.
+  Compression is always off the event loop: the Codex and Claude bridges use
+  Hono's streaming `compress()`, and the ACP bridge — one process that also
+  runs the agent's JSON-RPC stdio loop and every session's SSE writer — uses
+  the asynchronous `zlib.gzip` rather than `gzipSync`, which would stall all of
+  them for the duration of a multi-megabyte read.
 
-Regression coverage includes aggregate single-turn overflow, persistence and
-restart, exact response-size bounds, deferred-detail loading, and compressed
-transcript responses.
+Regression coverage includes aggregate single-turn overflow, single-message
+part trimming, UTF-8-safe content fallback, linear-time trimming of a
+many-part message, persistence and restart, repeat reads leaving a bounded
+transcript untouched, exact response-size bounds, deferred-detail loading and
+its cross-session rejection, eviction recovery, the per-entry detail cap,
+the split ACP status/transcript read with its truncation notice, and
+compressed transcript responses on all three bridges.
 
 This document records why a live Cursor native tab can render **Connection
 Failed** with the exact message `cursor interactive snapshot is oversized`, even

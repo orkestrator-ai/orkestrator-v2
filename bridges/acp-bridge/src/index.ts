@@ -4,7 +4,7 @@ import { promises as fs } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { gzipSync } from "node:zlib";
+import { gzip } from "node:zlib";
 import {
   PARENT_PID_ENV,
   parseParentPid,
@@ -2833,6 +2833,15 @@ function publicSession(state: SessionState): JsonObject {
 }
 
 function boundTranscriptForRead(state: SessionState): void {
+  /*
+   * `boundTranscript` opens with a full `JSON.stringify(state.messages)`, so a
+   * poll of a large idle session would otherwise pay a whole extra pass over
+   * the transcript on top of serializing and compressing the response.
+   * `uncheckedTranscriptBytes` is the write path's own dirty counter and
+   * `boundTranscript` resets it, so zero here means these exact messages were
+   * already measured against the budget and re-measuring cannot change them.
+   */
+  if (state.uncheckedTranscriptBytes === 0) return;
   const previousBaseIndex = state.droppedMessages;
   const previousPartCount = state.messages.reduce(
     (total, message) => total + message.parts.length,
@@ -3368,14 +3377,13 @@ function acceptsGzip(value: string | string[] | undefined): boolean {
   });
 }
 
-function json(response: ServerResponse, status: number, value: unknown): void {
+function sendJson(
+  response: ServerResponse,
+  status: number,
+  body: Buffer,
+  compressed: boolean,
+): void {
   if (response.headersSent || response.destroyed) return;
-  const body = Buffer.from(JSON.stringify(value));
-  const shouldCompress = body.byteLength >= 1024
-    && (response as ServerResponse & { [RESPONSE_ACCEPTS_GZIP]?: boolean })[
-      RESPONSE_ACCEPTS_GZIP
-    ] === true;
-  const encoded = shouldCompress ? gzipSync(body, { level: 6 }) : body;
   const existingVary = response.getHeader("Vary");
   const vary = typeof existingVary === "string" && existingVary.trim()
     ? `${existingVary}, Accept-Encoding`
@@ -3383,11 +3391,43 @@ function json(response: ServerResponse, status: number, value: unknown): void {
   response.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
-    "content-length": String(encoded.byteLength),
+    "content-length": String(body.byteLength),
     vary,
-    ...(shouldCompress ? { "content-encoding": "gzip" } : {}),
+    ...(compressed ? { "content-encoding": "gzip" } : {}),
   });
-  response.end(encoded);
+  response.end(body);
+}
+
+function json(response: ServerResponse, status: number, value: unknown): void {
+  if (response.headersSent || response.destroyed) return;
+  const body = Buffer.from(JSON.stringify(value));
+  const shouldCompress = body.byteLength >= 1024
+    && (response as ServerResponse & { [RESPONSE_ACCEPTS_GZIP]?: boolean })[
+      RESPONSE_ACCEPTS_GZIP
+    ] === true;
+  if (!shouldCompress) {
+    sendJson(response, status, body, false);
+    return;
+  }
+  /*
+   * Compression happens on libuv's threadpool, never inline. This process also
+   * runs the agent's JSON-RPC stdio loop and every session's SSE writer, and a
+   * transcript read is allowed up to `MAX_TRANSCRIPT_BYTES` — synchronous gzip
+   * of that much would stall all of them for the duration.
+   *
+   * The write is therefore deferred past the caller's return. Nothing else
+   * writes this response afterwards: the request handler's `.catch` only fires
+   * when routing rejects, and `sendJson` refuses a response that is already
+   * headed or destroyed.
+   */
+  gzip(body, { level: 6 }, (error, encoded) => {
+    if (error) {
+      // Losing the bandwidth win beats losing the response.
+      sendJson(response, status, body, false);
+      return;
+    }
+    sendJson(response, status, encoded, true);
+  });
 }
 
 function isObject(value: unknown): value is JsonObject {

@@ -319,6 +319,7 @@ function ToolPart({
   toolOutput,
   toolError,
   backgroundTask,
+  deferredDetails = false,
 }: {
   expansionKey: string;
   toolName?: string;
@@ -328,6 +329,8 @@ function ToolPart({
   toolOutput?: string;
   toolError?: string;
   backgroundTask?: NativeBackgroundTask;
+  /** Output exists but is fetched on expand, so the row must stay expandable. */
+  deferredDetails?: boolean;
 }) {
   const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
   const displayToolName = getToolDisplayName(toolName);
@@ -350,9 +353,12 @@ function ToolPart({
     pending: "text-yellow-600 animate-pulse",
   };
 
-  // Determine if there's content to show when expanded
+  // Determine if there's content to show when expanded. A deferred part counts:
+  // its output only loads *because* the row was expanded, so gating the trigger
+  // on already-present output would make it permanently unreachable.
   const hasExpandableContent =
-    toolOutput || toolError || (toolArgs && Object.keys(toolArgs).length > 0);
+    toolOutput || toolError || deferredDetails
+    || (toolArgs && Object.keys(toolArgs).length > 0);
 
   // The collapsed row is a single truncating line, so anything shown there is
   // flattened and capped rather than relying on CSS alone — the accessible name
@@ -634,7 +640,11 @@ function ToolPart({
 function hasRenderableDiff(toolDiff?: ToolDiffMetadata): boolean {
   return Boolean(toolDiff?.diff)
     || toolDiff?.before !== undefined
-    || toolDiff?.after !== undefined;
+    || toolDiff?.after !== undefined
+    // A deferred diff has a body waiting behind `detailRef`; routing it to the
+    // generic tool row would drop the edit treatment for the whole collapsed
+    // lifetime of the part.
+    || toolDiff?.deferred === true;
 }
 
 /** Parse unified diff output into lines with +/- indicators */
@@ -755,6 +765,7 @@ function EditToolPart({
   toolOutput,
   toolError,
   toolDiff,
+  deferredDetails = false,
 }: {
   expansionKey: string;
   toolName?: string;
@@ -763,6 +774,8 @@ function EditToolPart({
   toolOutput?: string;
   toolError?: string;
   toolDiff?: ToolDiffMetadata;
+  /** Diff body exists but is fetched on expand, so the row must stay expandable. */
+  deferredDetails?: boolean;
 }) {
   const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
   const { createFileTab } = useTerminalContext();
@@ -829,14 +842,17 @@ function EditToolPart({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- value deps, see above
   }, [toolOutput, diffSource, diffBefore, diffAfter]);
 
-  // Determine if there's content to show when expanded
+  // Determine if there's content to show when expanded. A deferred part counts:
+  // its diff only loads *because* the row was expanded, so gating the trigger
+  // on already-present content would make it permanently unreachable.
   const hasExpandableContent =
     toolOutput ||
     toolError ||
     diffLines.length > 0 ||
     toolDiff?.diff ||
     toolDiff?.before ||
-    toolDiff?.after;
+    toolDiff?.after ||
+    deferredDetails;
 
   // Handle pop-out to open diff in new tab
   const handlePopOut = useCallback(
@@ -1869,22 +1885,38 @@ function DeferredToolMessagePart({
     return () => { cancelled = true; };
   }, [detailRef, details, isOpen, loadError, loadToolDetails]);
 
+  /*
+   * The collapsed row shows the part's own metadata and nothing else. Earlier
+   * revisions parked prose in `toolOutput` to keep the expand trigger enabled,
+   * which put "Details load when expanded." where a diff summary belongs; the
+   * `deferredDetails` prop carries that signal instead, leaving the body empty
+   * until there is something real to put in it.
+   */
   const materialized: Extract<NativeMessagePart, { type: "tool-invocation" }> = {
     ...part,
     detailRef: undefined,
-    ...(details?.toolOutput !== undefined
-      ? { toolOutput: details.toolOutput }
-      : details ? {} : {
-          toolOutput: loadError ?? (isOpen ? "Loading tool details…" : "Details load when expanded."),
-        }),
+    ...(details?.toolOutput !== undefined ? { toolOutput: details.toolOutput } : {}),
     ...(details?.toolError !== undefined ? { toolError: details.toolError } : {}),
-    ...(details?.toolDiff ? {
-      toolDiff: { ...part.toolDiff, ...details.toolDiff },
-    } : {}),
+    ...(!details && loadError ? { toolError: loadError } : {}),
+    ...(!details && !loadError && isOpen
+      ? { toolOutput: "Loading tool details…" }
+      : {}),
+    ...(part.toolDiff || details?.toolDiff
+      ? {
+          toolDiff: {
+            ...part.toolDiff,
+            ...details?.toolDiff,
+            // Cleared once the body is in hand: `deferred` exists to say the
+            // real diff is still elsewhere.
+            ...(details ? { deferred: undefined } : {}),
+          },
+        }
+      : {}),
   };
   return (
     <MessagePart
       part={materialized}
+      deferredDetails={!details}
       partKey={partKey}
       showTextCopy={showTextCopy}
       truncateUserPrompt={truncateUserPrompt}
@@ -1904,6 +1936,7 @@ function MessagePart({
   containerId,
   eagerImagePreview = false,
   partKey,
+  deferredDetails = false,
 }: {
   part: NativeMessagePart;
   showTextCopy?: boolean;
@@ -1913,6 +1946,12 @@ function MessagePart({
   eagerImagePreview?: boolean;
   /** Stable identity for this part's position, used to persist expansion state. */
   partKey: string;
+  /**
+   * Set by `DeferredToolMessagePart` while a tool row's heavy fields are still
+   * behind their `detailRef`. Tool rows gate their expand trigger on having
+   * something to show, and a deferred row has nothing until it is expanded.
+   */
+  deferredDetails?: boolean;
 }) {
   const loadToolDetails = useContext(ToolDetailLoaderContext);
   const expansionScope = useContext(MessageExpansionScopeContext);
@@ -1962,6 +2001,7 @@ function MessagePart({
             toolOutput={part.toolOutput}
             toolError={part.toolError}
             toolDiff={part.toolDiff}
+            deferredDetails={deferredDetails}
           />
         );
       }
@@ -1989,6 +2029,7 @@ function MessagePart({
           toolOutput={part.toolOutput}
           toolError={part.toolError}
           backgroundTask={part.backgroundTask}
+          deferredDetails={deferredDetails}
         />
       );
     case "tool-result":

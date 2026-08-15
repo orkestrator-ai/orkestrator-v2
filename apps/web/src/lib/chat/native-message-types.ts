@@ -15,6 +15,14 @@ export interface NativeToolDiffMetadata {
   before?: string;
   after?: string;
   diff?: string;
+  /**
+   * A diff body exists but was left out of this projection, to be fetched
+   * through the part's `detailRef` on expand. Providers that identify a file
+   * mutation by diff content rather than tool name would otherwise be
+   * indistinguishable from a location-only hint on a read/search tool, and
+   * would lose the edit treatment until the user expanded the row.
+   */
+  deferred?: boolean;
 }
 
 export type NativeToolState = "success" | "failure" | "pending";

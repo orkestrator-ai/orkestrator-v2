@@ -400,6 +400,30 @@ describe("session detail route outcomes", () => {
     expect(bounded.messages[0]?.id).not.toBe("message-0");
   });
 
+  test("trims parts off a single oversized message rather than dropping it", () => {
+    // A long turn is one message, so message-level dropping has nothing left to
+    // take. The newest parts are what the user is looking at and must survive.
+    const parts = Array.from({ length: 40 }, (_, index) => ({
+      type: "text" as const,
+      content: `${index}:${"x".repeat(1024 * 1024)}`,
+    }));
+    const bounded = boundCodexTranscriptResponse([{
+      id: "message-long-turn",
+      role: "assistant" as const,
+      content: "done",
+      parts,
+      createdAt: "2026-07-25T12:00:00.000Z",
+    }]);
+
+    expect(bounded.messages).toHaveLength(1);
+    expect(Buffer.byteLength(JSON.stringify(bounded)))
+      .toBeLessThanOrEqual(MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES);
+    expect(bounded.messageWindow.truncated).toBe(true);
+    expect(bounded.messageWindow.omittedParts).toBeGreaterThan(0);
+    expect(bounded.messageWindow.omittedMessages).toBeUndefined();
+    expect(bounded.messages[0]?.parts.at(-1)).toEqual(parts.at(-1)!);
+  });
+
   test("gzip-compresses transcript responses when the client accepts gzip", async () => {
     const messages = [{
       id: "message-compress",

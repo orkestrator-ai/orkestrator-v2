@@ -3,6 +3,7 @@ import type {
   JsonSchema,
   StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
+import type { TranscriptWindowMetadata } from "@orkestrator/protocol/transcript-window";
 
 import type { TaskListSnapshot, TaskRegistry } from "@orkestrator/protocol/task-list";
 
@@ -612,11 +613,8 @@ export interface SessionListResponse {
 
 export interface MessagesResponse {
   messages: NormalizedMessage[];
-  messageWindow?: {
-    truncated: boolean;
-    omittedMessages?: number;
-    omittedParts?: number;
-  };
+  /** Absent on responses from a bridge predating the byte-aware ceiling. */
+  messageWindow?: TranscriptWindowMetadata;
 }
 
 export interface ModelsResponse {

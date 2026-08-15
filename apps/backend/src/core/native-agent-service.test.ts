@@ -1648,6 +1648,9 @@ describe("NativeAgentService", () => {
         filePath: "/workspace/src/a.ts",
         additions: 1,
         deletions: 1,
+        // Without this the renderer cannot distinguish a stripped diff from a
+        // location-only hint, and drops the edit treatment for the row.
+        deferred: true,
       });
       expect(tool?.detailRef).toBeString();
 
@@ -1693,6 +1696,252 @@ describe("NativeAgentService", () => {
         .toBeLessThanOrEqual(NATIVE_PROJECTION_MAX_BYTES);
       expect(projection?.messages.length).toBeLessThan(messages.length);
       expect((projection?.messages.at(-1) as { id?: string })?.id).toBe("message-19");
+    });
+  });
+
+  test("reports a non-serializable transcript as an unavailable provider", async () => {
+    // The bound measures with `JSON.stringify`, so a circular part surfaces
+    // there. It is a transport violation, not something to hand a renderer.
+    const circular: Record<string, unknown> = { type: "text", content: "loop" };
+    circular.self = circular;
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [{
+          id: "assistant-1",
+          role: "assistant" as const,
+          content: "done",
+          parts: [circular],
+          createdAt: "2026-08-15T10:00:00.000Z",
+        }],
+      }),
+    });
+    await withService({
+      prefix: "orkestrator-native-unserializable-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-unserializable",
+      };
+      await service.ensureSession(identity);
+      const projection = await service.getProjection(identity);
+      expect(projection?.connection).toBe("error");
+    });
+  });
+
+  test("trims parts off one oversized message and reports omittedParts", async () => {
+    // A single long turn: message-level dropping has nothing left to take, so
+    // the part-level lever is the only thing standing between the renderer and
+    // an oversized projection.
+    const messages = [{
+      id: "message-long-turn",
+      role: "assistant" as const,
+      content: "done",
+      parts: Array.from({ length: 40 }, (_, index) => ({
+        type: "text",
+        content: `${index}:${"x".repeat(1024 * 1024)}`,
+      })),
+      createdAt: "2026-08-15T10:00:00.000Z",
+    }];
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages }),
+    });
+    await withService({
+      prefix: "orkestrator-native-part-window-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-part-window",
+      };
+      await service.ensureSession(identity);
+      const projection = await service.getProjection(identity);
+
+      expect(projection?.connection).toBe("connected");
+      expect(projection?.messages).toHaveLength(1);
+      expect(projection?.messageWindow).toMatchObject({
+        truncated: true,
+        truncationReason: "bytes",
+      });
+      expect(projection?.messageWindow?.omittedParts).toBeGreaterThan(0);
+      expect(Buffer.byteLength(JSON.stringify(projection?.messages)))
+        .toBeLessThanOrEqual(NATIVE_PROJECTION_MAX_BYTES);
+      const retained = (projection?.messages[0] as { parts: Array<{ content: string }> }).parts;
+      // Oldest-first, so the newest part is always the one that survives.
+      expect(retained.at(-1)?.content).toBe(messages[0]!.parts.at(-1)!.content);
+    });
+  });
+
+  test("refuses a tool detail reference belonging to another session", async () => {
+    // `detailRef` is a bearer token for transcript content. It is hashed with
+    // the session key precisely so one tab cannot read another tab's output by
+    // replaying a reference, and the lookup must enforce that rather than trust
+    // the hash to be unguessable.
+    const messages = [{
+      id: "assistant-1",
+      role: "assistant" as const,
+      content: "done",
+      parts: [{
+        type: "tool-invocation",
+        content: "cat secrets.txt",
+        toolName: "bash",
+        toolState: "success",
+        toolOutput: "the other tab's output",
+      }],
+      createdAt: "2026-08-15T10:00:00.000Z",
+    }];
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages }),
+    });
+    await withService({
+      prefix: "orkestrator-native-detail-scope-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const owner = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-owner",
+      };
+      const other = { ...owner, logicalSessionKey: "env-env-1:tab-other" };
+      await service.ensureSession(owner);
+      await service.ensureSession(other);
+      const projection = await service.getProjection(owner);
+      const detailRef = (projection?.messages[0] as {
+        parts: Array<{ detailRef?: string }>;
+      }).parts[0]?.detailRef;
+      expect(detailRef).toBeString();
+
+      // The owning tab reads it back.
+      expect(await service.getProjectionToolDetails({ ...owner, detailRef: detailRef! }))
+        .toMatchObject({ toolOutput: "the other tab's output" });
+      // A different logical session presenting the same reference does not.
+      await expect(
+        service.getProjectionToolDetails({ ...other, detailRef: detailRef! }),
+      ).rejects.toThrow("no longer available");
+    });
+  });
+
+  test("rejects a blank or oversized tool detail reference", async () => {
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+    });
+    await withService({
+      prefix: "orkestrator-native-detail-validation-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-validation",
+      };
+      await service.ensureSession(identity);
+
+      await expect(service.getProjectionToolDetails({ ...identity, detailRef: "   " }))
+        .rejects.toThrow("invalid");
+      await expect(
+        service.getProjectionToolDetails({ ...identity, detailRef: "a".repeat(129) }),
+      ).rejects.toThrow("invalid");
+    });
+  });
+
+  test("re-reads the provider when a cached tool detail was evicted", async () => {
+    // The detail cache is bounded and shared across every session, so a busy
+    // host will evict entries the renderer still has references to. Expanding
+    // that row must recover from the authoritative provider snapshot rather
+    // than report the output as lost.
+    const messages = [{
+      id: "assistant-1",
+      role: "assistant" as const,
+      content: "done",
+      parts: [{
+        type: "tool-invocation",
+        content: "bun test",
+        toolName: "bash",
+        toolState: "success",
+        toolOutput: "recovered after eviction",
+      }],
+      createdAt: "2026-08-15T10:00:00.000Z",
+    }];
+    let snapshots = 0;
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => {
+        snapshots += 1;
+        return { status: "idle", messages };
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-detail-eviction-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-eviction",
+      };
+      await service.ensureSession(identity);
+      const projection = await service.getProjection(identity);
+      const detailRef = (projection?.messages[0] as {
+        parts: Array<{ detailRef?: string }>;
+      }).parts[0]?.detailRef;
+      expect(detailRef).toBeString();
+
+      // Simulate capacity eviction of exactly this entry.
+      (service as unknown as {
+        toolDetailCache: Map<string, unknown>;
+        toolDetailCacheBytes: number;
+      }).toolDetailCache.clear();
+      (service as unknown as { toolDetailCacheBytes: number }).toolDetailCacheBytes = 0;
+      const snapshotsBefore = snapshots;
+
+      expect(await service.getProjectionToolDetails({ ...identity, detailRef: detailRef! }))
+        .toMatchObject({ toolOutput: "recovered after eviction" });
+      expect(snapshots).toBeGreaterThan(snapshotsBefore);
+    });
+  });
+
+  test("replaces tool details that exceed the deferred display limit", async () => {
+    // The per-entry cap is a memory bound on the detail cache. Exceeding it
+    // must degrade to an explicit notice, never to a silent empty expansion.
+    const messages = [{
+      id: "assistant-1",
+      role: "assistant" as const,
+      content: "done",
+      parts: [{
+        type: "tool-invocation",
+        content: "bun run build",
+        toolName: "bash",
+        toolState: "success",
+        toolOutput: "x".repeat(5 * 1024 * 1024),
+      }],
+      createdAt: "2026-08-15T10:00:00.000Z",
+    }];
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages }),
+    });
+    await withService({
+      prefix: "orkestrator-native-detail-limit-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-detail-limit",
+      };
+      await service.ensureSession(identity);
+      const projection = await service.getProjection(identity);
+      const detailRef = (projection?.messages[0] as {
+        parts: Array<{ detailRef?: string }>;
+      }).parts[0]?.detailRef;
+
+      const details = await service.getProjectionToolDetails({
+        ...identity,
+        detailRef: detailRef!,
+      });
+      expect(details.toolOutput).toBeUndefined();
+      expect(details.toolError).toBe("Tool details exceeded the deferred display limit.");
     });
   });
 

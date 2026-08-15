@@ -2903,6 +2903,14 @@ describe("ACP bridge", () => {
       typeof part.toolUseId === "string" ? [part.toolUseId] : []
     )).toEqual(retainedToolIds);
 
+    // A read re-bounds the transcript, but only when something was appended
+    // since the last check: a steady-state poll of a large idle session must
+    // not re-serialize it, and must not mutate what it returns.
+    const readAgain = await read(second.base, second.headers);
+    expect(readAgain.messages).toEqual(restored.messages);
+    expect((readAgain as unknown as { revision: number }).revision)
+      .toBe((restored as unknown as { revision: number }).revision);
+
     const compressed = await nativeFetch(`${second.base}/session/${created.id}/messages`, {
       headers: { ...second.headers, "accept-encoding": "gzip" },
     });

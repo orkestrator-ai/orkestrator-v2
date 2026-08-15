@@ -1,8 +1,23 @@
 import { Loader2 } from "lucide-react";
+import { nativeAgentLatestActivity } from "@/lib/chat/native-agent-preview";
 import type { NativeAgentActivityPart } from "@/lib/chat/native-message-types";
 
 interface ActiveSubagentRailProps {
   agents: readonly NativeAgentActivityPart[];
+}
+
+/**
+ * Every active agent shares one truncated line, and a child action can be a
+ * whole shell command or an entire response body. Left unbounded, the first
+ * agent's activity pushes every other agent's name out of view — the opposite
+ * of what the rail exists to show.
+ */
+const MAX_ACTIVITY_DETAIL_CHARS = 60;
+
+function boundActivityDetail(value: string): string {
+  const collapsed = value.replace(/\s+/g, " ").trim();
+  if (collapsed.length <= MAX_ACTIVITY_DETAIL_CHARS) return collapsed;
+  return `${collapsed.slice(0, MAX_ACTIVITY_DETAIL_CHARS - 1).trimEnd()}…`;
 }
 
 function stringArgument(
@@ -43,11 +58,21 @@ export function activeSubagentLabel(part: NativeAgentActivityPart): string {
     || "Sub-agent";
 }
 
+export function activeSubagentDetail(part: NativeAgentActivityPart): string {
+  const label = activeSubagentLabel(part);
+  const activity = nativeAgentLatestActivity(part);
+  if (!activity || activity === label) return label;
+  const bounded = boundActivityDetail(activity);
+  if (!bounded || bounded === label) return label;
+  return `${label}: ${bounded}`;
+}
+
 /** A compact, composer-themed indication that child work remains active. */
 export function ActiveSubagentRail({ agents }: ActiveSubagentRailProps) {
   if (agents.length === 0) return null;
 
   const noun = agents.length === 1 ? "sub-agent" : "sub-agents";
+  const details = agents.map(activeSubagentDetail);
   return (
     <section
       data-testid="active-subagent-rail"
@@ -68,8 +93,19 @@ export function ActiveSubagentRail({ agents }: ActiveSubagentRailProps) {
           <p className="text-xs font-medium text-foreground">
             {agents.length} {noun} working
           </p>
-          <p className="truncate text-xs text-muted-foreground" title={agents.map(activeSubagentLabel).join(", ")}>
-            {agents.map(activeSubagentLabel).join(" · ")}
+          {/*
+            The count above is the announcement worth making. This line changes
+            on every child tool call, so it opts out of the surrounding polite
+            region rather than re-reading the rail aloud several times a second.
+            It stays readable on navigation because it is not `aria-hidden`.
+          */}
+          <p
+            data-testid="active-subagent-detail"
+            aria-live="off"
+            className="truncate text-xs text-muted-foreground"
+            title={details.join(", ")}
+          >
+            {details.join(" · ")}
           </p>
         </div>
         <span className="shrink-0 rounded-full border border-cyan-400/20 bg-cyan-400/5 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-cyan-200/80">

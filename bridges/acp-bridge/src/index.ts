@@ -104,6 +104,8 @@ interface BridgeToolPart {
   toolOutput?: string;
   toolError?: string;
   toolDiff?: BridgeToolDiff;
+  /** Launch tool this nested call belongs to, when the provider names a parent. */
+  parentTaskUseId?: string;
 }
 
 interface AcpToolSourceState {
@@ -1457,6 +1459,10 @@ function applyToolCallUpdate(
   }
   applyAcpToolSourcePatch(source, update);
   renderAcpToolSource(part, source);
+  const parentTaskUseId = acpParentTaskUseId(update);
+  if (parentTaskUseId && parentTaskUseId !== toolCallId) {
+    part.parentTaskUseId = parentTaskUseId;
+  }
   syncActiveSubagentTool(state, part);
 
   state.revision += 1;
@@ -1917,6 +1923,30 @@ function cancelCursorToolMetadataReconcile(state: SessionState): void {
   if (state.cursorToolReplayTimer) clearTimeout(state.cursorToolReplayTimer);
   state.cursorToolReplayTimer = undefined;
   state.cursorToolReplayPending = undefined;
+}
+
+/**
+ * Nested child tools name their launch call through several vendor `_meta`
+ * shapes. The standard ACP schema has no parent field, so this is best-effort
+ * capture of ids the frontend already groups on.
+ */
+function acpParentTaskUseId(update: JsonObject): string | undefined {
+  const candidates: unknown[] = [
+    update.parentToolCallId,
+    update.parent_tool_call_id,
+  ];
+  if (isObject(update._meta)) {
+    candidates.push(update._meta.parentToolCallId, update._meta.parent_tool_call_id);
+    const claudeCode = isObject(update._meta.claudeCode) ? update._meta.claudeCode : undefined;
+    if (claudeCode) {
+      candidates.push(claudeCode.parentToolUseId, claudeCode.parent_tool_use_id);
+    }
+  }
+  for (const candidate of candidates) {
+    const value = boundedString(candidate, MAX_TOOL_ID_BYTES)?.trim();
+    if (value) return value;
+  }
+  return undefined;
 }
 
 function applyAcpToolSourcePatch(source: AcpToolSourceState, update: JsonObject): void {
@@ -3956,6 +3986,7 @@ function normalizeBridgePart(
   const toolDiff = normalizeBridgeToolDiff(value.toolDiff);
   const toolName = boundedString(value.toolName, MAX_TOOL_NAME_BYTES);
   const toolTitle = boundedString(value.toolTitle, MAX_TOOL_TITLE_BYTES);
+  const parentTaskUseId = boundedString(value.parentTaskUseId, MAX_TOOL_ID_BYTES)?.trim();
   return {
     type: "tool-invocation",
     content: boundedString(value.content, MAX_TOOL_TITLE_BYTES) ?? "Tool call",
@@ -3970,6 +4001,7 @@ function normalizeBridgePart(
     ...(toolOutput !== undefined ? { toolOutput } : {}),
     ...(toolError !== undefined ? { toolError } : {}),
     ...(toolDiff ? { toolDiff } : {}),
+    ...(parentTaskUseId ? { parentTaskUseId } : {}),
   };
 }
 

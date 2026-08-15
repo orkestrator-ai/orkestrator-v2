@@ -1221,6 +1221,107 @@ describe("ACP bridge", () => {
     }).then((response) => response.json())).toEqual({ activity: "idle" });
   });
 
+  test("preserves ACP nested child parentToolCallId as parentTaskUseId", async () => {
+    const bridge = await spawnBridge();
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-nested-subagent:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "NESTEDSUBAGENT: inspect" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    const parts = settled.messages.flatMap((message) => message.parts);
+    expect(parts.find((part) => part.toolUseId === "cursor-subagent-1")).toMatchObject({
+      toolName: "task",
+      agentState: "active",
+    });
+    // Every vendor spelling the bridge claims to accept, proven individually.
+    expect(new Map(parts
+      .filter((part) => typeof part.toolUseId === "string"
+        && part.toolUseId.startsWith("cursor-child-"))
+      .map((part) => [part.toolUseId, part.parentTaskUseId]))).toEqual(new Map([
+        ["cursor-child-grep-1", "cursor-subagent-1"],
+        ["cursor-child-read-2", "cursor-subagent-1"],
+        ["cursor-child-edit-3", "cursor-subagent-1"],
+        ["cursor-child-list-4", "cursor-subagent-1"],
+        ["cursor-child-claude-5", "cursor-subagent-1"],
+        ["cursor-child-claude-6", "cursor-subagent-1"],
+        // A call naming itself is dropped rather than self-parented.
+        ["cursor-child-self-7", undefined],
+      ]));
+    expect(parts.find((part) => part.toolUseId === "cursor-child-grep-1")).toMatchObject({
+      toolTitle: "Search Find",
+      parentTaskUseId: "cursor-subagent-1",
+    });
+    expect(JSON.stringify(settled)).not.toContain("_meta");
+    expect(JSON.stringify(settled)).not.toContain("parentToolCallId");
+  });
+
+  // The rail and the nested agent row both key off `parentTaskUseId`, so losing
+  // it across a bridge restart would silently flatten a restored transcript
+  // back into unattributed top-level tool rows.
+  test("restores nested child parentTaskUseId after a bridge restart", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const first = await spawnBridge({ stateDirectory });
+    const created = await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ clientSessionKey: "env-nested-restart:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ prompt: "NESTEDSUBAGENT: inspect" }),
+    })).status).toBe(202);
+
+    await waitFor(
+      async () => nativeFetch(`${first.base}/session/${created.id}`, { headers: first.headers })
+        .then((response) => response.json()) as Promise<{ status: string }>,
+      (value) => value.status === "idle",
+    );
+    // Persistence is debounced, so the restart has to wait for the writer
+    // rather than for the turn that produced the parts.
+    await waitFor(
+      () => fs.readFile(resolve(stateDirectory, "state.json"), "utf8")
+        .then((contents) => contents)
+        .catch(() => ""),
+      (contents) => contents.includes("cursor-child-grep-1"),
+    );
+    await stopChild(first.child);
+
+    const restarted = await spawnBridge({ stateDirectory });
+    const restored = await nativeFetch(`${restarted.base}/session/${created.id}`, {
+      headers: restarted.headers,
+    }).then((response) => response.json()) as {
+      messages: Array<{ parts: Array<Record<string, unknown>> }>;
+    };
+    const restoredParts = restored.messages.flatMap((message) => message.parts);
+    expect(restoredParts.find((part) => part.toolUseId === "cursor-child-grep-1"))
+      .toMatchObject({ parentTaskUseId: "cursor-subagent-1" });
+    expect(restoredParts.find((part) => part.toolUseId === "cursor-child-claude-5"))
+      .toMatchObject({ parentTaskUseId: "cursor-subagent-1" });
+    expect(restoredParts.find((part) => part.toolUseId === "cursor-child-self-7"))
+      .not.toHaveProperty("parentTaskUseId");
+    // The launch part still has to be findable, or the restored children would
+    // have a parent id pointing at nothing.
+    expect(restoredParts.find((part) => part.toolUseId === "cursor-subagent-1"))
+      .toMatchObject({ toolName: "task" });
+  });
+
   test("fails active child markers replayed while adopting provider history", async () => {
     const bridge = await spawnBridge({ env: { FAKE_ACP_REPLAY_ACTIVE_SUBAGENT: "1" } });
     const listed = await nativeFetch(`${bridge.base}/session/list`, {

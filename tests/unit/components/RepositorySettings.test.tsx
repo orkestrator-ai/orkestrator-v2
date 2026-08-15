@@ -523,6 +523,86 @@ describe("RepositorySettings", () => {
         expect(Array.from(selects[3]!.options).map((option) => option.value))
           .toContain("high");
       });
+
+      test(`does not expose the synthetic ${label} fallback without a cached catalogue`, () => {
+        renderSettings({
+          config: {
+            global: {
+              defaultAgent: platform,
+              enabledAgentPlatforms: ["claude", "codex", platform, "opencode"],
+            } as AppConfig["global"],
+            repositories: {
+              "project-1": {
+                defaultBranch: "main",
+                prBaseBranch: "main",
+                defaultAgent: platform,
+              },
+            },
+          },
+        });
+
+        expect(screen.getByText("Start an environment to load available models"))
+          .toBeTruthy();
+        expect(screen.queryByText(
+          platform === "cursor" ? "Cursor automatic" : "Grok Build default",
+        )).toBeNull();
+      });
+
+      test(`clears an incompatible ${label} effort when the model changes`, async () => {
+        renderSettings({
+          config: {
+            global: {
+              defaultAgent: platform,
+              enabledAgentPlatforms: ["claude", "codex", platform, "opencode"],
+            } as AppConfig["global"],
+            repositories: {
+              "project-1": {
+                defaultBranch: "main",
+                prBaseBranch: "main",
+                defaultAgent: platform,
+                defaultModel: `${platform}-high-model`,
+                defaultEffort: "high",
+              },
+            },
+          },
+          prepareStores: () => {
+            useAgentModelCatalogStore.getState().setAcpModels([
+              {
+                id: `${platform}-high-model`,
+                label: `${label} High Model`,
+                platform,
+                reasoning: [{ id: "high", label: "High" }],
+              },
+              {
+                id: `${platform}-low-model`,
+                label: `${label} Low Model`,
+                platform,
+                reasoning: [{ id: "low", label: "Low" }],
+              },
+            ]);
+          },
+        });
+
+        const modelSelect = getMockSelects()[2]!;
+        fireEvent.change(modelSelect, {
+          target: { value: `${platform}-low-model` },
+        });
+
+        await waitFor(() => {
+          const effortSelect = getMockSelects()[3]!;
+          expect(effortSelect.value).toBe("__app_default__");
+          expect(Array.from(effortSelect.options).map((option) => option.value))
+            .toContain("low");
+        });
+
+        fireEvent.click(getSaveButton());
+        await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
+        expect(getSavedConfig()).toMatchObject({
+          defaultAgent: platform,
+          defaultModel: `${platform}-low-model`,
+        });
+        expect(getSavedConfig().defaultEffort).toBeUndefined();
+      });
     }
 
     test("filters Codex efforts by model and clears an unsupported saved effort", async () => {

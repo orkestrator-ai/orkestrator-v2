@@ -32,7 +32,32 @@ history rather than two partial ones.
 - **Failure:** Five cases failed in one stateful owning file: `writes an owner-only agent MCP config and includes it in a local Claude launch` timed out after 5,000 ms (5,002.60 ms); `does not create an agent MCP config when Claude lacks the launch flag` then requested a connection the fixture declares unreachable (344.24 ms); `serializes stop behind an in-flight start so no tmux session is orphaned` timed out waiting for its condition (2,006.39 ms); `keeps per-environment hook state under the shared runtime root and removes it on stop` reached a missing fake Claude executable (621.98 ms); and `environment teardown kills live sessions, restores settings and removes the runtime root` found no fake tmux log (1,675.57 ms).
 - **Suite counts:** Root and agent-support group: 3,640 total, 3,632 passed, 1 skipped, 7 failed, and 2 between-test errors. The other two root failures are recorded separately below.
 - **Isolated rerun:** `set -o pipefail; bun test ./tests/unit/electron/tmux-backend.test.ts 2>&1 | tee /tmp/orkestrator-tmux-backend-isolated-acp-image-fixes.log` -> 173 passed, 0 failed, 615 assertions in 74.19 seconds; all five affected cases passed.
+- **Recurrence (2026-08-15):** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-fix-full-tests.log` ran the root group at four Bun workers while the workspace, bridge, and protocol-lockfile groups ran concurrently. The same five cases failed: the first exhausted Bun's 5,000 ms budget, and the later cases reported the same missing fake executable, forbidden connection, wait timeout, and missing fixture artifacts seen after an interrupted cleanup. The root group reported 3,657 passed, 1 skipped, 6 failed, and 3 between-test errors; its sixth failure is recorded separately below.
+- **Recurrence isolated rerun:** `set -o pipefail; bun test ./tests/unit/electron/tmux-backend.test.ts --parallel 2>&1 | tee /tmp/orkestrator-fix-tmux-backend-isolated.log` -> 173 passed, 0 failed, 615 assertions in 63.02 seconds; all five affected cases passed.
 - **Hypothesis:** The first failure is a bare five-second timeout in a process-heavy fixture while four aggregate groups compete for process startup. Because the file shares fake runtime/module state across its lifecycle tests, interruption of that first case's cleanup plausibly caused the four later missing-runtime and ordering failures; the complete file rebuilt and cleaned every fixture successfully in a fresh isolated process. No product code touched by the ACP image change appears in these stacks.
+
+## `standalone backend service` process-shutdown timeouts (`apps/backend/tests/standalone.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-15
+- **Affected tests:** `drains an active local server process tree before exiting` and `exits without a leftover listener when environment-managed Serve setup fails`.
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-fix-full-tests.log`
+- **Worker configuration:** the backend workspace ran `bun test src tests --parallel=2` while the web, root, bridge, and protocol-lockfile groups ran concurrently.
+- **Failure:** both cases exhausted Bun's 5,000 ms per-test budget, at 5,001.05 ms and 5,000.08 ms respectively. Bun also reported two between-test errors after killing the timed-out child processes.
+- **Suite counts:** backend package: 1,705 passed, 2 failed, and 2 between-test errors across 55 files.
+- **Isolated rerun:** `set -o pipefail; bun test ./tests/standalone.test.ts --parallel 2>&1 | tee /tmp/orkestrator-fix-backend-standalone-isolated.log` from `apps/backend` -> 8 passed, 0 failed, 36 assertions in 15.40 seconds; the two affected cases passed in 1,928.31 ms and 1,701.20 ms.
+- **Hypothesis:** both tests start and stop real child-process trees and remained well below their outer budget without the other three validation groups competing for process startup. The aggregate log contains no failed functional assertion before either budget expired, and the reviewed repository-settings change does not touch backend lifecycle code.
+
+## `Electron backend command registry > deterministically generates refs, diff, Git-object contents, hashes, and validation evidence` (`tests/unit/electron/commands.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-15
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-fix-full-tests.log`
+- **Worker configuration:** the root and agent-support group ran with four Bun workers while the workspace, bridge, and protocol-lockfile groups ran concurrently.
+- **Failure:** the Git fixture test exhausted Bun's 5,000 ms budget at 5,017.86 ms. Bun then killed two dangling child processes and reported a between-test `git cat-file` command error from the interrupted fixture.
+- **Suite counts:** root and agent-support group: 3,657 passed, 1 skipped, 6 failed, and 3 between-test errors across 145 files; the other five failures are the tmux cluster recorded above.
+- **Isolated rerun:** `set -o pipefail; bun test ./tests/unit/electron/commands.test.ts --parallel 2>&1 | tee /tmp/orkestrator-fix-commands-isolated.log` -> 398 passed, 1 skipped, 0 failed, 2,385 assertions in 73.77 seconds; the target passed in 1,787.61 ms.
+- **Hypothesis:** this case performs several real Git subprocess operations inside one five-second outer budget. It completed in under two seconds when isolated, while the aggregate run was simultaneously timing out other process-heavy backend and tmux tests; no assertion mismatch was observed before the timeout.
 
 ## `download-claude.sh > downloads, extracts, probes, and cleans up on Darwin/x86_64` (`tests/unit/download-scripts.test.ts`)
 

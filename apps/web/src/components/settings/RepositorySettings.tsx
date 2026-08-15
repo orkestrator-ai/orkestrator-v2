@@ -416,10 +416,12 @@ export function RepositorySettings({
       }
       case "cursor":
       case "grok":
-        return (projectModelCatalog[effectiveAgent] ?? []).map((model) => ({
-          id: model.id,
-          name: model.name,
-        }));
+        return (projectModelCatalog[effectiveAgent] ?? [])
+          .filter((model) => model.id !== "default")
+          .map((model) => ({
+            id: model.id,
+            name: model.name,
+          }));
       default:
         return [];
     }
@@ -431,6 +433,13 @@ export function RepositorySettings({
     const effectiveModel = defaultModel || config.global.codexModel;
     return models.find((model) => model.id === effectiveModel);
   }, [codexModels, config.global.codexModel, defaultModel, effectiveAgent]);
+
+  const selectedAcpModel = useMemo(() => {
+    if (effectiveAgent !== "cursor" && effectiveAgent !== "grok") return undefined;
+    return (projectModelCatalog[effectiveAgent] ?? []).find(
+      (model) => model.id === defaultModel,
+    );
+  }, [defaultModel, effectiveAgent, projectModelCatalog]);
 
   const availableEffortLevels = useMemo((): { value: string; label: string }[] => {
     switch (effectiveAgent) {
@@ -464,19 +473,22 @@ export function RepositorySettings({
           : CODEX_EFFORT_LEVELS;
       }
       case "cursor":
-      case "grok": {
-        const model = (projectModelCatalog[effectiveAgent] ?? []).find(
-          (candidate) => candidate.id === defaultModel,
-        );
-        return (model?.reasoningEfforts ?? []).map((effort) => ({
+      case "grok":
+        return (selectedAcpModel?.reasoningEfforts ?? []).map((effort) => ({
           value: effort,
           label: effort.charAt(0).toUpperCase() + effort.slice(1),
         }));
-      }
       default:
         return [];
     }
-  }, [effectiveAgent, defaultModel, claudeModels, projectModelCatalog, selectedCodexModel]);
+  }, [
+    effectiveAgent,
+    defaultModel,
+    claudeModels,
+    projectModelCatalog,
+    selectedAcpModel,
+    selectedCodexModel,
+  ]);
 
   useEffect(() => {
     if (
@@ -487,8 +499,17 @@ export function RepositorySettings({
       && !selectedCodexModel.reasoningEfforts.includes(defaultEffort as CodexReasoningEffort)
     ) {
       setDefaultEffort("");
+      return;
     }
-  }, [defaultEffort, effectiveAgent, selectedCodexModel]);
+    if (
+      (effectiveAgent === "cursor" || effectiveAgent === "grok")
+      && selectedAcpModel
+      && defaultEffort
+      && !selectedAcpModel.reasoningEfforts.includes(defaultEffort)
+    ) {
+      setDefaultEffort("");
+    }
+  }, [defaultEffort, effectiveAgent, selectedAcpModel, selectedCodexModel]);
 
   const agentLabel = AGENT_PLATFORM_LABELS[effectiveAgent];
   const appDefaultAgentLabel = AGENT_PLATFORM_LABELS[globalDefaultAgent];

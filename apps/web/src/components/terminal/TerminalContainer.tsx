@@ -214,6 +214,43 @@ function findStartupAgentTabId(state: { root: PaneNode }): string | null {
     : candidates[0]!.id;
 }
 
+/**
+ * After setup finishes, move focus from the setup terminal onto the startup
+ * agent. The backend publishes that tab while setup is still running, and the
+ * renderer keeps the setup tab selected so the user can watch it; without this
+ * handoff the agent tab exists but stays unselected.
+ *
+ * A user who already clicked a non-setup tab is left alone. Returns whether
+ * selection changed so callers can treat the handoff as one-shot.
+ */
+function handoffSetupFocusToStartupAgent(
+  environmentId: string,
+  state: { root: PaneNode; activePaneId: string },
+  startupTabId: string,
+): boolean {
+  const agentLeaf = getAllLeaves(state.root).find((leaf) =>
+    leaf.tabs.some((tab) => tab.id === startupTabId),
+  );
+  if (!agentLeaf) return false;
+
+  const focusedLeaf = getAllLeaves(state.root).find((leaf) => leaf.id === state.activePaneId)
+    ?? agentLeaf;
+  const focusedTab = focusedLeaf.tabs.find((tab) => tab.id === focusedLeaf.activeTabId);
+  const agentSelected = agentLeaf.tabs.find((tab) => tab.id === agentLeaf.activeTabId);
+  const focusedIsSetupHandoff = !focusedTab || focusedTab.isSetupTab === true;
+  const agentLeafIsSetupHandoff = !agentSelected || agentSelected.isSetupTab === true;
+  if (!focusedIsSetupHandoff && !agentLeafIsSetupHandoff) return false;
+  if (
+    agentLeaf.activeTabId === startupTabId
+    && state.activePaneId === agentLeaf.id
+  ) {
+    return false;
+  }
+
+  usePaneLayoutStore.getState().setActiveTab(agentLeaf.id, startupTabId, environmentId);
+  return true;
+}
+
 
 type TerminalTabDragEndAction =
   | { type: "none" }
@@ -630,6 +667,7 @@ export function TerminalContainer({
   const setupSessionBindLifecycleGenerationRef = useRef(0);
   const setupSessionReconnectGenerationRef = useRef(0);
   const durableLaunchClearInFlightRef = useRef(false);
+  const handedOffSetupFocusRef = useRef<string | null>(null);
   // Command+W arrives either from the Electron menu accelerator or, in a
   // browser-served client, from the renderer fallback. These two refs keep
   // exactly one of them closing a tab per keypress.
@@ -1512,6 +1550,25 @@ export function TerminalContainer({
       clearPendingNativeLaunch(environmentId);
     }
   }, [isContainerRunning, environmentId, containerId, reset, clearPendingNativeLaunch]);
+
+  // The backend publishes the startup agent while setup still runs, and this
+  // renderer keeps the setup terminal selected so the user can watch it. When
+  // setup becomes ready, move focus onto that agent — including when the
+  // durable-launch effect is still blocked on a `starting` session.
+  useEffect(() => {
+    if (!setupReady) {
+      if (handedOffSetupFocusRef.current === environmentId) {
+        handedOffSetupFocusRef.current = null;
+      }
+      return;
+    }
+    if (!currentEnvState) return;
+    if (handedOffSetupFocusRef.current === environmentId) return;
+    const startupTabId = findStartupAgentTabId(currentEnvState);
+    if (!startupTabId) return;
+    handoffSetupFocusToStartupAgent(environmentId, currentEnvState, startupTabId);
+    handedOffSetupFocusRef.current = environmentId;
+  }, [setupReady, currentEnvState, environmentId]);
 
   // Launch native tab after workspace setup completes
   useEffect(() => {

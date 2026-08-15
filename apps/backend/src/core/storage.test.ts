@@ -512,6 +512,148 @@ describe("backend-owned setup and build surfaces", () => {
     });
   });
 
+  test("does not steal setup focus when republishing the startup tab during setup", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-startup-during-setup-focus";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      environment.setupPhase = "running";
+      await storage.addEnvironment(environment);
+      await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "codex",
+      });
+      await storage.savePaneLayout(environment.id, {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "default",
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [
+            { id: "default", type: "plain", isSetupTab: true },
+            {
+              id: "startup-agent",
+              type: "agent-native",
+              nativeAgentData: {
+                platform: "codex",
+                environmentId: environment.id,
+                isLocal: true,
+              },
+            },
+          ],
+          activeTabId: "default",
+        },
+      }, 1);
+
+      const republished = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "codex",
+      });
+
+      expect(republished?.root).toMatchObject({ activeTabId: "default" });
+    });
+  });
+
+  test("hands focus from the setup terminal to the startup agent once setup is ready", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-startup-setup-handoff";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      environment.setupPhase = "running";
+      await storage.addEnvironment(environment);
+      await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "codex",
+      });
+      await storage.savePaneLayout(environment.id, {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "default",
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [
+            { id: "default", type: "plain", isSetupTab: true },
+            {
+              id: "startup-agent",
+              type: "agent-native",
+              nativeAgentData: {
+                platform: "codex",
+                environmentId: environment.id,
+                isLocal: true,
+              },
+            },
+          ],
+          activeTabId: "default",
+        },
+      }, 1);
+      await storage.updateEnvironment(environment.id, {
+        setupPhase: "ready",
+        setupScriptsComplete: true,
+      });
+
+      const handedOff = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "codex",
+        providerSessionId: "codex-session-1",
+      });
+
+      expect(handedOff?.root).toMatchObject({
+        activeTabId: "startup-agent",
+        tabs: [
+          { id: "default", type: "plain", isSetupTab: true },
+          { id: "startup-agent", type: "agent-native" },
+        ],
+      });
+    });
+  });
+
+  test("does not steal a non-setup tab when republishing the startup agent after setup", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-startup-keep-user-focus";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      environment.setupPhase = "ready";
+      environment.setupScriptsComplete = true;
+      await storage.addEnvironment(environment);
+      await storage.savePaneLayout(environment.id, {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "default",
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [
+            { id: "default", type: "plain", isSetupTab: true },
+            { id: "notes", type: "file" },
+            {
+              id: "startup-agent",
+              type: "agent-native",
+              nativeAgentData: {
+                platform: "codex",
+                environmentId: environment.id,
+                isLocal: true,
+              },
+            },
+          ],
+          activeTabId: "notes",
+        },
+      }, 0);
+
+      const republished = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "codex",
+        providerSessionId: "codex-session-1",
+      });
+
+      expect(republished?.root).toMatchObject({ activeTabId: "notes" });
+    });
+  });
+
   test("repairs a malformed Cursor startup tab in place without resurrecting a closed tab", async () => {
     await withTemporaryStorage(async (storage) => {
       const environment = createEnvironment("project-1");

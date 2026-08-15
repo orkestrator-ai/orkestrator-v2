@@ -3529,6 +3529,108 @@ describe("TerminalContainer", () => {
     expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
   });
 
+  test("activates the backend-created agent tab when local setup finishes", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          defaultAgent: "codex",
+          codexMode: "native",
+        },
+        repositories: {},
+      },
+    }));
+    usePaneLayoutStore.setState({
+      environments: new Map([[
+        "env-hidden",
+        {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              { id: "default", type: "plain", isSetupTab: true },
+              {
+                id: "startup-agent",
+                type: "agent-native",
+                nativeAgentData: {
+                  platform: "codex",
+                  environmentId: "env-hidden",
+                  isLocal: true,
+                },
+              },
+            ],
+            activeTabId: "default",
+          },
+          activePaneId: "default",
+          containerId: null,
+        },
+      ]]),
+      hydration: new Map([["env-hidden", "done"]]),
+      activeEnvironmentId: "env-hidden",
+    } as never);
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((environment) =>
+        environment.id === "env-hidden"
+          ? {
+              ...environment,
+              containerId: null,
+              environmentType: "local",
+              worktreePath: "/tmp/env-hidden-worktree",
+              setupPhase: "running",
+              setupScriptsComplete: false,
+              defaultAgent: "codex",
+              codexMode: "native",
+              pendingAgentLaunch: true,
+              startupAgentSession: {
+                tabId: "startup-agent",
+                agent: "codex",
+                style: "native",
+                status: "starting",
+              },
+            }
+          : environment
+      ),
+    }));
+    useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId={null}
+          isActive
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(
+        usePaneLayoutStore.getState().getPane("default", "env-hidden")?.activeTabId,
+      ).toBe("default");
+      expect(
+        usePaneLayoutStore.getState().getAllTabs("env-hidden").some((tab) =>
+          tab.id === "startup-agent"
+        ),
+      ).toBe(true);
+    });
+
+    await act(async () => {
+      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+        setupPhase: "ready",
+        setupScriptsComplete: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        usePaneLayoutStore.getState().getPane("default", "env-hidden")?.activeTabId,
+      ).toBe("startup-agent");
+    });
+  });
+
   test("replaces a stale renderer launch with the backend running session", async () => {
     setupDurableLaunchEnvironment({
       defaultAgent: "codex",

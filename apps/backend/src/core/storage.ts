@@ -224,6 +224,24 @@ function paneLayoutLeaves(root: unknown): MutablePaneLayoutLeaf[] {
   return leaves;
 }
 
+function environmentIsReadyForSetupHandoff(environment: Environment): boolean {
+  return environment.setupPhase === "ready"
+    || environment.setupScriptsComplete === true
+    || environment.setupOverride === true;
+}
+
+/**
+ * True when this leaf is still showing the setup terminal (or has no
+ * selection). A user who already clicked a non-setup tab is left alone.
+ */
+function selectedTabIsSetupHandoffSource(
+  leaf: MutablePaneLayoutLeaf | undefined,
+): boolean {
+  if (!leaf) return true;
+  const selected = leaf.tabs.find((tab) => tab.id === leaf.activeTabId);
+  return !selected || selected.isSetupTab === true;
+}
+
 /**
  * Keeps a completed setup handoff focused on the surface that follows setup.
  *
@@ -4545,6 +4563,12 @@ export class StorageService {
    * method does not own (`displayTitle`, `agentHandoffId`, the one-shot
    * `initial*` selections) plus `nativeAgentData.hostPort`, and a wholesale
    * rewrite silently discarded all of it on every backend start.
+   *
+   * Creating the tab selects it. Republishing during setup does not: the
+   * renderer is watching the setup terminal, and stealing that focus on every
+   * two-second sweep would fight the user. Once setup is ready, a still-focused
+   * setup tab is the post-setup handoff — the same moment
+   * `ensureBuildPipelineTab` moves selection onto the build surface.
    */
   async ensureStartupNativeAgentTab(input: {
     environmentId: string;
@@ -4645,10 +4669,22 @@ export class StorageService {
         "initialCommands",
       ]) delete tab[foreign];
       if (existingIndex >= 0) target.tabs[existingIndex] = tab;
-      else {
-        target.tabs.push(tab);
-        if (!input.existingOnly) target.activeTabId = "startup-agent";
-      }
+      else target.tabs.push(tab);
+
+      const focusedLeaf = previous
+        ? paneLayoutLeaves(previous.root).find((leaf) => leaf.id === previous.activePaneId)
+        : undefined;
+      const shouldActivateStartupAgent = !input.existingOnly && (
+        existingIndex < 0
+        || (
+          environmentIsReadyForSetupHandoff(environment)
+          && (
+            selectedTabIsSetupHandoffSource(target)
+            || selectedTabIsSetupHandoffSource(focusedLeaf)
+          )
+        )
+      );
+      if (shouldActivateStartupAgent) target.activeTabId = "startup-agent";
 
       const unchanged = previous
         && (input.existingOnly || previous.activePaneId === target.id)

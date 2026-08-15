@@ -192,10 +192,12 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
         role="status"
         className="flex h-full flex-col items-center justify-center gap-4 p-4 text-muted-foreground"
       >
-        <AgentPlatformIcon
-          platform={platform}
-          className="agent-connecting-logo h-16 w-16"
-        />
+        <span aria-hidden="true">
+          <AgentPlatformIcon
+            platform={platform}
+            className="agent-connecting-logo h-16 w-16"
+          />
+        </span>
         <p className="text-sm">Connecting to {agentLabel}...</p>
       </div>
     );

@@ -1869,6 +1869,7 @@ function SharedNativeAgentController({
           )}
           onAddressAll={async () => { await submit(ADDRESS_ALL_REVIEW_PROMPT); }}
           contextUsage={composeContextUsage}
+          showContextUsage={contextUsage === undefined || composeContextUsage !== null}
           queue={projection?.queue ? {
             length: queuedMessages.length,
             error: projection.queue.blocked

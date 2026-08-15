@@ -451,12 +451,14 @@ describe("NativeChatShell", () => {
         />,
       );
 
-      expect(screen.getByText("Connecting to Codex...")).toBeTruthy();
+      const status = screen.getByRole("status");
+      expect(status.textContent).toBe("Connecting to Codex...");
       expect(screen.queryByTestId("compose-dock")).toBeNull();
       expect(screen.queryByTestId("transcript-bottom-spacer")).toBeNull();
       const logo = container.querySelector("svg.agent-connecting-logo");
       expect(logo).toBeTruthy();
       expect(logo?.getAttribute("class")).toContain("h-16");
+      expect(logo?.closest("[aria-hidden='true']")).toBeTruthy();
       expect(container.querySelector(".animate-spin")).toBeNull();
     });
 

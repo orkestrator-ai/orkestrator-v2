@@ -5994,12 +5994,34 @@ async function waitForHealth(
   pathName = "/global/health",
   attempts = LOCAL_SERVER_HEALTH_ATTEMPTS,
   headers?: Record<string, string>,
+  dependencies: {
+    checkHealth?: typeof checkHttpHealth;
+    delay?: (milliseconds: number) => Promise<void>;
+  } = {},
 ): Promise<void> {
+  const checkHealth = dependencies.checkHealth ?? checkHttpHealth;
+  const delay = dependencies.delay
+    ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (await checkHttpHealth(port, pathName, headers)) return;
-    await new Promise((resolve) => setTimeout(resolve, LOCAL_SERVER_HEALTH_INTERVAL_MS));
+    if (await checkHealth(port, pathName, headers)) return;
+    await delay(LOCAL_SERVER_HEALTH_INTERVAL_MS);
   }
   throw new Error(`Server on port ${port} did not become healthy`);
+}
+
+async function waitForLocalServerHealth(
+  port: number,
+  kind: LocalServerKind,
+  headers?: Record<string, string>,
+  dependencies?: Parameters<typeof waitForHealth>[4],
+): Promise<void> {
+  await waitForHealth(
+    port,
+    "/global/health",
+    localServerHealthAttempts(kind),
+    headers,
+    dependencies,
+  );
 }
 
 async function waitForHttpServerExit(port: number, attempts = 50): Promise<void> {
@@ -6045,7 +6067,7 @@ async function waitForLocalServerStartup(
 
     child.once("error", onError);
     child.once("exit", onExit);
-    waitForHealth(port, "/global/health", localServerHealthAttempts(kind), headers).then(() => complete(), (error: unknown) => {
+    waitForLocalServerHealth(port, kind, headers).then(() => complete(), (error: unknown) => {
       complete(error instanceof Error ? error : new Error(String(error)));
     });
   });
@@ -8824,7 +8846,7 @@ async function startContainerServer(
   if (!hostPort) throw new Error(`Container port ${port} is not mapped`);
   if (await checkHttpHealth(hostPort)) return { hostPort, wasRunning: true };
   await dockerExecDetached(containerId, command, redactValues);
-  await waitForHealth(hostPort, "/global/health", localServerHealthAttempts(processName)).catch(async (error) => {
+  await waitForLocalServerHealth(hostPort, processName).catch(async (error) => {
     const logFile = processName === "opencode"
       ? "/tmp/opencode-serve.log"
       : processName === "claude"
@@ -14366,6 +14388,7 @@ export const __testing = {
     return localServerProcesses.get(key);
   },
   releaseLocalServerOwnership,
+  waitForLocalServerHealth,
   waitForHttpServerExit,
   waitForUnhealthy,
   setTerminateProcessTree(

@@ -14328,6 +14328,50 @@ exit 0
     }
   });
 
+  test.each(["cursor", "grok"] as const)(
+    "allows a delayed %s ACP server to become healthy after the old attempt limit",
+    async (kind) => {
+      let checks = 0;
+
+      await expect(commandTesting.waitForLocalServerHealth(
+        45_678,
+        kind,
+        undefined,
+        {
+          checkHealth: async () => {
+            checks += 1;
+            return checks === 76;
+          },
+          delay: async () => {},
+        },
+      )).resolves.toBeUndefined();
+
+      expect(checks).toBe(76);
+    },
+  );
+
+  test.each(["opencode", "claude", "codex"] as const)(
+    "keeps the existing startup window for %s servers",
+    async (kind) => {
+      let checks = 0;
+
+      await expect(commandTesting.waitForLocalServerHealth(
+        45_678,
+        kind,
+        undefined,
+        {
+          checkHealth: async () => {
+            checks += 1;
+            return false;
+          },
+          delay: async () => {},
+        },
+      )).rejects.toThrow("Server on port 45678 did not become healthy");
+
+      expect(checks).toBe(75);
+    },
+  );
+
   test("does not persist local bridge process state when the bridge entrypoint is missing", async () => {
     const appRoot = await createTempDir("ork-electron-app-missing-");
     const worktreePath = await createTempDir("ork-electron-worktree-missing-");

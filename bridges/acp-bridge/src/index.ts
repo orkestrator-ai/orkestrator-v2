@@ -1236,6 +1236,14 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     : typeof update.type === "string"
       ? update.type
       : "";
+  if (kind === "usage_update" || kind === "state_update") {
+    // Standard ACP occupancy (`usage_update`) and v2 turn-complete usage
+    // (`state_update.usage`). Neither mutates the transcript. Cursor's CLI
+    // adapter does not emit these yet; when it does, this is the path that
+    // fills the agent info panel.
+    recordTurnUsage(state, update);
+    return;
+  }
   if (kind === "config_option_update") {
     state.sessionConfig = applyConfigOptionUpdate(provider, state.sessionConfig, update);
     rememberCatalog(state.sessionConfig.composer);
@@ -2957,9 +2965,10 @@ function boundTranscriptForRead(state: SessionState): void {
 }
 
 /**
- * The neutral usage snapshot, or nothing at all. Cursor reports no token counts
- * whatsoever, and an empty meter reading "0 tokens" would claim a measurement
- * the agent never made; the panel's own "no snapshot yet" copy is the truth.
+ * The neutral usage snapshot, or nothing at all. Cursor's current ACP adapter
+ * still omits every usage carrier, and an empty meter reading "0 tokens"
+ * would claim a measurement the agent never made; the panel's own "no
+ * snapshot yet" copy is the truth until a carrier arrives.
  */
 function publicContextUsage(state: SessionState) {
   return state.usage
@@ -3423,9 +3432,10 @@ async function route(
         })),
       ],
     }, promptSequence, schema).then((result) => {
-      // The result `_meta` is the last and most complete usage carrier, so it is
-      // read before `turnStartedAt` is cleared and the elapsed time is lost.
-      recordTurnUsage(state, isObject(result) ? result._meta : undefined);
+      // PromptResponse.usage is the ACP carrier; Grok still nests the same
+      // numbers under `_meta`. Parse the whole result so either spelling lands
+      // before `turnStartedAt` is cleared and the elapsed time is lost.
+      recordTurnUsage(state, result);
       state.turnStartedAt = undefined;
       state.currentTurnUsage = undefined;
       if (schema && requestId) {
@@ -3839,7 +3849,8 @@ function applyVendorUpdate(state: SessionState, method: string, params: JsonObje
  * `turn_completed`, and the prompt result), each with a different subset of the
  * fields, so later reports merge into earlier ones instead of replacing them —
  * otherwise the panel would lose the reasoning or cache breakdown the moment a
- * sparser carrier arrived for the same turn.
+ * sparser carrier arrived for the same turn. ACP `usage_update` occupancy is
+ * merged the same way so a later PromptResponse.usage cannot drop the window.
  */
 function recordTurnUsage(state: SessionState, payload: unknown): void {
   const turn = parseAcpTurnUsage(payload);

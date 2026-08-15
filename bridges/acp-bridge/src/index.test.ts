@@ -1245,6 +1245,45 @@ describe("ACP bridge", () => {
     expect(late.contextUsage?.durationMs).toBe(settledDurationMs);
   });
 
+  test("reads ACP usage_update occupancy and PromptResponse.usage without Grok _meta", async () => {
+    const bridge = await spawnBridge({ stateDirectory: await temporaryDirectory() });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-usage-acp:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    const readSession = async () =>
+      await nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as {
+          status: string;
+          contextUsage?: Record<string, unknown>;
+        };
+
+    expect((await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "USAGE_ACP: report occupancy over ACP" }),
+    })).status).toBe(202);
+
+    const session = await waitFor(
+      readSession,
+      (value) => value.status === "idle" && value.contextUsage !== undefined,
+    );
+    expect(session.contextUsage).toMatchObject({
+      usedTokens: 15_675,
+      maximumTokens: 200_000,
+      inputTokens: 10_000,
+      outputTokens: 2_000,
+      reasoningTokens: 300,
+      cacheReadTokens: 5_000,
+      cacheWriteTokens: 45,
+      costUsd: 0.042,
+      source: "provider",
+    });
+    expect(session.contextUsage?.percentage).toBeCloseTo(7.8375);
+  });
+
   test("normalizes ACP tool calls, upserts updates, and rehydrates them after restart", async () => {
     const stateDirectory = await temporaryDirectory();
     const first = await spawnBridge({ stateDirectory });

@@ -2255,6 +2255,48 @@ lines.on("line", (line) => {
       }, 250);
       return;
     }
+    // Standard ACP carriers Cursor's CLI schema already defines but does not
+    // emit. The bridge must still consume them so occupancy appears the moment
+    // an agent starts sending `usage_update` / `PromptResponse.usage`.
+    if (prompt.startsWith("USAGE_ACP")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Counted over ACP." } },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "usage_update",
+            used: 15_675,
+            size: 200_000,
+            cost: { amount: 0.042, currency: "USD" },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          stopReason: "end_turn",
+          usage: {
+            totalTokens: 12_345,
+            inputTokens: 10_000,
+            outputTokens: 2_000,
+            thoughtTokens: 300,
+            cachedReadTokens: 5_000,
+            cachedWriteTokens: 45,
+          },
+        },
+      });
+      return;
+    }
     // A turn that reports everything the agent info panel can show: the MCP
     // inventory and command list as notifications, then the same token counts
     // Grok repeats across a session notification and the prompt result.

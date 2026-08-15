@@ -3,6 +3,7 @@ import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactio
 import { ProviderUnavailableError } from "./agent-provider-contract.js";
 import {
   asRecord,
+  assertSdkResponse,
   MAX_TRACKED_PROVIDER_INTERACTIONS,
   nonEmptyString,
   serializedByteLength,
@@ -308,8 +309,4 @@ export class OpenCodeSessionLifecycle {
     this.sessionListCache = null;
     this.sessionListFailure = null;
   }
-}
-
-function assertSdkResponse(response: { error?: unknown }, operation: string): void {
-  if (response.error) throw new Error(`${operation} failed`);
 }

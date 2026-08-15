@@ -18,6 +18,7 @@ import {
   asRecord,
   boundedText,
   InteractionSnapshotTracker,
+  isTransientHttpStatus,
   MAX_TRACKED_PROVIDER_INTERACTIONS,
   nonEmptyString,
   opaqueOptionId,
@@ -31,7 +32,6 @@ import {
   assertOk,
   boundedJson,
   bridgeFetch,
-  isTransientHttpStatus,
 } from "./http-bridge-transport.js";
 
 const MCP_FORM_CONTENT_QUESTION_ID = "mcp-form-content";

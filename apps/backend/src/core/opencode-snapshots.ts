@@ -1,13 +1,17 @@
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 import {
   asRecord,
+  MAX_TRACKED_INTERACTION_SESSIONS,
   MAX_TRACKED_PROVIDER_INTERACTIONS,
   nonEmptyString,
   serializedByteLength,
 } from "./agent-provider-runtime.js";
 import { ProviderUnavailableError } from "./agent-provider-contract.js";
 
-export const MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS = 1_025;
+// One more than the sessions we can track, so a full tracking set still leaves
+// room to observe that the provider returned an extra entry.
+export const MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS =
+  MAX_TRACKED_INTERACTION_SESSIONS + 1;
 export const MAX_OPENCODE_EXISTENCE_SNAPSHOT_BYTES = 4 * 1024 * 1024;
 
 export function boundedOwnedOpenCodeCollection(

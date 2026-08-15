@@ -46,8 +46,10 @@ import {
 } from "./agent-provider-contract.js";
 import {
   asRecord,
+  assertSdkResponse,
   InteractionSnapshotTracker,
   INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+  isTransientHttpStatus,
   MAX_TRACKED_INTERACTION_SESSIONS,
   MAX_TRACKED_PROVIDER_INTERACTIONS,
   nonEmptyString,
@@ -234,12 +236,28 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     ) => Promise<unknown>).call(owner, parameters, this.requestOptions());
   }
 
+  /**
+   * Cache key for one normalized catalogue.
+   *
+   * The connectivity filter has to be part of the key. An allowlist configured
+   * empty means "unrestricted", which collides with the empty allowlist
+   * `rawModelCatalog` passes — without this the picker could be served the
+   * deliberately unfiltered cache entry written for the durable cache.
+   */
+  private catalogCacheKey(
+    allowedProviders: readonly string[],
+    requireConnected: boolean,
+  ): string {
+    return `${requireConnected ? "connected" : "all"}:${openCodeModelProvidersKey(allowedProviders)}`;
+  }
+
   private async readComposerCatalog(
     allowedProviders: readonly string[],
+    requireConnected: boolean,
   ): Promise<
     ReturnType<typeof normalizeOpenCodeComposerCatalog>
   > {
-    const providersKey = openCodeModelProvidersKey(allowedProviders);
+    const providersKey = this.catalogCacheKey(allowedProviders, requireConnected);
     if (
       this.catalogMetadata
       && this.catalogMetadata.expiresAt > Date.now()
@@ -256,6 +274,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     const live = normalizeOpenCodeComposerCatalog(
       payload(providerResult),
       allowedProviders,
+      { requireConnected },
     );
     // An empty connected set is authoritative. Falling back merely because it
     // yielded no models would re-expose every provider OpenCode knows about,
@@ -265,6 +284,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       : normalizeOpenCodeComposerCatalog(
           payload(fallbackResult),
           allowedProviders,
+          { requireConnected },
         );
     this.catalogMetadata = {
       expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
@@ -297,6 +317,15 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
    * the user message, publish a transient error, and leave the session idle.
    * Preflight the live connectivity snapshot so that failure is definitive and
    * no apparently stuck turn is created.
+   *
+   * The preflight only ever *rejects* on the positive signal it exists for: a
+   * catalogue that was read successfully and that reports the selected model's
+   * provider as not connected. An unreadable catalogue — a thrown transport
+   * error, a timeout, an error envelope, or a build that does not serve
+   * `/provider` — is no evidence about the model, so dispatch proceeds. Failing
+   * closed there would let one flaky read on a *secondary* endpoint block every
+   * prompt, which is strictly worse than the stuck turn this guards against;
+   * `readComposerCatalog` tolerates the same call failing for the same reason.
    */
   private async assertSelectedModelAvailable(model: string | undefined): Promise<void> {
     if (!model || !model.includes("/")) return;
@@ -309,29 +338,30 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         parameters: Record<string, unknown>,
         options: unknown,
       ) => Promise<unknown>).call(provider, {}, this.requestOptions());
-    } catch (error) {
-      throw new ProviderUnavailableError(
-        "OpenCode model availability is unavailable",
-        { cause: error },
-      );
+    } catch {
+      return;
     }
     const envelope = asRecord(response);
-    if (envelope?.error) {
-      throw new ProviderUnavailableError("OpenCode model availability is unavailable");
-    }
+    if (envelope?.error) return;
     const allowedProviders = await this.openCodeModelProviders();
     const catalog = normalizeOpenCodeComposerCatalog(
       envelope?.data ?? {},
       allowedProviders,
+      { requireConnected: true },
     );
-    // The preflight is fresher than the composer cache. Publish it into both
-    // cache layers so a rejected send immediately removes the stale choice.
-    this.catalogMetadata = {
-      expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
-      providersKey: openCodeModelProvidersKey(allowedProviders),
-      catalog,
-    };
-    this.interactiveMetadata.clear();
+    // The preflight is fresher than the composer cache, so publish it into both
+    // cache layers: a rejected send immediately removes the stale choice.
+    // Publishing a degenerate read would instead suppress the `config.providers`
+    // fallback for a whole TTL, so it is held to the same bar
+    // `readComposerCatalog` applies before it accepts a live catalogue.
+    if (catalog.connectedProviderIds !== undefined || catalog.models.length > 0) {
+      this.catalogMetadata = {
+        expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+        providersKey: this.catalogCacheKey(allowedProviders, true),
+        catalog,
+      };
+      this.interactiveMetadata.clear();
+    }
     // Older OpenCode builds did not report connectivity. Preserve their prior
     // behavior instead of treating an absent field as an empty connected set.
     if (catalog.connectedProviderIds === undefined) return;
@@ -344,6 +374,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   async modelCatalog(): Promise<AgentModel[]> {
     return (await this.readComposerCatalog(
       await this.openCodeModelProviders(),
+      true,
     )).models;
   }
 
@@ -351,7 +382,10 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     // The empty allowlist has the documented provider-filter meaning of
     // unrestricted, while `normalizeOpenCodeComposerCatalog` still enforces
     // its provider/model bounds before this reaches persistent storage.
-    return (await this.readComposerCatalog([])).models;
+    // Connectivity is deliberately not applied either: this catalogue backs the
+    // durable cache, which must still offer a provider the user authenticates
+    // after it was written.
+    return (await this.readComposerCatalog([], false)).models;
   }
 
   private async monitorRequests(): Promise<void> {
@@ -977,7 +1011,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     // filtered against a specific allowlist, and a settings edit must invalidate
     // it here as well as in `readComposerCatalog`.
     const allowedProviders = await this.openCodeModelProviders();
-    const providersKey = openCodeModelProvidersKey(allowedProviders);
+    // Composer reads are picker-facing, so they carry the connectivity filter
+    // and must key on it exactly as `readComposerCatalog` does.
+    const providersKey = this.catalogCacheKey(allowedProviders, true);
     const cached = this.interactiveMetadata.get(sessionId);
     if (
       cached
@@ -997,7 +1033,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       this.optionalSdkCall("session", "todo", { sessionID: sessionId, directory }),
       this.optionalSdkCall("session", "diff", { sessionID: sessionId, directory }),
       this.optionalSdkCall("session", "get", { sessionID: sessionId, directory }),
-      this.readComposerCatalog(allowedProviders),
+      this.readComposerCatalog(allowedProviders, true),
     ]);
     const data = (index: number, fallback: unknown): unknown => {
       const result = results[index];
@@ -1402,7 +1438,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     this.failedQuestionSessions.clear();
     this.answeringRequestIds.clear();
     this.requestTasks.clear();
-    this.lifecycle.clear();
   }
 
   private requestOptions(): { signal: AbortSignal } {
@@ -1417,22 +1452,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       ]),
     };
   }
-}
-
-function assertSdkResponse(
-  response: { error?: unknown },
-  operation: string,
-): void {
-  if (response.error) {
-    throw new Error(`${operation} failed`);
-  }
-}
-
-function isTransientHttpStatus(status: number): boolean {
-  return status === 408
-    || status === 425
-    || status === 429
-    || status >= 500;
 }
 
 function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {

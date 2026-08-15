@@ -69,9 +69,23 @@ function openCodeCatalogDefault(value: unknown): {
   };
 }
 
+/**
+ * Normalize an OpenCode provider catalogue into selectable models.
+ *
+ * `requireConnected` gates the connectivity filter rather than applying it
+ * unconditionally. Picker-facing and dispatch-facing reads want it: a provider
+ * OpenCode cannot currently serve must not be offered or sent to. The durable
+ * cache read (`rawModelCatalog`) must not have it, because that catalogue
+ * deliberately outlives the current connectivity state so a provider
+ * authenticated later is still offered before another bridge starts.
+ *
+ * `connectedProviderIds` is reported either way, so a caller that skipped the
+ * filter can still see what OpenCode considered connected.
+ */
 export function normalizeOpenCodeComposerCatalog(
   value: unknown,
   allowedProviders: readonly string[] = DEFAULT_OPENCODE_MODEL_PROVIDERS,
+  options: { requireConnected?: boolean } = {},
 ): {
   models: AgentModel[];
   selectedModelId?: string;
@@ -89,7 +103,7 @@ export function normalizeOpenCodeComposerCatalog(
         return providerId ? [providerId] : [];
       }).slice(0, 512)
     : undefined;
-  const connectedProviders = connectedProviderIds
+  const connectedProviders = options.requireConnected && connectedProviderIds
     ? new Set(connectedProviderIds)
     : null;
   // Reject the provider before either cap is applied. OpenCode advertises

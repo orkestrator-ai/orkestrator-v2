@@ -6,7 +6,11 @@ import {
   type ProviderSendOptions,
   ProviderUnavailableError,
 } from "./agent-provider-contract.js";
-import { asRecord, nonEmptyString } from "./agent-provider-runtime.js";
+import {
+  asRecord,
+  isTransientHttpStatus,
+  nonEmptyString,
+} from "./agent-provider-runtime.js";
 
 const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 30_000;
 const ACP_SESSION_START_TIMEOUT_MS = 75_000;
@@ -130,13 +134,6 @@ export async function assertOkWithErrorDetail(
     throw new ProviderUnavailableError(message);
   }
   throw new Error(message);
-}
-
-export function isTransientHttpStatus(status: number): boolean {
-  return status === 408
-    || status === 425
-    || status === 429
-    || status >= 500;
 }
 
 /**

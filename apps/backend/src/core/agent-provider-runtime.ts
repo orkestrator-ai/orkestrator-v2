@@ -74,6 +74,33 @@ export function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+/**
+ * Reject an SDK envelope that carries an error instead of data.
+ *
+ * The envelope's own error body is deliberately not interpolated: it can quote
+ * a prompt, a path, or a credential, and this message reaches logs.
+ */
+export function assertSdkResponse(
+  response: { error?: unknown },
+  operation: string,
+): void {
+  if (response.error) {
+    throw new Error(`${operation} failed`);
+  }
+}
+
+/**
+ * Statuses that mean "ask again later" rather than "this request was wrong".
+ * Callers map these to ProviderUnavailableError so bounded reconnect handling
+ * runs instead of failing a session outright.
+ */
+export function isTransientHttpStatus(status: number): boolean {
+  return status === 408
+    || status === 425
+    || status === 429
+    || status >= 500;
+}
+
 export function normalizeProviderContextUsage(
   value: unknown,
 ): NativeAgentContextUsage | undefined {

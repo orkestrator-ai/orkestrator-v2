@@ -169,6 +169,11 @@ export interface ProviderInteractiveSnapshot {
 /** Provider operations shared by workflows and interactive native-agent tabs. */
 export interface AgentSessionProvider {
   readonly agent: ProviderAgent;
+  /**
+   * Register a session restored from durable workflow state. Providers that
+   * monitor environment-wide event streams must ignore requests for every
+   * session not registered here or created through createSession().
+   */
   registerSession?(
     sessionId: string,
     interaction?: ProviderSessionRegistration,
@@ -184,7 +189,17 @@ export interface AgentSessionProvider {
     options: ProviderSendOptions,
   ): Promise<void>;
   status(sessionId: string): Promise<ProviderStatus>;
+  /**
+   * Authoritative activity including input parked at the provider. Optional so
+   * narrow test providers and non-interactive integrations can fall back to
+   * the coarser status contract.
+   */
   activity?(sessionId: string): Promise<ProviderActivityState>;
+  /**
+   * Read authoritative activity for several sessions from one provider
+   * snapshot. Providers whose upstream API is session-scoped may omit this and
+   * let callers fall back to activity()/status() per session.
+   */
   activityBatch?(
     sessionIds: readonly string[],
   ): Promise<Map<string, ProviderActivityState>>;
@@ -198,8 +213,23 @@ export interface AgentSessionProvider {
   dispose?(): Promise<void> | void;
 }
 
+/**
+ * Interactive, provider-neutral session surface consumed by NativeAgentService.
+ * Build-pipeline callers retain the deliberately smaller interface above.
+ */
 export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
+  /** Live, bounded model discovery for launch surfaces without a session yet. */
   modelCatalog?(): Promise<AgentModel[]>;
+  /**
+   * Backend-only bounded discovery for the durable OpenCode cache. Unlike
+   * `modelCatalog`, this retains an unfiltered bounded source catalogue so a
+   * later allowlist expansion can work before another bridge is started. It
+   * must never be returned directly to a renderer.
+   *
+   * "Unfiltered" covers provider connectivity as well as the allowlist: a
+   * provider the user authenticates *after* this cache was written must still
+   * be offered by launch dialogs before another bridge starts.
+   */
   rawModelCatalog?(): Promise<AgentModel[]>;
   interactiveSnapshot?(sessionId: string): Promise<ProviderInteractiveSnapshot>;
   updateInteractiveControls?(
@@ -216,6 +246,7 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
     messageId?: string,
   ): Promise<NativeAgentForkOutcome>;
   slashCommands?(): Promise<NativeAgentSlashCommand[]>;
+  /** Drop provider-side model/command caches so the next read re-discovers. */
   refreshCatalog?(): Promise<void> | void;
   stopBackgroundTask?(sessionId: string, taskId: string): Promise<void>;
   dismissSuggestedPrompt?(sessionId: string): Promise<void>;

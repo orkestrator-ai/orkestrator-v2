@@ -36,6 +36,7 @@ import {
   INTERACTIVE_RUNTIME_METADATA_RETRY_MS,
   INTERACTIVE_RUNTIME_METADATA_TTL_MS,
   isProviderActivityState,
+  isTransientHttpStatus,
   MAX_TRACKED_INTERACTION_SESSIONS,
   nonEmptyString,
   normalizeProviderContextUsage,
@@ -50,7 +51,6 @@ import {
   assertOkWithErrorDetail,
   boundedJson,
   bridgeFetch,
-  isTransientHttpStatus,
   resolvePromptAttachments,
   type HttpBridgeProviderDependencies,
 } from "./http-bridge-transport.js";

@@ -403,6 +403,141 @@ describe("OpenCode provider runtime", () => {
     }
   });
 
+  // Connectivity is a *picker* filter. The durable cache deliberately outlives
+  // it, so a provider the user authenticates later is still offered by launch
+  // dialogs before an environment starts another bridge.
+  test("keeps disconnected providers in the raw catalogue for the durable cache", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: {
+        list: mock(async () => ({
+          data: {
+            all: [
+              {
+                id: "hpc-ai",
+                name: "HPC-AI",
+                models: { "deepseek-v4-flash": { name: "DeepSeek V4 Flash" } },
+              },
+              {
+                id: "opencode",
+                name: "OpenCode",
+                models: { "kimi-k2.7": { name: "Kimi K2.7" } },
+              },
+            ],
+            connected: ["opencode"],
+          },
+        })),
+      },
+    });
+    const provider = openCodeActivityProvider(fake, {
+      resolveOpenCodeModelProviders: () => ["hpc-ai", "opencode"],
+    });
+    try {
+      await expect(provider.modelCatalog?.()).resolves.toEqual([
+        expect.objectContaining({ id: "opencode/kimi-k2.7" }),
+      ]);
+      await expect(provider.rawModelCatalog?.()).resolves.toEqual([
+        expect.objectContaining({ id: "hpc-ai/deepseek-v4-flash" }),
+        expect.objectContaining({ id: "opencode/kimi-k2.7" }),
+      ]);
+      // The filtered and unfiltered catalogues share one cache slot, so the
+      // second read must not be served the first read's entry.
+      await expect(provider.modelCatalog?.()).resolves.toEqual([
+        expect.objectContaining({ id: "opencode/kimi-k2.7" }),
+      ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  // An allowlist configured empty means "unrestricted", which is the exact key
+  // `rawModelCatalog` passes. Without the connectivity flag in the cache key the
+  // picker would be served the deliberately unfiltered durable-cache entry.
+  test("does not serve the unfiltered raw catalogue to an unrestricted picker", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: {
+        list: mock(async () => ({
+          data: {
+            all: [
+              { id: "hpc-ai", models: { "deepseek-v4-flash": {} } },
+              { id: "opencode", models: { "kimi-k2.7": {} } },
+            ],
+            connected: ["opencode"],
+          },
+        })),
+      },
+    });
+    const provider = openCodeActivityProvider(fake, {
+      resolveOpenCodeModelProviders: () => [],
+    });
+    try {
+      await expect(provider.rawModelCatalog?.()).resolves.toEqual([
+        expect.objectContaining({ id: "hpc-ai/deepseek-v4-flash" }),
+        expect.objectContaining({ id: "opencode/kimi-k2.7" }),
+      ]);
+      await expect(provider.modelCatalog?.()).resolves.toEqual([
+        expect.objectContaining({ id: "opencode/kimi-k2.7" }),
+      ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("reads connected providers reported as objects", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: {
+        list: mock(async () => ({
+          data: {
+            all: [
+              { id: "hpc-ai", models: { "deepseek-v4-flash": {} } },
+              { id: "opencode", models: { "kimi-k2.7": {} } },
+            ],
+            connected: [{ id: "opencode" }, { id: "" }, null],
+          },
+        })),
+      },
+    });
+    const provider = openCodeActivityProvider(fake, {
+      resolveOpenCodeModelProviders: () => ["hpc-ai", "opencode"],
+    });
+    try {
+      await expect(provider.modelCatalog?.()).resolves.toEqual([
+        expect.objectContaining({ id: "opencode/kimi-k2.7" }),
+      ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("bounds the connected provider list it will honour", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: {
+        list: mock(async () => ({
+          data: {
+            all: [{ id: "opencode", models: { "kimi-k2.7": {} } }],
+            // The 512-entry bound drops everything past the cap, including the
+            // one provider that actually holds the selectable model.
+            connected: [
+              ...Array.from({ length: 512 }, (_unused, index) => `filler-${index}`),
+              "opencode",
+            ],
+          },
+        })),
+      },
+    });
+    const provider = openCodeActivityProvider(fake, {
+      resolveOpenCodeModelProviders: () => ["opencode"],
+    });
+    try {
+      await expect(provider.modelCatalog?.()).resolves.toEqual([]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("treats an empty connected provider list as authoritative", async () => {
     const fake = openCodeFake();
     Object.assign(fake.client as object, {

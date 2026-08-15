@@ -14,6 +14,7 @@ import {
 } from "./agent-provider-contract.js";
 import {
   asRecord,
+  assertSdkResponse,
   boundedJoinedText,
   boundedStringArray,
   boundedText,
@@ -345,8 +346,4 @@ export class OpenCodeInteractionAdapter {
   }
 
 
-}
-
-function assertSdkResponse(response: { error?: unknown }, operation: string): void {
-  if (response.error) throw new Error(`${operation} failed`);
 }

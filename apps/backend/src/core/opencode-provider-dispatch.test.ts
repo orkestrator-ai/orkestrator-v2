@@ -58,6 +58,99 @@ describe("OpenCode provider dispatch", () => {
     }
   });
 
+  // The availability preflight reads a *secondary* endpoint. Failing the prompt
+  // when that read fails would let one flaky `/provider` response block every
+  // dispatch, which is worse than the stuck turn the preflight guards against.
+  // Only a catalogue that was actually read may reject a send.
+  test.each([
+    [
+      "an unreachable provider catalogue",
+      () => Promise.reject(new Error("provider list unavailable")),
+    ],
+    [
+      "an error envelope from the provider catalogue",
+      async () => ({ error: { message: "provider list failed" } }),
+    ],
+    [
+      "a provider catalogue that reports nothing",
+      async () => ({ data: {} }),
+    ],
+  ] as const)("dispatches despite %s", async (_label, list) => {
+    const fake = openCodeFake();
+    const providerList = mock(list);
+    Object.assign(fake.client as object, { provider: { list: providerList } });
+    const provider = createNativeAgentProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "test-token",
+        directory: "/workspace",
+        model: "hpc-ai/deepseek/deepseek-v4-flash",
+      },
+      {
+        openCodeClient: fake.client,
+        openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
+        autoAnswerRequests: false,
+        resolveOpenCodeModelProviders: () => ["hpc-ai", "opencode"],
+      },
+    );
+    try {
+      await provider.send("owned-session", "prompt", { requestId: "request-1" });
+      expect(providerList).toHaveBeenCalledTimes(1);
+      expect(fake.promptCalls).toHaveLength(1);
+      expect(fake.promptCalls[0]).toMatchObject({
+        sessionID: "owned-session",
+        model: { providerID: "hpc-ai", modelID: "deepseek/deepseek-v4-flash" },
+      });
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  // A degenerate preflight read must not be published into the composer cache.
+  // Caching it would suppress the `config.providers` fallback for a whole TTL
+  // and empty the model picker for a user whose send just succeeded.
+  test("does not let a degenerate preflight read empty the composer catalogue", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: { list: mock(async () => ({ data: {} })) },
+      config: {
+        providers: mock(async () => ({
+          data: {
+            providers: [{
+              id: "opencode",
+              models: { "kimi-k2.7": { name: "Kimi K2.7" } },
+            }],
+          },
+        })),
+      },
+    });
+    const provider = createNativeAgentProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "test-token",
+        directory: "/workspace",
+        model: "opencode/kimi-k2.7",
+      },
+      {
+        openCodeClient: fake.client,
+        openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
+        autoAnswerRequests: false,
+        resolveOpenCodeModelProviders: () => ["opencode"],
+      },
+    );
+    try {
+      await provider.send("owned-session", "prompt", { requestId: "request-1" });
+      expect(fake.promptCalls).toHaveLength(1);
+      await expect(provider.modelCatalog?.()).resolves.toEqual([
+        expect.objectContaining({ id: "opencode/kimi-k2.7" }),
+      ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("bounds targeted transcript reads at the SDK boundary", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);

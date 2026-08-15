@@ -6,6 +6,10 @@ type JsonObject = Record<string, unknown>;
 
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 let promptRequestId: number | null = null;
+let flattenedResourceExhaustedAttempts = 0;
+let flattenedResourceExhaustedScenario = false;
+let rpcResourceExhaustedAttempts = 0;
+let rpcResourceExhaustedScenario = false;
 const provider = process.env.ACP_PROVIDER === "grok" ? "grok" : "cursor";
 
 const cursorConfig = {
@@ -680,6 +684,152 @@ lines.on("line", (line) => {
         process.env.FAKE_ACP_PROMPT_BLOCKS_FILE,
         `${JSON.stringify(params?.prompt ?? [])}\n`,
       );
+    }
+    const resumesResourceExhaustedScenario = prompt.startsWith(
+      "Continue from where the interrupted turn stopped.",
+    );
+    // Text streamed before an attempt fails. Off by default so the scenarios
+    // that assert an exact recovered transcript stay unchanged; the structured
+    // cases switch it on to produce the realistic "streamed, then failed" shape.
+    const resourceExhaustedPartial = process.env.FAKE_ACP_RESOURCE_EXHAUSTED_PARTIAL;
+    const writeResourceExhaustedPartial = (): void => {
+      if (!resourceExhaustedPartial) return;
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: resourceExhaustedPartial },
+          },
+        },
+      });
+    };
+    const startsRpcResourceExhaustedScenario = prompt.startsWith("RESOURCEEXHAUSTEDRPC:");
+    if (startsRpcResourceExhaustedScenario) rpcResourceExhaustedScenario = true;
+    if (rpcResourceExhaustedScenario
+      && (startsRpcResourceExhaustedScenario || resumesResourceExhaustedScenario)) {
+      const configuredAttempts = Number(process.env.FAKE_ACP_RPC_RESOURCE_EXHAUSTED_ATTEMPTS ?? "1");
+      const failedAttempts = Number.isSafeInteger(configuredAttempts) && configuredAttempts >= 0
+        ? configuredAttempts
+        : 1;
+      if (rpcResourceExhaustedAttempts < failedAttempts) {
+        rpcResourceExhaustedAttempts += 1;
+        writeResourceExhaustedPartial();
+        write({
+          jsonrpc: "2.0",
+          id: message.id,
+          error: { code: -32000, message: "RetriableError: [resource_exhausted] Error" },
+        });
+        return;
+      }
+      rpcResourceExhaustedScenario = false;
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: {
+              type: "text",
+              text: process.env.FAKE_ACP_RESOURCE_EXHAUSTED_FINAL
+                ?? "Recovered from the structured RPC error.",
+            },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    const startsResourceExhaustedScenario = prompt.startsWith("RESOURCEEXHAUSTED:");
+    if (startsResourceExhaustedScenario) flattenedResourceExhaustedScenario = true;
+    if (flattenedResourceExhaustedScenario
+      && (startsResourceExhaustedScenario || resumesResourceExhaustedScenario)) {
+      const configuredAttempts = Number(
+        process.env.FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS ?? "1",
+      );
+      const failedAttempts = Number.isSafeInteger(configuredAttempts) && configuredAttempts >= 0
+        ? configuredAttempts
+        : 1;
+      if (flattenedResourceExhaustedAttempts < failedAttempts) {
+        if (flattenedResourceExhaustedAttempts === 0) {
+          write({
+            jsonrpc: "2.0",
+            method: "session/update",
+            params: {
+              sessionId: "fake-session",
+              update: {
+                sessionUpdate: "agent_message_chunk",
+                content: { type: "text", text: "Completed the first safe step." },
+              },
+            },
+          });
+          write({
+            jsonrpc: "2.0",
+            method: "session/update",
+            params: {
+              sessionId: "fake-session",
+              update: {
+                sessionUpdate: "tool_call",
+                toolCallId: "resource-safe-1",
+                title: "Inspect repository state",
+                kind: "read",
+                status: "completed",
+              },
+            },
+          });
+        }
+        flattenedResourceExhaustedAttempts += 1;
+        writeResourceExhaustedPartial();
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: {
+                type: "text",
+                // The class name varies by provider error; `RetriableError` is
+                // only the one Cursor emits today.
+                text: `\n\nError: ${
+                  process.env.FAKE_ACP_FLATTENED_ERROR_NAME ?? "RetriableError"
+                }: [resource_exhausted] Error`,
+              },
+            },
+          },
+        });
+        // Cursor's ACP bug returns success even though the model-side failure
+        // was flattened into ordinary assistant text.
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+        // Optionally die while the bridge is parked in backoff, so the retry
+        // wakes up to a session whose child is gone.
+        const dieAfterMs = Number(process.env.FAKE_ACP_RESOURCE_EXHAUSTED_DIE_AFTER_MS ?? "");
+        if (Number.isSafeInteger(dieAfterMs) && dieAfterMs > 0) {
+          setTimeout(() => process.exit(1), dieAfterMs);
+        }
+        return;
+      }
+      flattenedResourceExhaustedScenario = false;
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: {
+              type: "text",
+              text: process.env.FAKE_ACP_RESOURCE_EXHAUSTED_FINAL
+                ?? "Recovered and finished the original request.",
+            },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
     }
     // Agents that mirror the user turn back to the client mid-prompt. The
     // bridge already holds the authoritative copy from `/session/prompt`, so

@@ -1,4 +1,5 @@
 import type { RuntimeProfile } from "../../electron/runtime-profile.js";
+import { AGENT_PLATFORMS, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 export type DevArguments = {
   profile?: string;
@@ -11,11 +12,7 @@ export type DevArguments = {
   credentialSources: RuntimeProfile["credentialSources"];
 };
 
-const ALL_AGENT_CREDENTIAL_SOURCES: RuntimeProfile["credentialSources"] = [
-  "claude",
-  "codex",
-  "opencode",
-];
+const ALL_AGENT_CREDENTIAL_SOURCES: RuntimeProfile["credentialSources"] = [...AGENT_PLATFORMS];
 
 export function parseDevArguments(args: string[]): DevArguments {
   const result: DevArguments = {
@@ -49,8 +46,8 @@ export function parseDevArguments(args: string[]): DevArguments {
       result.fixture = true;
     } else if (argument === "--credential-source") {
       const value = valueAfter(index++, argument);
-      if (value !== "claude" && value !== "codex" && value !== "opencode") {
-        throw new Error("--credential-source accepts claude, codex, or opencode");
+      if (!isAgentPlatform(value)) {
+        throw new Error(`--credential-source accepts ${AGENT_PLATFORMS.join(", ")}`);
       }
       result.credentialSources.push(value);
     } else if (argument === "--") {

@@ -514,6 +514,10 @@ export async function setCursorApiKey(apiKey: string | null): Promise<AppConfig>
   return invoke<AppConfig>("set_cursor_api_key", { apiKey });
 }
 
+export async function setAnthropicApiKey(apiKey: string | null): Promise<AppConfig> {
+  return invoke<AppConfig>("set_anthropic_api_key", { apiKey });
+}
+
 export async function getWebClientStatus(): Promise<WebClientStatus> {
   if (window.orkestrator?.webClient) {
     return window.orkestrator.webClient.getStatus();

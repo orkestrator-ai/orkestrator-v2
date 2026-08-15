@@ -233,11 +233,12 @@ describe("Electron StorageService", () => {
     expect(merged.defaultAgent).toBe("claude");
   });
 
-  test("preserves write-only credentials during renderer config writes and mutates Cursor keys explicitly", async () => {
+  test("preserves write-only credentials during renderer config writes and mutates API keys explicitly", async () => {
     const dataDir = await createTempDir("ork-storage-write-only-credentials-");
     const storage = new StorageService(dataDir);
     await storage.init();
     await storage.setGitHubToken("stored-github-token");
+    await storage.setAnthropicApiKey("stored-anthropic-key");
     await storage.setCursorApiKey("stored-cursor-key");
 
     const rendererGlobal = {
@@ -245,11 +246,13 @@ describe("Electron StorageService", () => {
       debugLogging: true,
     };
     delete rendererGlobal.githubToken;
+    delete rendererGlobal.anthropicApiKey;
     delete rendererGlobal.cursorApiKey;
     await storage.updateGlobalConfig(rendererGlobal, { preserveCredentials: true });
 
     let persisted = (await storage.loadConfig()).global;
     expect(persisted.githubToken).toBe("stored-github-token");
+    expect(persisted.anthropicApiKey).toBe("stored-anthropic-key");
     expect(persisted.cursorApiKey).toBe("stored-cursor-key");
     expect(persisted.debugLogging).toBe(true);
 
@@ -257,8 +260,13 @@ describe("Electron StorageService", () => {
     expect((await storage.loadConfig()).global.cursorApiKey)
       .toBe("replacement-cursor-key");
     await storage.setCursorApiKey(null);
+    await storage.setAnthropicApiKey("replacement-anthropic-key");
+    expect((await storage.loadConfig()).global.anthropicApiKey)
+      .toBe("replacement-anthropic-key");
+    await storage.setAnthropicApiKey(null);
     persisted = (await storage.loadConfig()).global;
     expect(persisted.cursorApiKey).toBeUndefined();
+    expect(persisted.anthropicApiKey).toBeUndefined();
     expect(persisted.githubToken).toBe("stored-github-token");
   });
 
@@ -272,10 +280,16 @@ describe("Electron StorageService", () => {
     await storage.init();
     await storage.saveConfig(defaultConfig());
     await storage.setGitHubToken("stored-github-token");
+    await storage.setAnthropicApiKey("stored-anthropic-key");
     await storage.setCursorApiKey("stored-cursor-key");
 
     const loaded = await storage.loadConfig();
-    const { githubToken: _token, cursorApiKey: _apiKey, ...rendererGlobal } = loaded.global;
+    const {
+      githubToken: _token,
+      anthropicApiKey: _anthropicApiKey,
+      cursorApiKey: _apiKey,
+      ...rendererGlobal
+    } = loaded.global;
     await storage.saveConfig(
       { ...loaded, global: { ...rendererGlobal, debugLogging: true } },
       { preserveCredentials: true },
@@ -283,18 +297,24 @@ describe("Electron StorageService", () => {
 
     const persisted = (await storage.loadConfig()).global;
     expect(persisted.githubToken).toBe("stored-github-token");
+    expect(persisted.anthropicApiKey).toBe("stored-anthropic-key");
     expect(persisted.cursorApiKey).toBe("stored-cursor-key");
     expect(persisted.debugLogging).toBe(true);
 
     // Without the option a whole-config write stays authoritative, so a backend
     // caller that genuinely means to drop both still can.
     const authoritative = await storage.loadConfig();
-    const { githubToken: _dropped, cursorApiKey: _alsoDropped, ...withoutCredentials } =
-      authoritative.global;
+    const {
+      githubToken: _dropped,
+      anthropicApiKey: _alsoDroppedAnthropic,
+      cursorApiKey: _alsoDropped,
+      ...withoutCredentials
+    } = authoritative.global;
     await storage.saveConfig({ ...authoritative, global: withoutCredentials });
 
     const cleared = (await storage.loadConfig()).global;
     expect(cleared.githubToken).toBeUndefined();
+    expect(cleared.anthropicApiKey).toBeUndefined();
     expect(cleared.cursorApiKey).toBeUndefined();
   });
 

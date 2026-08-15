@@ -5,7 +5,7 @@ import { parseAgentTestArguments, parseDevArguments } from "./arguments.js";
 describe("development CLI arguments", () => {
   test("enables every supported provider for agent testing by default", () => {
     expect(parseAgentTestArguments(["--fixture"]).credentialSources)
-      .toEqual(["claude", "codex", "opencode"]);
+      .toEqual(["claude", "codex", "cursor", "grok", "opencode"]);
   });
 
   test("keeps ordinary development credential-free by default", () => {
@@ -17,6 +17,10 @@ describe("development CLI arguments", () => {
       "--credential-source", "codex",
       "--credential-source", "codex",
     ]).credentialSources).toEqual(["codex"]);
+    expect(parseAgentTestArguments([
+      "--credential-source", "cursor",
+      "--credential-source", "grok",
+    ]).credentialSources).toEqual(["cursor", "grok"]);
   });
 
   test("supports an explicitly credential-free agent-test profile", () => {

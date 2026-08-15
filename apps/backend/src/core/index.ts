@@ -64,7 +64,7 @@ export class OrkestratorBackend {
     worktreeDir?: string;
     dockerImage?: string;
     strictDockerOwner?: boolean;
-    credentialSources?: Array<"claude" | "codex" | "opencode">;
+    credentialSources?: import("@orkestrator/protocol/agent-platforms").AgentPlatform[];
     emit: BackendEmit;
     startupReapers?: {
       localServers?: typeof reapOrphanedLocalServers;

@@ -1592,6 +1592,8 @@ describe("Electron backend command registry", () => {
           version: "1.0.0",
           global: {
             githubTokenConfigured: true,
+            anthropicApiKeyConfigured: false,
+            anthropicApiKeySource: "none",
             cursorApiKeyConfigured: true,
             cursorApiKeySource: "config",
           },
@@ -16949,7 +16951,7 @@ exit 0
     });
     const { context } = createContext(environment);
     context.runtimeFlavor = "agent-test";
-    context.credentialSources = new Set(["claude", "codex", "opencode"]);
+    context.credentialSources = new Set(["claude", "codex", "cursor", "grok", "opencode"]);
     const commands = createCommandRegistry();
     const saved = {
       CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
@@ -16958,6 +16960,7 @@ exit 0
       XDG_DATA_HOME: process.env.XDG_DATA_HOME,
       XDG_STATE_HOME: process.env.XDG_STATE_HOME,
       ORKESTRATOR_AGENT_TEST_HOST_HOME: process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME,
+      CURSOR_API_KEY: process.env.CURSOR_API_KEY,
     };
 
     try {
@@ -16982,6 +16985,9 @@ exit 0
           path.join(xdgDataHome, "opencode"),
           path.join(xdgStateHome, "opencode"),
           hostHome,
+          path.join(hostHome, ".cursor"),
+          path.join(hostHome, ".grok"),
+          path.join(hostHome, ".config", "grok"),
           // Decoys: the developer's real agent homes, which `withFakeDocker`
           // points $HOME at. An agent-test container must never mount these.
           path.join(home, ".claude"),
@@ -16990,6 +16996,7 @@ exit 0
         ]) await fs.mkdir(directory, { recursive: true });
         await fs.writeFile(path.join(hostHome, ".claude.json"), "{}");
         await fs.writeFile(path.join(home, ".claude.json"), "{}");
+        await fs.writeFile(path.join(xdgStateHome, "opencode", "model.json"), "{}");
 
         process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
         process.env.CODEX_HOME = codexHome;
@@ -16997,6 +17004,7 @@ exit 0
         process.env.XDG_DATA_HOME = xdgDataHome;
         process.env.XDG_STATE_HOME = xdgStateHome;
         process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
+        process.env.CURSOR_API_KEY = "agent-test-cursor-key";
 
         await commands.get("provision_environment")?.(
           { environmentId: environment.id },
@@ -17008,7 +17016,14 @@ exit 0
         expect(log).toContain(`-v ${codexHome}:/codex-home:ro`);
         expect(log).toContain(`-v ${path.join(xdgConfigHome, "opencode")}:/opencode-config:ro`);
         expect(log).toContain(`-v ${path.join(xdgDataHome, "opencode")}:/opencode-data:ro`);
-        expect(log).toContain(`-v ${path.join(xdgStateHome, "opencode")}:/opencode-state:ro`);
+        expect(log).toContain(
+          `-v ${path.join(xdgStateHome, "opencode", "model.json")}:/opencode-state/model.json:ro`,
+        );
+        expect(log).toContain(`-v ${path.join(hostHome, ".cursor")}:/cursor-config:ro`);
+        expect(log).toContain(`-v ${path.join(hostHome, ".grok")}:/grok-home:ro`);
+        expect(log).toContain(`-v ${path.join(hostHome, ".config", "grok")}:/grok-config:ro`);
+        expect(log).toContain("-e CURSOR_API_KEY");
+        expect(log).not.toContain("agent-test-cursor-key");
         // `.claude.json` has no CLAUDE_CONFIG_DIR equivalent, so it is the one
         // path resolved against the recorded host home rather than an env var.
         expect(log).toContain(`-v ${path.join(hostHome, ".claude.json")}:/claude-config.json:ro`);
@@ -17017,9 +17032,7 @@ exit 0
         expect(log).not.toContain(`${path.join(home, ".codex")}:`);
         expect(log).not.toContain(`${path.join(home, ".config", "opencode")}:`);
         expect(log).not.toContain(`${path.join(home, ".claude.json")}:`);
-        // Cursor, Grok, and the host gitconfig have no allow-list entry at all.
-        expect(log).not.toContain("/cursor-config");
-        expect(log).not.toContain("/grok-config");
+        // The developer's actual HOME and gitconfig remain outside the profile.
         expect(log).not.toContain("/tmp/gitconfig");
       });
     } finally {
@@ -17568,6 +17581,7 @@ describe("storage-backed command delegation", () => {
       global: {
         allowedDomains: [] as string[],
         githubToken: "github_secret_token",
+        anthropicApiKey: "anthropic_secret_key",
         cursorApiKey: "cursor_secret_key",
       },
       repositories: {} as Record<string, RepositoryConfig>,
@@ -17591,6 +17605,7 @@ describe("storage-backed command delegation", () => {
               global: {
                 ...value.global,
                 githubToken: config.global.githubToken,
+                anthropicApiKey: config.global.anthropicApiKey,
                 cursorApiKey: config.global.cursorApiKey,
               },
             }
@@ -17606,6 +17621,7 @@ describe("storage-backed command delegation", () => {
             ? {
                 ...value,
                 githubToken: config.global.githubToken,
+                anthropicApiKey: config.global.anthropicApiKey,
                 cursorApiKey: config.global.cursorApiKey,
               }
             : value,
@@ -17632,6 +17648,14 @@ describe("storage-backed command delegation", () => {
         config = {
           ...config,
           global: apiKey === null ? global : { ...global, cursorApiKey: apiKey },
+        };
+        return config;
+      }),
+      setAnthropicApiKey: mock(async (apiKey: string | null) => {
+        const { anthropicApiKey: _removed, ...global } = config.global;
+        config = {
+          ...config,
+          global: apiKey === null ? global : { ...global, anthropicApiKey: apiKey },
         };
         return config;
       }),
@@ -17679,6 +17703,8 @@ describe("storage-backed command delegation", () => {
       global: {
         allowedDomains: [],
         githubTokenConfigured: true,
+        anthropicApiKeyConfigured: true,
+        anthropicApiKeySource: "config",
         cursorApiKeyConfigured: true,
         cursorApiKeySource: "config",
       },
@@ -17687,6 +17713,8 @@ describe("storage-backed command delegation", () => {
     await expect(commands.get("get_global_config")?.({}, context)).resolves.toEqual({
       allowedDomains: [],
       githubTokenConfigured: true,
+      anthropicApiKeyConfigured: true,
+      anthropicApiKeySource: "config",
       cursorApiKeyConfigured: true,
       cursorApiKeySource: "config",
     });
@@ -17698,6 +17726,9 @@ describe("storage-backed command delegation", () => {
           allowedDomains: ["api.example.com"],
           githubToken: "renderer_attempted_secret",
           githubTokenConfigured: false,
+          anthropicApiKey: "renderer_attempted_anthropic_secret",
+          anthropicApiKeyConfigured: false,
+          anthropicApiKeySource: "none",
           cursorApiKey: "renderer_attempted_cursor_secret",
           cursorApiKeyConfigured: false,
           cursorApiKeySource: "none",
@@ -17718,6 +17749,9 @@ describe("storage-backed command delegation", () => {
         allowedDomains: ["github.com"],
         githubToken: "renderer_attempted_secret",
         githubTokenConfigured: false,
+        anthropicApiKey: "renderer_attempted_anthropic_secret",
+        anthropicApiKeyConfigured: false,
+        anthropicApiKeySource: "none",
         cursorApiKey: "renderer_attempted_cursor_secret",
         cursorApiKeyConfigured: false,
         cursorApiKeySource: "none",
@@ -17727,6 +17761,8 @@ describe("storage-backed command delegation", () => {
       global: {
         allowedDomains: ["github.com"],
         githubTokenConfigured: true,
+        anthropicApiKeyConfigured: true,
+        anthropicApiKeySource: "config",
         cursorApiKeyConfigured: true,
         cursorApiKeySource: "config",
       },
@@ -17803,6 +17839,21 @@ describe("storage-backed command delegation", () => {
     expect(storage.setCursorApiKey).toHaveBeenLastCalledWith(null);
     await expect(commands.get("set_cursor_api_key")?.({ apiKey: "   " }, context))
       .rejects.toThrow("Cursor API key cannot be empty");
+
+    await expect(commands.get("set_anthropic_api_key")?.({ apiKey: " replacement_anthropic_key " }, context))
+      .resolves.toMatchObject({
+        global: { anthropicApiKeyConfigured: true, anthropicApiKeySource: "config" },
+      });
+    expect(storage.setAnthropicApiKey).toHaveBeenLastCalledWith("replacement_anthropic_key");
+    expect(JSON.stringify(await commands.get("get_config")?.({}, context)))
+      .not.toContain("replacement_anthropic_key");
+    await expect(commands.get("set_anthropic_api_key")?.({ apiKey: null }, context))
+      .resolves.toMatchObject({
+        global: { anthropicApiKeyConfigured: false },
+      });
+    expect(storage.setAnthropicApiKey).toHaveBeenLastCalledWith(null);
+    await expect(commands.get("set_anthropic_api_key")?.({ apiKey: "   " }, context))
+      .rejects.toThrow("Anthropic API key cannot be empty");
 
     await expect(commands.get("get_repository_config")?.({ projectId: "project-1" }, context))
       .resolves.toEqual(repositoryConfig);

@@ -30,6 +30,14 @@ const mockSetCursorApiKey = mock(async (apiKey: string | null) => ({
   },
   repositories: {},
 }));
+const mockSetAnthropicApiKey = mock(async (apiKey: string | null) => ({
+  version: "1.0",
+  global: {
+    ...useConfigStore.getState().config.global,
+    anthropicApiKeyConfigured: apiKey !== null,
+  },
+  repositories: {},
+}));
 const mockGetLogDirectory = mock(async () => null);
 const mockPropagateGithubCredentialsToContainers = mock(
   async (): Promise<{ updated: string[]; failed: [string, string][] }> => ({
@@ -78,6 +86,7 @@ mock.module("@/lib/backend", () => ({
   updateGlobalConfig: mockUpdateGlobalConfig,
   setGitHubToken: mockSetGitHubToken,
   setCursorApiKey: mockSetCursorApiKey,
+  setAnthropicApiKey: mockSetAnthropicApiKey,
   getLogDirectory: mockGetLogDirectory,
   propagateGithubCredentialsToContainers: mockPropagateGithubCredentialsToContainers,
   getWebClientStatus: mockGetWebClientStatus,
@@ -121,6 +130,7 @@ describe("GlobalSettings", () => {
     mockUpdateGlobalConfig.mockClear();
     mockSetGitHubToken.mockClear();
     mockSetCursorApiKey.mockClear();
+    mockSetAnthropicApiKey.mockClear();
     mockGetLogDirectory.mockClear();
     mockPropagateGithubCredentialsToContainers.mockClear();
     mockPropagateGithubCredentialsToContainers.mockImplementation(async () => ({
@@ -1295,11 +1305,10 @@ describe("GlobalSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {
-      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-        expect.objectContaining({
-          anthropicApiKey: "test-anthropic-key",
-        }),
+      expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty(
+        "anthropicApiKey",
       );
+      expect(mockSetAnthropicApiKey).toHaveBeenCalledWith("test-anthropic-key");
       expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty(
         "cursorApiKey",
       );
@@ -1334,6 +1343,33 @@ describe("GlobalSettings", () => {
 
     await waitFor(() => expect(mockSetCursorApiKey).toHaveBeenCalledWith(null));
     expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty("cursorApiKey");
+  });
+
+  test("treats a configured Anthropic API key as write-only and clears it explicitly", async () => {
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          anthropicApiKeyConfigured: true,
+          anthropicApiKeySource: "config",
+        },
+      },
+    }));
+    render(<GlobalSettings activeSection="claude" />);
+
+    const input = screen.getByPlaceholderText(
+      "API key configured — enter a replacement",
+    ) as HTMLInputElement;
+    expect(input.value).toBe("");
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear stored Anthropic API key" }));
+    expect(screen.getByText("The stored Anthropic API key will be cleared when you save."))
+      .toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockSetAnthropicApiKey).toHaveBeenCalledWith(null));
+    expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty("anthropicApiKey");
   });
 
   test("warns that a Cursor key inherited from the host environment cannot be cleared here", async () => {

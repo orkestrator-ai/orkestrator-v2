@@ -357,6 +357,9 @@ copy_agent_directory_entries() {
     local relative_path="$3"
     # Display name of the calling agent, used only in warnings.
     local label="${4:-Agent}"
+    # Optional exact top-level entry to omit (for example OpenCode's
+    # host-platform node_modules directory).
+    local excluded_entry="${5:-}"
     local source_path="$source_root/$relative_path"
     local destination_path="$destination_root/$relative_path"
     local max_entries="${AGENT_COPY_MAX_DIRECTORY_ENTRIES:-5000}"
@@ -396,6 +399,9 @@ copy_agent_directory_entries() {
             break
         fi
         entry_name="${entry#$source_path/}"
+        if [ -n "$excluded_entry" ] && [ "$entry_name" = "$excluded_entry" ]; then
+            continue
+        fi
         if [ -L "$entry" ]; then
             agent_copy_warn "$relative_path/$entry_name" "Skipping symlinked $label entry"
             continue
@@ -651,8 +657,8 @@ log_progress "Claude Code configuration ready"
 # Set up OpenCode configuration
 # The host's ~/.config/opencode is mounted read-only at /opencode-config
 # The host's ~/.local/share/opencode is mounted read-only at /opencode-data
-# The host's ~/.local/state/opencode is mounted read-only at /opencode-state
-# The host's ~/.local/state/opencode/model.json is mounted read-only at /opencode-model.json
+# Only the host's ~/.local/state/opencode/model.json preference file is mounted
+# read-only at /opencode-state/model.json.
 log_progress "Setting up OpenCode configuration..."
 mkdir -p "$HOME/.config/opencode"
 mkdir -p "$HOME/.local/share/opencode"
@@ -666,12 +672,9 @@ if [ -d /opencode-config ]; then
     # built for the host platform. Mach-O binaries from a macOS host cannot run
     # in this Linux container, exactly as with Codex's plugins/.plugin-appserver.
     # OpenCode reinstalls what it needs for Linux on first use.
-    # find reports a non-zero status when any -exec fails, and `set -e` is active,
-    # so the guard is required. Individual cp errors stay on stderr rather than
-    # being discarded — a partially copied config is worth being able to debug.
-    find /opencode-config -maxdepth 1 -mindepth 1 ! -name node_modules \
-        -exec cp -R {} "$HOME/.config/opencode/" \; ||
-        echo "Warning: Some config files could not be copied from /opencode-config"
+    copy_agent_directory_entries \
+        /opencode-config "$HOME/.config/opencode" "." OpenCode node_modules
+    report_agent_copy_skips OpenCode
     if [ -n "$DEBUG" ]; then
         echo "Copied OpenCode config files:"
         ls -la "$HOME/.config/opencode/"
@@ -709,28 +712,12 @@ if [ -d /opencode-data ]; then
     fi
 fi
 
-if [ -d /opencode-state ]; then
-    if ! cp -r /opencode-state/. "$HOME/.local/state/opencode/" 2>&1; then
-        echo "Warning: Some state files could not be copied from /opencode-state"
-    fi
-    if [ -n "$DEBUG" ]; then
-        echo "Copied OpenCode state files:"
-        ls -la "$HOME/.local/state/opencode/"
-    fi
-fi
-
 # Explicitly inject model.json if available
-# This ensures model selection is present even if the broader state copy is partial
-if [ -f /opencode-model.json ]; then
-    if ! cp /opencode-model.json "$HOME/.local/state/opencode/model.json" 2>/dev/null; then
-        echo "Warning: Failed to copy OpenCode model.json from /opencode-model.json"
-    else
-        chmod 600 "$HOME/.local/state/opencode/model.json" 2>/dev/null || true
-        if [ -n "$DEBUG" ]; then
-            echo "Injected OpenCode model.json"
-        fi
-    fi
-fi
+# Prompt history, frecency, locks, and arbitrary state are not portable inputs.
+# model.json is the one preference file a fresh container needs.
+copy_agent_file /opencode-state "$HOME/.local/state/opencode" "model.json" OpenCode
+chmod 600 "$HOME/.local/state/opencode/model.json" 2>/dev/null || true
+report_agent_copy_skips OpenCode
 
 log_progress "OpenCode configuration ready"
 
@@ -820,7 +807,8 @@ if [ -d /grok-home ]; then
         auth.json \
         config.toml \
         trusted_folders.toml \
-        agent_id
+        agent_id \
+        models_cache.json
     do
         copy_agent_file /grok-home "$HOME/.grok" "$file" Grok
     done

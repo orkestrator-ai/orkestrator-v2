@@ -24,21 +24,21 @@ The second start is idempotent and reports the already-running launcher. Wait fo
 `testProject`, `electronTitle`, and `logDir`. The manifest names the mode-0600
 gateway auth file but never includes its token.
 
-Agent-test profiles use the host's active Claude, Codex, and OpenCode logins by
-default so manual QA can run real agents:
+Agent-test profiles authorize the host's Claude, Codex, Cursor, Grok, and
+OpenCode credentials by default so manual QA can run real agents:
 
-See [`../credentials-and-models.md`](../credentials-and-models.md) for the full
+See [`../todo/credentials-and-models.md`](../todo/credentials-and-models.md) for the full
 per-platform credential, container-import, and model-cache matrix.
 
 ```bash
 bun run dev:test -- --profile live-agents --fixture
 ```
 
-To narrow the profile to one provider, pass `--credential-source codex` (or
-`claude`/`opencode`). To test the signed-out experience, pass
-`--no-agent-credentials`. GitHub, Cursor, Grok, and unrelated ambient API
-credentials remain disabled. Live agent requests can incur external effects or
-cost, so use only the seeded fixture and do not put credentials in test output.
+To narrow the profile to one provider, pass `--credential-source codex` (or any
+other agent platform). To test the signed-out experience, pass
+`--no-agent-credentials`. GitHub and unrelated ambient API credentials remain
+disabled. Live agent requests can incur external effects or cost, so use only
+the seeded fixture and do not put credentials in test output.
 
 Startup fills missing profile caches from available, bounded model metadata:
 `agent-model-catalog.json`, `opencode-model-catalog.json`, Codex
@@ -48,7 +48,8 @@ shared `agent-model-catalog.json`; Cursor has no separate portable model-cache
 file. This makes model pickers representative even in a deliberately
 credential-free run. Existing profile caches are preserved across restarts, and
 the seeding does not copy projects, sessions, prompts, settings, or additional
-credentials.
+credentials. Grok's explicitly authorized local login is the sole exception: a
+bounded owner-only `auth.json` snapshot is refreshed into the isolated home.
 
 To create and start fixture environments during seeding:
 

@@ -201,9 +201,9 @@ describe("container runtime environment wiring", () => {
   test("Cursor and Grok host state mounts do not replace their writable container homes", () => {
     const backend = read("apps/backend/src/core/commands.ts");
 
-    expect(backend).toContain('path.join(home, ".cursor"), "/cursor-config"');
-    expect(backend).toContain('path.join(home, ".grok"), "/grok-home"');
-    expect(backend).toContain('path.join(home, ".config", "grok"), "/grok-config"');
+    expect(backend).toContain('path.join(cursorHome, ".cursor"), "/cursor-config"');
+    expect(backend).toContain('path.join(grokHome, ".grok"), "/grok-home"');
+    expect(backend).toContain('path.join(grokHome, ".config", "grok"), "/grok-config"');
     expect(backend).not.toContain('path.join(home, ".cursor"), "/home/node/.cursor"');
     expect(backend).not.toContain('path.join(home, ".grok"), "/home/node/.grok"');
   });
@@ -535,7 +535,8 @@ eval "$block"
     // dependencies built for the host platform; Mach-O binaries from a macOS
     // host cannot run in the Linux container.
     expect(entrypoint).not.toContain("cp -r /opencode-config/.");
-    expect(entrypoint).toContain("! -name node_modules");
+    expect(entrypoint).toContain("OpenCode node_modules");
+    expect(entrypoint).toContain('local excluded_entry="${5:-}"');
   });
 
   test("OpenCode config copy merges user-authored entries and drops node_modules", () => {
@@ -550,18 +551,14 @@ eval "$block"
       writeFileSync(join(source, "plugin", "custom.ts"), "export default {}\n");
       writeFileSync(join(source, "node_modules", "some-dep", "binary.node"), "mach-o\n");
 
-      // Extract the real command rather than restating it, so a future edit to
-      // the entrypoint cannot drift away from what this asserts.
-      const entrypointPath = join(repoRoot, "docker", "entrypoint.sh");
-      const harness = `
-set -e
-copy="$(sed -n '/^    find \\/opencode-config /,/^        echo "Warning: Some config files could not be copied/p' ${shellQuote(entrypointPath)} | sed "s#/opencode-config#\\$AGENT_TEST_SOURCE#g; s#\\"\\$HOME/.config/opencode/\\"#\\"\\$AGENT_TEST_DESTINATION/\\"#g")"
-[ -n "$copy" ] || { echo "harness failed to extract the copy command"; exit 9; }
-eval "$copy"
+      const harness = agentCopyHelperHarness(`
+copy_agent_directory_entries \
+    "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" "." OpenCode node_modules
 # Re-running is the container-restart path: the entrypoint runs on every start.
-eval "$copy"
+copy_agent_directory_entries \
+    "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" "." OpenCode node_modules
 printf 'continued'
-`;
+`);
 
       const result = runShell(harness, {
         PATH: process.env.PATH ?? "/usr/bin:/bin",

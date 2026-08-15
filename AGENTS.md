@@ -413,9 +413,10 @@ The detailed operational reference is
   reuse a profile owned by another agent or workspace.
 - Always pass `--fixture` for UI workflows that need a project. Use only the
   returned `testProject`; never add this Orkestrator checkout as a project.
-- Agent-test profiles inherit the host login for Claude, Codex, and OpenCode by
-  default so live agent paths can be tested. This is authorized for this
-  repository's isolated `dev:test` profiles. Use `--credential-source <name>`
+- Agent-test profiles authorize the host credentials for Claude, Codex, Cursor,
+  Grok, and OpenCode by default so live agent paths can be tested. This is
+  authorized for this repository's isolated `dev:test` profiles. Use
+  `--credential-source <name>`
   to narrow a run to one provider, or `--no-agent-credentials` only when the
   scenario specifically requires a credential-free state. Credentials permit
   real external requests, so keep prompts and mutations scoped to the seeded

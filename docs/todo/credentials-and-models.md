@@ -40,12 +40,14 @@ but it cannot make a signed-out provider capable of running a request.
 | Claude | macOS Keychain or `~/.claude/.credentials.json`; optional `ANTHROPIC_API_KEY` | Host OAuth synchronized over stdin; optional `ANTHROPIC_API_KEY` | Shared cache plus per-environment snapshot | No additional portable model cache used here | Enabled |
 | Codex | `CODEX_HOME`/`~/.codex/auth.json`; optional `OPENAI_API_KEY` | Read-only Codex home import | Shared cache | `models_cache.json` and bridge `models-cache.json` | Enabled |
 | OpenCode | XDG config/data state; optional `OPENCODE_API_KEY` | Read-only XDG imports copied into the container | Project-scoped cache | Provider state and `model.json` preferences | Enabled |
-| Cursor | Host login where supported; stored or ambient `CURSOR_API_KEY` | `CURSOR_API_KEY`; host macOS login is not portable to Linux | Shared cache | No separate portable model catalogue found or used | Not explicitly enabled |
-| Grok | `~/.grok` and `~/.config/grok` | Bounded import of Grok auth/config | Shared cache | `~/.grok/models_cache.json` | Not explicitly enabled |
+| Cursor | Host login where supported; stored or ambient `CURSOR_API_KEY` | `CURSOR_API_KEY`; host macOS login is not portable to Linux | Shared cache | No separate portable model catalogue found or used | Enabled |
+| Grok | `~/.grok` and `~/.config/grok` | Bounded import of Grok auth/config | Shared cache | `~/.grok/models_cache.json` | Enabled via an isolated auth snapshot |
 
-An isolated profile's default enabled-platform selection is still the legacy
-set: Claude, Codex, and OpenCode. Cursor and Grok must be enabled in that
-profile's settings before their UI paths and managed toolchains are available.
+Credential authorization and UI platform selection are separate. Agent-test
+profiles authorize all five credential sources by default, while the initial
+enabled-platform setting remains the legacy Claude/Codex/OpenCode set. Cursor
+and Grok must still be enabled in profile settings before their UI paths and
+managed toolchains are available.
 
 ## Application-level catalogue storage
 
@@ -91,7 +93,8 @@ For local environments, Claude uses the backend process's Claude configuration
 and environment. On macOS, the primary OAuth credential normally resides in the
 login Keychain. Linux can use `~/.claude/.credentials.json`. An
 `ANTHROPIC_API_KEY` may also come from the process environment or the stored
-global `anthropicApiKey` setting, depending on the launch path.
+global setting. The stored value wins, and local/container launch paths use the
+same resolver.
 
 For containers:
 
@@ -108,9 +111,11 @@ For containers:
    stale container state.
 
 The OAuth payload is not placed in Docker command arguments or long-lived
-container environment variables. A configured `ANTHROPIC_API_KEY`, however,
-is forwarded as a container environment variable. `useHostClaudeCredentials`
-can disable host OAuth propagation into normal containers.
+container environment variables. An effective `ANTHROPIC_API_KEY`, however,
+is forwarded as a container environment variable. Like Cursor's key, it is
+write-only to the renderer: settings reads expose only configured/effective
+source metadata. `useHostClaudeCredentials` can disable host OAuth propagation
+into normal containers.
 
 #### Models
 
@@ -167,12 +172,12 @@ For local environments, OpenCode uses its XDG locations:
 
 `OPENCODE_API_KEY` can also be inherited from the host process.
 
-For containers, the three host directories are mounted read-only. The
-entrypoint copies configuration without host `node_modules`, copies a bounded
-allowlist from the data directory including `auth.json` and `account.json`, and
-copies provider state into writable container paths. The host session database
-is deliberately excluded from the data-directory allowlist. `model.json` is
-copied explicitly as preference state.
+For containers, configuration and data directories are mounted read-only, while
+the state mount exposes only `model.json`. Every imported entry goes through the
+shared bounded, symlink-safe copy helpers. Configuration excludes host
+`node_modules`; data includes the bounded `auth.json`, `account.json`, storage,
+and snapshot allowlist. The host session database, prompt history, frecency,
+locks, and other mutable state are not imported.
 
 #### Models
 
@@ -230,7 +235,8 @@ For local environments, Grok uses its normal host state under `~/.grok` and
 For normal containers, both host directories are mounted read-only and copied
 into writable container state using bounded, symlink-safe helpers. The primary
 allowlist includes `auth.json`, `config.toml`, `trusted_folders.toml`,
-`agent_id`, hooks, and skills. Runtime session databases, logs, and other
+`agent_id`, `models_cache.json`, hooks, and skills. Runtime session databases,
+logs, and other
 mutable host state are not imported.
 
 #### Models
@@ -240,10 +246,9 @@ normalizes that data and persists it in the Grok entry of
 `agent-model-catalog.json`.
 
 Grok also owns `~/.grok/models_cache.json`. Agent-test startup copies that file
-into the isolated local home. The normal Docker entrypoint does not currently
-include `models_cache.json` in its Grok allowlist, so a container depends on the
-shared Orkestrator catalogue for its picker and on live Grok discovery after
-startup.
+into the isolated local home, and the Docker entrypoint includes it in the same
+bounded allowlist. Containers therefore have both the shared Orkestrator warm
+start and Grok's native cache before live discovery completes.
 
 ## Agent-test credential policy
 
@@ -254,33 +259,34 @@ credential locations from the backend environment.
 
 ### Defaults and command-line controls
 
-Agent-test startup currently enables these real host credential sources by
-default:
+Agent-test startup enables all provider credential sources by default:
 
 - Claude
 - Codex
+- Cursor
+- Grok
 - OpenCode
 
-Use `--credential-source <name>` to narrow a profile to one of those providers.
+Use `--credential-source <name>` to narrow a profile to any one of those providers.
 Use `--no-agent-credentials` for a deliberately signed-out profile. The two
 forms cannot be combined.
 
-Cursor and Grok are not accepted values for `--credential-source`. Their model
-catalogues can still be present from cache, but agent-test mode does not
-explicitly grant their credential files or API-key environment variables.
-
 ### What “enabled” means
 
-For an enabled source, local agent processes receive references to the real host
-provider state rather than a copied credential snapshot:
+For an enabled source, local agent processes receive only the provider-specific
+host state below. Grok uses a snapshot because its CLI cannot isolate its home
+from the rest of `HOME`:
 
 | Platform | Agent-test host state exposed |
 | --- | --- |
 | Claude | Host `CLAUDE_CONFIG_DIR`/`~/.claude` and `ANTHROPIC_API_KEY` when inherited |
 | Codex | Host `CODEX_HOME`/`~/.codex` and `OPENAI_API_KEY` when inherited |
+| Cursor | `CURSOR_API_KEY` when inherited; host Cursor configuration is mounted read-only for containers |
+| Grok | Owner-only snapshot of host `~/.grok/auth.json` for local runs; bounded read-only host imports for containers |
 | OpenCode | Host XDG config/data/state directories and `OPENCODE_API_KEY` when inherited |
 
-This makes real local agent calls work, but it also means a local provider can
+For Claude, Codex, and OpenCode this makes real local agent calls work, but it
+also means a local provider can
 write provider-owned state such as refreshed credentials, preferences, caches,
 or session records back into the real host provider directory. Application
 projects, Orkestrator sessions, and Orkestrator configuration remain isolated.
@@ -289,24 +295,21 @@ For a container test environment, those host provider directories are mounted
 read-only and copied into writable container state using the normal production
 allowlists. Claude's Keychain credential is synchronized separately over stdin.
 
-When credentials are disabled, Claude/Codex/OpenCode paths point into empty
-profile-owned directories instead. This prevents ambient provider logins from
-being discovered while still allowing model metadata to be seeded separately.
+When credentials are disabled, provider paths point into empty profile-owned
+directories, Cursor's inherited key is removed, and no Grok auth is copied.
+This prevents ambient provider logins from being discovered while still
+allowing model metadata to be seeded separately.
 
-### Cursor and Grok in agent-test profiles
+Cursor and Grok follow the same explicit authorization gate as the other
+providers. A narrowed or credential-free profile removes `CURSOR_API_KEY`, does
+not mount their host directories, and does not copy Grok auth. The isolated
+Orkestrator config still does not inherit the production stored Cursor key.
 
-- Ambient `CURSOR_API_KEY` is removed from the backend environment.
-- The isolated Orkestrator config does not inherit the production stored Cursor
-  API key.
-- Agent-test containers do not mount Cursor or Grok host configuration, and the
-  container creation path deliberately withholds the Cursor API key.
-- Grok's host `auth.json` is not copied into the isolated test home.
-- A local Cursor binary on macOS may independently consult Keychain, but this is
-  not an explicit or selectable agent-test credential grant and should not be
-  relied upon for deterministic tests.
-
-Consequently, cached Cursor/Grok models can appear in pickers while a live
-Cursor/Grok request is still signed out.
+Grok is the deliberate local-path exception: its CLI has no documented
+provider-home override, so pointing its process at the host `HOME` would also
+expose unrelated credentials. Startup instead copies only `auth.json` through a
+bounded, no-final-symlink, stable-descriptor path into the isolated home. It is
+refreshed from the host on each profile start and installed mode `0600`.
 
 ## Agent-test model-cache seeding
 
@@ -330,8 +333,9 @@ replacement and with mode `0600`. Missing, unreadable, oversized, changing, or
 failed optional copies do not prevent profile startup. Normal storage and bridge
 parsers still validate the copied content before using it.
 
-The seeding copies model metadata only. It does not copy Orkestrator projects,
-environments, sessions, prompts, configuration, or extra credential files.
+The cache seeding copies model metadata only. The separately gated Grok auth
+snapshot copies exactly `auth.json`; neither path copies Orkestrator projects,
+environments, sessions, prompts, or general provider configuration.
 
 One limitation is that OpenCode snapshots remain keyed by their production
 project IDs. A newly seeded fixture has a new project ID, so the copied
@@ -359,40 +363,42 @@ gateway token does not enter browser history or persistent browser state.
   manifests, test reports, screenshots, or artifacts.
 - Docker credential delivery uses read-only mounts or stdin where practical.
 - Allowlisted container copies are bounded and reject symlinked
-  sources/destinations. OpenCode's broader state-directory copy is a current
-  exception.
-- Claude and Cursor stdin-delivered secrets are written owner-only and are
-  redacted from command diagnostics.
-- The renderer receives only Cursor credential presence/source, not the stored
-  Cursor key. The configured Anthropic API key is currently part of the global
-  settings payload so the settings UI can edit it.
+  sources/destinations. OpenCode imports only its allowlisted configuration and
+  exact model-preference file rather than copying the full state directory.
+- Claude OAuth and Cursor bridge credentials synchronized over stdin are written
+  owner-only and redacted from command diagnostics. API-key environment values
+  are likewise redacted wherever container commands are reported.
+- The renderer receives only credential presence/source for stored Anthropic
+  and Cursor API keys, never either stored value. Replacement and clearing use
+  dedicated write-only commands, and ordinary config writes preserve both.
 - Model catalogue corruption is non-fatal: consumers reject invalid entries and
   retain live, last-known-good, or bundled fallback data as available.
 - Resetting an agent-test profile deletes only its isolated state. It does not
   remove or roll back changes a live local provider already wrote into its real
   host provider directory.
 
-## Current asymmetries and follow-up considerations
+## Remaining intentional constraints and follow-up considerations
 
-1. **Cursor and Grok credentials are not first-class agent-test sources.** Their
-   catalogues are seeded, but `--credential-source` cannot authorize their live
-   credentials.
-2. **Allowed local provider homes are shared with the host.** This enables real
-   Claude/Codex/OpenCode testing, but local test sessions can add or update
-   provider-owned host state.
-3. **OpenCode cache seeding is project-scoped.** Production project IDs do not
-   automatically map to a new fixture project.
-4. **Grok's container allowlist omits its native model cache.** Local agent-test
-   profiles receive it, while containers rely on the application cache and live
-   discovery.
-5. **Credential presentation differs by provider.** Cursor's stored key is
-   write-only to the renderer; the Anthropic API key is editable as part of the
-   ordinary global settings payload; the other providers primarily rely on
-   provider-owned files or environment variables.
-6. **OpenCode state import is broader than the other container imports.** Its
-   config and data handling have exclusions and allowlists, but the mounted
-   OpenCode state directory is still copied recursively rather than through the
-   bounded per-entry helpers.
+1. **Allowed local provider homes are usually shared with the host.** This
+   enables real Claude/Codex/OpenCode testing, but local test sessions can add
+   or update provider-owned host state. Grok avoids this through its isolated
+   auth snapshot; changing the other providers requires provider-specific
+   writable overlays or supported home splits.
+2. **OpenCode cache seeding is project-scoped.** Production project IDs do not
+   automatically map to a new fixture project. Falling back to another
+   project's catalogue would incorrectly expose models added by that project's
+   `opencode.json`, so a live fixture discovery remains the safe path.
+3. **Credential mechanisms remain provider-native where possible.** Claude and
+   Cursor expose optional write-only API-key overrides because those are needed
+   for headless/container paths. Codex, OpenCode, and Grok continue to use their
+   own login state rather than accumulating duplicate secrets in Orkestrator.
+4. **A fully deterministic signed-out Cursor run is platform-limited.** The
+   agent-test gate removes inherited Cursor keys and withholds the host Cursor
+   configuration when Cursor is not authorized, but a local macOS Cursor binary
+   may independently consult its login Keychain. Cursor does not expose a
+   portable provider-home override comparable to the paths used by the other
+   agents; container runs remain deterministic because that Keychain is not
+   available inside Linux.
 
 These are descriptions of current behavior, not assumptions that a visible
 cached model implies a usable credential.

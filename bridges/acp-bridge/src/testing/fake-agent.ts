@@ -113,6 +113,34 @@ function write(value: JsonObject): void {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
+const holdTurnFile = process.env.FAKE_ACP_HOLD_TURN_FILE;
+
+/**
+ * Runs `release` once the test creates `FAKE_ACP_HOLD_TURN_FILE`, or straight
+ * away when no hold file is configured.
+ *
+ * Tests that need a turn to still be running while the bridge does detached
+ * work must not pick a duration for it: that work spawns a child, initializes
+ * it and loads a session, which is exactly the kind of thing a loaded CI host
+ * makes slower than any timer a test would guess. The deadline is only a
+ * backstop so a failing test cannot leave the process hanging.
+ */
+function whenReleased(release: () => void): void {
+  if (!holdTurnFile) {
+    release();
+    return;
+  }
+  const deadline = Date.now() + 30_000;
+  const poll = (): void => {
+    if (existsSync(holdTurnFile) || Date.now() > deadline) {
+      release();
+      return;
+    }
+    setTimeout(poll, 20);
+  };
+  poll();
+}
+
 lines.on("line", (line) => {
   const message = JSON.parse(line) as JsonObject;
   if (message.method === "initialize" && typeof message.id === "number") {
@@ -363,6 +391,44 @@ lines.on("line", (line) => {
         status: "completed",
         rawOutput: { content: "package contents" },
       });
+    }
+    // Cursor's index only holds calls that have settled, so this replay grows
+    // as the turn progresses: the read still in flight appears only once the
+    // hold file releases it. Replayed in completion order, which is the
+    // reverse of the launch order the live transcript carries.
+    if (process.env.FAKE_ACP_REPLAY_CURSOR_PARALLEL_READS === "1") {
+      const settled = [
+        {
+          id: "replay-read-2",
+          title: "Read second.json (1 - 20)",
+          path: "/workspace/second.json",
+          content: "second contents",
+        },
+        ...(holdTurnFile && !existsSync(holdTurnFile)
+          ? []
+          : [{
+              id: "replay-read-1",
+              title: "Read first.json (1 - 40)",
+              path: "/workspace/first.json",
+              content: "first contents",
+            }]),
+      ];
+      for (const entry of settled) {
+        replay({
+          sessionUpdate: "tool_call",
+          toolCallId: entry.id,
+          title: entry.title,
+          kind: "read",
+          status: "pending",
+          rawInput: { path: entry.path },
+        });
+        replay({
+          sessionUpdate: "tool_call_update",
+          toolCallId: entry.id,
+          status: "completed",
+          rawOutput: { content: entry.content },
+        });
+      }
     }
     // The same first turn as above, preceded by tool calls from turns the live
     // transcript has already enriched or never held. Exercises the collector's
@@ -1980,6 +2046,96 @@ lines.on("line", (line) => {
       });
       return;
     }
+    // Two same-kind reads launched together, only the second of which settles
+    // while the turn keeps running. Cursor indexes a call when it settles, so
+    // `FAKE_ACP_REPLAY_CURSOR_PARALLEL_READS` withholds the first read's
+    // metadata until this prompt is released — the state in which an
+    // unsettled, still-generic part could otherwise claim its sibling's entry.
+    if (prompt.startsWith("CURSOR_GENERIC_TOOLS_PENDING_SIBLING")) {
+      for (const update of [
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-read-1",
+          title: "Read File",
+          kind: "read",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-read-2",
+          title: "Read File",
+          kind: "read",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "live-read-2",
+          status: "completed",
+          rawOutput: { content: "second contents" },
+        },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: "fake-session", update },
+        });
+      }
+      whenReleased(() => {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "live-read-1",
+              status: "completed",
+              rawOutput: { content: "first contents" },
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          id: message.id as number,
+          result: { stopReason: "end_turn" },
+        });
+      });
+      return;
+    }
+    // A generic call settles — arming a live pass — and then the turn itself
+    // fails, so no final pass will ever run to consume that armed timer.
+    if (prompt.startsWith("CURSOR_GENERIC_TOOLS_FAIL")) {
+      for (const update of [
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-read-1",
+          title: "Read File",
+          kind: "read",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "live-read-1",
+          status: "completed",
+          rawOutput: { content: "package contents" },
+        },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: "fake-session", update },
+        });
+      }
+      write({
+        jsonrpc: "2.0",
+        id: message.id as number,
+        error: { code: -32603, message: "fake turn failure" },
+      });
+      return;
+    }
     if (prompt.startsWith("CURSOR_GENERIC_TOOLS")) {
       for (const update of [
         {
@@ -2028,7 +2184,16 @@ lines.on("line", (line) => {
           },
         },
       });
-      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      const finish = () => write({
+        jsonrpc: "2.0",
+        id: message.id as number,
+        result: { stopReason: "end_turn" },
+      });
+      // Keep the authoritative turn running until the test releases it, so a
+      // detached replay can prove it enriched completed calls *before* the
+      // final response rather than racing it.
+      if (prompt.startsWith("CURSOR_GENERIC_TOOLS_RUNNING")) whenReleased(finish);
+      else finish();
       return;
     }
     // A second turn's worth of generic Cursor tool calls, distinguishable from

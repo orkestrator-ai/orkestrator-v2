@@ -3422,6 +3422,18 @@ export function evictIdleHydratedTranscripts(now: number = Date.now()): string[]
       skip("background-task-candidates");
       continue;
     }
+    // A released turn waiting for the continuation a background task triggers
+    // is idle by `status`, owns no abort controller and — once the level signal
+    // has cleared its tasks — no live task either. Evicting its transcript here
+    // would drop the messages the continuation is about to be appended to.
+    if (session.retainedQueryControls && session.retainedQueryControls.size > 0) {
+      skip("retained-query-controls");
+      continue;
+    }
+    if (session.settlingBackgroundTasks && session.settlingBackgroundTasks.size > 0) {
+      skip("settling-background-tasks");
+      continue;
+    }
     if (
       Object.values(session.backgroundTasks ?? {}).some(
         (task) =>
@@ -3942,6 +3954,74 @@ function boundBackgroundTaskHistory(
   );
 }
 
+/**
+ * Tasks that may be awaiting a terminal edge at once.
+ *
+ * Each entry is one short snapshot held only for the gap between the level
+ * signal and the edge — normally microseconds, at most one watchdog window.
+ * Past the bound the snapshot is simply not parked: the edge then lands the
+ * task with provider-supplied metadata instead of the original description,
+ * which is a cosmetic loss rather than a lost continuation.
+ */
+export const MAX_SETTLING_BACKGROUND_TASKS = 128;
+
+/**
+ * Hold a dropped task's metadata until its `task_notification` explains it.
+ *
+ * The caller has already removed the task from the live set; this only keeps
+ * what the edge cannot reconstruct (description, `startedAt`, `toolUseId`).
+ */
+function parkSettlingBackgroundTask(
+  session: SessionState,
+  task: BackgroundTaskSnapshot,
+  owner: NonNullable<SessionState["queryControl"]>,
+): void {
+  const settling = (session.settlingBackgroundTasks ??= new Map());
+  if (!settling.has(task.id) && settling.size >= MAX_SETTLING_BACKGROUND_TASKS) {
+    console.warn(
+      "[session-manager] Ignoring a settling task past the bound:",
+      { sessionId: session.id, bound: MAX_SETTLING_BACKGROUND_TASKS },
+    );
+    return;
+  }
+  settling.set(task.id, { task, owner });
+}
+
+function takeSettlingBackgroundTask(
+  session: SessionState,
+  taskId: string,
+): { task: BackgroundTaskSnapshot; owner: NonNullable<SessionState["queryControl"]> }
+  | undefined
+{
+  const parked = session.settlingBackgroundTasks?.get(taskId);
+  if (!parked) return undefined;
+  session.settlingBackgroundTasks!.delete(taskId);
+  if (session.settlingBackgroundTasks!.size === 0) {
+    session.settlingBackgroundTasks = undefined;
+  }
+  return parked;
+}
+
+/**
+ * Drop every parked snapshot belonging to `owner`.
+ *
+ * Called when that control can no longer deliver an edge — the watchdog
+ * expired, or the query ended. The tasks are already absent from the live set,
+ * so this only releases the retained metadata.
+ */
+function forgetSettlingBackgroundTasksOwnedBy(
+  session: SessionState,
+  owner: NonNullable<SessionState["queryControl"]> | undefined,
+): void {
+  if (!owner || !session.settlingBackgroundTasks) return;
+  for (const [taskId, parked] of session.settlingBackgroundTasks) {
+    if (parked.owner === owner) session.settlingBackgroundTasks.delete(taskId);
+  }
+  if (session.settlingBackgroundTasks.size === 0) {
+    session.settlingBackgroundTasks = undefined;
+  }
+}
+
 const NO_CONTROL_CHANNEL: StopBackgroundTaskResult = {
   ok: false,
   reason: "no_control_channel",
@@ -4117,6 +4197,7 @@ async function releaseQueryControls(session: SessionState): Promise<void> {
   session.backgroundTaskControls = undefined;
   session.backgroundTaskCandidates = undefined;
   session.retainedQueryControls = undefined;
+  session.settlingBackgroundTasks = undefined;
   await Promise.all(Array.from(controls, closeQueryControl));
 }
 
@@ -5109,6 +5190,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           { sessionId },
         );
         stopWaitingForContinuation();
+        // No edge can arrive on a query that has gone silent this long. The
+        // parked snapshots are already absent from the live set, so dropping
+        // them only releases metadata that now has nothing to attach to.
+        forgetSettlingBackgroundTasksOwnedBy(session, queryIteratorControl);
         heldSdkPrompt.close();
         closeQueryControlIfUnused(session, queryIteratorControl);
       }, testHooks?.retainedContinuationTimeoutMs ?? RETAINED_CONTINUATION_TIMEOUT_MS);
@@ -6226,7 +6311,12 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             session,
             taskMessage.tool_use_id,
           );
+          // A level signal that preceded this edge has already removed the task
+          // from the live set; its parked snapshot is the only remaining source
+          // of the original description and start time.
+          const parked = takeSettlingBackgroundTask(session, taskMessage.task_id);
           const previous = session.backgroundTasks?.[taskMessage.task_id]
+            ?? parked?.task
             ?? correlated.task;
           const terminalStatus: BackgroundTaskSnapshot["status"] =
             taskMessage.status === "failed"
@@ -6255,6 +6345,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             [task.id]: task,
           });
           const owner = session.backgroundTaskControls?.get(task.id)
+            ?? parked?.owner
             ?? correlated.owner;
           session.backgroundTaskControls?.delete(task.id);
           // The notification is injected into the same root loop and may be
@@ -6294,13 +6385,19 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           // turn can therefore publish its own empty set while an older CLI is
           // still running a background Bash task. Preserve every live member
           // owned by another control; only this query's slice is replaced.
+          const previouslyLiveOwnedByThisQuery: BackgroundTaskSnapshot[] = [];
           for (const [id, task] of Object.entries(session.backgroundTasks ?? {})) {
             if (!LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) continue;
             const owner = previousControls?.get(id);
             if (owner && owner !== queryIterator) {
               replacement[id] = task;
               replacementControls.set(id, owner);
+              continue;
             }
+            // Owned by this query (or by no handle at all, which only this
+            // query can still speak for). Whether it survives depends on the
+            // payload below.
+            previouslyLiveOwnedByThisQuery.push(task);
           }
           for (const entry of taskMessage.tasks) {
             const id = entry?.task_id;
@@ -6329,6 +6426,30 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           session.backgroundTasks = boundBackgroundTaskHistory(replacement);
           session.backgroundTaskControls =
             replacementControls.size > 0 ? replacementControls : undefined;
+          // Anything this query owned that the level no longer lists has
+          // stopped running, but the level says nothing about *how* it ended.
+          // The edge that does is documented to arrive after this frame, so
+          // the query still owes a continuation and must not be torn down
+          // here — that close is what silently dropped the "I'll report back
+          // when it finishes" reply the model had already promised.
+          const droppedByThisQuery = previouslyLiveOwnedByThisQuery.filter(
+            (task) => replacement[task.id] === undefined,
+          );
+          if (droppedByThisQuery.length > 0 && turnReleasedToBackgroundTasks) {
+            for (const task of droppedByThisQuery) {
+              parkSettlingBackgroundTask(session, task, queryIterator);
+            }
+            // Mirrors the `task_notification` branch: the earlier result is
+            // only the boundary before this transition, not permission to
+            // close streaming input. Closing it here lands stdin EOF between
+            // the model's final tool result and its final assistant message,
+            // which the rollout records as `[Request interrupted by user]`.
+            receivedResult = false;
+            waitForContinuationAfterNotification();
+          }
+          // Retention above is what keeps this query out of the close below:
+          // `closeQueryControlIfUnused` treats a retained control as still in
+          // use. Every other owner is closed exactly as before.
           for (const owner of previousOwners) {
             closeQueryControlIfUnused(session, owner);
           }
@@ -6865,6 +6986,8 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       // Dropping the retention is what lets the close below actually run.
       forgetRetainedQueryControl(session, queryIteratorControl);
       removeBackgroundTaskCandidatesOwnedBy(session, queryIteratorControl);
+      // The handle is dead, so no edge can still arrive to claim these.
+      forgetSettlingBackgroundTasksOwnedBy(session, queryIteratorControl);
       const settled = settleTasksOwnedByClosedControl(
         session,
         queryIteratorControl,

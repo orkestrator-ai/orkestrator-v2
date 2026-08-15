@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 
 export const HOSTED_WEB_CLIENT_ORIGINS = [
@@ -213,6 +214,9 @@ export function createBackendProcessEnvironment(
       env.XDG_DATA_HOME = path.join(runtime.isolatedCredentialRoot, "xdg-data");
       env.XDG_STATE_HOME = path.join(runtime.isolatedCredentialRoot, "xdg-state");
     }
+    if (allowed.has("cursor") && inherited.CURSOR_API_KEY) {
+      env.CURSOR_API_KEY = inherited.CURSOR_API_KEY;
+    }
   }
   return env;
 }
@@ -352,7 +356,7 @@ export class BackendProcess {
     dockerImage?: string;
     strictDockerOwner?: boolean;
     strictGatewayPort?: boolean;
-    credentialSources?: Array<"claude" | "codex" | "opencode">;
+    credentialSources?: AgentPlatform[];
     onEvent: (event: string, payload: unknown) => void;
     onUnexpectedExit?: (error: Error) => void;
   }): Promise<BackendHttpClient> {
@@ -383,7 +387,7 @@ export class BackendProcess {
     dockerImage?: string;
     strictDockerOwner?: boolean;
     strictGatewayPort?: boolean;
-    credentialSources?: Array<"claude" | "codex" | "opencode">;
+    credentialSources?: AgentPlatform[];
     onEvent: (event: string, payload: unknown) => void;
     onUnexpectedExit?: (error: Error) => void;
   }): Promise<BackendHttpClient> {

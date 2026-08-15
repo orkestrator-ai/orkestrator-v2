@@ -59,6 +59,7 @@ const {
   setWebClientEnabled,
   setGatewayToken,
   setGitHubToken,
+  setAnthropicApiKey,
   setCursorApiKey,
   setEnvironmentUnread,
   setEnvironmentPendingAgentLaunch,
@@ -1072,6 +1073,28 @@ describe("backend setup wrappers", () => {
     expect(invokeMock.mock.calls).toEqual([
       ["set_cursor_api_key", { apiKey: "cursor_replacement" }],
       ["set_cursor_api_key", { apiKey: null }],
+    ]);
+  });
+
+  test("uses the write-only Anthropic API key command for replacement and clearing", async () => {
+    const configured = {
+      version: "1.0",
+      global: { anthropicApiKeyConfigured: true },
+      repositories: {},
+    } as AppConfig;
+    const cleared = {
+      version: "1.0",
+      global: { anthropicApiKeyConfigured: false },
+      repositories: {},
+    } as AppConfig;
+    invokeMock.mockResolvedValueOnce(configured).mockResolvedValueOnce(cleared);
+
+    await expect(setAnthropicApiKey("anthropic_replacement")).resolves.toBe(configured);
+    await expect(setAnthropicApiKey(null)).resolves.toBe(cleared);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["set_anthropic_api_key", { apiKey: "anthropic_replacement" }],
+      ["set_anthropic_api_key", { apiKey: null }],
     ]);
   });
 

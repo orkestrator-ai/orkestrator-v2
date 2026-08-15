@@ -185,6 +185,7 @@ import {
 import {
   AGENT_PLATFORM_LABELS,
   isAgentPlatform,
+  type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
 import {
   fallbackReasoningId,
@@ -242,7 +243,7 @@ export type CommandContext = {
   worktreeDir?: string;
   dockerImage?: string;
   strictDockerOwner?: boolean;
-  credentialSources?: ReadonlySet<"claude" | "codex" | "opencode">;
+  credentialSources?: ReadonlySet<AgentPlatform>;
   environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
   toolchainBinDir?: string;
   agentTools?: {
@@ -1164,11 +1165,13 @@ async function requireGitHubProject(
 
 type RendererGlobalConfig = Omit<
   AppConfig["global"],
-  "githubToken" | "cursorApiKey"
+  "githubToken" | "anthropicApiKey" | "cursorApiKey"
 > & {
   githubTokenConfigured: boolean;
+  anthropicApiKeyConfigured: boolean;
+  anthropicApiKeySource: ApiKeySource;
   cursorApiKeyConfigured: boolean;
-  cursorApiKeySource: CursorApiKeySource;
+  cursorApiKeySource: ApiKeySource;
 };
 
 type RendererAppConfig = Omit<AppConfig, "global"> & {
@@ -1195,7 +1198,27 @@ function asAgentModelConfigKey(value: unknown): AgentModelConfigKey {
  * pane that a container is being handed a key inherited from this process's own
  * environment — and clearing the stored key does not stop that one.
  */
-export type CursorApiKeySource = "config" | "host-env" | "none";
+export type ApiKeySource = "config" | "host-env" | "none";
+
+function resolveStoredOrInheritedApiKey(
+  configuredValue: string | undefined,
+  inheritedValue: string | undefined,
+): { apiKey?: string; source: ApiKeySource } {
+  const configured = configuredValue?.trim();
+  if (configured) return { apiKey: configured, source: "config" };
+  const inherited = inheritedValue?.trim();
+  if (inherited) return { apiKey: inherited, source: "host-env" };
+  return { source: "none" };
+}
+
+function resolveAnthropicApiKey(
+  global: AppConfig["global"],
+): { apiKey?: string; source: ApiKeySource } {
+  return resolveStoredOrInheritedApiKey(
+    global.anthropicApiKey,
+    process.env.ANTHROPIC_API_KEY,
+  );
+}
 
 /**
  * Single source of truth for the Cursor key. `createDockerContainer` forwards
@@ -1203,12 +1226,11 @@ export type CursorApiKeySource = "config" | "host-env" | "none";
  */
 function resolveCursorApiKey(
   global: AppConfig["global"],
-): { apiKey?: string; source: CursorApiKeySource } {
-  const configured = global.cursorApiKey?.trim();
-  if (configured) return { apiKey: configured, source: "config" };
-  const inherited = process.env.CURSOR_API_KEY?.trim();
-  if (inherited) return { apiKey: inherited, source: "host-env" };
-  return { source: "none" };
+): { apiKey?: string; source: ApiKeySource } {
+  return resolveStoredOrInheritedApiKey(
+    global.cursorApiKey,
+    process.env.CURSOR_API_KEY,
+  );
 }
 
 function cursorApiKeyFingerprint(apiKey: string | undefined): string {
@@ -1218,13 +1240,16 @@ function cursorApiKeyFingerprint(apiKey: string | undefined): string {
 }
 
 function redactGlobalConfig(global: AppConfig["global"]): RendererGlobalConfig {
-  const { source } = resolveCursorApiKey(global);
-  const { githubToken, cursorApiKey, ...safeGlobal } = global;
+  const { source: anthropicApiKeySource } = resolveAnthropicApiKey(global);
+  const { source: cursorApiKeySource } = resolveCursorApiKey(global);
+  const { githubToken, anthropicApiKey, cursorApiKey, ...safeGlobal } = global;
   return {
     ...safeGlobal,
     githubTokenConfigured: Boolean(githubToken?.trim()),
+    anthropicApiKeyConfigured: Boolean(anthropicApiKey?.trim()),
+    anthropicApiKeySource,
     cursorApiKeyConfigured: Boolean(cursorApiKey?.trim()),
-    cursorApiKeySource: source,
+    cursorApiKeySource,
   };
 }
 
@@ -1239,6 +1264,9 @@ function stripRendererCredentials(global: Record<string, unknown>): AppConfig["g
   const {
     githubToken: _ignoredToken,
     githubTokenConfigured: _ignoredConfigured,
+    anthropicApiKey: _ignoredAnthropicApiKey,
+    anthropicApiKeyConfigured: _ignoredAnthropicConfigured,
+    anthropicApiKeySource: _ignoredAnthropicSource,
     cursorApiKey: _ignoredCursorApiKey,
     cursorApiKeyConfigured: _ignoredCursorConfigured,
     cursorApiKeySource: _ignoredCursorSource,
@@ -8712,7 +8740,7 @@ async function createDockerContainer(environment: Environment, context: CommandC
   const allowClaudeCredentials = context.runtimeFlavor !== "agent-test"
     || context.credentialSources?.has("claude");
   const anthropicApiKey = allowClaudeCredentials
-    ? config.global.anthropicApiKey?.trim()
+    ? resolveAnthropicApiKey(config.global).apiKey
     : undefined;
   if (anthropicApiKey) {
     dockerEnvironment.ANTHROPIC_API_KEY = anthropicApiKey;
@@ -8727,6 +8755,7 @@ async function createDockerContainer(environment: Environment, context: CommandC
   // headless runs, and the same helper reports its `source` to the settings pane
   // so an inherited key is never forwarded invisibly.
   const { apiKey: cursorApiKey } = context.runtimeFlavor === "agent-test"
+    && !context.credentialSources?.has("cursor")
     ? { apiKey: undefined }
     : resolveCursorApiKey(config.global);
   if (cursorApiKey) {
@@ -8773,10 +8802,18 @@ async function createDockerContainer(environment: Environment, context: CommandC
   // Grok creates session databases during ACP startup, so mounting the host
   // directories directly over their homes makes both bridges fail immediately.
   // Mount portable inputs separately; entrypoint.sh copies a bounded allowlist.
-  if (context.runtimeFlavor !== "agent-test") {
-    await bindIfExists(path.join(home, ".cursor"), "/cursor-config");
-    await bindIfExists(path.join(home, ".grok"), "/grok-home");
-    await bindIfExists(path.join(home, ".config", "grok"), "/grok-config");
+  if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("cursor")) {
+    const cursorHome = context.runtimeFlavor === "agent-test" && agentTestHostHome
+      ? agentTestHostHome
+      : home;
+    await bindIfExists(path.join(cursorHome, ".cursor"), "/cursor-config");
+  }
+  if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("grok")) {
+    const grokHome = context.runtimeFlavor === "agent-test" && agentTestHostHome
+      ? agentTestHostHome
+      : home;
+    await bindIfExists(path.join(grokHome, ".grok"), "/grok-home");
+    await bindIfExists(path.join(grokHome, ".config", "grok"), "/grok-config");
   }
   if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("opencode")) {
     const configHome = context.runtimeFlavor === "agent-test"
@@ -8790,7 +8827,12 @@ async function createDockerContainer(environment: Environment, context: CommandC
       : path.join(home, ".local", "state");
     if (configHome) await bindIfExists(path.join(configHome, "opencode"), "/opencode-config");
     if (dataHome) await bindIfExists(path.join(dataHome, "opencode"), "/opencode-data");
-    if (stateHome) await bindIfExists(path.join(stateHome, "opencode"), "/opencode-state");
+    if (stateHome) {
+      await bindIfExists(
+        path.join(stateHome, "opencode", "model.json"),
+        "/opencode-state/model.json",
+      );
+    }
   }
   if (context.runtimeFlavor !== "agent-test") {
     await bindIfExists(path.join(home, ".gitconfig"), "/tmp/gitconfig");
@@ -10048,6 +10090,13 @@ export function createCommandRegistry(
       throw new Error("Cursor API key cannot be empty. Use null to clear it.");
     }
     return redactAppConfig(await storage.setCursorApiKey(nextApiKey));
+  });
+  register("set_anthropic_api_key", async ({ apiKey }, { storage }) => {
+    const nextApiKey = apiKey === null ? null : asString(apiKey, "apiKey").trim();
+    if (nextApiKey !== null && !nextApiKey) {
+      throw new Error("Anthropic API key cannot be empty. Use null to clear it.");
+    }
+    return redactAppConfig(await storage.setAnthropicApiKey(nextApiKey));
   });
   register("get_repository_config", ({ projectId }, { storage }) => storage.getRepositoryConfig(asString(projectId, "projectId")));
   register("update_repository_config", async ({ projectId, repoConfig }, context) => {

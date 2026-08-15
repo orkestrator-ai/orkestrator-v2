@@ -168,6 +168,8 @@ describe("standalone backend options", () => {
       credentialSources: ["codex"],
     });
     expect(() => parseOptions(["--runtime-flavor", "preview"], {})).toThrow("runtime-flavor");
+    expect(parseOptions(["--credential-source", "cursor,grok"], {}).credentialSources)
+      .toEqual(["cursor", "grok"]);
     expect(() => parseOptions(["--credential-source", "github"], {})).toThrow("credential-source");
   });
 

@@ -21,6 +21,7 @@ import {
   readProfile,
   readStatus,
   reserveLoopbackPorts,
+  seedAgentTestProviderCredentials,
   seedInstalledModelCatalogCaches,
 } from "./profile-io.js";
 import { seedFixture } from "./fixture.js";
@@ -288,7 +289,10 @@ export async function startDevelopment(args: DevArguments, flavor: "development"
   });
   const profilePath = await initializeProfile(profile);
   if (flavor === "agent-test") {
-    await seedInstalledModelCatalogCaches(profile);
+    await Promise.all([
+      seedInstalledModelCatalogCaches(profile),
+      seedAgentTestProviderCredentials(profile),
+    ]);
   }
   const statusPath = statusManifestPath(profile);
   const rendererUrl = `http://${profile.rendererHost}:${profile.rendererPort}`;

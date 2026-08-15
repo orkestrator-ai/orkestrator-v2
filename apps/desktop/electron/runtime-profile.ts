@@ -3,6 +3,8 @@ import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { type AgentPlatform, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
+
 import { APP_SLUG, PRODUCT_NAME } from "./app-constants.js";
 
 export const DEV_PROFILE_SENTINEL = ".orkestrator-dev-profile";
@@ -29,7 +31,7 @@ export type RuntimeProfile = {
   gatewayHost: "127.0.0.1";
   gatewayPort: number;
   electronTitle: string;
-  credentialSources: Array<"claude" | "codex" | "opencode">;
+  credentialSources: AgentPlatform[];
 };
 
 export type RuntimeProcessName = "launcher" | "vite" | "electron" | "backend";
@@ -220,7 +222,7 @@ export function parseRuntimeProfile(value: unknown): RuntimeProfile {
     }
   }
   if (!Array.isArray(candidate.credentialSources)
-    || candidate.credentialSources.some((entry) => !["claude", "codex", "opencode"].includes(entry))) {
+    || candidate.credentialSources.some((entry) => !isAgentPlatform(entry))) {
     throw new Error("Runtime profile credentialSources is invalid");
   }
   const parsed = candidate as RuntimeProfile;

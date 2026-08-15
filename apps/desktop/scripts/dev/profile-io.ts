@@ -60,6 +60,13 @@ type ModelCacheSeedOptions = {
   afterSourceValidation?: (label: string) => void | Promise<void>;
 };
 
+type BoundedSeedCandidate = {
+  label: string;
+  source: string;
+  destination: string;
+  replace?: boolean;
+};
+
 async function pathExists(filePath: string): Promise<boolean> {
   try {
     await lstat(filePath);
@@ -80,6 +87,87 @@ function isSameFile(
     && current.size === initial.size
     && current.mtimeMs === initial.mtimeMs
     && current.ctimeMs === initial.ctimeMs;
+}
+
+async function seedBoundedFiles(
+  candidates: readonly BoundedSeedCandidate[],
+  options: ModelCacheSeedOptions,
+): Promise<string[]> {
+  const copied: string[] = [];
+  for (const candidate of candidates) {
+    let temporary: string | undefined;
+    let sourceHandle: FileHandle | undefined;
+    let temporaryHandle: FileHandle | undefined;
+    try {
+      if (!candidate.replace && await pathExists(candidate.destination)) continue;
+      sourceHandle = await open(
+        candidate.source,
+        constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+      );
+      const initialSourceInfo = await sourceHandle.stat();
+      if (!initialSourceInfo.isFile() || initialSourceInfo.size > MAX_MODEL_CACHE_BYTES) continue;
+      await options.afterSourceValidation?.(candidate.label);
+
+      await mkdir(path.dirname(candidate.destination), { recursive: true, mode: 0o700 });
+      temporary = `${candidate.destination}.${process.pid}.${Date.now()}.tmp`;
+      temporaryHandle = await open(
+        temporary,
+        constants.O_WRONLY
+          | constants.O_CREAT
+          | constants.O_EXCL
+          | (constants.O_NOFOLLOW ?? 0),
+        0o600,
+      );
+
+      let totalBytes = 0;
+      while (totalBytes <= MAX_MODEL_CACHE_BYTES) {
+        const remaining = (MAX_MODEL_CACHE_BYTES + 1) - totalBytes;
+        const chunk = Buffer.allocUnsafe(Math.min(MODEL_CACHE_COPY_CHUNK_BYTES, remaining));
+        const { bytesRead } = await sourceHandle.read(chunk, 0, chunk.length, null);
+        if (bytesRead === 0) break;
+        totalBytes += bytesRead;
+        if (totalBytes > MAX_MODEL_CACHE_BYTES) throw new Error("Seed source exceeds the size limit");
+
+        let written = 0;
+        while (written < bytesRead) {
+          const result = await temporaryHandle.write(chunk, written, bytesRead - written);
+          if (result.bytesWritten === 0) throw new Error("Seed write made no progress");
+          written += result.bytesWritten;
+        }
+      }
+
+      const [finalSourceInfo, currentSourceInfo] = await Promise.all([
+        sourceHandle.stat(),
+        lstat(candidate.source),
+      ]);
+      if (
+        !isSameFile(initialSourceInfo, finalSourceInfo)
+        || !currentSourceInfo.isFile()
+        || currentSourceInfo.dev !== initialSourceInfo.dev
+        || currentSourceInfo.ino !== initialSourceInfo.ino
+      ) {
+        throw new Error("Seed source changed while it was being copied");
+      }
+
+      await temporaryHandle.chmod(0o600);
+      await temporaryHandle.close();
+      temporaryHandle = undefined;
+      if (candidate.replace) {
+        await rename(temporary, candidate.destination);
+        temporary = undefined;
+      } else {
+        await link(temporary, candidate.destination);
+      }
+      copied.push(candidate.label);
+    } catch {
+      // Provider state is an optional convenience, never a startup dependency.
+    } finally {
+      await sourceHandle?.close().catch(() => undefined);
+      await temporaryHandle?.close().catch(() => undefined);
+      if (temporary) await rm(temporary, { force: true }).catch(() => undefined);
+    }
+  }
+  return copied;
 }
 
 /**
@@ -124,76 +212,33 @@ export async function seedInstalledModelCatalogCaches(
       destination: path.join(isolatedHome, ".grok", "models_cache.json"),
     },
   ];
-  const copied: string[] = [];
-  for (const candidate of candidates) {
-    let temporary: string | undefined;
-    let sourceHandle: FileHandle | undefined;
-    let temporaryHandle: FileHandle | undefined;
-    try {
-      if (await pathExists(candidate.destination)) continue;
-      sourceHandle = await open(
-        candidate.source,
-        constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
-      );
-      const initialSourceInfo = await sourceHandle.stat();
-      if (!initialSourceInfo.isFile() || initialSourceInfo.size > MAX_MODEL_CACHE_BYTES) continue;
-      await options.afterSourceValidation?.(candidate.label);
+  return seedBoundedFiles(candidates, options);
+}
 
-      await mkdir(path.dirname(candidate.destination), { recursive: true, mode: 0o700 });
-      temporary = `${candidate.destination}.${process.pid}.${Date.now()}.tmp`;
-      temporaryHandle = await open(
-        temporary,
-        constants.O_WRONLY
-          | constants.O_CREAT
-          | constants.O_EXCL
-          | (constants.O_NOFOLLOW ?? 0),
-        0o600,
-      );
-
-      let totalBytes = 0;
-      while (totalBytes <= MAX_MODEL_CACHE_BYTES) {
-        const remaining = (MAX_MODEL_CACHE_BYTES + 1) - totalBytes;
-        const chunk = Buffer.allocUnsafe(Math.min(MODEL_CACHE_COPY_CHUNK_BYTES, remaining));
-        const { bytesRead } = await sourceHandle.read(chunk, 0, chunk.length, null);
-        if (bytesRead === 0) break;
-        totalBytes += bytesRead;
-        if (totalBytes > MAX_MODEL_CACHE_BYTES) throw new Error("Model cache exceeds the seed limit");
-
-        let written = 0;
-        while (written < bytesRead) {
-          const result = await temporaryHandle.write(chunk, written, bytesRead - written);
-          if (result.bytesWritten === 0) throw new Error("Model cache seed write made no progress");
-          written += result.bytesWritten;
-        }
-      }
-
-      const [finalSourceInfo, currentSourceInfo] = await Promise.all([
-        sourceHandle.stat(),
-        lstat(candidate.source),
-      ]);
-      if (
-        !isSameFile(initialSourceInfo, finalSourceInfo)
-        || !currentSourceInfo.isFile()
-        || currentSourceInfo.dev !== initialSourceInfo.dev
-        || currentSourceInfo.ino !== initialSourceInfo.ino
-      ) {
-        throw new Error("Model cache changed while it was being seeded");
-      }
-
-      await temporaryHandle.chmod(0o600);
-      await temporaryHandle.close();
-      temporaryHandle = undefined;
-      await link(temporary, candidate.destination);
-      copied.push(candidate.label);
-    } catch {
-      // Installed caches are an optional warm start, never a startup dependency.
-    } finally {
-      await sourceHandle?.close().catch(() => undefined);
-      await temporaryHandle?.close().catch(() => undefined);
-      if (temporary) await rm(temporary, { force: true }).catch(() => undefined);
-    }
-  }
-  return copied;
+/**
+ * Grok has no documented home-directory override, so an isolated local test
+ * cannot point only Grok at the host home. Copy just its credential into the
+ * private profile instead. The source is re-read on every start so a refreshed
+ * host login wins; sessions, prompts, logs, and the rest of HOME stay isolated.
+ */
+export async function seedAgentTestProviderCredentials(
+  profile: RuntimeProfile,
+  options: ModelCacheSeedOptions = {},
+): Promise<string[]> {
+  if (!profile.credentialSources.includes("grok")) return [];
+  const roots = options.roots ?? defaultRuntimeProfileRoots();
+  return seedBoundedFiles([{
+    label: "grok/auth.json",
+    source: path.join(roots.homeDir, ".grok", "auth.json"),
+    destination: path.join(
+      profile.dataDir,
+      "agent-credentials",
+      "home",
+      ".grok",
+      "auth.json",
+    ),
+    replace: true,
+  }], options);
 }
 
 export async function readProfile(profilePath: string): Promise<RuntimeProfile> {

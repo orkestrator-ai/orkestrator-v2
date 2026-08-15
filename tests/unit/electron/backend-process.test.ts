@@ -171,15 +171,17 @@ describe("Electron backend process supervisor", () => {
     const isolated = createBackendProcessEnvironment({
       HOME: "/Users/tester",
       OPENAI_API_KEY: "allowed-openai",
+      CURSOR_API_KEY: "allowed-cursor",
       ANTHROPIC_API_KEY: "blocked-anthropic",
       NPM_TOKEN: "blocked-npm",
     }, true, "/resources", "2.8.2", {
       flavor: "agent-test",
-      credentialSources: ["codex"],
+      credentialSources: ["codex", "cursor"],
       isolatedCredentialRoot: "/profiles/qa/credentials",
     });
 
     expect(isolated.OPENAI_API_KEY).toBe("allowed-openai");
+    expect(isolated.CURSOR_API_KEY).toBe("allowed-cursor");
     expect(isolated.CODEX_HOME).toBe("/Users/tester/.codex");
     expect(isolated.ANTHROPIC_API_KEY).toBeUndefined();
     expect(isolated.NPM_TOKEN).toBeUndefined();

@@ -117,6 +117,29 @@ function write(value: JsonObject): void {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
+/** Text a test waits for to prove an ignored `cursor/task` was already read. */
+const IGNORED_CURSOR_TASK_MARKER = "Cursor task frame delivered.";
+
+/**
+ * Emitted after a `cursor/task` the bridge is expected to ignore. The bridge
+ * reads this stream in order, so a transcript containing the marker proves the
+ * preceding frame was processed — without it, "the child is still active" could
+ * just mean the test read before the frame arrived.
+ */
+function writeIgnoredCursorTaskMarker(): void {
+  write({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "fake-session",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: IGNORED_CURSOR_TASK_MARKER },
+      },
+    },
+  });
+}
+
 const holdTurnFile = process.env.FAKE_ACP_HOLD_TURN_FILE;
 
 /**
@@ -1252,6 +1275,25 @@ lines.on("line", (line) => {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }
+    if (prompt.startsWith("FINISHCURSORSUBAGENTSTATUS")) {
+      // Real Cursor keeps `isBackground: true` on the launch result and reports
+      // completion through a later status field rather than flipping the flag.
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "cursor-subagent-1",
+            status: "completed",
+            rawOutput: { durationMs: 84, isBackground: true, status: "completed" },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
     if (prompt.startsWith("FINISHCURSORSUBAGENT")) {
       write({
         jsonrpc: "2.0",
@@ -1264,6 +1306,198 @@ lines.on("line", (line) => {
             status: "completed",
             rawOutput: { durationMs: 84, isBackground: false, status: "completed" },
           },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FINISHCURSORTASKREQUEST")) {
+      write({
+        jsonrpc: "2.0",
+        id: 903,
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          prompt: "Validate the implementation",
+          subagentType: "explore",
+          durationMs: 84,
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FINISHCURSORTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          prompt: "Validate the implementation",
+          subagentType: "explore",
+          durationMs: 84,
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FAILCURSORTASKREQUEST")) {
+      write({
+        jsonrpc: "2.0",
+        id: 903,
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          outcome: { outcome: "cancelled" },
+          durationMs: 12,
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FAILCURSORTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          outcome: { outcome: "cancelled" },
+          durationMs: 12,
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    // The `cursor/task` frames below carry a `status`/`outcome` field. Real
+    // Cursor (2026.08.11-e8db854) sends neither — its payload is toolCallId,
+    // description, prompt, subagentType, model, agentId, durationMs — so these
+    // model the version that starts reporting a state, not today's contract.
+    // They exist to pin which values settle a child and which must not.
+    if (prompt.startsWith("REJECTCURSORTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          status: "rejected",
+          durationMs: 12,
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    // Forward-compat, as above: a `cursor/task` that names a non-terminal state
+    // is a progress report, so nothing may settle.
+    if (prompt.startsWith("RUNNINGCURSORTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          status: "running",
+          durationMs: 12,
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          outcome: { outcome: "in_progress" },
+        },
+      });
+      writeIgnoredCursorTaskMarker();
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    // Same terminal frame, addressed to a different ACP session. A superseded
+    // or unrelated conversation must not settle this one's child.
+    if (prompt.startsWith("OTHERSESSIONCURSORTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          sessionId: "some-other-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          durationMs: 84,
+        },
+      });
+      writeIgnoredCursorTaskMarker();
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    // Terminal frames for ids that are not live children: an ordinary finished
+    // tool call, and an id this session has never seen.
+    if (prompt.startsWith("UNKNOWNCURSORTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "cursor-plain-tool-1",
+            title: "Read file",
+            kind: "read",
+            status: "completed",
+            rawInput: { _toolName: "read", path: "notes.md" },
+          },
+        },
+      });
+      for (const toolCallId of ["cursor-plain-tool-1", "cursor-never-seen-1"]) {
+        write({
+          jsonrpc: "2.0",
+          method: "cursor/task",
+          params: {
+            sessionId: "fake-session",
+            toolCallId,
+            description: "Validate the implementation",
+            durationMs: 84,
+          },
+        });
+      }
+      writeIgnoredCursorTaskMarker();
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FINISHEVICTEDCURSORTASK")) {
+      for (const index of [0, 1]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `cursor-task-late-filler-${index}`,
+              title: `Late retained output ${index}`,
+              status: "completed",
+              rawOutput: `${index}:`.padEnd(600 * 1024, "z"),
+            },
+          },
+        });
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          durationMs: 84,
         },
       });
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
@@ -3163,6 +3397,12 @@ lines.on("line", (line) => {
   if (message.id === 902 && process.env.FAKE_ACP_VENDOR_MODEL_REQUEST_FILE) {
     appendFileSync(
       process.env.FAKE_ACP_VENDOR_MODEL_REQUEST_FILE,
+      `${JSON.stringify(message)}\n`,
+    );
+  }
+  if (message.id === 903 && process.env.FAKE_ACP_CURSOR_TASK_REQUEST_FILE) {
+    appendFileSync(
+      process.env.FAKE_ACP_CURSOR_TASK_REQUEST_FILE,
       `${JSON.stringify(message)}\n`,
     );
   }

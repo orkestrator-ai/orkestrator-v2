@@ -214,6 +214,19 @@ function expectProviderMenuOrder(action: string) {
   ]);
 }
 
+/**
+ * Points the review dialog's one agent/model/reasoning picker at a provider.
+ *
+ * The menu keeps itself open while the platform rail is browsed and marks the
+ * rest of the dialog `aria-hidden` meanwhile, so it has to be dismissed before
+ * the launch buttons are reachable again.
+ */
+function chooseReviewProvider(platform: string) {
+  fireEvent.pointerDown(screen.getByRole("combobox", { name: "Agent, model and reasoning" }));
+  fireEvent.click(screen.getByRole("button", { name: `${platform} models` }));
+  fireEvent.keyDown(document.body, { key: "Escape" });
+}
+
 function confirmMerge() {
   fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
   fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
@@ -2309,7 +2322,7 @@ describe("ActionBar workflow tabs", () => {
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Code review" }));
     expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("radio", { name: /^Codex/ }));
+    chooseReviewProvider("codex");
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(createTabMock).toHaveBeenLastCalledWith(
       "codex",
@@ -2787,14 +2800,14 @@ describe("ActionBar workflow tabs", () => {
     expect(createTabMock).not.toHaveBeenCalled();
 
     const cases = [
-      { provider: "Claude", agent: "claude" },
-      { provider: "Codex", agent: "codex" },
-      { provider: "OpenCode", agent: "opencode" },
+      { agent: "claude" },
+      { agent: "codex" },
+      { agent: "opencode" },
     ] as const;
 
     for (const reviewCase of cases) {
       fireEvent.contextMenu(reviewButton);
-      fireEvent.click(screen.getByRole("radio", { name: new RegExp(`^${reviewCase.provider}`) }));
+      chooseReviewProvider(reviewCase.agent);
       fireEvent.click(screen.getByRole("button", { name: "Start review" }));
       expect(createTabMock).toHaveBeenLastCalledWith(
         reviewCase.agent,

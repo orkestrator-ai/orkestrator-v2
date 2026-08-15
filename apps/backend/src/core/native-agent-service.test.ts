@@ -89,6 +89,7 @@ function createProviderStub(
     dismissSuggestedPrompt?: NativeAgentRuntimeProvider["dismissSuggestedPrompt"];
     updateInteractiveControls?: NativeAgentRuntimeProvider["updateInteractiveControls"];
     slashCommands?: NativeAgentRuntimeProvider["slashCommands"];
+    refreshCatalog?: NativeAgentRuntimeProvider["refreshCatalog"];
   } = {},
 ) {
   const createSession = mock(
@@ -124,6 +125,9 @@ function createProviderStub(
   const slashCommands = behaviour.slashCommands
     ? mock(behaviour.slashCommands)
     : undefined;
+  const refreshCatalog = behaviour.refreshCatalog
+    ? mock(behaviour.refreshCatalog)
+    : undefined;
   const provider = {
     agent,
     createSession,
@@ -139,6 +143,7 @@ function createProviderStub(
     rawModelCatalog,
     updateInteractiveControls,
     slashCommands,
+    refreshCatalog,
     structured: async () => null,
     abort,
     stopBackgroundTask,
@@ -161,6 +166,7 @@ function createProviderStub(
     rawModelCatalog,
     updateInteractiveControls,
     slashCommands,
+    refreshCatalog,
     dispose,
   };
 }
@@ -1083,6 +1089,260 @@ describe("NativeAgentService", () => {
       now += 30_001;
       await service.getProjection(identity);
       expect(stub.slashCommands).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  test("does not hold an updated transcript behind expired discovery metadata", async () => {
+    let now = 1_000;
+    let message = "old transcript";
+    let releaseCatalog!: () => void;
+    let releaseCommands!: () => void;
+    const catalogGate = new Promise<void>((resolve) => { releaseCatalog = resolve; });
+    const commandGate = new Promise<void>((resolve) => { releaseCommands = resolve; });
+    let catalogReads = 0;
+    let catalogRefreshFinished = false;
+    const invoke: Invoke = async <T>(command: string): Promise<T> => {
+      if (command !== "get_native_agent_model_catalog") {
+        throw new Error(`Unexpected backend command: ${command}`);
+      }
+      catalogReads += 1;
+      if (catalogReads > 1) {
+        await catalogGate;
+        catalogRefreshFinished = true;
+      }
+      return [{
+        platform: "codex",
+        id: catalogReads > 1 ? "gpt-new" : "gpt-old",
+        label: catalogReads > 1 ? "GPT new" : "GPT old",
+      }] as T;
+    };
+    let commandReads = 0;
+    let commandRefreshFinished = false;
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [{
+          id: "message-1",
+          role: "assistant",
+          content: message,
+          parts: [],
+          createdAt: "2026-08-14T10:00:00.000Z",
+        }],
+      }),
+      slashCommands: async () => {
+        commandReads += 1;
+        if (commandReads > 1) {
+          await commandGate;
+          commandRefreshFinished = true;
+        }
+        return [{ name: commandReads > 1 ? "/new" : "/old" }];
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-stale-discovery-",
+      provider: async () => stub.provider,
+      invoke,
+      now: () => now,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-stale-discovery",
+      };
+      await service.ensureSession(identity);
+      await service.getProjection(identity);
+
+      now += 30_001;
+      message = "latest transcript";
+      const projection = await Promise.race([
+        service.getProjection(identity),
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("Transcript waited for discovery metadata")), 100);
+        }),
+      ]);
+
+      expect(projection?.messages).toEqual([
+        expect.objectContaining({ content: "latest transcript" }),
+      ]);
+      expect(projection?.composer?.models).toEqual([
+        expect.objectContaining({ id: "gpt-old" }),
+      ]);
+      expect(projection?.slashCommands?.map((command) => command.name))
+        .toEqual(["/old", "/steer"]);
+
+      releaseCatalog();
+      releaseCommands();
+      await waitForCondition(() => catalogRefreshFinished && commandRefreshFinished);
+      const updated = await service.getProjection(identity);
+      expect(updated?.composer?.models).toEqual([
+        expect.objectContaining({ id: "gpt-new" }),
+      ]);
+      expect(updated?.slashCommands?.map((command) => command.name))
+        .toEqual(["/new", "/steer"]);
+    });
+  });
+
+  test("runs fresh discovery after an explicit refresh overlaps stale background work", async () => {
+    let now = 1_000;
+    let releaseCatalog!: () => void;
+    let releaseCommands!: () => void;
+    const catalogGate = new Promise<void>((resolve) => { releaseCatalog = resolve; });
+    const commandGate = new Promise<void>((resolve) => { releaseCommands = resolve; });
+    let catalogReads = 0;
+    let staleCatalogSettled = false;
+    const invoke: Invoke = async <T>(command: string): Promise<T> => {
+      if (command !== "get_native_agent_model_catalog") {
+        throw new Error(`Unexpected backend command: ${command}`);
+      }
+      catalogReads += 1;
+      if (catalogReads === 2) {
+        await catalogGate;
+        staleCatalogSettled = true;
+      }
+      return [{
+        platform: "codex",
+        id: catalogReads > 2 ? "gpt-new" : "gpt-old",
+        label: catalogReads > 2 ? "GPT new" : "GPT old",
+      }] as T;
+    };
+    let commandReads = 0;
+    let staleCommandsSettled = false;
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+      slashCommands: async () => {
+        commandReads += 1;
+        if (commandReads === 2) {
+          await commandGate;
+          staleCommandsSettled = true;
+        }
+        return [{ name: commandReads > 2 ? "/new" : "/old" }];
+      },
+      refreshCatalog: () => undefined,
+    });
+    await withService({
+      prefix: "orkestrator-native-forced-discovery-",
+      provider: async () => stub.provider,
+      invoke,
+      now: () => now,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-forced-discovery",
+      };
+      try {
+        await service.ensureSession(identity);
+        const initial = await service.getProjection(identity);
+        expect(initial?.composer?.models.map((model) => model.id)).toEqual(["gpt-old"]);
+        expect(initial?.slashCommands?.map((command) => command.name))
+          .toEqual(["/old", "/steer"]);
+
+        now += 30_001;
+        await service.getProjection(identity);
+        await waitForCondition(() => catalogReads === 2 && commandReads === 2);
+
+        const refreshedProjection = service.refreshProjectionModels(identity);
+        await Promise.resolve();
+        expect(catalogReads).toBe(2);
+        expect(commandReads).toBe(2);
+
+        // Both gates are still closed: an explicit refresh discards the stale
+        // reads instead of inheriting their latency, which for a wedged bridge
+        // is a full request timeout.
+        const refreshed = await refreshedProjection;
+        expect(staleCatalogSettled).toBe(false);
+        expect(staleCommandsSettled).toBe(false);
+        expect(stub.refreshCatalog).toHaveBeenCalledTimes(1);
+        expect(catalogReads).toBe(3);
+        expect(commandReads).toBe(3);
+        expect(refreshed?.composer?.models.map((model) => model.id)).toEqual(["gpt-new"]);
+        expect(refreshed?.slashCommands?.map((command) => command.name))
+          .toEqual(["/new", "/steer"]);
+
+        // The discarded reads finishing later must not overwrite the catalogue
+        // the explicit refresh just installed.
+        releaseCatalog();
+        releaseCommands();
+        await waitForCondition(() => staleCatalogSettled && staleCommandsSettled);
+        const settled = await service.getProjection(identity);
+        expect(catalogReads).toBe(3);
+        expect(commandReads).toBe(3);
+        expect(settled?.composer?.models.map((model) => model.id)).toEqual(["gpt-new"]);
+        expect(settled?.slashCommands?.map((command) => command.name))
+          .toEqual(["/new", "/steer"]);
+      } finally {
+        releaseCatalog();
+        releaseCommands();
+      }
+    });
+  });
+
+  test("backs a failed background discovery off instead of retrying every poll", async () => {
+    let now = 1_000;
+    let catalogReads = 0;
+    const invoke: Invoke = async <T>(command: string): Promise<T> => {
+      if (command !== "get_native_agent_model_catalog") {
+        throw new Error(`Unexpected backend command: ${command}`);
+      }
+      catalogReads += 1;
+      if (catalogReads > 1) throw new Error("Model discovery is unavailable");
+      return [{ platform: "codex", id: "gpt-old", label: "GPT old" }] as T;
+    };
+    let commandReads = 0;
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+      slashCommands: async () => {
+        commandReads += 1;
+        if (commandReads > 1) throw new Error("Command discovery is unavailable");
+        return [{ name: "/old" }];
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-discovery-backoff-",
+      provider: async () => stub.provider,
+      invoke,
+      now: () => now,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-discovery-backoff",
+      };
+      await service.ensureSession(identity);
+      await service.getProjection(identity);
+      expect(catalogReads).toBe(1);
+      expect(commandReads).toBe(1);
+
+      now += 30_001;
+      const stale = await service.getProjection(identity);
+      expect(stale?.composer?.models.map((model) => model.id)).toEqual(["gpt-old"]);
+      expect(stale?.slashCommands?.map((command) => command.name))
+        .toEqual(["/old", "/steer"]);
+
+      // A failed optional endpoint must not be re-probed on every 500ms
+      // projection poll, so the retained entry carries an explicit back-off.
+      const caches = service as unknown as {
+        modelCatalogCache: Map<string, { expiresAt: number }>;
+        slashCommandCache: Map<string, { expiresAt: number }>;
+      };
+      await waitForCondition(() => (
+        caches.modelCatalogCache.get("env-1")?.expiresAt === now + 5_000
+        && caches.slashCommandCache.get("env-1\0codex")?.expiresAt === now + 5_000
+      ));
+      expect(catalogReads).toBe(2);
+      expect(commandReads).toBe(2);
+
+      now += 4_999;
+      const withinBackoff = await service.getProjection(identity);
+      expect(catalogReads).toBe(2);
+      expect(commandReads).toBe(2);
+      expect(withinBackoff?.composer?.models.map((model) => model.id)).toEqual(["gpt-old"]);
+      expect(withinBackoff?.slashCommands?.map((command) => command.name))
+        .toEqual(["/old", "/steer"]);
+
+      now += 2;
+      await service.getProjection(identity);
+      await waitForCondition(() => catalogReads === 3 && commandReads === 3);
     });
   });
 
@@ -6587,6 +6847,150 @@ describe("NativeAgentService", () => {
       });
     });
 
+    test("dispatches an attachment-only startup prompt before clearing its images", async () => {
+      const { provider, send } = createProviderStub("codex");
+      await withService({
+        prefix: "orkestrator-native-launch-image-only-",
+        environment: {
+          pendingAgentLaunch: true,
+          defaultAgent: "codex",
+          codexMode: "native",
+          initialPrompt: "   ",
+          initialPromptAttachments: [{
+            id: "image-1",
+            name: "reference.png",
+            previewUrl: "data:image/png;base64,cG5n",
+            base64Data: "cG5n",
+          }],
+        },
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        await service.reconcileInitialLaunch("env-1");
+
+        expect(send).toHaveBeenCalledWith(
+          "provider-session",
+          "",
+          expect.objectContaining({
+            requestId: "initial-prompt:env-1:startup-agent",
+            images: [{ filename: "reference.png", data: "cG5n" }],
+          }),
+        );
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          pendingAgentLaunch: false,
+          startupAgentSession: {
+            providerSessionId: "provider-session",
+            status: "running",
+          },
+        });
+        expect((await storage.getEnvironment("env-1"))?.initialPromptAttachments)
+          .toBeUndefined();
+      });
+    });
+
+    test.each([
+      ["claude", { claudeMode: "native" }] as const,
+      ["opencode", { opencodeMode: "native" }] as const,
+    ])(
+      "dispatches an attachment-only startup prompt for %s too",
+      async (agent, modes) => {
+        // The blank-prompt relaxation is agent-neutral: every native agent that
+        // accepts an attachment-only turn must reach the same dispatch, not
+        // only the codex path the fix was written against.
+        const { provider, send } = createProviderStub(agent);
+        await withService({
+          prefix: `orkestrator-native-launch-image-only-${agent}-`,
+          environment: {
+            pendingAgentLaunch: true,
+            defaultAgent: agent,
+            ...modes,
+            initialPrompt: "",
+            initialPromptAttachments: [{
+              id: "image-1",
+              name: "reference.png",
+              previewUrl: "data:image/png;base64,cG5n",
+              base64Data: "cG5n",
+            }],
+          },
+          provider: async () => provider,
+        }, async ({ storage, service }) => {
+          await service.reconcileInitialLaunch("env-1");
+
+          expect(send).toHaveBeenCalledWith(
+            "provider-session",
+            "",
+            expect.objectContaining({
+              requestId: "initial-prompt:env-1:startup-agent",
+              images: [{ filename: "reference.png", data: "cG5n" }],
+            }),
+          );
+          expect(await storage.getEnvironment("env-1")).toMatchObject({
+            pendingAgentLaunch: false,
+            startupAgentSession: { agent, status: "running" },
+          });
+        });
+      },
+    );
+
+    test("dispatches a launch the repository's agent style makes native", async () => {
+      // The renderer resolves the Claude style through the repository tier when
+      // it decides whether to leave the initial prompt's images alone. This
+      // side has to agree: if it declined here, a launch the renderer stood
+      // down for would never deliver its attachments.
+      const { provider, send } = createProviderStub("claude");
+      await withService({
+        prefix: "orkestrator-native-launch-repo-style-",
+        environment: {
+          pendingAgentLaunch: true,
+          defaultAgent: "claude",
+          initialPrompt: "Inspect this screenshot",
+        },
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        const config = await storage.loadConfig();
+        await storage.updateGlobalConfig({ ...config.global, claudeMode: "terminal" });
+        await storage.updateRepositoryConfig("project-1", {
+          defaultBranch: "main",
+          prBaseBranch: "main",
+          agentStyle: "native",
+        });
+
+        await service.reconcileInitialLaunch("env-1");
+
+        expect(send).toHaveBeenCalledWith(
+          "provider-session",
+          "Inspect this screenshot",
+          expect.objectContaining({
+            requestId: "initial-prompt:env-1:startup-agent",
+          }),
+        );
+      });
+    });
+
+    test("leaves a tmux-backed native Claude launch to the terminal coordinator", async () => {
+      const { provider, send, createSession } = createProviderStub("claude");
+      await withService({
+        prefix: "orkestrator-native-launch-tmux-",
+        environment: {
+          pendingAgentLaunch: true,
+          defaultAgent: "claude",
+          claudeMode: "native",
+          claudeNativeBackend: "tmux",
+          initialPrompt: "Inspect this screenshot",
+        },
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        await service.reconcileInitialLaunch("env-1");
+
+        expect(send).not.toHaveBeenCalled();
+        expect(createSession).not.toHaveBeenCalled();
+        // Still pending: the terminal coordinator owns this launch and the
+        // renderer is the side that will deliver its attachments.
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          pendingAgentLaunch: true,
+        });
+      });
+    });
+
     test("shares one launch task between concurrent reconciliations", async () => {
       let releaseCreate: (() => void) | undefined;
       const createBarrier = new Promise<void>((resolve) => {
@@ -6892,7 +7296,7 @@ describe("NativeAgentService", () => {
           prompt: "Do it",
           requestId: "request-1",
           ...override,
-        })).rejects.toThrow("prompt and request ID must not be blank");
+        })).rejects.toThrow("prompt or attachment and request ID must not be blank");
         expect(send).not.toHaveBeenCalled();
       });
     });

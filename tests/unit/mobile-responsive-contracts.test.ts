@@ -101,6 +101,19 @@ describe("mobile responsive layout contracts", () => {
     expect(css).not.toContain(".native-compose-input-viewport");
   });
 
+  test("connecting logos honor reduced motion", () => {
+    const css = read("apps/web/src/index.css");
+    expect(css).toContain(".agent-connecting-logo {");
+    expect(css).toContain("animation: agent-connecting-pulse 1.6s ease-in-out infinite;");
+    expect(css).toContain(`@media (prefers-reduced-motion: reduce) {
+  .agent-connecting-logo {
+    animation: none;
+    opacity: 1;
+    filter: none;
+  }
+}`);
+  });
+
   test("chat status rows keep stable geometry and honor reduced motion", () => {
     const css = read("apps/web/src/index.css");
     expect(css).toContain(`.chat-status-row {

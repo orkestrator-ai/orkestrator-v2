@@ -80,6 +80,11 @@ async function spawnBridge(options: {
 } = {}): Promise<{ child: ChildProcessWithoutNullStreams; base: string; headers: Record<string, string> }> {
   const port = options.port ?? await unusedPort();
   const token = options.token ?? "integration-test-token";
+  // A live Orkestrator process exports ACP_STATE_DIR. Inheriting it would
+  // restore that environment's sessions into this test bridge, so a
+  // MAX_SESSIONS=1 rollback test 429s before it can fail closed, and
+  // /global/models merges the fixture catalogue with whatever was persisted.
+  const stateDirectory = options.stateDirectory ?? await temporaryDirectory();
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     ACP_PROVIDER: "cursor",
@@ -87,9 +92,10 @@ async function spawnBridge(options: {
     ACP_BRIDGE_TOKEN: token,
     PORT: String(port),
     HOSTNAME: "127.0.0.1",
-    ...(options.stateDirectory ? { ACP_STATE_DIR: options.stateDirectory } : {}),
-    ...options.env,
+    ACP_STATE_DIR: stateDirectory,
   };
+  delete env.ACP_MAX_SESSIONS;
+  Object.assign(env, options.env);
   // The child inherits this process's environment, so a test that pins a
   // fail-closed default has to prove the variable is genuinely absent rather
   // than merely unmentioned. An explicit `undefined` in `options.env` deletes

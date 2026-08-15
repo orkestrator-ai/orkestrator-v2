@@ -10,7 +10,7 @@ test("agent thinking shimmer respects motion and forced-color preferences", asyn
   });
   await page.goto("/styles");
 
-  const indicator = page.getByRole("status");
+  const indicator = page.getByRole("status").filter({ hasText: "Codex is thinking..." });
   await expect(indicator).toHaveText("Codex is thinking...");
   await expect(indicator).toHaveCSS("animation-name", "agent-thinking-shimmer");
   await expect(indicator).toHaveCSS("color", "rgba(0, 0, 0, 0)");
@@ -44,6 +44,36 @@ test("agent thinking shimmer respects motion and forced-color preferences", asyn
   expect(forcedColorStyles.animationName).toBe("none");
   expect(forcedColorStyles.backgroundImage).toBe("none");
   expect(forcedColorStyles.color).not.toBe("rgba(0, 0, 0, 0)");
+});
+
+test("connecting NativeChatShell logo respects the reduced-motion preference", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop coverage is sufficient for global media rules");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.goto("/styles");
+
+  const shell = page.getByTestId("agent-connecting-shell");
+  const status = shell.getByRole("status");
+  await expect(status).toHaveText("Connecting to Codex...");
+  const logo = shell.locator("span[aria-hidden='true'] svg.agent-connecting-logo");
+  await expect(logo).toBeVisible();
+
+  for (const viewport of [
+    { width: 1_280, height: 800 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expect(logo).toHaveCSS("width", "64px");
+    await expect(logo).toHaveCSS("height", "64px");
+  }
+  await expect(logo).toHaveCSS("animation-name", "agent-connecting-pulse");
+  await expect(logo).toHaveCSS("animation-duration", "1.6s");
+
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(logo).toHaveCSS("animation-name", "none");
+  await expect(logo).toHaveCSS("opacity", "1");
+  await expect(logo).toHaveCSS("filter", "none");
 });
 
 test.describe("touch compose input geometry", () => {

@@ -1510,6 +1510,7 @@ function SharedNativeAgentController({
     <NativeChatShell
       agentExpansionScope={data.environmentId}
       agentLabel={label}
+      platform={platform}
       isActive={isActive}
       ownsGlobalShortcuts={ownsGlobalShortcuts}
       // Without this, images the agent wrote inside the container render as
@@ -1868,6 +1869,7 @@ function SharedNativeAgentController({
           )}
           onAddressAll={async () => { await submit(ADDRESS_ALL_REVIEW_PROMPT); }}
           contextUsage={composeContextUsage}
+          showContextUsage={contextUsage === undefined || composeContextUsage !== null}
           queue={projection?.queue ? {
             length: queuedMessages.length,
             error: projection.queue.blocked

@@ -128,8 +128,14 @@ function parseAcpTurnUsageObject(value: Record<string, unknown>): AcpTurnUsage |
 
   // ACP `usage_update` uses `used`/`size`, which are too generic to accept on
   // every payload. The discriminator is required; persist restore already
-  // stores the mapped `contextUsedTokens` / `contextWindow` names.
-  if (value.sessionUpdate === "usage_update") {
+  // stores the mapped `contextUsedTokens` / `contextWindow` names. `type` is
+  // the same fallback `applySessionUpdate` already uses for every kind.
+  const kind = typeof value.sessionUpdate === "string"
+    ? value.sessionUpdate
+    : typeof value.type === "string"
+      ? value.type
+      : "";
+  if (kind === "usage_update") {
     const occupancy = count(value.used);
     const window = count(value.size);
     if (occupancy !== undefined && usage.contextUsedTokens === undefined) {

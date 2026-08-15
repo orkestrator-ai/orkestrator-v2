@@ -108,6 +108,47 @@ describe("parseAcpTurnUsage", () => {
     expect(parseAcpTurnUsage({ used: 10, size: 100 })).toBeNull();
   });
 
+  test("reads occupancy when the update uses type instead of sessionUpdate", () => {
+    expect(parseAcpTurnUsage({
+      type: "usage_update",
+      used: 15_675,
+      size: 200_000,
+    })).toEqual({
+      contextUsedTokens: 15_675,
+      contextWindow: 200_000,
+    });
+  });
+
+  test("reads ACP v2 idle state_update.usage, including thoughtTokens", () => {
+    expect(parseAcpTurnUsage({
+      sessionUpdate: "state_update",
+      state: "idle",
+      stopReason: "end_turn",
+      usage: {
+        totalTokens: 8_000,
+        inputTokens: 7_000,
+        outputTokens: 1_000,
+        thoughtTokens: 50,
+        cachedReadTokens: 4_000,
+        cachedWriteTokens: 20,
+      },
+    })).toEqual({
+      totalTokens: 8_000,
+      inputTokens: 7_000,
+      outputTokens: 1_000,
+      reasoningTokens: 50,
+      cacheReadTokens: 4_000,
+      cacheWriteTokens: 20,
+    });
+  });
+
+  test("reports nothing for a running state_update without usage", () => {
+    expect(parseAcpTurnUsage({
+      sessionUpdate: "state_update",
+      state: "running",
+    })).toBeNull();
+  });
+
   test("ignores a usage_update cost that is not USD", () => {
     expect(parseAcpTurnUsage({
       sessionUpdate: "usage_update",

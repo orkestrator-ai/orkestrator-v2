@@ -1246,28 +1246,30 @@ describe("ACP bridge", () => {
   });
 
   test("reads ACP usage_update occupancy and PromptResponse.usage without Grok _meta", async () => {
-    const bridge = await spawnBridge({ stateDirectory: await temporaryDirectory() });
-    const created = await nativeFetch(`${bridge.base}/session/create`, {
+    const stateDirectory = await temporaryDirectory();
+    const first = await spawnBridge({ stateDirectory });
+    const created = await nativeFetch(`${first.base}/session/create`, {
       method: "POST",
-      headers: bridge.headers,
+      headers: first.headers,
       body: JSON.stringify({ clientSessionKey: "env-usage-acp:tab-1" }),
     }).then((response) => response.json()) as { id: string };
 
-    const readSession = async () =>
-      await nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
-        .then((response) => response.json()) as {
-          status: string;
-          contextUsage?: Record<string, unknown>;
-        };
+    type UsageSnapshot = {
+      status: string;
+      contextUsage?: Record<string, unknown>;
+    };
+    const readSession = async (base: string, headers: Record<string, string>) =>
+      await nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as UsageSnapshot;
 
-    expect((await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+    expect((await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
       method: "POST",
-      headers: bridge.headers,
+      headers: first.headers,
       body: JSON.stringify({ prompt: "USAGE_ACP: report occupancy over ACP" }),
     })).status).toBe(202);
 
     const session = await waitFor(
-      readSession,
+      () => readSession(first.base, first.headers),
       (value) => value.status === "idle" && value.contextUsage !== undefined,
     );
     expect(session.contextUsage).toMatchObject({
@@ -1282,6 +1284,62 @@ describe("ACP bridge", () => {
       source: "provider",
     });
     expect(session.contextUsage?.percentage).toBeCloseTo(7.8375);
+
+    first.child.kill("SIGTERM");
+    await Bun.sleep(200);
+    const second = await spawnBridge({ stateDirectory });
+    const restored = await readSession(second.base, second.headers);
+    expect(restored.contextUsage).toMatchObject({
+      usedTokens: 15_675,
+      maximumTokens: 200_000,
+      inputTokens: 10_000,
+      outputTokens: 2_000,
+      reasoningTokens: 300,
+      cacheReadTokens: 5_000,
+      cacheWriteTokens: 45,
+      costUsd: 0.042,
+      source: "provider",
+    });
+    expect(restored.contextUsage?.percentage).toBeCloseTo(7.8375);
+  });
+
+  test("reads ACP v2 idle state_update.usage without PromptResponse.usage", async () => {
+    const bridge = await spawnBridge({ stateDirectory: await temporaryDirectory() });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-usage-state:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    const readSession = async () =>
+      await nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as {
+          status: string;
+          contextUsage?: Record<string, unknown>;
+        };
+
+    expect((await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "USAGE_STATE: complete over idle usage" }),
+    })).status).toBe(202);
+
+    const session = await waitFor(
+      readSession,
+      (value) => value.status === "idle" && value.contextUsage !== undefined,
+    );
+    expect(session.contextUsage).toMatchObject({
+      usedTokens: 8_000,
+      inputTokens: 7_000,
+      outputTokens: 1_000,
+      reasoningTokens: 50,
+      cacheReadTokens: 4_000,
+      cacheWriteTokens: 20,
+      source: "provider",
+    });
+    expect(session.contextUsage).not.toHaveProperty("maximumTokens");
+    expect(session.contextUsage).not.toHaveProperty("percentage");
+    expect(session.contextUsage).not.toHaveProperty("costUsd");
   });
 
   test("normalizes ACP tool calls, upserts updates, and rehydrates them after restart", async () => {

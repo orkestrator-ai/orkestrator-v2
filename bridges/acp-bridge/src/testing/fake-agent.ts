@@ -2258,6 +2258,52 @@ lines.on("line", (line) => {
     // Standard ACP carriers Cursor's CLI schema already defines but does not
     // emit. The bridge must still consume them so occupancy appears the moment
     // an agent starts sending `usage_update` / `PromptResponse.usage`.
+    // v2 turn-complete usage rides idle `state_update.usage`; session/prompt
+    // itself returns only a stop reason, the way Cursor's empty result looks.
+    if (prompt.startsWith("USAGE_STATE")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Counted over state_update." } },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: { sessionUpdate: "state_update", state: "running" },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "state_update",
+            state: "idle",
+            stopReason: "end_turn",
+            usage: {
+              totalTokens: 8_000,
+              inputTokens: 7_000,
+              outputTokens: 1_000,
+              thoughtTokens: 50,
+              cachedReadTokens: 4_000,
+              cachedWriteTokens: 20,
+            },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: { stopReason: "end_turn" },
+      });
+      return;
+    }
     if (prompt.startsWith("USAGE_ACP")) {
       write({
         jsonrpc: "2.0",

@@ -61,12 +61,24 @@ function describeWaitValue(value: unknown): string {
     : `${serialized.slice(0, MAX_WAIT_DIAGNOSTIC_BYTES)}… (${serialized.length} chars, truncated)`;
 }
 
+function isRetryableWaitError(error: unknown): boolean {
+  if (!error || typeof error !== "object" || !("code" in error)) return false;
+  return error.code === "ConnectionRefused" || error.code === "ECONNREFUSED";
+}
+
 async function waitFor<T>(read: () => Promise<T>, accept: (value: T) => boolean): Promise<T> {
   const deadline = Date.now() + 5_000;
-  let latest!: T;
+  let latest: T | undefined;
   while (Date.now() < deadline) {
-    latest = await read();
-    if (accept(latest)) return latest;
+    try {
+      latest = await read();
+      if (accept(latest)) return latest;
+    } catch (error) {
+      // The bridge child can still be binding, or Bun may already have killed it
+      // after a test timeout. Retry until the deadline so a refused connection
+      // becomes a bounded wait diagnostic instead of an unhandled rejection.
+      if (!isRetryableWaitError(error)) throw error;
+    }
     await Bun.sleep(20);
   }
   throw new Error(`Timed out waiting for ACP state: ${describeWaitValue(latest)}`);
@@ -1429,6 +1441,8 @@ describe("ACP bridge", () => {
       .toEqual({ error: "Session exceeded the active sub-agent limit" });
   });
 
+  // spawnBridge already waits up to 5s for health; the two follow-up waitFors
+  // need remaining room when the aggregate suite is spawning other bridges.
   for (const terminal of [
     { prompt: "FINISHCURSORSUBAGENT", agentState: "finished", toolState: "success" },
     { prompt: "FAILCURSORSUBAGENT", agentState: "failed", toolState: "failure" },
@@ -1471,7 +1485,7 @@ describe("ACP bridge", () => {
       )).toMatchObject({ toolState: terminal.toolState, agentState: terminal.agentState });
       expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
         .then((response) => response.json())).toEqual({ activity: "idle" });
-    });
+    }, 20_000);
   }
 
   test("tracks Grok's metadata-described sub-agent until its terminal notification", async () => {

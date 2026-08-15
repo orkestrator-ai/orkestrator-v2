@@ -10,6 +10,33 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `ACP bridge > settles Cursor's in-process child as finished` (`bridges/acp-bridge/src/index.test.ts`)
+
+- **Status:** resolved
+- **Date observed:** 2026-08-15
+- **Original command:** `bun run test`
+- **Worker configuration:** bridges group used two workers while workspace, root,
+  and protocol-lockfile groups ran concurrently.
+- **Failure:** the test exceeded Bun's default 5,000 ms timeout (`5000.79 ms`).
+  Bun then killed the spawned bridge (`killed 1 dangling process`), and the
+  in-flight `waitFor` fetch failed as an unhandled `ConnectionRefused` against
+  `/session/:id`.
+- **Suite counts:** bridges group: 2,503 passed, 11 skipped, 1 failed, 1 error
+  across 70 files.
+- **Isolated rerun:** `bun test bridges/acp-bridge/src/index.test.ts -t "settles Cursor's in-process child"`
+  → passed in 0.3 s.
+- **Root cause:** `spawnBridge` already waits up to 5 s for health, then this
+  case runs two more 5 s `waitFor` polls, all inside Bun's 5 s default test
+  budget. Under aggregate spawn contention the health wait consumed the budget
+  before the child could settle. `waitFor` also rethrew connection errors
+  immediately, so the killed child became a second unhandled error.
+- **Fix:** give these two settle tests a 20 s budget, and retry `ConnectionRefused`
+  inside `waitFor` until the deadline so a refused connection becomes a bounded
+  wait diagnostic.
+- **Verification:** focused settle tests passed in 0.3 s, the owning file passed
+  in 29.2 s, and the complete concurrent suite passed in 138.5 s with no
+  failures.
+
 ## Test bootstrap mock-registration cascade (`apps/web` and root renderer tests)
 
 - **Status:** resolved

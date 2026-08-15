@@ -6783,6 +6783,46 @@ describe("NativeAgentService", () => {
     }
   });
 
+  test.each([true, false] as const)(
+    "forwards queued claude shared fastMode=%s through dispatch",
+    async (fastMode) => {
+      const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-native-claude-fast-"));
+      const storage = await createStorage(dataDir);
+      await addEnvironment(storage);
+      const queueKey = "claude\u0000env-env-1:tab-1";
+      await storage.savePromptQueue(queueKey, "env-1", [
+        { id: "row-1", text: "Use the selected speed", fastMode },
+      ]);
+      const send = mock(async () => undefined);
+      const provider = {
+        agent: "claude",
+        createSession: async () => "provider-session",
+        registerSession: () => undefined,
+        send,
+        status: async () => "idle",
+        messages: async () => [],
+        structured: async () => null,
+        abort: async () => undefined,
+      } as AgentSessionProvider;
+      const service = new NativeAgentService(storage, async <T>(): Promise<T> => {
+        throw new Error("unused");
+      }, { provider: async () => provider });
+      try {
+        await (
+          service as unknown as { drainPromptQueues(): Promise<void> }
+        ).drainPromptQueues();
+        expect(send).toHaveBeenCalledWith(
+          "provider-session",
+          "Use the selected speed",
+          expect.objectContaining({ fastMode }),
+        );
+      } finally {
+        await service.shutdown();
+        await fs.rm(dataDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   test("parks permanent rejection visibly but retains transient in-flight work", async () => {
     const run = async (
       error: Error,

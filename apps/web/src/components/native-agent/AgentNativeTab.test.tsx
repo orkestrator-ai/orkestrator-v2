@@ -1149,6 +1149,104 @@ describe("AgentNativeTab", () => {
       }));
     }
 
+    test("shows an active Cursor Task as a sub-agent rail above the composer", async () => {
+      seedProjection({
+        messages: [{
+          id: "assistant-cursor-subagent",
+          role: "assistant",
+          content: "Parent response complete",
+          createdAt: "2026-08-15T10:00:00.000Z",
+          parts: [{
+            type: "tool-invocation",
+            content: "Task: Validate the implementation",
+            toolName: "task",
+            toolTitle: "Task: Validate the implementation",
+            toolUseId: "cursor-subagent-1",
+            toolState: "success",
+            agentState: "active",
+            toolArgs: { description: "Validate the implementation" },
+          }],
+        }],
+      });
+
+      render(<AgentNativeTab tabId="tab-cursor-subagent" data={identity("cursor")} isActive />);
+
+      const rail = await screen.findByRole("status", { name: "1 sub-agent working" });
+      const composeDock = screen.getByTestId("compose-dock");
+      const composeBar = screen.getByTestId("shared-native-compose-bar");
+      expect(within(rail).getByText("Validate the implementation")).toBeTruthy();
+      expect(composeDock.contains(rail)).toBe(true);
+      expect(rail.compareDocumentPosition(composeBar) & Node.DOCUMENT_POSITION_FOLLOWING)
+        .toBeTruthy();
+    });
+
+    test("shows an active Grok Build sub-agent in the shared composer rail", async () => {
+      seedProjection({
+        messages: [{
+          id: "assistant-grok-subagent",
+          role: "assistant",
+          content: "Parent response complete",
+          createdAt: "2026-08-15T10:00:00.000Z",
+          parts: [{
+            type: "tool-invocation",
+            content: "Launch validation agent",
+            toolName: "spawn_subagent",
+            toolTitle: "Launch validation agent",
+            toolUseId: "grok-subagent-1",
+            toolState: "success",
+            agentState: "active",
+            toolArgs: {
+              variant: "Task",
+              run_in_background: true,
+              description: "Validate the implementation",
+              subagent_type: "explore",
+            },
+          }],
+        }],
+      });
+
+      const { rerender } = render(
+        <AgentNativeTab tabId="tab-grok-subagent" data={identity("grok")} isActive={false} />,
+      );
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      });
+      expect(screen.queryByTestId("active-subagent-rail")).toBeNull();
+
+      await act(async () => {
+        rerender(<AgentNativeTab tabId="tab-grok-subagent" data={identity("grok")} isActive />);
+      });
+
+      const rail = await screen.findByRole("status", { name: "1 sub-agent working" });
+      expect(within(rail).getByText("Validate the implementation")).toBeTruthy();
+      expect(screen.getByTestId("active-subagent-spinner")).toBeTruthy();
+      expect(screen.getByTestId("compose-dock").contains(rail)).toBe(true);
+    });
+
+    test("removes the sub-agent rail when Cursor reports the child terminal", async () => {
+      seedProjection({
+        messages: [{
+          id: "assistant-cursor-subagent-finished",
+          role: "assistant",
+          content: "",
+          createdAt: "2026-08-15T10:00:00.000Z",
+          parts: [{
+            type: "tool-invocation",
+            content: "Task: Validate the implementation",
+            toolName: "task",
+            toolUseId: "cursor-subagent-1",
+            toolState: "success",
+            agentState: "finished",
+          }],
+        }],
+      });
+
+      render(<AgentNativeTab tabId="tab-cursor-subagent-finished" data={identity("cursor")} isActive />);
+
+      await screen.findByTestId("shared-native-compose-bar");
+      expect(screen.queryByTestId("active-subagent-rail")).toBeNull();
+    });
+
     test("renders an unavailable context wheel when the provider reports no maximum", async () => {
       seedProjection({
         contextUsage: {

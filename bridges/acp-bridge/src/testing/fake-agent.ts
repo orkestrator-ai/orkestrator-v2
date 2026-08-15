@@ -83,8 +83,8 @@ function sessionPayload(sessionId = "fake-session"): JsonObject {
   // messages must carry no model attribution.
   const withoutModel = provider !== "grok" && process.env.FAKE_ACP_NO_MODEL_OPTION === "1"
     ? {
-        ...config,
-        configOptions: config.configOptions.filter((option) => option.id !== "model"),
+        ...cursorConfig,
+        configOptions: cursorConfig.configOptions.filter((option) => option.id !== "model"),
       }
     : config;
   return {
@@ -526,6 +526,154 @@ lines.on("line", (line) => {
         params: {
           sessionId: "fake-session",
           update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Led with a tool." } },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("BACKGROUNDSUBAGENT")) {
+      if (provider === "grok") {
+        const toolMeta = {
+          version: 1,
+          name: "spawn_subagent",
+          kind: "task",
+          namespace: "grok_build",
+          label: "Subagent",
+          read_only: false,
+        };
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: "grok-subagent-tool-1",
+              title: "Agent: Validate the implementation",
+              rawInput: {
+                background: true,
+                description: "Validate the implementation",
+                prompt: "Inspect the implementation and report any issues.",
+                subagent_type: "explore",
+              },
+              _meta: {
+                subagentBackground: true,
+                "x.ai/tool": toolMeta,
+              },
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "grok-subagent-tool-1",
+              title: "Launch validation agent",
+              kind: "other",
+              rawInput: {
+                variant: "Task",
+                task_id: "",
+                capability_mode: "default",
+                run_in_background: true,
+                description: "Validate the implementation",
+                prompt: "Inspect the implementation and report any issues.",
+                subagent_type: "explore",
+              },
+              _meta: { "x.ai/tool": toolMeta },
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "grok-subagent-tool-1",
+              status: "completed",
+              content: [{ type: "content", content: { type: "text", text: "Subagent started." } }],
+              rawOutput: { type: "Text", text: "Subagent started." },
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "subagent_spawned",
+              subagent_id: "grok-subagent-1",
+              child_session_id: "grok-child-session-1",
+              parent_session_id: "fake-session",
+              parent_prompt_id: "grok-parent-prompt-1",
+              subagent_type: "explore",
+              description: "Validate the implementation",
+              model: "grok-test",
+              effective_context_source: "parent",
+            },
+          },
+        });
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+        return;
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "cursor-subagent-1",
+            title: "Task: Validate the implementation",
+            kind: "other",
+            status: "in_progress",
+            rawInput: {
+              _toolName: "task",
+              description: "Validate the implementation",
+            },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "cursor-subagent-1",
+            status: "completed",
+            content: [{ type: "content", content: { type: "text", text: "Sub-agent launched." } }],
+            rawOutput: { durationMs: 42, isBackground: true },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FINISHSUBAGENT")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "subagent_finished",
+            subagent_id: "grok-subagent-1",
+            child_session_id: "grok-child-session-1",
+            status: "completed",
+            duration_ms: 42,
+            tokens_used: 12,
+            tool_calls: 1,
+            turns: 1,
+            output: "Validation complete.",
+            will_wake: true,
+          },
         },
       });
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });

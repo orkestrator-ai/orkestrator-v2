@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { NativeMessage } from "./native-message-types";
 import { normalizeOpenCodeNativeMessage } from "./native-message-adapters";
-import { pinActiveNativeAgentParts } from "./native-agent-pinning";
+import {
+  pinActiveNativeAgentParts,
+  separateActiveNativeAgentParts,
+} from "./native-agent-pinning";
 
 function assistantMessage(
   id: string,
@@ -18,6 +21,48 @@ function assistantMessage(
 }
 
 describe("pinActiveNativeAgentParts", () => {
+  test("separates active agents for a composer rail and retains surrounding transcript", () => {
+    const activeTask = {
+      type: "task-group" as const,
+      content: "Task: Validate the change",
+      task: {
+        type: "tool-invocation" as const,
+        content: "Task: Validate the change",
+        toolUseId: "cursor-task-1",
+        toolState: "success" as const,
+        agentState: "active" as const,
+      },
+      childTools: [],
+    };
+    const separated = separateActiveNativeAgentParts([
+      assistantMessage("assistant-1", [
+        { type: "text", content: "Parent response" },
+        activeTask,
+      ]),
+      assistantMessage("assistant-2", [{ type: "text", content: "Later" }]),
+    ]);
+
+    expect(separated.messages.map((message) => message.id)).toEqual([
+      "assistant-1",
+      "assistant-2",
+    ]);
+    expect(separated.messages[0]?.parts).toEqual([{ type: "text", content: "Parent response" }]);
+    expect(separated.activeAgents).toEqual([activeTask]);
+  });
+
+  test("drops an otherwise empty source row when its active agent moves to the rail", () => {
+    const separated = separateActiveNativeAgentParts([
+      assistantMessage("assistant-1", [{
+        type: "subagent",
+        content: "Researcher",
+        agentState: "active",
+      }]),
+    ]);
+
+    expect(separated.messages).toEqual([]);
+    expect(separated.activeAgents).toHaveLength(1);
+  });
+
   test("moves active subagents to the bottom as temporary message rows", () => {
     const messages: NativeMessage[] = [
       assistantMessage("assistant-1", [

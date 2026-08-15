@@ -1142,6 +1142,127 @@ describe("ACP bridge", () => {
     expect(restored.messages[1]?.parts).toEqual(assistantParts);
   });
 
+  test("keeps Cursor's completed Task launch active until the background sub-agent ends", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const first = await spawnBridge({ stateDirectory });
+    const created = await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ clientSessionKey: "env-background-subagent:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ prompt: "BACKGROUNDSUBAGENT: validate" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${first.base}/session/${created.id}`, { headers: first.headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    expect(settled.messages[1]?.parts[0]).toMatchObject({
+      type: "tool-invocation",
+      toolUseId: "cursor-subagent-1",
+      toolName: "task",
+      toolState: "success",
+      agentState: "active",
+      toolOutput: "Sub-agent launched.",
+    });
+    expect(await nativeFetch(`${first.base}/session/${created.id}/activity`, {
+      headers: first.headers,
+    }).then((response) => response.json())).toEqual({ activity: "working" });
+
+    await stopChild(first.child);
+    const restarted = await spawnBridge({ stateDirectory });
+    const restored = await nativeFetch(`${restarted.base}/session/${created.id}`, {
+      headers: restarted.headers,
+    }).then((response) => response.json()) as {
+      messages: Array<{ parts: Array<Record<string, unknown>> }>;
+    };
+    // The background child belonged to the old Cursor process, so restart is
+    // authoritative evidence that it cannot still be running.
+    expect(restored.messages[1]?.parts[0]).toMatchObject({
+      toolState: "success",
+      agentState: "failed",
+    });
+    expect(await nativeFetch(`${restarted.base}/session/${created.id}/activity`, {
+      headers: restarted.headers,
+    }).then((response) => response.json())).toEqual({ activity: "idle" });
+  });
+
+  test("tracks Grok's metadata-described sub-agent until its terminal notification", async () => {
+    const { base, headers } = await spawnBridge({ env: { ACP_PROVIDER: "grok" } });
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-grok-background-subagent:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "BACKGROUNDSUBAGENT: validate" }),
+    })).status).toBe(202);
+
+    const active = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle"
+        && value.messages.some((message) => message.parts.some((part) =>
+          part.toolUseId === "grok-subagent-tool-1" && part.agentState === "active"
+        )),
+    );
+    expect(active.messages.flatMap((message) => message.parts).find((part) =>
+      part.toolUseId === "grok-subagent-tool-1"
+    )).toMatchObject({
+      type: "tool-invocation",
+      toolName: "spawn_subagent",
+      toolState: "success",
+      agentState: "active",
+      toolArgs: {
+        variant: "Task",
+        run_in_background: true,
+        description: "Validate the implementation",
+        subagent_type: "explore",
+      },
+    });
+    expect(await nativeFetch(`${base}/session/${created.id}/activity`, {
+      headers,
+    }).then((response) => response.json())).toEqual({ activity: "working" });
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "FINISHSUBAGENT" }),
+    })).status).toBe(202);
+
+    const finished = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle"
+        && value.messages.some((message) => message.parts.some((part) =>
+          part.toolUseId === "grok-subagent-tool-1" && part.agentState === "finished"
+        )),
+    );
+    expect(finished.messages.flatMap((message) => message.parts).find((part) =>
+      part.toolUseId === "grok-subagent-tool-1"
+    )).toMatchObject({ toolState: "success", agentState: "finished" });
+    expect(await nativeFetch(`${base}/session/${created.id}/activity`, {
+      headers,
+    }).then((response) => response.json())).toEqual({ activity: "idle" });
+  });
+
   test("normalizes failing tool calls into failed parts with an error message", async () => {
     const { base, headers } = await spawnBridge();
     const created = await nativeFetch(`${base}/session/create`, {

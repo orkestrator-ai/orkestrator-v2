@@ -94,7 +94,9 @@ export function parseNativeAttachmentsFromContent(
 
 function isTaskTool(toolName?: string): boolean {
   const normalized = toolName?.toLowerCase();
-  return normalized === "task" || normalized === "agent";
+  return normalized === "task"
+    || normalized === "agent"
+    || normalized === "spawn_subagent";
 }
 
 function isToolActivity(part: NativeMessagePart): boolean {
@@ -125,7 +127,10 @@ export function normalizeClaudePart(part: ClaudeMessagePart): NativeMessagePart 
   }
 }
 
-function groupClaudeTaskParts(parts: NativeMessagePart[]): NativeMessagePart[] {
+function groupTaskParts(
+  parts: NativeMessagePart[],
+  shouldGroup: (part: Extract<NativeMessagePart, { type: "tool-invocation" }>) => boolean,
+): NativeMessagePart[] {
   const result: NativeMessagePart[] = [];
   const taskGroups = new Map<string, NativeTaskGroupPart>();
   let currentTask: NativeTaskGroupPart | null = null;
@@ -159,7 +164,7 @@ function groupClaudeTaskParts(parts: NativeMessagePart[]): NativeMessagePart[] {
       continue;
     }
 
-    if (isTaskTool(part.toolName)) {
+    if (isTaskTool(part.toolName) && shouldGroup(part)) {
       const taskGroup: NativeTaskGroupPart = {
         type: "task-group",
         content: part.content,
@@ -184,6 +189,16 @@ function groupClaudeTaskParts(parts: NativeMessagePart[]): NativeMessagePart[] {
   }
 
   return result;
+}
+
+/**
+ * Promote provider-neutral Task/Agent tool launches only when their bridge has
+ * supplied an explicit child lifecycle. A plain task-named tool may be an
+ * ordinary foreground operation, so its name alone is not enough outside the
+ * Claude adapter.
+ */
+function groupNativeSubagentTaskParts(parts: NativeMessagePart[]): NativeMessagePart[] {
+  return groupTaskParts(parts, (part) => part.agentState !== undefined);
 }
 
 function isStreamCollapsibleTextPart(
@@ -488,7 +503,9 @@ export function normalizeNativeMessage(message: NativeMessage): NativeMessage {
   );
   const normalized: NativeMessage = {
     ...messageWithAttachments,
-    parts: groupNativeAgentActivity(groupNativeToolActivity(dedupedParts)),
+    parts: groupNativeAgentActivity(
+      groupNativeToolActivity(groupNativeSubagentTaskParts(dedupedParts)),
+    ),
   };
   normalizedNativeMessageCache.set(message, normalized);
   return normalized;
@@ -537,7 +554,7 @@ function normalizeClaudeMessageUncached(message: ClaudeMessage): NativeMessage {
         .filter((part): part is NativeMessagePart => part !== null);
 
   const taskGroupedParts = message.role === "assistant"
-    ? groupClaudeTaskParts(rawParts)
+    ? groupTaskParts(rawParts, () => true)
     : rawParts;
 
   return {

@@ -92,6 +92,14 @@ interface BridgeToolPart {
   toolName?: string;
   toolArgs?: JsonObject;
   toolState?: "success" | "failure" | "pending";
+  /**
+   * Lifecycle of a sub-agent launched by this tool.
+   *
+   * Cursor and Grok can complete the launch tool as soon as the child starts.
+   * Keep that lifecycle separate from `toolState`, just as the shared renderer
+   * does for Codex collaboration items.
+   */
+  agentState?: "active" | "finished" | "failed";
   toolTitle?: string;
   toolOutput?: string;
   toolError?: string;
@@ -102,9 +110,12 @@ interface AcpToolSourceState {
   title?: string;
   explicitName?: string;
   inputName?: string;
+  metadataName?: string;
+  metadataKind?: string;
   kind?: string;
   toolArgs?: JsonObject;
   toolState?: BridgeToolPart["toolState"];
+  agentState?: BridgeToolPart["agentState"];
   contentOutput?: string;
   rawOutput?: string;
   contentDiffs: BridgeToolDiff[];
@@ -133,6 +144,10 @@ interface SessionState {
   status: SessionStatus;
   error?: string;
   messages: BridgeMessage[];
+  /** Active background children, maintained incrementally for the hot activity route. */
+  activeSubagentToolIds: Set<string>;
+  /** Grok's terminal sub-agent notifications identify the child, not its tool call. */
+  subagentToolIds: Map<string, string>;
   /** Provider message IDs seen during the current process, bounded with the transcript. */
   historyMessageIds: Map<string, string>;
   child: AcpProcess | null;
@@ -787,6 +802,8 @@ async function resumeSessionReserved(
       acpSessionId,
       status: "idle",
       messages: [],
+      activeSubagentToolIds: new Set(),
+      subagentToolIds: new Map(),
       historyMessageIds: new Map(),
       child,
       revision: 0,
@@ -891,6 +908,8 @@ async function createSessionReserved(
       acpSessionId: created.sessionId,
       status: "idle",
       messages: [],
+      activeSubagentToolIds: new Set(),
+      subagentToolIds: new Map(),
       historyMessageIds: new Map(),
       child,
       revision: 0,
@@ -956,7 +975,7 @@ function attachChild(state: SessionState, child: AcpProcess): void {
     state.status = "error";
     state.error = error.message;
     // The agent is gone, so nothing will ever complete the tools it had open.
-    reconcileStaleToolParts(state);
+    reconcileStaleToolParts(state, true);
     state.revision += 1;
     schedulePersist();
   };
@@ -1103,12 +1122,20 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     }
     return;
   }
-  if (state.outputTruncated) return;
   // A reconnect replays a transcript the bridge already holds, so every update
   // that would mutate it has to be dropped — tool calls included. `tool_call`
   // upserts by id against the *trailing* message only, so a replayed historical
   // call finds no owner and appends a duplicate to whatever is at the tail.
   if (state.historyReplay === "ignore" && isTranscriptUpdateKind(kind)) return;
+  if (kind === "subagent_spawned") {
+    applySubagentSpawned(state, update);
+    return;
+  }
+  if (kind === "subagent_finished") {
+    applySubagentFinished(state, update);
+    return;
+  }
+  if (state.outputTruncated) return;
   if (kind === "tool_call" || kind === "tool_call_update") {
     applyToolCallUpdate(state, update, kind === "tool_call");
     return;
@@ -1173,6 +1200,7 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
       return;
     }
     trimPartsTo(message, MAX_PARTS_PER_MESSAGE - 1);
+    rebuildActiveSubagentToolIds(state);
   }
   const streaming = previous?.type === partType ? previous : undefined;
   const currentPartText = streaming?.content ?? "";
@@ -1224,6 +1252,8 @@ const TRANSCRIPT_UPDATE_KINDS = new Set([
   "agent_thought_chunk",
   "tool_call",
   "tool_call_update",
+  "subagent_spawned",
+  "subagent_finished",
 ]);
 
 function isTranscriptUpdateKind(kind: string): boolean {
@@ -1281,6 +1311,7 @@ function applyToolCallUpdate(
         return;
       }
       trimPartsTo(owner, MAX_PARTS_PER_MESSAGE - 1);
+      rebuildActiveSubagentToolIds(state);
     }
     part = {
       type: "tool-invocation",
@@ -1300,6 +1331,7 @@ function applyToolCallUpdate(
       explicitName: part.toolName,
       toolArgs: part.toolArgs,
       toolState: part.toolState ?? (isInitial ? "pending" : undefined),
+      agentState: part.agentState,
       rawOutput: part.toolOutput,
       contentDiffs: part.toolDiff ? [part.toolDiff] : [],
     };
@@ -1307,6 +1339,7 @@ function applyToolCallUpdate(
   }
   applyAcpToolSourcePatch(source, update);
   renderAcpToolSource(part, source);
+  syncActiveSubagentTool(state, part);
 
   state.revision += 1;
   const serializedBytes = Buffer.byteLength(JSON.stringify(part));
@@ -1332,6 +1365,15 @@ function applyAcpToolSourcePatch(source: AcpToolSourceState, update: JsonObject)
   }
   if ("kind" in update) {
     source.kind = boundedNullableString(update.kind, MAX_TOOL_NAME_BYTES);
+  }
+  if ("_meta" in update && isObject(update._meta)) {
+    const toolMeta = isObject(update._meta["x.ai/tool"])
+      ? update._meta["x.ai/tool"]
+      : undefined;
+    if (toolMeta) {
+      source.metadataName = boundedString(toolMeta.name, MAX_TOOL_NAME_BYTES)?.trim();
+      source.metadataKind = boundedString(toolMeta.kind, MAX_TOOL_NAME_BYTES)?.trim();
+    }
   }
   if ("rawInput" in update) {
     if (isObject(update.rawInput)) {
@@ -1366,7 +1408,10 @@ function applyAcpToolSourcePatch(source: AcpToolSourceState, update: JsonObject)
 }
 
 function renderAcpToolSource(part: BridgeToolPart, source: AcpToolSourceState): void {
-  const toolName = source.explicitName ?? source.inputName ?? source.kind;
+  const toolName = source.explicitName
+    ?? source.inputName
+    ?? source.metadataName
+    ?? source.kind;
   setOptionalPartField(part, "toolTitle", source.title);
   setOptionalPartField(part, "toolName", toolName);
   setOptionalPartField(part, "toolArgs", source.toolArgs);
@@ -1375,6 +1420,11 @@ function renderAcpToolSource(part: BridgeToolPart, source: AcpToolSourceState): 
 
   const output = source.contentOutput ?? source.rawOutput;
   setOptionalPartField(part, "toolOutput", output);
+  // Cursor puts `isBackground` in rawOutput even when it also supplies a
+  // human-readable content block. Grok carries the equivalent signal in the
+  // Task input and later sends separate subagent lifecycle notifications.
+  source.agentState = acpSubagentState(source, source.rawOutput ?? output);
+  setOptionalPartField(part, "agentState", source.agentState);
   setOptionalPartField(
     part,
     "toolError",
@@ -1386,6 +1436,144 @@ function renderAcpToolSource(part: BridgeToolPart, source: AcpToolSourceState): 
     source.locationPath ?? toolArgumentPath(source.toolArgs),
   );
   setOptionalPartField(part, "toolDiff", diff);
+}
+
+function acpSubagentState(
+  source: AcpToolSourceState,
+  output: string | undefined,
+): BridgeToolPart["agentState"] | undefined {
+  const toolName = (source.explicitName ?? source.inputName ?? source.kind)?.trim();
+  const title = source.title?.trim();
+  const normalizedToolName = toolName?.toLowerCase();
+  const normalizedMetadataName = source.metadataName?.toLowerCase();
+  const normalizedMetadataKind = source.metadataKind?.toLowerCase();
+  const variant = typeof source.toolArgs?.variant === "string"
+    ? source.toolArgs.variant.toLowerCase()
+    : undefined;
+  const isSubagentTool = normalizedToolName === "task"
+    || normalizedToolName === "agent"
+    || normalizedMetadataName === "spawn_subagent"
+    || normalizedMetadataKind === "task"
+    || variant === "task"
+    || /\bsub[- ]?agent\b/i.test(title ?? "");
+  if (!isSubagentTool && source.agentState === undefined) return undefined;
+  if (source.toolState === "failure") return "failed";
+  // A vendor may send a late tool projection after its dedicated lifecycle
+  // notification. Terminal child state is authoritative and cannot reopen.
+  if (source.agentState === "finished" || source.agentState === "failed") {
+    return source.agentState;
+  }
+
+  let lifecycle: Record<string, unknown> | undefined;
+  if (output) {
+    try {
+      const parsed = JSON.parse(output);
+      if (isObject(parsed)) lifecycle = parsed;
+    } catch {
+      // ACP permits plain-text tool output. The tool status still supplies the
+      // foreground lifecycle when no structured background hint is present.
+    }
+  }
+
+  if (lifecycle?.isBackground === true) return "active";
+  if (lifecycle?.isBackground === false) return "finished";
+  const backgroundLaunch = source.toolArgs?.background === true
+    || source.toolArgs?.run_in_background === true;
+  if (backgroundLaunch) return "active";
+  const reportedState = typeof lifecycle?.status === "string"
+    ? lifecycle.status
+    : typeof lifecycle?.state === "string"
+      ? lifecycle.state
+      : undefined;
+  if (reportedState && /^(failed|killed|cancelled|canceled|error)$/i.test(reportedState)) {
+    return "failed";
+  }
+  if (reportedState && /^(completed|finished|done|success)$/i.test(reportedState)) {
+    return "finished";
+  }
+  if (source.toolState === "pending") return "active";
+  if (source.toolState === "success") return "finished";
+  return source.agentState;
+}
+
+function syncActiveSubagentTool(state: SessionState, part: BridgeToolPart): void {
+  if (part.agentState === "active") state.activeSubagentToolIds.add(part.toolUseId);
+  else state.activeSubagentToolIds.delete(part.toolUseId);
+}
+
+function rebuildActiveSubagentToolIds(state: SessionState): void {
+  state.activeSubagentToolIds.clear();
+  for (const message of state.messages) {
+    for (const part of message.parts) {
+      if (part.type === "tool-invocation" && part.agentState === "active") {
+        state.activeSubagentToolIds.add(part.toolUseId);
+      }
+    }
+  }
+  for (const [subagentId, toolUseId] of state.subagentToolIds) {
+    if (!state.activeSubagentToolIds.has(toolUseId)) {
+      state.subagentToolIds.delete(subagentId);
+    }
+  }
+}
+
+function applySubagentSpawned(state: SessionState, update: JsonObject): void {
+  const subagentId = boundedString(update.subagent_id, MAX_TOOL_ID_BYTES)?.trim();
+  if (!subagentId || state.subagentToolIds.has(subagentId)) return;
+
+  const claimedToolIds = new Set(state.subagentToolIds.values());
+  const description = boundedString(update.description, MAX_TOOL_TITLE_BYTES)?.trim();
+  const subagentType = boundedString(update.subagent_type, MAX_TOOL_NAME_BYTES)?.trim();
+  const candidates: BridgeToolPart[] = [];
+
+  for (let messageIndex = state.messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+    const message = state.messages[messageIndex]!;
+    for (let partIndex = message.parts.length - 1; partIndex >= 0; partIndex -= 1) {
+      const part = message.parts[partIndex]!;
+      if (part.type !== "tool-invocation"
+        || part.agentState !== "active"
+        || claimedToolIds.has(part.toolUseId)) continue;
+      candidates.push(part);
+    }
+  }
+
+  const matched = candidates.find((part) => {
+    const partDescription = typeof part.toolArgs?.description === "string"
+      ? part.toolArgs.description.trim()
+      : undefined;
+    const partType = typeof part.toolArgs?.subagent_type === "string"
+      ? part.toolArgs.subagent_type.trim()
+      : undefined;
+    return (!description || partDescription === description)
+      && (!subagentType || partType === subagentType);
+  }) ?? candidates[0];
+
+  if (matched) state.subagentToolIds.set(subagentId, matched.toolUseId);
+}
+
+function applySubagentFinished(state: SessionState, update: JsonObject): void {
+  const subagentId = boundedString(update.subagent_id, MAX_TOOL_ID_BYTES)?.trim();
+  if (!subagentId) return;
+  const toolUseId = state.subagentToolIds.get(subagentId);
+  if (!toolUseId) return;
+
+  const part = state.messages
+    .flatMap((message) => message.parts)
+    .find((candidate): candidate is BridgeToolPart =>
+      candidate.type === "tool-invocation" && candidate.toolUseId === toolUseId
+    );
+  state.subagentToolIds.delete(subagentId);
+  if (!part) return;
+
+  const status = typeof update.status === "string" ? update.status : "completed";
+  part.agentState = /^(failed|killed|cancelled|canceled|error)$/i.test(status)
+    ? "failed"
+    : "finished";
+  const source = acpToolSourceStates.get(part);
+  if (source) source.agentState = part.agentState;
+  syncActiveSubagentTool(state, part);
+  state.revision += 1;
+  schedulePersist();
 }
 
 function setOptionalPartField<TKey extends keyof BridgeToolPart>(
@@ -1974,6 +2162,9 @@ function boundTranscript(state: SessionState): boolean {
     state.error = `${provider} output exceeded the transcript limit`;
     truncatedCurrentMessage = true;
   }
+  // Bounding can evict the tool that owned a background child. Keep the
+  // constant-time `/activity` index exactly aligned with the retained snapshot.
+  rebuildActiveSubagentToolIds(state);
   return truncatedCurrentMessage;
 }
 
@@ -2160,7 +2351,13 @@ async function route(
     }
     return json(response, 200, state.sessionConfig.composer);
   }
-  if (action === "activity" && request.method === "GET") return json(response, 200, { activity: state.status === "running" ? "working" : "idle" });
+  if (action === "activity" && request.method === "GET") {
+    return json(response, 200, {
+      activity: state.status === "running" || state.activeSubagentToolIds.size > 0
+        ? "working"
+        : "idle",
+    });
+  }
   if (action === "approvals" && request.method === "GET") return json(response, 200, { approvals: publicApprovals(state), revision: state.revision });
   if (action === "interactions" && request.method === "GET") return json(response, 200, { interactions: [], revision: state.revision });
   if (action?.startsWith("approvals/") && request.method === "POST") {
@@ -2337,7 +2534,7 @@ async function route(
       state.error = error instanceof Error ? error.message : String(error);
       state.turnStartedAt = undefined;
       state.currentTurnUsage = undefined;
-      reconcileStaleToolParts(state);
+      reconcileStaleToolParts(state, true);
       if (requestId) setPromptJournal(state, {
         requestId,
         state: "failed",
@@ -2912,6 +3109,8 @@ async function loadPersistedState(): Promise<void> {
         ? { error: candidate.error.slice(0, 4_000) }
         : {}),
       messages,
+      activeSubagentToolIds: new Set(),
+      subagentToolIds: new Map(),
       historyMessageIds: new Map(),
       child: null,
       revision: Number.isSafeInteger(candidate.revision) ? Number(candidate.revision) : 0,
@@ -2949,7 +3148,7 @@ async function loadPersistedState(): Promise<void> {
       }
     }
     boundTranscript(state);
-    reconcileStaleToolParts(state);
+    reconcileStaleToolParts(state, true);
     rememberCatalog(state.sessionConfig.composer);
     sessions.set(state.id, state);
     if (state.clientSessionKey) clientSessionKeys.set(state.clientSessionKey, state.id);
@@ -2968,10 +3167,16 @@ async function loadPersistedState(): Promise<void> {
  * Every live caller bumps the revision for its own status change already, so
  * this reports nothing back.
  */
-function reconcileStaleToolParts(state: SessionState): void {
+function reconcileStaleToolParts(
+  state: SessionState,
+  failActiveSubagents = false,
+): void {
   for (const message of state.messages) {
     for (const part of message.parts) {
       if (part.type !== "tool-invocation") continue;
+      if (failActiveSubagents && part.agentState === "active") {
+        part.agentState = "failed";
+      }
       if (part.toolState === "success" || part.toolState === "failure") continue;
       part.toolState = "failure";
       part.toolError = part.toolError ?? "Tool call ended without a result";
@@ -2981,6 +3186,7 @@ function reconcileStaleToolParts(state: SessionState): void {
       if (source) source.toolState = "failure";
     }
   }
+  rebuildActiveSubagentToolIds(state);
 }
 
 function normalizeBridgeMessage(value: unknown): BridgeMessage | null {
@@ -3056,6 +3262,11 @@ function normalizeBridgePart(
     || value.toolState === "pending"
     ? value.toolState
     : undefined;
+  const agentState = value.agentState === "active"
+    || value.agentState === "finished"
+    || value.agentState === "failed"
+    ? value.agentState
+    : undefined;
   const toolOutput = boundedString(value.toolOutput, MAX_TOOL_OUTPUT_BYTES);
   const toolError = boundedString(value.toolError, MAX_TOOL_OUTPUT_BYTES);
   const toolDiff = normalizeBridgeToolDiff(value.toolDiff);
@@ -3070,6 +3281,7 @@ function normalizeBridgePart(
     ...(toolName ? { toolName } : {}),
     ...(isObject(value.toolArgs) ? { toolArgs: boundedToolArguments(value.toolArgs) } : {}),
     ...(toolState ? { toolState } : {}),
+    ...(agentState ? { agentState } : {}),
     ...(toolTitle ? { toolTitle } : {}),
     ...(toolOutput !== undefined ? { toolOutput } : {}),
     ...(toolError !== undefined ? { toolError } : {}),

@@ -2911,8 +2911,12 @@ function setPromptJournal(state: SessionState, entry: PromptJournalEntry): void 
 }
 
 const RESOURCE_EXHAUSTED_ERROR = /\[resource_exhausted\]\s+Error/i;
+// The class name is whatever the provider's own error carried — `RetriableError`
+// is only the one Cursor happens to emit today. Matching a single character here
+// would silently exclude every other name and leave the turn dead, so the
+// identifier is quantified and the flag set matches `RESOURCE_EXHAUSTED_ERROR`.
 const FLATTENED_RESOURCE_EXHAUSTED_SUFFIX =
-  /(?:^|\n\n)Error: (?:RetriableError|[A-Za-z_$]): \[resource_exhausted\] Error\s*$/;
+  /(?:^|\n\n)Error: [A-Za-z_$][\w$]*: \[resource_exhausted\] Error\s*$/i;
 const RESOURCE_EXHAUSTED_CONTINUATION =
   "Continue from where the interrupted turn stopped. A transient provider capacity error ended the previous attempt. Do not repeat work or tool calls that already completed; inspect the session history and finish the original request.";
 
@@ -2936,13 +2940,14 @@ function stripFlattenedResourceExhaustedTail(
   tail.part.content = tail.part.content.replace(FLATTENED_RESOURCE_EXHAUSTED_SUFFIX, "");
   tail.message.content = tail.message.content.replace(FLATTENED_RESOURCE_EXHAUSTED_SUFFIX, "");
   if (!tail.part.content) tail.message.parts.pop();
-  if (state.currentTurnOutput !== null) {
-    state.currentTurnOutput = "";
-  }
   // Interim provider serialization is not part of the transcript users should
   // have to interpret. The final marker is retained if all retries exhaust.
   state.revision += 1;
   schedulePersist();
+}
+
+function structuredPromptInstruction(schema: JsonObject): string {
+  return `Return only one JSON value matching this JSON Schema. Do not use a Markdown fence or add commentary.\n\n${JSON.stringify(schema)}`;
 }
 
 function resourceExhaustedError(error: unknown): error is Error {
@@ -2969,11 +2974,20 @@ function retryStillOwned(
     && state.retryCancelledPromptSequence !== promptSequence;
 }
 
+function retryOwnershipLostError(state: SessionState): Error {
+  // A child exit or a transcript-limit failure records the real cause before the
+  // retry wakes up, and `/prompt` clears `error` per turn so anything here
+  // belongs to this one. Preserve it rather than hiding "the agent died" behind
+  // the generic message.
+  return new Error(state.error || `${provider} prompt retry lost its live session`);
+}
+
 async function requestPromptWithResourceExhaustedRetries(
   state: SessionState,
   child: AcpProcess,
   initialPrompt: JsonObject,
   promptSequence: number,
+  schema: JsonObject | undefined,
 ): Promise<unknown> {
   let prompt = initialPrompt;
   let retries = 0;
@@ -2994,7 +3008,7 @@ async function requestPromptWithResourceExhaustedRetries(
       if (state.retryCancelledPromptSequence === promptSequence) {
         return { stopReason: "cancelled" };
       }
-      throw requestError ?? new Error(`${provider} prompt retry lost its live session`);
+      throw requestError ?? retryOwnershipLostError(state);
     }
     if (retries >= RESOURCE_EXHAUSTED_MAX_RETRIES) {
       throw new Error(
@@ -3004,6 +3018,11 @@ async function requestPromptWithResourceExhaustedRetries(
     }
 
     if (flattened) stripFlattenedResourceExhaustedTail(state, flattened);
+    // Discard every attempt's partial structured output, on both the flattened
+    // and the typed-RPC path. The continuation re-emits the whole value, so a
+    // retained prefix would concatenate into unparseable JSON and fail a turn
+    // that actually recovered.
+    if (state.currentTurnOutput !== null) state.currentTurnOutput = "";
     // A provider can stop between a tool's start and terminal update. Settle
     // that attempt before the continuation starts; completed tools remain
     // successful and the continuation is explicitly told not to repeat them.
@@ -3015,11 +3034,19 @@ async function requestPromptWithResourceExhaustedRetries(
       if (state.retryCancelledPromptSequence === promptSequence) {
         return { stopReason: "cancelled" };
       }
-      throw new Error(`${provider} prompt retry lost its live session`);
+      throw retryOwnershipLostError(state);
     }
     prompt = {
       sessionId: state.acpSessionId,
-      prompt: [{ type: "text", text: RESOURCE_EXHAUSTED_CONTINUATION }],
+      // The schema instruction rides every attempt. The continuation replaces
+      // the original prompt on the wire, so omitting it would ask a structured
+      // turn to finish without restating the contract it must satisfy.
+      prompt: [{
+        type: "text",
+        text: schema
+          ? `${RESOURCE_EXHAUSTED_CONTINUATION}\n\n${structuredPromptInstruction(schema)}`
+          : RESOURCE_EXHAUSTED_CONTINUATION,
+      }],
     };
   }
 }
@@ -3205,6 +3232,12 @@ async function route(
       // The turn definitely did not run, so release the claim and let the
       // caller retry with the same requestId.
       state.dispatching = false;
+      // A cancel that landed in this window reserved the sequence this turn was
+      // about to take. The turn never took it, so drop the reservation rather
+      // than let it suppress retries for whichever turn claims it next.
+      if (state.retryCancelledPromptSequence === state.promptSequence + 1) {
+        state.retryCancelledPromptSequence = undefined;
+      }
       if (requestId) state.promptJournal.delete(requestId);
       if (error instanceof PromptAttachmentError) {
         return json(response, 400, { error: error.message });
@@ -3241,9 +3274,7 @@ async function route(
     state.revision += 1;
     boundTranscript(state);
     await persistState();
-    const acpPrompt = schema
-      ? `${prompt}\n\nReturn only one JSON value matching this JSON Schema. Do not use a Markdown fence or add commentary.\n\n${JSON.stringify(schema)}`
-      : prompt;
+    const acpPrompt = schema ? `${prompt}\n\n${structuredPromptInstruction(schema)}` : prompt;
     // The turn is now dispatched and `status` is "running", so the busy check
     // is authoritative again and the claim can be released.
     state.dispatching = false;
@@ -3260,7 +3291,7 @@ async function route(
           data: image.data,
         })),
       ],
-    }, promptSequence).then((result) => {
+    }, promptSequence, schema).then((result) => {
       // The result `_meta` is the last and most complete usage carrier, so it is
       // read before `turnStartedAt` is cleared and the elapsed time is lost.
       recordTurnUsage(state, isObject(result) ? result._meta : undefined);
@@ -3332,7 +3363,13 @@ async function route(
   }
   if ((action === "cancel" || action === "abort") && request.method === "POST") {
     for (const approval of [...state.approvals.values()]) approval.respond();
-    if (state.status === "running") {
+    if (state.dispatching) {
+      // The turn is claimed but has not taken its sequence yet, and dispatch can
+      // sit in a process spawn for seconds. Record the sequence it is about to
+      // take so a cancel in that window still stops the retry loop instead of
+      // costing the user four dispatches of a turn they already stopped.
+      state.retryCancelledPromptSequence = state.promptSequence + 1;
+    } else if (state.status === "running") {
       state.retryCancelledPromptSequence = state.promptSequence;
     }
     state.child?.notify("session/cancel", { sessionId: state.acpSessionId });

@@ -688,6 +688,24 @@ lines.on("line", (line) => {
     const resumesResourceExhaustedScenario = prompt.startsWith(
       "Continue from where the interrupted turn stopped.",
     );
+    // Text streamed before an attempt fails. Off by default so the scenarios
+    // that assert an exact recovered transcript stay unchanged; the structured
+    // cases switch it on to produce the realistic "streamed, then failed" shape.
+    const resourceExhaustedPartial = process.env.FAKE_ACP_RESOURCE_EXHAUSTED_PARTIAL;
+    const writeResourceExhaustedPartial = (): void => {
+      if (!resourceExhaustedPartial) return;
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: resourceExhaustedPartial },
+          },
+        },
+      });
+    };
     const startsRpcResourceExhaustedScenario = prompt.startsWith("RESOURCEEXHAUSTEDRPC:");
     if (startsRpcResourceExhaustedScenario) rpcResourceExhaustedScenario = true;
     if (rpcResourceExhaustedScenario
@@ -698,6 +716,7 @@ lines.on("line", (line) => {
         : 1;
       if (rpcResourceExhaustedAttempts < failedAttempts) {
         rpcResourceExhaustedAttempts += 1;
+        writeResourceExhaustedPartial();
         write({
           jsonrpc: "2.0",
           id: message.id,
@@ -713,7 +732,11 @@ lines.on("line", (line) => {
           sessionId: "fake-session",
           update: {
             sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: "Recovered from the structured RPC error." },
+            content: {
+              type: "text",
+              text: process.env.FAKE_ACP_RESOURCE_EXHAUSTED_FINAL
+                ?? "Recovered from the structured RPC error.",
+            },
           },
         },
       });
@@ -759,6 +782,7 @@ lines.on("line", (line) => {
           });
         }
         flattenedResourceExhaustedAttempts += 1;
+        writeResourceExhaustedPartial();
         write({
           jsonrpc: "2.0",
           method: "session/update",
@@ -768,7 +792,11 @@ lines.on("line", (line) => {
               sessionUpdate: "agent_message_chunk",
               content: {
                 type: "text",
-                text: "\n\nError: RetriableError: [resource_exhausted] Error",
+                // The class name varies by provider error; `RetriableError` is
+                // only the one Cursor emits today.
+                text: `\n\nError: ${
+                  process.env.FAKE_ACP_FLATTENED_ERROR_NAME ?? "RetriableError"
+                }: [resource_exhausted] Error`,
               },
             },
           },
@@ -776,6 +804,12 @@ lines.on("line", (line) => {
         // Cursor's ACP bug returns success even though the model-side failure
         // was flattened into ordinary assistant text.
         write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+        // Optionally die while the bridge is parked in backoff, so the retry
+        // wakes up to a session whose child is gone.
+        const dieAfterMs = Number(process.env.FAKE_ACP_RESOURCE_EXHAUSTED_DIE_AFTER_MS ?? "");
+        if (Number.isSafeInteger(dieAfterMs) && dieAfterMs > 0) {
+          setTimeout(() => process.exit(1), dieAfterMs);
+        }
         return;
       }
       flattenedResourceExhaustedScenario = false;
@@ -786,7 +820,11 @@ lines.on("line", (line) => {
           sessionId: "fake-session",
           update: {
             sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: "Recovered and finished the original request." },
+            content: {
+              type: "text",
+              text: process.env.FAKE_ACP_RESOURCE_EXHAUSTED_FINAL
+                ?? "Recovered and finished the original request.",
+            },
           },
         },
       });

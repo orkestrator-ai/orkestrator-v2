@@ -47,6 +47,7 @@ import {
   AmbiguousPromptDispatchError,
   createBuildPipelineProvider,
   ProviderUnavailableError,
+  readProviderStatus,
   type BridgeConnection,
   type BuildPipelineProvider,
   type ProviderDependencies,
@@ -702,7 +703,14 @@ export class LoopedReviewService {
       await this.applyResult(workflow, session, dispatch, result, lease.token);
       return;
     }
-    const status = await provider.status(session.providerSessionId);
+    // Read as data. A turn that ended terminally is definitely not going to
+    // produce structured output, and only this branch classifies that as
+    // definite; letting it throw made the same condition indefinite — and so
+    // retried — whenever the provider explained why it failed.
+    const { status, error: statusDetail } = await readProviderStatus(
+      provider,
+      session.providerSessionId,
+    );
     await this.assertFence(workflow.id, lease.token);
     if (status === "blocked") {
       // An authoritative interaction snapshot was already checked above. A
@@ -710,7 +718,11 @@ export class LoopedReviewService {
       throw new DefiniteResultError("Native provider is blocked without a resolvable interaction");
     }
     if (status === "error") {
-      throw new DefiniteResultError("Native provider failed before returning structured output");
+      throw new DefiniteResultError(
+        statusDetail
+          ? `Native provider failed before returning structured output: ${statusDetail}`
+          : "Native provider failed before returning structured output",
+      );
     }
     if (status === "missing") throw new MissingProviderSessionError();
     if (status === "idle") {

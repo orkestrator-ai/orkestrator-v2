@@ -1123,8 +1123,9 @@ describe("AgentNativeTab", () => {
       render(<AgentNativeTab tabId="tab-unbounded-usage" data={identity("grok")} isActive />);
 
       expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
-      expect(screen.getByRole("button", { name: "Context window usage unavailable" }))
-        .toBeTruthy();
+      expect(screen.getByRole("button", {
+        name: "Context window usage unavailable",
+      })).toBeTruthy();
       expect(document.querySelector("[data-context-usage-progress]")).toBeNull();
     });
 

@@ -1572,6 +1572,30 @@ function AgentMetaRows({
   );
 }
 
+/**
+ * A sub-agent's result runs to the bridge's 512 KiB tool-output cap, so it gets
+ * the same bounded, scrollable frame every other tool output on this transcript
+ * uses rather than expanding the row to an arbitrary height.
+ */
+function AgentResultBlock({ result }: { result?: string }) {
+  if (!result) return null;
+  return (
+    <div className="mb-3 border-l border-border/30 pl-3">
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+        Result
+      </div>
+      <div className="max-h-64 overflow-auto">
+        <MessageMarkdown
+          content={result}
+          components={markdownComponents}
+          className="text-xs text-muted-foreground/90 prose-invert prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-pre:my-1 prose-pre:p-2"
+          enableBreaks={false}
+        />
+      </div>
+    </div>
+  );
+}
+
 function AgentUsageStats({
   hasExternalUsage,
   tokenOnlyUsage,
@@ -1675,7 +1699,9 @@ function SubagentPart({
   const statusLabel = getSubagentStatusLabel(status);
   const hideCounts = useContext(AgentPlatformContext) === "cursor";
   const durationMs = numberToolArg(part.toolArgs, "durationMs");
-  const result = usefulAgentOutput(part.toolOutput);
+  // Agent output runs to the bridge's 512 KiB cap and `usefulAgentOutput`
+  // parses it, so keep that off every unrelated re-render.
+  const result = useMemo(() => usefulAgentOutput(part.toolOutput), [part.toolOutput]);
   const prompt = part.subagentPrompt?.trim() || stringToolArg(part.toolArgs, "prompt");
   const preview = useMemo(() => {
     const next = getSubagentPreview(part, status);
@@ -1756,19 +1782,7 @@ function SubagentPart({
             </div>
           ) : null}
           <AgentMetaRows entries={agentMetaEntries(part.toolArgs, displayName)} />
-          {result ? (
-            <div className="mb-3 border-l border-border/30 pl-3">
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-                Result
-              </div>
-              <MessageMarkdown
-                content={result}
-                components={markdownComponents}
-                className="text-xs text-muted-foreground/90 prose-invert prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-pre:my-1 prose-pre:p-2"
-                enableBreaks={false}
-              />
-            </div>
-          ) : null}
+          <AgentResultBlock result={result} />
 
           <div className="space-y-1">
             {subagentActions.map((childPart, index) => (
@@ -1916,7 +1930,11 @@ function TaskGroupPart({
   const toolCount = part.task.toolUseCount ?? capturedToolCount;
   const hideCounts = useContext(AgentPlatformContext) === "cursor";
   const durationMs = numberToolArg(part.task.toolArgs, "durationMs");
-  const result = usefulAgentOutput(part.task.toolOutput);
+  // See `SubagentPart`: the parse is proportional to the 512 KiB output cap.
+  const result = useMemo(
+    () => usefulAgentOutput(part.task.toolOutput),
+    [part.task.toolOutput],
+  );
   const preview = useMemo(() => {
     const latest = nativeAgentLatestActivity(part);
     if (latest) return latest;
@@ -2005,19 +2023,7 @@ function TaskGroupPart({
             </div>
           ) : null}
           <AgentMetaRows entries={metaEntries} />
-          {result ? (
-            <div className="mb-3 border-l border-border/30 pl-3">
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-                Result
-              </div>
-              <MessageMarkdown
-                content={result}
-                components={markdownComponents}
-                className="text-xs text-muted-foreground/90 prose-invert prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-pre:my-1 prose-pre:p-2"
-                enableBreaks={false}
-              />
-            </div>
-          ) : null}
+          <AgentResultBlock result={result} />
           <div className="space-y-1">
             {part.childTools.map((child, index) => (
               <MessagePart

@@ -2604,6 +2604,95 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.getByText("Review the diff (explore)")).toBeTruthy();
   });
 
+  describe("agent result disclosure", () => {
+    function renderTaskWithOutput(toolOutput: string) {
+      render(
+        <NativeMessage
+          message={makeMessage([
+            {
+              type: "task-group",
+              content: "Task: Subagent task",
+              task: {
+                type: "tool-invocation",
+                content: "Task: Subagent task",
+                toolName: "task",
+                toolTitle: "Task: Subagent task",
+                toolState: "success",
+                agentState: "finished",
+                toolOutput,
+                toolArgs: { description: "Summarize two docs" },
+              },
+              childTools: [],
+            },
+          ])}
+          platform="cursor"
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: /summarize two docs/i }));
+    }
+
+    test("shows plain child output under Result inside a bounded scroll frame", () => {
+      renderTaskWithOutput("Both docs describe the upgrade flow.");
+
+      const label = screen.getByText("Result");
+      expect(screen.getByText("Both docs describe the upgrade flow.")).toBeTruthy();
+      expect(getClassTokens(label.parentElement?.lastElementChild))
+        .toContain("max-h-64");
+      expect(getClassTokens(label.parentElement?.lastElementChild))
+        .toContain("overflow-auto");
+    });
+
+    test("suppresses the Result section for the bare sub-agent launch acknowledgement", () => {
+      renderTaskWithOutput("  Sub-agent launched.  ");
+
+      expect(screen.queryByText("Result") === null).toBe(true);
+    });
+
+    test("suppresses the Result section for a lifecycle-only JSON payload", () => {
+      renderTaskWithOutput('{"durationMs":42,"isBackground":true,"status":"completed"}');
+
+      expect(screen.queryByText("Result") === null).toBe(true);
+    });
+
+    test("keeps a JSON payload that carries more than lifecycle fields", () => {
+      renderTaskWithOutput('{"durationMs":42,"summary":"two docs read"}');
+
+      expect(screen.getByText("Result")).toBeTruthy();
+      expect(screen.getByText(/two docs read/)).toBeTruthy();
+    });
+
+    test("keeps a JSON array payload rather than treating it as lifecycle metadata", () => {
+      renderTaskWithOutput('["first finding","second finding"]');
+
+      expect(screen.getByText("Result")).toBeTruthy();
+      expect(screen.getByText(/first finding/)).toBeTruthy();
+    });
+
+    test("renders a bounded Result frame for a plain subagent part too", () => {
+      render(
+        <NativeMessage
+          message={makeMessage([
+            {
+              type: "subagent",
+              content: "Reviewer",
+              subagentId: "agent-result",
+              subagentName: "Reviewer",
+              toolState: "success",
+              toolOutput: "Reviewed 3 files.",
+            },
+          ])}
+          platform="cursor"
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: /reviewer/i }));
+
+      const label = screen.getByText("Result");
+      expect(screen.getByText("Reviewed 3 files.")).toBeTruthy();
+      expect(getClassTokens(label.parentElement?.lastElementChild))
+        .toContain("max-h-64");
+    });
+  });
+
   test("previews the latest child command in the collapsed agent row", () => {
     const message = makeMessage([
       {

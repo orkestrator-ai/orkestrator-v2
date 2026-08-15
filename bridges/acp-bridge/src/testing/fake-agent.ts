@@ -1212,6 +1212,151 @@ lines.on("line", (line) => {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }
+    if (prompt.startsWith("CURSORTASKDURATIONS")) {
+      // `durationMs` is the field that settles a sub-agent, so every shape a
+      // vendor might use for "no duration yet" is exercised here alongside the
+      // two that are genuinely reportable.
+      const durationCases: Array<[string, unknown]> = [
+        ["duration-zero", 0],
+        ["duration-string", "1500"],
+        ["duration-float", 12.7],
+        ["duration-negative", -5],
+        ["duration-null", null],
+        ["duration-boolean", true],
+        ["duration-empty", ""],
+        ["duration-array", []],
+        ["duration-text", "soon"],
+      ];
+      for (const [toolCallId, durationMs] of durationCases) {
+        write({
+          jsonrpc: "2.0",
+          method: "cursor/task",
+          params: {
+            toolCallId,
+            description: `Case ${toolCallId}`,
+            subagentType: "explore",
+            durationMs,
+          },
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("CURSORTASKHELD")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "cursor-task-held",
+            title: "Task: Subagent task",
+            kind: "other",
+            status: "in_progress",
+            rawInput: { _toolName: "task" },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          toolCallId: "cursor-task-held",
+          description: "Held task",
+          subagentType: "explore",
+          // "Still running": must not be read as a completed 0ms turn.
+          durationMs: null,
+        },
+      });
+      whenReleased(() => {
+        write({
+          jsonrpc: "2.0",
+          method: "cursor/task",
+          params: { toolCallId: "cursor-task-held", durationMs: 2_400 },
+        });
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      });
+      return;
+    }
+    if (prompt.startsWith("CURSORTASKTRIMMED")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "cursor-task-trimmed",
+            title: "Task: Subagent task",
+            kind: "other",
+            status: "in_progress",
+            rawInput: { _toolName: "task" },
+          },
+        },
+      });
+      // Enough siblings to push the launch part out of the message before its
+      // metadata arrives.
+      for (let index = 0; index < 512; index += 1) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `trimmed-fill-${index}`,
+              kind: "noop",
+              status: "pending",
+            },
+          },
+        });
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          toolCallId: "cursor-task-trimmed",
+          description: "Trimmed task",
+          subagentType: "explore",
+          durationMs: 900,
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("CURSORPRESERVENONTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "plain-tool-1",
+            title: "Read File",
+            kind: "read",
+            status: "in_progress",
+            rawInput: { path: "/workspace/a.ts", description: "First pass", model: "m-1" },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "plain-tool-1",
+            status: "completed",
+            rawInput: { path: "/workspace/b.ts" },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
     if (prompt.startsWith("CURSORTASK")) {
       write({
         jsonrpc: "2.0",

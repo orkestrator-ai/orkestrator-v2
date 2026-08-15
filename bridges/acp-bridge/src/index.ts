@@ -2253,6 +2253,24 @@ const TASK_LAUNCH_ARG_KEYS = [
   "agent_id",
 ] as const;
 
+/**
+ * `durationMs` is the one `cursor/task` field that decides lifecycle: any
+ * present value settles the sub-agent as finished. A bare `Number()` would
+ * coerce `null`, `false`, `""` and `[]` to `0`, so a vendor encoding "not
+ * finished yet" as `null` would report a live background child as complete and
+ * drop it out of `activeSubagentToolIds`. Only a real number — or a numeric
+ * string, which the renderer also accepts — counts as a reported duration.
+ */
+function boundedDurationMs(value: unknown): number | undefined {
+  const numeric = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim()
+      ? Number(value)
+      : Number.NaN;
+  if (!Number.isFinite(numeric) || numeric < 0) return undefined;
+  return Math.floor(numeric);
+}
+
 function cursorSubagentTypeLabel(value: unknown): string | undefined {
   if (typeof value === "string") {
     return boundedString(value, MAX_TOOL_NAME_BYTES)?.trim();
@@ -2334,10 +2352,7 @@ function applyCursorTask(state: SessionState, params: JsonObject): void {
   const subagentType = cursorSubagentTypeLabel(params.subagentType ?? params.subagent_type);
   const model = boundedString(params.model, MAX_TOOL_NAME_BYTES)?.trim();
   const agentId = boundedString(params.agentId ?? params.agent_id, MAX_TOOL_ID_BYTES)?.trim();
-  const durationValue = Number(params.durationMs);
-  const durationMs = Number.isFinite(durationValue) && durationValue >= 0
-    ? Math.floor(durationValue)
-    : undefined;
+  const durationMs = boundedDurationMs(params.durationMs);
   if (
     !description
     && !prompt

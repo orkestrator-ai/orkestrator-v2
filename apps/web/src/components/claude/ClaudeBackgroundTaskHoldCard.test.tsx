@@ -74,7 +74,7 @@ describe("ClaudeBackgroundTaskHoldCard", () => {
     expect(screen.getByText(
       "Claude is still responding while these tasks run. Stop only tasks that no longer need to run.",
     )).toBeTruthy();
-    expect(screen.queryByText(/The response is complete/)).toBeNull();
+    expect(screen.queryByText(/The response is complete/) === null).toBe(true);
     expect(screen.getByRole("status").textContent).toBe(
       "Claude is still responding while background tasks are running.",
     );
@@ -99,7 +99,7 @@ describe("ClaudeBackgroundTaskHoldCard", () => {
     expect(screen.getByText(
       "Claude's response ended with an error while these tasks continue. Stop only tasks that no longer need to run.",
     )).toBeTruthy();
-    expect(screen.queryByText(/The response is complete/)).toBeNull();
+    expect(screen.queryByText(/The response is complete/) === null).toBe(true);
     expect(screen.getByRole("status").textContent).toBe(
       "Claude's response ended with an error, but background tasks are still running.",
     );
@@ -124,8 +124,8 @@ describe("ClaudeBackgroundTaskHoldCard", () => {
     );
 
     expect(screen.getByText("Response in progress · 1 background task running")).toBeTruthy();
-    expect(screen.queryByText(/Response ended/)).toBeNull();
-    expect(screen.queryByText(/ended with an error/)).toBeNull();
+    expect(screen.queryByText(/Response ended/) === null).toBe(true);
+    expect(screen.queryByText(/ended with an error/) === null).toBe(true);
     expect(screen.getByRole("status").textContent).toBe(
       "Claude is still responding while background tasks are running.",
     );
@@ -171,8 +171,7 @@ describe("ClaudeBackgroundTaskHoldCard", () => {
       />,
     );
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "Stop Wait for final review agent" }))
-        .toBeNull();
+      expect(screen.queryByRole("button", { name: "Stop Wait for final review agent" }) === null).toBe(true);
     });
     rerender(
       <ClaudeBackgroundTaskHoldCard
@@ -263,7 +262,7 @@ describe("ClaudeBackgroundTaskHoldCard", () => {
         onStopTask={onStopTask}
       />,
     );
-    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("alert") === null).toBe(true));
   });
 
   test("clears the previous error as soon as another stop attempt starts", async () => {
@@ -289,7 +288,7 @@ describe("ClaudeBackgroundTaskHoldCard", () => {
     fireEvent.click(button);
     await waitFor(() => {
       expect(onStopTask).toHaveBeenCalledTimes(2);
-      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.queryByRole("alert") === null).toBe(true);
       expect(button.hasAttribute("disabled")).toBe(true);
     });
 

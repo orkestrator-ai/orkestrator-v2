@@ -158,7 +158,7 @@ describe("ProjectLauncher", () => {
     );
 
     expect(screen.getByRole("button", { name: "Open Project 1" })).toBeTruthy();
-    expect(screen.queryByText("Loading projects...")).toBeNull();
+    expect(screen.queryByText("Loading projects...") === null).toBe(true);
   });
 
   test("integrates recent project selection and opens and closes the shared create flow", () => {
@@ -194,7 +194,7 @@ describe("ProjectLauncher", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Close create flow" }));
-    expect(screen.queryByRole("button", { name: "Close create flow" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Close create flow" }) === null).toBe(true);
     expect(flowProps?.projectId).toBeNull();
     // Closing resets the id, so the name lookup must resolve to nothing rather
     // than to a stale project's name.

@@ -266,7 +266,7 @@ describe("BuildChatTab on a phone", () => {
     )?.hidden).toBe(false);
     // The composer addresses the transcript, so it travels with it rather than
     // eating a third of the stage list.
-    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("textbox") === null).toBe(true);
   });
 
   test("deactivates the transcript's scroll state while the stage list is on screen", () => {
@@ -405,7 +405,7 @@ describe("BuildChatTab across the breakpoint", () => {
 
     // Nothing left to choose between, so the switcher goes away with the
     // constraint that produced it.
-    expect(screen.queryByRole("tablist", { name: "Build view" })).toBeNull();
+    expect(screen.queryByRole("tablist", { name: "Build view" }) === null).toBe(true);
     expect(stageTab("Build Session")).toBeTruthy();
     expect(screen.getByText("All criteria pass")).toBeTruthy();
     // The transcript is on screen again, so it follows the stream again.
@@ -422,7 +422,7 @@ describe("BuildChatTab across the breakpoint", () => {
       viewTabs().getByRole("tab", { name: "Stages" }).getAttribute("aria-selected"),
     ).toBe("true");
     expect(stageTab("Build Session")).toBeTruthy();
-    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("textbox") === null).toBe(true);
     expect(lastScrollState().isActive).toBe(false);
   });
 });
@@ -433,7 +433,7 @@ describe("BuildChatTab on a desktop", () => {
   test("keeps the stage rail beside the transcript with no view switcher", () => {
     renderTab();
 
-    expect(screen.queryByRole("tablist", { name: "Build view" })).toBeNull();
+    expect(screen.queryByRole("tablist", { name: "Build view" }) === null).toBe(true);
     expect(stageTab("Build Session")).toBeTruthy();
     expect(screen.getByText("All criteria pass")).toBeTruthy();
     expect(screen.getByRole("textbox")).toBeTruthy();

@@ -70,45 +70,50 @@ copied `testProject` only.
 
 ## Automated checks
 
-Run focused package typechecks/tests first, with `--parallel` on direct suites.
-Every automated command must save complete stdout and stderr to a log file.
-Agent and tool output buffers often max out, so visible command output is not an
-authoritative record. Enable `pipefail`, pipe through `tee`, and run each pipeline
-separately so its exit status belongs to exactly one command:
+Run focused package typechecks/tests first, with bounded `--parallel` workers on
+direct suites. Every automated command must use the repository's logged runner,
+which streams stdout/stderr to private storage, preserves the child exit status,
+deletes raw output on success, and compresses bounded failure evidence. Run each
+command separately so its result belongs to one check:
 
 ```bash
-set -o pipefail
-bun run --cwd apps/web typecheck 2>&1 | tee /tmp/orkestrator-web-typecheck.log
-bun test ./apps/web/src/path/to/ChangedComponent.test.tsx --parallel \
-  2>&1 | tee /tmp/orkestrator-changed-component.log
+bun run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+bun run test:logged -- --name changed-component -- \
+  bun --cwd=apps/web test src/path/to/ChangedComponent.test.tsx \
+  --parallel=2 --only-failures
 
 ORKESTRATOR_AGENT_TEST_PROFILE=codex-qa \
 ORKESTRATOR_AGENT_TEST_RUN_ID=codex-qa \
-bun run test:agent:browser 2>&1 | tee /tmp/orkestrator-agent-browser.log
+bun run test:logged -- --name agent-browser -- bun run test:agent:browser
 
-bun run test:agent:electron 2>&1 | tee /tmp/orkestrator-agent-electron.log
+bun run test:logged -- --name agent-electron -- bun run test:agent:electron
 
 # Against a profile started with --fixture-environments local,container:
 ORKESTRATOR_AGENT_TEST_PROFILE=container-qa \
-bun run test:agent:docker 2>&1 | tee /tmp/orkestrator-agent-docker.log
+bun run test:logged -- --name agent-docker -- bun run test:agent:docker
 
 # Run for cross-cutting or release-sensitive changes:
-bun run test 2>&1 | tee /tmp/orkestrator-full-tests.log
+bun run test
+
+# Release validation, including the serial iOS suite:
+bun run test:all
 ```
 
-Use descriptive, unique `/tmp` filenames when agents run concurrently. Do not
-write transient console logs into the repository. If the visible tool output is
-truncated, use the command's exit status and inspect the saved file in bounded
-chunks instead of rerunning solely to recover output:
+Do not add another `tee`; the terminal harness may already retain output, and a
+second verbatim copy recreates the disk-amplification problem. On failure the
+runner prints a unique `orkestrator-test-run.*` directory below the platform
+temporary directory. Inspect
+the compressed file in bounded chunks instead of rerunning solely to recover
+output:
 
 ```bash
-tail -n 200 /tmp/orkestrator-agent-browser.log
-rg -n "\(fail\)|error:|Failing groups:" /tmp/orkestrator-agent-browser.log
+ORK_TEST_ARTIFACT_DIR=/path/printed/by/the/runner
+gzip -cd "$ORK_TEST_ARTIFACT_DIR/agent-browser.log.gz" | tail -n 200
 ```
 
-The exit status remains authoritative because `pipefail` preserves failures from
-the command before `tee`. Pattern searches are diagnostic only; some tests print
-expected errors while exercising failure handling.
+The exit status is authoritative. Pattern searches are diagnostic only; some
+tests print expected errors while exercising failure handling. See
+[`../test-logs.md`](../test-logs.md) for source bounds, retention, and cleanup.
 
 The browser suite uses the auth file outside Playwright to mint a 60-second,
 single-use loopback bootstrap, exchanges it by POST, and never puts the durable
@@ -124,8 +129,9 @@ owned by another profile.
 Artifacts are written below `output/agent-testing/<profile-or-run-id>/`, with
 traces and screenshots retained on failure and a JSON result summary. Browser
 artifacts are redacted after the run as a second defense for the short-lived
-session cookie. Do not add gateway tokens, prompts, terminal output, or fixture
-contents to reports.
+session cookie. Oversized files and trees are removed rather than loaded without
+a bound or retained unredacted. Do not add gateway tokens, prompts, terminal
+output, or fixture contents to reports.
 
 ## Manual browser QA
 
@@ -173,8 +179,8 @@ deletes that profile's disposable state. Preserve downloaded binaries with
 ## Troubleshooting
 
 - Read `dev:status --json`, then inspect only the returned `logDir`.
-- For tests and typechecks, inspect the `/tmp` file named in the command rather
-  than relying on the agent/tool output buffer.
+- For failed tests and typechecks, inspect the compressed artifact directory
+  printed by the logged runner rather than relying on the agent/tool buffer.
 - An occupied reserved port fails startup clearly; retrying allocates fresh ports.
 - If Docker is unavailable, use the local fixture flow.
 - A missing toolchain affects nested agents, not credential-free fixture/server

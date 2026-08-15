@@ -65,7 +65,7 @@ describe("JsonTree arrays", () => {
 
     // Mixed arrays drop the bullet list, but the scalar must still be shown,
     // and the record keeps its own position rather than being renumbered.
-    expect(screen.queryByRole("listitem")).toBeNull();
+    expect(screen.queryByRole("listitem") === null).toBe(true);
     expect(screen.getByText("loose")).toBeTruthy();
     expect(screen.getByText("2. Recorded")).toBeTruthy();
   });
@@ -97,7 +97,7 @@ describe("JsonTree bounds", () => {
     );
 
     expect(screen.getByText(/Maximum nesting depth reached/)).toBeTruthy();
-    expect(screen.queryByText(/"deep": "value"/)).toBeNull();
+    expect(screen.queryByText(/"deep": "value"/) === null).toBe(true);
   });
 
   test("renders one level below the depth cap as structure", () => {
@@ -124,9 +124,7 @@ describe("JsonTree bounds", () => {
 
     expect(screen.getByText(/^7 more not shown/)).toBeTruthy();
     expect(screen.getByText("Field0")).toBeTruthy();
-    expect(
-      screen.queryByText(`Field${MAX_JSON_RENDER_ENTRIES}`),
-    ).toBeNull();
+    expect(screen.queryByText(`Field${MAX_JSON_RENDER_ENTRIES}`) === null).toBe(true);
   });
 
   test("caps the items it renders and says how many it withheld", () => {
@@ -145,7 +143,7 @@ describe("JsonTree bounds", () => {
   test("does not claim truncation when everything fits", () => {
     render(<JsonTree value={[1, 2]} expansionKey="t" />);
 
-    expect(screen.queryByText(/more not shown/)).toBeNull();
+    expect(screen.queryByText(/more not shown/) === null).toBe(true);
   });
 });
 
@@ -162,7 +160,7 @@ describe("JsonTree expansion persistence", () => {
 
     // Keyed by `msg/tree/verdict`, so the sibling branch stays closed.
     expect(screen.getByText("no")).toBeTruthy();
-    expect(screen.queryByText("2")).toBeNull();
+    expect(screen.queryByText("2") === null).toBe(true);
   });
 
   test("the same key opens the same branch in an identical tree", () => {
@@ -196,7 +194,7 @@ describe("JsonTree expansion persistence", () => {
 
     fireEvent.click(screen.getByText("A"));
     expect(screen.getByText("B")).toBeTruthy();
-    expect(screen.queryByText("closed")).toBeNull();
+    expect(screen.queryByText("closed") === null).toBe(true);
   });
 
   test("accepts valid JSON keys containing lone UTF-16 surrogates", () => {

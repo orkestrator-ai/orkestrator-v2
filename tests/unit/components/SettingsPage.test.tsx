@@ -100,11 +100,11 @@ describe("SettingsPage", () => {
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("get_config"));
     expect(container.querySelector(".animate-spin")).toBeTruthy();
-    expect(screen.queryByTestId("active-settings-section")).toBeNull();
+    expect(screen.queryByTestId("active-settings-section") === null).toBe(true);
 
     resolveConfig(defaultConfig());
     expect(await screen.findByTestId("active-settings-section")).toBeTruthy();
-    expect(container.querySelector(".animate-spin")).toBeNull();
+    expect(container.querySelector(".animate-spin") === null).toBe(true);
   });
 
   test("opens the read-only Skills browser without waiting for config or rendering GlobalSettings", async () => {
@@ -118,8 +118,8 @@ describe("SettingsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Skills" }));
 
     expect(screen.getByTestId("skills-settings")).toBeTruthy();
-    expect(screen.queryByTestId("active-settings-section")).toBeNull();
-    expect(container.querySelector(".animate-spin")).toBeNull();
+    expect(screen.queryByTestId("active-settings-section") === null).toBe(true);
+    expect(container.querySelector(".animate-spin") === null).toBe(true);
   });
 
   test("returns to GlobalSettings after leaving Skills once config resolves", async () => {
@@ -136,7 +136,7 @@ describe("SettingsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "General" }));
 
     expect(await screen.findByTestId("active-settings-section")).toBeTruthy();
-    expect(screen.queryByTestId("skills-settings")).toBeNull();
+    expect(screen.queryByTestId("skills-settings") === null).toBe(true);
   });
 
   test("reuses a successful initial load when the page is reopened", async () => {

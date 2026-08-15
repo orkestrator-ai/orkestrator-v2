@@ -59,7 +59,7 @@ describe("JsonPayloadPart", () => {
     expect(screen.getByText("Structured review report")).toBeTruthy();
     expect(screen.getByText(/Ready: with-fixes/)).toBeTruthy();
     // The report's own sections stay unmounted until the fold-out is opened.
-    expect(screen.queryByText("Review Scope")).toBeNull();
+    expect(screen.queryByText("Review Scope") === null).toBe(true);
   });
 
   test("opens the report's sections on demand", () => {
@@ -75,8 +75,7 @@ describe("JsonPayloadPart", () => {
     expect(screen.getByText("Review Scope")).toBeTruthy();
     expect(screen.getByText("Verdict")).toBeTruthy();
     // The trigger already names the report; the card must not repeat it.
-    expect(screen.queryByRole("heading", { name: "Structured review report" }))
-      .toBeNull();
+    expect(screen.queryByRole("heading", { name: "Structured review report" }) === null).toBe(true);
   });
 
   test("states the verification outcome without being opened", () => {
@@ -114,7 +113,7 @@ describe("JsonPayloadPart", () => {
     );
 
     expect(screen.getByText("Verification failed")).toBeTruthy();
-    expect(screen.queryByText("JSON payload")).toBeNull();
+    expect(screen.queryByText("JSON payload") === null).toBe(true);
   });
 
   test("renders an unrecognized payload as labelled fields", () => {
@@ -150,7 +149,7 @@ describe("JsonPayloadPart", () => {
 
     expect(screen.getByText("Verdict")).toBeTruthy();
     expect(screen.getByText("2 fields")).toBeTruthy();
-    expect(screen.queryByText("Pending.")).toBeNull();
+    expect(screen.queryByText("Pending.") === null).toBe(true);
 
     fireEvent.click(screen.getByText("Verdict"));
 
@@ -206,7 +205,7 @@ describe("JsonPayloadPart", () => {
 
     fireEvent.click(screen.getByText("JSON list"));
     expect(screen.getByText("Raw JSON")).toBeTruthy();
-    expect(view.container.querySelector("pre")).toBeNull();
+    expect(view.container.querySelector("pre") === null).toBe(true);
 
     fireEvent.click(screen.getByText("Raw JSON"));
     expect(view.container.querySelector("pre")?.textContent).toBe(source);
@@ -341,7 +340,7 @@ describe("NativeMessage JSON payload handling", () => {
       />,
     );
 
-    expect(screen.queryByText("JSON payload")).toBeNull();
+    expect(screen.queryByText("JSON payload") === null).toBe(true);
     expect(screen.getByText("Here is the payload:")).toBeTruthy();
   });
 
@@ -352,7 +351,7 @@ describe("NativeMessage JSON payload handling", () => {
       />,
     );
 
-    expect(screen.queryByText("JSON payload")).toBeNull();
+    expect(screen.queryByText("JSON payload") === null).toBe(true);
     expect(document.body.textContent).toContain('"compilerOptions"');
   });
 
@@ -373,7 +372,7 @@ describe("NativeMessage JSON payload handling", () => {
       <NativeMessage message={makeMessage('{"a":1}', "user")} />,
     );
 
-    expect(screen.queryByText("JSON payload")).toBeNull();
+    expect(screen.queryByText("JSON payload") === null).toBe(true);
     expect(document.body.textContent).toContain('{"a":1}');
   });
 
@@ -390,7 +389,7 @@ describe("NativeMessage JSON payload handling", () => {
       />,
     );
 
-    expect(screen.queryByText("Verification passed")).toBeNull();
+    expect(screen.queryByText("Verification passed") === null).toBe(true);
     expect(document.body.textContent).toContain('"rationale"');
   });
 });

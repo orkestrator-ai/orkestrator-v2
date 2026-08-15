@@ -348,7 +348,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     );
 
     await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
-    expect(screen.queryByRole("toolbar", { name: "Terminal keys" })).toBeNull();
+    expect(screen.queryByRole("toolbar", { name: "Terminal keys" }) === null).toBe(true);
 
     view.rerender(
       <ClaudeTmuxInteractiveTerminal
@@ -717,7 +717,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     );
 
     await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
-    expect(screen.queryByText("Error: fit unavailable")).toBeNull();
+    expect(screen.queryByText("Error: fit unavailable") === null).toBe(true);
     expect(detachInteractiveTerminalMock).not.toHaveBeenCalled();
   });
 
@@ -796,7 +796,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     });
 
     expect(new TextDecoder().decode(terminalInstances[0]!.writes.at(-1)!)).toBe("restored");
-    expect(screen.queryByText(/Terminal recovery failed/)).toBeNull();
+    expect(screen.queryByText(/Terminal recovery failed/) === null).toBe(true);
   });
 
   test("contains and surfaces a rejected desync recovery", async () => {

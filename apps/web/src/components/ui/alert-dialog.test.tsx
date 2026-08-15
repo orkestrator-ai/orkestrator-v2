@@ -80,7 +80,7 @@ describe("AlertDialog primitives", () => {
 
     expect(onClick).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
-    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("alertdialog") === null).toBe(true));
   });
 
   test("keeps a nested portaled select above a default dialog by source order at the same layer", async () => {

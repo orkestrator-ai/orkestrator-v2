@@ -233,7 +233,7 @@ describe("native chat scroll wiring", () => {
         isActive
       />,
     );
-    expect(view.queryByLabelText("Scroll to bottom of transcript")).toBeNull();
+    expect(view.queryByLabelText("Scroll to bottom of transcript") === null).toBe(true);
 
     cleanup();
     isAtBottom = false;
@@ -263,7 +263,7 @@ describe("native chat scroll wiring", () => {
       />,
     );
 
-    expect(view.queryByLabelText("Send a message to the agent")).toBeNull();
+    expect(view.queryByLabelText("Send a message to the agent") === null).toBe(true);
     expect(view.getByLabelText("Scroll to bottom of transcript")).toBeTruthy();
   });
 });

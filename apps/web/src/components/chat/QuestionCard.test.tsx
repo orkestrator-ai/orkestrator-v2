@@ -104,7 +104,7 @@ describe("QuestionCard deadlines", () => {
     cleanup();
 
     renderCard(question, { expiresAt: Date.now() - 1 });
-    expect(screen.queryByText("This request expired and was declined.")).toBeNull();
+    expect(screen.queryByText("This request expired and was declined.") === null).toBe(true);
     expect(screen.getByRole("button", { name: "Submit" })).toBeTruthy();
     expect(
       (screen.getByRole("button", { name: "Yes" }) as HTMLButtonElement).disabled,
@@ -277,7 +277,7 @@ describe("QuestionCard custom-answer overrides", () => {
       { allowCustomAnswer: true },
     );
 
-    expect(screen.queryByPlaceholderText(/type your own/i)).toBeNull();
+    expect(screen.queryByPlaceholderText(/type your own/i) === null).toBe(true);
   });
 
   test("renders nothing when handed an empty question list", () => {
@@ -339,7 +339,7 @@ describe("QuestionCard exclusive draft supersedes the committed answer", () => {
     expect(screen.getByLabelText("Remove answer A")).toBeTruthy();
 
     fireEvent.change(input, { target: { value: "ans" } });
-    expect(screen.queryByLabelText("Remove answer A")).toBeNull();
+    expect(screen.queryByLabelText("Remove answer A") === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith([["ans"]]));
@@ -354,7 +354,7 @@ describe("QuestionCard exclusive draft supersedes the committed answer", () => {
     fireEvent.change(input, { target: { value: "answer A" } });
     fireEvent.keyDown(input, { key: "Enter" });
     fireEvent.change(input, { target: { value: "ans" } });
-    expect(screen.queryByLabelText("Remove answer A")).toBeNull();
+    expect(screen.queryByLabelText("Remove answer A") === null).toBe(true);
 
     fireEvent.change(input, { target: { value: "" } });
     expect(screen.getByLabelText("Remove answer A")).toBeTruthy();
@@ -370,7 +370,7 @@ describe("QuestionCard exclusive draft supersedes the committed answer", () => {
     fireEvent.change(screen.getByPlaceholderText(/type your own/i), {
       target: { value: "something else" },
     });
-    expect(optionA.querySelector("div.rounded-full.bg-primary")).toBeNull();
+    expect(optionA.querySelector("div.rounded-full.bg-primary") === null).toBe(true);
   });
 
   test("picking an option while a draft is pending selects it and drops the draft", async () => {
@@ -621,7 +621,7 @@ describe("QuestionCard custom input keyboard handling", () => {
     fireEvent.change(input, { target: { value: "draft text" } });
     fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
 
-    expect(screen.queryByLabelText("Remove draft text")).toBeNull();
+    expect(screen.queryByLabelText("Remove draft text") === null).toBe(true);
     expect((input as HTMLInputElement).value).toBe("draft text");
 
     // Still submitted, because an uncommitted draft is never lost.
@@ -637,7 +637,7 @@ describe("QuestionCard custom input keyboard handling", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     fireEvent.click(screen.getByLabelText("Remove chip text"));
 
-    expect(screen.queryByLabelText("Remove chip text")).toBeNull();
+    expect(screen.queryByLabelText("Remove chip text") === null).toBe(true);
     expect(
       screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled"),
     ).toBe(true);
@@ -666,7 +666,7 @@ describe("QuestionCard multi-question navigation", () => {
 
   test("offers no Back button on the first question", () => {
     renderCard(TWO_QUESTIONS);
-    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Back" }) === null).toBe(true);
   });
 
   test("tracks the answered count and flags a complete card", () => {
@@ -680,7 +680,7 @@ describe("QuestionCard multi-question navigation", () => {
     );
 
     expect(screen.getByText("0/2 answered")).toBeTruthy();
-    expect(container.querySelector("svg.ml-auto.text-green-500")).toBeNull();
+    expect(container.querySelector("svg.ml-auto.text-green-500") === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "1b" }));
     expect(screen.getByText("1/2 answered")).toBeTruthy();
@@ -696,7 +696,7 @@ describe("QuestionCard multi-question navigation", () => {
   test("counts a single question without a progress fraction", () => {
     renderCard([{ question: "Only?", options: [{ label: "Yes" }] }]);
     expect(screen.getByText("1 question")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Next" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Next" }) === null).toBe(true);
   });
 
   test("falls back to the first question when a persisted index is out of range", () => {
@@ -751,13 +751,13 @@ describe("QuestionCard dismiss affordance", () => {
       onDismiss: async () => {},
       hideDismiss: true,
     });
-    expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Dismiss" }) === null).toBe(true);
   });
 
   test("hides the Dismiss button when there is nothing to dismiss to", () => {
     // The build pipeline reuses this card with no dismiss path at all.
     renderCard([{ question: "Continue?", options: [{ label: "Yes" }] }]);
-    expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Dismiss" }) === null).toBe(true);
   });
 
   test("uses custom action labels and input placeholder copy", () => {
@@ -928,7 +928,7 @@ describe("QuestionCard secret handling", () => {
     expect(rendered.container.textContent).not.toContain(secret);
     expect(screen.getByText("Secret entered")).toBeTruthy();
     expect(screen.getByLabelText("Remove secret answer")).toBeTruthy();
-    expect(screen.queryByLabelText(`Remove ${secret}`)).toBeNull();
+    expect(screen.queryByLabelText(`Remove ${secret}`) === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith([[secret]]));

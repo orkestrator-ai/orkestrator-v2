@@ -288,8 +288,8 @@ describe("sortable sidebar items", () => {
     fireEvent.mouseEnter(screen.getByRole("button", { name: /Project One/i }));
 
     expect(await screen.findByText("0 environments")).toBeTruthy();
-    expect(screen.queryByText("/workspace/project-one")).toBeNull();
-    expect(screen.queryByText(/running/)).toBeNull();
+    expect(screen.queryByText("/workspace/project-one") === null).toBe(true);
+    expect(screen.queryByText(/running/) === null).toBe(true);
   });
 
   test("SortableProjectGroup tooltip pluralizes totals and reports only running environments", async () => {
@@ -317,7 +317,7 @@ describe("sortable sidebar items", () => {
     fireEvent.mouseEnter(screen.getByRole("button", { name: /Project One/i }));
 
     expect(await screen.findByText("2 environments")).toBeTruthy();
-    expect(screen.queryByText(/running/)).toBeNull();
+    expect(screen.queryByText(/running/) === null).toBe(true);
   });
 
   test("SortableProjectGroup renders the collapse chevron rotated when expanded", () => {
@@ -376,7 +376,7 @@ describe("sortable sidebar items", () => {
     // with act. The controlled close state is owned by this component; Radix
     // may keep the hidden portal mounted while exit-presence settles.
     expect(dialog.getAttribute("data-state")).toBe("closed");
-    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByRole("alertdialog") === null).toBe(true);
   // Radix transitions for a menu followed by a modal can exceed Bun's default
   // ceiling when all root UI suites are sharing a saturated runner.
   }, 15_000);

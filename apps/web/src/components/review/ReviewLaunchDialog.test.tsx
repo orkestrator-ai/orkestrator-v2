@@ -289,7 +289,7 @@ describe("ReviewLaunchDialog", () => {
     openPicker();
     expect(screen.getByRole("button", { name: "claude models" })).toBeTruthy();
     for (const agent of ["codex", "cursor", "grok", "opencode"]) {
-      expect(screen.queryByRole("button", { name: `${agent} models` })).toBeNull();
+      expect(screen.queryByRole("button", { name: `${agent} models` }) === null).toBe(true);
     }
     closePicker();
 
@@ -317,7 +317,7 @@ describe("ReviewLaunchDialog", () => {
     openPicker();
     expect(screen.getByRole("button", { name: "claude models" })).toBeTruthy();
     for (const agent of ["codex", "cursor", "grok", "opencode"]) {
-      expect(screen.queryByRole("button", { name: `${agent} models` })).toBeNull();
+      expect(screen.queryByRole("button", { name: `${agent} models` }) === null).toBe(true);
     }
     closePicker();
 
@@ -351,8 +351,8 @@ describe("ReviewLaunchDialog", () => {
     openPicker();
     fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
     expect(modelItem(/Claude B/)).toBeTruthy();
-    expect(models().queryByRole("menuitemradio", { name: /provider\/model-a/ })).toBeNull();
-    expect(models().queryByRole("menuitemradio", { name: /OpenCode/ })).toBeNull();
+    expect(models().queryByRole("menuitemradio", { name: /provider\/model-a/ }) === null).toBe(true);
+    expect(models().queryByRole("menuitemradio", { name: /OpenCode/ }) === null).toBe(true);
     closePicker();
   });
 
@@ -555,7 +555,7 @@ describe("ReviewLaunchDialog", () => {
     // has to be sent the raw value.
     openPicker();
     expect(reasoningItems().getByRole("menuitemradio", { name: "Extra high" })).toBeTruthy();
-    expect(reasoningItems().queryByRole("menuitemradio", { name: "Xhigh" })).toBeNull();
+    expect(reasoningItems().queryByRole("menuitemradio", { name: "Xhigh" }) === null).toBe(true);
 
     fireEvent.click(reasoningItems().getByRole("menuitemradio", { name: "Extra high" }));
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
@@ -625,7 +625,7 @@ describe("ReviewLaunchDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
     expect(modelItem(/OpenCode A/)).toBeTruthy();
-    expect(models().queryByRole("menuitemradio", { name: /OpenCode B/ })).toBeNull();
+    expect(models().queryByRole("menuitemradio", { name: /OpenCode B/ }) === null).toBe(true);
     showProviderModels("opencode");
     expect(modelItem(/OpenCode B/)).toBeTruthy();
   });
@@ -652,7 +652,7 @@ describe("ReviewLaunchDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
     expect(modelItem(/OpenCode B/)).toBeTruthy();
-    expect(models().queryByRole("menuitemradio", { name: /OpenCode A/ })).toBeNull();
+    expect(models().queryByRole("menuitemradio", { name: /OpenCode A/ }) === null).toBe(true);
   });
 
   test("closes without launching when cancelled", () => {
@@ -726,7 +726,7 @@ describe("ReviewLaunchDialog reopen behaviour", () => {
       preferredModels: { claude: "claude-b" },
       preferredReasoningEfforts: { claude: "xhigh" },
     });
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("dialog") === null).toBe(true);
 
     rerender(<ReviewLaunchDialog {...props} open />);
 
@@ -857,7 +857,7 @@ describe("ReviewLaunchDialog degraded catalogs", () => {
 
     expect(screen.getByText("This model uses its default reasoning setting.")).toBeTruthy();
     openPicker();
-    expect(screen.queryByRole("group", { name: "Reasoning" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Reasoning" }) === null).toBe(true);
     closePicker();
 
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
@@ -932,7 +932,7 @@ describe("ReviewLaunchDialog on a phone", () => {
     openPicker();
     expect(screen.getByRole("group", { name: "Agent platforms" })).toBeTruthy();
     // Desktop's side-by-side columns do not exist here.
-    expect(screen.queryByRole("group", { name: "Models" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Models" }) === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "codex models" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: /Codex A/ }));
@@ -964,7 +964,7 @@ describe("ReviewLaunchDialog on a phone", () => {
 
     expect(screen.getByText("This model uses its default reasoning setting.")).toBeTruthy();
     openPicker();
-    expect(document.querySelector("[data-native-mobile-reasoning-trigger]")).toBeNull();
+    expect(document.querySelector("[data-native-mobile-reasoning-trigger]") === null).toBe(true);
     closePicker();
   });
 });

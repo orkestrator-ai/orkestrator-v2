@@ -128,7 +128,7 @@ describe("FullscreenSettingsLayout", () => {
     expect(screen.getByRole("option", { name: /Network/ })).toBeTruthy();
 
     fireEvent.keyDown(screen.getByRole("option", { name: /Network/ }), { key: "Escape" });
-    expect(screen.queryByRole("option", { name: /Network/ })).toBeNull();
+    expect(screen.queryByRole("option", { name: /Network/ }) === null).toBe(true);
     expect(onOpenChange).not.toHaveBeenCalled();
 
     fireEvent.keyDown(window, { key: "Escape" });

@@ -93,7 +93,7 @@ describe("OpenCodeQuestionCard", () => {
 
     expect(screen.getByText("Choose deployment targets")).toBeTruthy();
     expect(screen.getByText("Deploy the web application")).toBeTruthy();
-    expect(screen.queryByPlaceholderText(/Type your own answer/i)).toBeNull();
+    expect(screen.queryByPlaceholderText(/Type your own answer/i) === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: /Web/ }));
     fireEvent.click(screen.getByRole("button", { name: /Desktop/ }));
@@ -139,7 +139,7 @@ describe("OpenCodeQuestionCard", () => {
   test("does not fabricate a countdown when OpenCode publishes no deadline", () => {
     render(<OpenCodeQuestionCard question={makeQuestion()} client={CLIENT} />);
 
-    expect(screen.queryByLabelText(/Time remaining/i)).toBeNull();
+    expect(screen.queryByLabelText(/Time remaining/i) === null).toBe(true);
   });
 
   test("treats custom as enabled by default and keeps single-select answers exclusive", async () => {

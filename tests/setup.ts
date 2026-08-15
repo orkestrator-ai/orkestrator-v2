@@ -1,10 +1,9 @@
-// Test setup file for Bun
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
+// Test setup file for Bun. tests/register-dom.ts runs first.
+import { installBoundedTestDiagnostics } from "./bounded-test-diagnostics";
 
 process.env.CODEX_BRIDGE_NO_SERVER ??= "1";
 
-// Register happy-dom globals for React testing
-GlobalRegistrator.register();
+installBoundedTestDiagnostics();
 
 // Mock native backend modules
 import { beforeEach, mock } from "bun:test";

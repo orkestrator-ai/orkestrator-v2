@@ -361,48 +361,41 @@ Files:
 ## Testing
 
 ```bash
-set -o pipefail
-bun run test 2>&1 | tee /tmp/orkestrator-full-tests.log
-bun test ./tests --parallel 2>&1 | tee /tmp/orkestrator-root-tests.log
-bun test bridges --parallel 2>&1 | tee /tmp/orkestrator-bridge-tests.log
-bun run --cwd apps/web typecheck 2>&1 | tee /tmp/orkestrator-web-typecheck.log
-bun run --cwd apps/desktop typecheck 2>&1 | tee /tmp/orkestrator-desktop-typecheck.log
-bun run --cwd apps/backend typecheck 2>&1 | tee /tmp/orkestrator-backend-typecheck.log
+bun run test
+bun run test:all # Includes the serial iOS suite when Xcode is available.
+bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures
+bun run test:logged -- --name bridge-tests -- bun test bridges --parallel=2 --only-failures
+bun run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+bun run test:logged -- --name desktop-typecheck -- bun run --cwd apps/desktop typecheck
+bun run test:logged -- --name backend-typecheck -- bun run --cwd apps/backend typecheck
 ```
 
-Run each pipeline separately so its exit status maps to one suite. The comments
-formerly shown beside these commands are summarized here: `bun run test` is the
-complete concurrent suite followed by iOS; `./tests` is the root-only suite and
-uses an explicit path to avoid package tests; the remaining commands cover the
-bridges and package typechecks.
+Run each command separately so its exit status maps to one suite. `bun run test`
+is the complete concurrent cross-platform suite; `test:all` adds iOS at the end.
+The explicit `./tests` path avoids package tests.
 
 When running any test, typecheck, build verification, or smoke suite, always
-capture complete stdout and stderr in a file. Terminal, tool-call, and agent
-conversation buffers are routinely truncated and must never be treated as the
-authoritative test record. Pipe through `tee` and enable `pipefail` so the saved
-file is complete while the shell still returns the test command's failure:
+use `test:logged`. It streams stdout/stderr to a private bounded file, preserves
+the child status, deletes raw passing output, and compresses failing evidence.
+Terminal and conversation buffers are not authoritative. Do not add a second
+`tee`, because that recreates an unbounded duplicate:
 
 ```bash
-set -o pipefail
-bun test ./tests --parallel 2>&1 | tee /tmp/orkestrator-root-tests.log
+bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures
 ```
 
-Use a descriptive log name for each suite or rerun, and inspect the saved log for
-the full failure context instead of relying only on buffered terminal output.
-Use a unique suffix when concurrent agents might run the same suite. Keep these
-transient logs in `/tmp`, not in the repository, and never commit them.
-
 If a tool buffer maxes out, do not infer success or failure from the visible
-tail and do not rerun merely to recover the missing text. Check the process exit
-status, then inspect the saved file with bounded reads such as:
+status. On failure, inspect the unique compressed artifact path printed by the
+runner with bounded reads such as:
 
 ```bash
-tail -n 200 /tmp/orkestrator-root-tests.log
-rg -n "\(fail\)|error:|Failing groups:" /tmp/orkestrator-root-tests.log
+ORK_TEST_ARTIFACT_DIR=/path/printed/by/the/runner
+gzip -cd "$ORK_TEST_ARTIFACT_DIR/root-tests.log.gz" | tail -n 200
 ```
 
 The exit status is authoritative; text matching is only a diagnostic aid because
-some tests intentionally exercise and print error paths.
+some tests intentionally exercise and print error paths. See
+[`docs/test-logs.md`](docs/test-logs.md) for limits and retention.
 
 ### Required frontend-to-browser test cycle for agents
 
@@ -438,14 +431,13 @@ The detailed operational reference is
 #### 1. Run the fast checks before starting the UI
 
 At minimum, typecheck the web package and run the owning test file. Add backend
-or desktop typechecks when the change crosses those boundaries. Capture complete
-output in logs.
+or desktop typechecks when the change crosses those boundaries.
 
 ```bash
-set -o pipefail
-bun run --cwd apps/web typecheck 2>&1 | tee /tmp/orkestrator-web-typecheck.log
-bun test ./apps/web/src/path/to/ChangedComponent.test.tsx --parallel \
-  2>&1 | tee /tmp/orkestrator-changed-component.log
+bun run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+bun run test:logged -- --name changed-component -- \
+  bun --cwd=apps/web test src/path/to/ChangedComponent.test.tsx \
+  --parallel=2 --only-failures
 ```
 
 Do not proceed to browser QA with a known type error or deterministic focused
@@ -502,24 +494,20 @@ reloads during progress, verifies authoritative rehydration and diff state, and
 cleans up its environment.
 
 ```bash
-set -o pipefail
 ORKESTRATOR_AGENT_TEST_PROFILE=agent-settings-dialog \
 ORKESTRATOR_AGENT_TEST_RUN_ID=agent-settings-dialog \
-bun run test:agent:browser 2>&1 | tee /tmp/orkestrator-agent-browser.log
+bun run test:logged -- --name agent-browser -- bun run test:agent:browser
 ```
 
 Use the optional suites only when their layer is in scope:
 
 ```bash
-# Run each pipeline separately.
-set -o pipefail
-
 # Real Electron main process, preload, IPC, clipboard, title, userData, and shutdown
-bun run test:agent:electron 2>&1 | tee /tmp/orkestrator-agent-electron.log
+bun run test:logged -- --name agent-electron -- bun run test:agent:electron
 
 # Requires a profile started with --fixture-environments local,container
 ORKESTRATOR_AGENT_TEST_PROFILE=agent-container-qa \
-bun run test:agent:docker 2>&1 | tee /tmp/orkestrator-agent-docker.log
+bun run test:logged -- --name agent-docker -- bun run test:agent:docker
 ```
 
 The Docker suite is opt-in because it builds/starts the workspace-specific
@@ -593,7 +581,7 @@ that a missed event can be recovered.
 | Browser gateway or backend command | Backend and web typechecks; focused gateway/command tests; browser smoke; authenticated real-browser path |
 | Electron main, preload, IPC, or window behavior | Desktop typecheck; focused Electron tests; `test:agent:electron`; native-window check when visual behavior changed |
 | Docker lifecycle or container UI | Backend typecheck; exact-owner focused tests; local browser smoke; opt-in Docker fixture/suite when Docker is available |
-| Cross-cutting or release-sensitive change | All relevant checks above, then `set -o pipefail; bun run test 2>&1 \| tee /tmp/orkestrator-full-tests.log` |
+| Cross-cutting or release-sensitive change | All relevant checks above, then `bun run test`; use `bun run test:all` for release validation including iOS |
 
 #### 8. Evidence and failure reporting
 
@@ -601,8 +589,7 @@ Record enough evidence for another agent to reproduce the result:
 
 - Profile name and tested commit/worktree.
 - Exact commands and pass/fail counts.
-- Saved `/tmp` log path for every automated command; this is the authoritative
-  output when the agent/tool buffer is truncated.
+- The logged runner's compressed failure artifact path, when a command fails.
 - Browser or Electron route used and viewport when layout matters.
 - Short reproduction steps, expected result, and actual result.
 - Artifact paths under `output/agent-testing/<run-id>/`.
@@ -665,12 +652,14 @@ ports, drive happy-dom) rather than CPU, so it parallelizes well:
   from ~100s to ~30s).
 - **Across groups** — `scripts/test-all.ts` runs the workspace, root, bridge and
   protocol groups concurrently, with bounded worker pools (`planWorkers`) so
-  the three worker-consuming groups cannot oversubscribe a small CI runner. iOS
-  runs last and alone: the simulator is a single shared resource.
+  the three worker-consuming groups cannot oversubscribe a small CI runner.
+  Larger hosts give remaining capacity to the root long pole while keeping at
+  most two package tasks active. iOS is opt-in through `test:all` and runs
+  last and alone because the simulator is a single shared resource.
 
-Group output is buffered and printed as a labelled block, and **every** failing
-group is reported rather than stopping at the first — with concurrency the others
-have already run.
+Group output streams to private bounded files while only a failure tail stays in
+memory. Passing groups print a summary; failing groups retain compressed
+artifacts. **Every** failing group is reported rather than stopping at the first.
 
 Always add `--parallel` when running a suite directly; a sequential run of
 `tests/` takes roughly three times as long.

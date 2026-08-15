@@ -783,7 +783,7 @@ describe("PaneLeafContainer", () => {
       expect(surface.className).toContain("hidden");
       expect(surface.className).not.toContain("fixed");
       // The chunk URL must never reach the DOM.
-      expect(screen.queryByText(/assets\/build-1234\.js/)).toBeNull();
+      expect(screen.queryByText(/assets\/build-1234\.js/) === null).toBe(true);
     } finally {
       console.error = originalError;
       buildChatTabFailure = null;
@@ -823,7 +823,7 @@ describe("PaneLeafContainer", () => {
       // The module loaded fine and then threw, so reloading for a fresh copy is
       // not the diagnosis and must not be presented as one.
       expect(screen.getByText("Something went wrong in this view")).toBeTruthy();
-      expect(screen.queryByText("This part of the app failed to load")).toBeNull();
+      expect(screen.queryByText("This part of the app failed to load") === null).toBe(true);
       expect(alert.parentElement!.className).not.toContain("hidden");
     } finally {
       console.error = originalError;

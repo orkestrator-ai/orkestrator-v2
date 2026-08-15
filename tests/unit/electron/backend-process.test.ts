@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -30,6 +30,15 @@ async function waitForWebClientStatus(
     status = await client.getWebClientStatus();
   }
   return status;
+}
+
+async function waitForPath(target: string, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await access(target).then(() => true, () => false)) return;
+    await Bun.sleep(10);
+  }
+  throw new Error(`Timed out waiting for ${target}`);
 }
 
 afterEach(async () => {
@@ -563,9 +572,12 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
     const toolsDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-tailscale-"));
     directories.push(dataDir, toolsDir);
     const executable = path.join(toolsDir, "tailscale");
+    const statusStarted = path.join(toolsDir, "status-started");
+    const releaseStatus = path.join(toolsDir, "release-status");
     await writeFile(executable, `#!/bin/sh
 if [ "$*" = "serve status --json" ]; then
-  sleep 5
+  : > ${JSON.stringify(statusStarted)}
+  while [ ! -f ${JSON.stringify(releaseStatus)} ]; do sleep 0.01; done
   printf '{}\\n'
   exit 0
 fi
@@ -578,7 +590,6 @@ printf 'Available within your tailnet:\\nhttps://slow.example.ts.net\\n'
 
     const backendProcess = new BackendProcess();
     processes.push(backendProcess);
-    const startedAt = Date.now();
     const client = await backendProcess.start({
       isDev: true,
       appRoot: root,
@@ -590,8 +601,9 @@ printf 'Available within your tailnet:\\nhttps://slow.example.ts.net\\n'
       onEvent: () => undefined,
     });
 
-    expect(Date.now() - startedAt).toBeLessThan(4_000);
+    await waitForPath(statusStarted);
     await expect(client.invoke("greet", { name: "ready" })).resolves.toContain("Hello, ready!");
+    await writeFile(releaseStatus, "release\n");
     await expect(waitForWebClientStatus(client, (status) => status.running)).resolves.toMatchObject({
       running: true,
       url: "https://slow.example.ts.net/",

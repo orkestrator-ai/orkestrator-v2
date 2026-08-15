@@ -829,7 +829,7 @@ describe("TerminalContainer", () => {
     );
 
     expect(screen.getByText("Container is not running")).toBeTruthy();
-    expect(screen.queryByText("Environment setup failed.")).toBeNull();
+    expect(screen.queryByText("Environment setup failed.") === null).toBe(true);
     await waitFor(() => {
       const panes = usePaneLayoutStore.getState().environments.get("env-hidden");
       expect(panes?.containerId).toBeNull();
@@ -5691,7 +5691,7 @@ describe("TerminalContainer", () => {
     );
     expect(screen.getByTestId("initialization-logs").textContent)
       .toBe("container-hidden");
-    expect(screen.queryByRole("button", { name: /start container/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /start container/i }) === null).toBe(true);
   });
 
   test("renders local creation and stopped overlays with environment wording", () => {

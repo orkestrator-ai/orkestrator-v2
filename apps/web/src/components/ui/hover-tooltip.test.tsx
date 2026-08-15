@@ -149,7 +149,7 @@ describe("HoverTooltipContent", () => {
     fireEvent.mouseEnter(screen.getByRole("button", { name: "Run" }));
 
     // Tooltip should not appear immediately on hover.
-    expect(screen.queryByText("Run command")).toBeNull();
+    expect(screen.queryByText("Run command") === null).toBe(true);
 
     await waitFor(() => {
       expect(screen.getByText("Run command")).toBeTruthy();
@@ -161,7 +161,7 @@ describe("HoverTooltipContent", () => {
 
     const button = screen.getByRole("button", { name: "Focus me" });
     fireEvent.mouseEnter(button);
-    expect(screen.queryByText("Focus tooltip")).toBeNull();
+    expect(screen.queryByText("Focus tooltip") === null).toBe(true);
 
     fireEvent.focus(button);
 
@@ -177,7 +177,7 @@ describe("HoverTooltipContent", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 250));
 
-    expect(screen.queryByText("Run command")).toBeNull();
+    expect(screen.queryByText("Run command") === null).toBe(true);
   });
 
   test("keeps tooltip visible for the close delay before hiding", async () => {
@@ -196,7 +196,7 @@ describe("HoverTooltipContent", () => {
 
     await waitFor(
       () => {
-        expect(screen.queryByText("Run command")).toBeNull();
+        expect(screen.queryByText("Run command") === null).toBe(true);
       },
       {
         // The close delay is 50ms, but the repository-wide parallel suite can
@@ -341,6 +341,6 @@ describe("HoverTooltipContent", () => {
   test("does not render when opened before the anchor ref is available", () => {
     render(<OpenTooltipWithoutAnchor />);
 
-    expect(screen.queryByText("Missing anchor")).toBeNull();
+    expect(screen.queryByText("Missing anchor") === null).toBe(true);
   });
 });

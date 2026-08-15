@@ -49,6 +49,7 @@ import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 import type { Environment } from "@/types";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
+import { rendererDebugLog } from "@/lib/debug-log";
 
 export const DOCKER_AVAILABILITY_POLL_INTERVAL_MS = 60_000;
 
@@ -219,7 +220,7 @@ function App() {
         available = await probeDocker(source);
       }
 
-      console.log(`[App] Docker ${source} check:`, available);
+      rendererDebugLog(`[App] Docker ${source} check:`, available);
       dockerAvailableRef.current = available;
       setDockerAvailable(available);
 
@@ -229,7 +230,7 @@ function App() {
         try {
           const clearedIds = await syncAllEnvironmentsWithDocker();
           if (clearedIds.length > 0) {
-            console.log("[App] Cleared orphaned container references:", clearedIds);
+            rendererDebugLog("[App] Cleared orphaned container references:", clearedIds);
           }
         } catch (error) {
           console.error("[App] Failed to sync environments with Docker:", error);
@@ -287,12 +288,12 @@ function App() {
       getAvailableAiCli(),
     ])
       .then(([claudeCli, claudeConfig, opencodeCli, codexCli, githubCli, aiCli]) => {
-        console.log("[App] Claude CLI available:", claudeCli);
-        console.log("[App] Claude config available:", claudeConfig);
-        console.log("[App] OpenCode CLI available:", opencodeCli);
-        console.log("[App] Codex CLI available:", codexCli);
-        console.log("[App] GitHub CLI available:", githubCli);
-        console.log("[App] Available AI CLI:", aiCli);
+        rendererDebugLog("[App] Claude CLI available:", claudeCli);
+        rendererDebugLog("[App] Claude config available:", claudeConfig);
+        rendererDebugLog("[App] OpenCode CLI available:", opencodeCli);
+        rendererDebugLog("[App] Codex CLI available:", codexCli);
+        rendererDebugLog("[App] GitHub CLI available:", githubCli);
+        rendererDebugLog("[App] Available AI CLI:", aiCli);
         setClaudeCliAvailable(claudeCli);
         setClaudeConfigAvailable(claudeConfig);
         setOpencodeCliAvailable(opencodeCli);
@@ -355,7 +356,7 @@ function App() {
         checkGithubCli(),
         getAvailableAiCli(),
       ]);
-      console.log("[App] CLI retry check - Claude:", claudeCli, "OpenCode:", opencodeCli, "Codex:", codexCli, "GitHub:", githubCli, "Available AI:", aiCli);
+      rendererDebugLog("[App] CLI retry check - Claude:", claudeCli, "OpenCode:", opencodeCli, "Codex:", codexCli, "GitHub:", githubCli, "Available AI:", aiCli);
       setClaudeCliAvailable(claudeCli);
       setClaudeConfigAvailable(claudeConfig);
       setOpencodeCliAvailable(opencodeCli);

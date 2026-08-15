@@ -247,7 +247,7 @@ describe("ClaudeQuestionCard", () => {
       />
     );
 
-    expect(screen.queryByPlaceholderText(/Type your own answer/i)).toBeNull();
+    expect(screen.queryByPlaceholderText(/Type your own answer/i) === null).toBe(true);
     expect((screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement).disabled).toBe(false);
 
     await act(async () => {
@@ -369,7 +369,7 @@ describe("ClaudeQuestionCard", () => {
     fireEvent.click(removeBtn);
 
     // Chip is gone, submit disabled again
-    expect(screen.queryByLabelText("Remove Green")).toBeNull();
+    expect(screen.queryByLabelText("Remove Green") === null).toBe(true);
     expect(submit.disabled).toBe(true);
   });
 
@@ -419,7 +419,7 @@ describe("ClaudeQuestionCard", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     // Old chip replaced by new one
-    expect(screen.queryByLabelText("Remove Green")).toBeNull();
+    expect(screen.queryByLabelText("Remove Green") === null).toBe(true);
     expect(screen.getByLabelText("Remove Purple")).toBeTruthy();
 
     const submit = screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement;

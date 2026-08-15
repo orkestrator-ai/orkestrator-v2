@@ -135,7 +135,7 @@ describe("KanbanBoard ticket sources", () => {
     render(<KanbanBoard projectId="project-1" />);
 
     // Board columns are replaced by the notes view.
-    expect(screen.queryByText("Backlog")).toBeNull();
+    expect(screen.queryByText("Backlog") === null).toBe(true);
     expect(screen.getByText("Project Notes")).toBeTruthy();
     expect(loadNotesMock).toHaveBeenCalledWith("project-1");
   });

@@ -266,7 +266,7 @@ describe("BuildCompletionStatus", () => {
       backendRevision: 2,
     });
     await waitFor(() => expect(button.disabled).toBe(false));
-    expect(button.querySelector(".animate-spin")).toBeNull();
+    expect(button.querySelector(".animate-spin") === null).toBe(true);
   });
 
   test("leaves the completion retry usable while the interaction retry runs", async () => {
@@ -313,7 +313,7 @@ describe("BuildCompletionStatus", () => {
     expect(interaction.disabled).toBe(true);
     expect(completion.disabled).toBe(false);
     expect(completion.textContent).not.toContain("Retrying…");
-    expect(completion.querySelector(".animate-spin")).toBeNull();
+    expect(completion.querySelector(".animate-spin") === null).toBe(true);
 
     fireEvent.click(completion);
     await waitFor(() =>
@@ -346,9 +346,8 @@ describe("BuildCompletionStatus", () => {
 
     // Only an interactive-request failure has a safe retry here; offering one
     // for a dispatch failure would replay a prompt that may already have run.
-    expect(screen.queryByRole("button", { name: "Retry failed build phase" }))
-      .toBeNull();
-    expect(screen.queryByText("The prompt was never dispatched")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry failed build phase" }) === null).toBe(true);
+    expect(screen.queryByText("The prompt was never dispatched") === null).toBe(true);
     expect(screen.getAllByRole("alert")).toHaveLength(1);
   });
 
@@ -374,8 +373,7 @@ describe("BuildCompletionStatus", () => {
 
     render(<BuildCompletionStatus pipeline={pipeline} />);
 
-    expect(screen.queryByRole("button", { name: "Retry failed build phase" }))
-      .toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry failed build phase" }) === null).toBe(true);
     expect(screen.getAllByRole("alert")).toHaveLength(1);
     expect(screen.getByText(/Updating the task board failed/)).toBeTruthy();
   });
@@ -397,7 +395,7 @@ describe("BuildCompletionStatus", () => {
     expect(screen.getByText(/2 unattended input requests were auto-declined/))
       .toBeTruthy();
     expect(screen.queryAllByRole("alert")).toHaveLength(0);
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("button") === null).toBe(true);
   });
 
   test("retries a failed GitHub completion comment from the build UI", async () => {

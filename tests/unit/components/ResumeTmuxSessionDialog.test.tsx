@@ -60,7 +60,7 @@ describe("ResumeTmuxSessionDialog", () => {
         onResume={() => {}}
       />,
     );
-    expect(screen.queryByText("Resume Session")).toBeNull();
+    expect(screen.queryByText("Resume Session") === null).toBe(true);
     expect(listPreviousSessionsMock).not.toHaveBeenCalled();
   });
 
@@ -101,13 +101,13 @@ describe("ResumeTmuxSessionDialog", () => {
     await waitFor(() =>
       expect(document.querySelector(".animate-spin")).toBeTruthy(),
     );
-    expect(screen.queryByText(/No previous sessions recorded/i)).toBeNull();
+    expect(screen.queryByText(/No previous sessions recorded/i) === null).toBe(true);
 
     resolveSessions([]);
     expect(
       await screen.findByText(/No previous sessions recorded/i),
     ).toBeTruthy();
-    expect(document.querySelector(".animate-spin")).toBeNull();
+    expect(document.querySelector(".animate-spin") === null).toBe(true);
   });
 
   test("renders an error message when listing fails", async () => {

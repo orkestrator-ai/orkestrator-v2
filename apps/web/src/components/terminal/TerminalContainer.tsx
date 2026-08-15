@@ -77,6 +77,7 @@ import {
 } from "@/types/paneLayout";
 import type { ClaudeNativeBackend } from "@/types";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { rendererDebugLog } from "@/lib/debug-log";
 
 const SETUP_SESSION_BIND_RETRY_DELAY_MS = 250;
 const MAX_SETUP_SESSION_BIND_ATTEMPTS = 3;
@@ -803,7 +804,7 @@ export function TerminalContainer({
       else unlisten = release;
     }).catch((error) => {
       if (!disposed) {
-        console.debug("[setup-terminal] failed to install reconnect listener", error);
+        rendererDebugLog("[setup-terminal] failed to install reconnect listener", error);
       }
     });
     return () => {
@@ -846,7 +847,7 @@ export function TerminalContainer({
       });
 
       if (staleSetupTab) {
-        console.log("[TerminalContainer] Removing stale setup placeholder tab:", staleSetupTab.id);
+        rendererDebugLog("[TerminalContainer] Removing stale setup placeholder tab:", staleSetupTab.id);
         removeTab(leaf.id, staleSetupTab.id, environmentId);
         return;
       }
@@ -1397,7 +1398,7 @@ export function TerminalContainer({
         return;
       }
 
-      console.log("[TerminalContainer] Initial tab decision:", {
+      rendererDebugLog("[TerminalContainer] Initial tab decision:", {
         agentType: claudeOptions?.agentType,
         launchAgent,
         opencodeMode,
@@ -1461,7 +1462,7 @@ export function TerminalContainer({
       && previousContainerIdRef.current !== null
       && previousContainerIdRef.current !== containerId
     ) {
-      console.debug("[TerminalContainer] Container changed for environment:", environmentId, "resetting panes");
+      rendererDebugLog("[TerminalContainer] Container changed for environment:", environmentId, "resetting panes");
       reset(environmentId);
       setHasAppliedClaudeOptions(false);
       clearPendingNativeLaunch(environmentId);
@@ -1474,7 +1475,7 @@ export function TerminalContainer({
   // This clears all terminals and tabs since their backend sessions are destroyed
   useEffect(() => {
     if (!isContainerRunning && containerId) {
-      console.debug("[TerminalContainer] Container stopped, resetting panes for environment:", environmentId);
+      rendererDebugLog("[TerminalContainer] Container stopped, resetting panes for environment:", environmentId);
       reset(environmentId);
       // Clear pending native OpenCode launch on container stop
       clearPendingNativeLaunch(environmentId);
@@ -1487,7 +1488,7 @@ export function TerminalContainer({
       setupReady
       && pendingNativeLaunch
       && (containerId || isLocalEnvironmentReady);
-    console.log("[TerminalContainer] Native tab effect check - setupPhase:", setupPhase, "hasPending:", !!pendingNativeLaunch, "containerId:", !!containerId, "isLocalEnvironmentReady:", isLocalEnvironmentReady);
+    rendererDebugLog("[TerminalContainer] Native tab effect check - setupPhase:", setupPhase, "hasPending:", !!pendingNativeLaunch, "containerId:", !!containerId, "isLocalEnvironmentReady:", isLocalEnvironmentReady);
 
     // Simple logic: when workspace is ready and we have a pending launch, create the tab
     // For local environments, containerId is null so we check isLocalEnvironmentReady (worktreePath exists)
@@ -1504,7 +1505,7 @@ export function TerminalContainer({
         const isClaudeNative = pending.agentType === "claude";
         const isCodexNative = pending.agentType === "codex";
         const launchMode = pending.launchMode ?? "native";
-        console.log(
+        rendererDebugLog(
           "[TerminalContainer] Workspace ready, launching",
           launchMode,
           isClaudeNative ? "Claude" : isCodexNative ? "Codex" : "OpenCode",
@@ -1615,7 +1616,7 @@ export function TerminalContainer({
 
       const allTabs = getAllTabs(environmentId);
       if (allTabs.length >= MAX_TABS) {
-        console.debug("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
+        rendererDebugLog("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
         showTabLimitReachedToast(MAX_TABS);
         return false;
       }
@@ -1631,7 +1632,7 @@ export function TerminalContainer({
         browserData: { url: initialUrl?.trim() ?? "" },
         displayTitle,
       };
-      console.debug(
+      rendererDebugLog(
         "[TerminalContainer] Creating browser tab:",
         newTabId,
         "for environment:",
@@ -1676,7 +1677,7 @@ export function TerminalContainer({
 
       const allTabs = getAllTabs(environmentId);
       if (allTabs.length >= MAX_TABS) {
-        console.debug("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
+        rendererDebugLog("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
         showTabLimitReachedToast(MAX_TABS);
         return false;
       }
@@ -1746,7 +1747,7 @@ export function TerminalContainer({
           isLocal: isLocalEnvironment,
           displayTitle: options?.displayTitle,
         });
-        console.debug(
+        rendererDebugLog(
           "[TerminalContainer] Creating unassigned agent-native tab:",
           newTabId,
           "for environment:",
@@ -1793,7 +1794,7 @@ export function TerminalContainer({
           initialAgentModel: options?.initialAgentModel,
           initialReasoningEffort: options?.initialReasoningEffort,
         });
-        console.debug("[TerminalContainer] Creating opencode-native tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
+        rendererDebugLog("[TerminalContainer] Creating opencode-native tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
         seedDeferredNativePlatform(newTab, "opencode");
         addTab(activePaneId, newTab, environmentId);
         return true;
@@ -1821,7 +1822,7 @@ export function TerminalContainer({
           sessionId: options?.resumeSessionId,
           deferPlatform: !prelockNativePlatform,
         });
-        console.debug("[TerminalContainer] Creating", newTab.type, "tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
+        rendererDebugLog("[TerminalContainer] Creating", newTab.type, "tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
         seedDeferredNativePlatform(newTab, "claude");
         addTab(activePaneId, newTab, environmentId);
         return true;
@@ -1841,7 +1842,7 @@ export function TerminalContainer({
           initialAgentModel: options?.initialAgentModel,
           initialReasoningEffort: options?.initialReasoningEffort,
         });
-        console.debug("[TerminalContainer] Creating codex-native tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
+        rendererDebugLog("[TerminalContainer] Creating codex-native tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
         seedDeferredNativePlatform(newTab, "codex");
         addTab(activePaneId, newTab, environmentId);
         return true;
@@ -1878,7 +1879,7 @@ export function TerminalContainer({
         initialReasoningEffort: options?.initialReasoningEffort,
       };
 
-      console.debug("[TerminalContainer] Creating new tab:", newTabId, "type:", type, "for environment:", environmentId);
+      rendererDebugLog("[TerminalContainer] Creating new tab:", newTabId, "type:", type, "for environment:", environmentId);
       addTab(activePaneId, newTab, environmentId);
       return true;
     },
@@ -1924,13 +1925,13 @@ export function TerminalContainer({
         const pane = usePaneLayoutStore.getState().findPaneWithTab(existingTab.id, environmentId);
         if (pane) {
           usePaneLayoutStore.getState().setActiveTab(pane.id, existingTab.id, environmentId);
-          console.debug("[TerminalContainer] Activated existing tab:", existingTab.id, "in pane:", pane.id);
+          rendererDebugLog("[TerminalContainer] Activated existing tab:", existingTab.id, "in pane:", pane.id);
         }
         return;
       }
 
       if (allTabs.length >= MAX_TABS) {
-        console.debug("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
+        rendererDebugLog("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
         showTabLimitReachedToast(MAX_TABS);
         return;
       }
@@ -1954,7 +1955,7 @@ export function TerminalContainer({
         },
       };
 
-      console.debug("[TerminalContainer] Creating file tab:", newTabId, "path:", filePath, "isDiff:", options?.isDiff, "isLocal:", isLocalEnvironment, "for environment:", environmentId);
+      rendererDebugLog("[TerminalContainer] Creating file tab:", newTabId, "path:", filePath, "isDiff:", options?.isDiff, "isLocal:", isLocalEnvironment, "for environment:", environmentId);
       addTab(activePaneId, newTab, environmentId);
     },
     [containerId, isContainerRunning, isLocalEnvironment, worktreePath, activePaneId, addTab, getAllTabs, environmentId]
@@ -2144,7 +2145,7 @@ export function TerminalContainer({
       setDragOverPaneId(null);
 
       const { active, over } = event;
-      console.debug("[TerminalContainer] DragEnd - active:", active.id, "over:", over?.id ?? "null", "lastDragOverPaneId:", lastDragOverPaneId);
+      rendererDebugLog("[TerminalContainer] DragEnd - active:", active.id, "over:", over?.id ?? "null", "lastDragOverPaneId:", lastDragOverPaneId);
       if (!over) return;
 
       const activeId = active.id as string;
@@ -2158,13 +2159,13 @@ export function TerminalContainer({
       });
 
       if (action.type === "split") {
-        console.debug("[TerminalContainer] Split at edge:", action.edge, "from pane:", action.fromPaneId);
+        rendererDebugLog("[TerminalContainer] Split at edge:", action.edge, "from pane:", action.fromPaneId);
         splitPaneAtEdge(action.targetPaneId, action.edge, action.tabId, action.fromPaneId, environmentId);
       } else if (action.type === "reorder") {
-        console.debug("[TerminalContainer] Reordering tabs:", action.fromIndex, "->", action.toIndex);
+        rendererDebugLog("[TerminalContainer] Reordering tabs:", action.fromIndex, "->", action.toIndex);
         reorderTabs(action.paneId, action.fromIndex, action.toIndex, environmentId);
       } else if (action.type === "move") {
-        console.debug("[TerminalContainer] Moving tab to pane:", action.toPaneId, "index:", action.toIndex);
+        rendererDebugLog("[TerminalContainer] Moving tab to pane:", action.toPaneId, "index:", action.toIndex);
         moveTab(action.fromPaneId, action.toPaneId, action.tabId, action.toIndex, environmentId);
       }
     },
@@ -2196,7 +2197,7 @@ export function TerminalContainer({
 
   // Debug logging for local environment display issues (only in development)
   if (import.meta.env.DEV) {
-    console.debug("[TerminalContainer] Display state:", {
+    rendererDebugLog("[TerminalContainer] Display state:", {
       environmentId,
       isLocalEnvironment,
       isLocalEnvironmentReady,

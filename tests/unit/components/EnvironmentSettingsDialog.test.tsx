@@ -332,7 +332,7 @@ describe("EnvironmentSettingsDialog", () => {
         new Set(["claude", "codex", "opencode"]),
       );
     });
-    expect(screen.queryByRole("button", { name: "Reveal skill in file manager" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reveal skill in file manager" }) === null).toBe(true);
     expect(mockGetEnvironmentExtensions).toHaveBeenCalledWith("env-1", {});
   });
 
@@ -471,7 +471,7 @@ describe("EnvironmentSettingsDialog", () => {
       await waitFor(() => {
         expect(screen.getByText(/Extension settings could not be loaded/)).toBeTruthy();
       });
-      expect(screen.queryByText("claude-docs")).toBeNull();
+      expect(screen.queryByText("claude-docs") === null).toBe(true);
       // The agent navigation and empty selected section remain available.
       expect(screen.getByRole("tab", { name: "Claude" })).toBeTruthy();
       expect(screen.getByRole("region", { name: "Claude extensions" })).toBeTruthy();
@@ -588,7 +588,7 @@ describe("EnvironmentSettingsDialog", () => {
     });
 
     await waitFor(() => expect(screen.getByText("claude-docs")).toBeTruthy());
-    expect(screen.queryByText(/Reading Claude, Codex, and OpenCode configuration/)).toBeNull();
+    expect(screen.queryByText(/Reading Claude, Codex, and OpenCode configuration/) === null).toBe(true);
     expect(screen.getByRole("button", { name: /Refresh/ }).hasAttribute("disabled")).toBe(false);
   });
 
@@ -633,7 +633,7 @@ describe("EnvironmentSettingsDialog", () => {
 
     // Mid-refresh the panel keeps showing what it already had.
     expect(screen.getByText("claude-docs")).toBeTruthy();
-    expect(screen.queryByText(/Reading Claude, Codex, and OpenCode configuration/)).toBeNull();
+    expect(screen.queryByText(/Reading Claude, Codex, and OpenCode configuration/) === null).toBe(true);
 
     await act(async () => {
       refreshGate.resolve([
@@ -648,7 +648,7 @@ describe("EnvironmentSettingsDialog", () => {
     });
 
     await waitFor(() => expect(screen.getByText("refreshed-server")).toBeTruthy());
-    expect(screen.queryByText("claude-docs")).toBeNull();
+    expect(screen.queryByText("claude-docs") === null).toBe(true);
   });
 
   test("discards a load that resolves after the dialog closed", async () => {
@@ -699,7 +699,7 @@ describe("EnvironmentSettingsDialog", () => {
       />
     );
 
-    expect(screen.queryByText("env-1-only-server")).toBeNull();
+    expect(screen.queryByText("env-1-only-server") === null).toBe(true);
     expect(screen.getByText(/Reading Claude, Codex, and OpenCode configuration/)).toBeTruthy();
 
     await act(async () => {
@@ -715,7 +715,7 @@ describe("EnvironmentSettingsDialog", () => {
     });
 
     await waitFor(() => expect(screen.getByText("env-2-server")).toBeTruthy());
-    expect(screen.queryByText("env-1-only-server")).toBeNull();
+    expect(screen.queryByText("env-1-only-server") === null).toBe(true);
   });
 
   test("discards a failed load that resolves after the dialog closed", async () => {
@@ -759,7 +759,7 @@ describe("EnvironmentSettingsDialog", () => {
       );
 
       // The abandoned failure must not paint an error over the new load.
-      expect(screen.queryByText(/Extension settings could not be loaded/)).toBeNull();
+      expect(screen.queryByText(/Extension settings could not be loaded/) === null).toBe(true);
       expect(screen.getByText(/Reading Claude, Codex, and OpenCode configuration/)).toBeTruthy();
     } finally {
       consoleError.mockRestore();
@@ -905,7 +905,7 @@ describe("EnvironmentSettingsDialog", () => {
     await waitFor(() => {
       expect(mockUpdatePortMappings).toHaveBeenCalledTimes(1);
     });
-    expect(screen.queryByRole("button", { name: "Restart Environment" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Restart Environment" }) === null).toBe(true);
     expect(onRestart).not.toHaveBeenCalled();
     expect(onUpdate).toHaveBeenCalled();
     expect(onOpenChange).toHaveBeenCalledWith(false);

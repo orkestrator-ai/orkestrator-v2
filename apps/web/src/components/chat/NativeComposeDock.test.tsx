@@ -58,7 +58,7 @@ describe("NativeComposeDock", () => {
       </NativeComposeDock>,
     );
 
-    expect(screen.queryByRole("button", { name: "Scroll down" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Scroll down" }) === null).toBe(true);
   });
 
   test("shows the notice in both centered and docked layouts", () => {
@@ -97,7 +97,7 @@ describe("NativeComposeDock", () => {
       </NativeComposeDock>,
     );
 
-    expect(screen.queryByTestId("compose-dock-notice")).toBeNull();
+    expect(screen.queryByTestId("compose-dock-notice") === null).toBe(true);
   });
 
   test("shows pinned content in both centered and docked layouts", () => {
@@ -159,6 +159,6 @@ describe("NativeComposeDock", () => {
       </NativeComposeDock>,
     );
 
-    expect(container.querySelector(".overflow-y-auto")).toBeNull();
+    expect(container.querySelector(".overflow-y-auto") === null).toBe(true);
   });
 });

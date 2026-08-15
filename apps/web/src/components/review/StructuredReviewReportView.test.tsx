@@ -91,12 +91,12 @@ describe("StructuredReviewReportView", () => {
 
   test("hides raw JSON until deliberate inspection", () => {
     render(<StructuredReviewReportView report={report} />);
-    expect(screen.queryByLabelText("Raw structured review JSON")).toBeNull();
+    expect(screen.queryByLabelText("Raw structured review JSON") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: /Inspect raw JSON/ }));
     expect(screen.getByLabelText("Raw structured review JSON").textContent)
       .toContain("\"reviewScope\"");
     fireEvent.click(screen.getByRole("button", { name: /Hide raw JSON/ }));
-    expect(screen.queryByLabelText("Raw structured review JSON")).toBeNull();
+    expect(screen.queryByLabelText("Raw structured review JSON") === null).toBe(true);
   });
 
   test("infers the not-run count for a legacy report already held in memory", () => {
@@ -133,7 +133,7 @@ describe("StructuredReviewReportView", () => {
     );
 
     expect(screen.getByText("0 not run")).toBeTruthy();
-    expect(screen.queryByText("-2 not run")).toBeNull();
+    expect(screen.queryByText("-2 not run") === null).toBe(true);
   });
 
   test("renders commit, failed validation, skipped files, and limitations", () => {
@@ -185,25 +185,25 @@ describe("StructuredReviewReportView", () => {
 
     // Collapsed content is unmounted, not hidden: this report is the largest
     // thing in a transcript that already scrolls.
-    expect(screen.queryByText("Adds structured reviews.")).toBeNull();
-    expect(screen.queryByText("Long-running state changed.")).toBeNull();
+    expect(screen.queryByText("Adds structured reviews.") === null).toBe(true);
+    expect(screen.queryByText("Long-running state changed.") === null).toBe(true);
     // A collapsed report still says what it concluded.
     expect(screen.getByText(/Ready: with-fixes · 1 issue · 1 coverage gap/))
       .toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /What Changed/ }));
     expect(screen.getByText("Adds structured reviews.")).toBeTruthy();
-    expect(screen.queryByText("Long-running state changed.")).toBeNull();
+    expect(screen.queryByText("Long-running state changed.") === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: /What Changed/ }));
-    expect(screen.queryByText("Adds structured reviews.")).toBeNull();
+    expect(screen.queryByText("Adds structured reviews.") === null).toBe(true);
   });
 
   test("keeps the raw JSON inspector out of the report when it is suppressed", () => {
     render(<StructuredReviewReportView report={report} showRawJson={false} />);
 
-    expect(screen.queryByRole("button", { name: /Inspect raw JSON/ })).toBeNull();
-    expect(screen.queryByText("Validated JSON Schema")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Inspect raw JSON/ }) === null).toBe(true);
+    expect(screen.queryByText("Validated JSON Schema") === null).toBe(true);
     expect(screen.getByRole("heading", { name: "Structured review report" }))
       .toBeTruthy();
     expect(screen.getByText("Adds structured reviews.")).toBeTruthy();
@@ -221,9 +221,8 @@ describe("StructuredReviewReportView", () => {
       />,
     );
 
-    expect(screen.queryByRole("heading", { name: "Structured review report" }))
-      .toBeNull();
-    expect(screen.queryByText(/^Ready: /)).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Structured review report" }) === null).toBe(true);
+    expect(screen.queryByText(/^Ready: /) === null).toBe(true);
     // The article stays named for assistive technology even with no visible
     // heading, and the sections themselves are untouched.
     expect(screen.getByLabelText("Structured review report")).toBeTruthy();
@@ -235,8 +234,7 @@ describe("StructuredReviewReportView", () => {
       <StructuredReviewReportView report={report} showHeading={false} />,
     );
 
-    expect(screen.queryByRole("heading", { name: "Structured review report" }))
-      .toBeNull();
+    expect(screen.queryByRole("heading", { name: "Structured review report" }) === null).toBe(true);
     expect(screen.getByText("Validated JSON Schema")).toBeTruthy();
     expect(screen.getByRole("button", { name: /Inspect raw JSON/ }))
       .toBeTruthy();
@@ -297,7 +295,7 @@ describe("StructuredReviewReportView", () => {
     // that a report inside a transcript stays small, so this must actually
     // close and not merely toggle a chevron.
     fireEvent.click(disclosure);
-    expect(screen.queryByText("Adds structured reviews.")).toBeNull();
+    expect(screen.queryByText("Adds structured reviews.") === null).toBe(true);
   });
 
   test("summarizes a collapsed report's counts in both singular and plural", () => {
@@ -349,8 +347,7 @@ describe("StructuredReviewReportView", () => {
 
     expect(screen.getByLabelText("Verification review")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Verification review" })).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: "Structured review report" }))
-      .toBeNull();
+    expect(screen.queryByRole("heading", { name: "Structured review report" }) === null).toBe(true);
   });
 
   test("renders each section's body, not only its heading", () => {
@@ -426,7 +423,7 @@ describe("StructuredReviewReportView", () => {
         }}
       />,
     );
-    expect(screen.queryByText("Alternative fixes")).toBeNull();
+    expect(screen.queryByText("Alternative fixes") === null).toBe(true);
   });
 
   test("renders explicit empty states for findings, strengths, and coverage gaps", () => {

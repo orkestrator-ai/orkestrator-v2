@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, truncate, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { sanitizeAgentTestingArtifacts } from "./artifact-sanitizer";
+import { MAX_SANITIZABLE_FILE_BYTES, sanitizeAgentTestingArtifacts } from "./artifact-sanitizer";
 
 const temporaryDirectories: string[] = [];
 
@@ -80,5 +80,37 @@ describe("agent-test artifact sanitizer", () => {
     );
 
     await expect(readFile(archive, "utf8")).rejects.toThrow();
+  });
+
+  test("rejects and destroys an artifact that exceeds the sanitizer memory bound", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ork-agent-oversized-"));
+    temporaryDirectories.push(root);
+    const artifact = path.join(root, "oversized.log");
+    await writeFile(artifact, "potential-secret");
+    await truncate(artifact, MAX_SANITIZABLE_FILE_BYTES + 1);
+
+    await expect(sanitizeAgentTestingArtifacts(artifact, ["potential-secret"]))
+      .rejects.toThrow("sanitization limit");
+    await expect(readFile(artifact)).rejects.toThrow();
+  });
+
+  test("removes only an oversized artifact and still redacts safe evidence", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ork-agent-partial-bound-"));
+    temporaryDirectories.push(root);
+    const oversized = path.join(root, "oversized.log");
+    const safe = path.join(root, "results.json");
+    const secret = "preserve-and-redact-this-secret";
+    await writeFile(oversized, "uninspectable");
+    await truncate(oversized, MAX_SANITIZABLE_FILE_BYTES + 1);
+    await writeFile(safe, JSON.stringify({ secret }));
+
+    await expect(sanitizeAgentTestingArtifacts(root, [secret]))
+      .rejects.toThrow("sanitization limit");
+
+    expect(await stat(root)).not.toBeNull();
+    expect(await stat(oversized).catch(() => null)).toBeNull();
+    const retained = await readFile(safe, "utf8");
+    expect(retained).not.toContain(secret);
+    expect(retained).toContain("[REDACTED]");
   });
 });

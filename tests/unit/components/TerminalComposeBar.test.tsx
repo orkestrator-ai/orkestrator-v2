@@ -182,7 +182,7 @@ describe("Terminal ComposeBar", () => {
   test("does not render while closed", () => {
     const { onSend } = renderComposeBar({ isOpen: false });
 
-    expect(document.querySelector("[data-compose-bar]")).toBeNull();
+    expect(document.querySelector("[data-compose-bar]") === null).toBe(true);
     expect(onSend).not.toHaveBeenCalled();
   });
 
@@ -484,7 +484,7 @@ describe("Terminal ComposeBar", () => {
   test("hides Address all by default", () => {
     renderComposeBar();
 
-    expect(screen.queryByRole("button", { name: "Address all" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Address all" }) === null).toBe(true);
   });
 
   test("delegates Address all to the review follow-up handler", () => {
@@ -832,11 +832,11 @@ describe("Terminal ComposeBar", () => {
     fireEvent.click(fullPreview);
     expect(screen.getByAltText("Full preview")).toBeTruthy();
     fireEvent.click(fullPreview.parentElement!.parentElement!);
-    expect(screen.queryByAltText("Full preview")).toBeNull();
+    expect(screen.queryByAltText("Full preview") === null).toBe(true);
 
     const removeButton = thumbnail.parentElement!.querySelector("button")!;
     fireEvent.click(removeButton);
-    expect(screen.queryByAltText("Attachment preview")).toBeNull();
+    expect(screen.queryByAltText("Attachment preview") === null).toBe(true);
     expect(useTerminalSessionStore.getState().getComposeDraftImages(SESSION_KEY)).toEqual([]);
   });
 
@@ -849,7 +849,7 @@ describe("Terminal ComposeBar", () => {
     const closeButton = fullPreview.parentElement!.querySelector("button")!;
     fireEvent.click(closeButton);
 
-    expect(screen.queryByAltText("Full preview")).toBeNull();
+    expect(screen.queryByAltText("Full preview") === null).toBe(true);
   });
 
   test("sends trimmed text with container-backed images and clears the draft", async () => {

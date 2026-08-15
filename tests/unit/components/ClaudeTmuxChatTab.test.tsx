@@ -928,7 +928,7 @@ describe("ClaudeTmuxChatTab", () => {
     );
 
     expect(await screen.findByTitle("Claude Sonnet")).toBeTruthy();
-    expect(screen.queryByText("claude-sonnet-5")).toBeNull();
+    expect(screen.queryByText("claude-sonnet-5") === null).toBe(true);
   });
 
   test("jumps to the bottom when reactivated after an environment switch", async () => {
@@ -1195,7 +1195,7 @@ describe("ClaudeTmuxChatTab", () => {
 
     await waitFor(() => expect(subscribeMock).toHaveBeenCalledTimes(1));
     expect(capturePaneMock).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: "Show TUI" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show TUI" }) === null).toBe(true);
   });
 
   test("applies lifecycle events and preserves fast mode for a fresh restart", async () => {
@@ -1277,7 +1277,7 @@ describe("ClaudeTmuxChatTab", () => {
       />,
     );
 
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("status") === null).toBe(true);
 
     act(() => {
       useClaudeTmuxStore.getState().setRunning(stateKey, true, {
@@ -1294,7 +1294,7 @@ describe("ClaudeTmuxChatTab", () => {
       useClaudeTmuxStore.getState().setBusy(stateKey, false);
     });
 
-    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("status") === null).toBe(true));
   });
 
   test("hides the thinking status when the backend reports the session stopped", async () => {
@@ -1326,7 +1326,7 @@ describe("ClaudeTmuxChatTab", () => {
       });
     });
 
-    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("status") === null).toBe(true));
     expect(useClaudeTmuxStore.getState().getTab(stateKey)).toMatchObject({
       running: false,
       busy: false,
@@ -1373,7 +1373,7 @@ describe("ClaudeTmuxChatTab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /native/i }));
 
-    expect(screen.queryByTestId("tmux-interactive-terminal")).toBeNull();
+    expect(screen.queryByTestId("tmux-interactive-terminal") === null).toBe(true);
     expect(screen.getByRole("button", { name: /terminal/i })).toBeTruthy();
   });
 
@@ -1402,7 +1402,7 @@ describe("ClaudeTmuxChatTab", () => {
     });
     expect(screen.getByRole("search", { name: "Find in agent chat" })).toBeTruthy();
     fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByRole("search", { name: "Find in agent chat" })).toBeNull();
+    expect(screen.queryByRole("search", { name: "Find in agent chat" }) === null).toBe(true);
 
     view.rerender(
       <ClaudeTmuxChatTab
@@ -1417,7 +1417,7 @@ describe("ClaudeTmuxChatTab", () => {
       code: "KeyF",
       metaKey: true,
     });
-    expect(screen.queryByRole("search", { name: "Find in agent chat" })).toBeNull();
+    expect(screen.queryByRole("search", { name: "Find in agent chat" }) === null).toBe(true);
 
     view.rerender(
       <ClaudeTmuxChatTab
@@ -1431,7 +1431,7 @@ describe("ClaudeTmuxChatTab", () => {
       code: "KeyF",
       metaKey: true,
     });
-    expect(screen.queryByRole("search", { name: "Find in agent chat" })).toBeNull();
+    expect(screen.queryByRole("search", { name: "Find in agent chat" }) === null).toBe(true);
 
     view.rerender(
       <ClaudeTmuxChatTab
@@ -1448,7 +1448,7 @@ describe("ClaudeTmuxChatTab", () => {
       code: "KeyF",
       metaKey: true,
     });
-    expect(screen.queryByRole("search", { name: "Find in agent chat" })).toBeNull();
+    expect(screen.queryByRole("search", { name: "Find in agent chat" }) === null).toBe(true);
   });
 
   test("surfaces Claude tmux agent tokens in native rows", async () => {
@@ -1489,8 +1489,8 @@ Running 1 Explore agent...
     );
 
     expect(await screen.findByText("20.4k tokens")).toBeTruthy();
-    expect(screen.queryByText("8 tool uses")).toBeNull();
-    expect(screen.queryByText("0 updates")).toBeNull();
+    expect(screen.queryByText("8 tool uses") === null).toBe(true);
+    expect(screen.queryByText("0 updates") === null).toBe(true);
   });
 
   test("keeps successful background launches active while they remain in the tmux roster", async () => {
@@ -1547,8 +1547,8 @@ Running 1 Explore agent...
 
     expect(await screen.findByText("45.7k tokens")).toBeTruthy();
     expect(screen.getByText("Active")).toBeTruthy();
-    expect(screen.queryByText("0 tools")).toBeNull();
-    expect(screen.queryByText("0 updates")).toBeNull();
+    expect(screen.queryByText("0 tools") === null).toBe(true);
+    expect(screen.queryByText("0 updates") === null).toBe(true);
   });
 
   test("forwards the worktree path to the interactive terminal for local environments", async () => {
@@ -1642,7 +1642,7 @@ Running 1 Explore agent...
       ),
       "env-1",
     ]);
-    expect(screen.queryByAltText(/clipboard-/)).toBeNull();
+    expect(screen.queryByAltText(/clipboard-/) === null).toBe(true);
   });
 
   test("persists tmux composer input under the backend queue interlock key", async () => {
@@ -1892,9 +1892,7 @@ Running 1 Explore agent...
 
     await waitFor(() => {
       expect(screen.getByTestId("tmux-interactive-terminal")).toBeTruthy();
-      expect(
-        screen.queryByRole("button", { name: /scroll to bottom of conversation/i }),
-      ).toBeNull();
+      expect(screen.queryByRole("button", { name: /scroll to bottom of conversation/i }) === null).toBe(true);
     });
   });
 
@@ -1981,7 +1979,7 @@ Running 1 Explore agent...
       expect(lastVirtuosoProps?.data).toHaveLength(100);
     });
     expect(screen.getAllByText(/^Message \d+$/)).toHaveLength(VIRTUOSO_WINDOW_SIZE);
-    expect(screen.queryByText("Message 0")).toBeNull();
+    expect(screen.queryByText("Message 0") === null).toBe(true);
     expect(screen.getByText("Message 99")).toBeTruthy();
   });
 
@@ -2001,7 +1999,7 @@ Running 1 Explore agent...
 
     fireEvent.click(terminalButton);
 
-    expect(screen.queryByTestId("tmux-interactive-terminal")).toBeNull();
+    expect(screen.queryByTestId("tmux-interactive-terminal") === null).toBe(true);
   });
 
   test("retries stale hydration three times before allowing auto-start", async () => {
@@ -2024,7 +2022,7 @@ Running 1 Explore agent...
 
     await waitFor(() => expect(getStatusMock).toHaveBeenCalledTimes(3));
     await waitFor(() => expect(startSessionMock).toHaveBeenCalledTimes(1));
-    expect(screen.queryByText(/Failed to refresh Claude tmux tab/)).toBeNull();
+    expect(screen.queryByText(/Failed to refresh Claude tmux tab/) === null).toBe(true);
   });
 
   test("clears stale transcript and hooks for a matching status without a session id", async () => {
@@ -2195,7 +2193,7 @@ Running 1 Explore agent...
         },
       ]);
     });
-    expect(screen.queryByText("Finished a background check")).toBeNull();
+    expect(screen.queryByText("Finished a background check") === null).toBe(true);
   });
 
   test("does not let a stale hydration response overwrite a live fast-mode event", async () => {
@@ -2320,7 +2318,7 @@ Running 1 Explore agent...
 
     await waitFor(() => expect(getStatusMock).toHaveBeenCalledTimes(2));
     expect(screen.getByRole("button", { name: /Default.*\(High\)/ })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /⚡/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /⚡/ }) === null).toBe(true);
   });
 
   test("refresh requests replace the transcript with the latest backend snapshot", async () => {
@@ -2363,7 +2361,7 @@ Running 1 Explore agent...
     );
 
     await screen.findByText("Updated by another client");
-    expect(screen.queryByText("Stale client copy")).toBeNull();
+    expect(screen.queryByText("Stale client copy") === null).toBe(true);
     expect(getStatusMock).toHaveBeenCalledTimes(2);
   });
 
@@ -2442,7 +2440,7 @@ Running 1 Explore agent...
       expect(tab.running).toBe(false);
       expect(tab.messages).toEqual([]);
     });
-    expect(screen.queryByText("Session transcript")).toBeNull();
+    expect(screen.queryByText("Session transcript") === null).toBe(true);
   });
 
   test("does not overwrite a live tmux event with an older refresh snapshot", async () => {
@@ -2663,7 +2661,7 @@ Running 1 Explore agent...
       );
     });
     expect(useClaudeTmuxStore.getState().getTab("tab-1").pendingPermissions).toEqual([]);
-    expect(screen.queryByText("Claude needs permission")).toBeNull();
+    expect(screen.queryByText("Claude needs permission") === null).toBe(true);
   });
 
   test("hydrates ExitPlanMode with its authoritative deadline", async () => {
@@ -3085,8 +3083,8 @@ Running 1 Explore agent...
         message: "Background note",
       }),
     ]);
-    expect(screen.queryByText("SessionStart")).toBeNull();
-    expect(screen.queryByText("Background note")).toBeNull();
+    expect(screen.queryByText("SessionStart") === null).toBe(true);
+    expect(screen.queryByText("Background note") === null).toBe(true);
   });
 
   test("normalizes default informational hook messages and timestamps", async () => {
@@ -3379,7 +3377,7 @@ Running 1 Explore agent...
     // Filtering narrows the list.
     fireEvent.change(textarea, { target: { value: "/com" } });
     await waitFor(() => {
-      expect(screen.queryByText("/clear")).toBeNull();
+      expect(screen.queryByText("/clear") === null).toBe(true);
       expect(screen.getByText("/compact")).toBeTruthy();
     });
 
@@ -3436,7 +3434,7 @@ Running 1 Explore agent...
     fireEvent.change(textarea, { target: { value: "/" } });
     await screen.findByText("Slash Commands");
     fireEvent.keyDown(textarea, { key: "Escape" });
-    expect(screen.queryByText("Slash Commands")).toBeNull();
+    expect(screen.queryByText("Slash Commands") === null).toBe(true);
   });
 
   test("inserts a selected @ file mention into the tmux compose input", async () => {
@@ -3492,7 +3490,7 @@ Running 1 Explore agent...
     expect(useClaudeTmuxStore.getState().getDraftMentions("tab-1")[0]?.id).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
-    expect(screen.queryByText("Button.tsx")).toBeNull();
+    expect(screen.queryByText("Button.tsx") === null).toBe(true);
   });
 
   test("serializes tmux @ file references to full environment paths before submit", async () => {
@@ -3682,7 +3680,7 @@ Running 1 Explore agent...
     expect(await screen.findByAltText("diagram.png")).toBeTruthy();
     fireEvent.click(screen.getByTitle("Remove attachment"));
 
-    expect(screen.queryByAltText("diagram.png")).toBeNull();
+    expect(screen.queryByAltText("diagram.png") === null).toBe(true);
     expect(useClaudeTmuxStore.getState().getAttachments(stateKey)).toEqual([]);
   });
 
@@ -3717,7 +3715,7 @@ Running 1 Explore agent...
         selectionEnd: value.length,
       },
     });
-    expect(screen.queryByText("Button.tsx")).toBeNull();
+    expect(screen.queryByText("Button.tsx") === null).toBe(true);
 
     const cursorPosition = "Review @src".length;
     textarea.setSelectionRange(cursorPosition, cursorPosition);
@@ -4260,7 +4258,7 @@ Running 1 Explore agent...
         false,
       );
     });
-    expect(screen.queryByRole("button", { name: /Fable/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Fable/ }) === null).toBe(true);
   });
 
   test("passes the selected reasoning effort to the tmux launch", async () => {
@@ -4487,7 +4485,7 @@ Running 1 Explore agent...
 
     expect(await screen.findByText("Error: tmux unavailable")).toBeTruthy();
     expect(screen.getByRole("button", { name: /\(High\)/ })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /\(Low\)/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /\(Low\)/ }) === null).toBe(true);
   });
 
   test("switches fast mode through Claude's explicit /fast command", async () => {
@@ -4740,7 +4738,7 @@ Running 1 Explore agent...
 
     expect(await screen.findByText("Error: fast mode unavailable")).toBeTruthy();
     expect(screen.getByRole("button", { name: /Default.*\(High\)/ })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /⚡/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /⚡/ }) === null).toBe(true);
   });
 
   test("locks competing tmux controls while a fast-mode switch is pending", async () => {
@@ -4835,7 +4833,7 @@ Running 1 Explore agent...
     await waitFor(() => expect(switchModelMock).toHaveBeenCalled());
     expect(operations).toEqual(["fast:true", "fast:false", "model:sonnet"]);
     expect(screen.getByRole("button", { name: /Sonnet/ })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /⚡/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /⚡/ }) === null).toBe(true);
   });
 
   test("does not switch models when disabling fast mode is rejected", async () => {
@@ -4920,7 +4918,7 @@ Running 1 Explore agent...
     expect(await screen.findByText("Error: model switch failed")).toBeTruthy();
     expect(switchFastModeMock).toHaveBeenLastCalledWith("tab-1", false, "env-1");
     expect(screen.getByRole("button", { name: /Default.*\(High\)/ })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /⚡/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /⚡/ }) === null).toBe(true);
   });
 
   test("hides the effort control for models without effort support", async () => {
@@ -4943,7 +4941,7 @@ Running 1 Explore agent...
       fireEvent.click(haikuOption);
     });
 
-    expect(screen.queryByRole("button", { name: /\(High\)/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /\(High\)/ }) === null).toBe(true);
   });
 
   test("resets effort to the default when the new model doesn't support the chosen level", async () => {
@@ -5021,7 +5019,7 @@ Running 1 Explore agent...
     fireEvent.pointerDown(screen.getByRole("button", { name: /Sonnet/ }));
 
     expect(await screen.findByText("Opus (1M context)")).toBeTruthy();
-    expect(screen.queryByText(/Opus 4\.8/)).toBeNull();
+    expect(screen.queryByText(/Opus 4\.8/) === null).toBe(true);
   });
 
   test("rehydrates the environment-scoped authoritative model catalog", async () => {
@@ -5063,7 +5061,7 @@ Running 1 Explore agent...
 
     fireEvent.pointerDown(screen.getByRole("button", { name: /Default/ }));
     expect(await screen.findByText("Authoritative Opus 5")).toBeTruthy();
-    expect(screen.queryByText("Opus (1M context)")).toBeNull();
+    expect(screen.queryByText("Opus (1M context)") === null).toBe(true);
   });
 
   test("keeps the host last-known-good when catalog rehydration returns fallback models", async () => {
@@ -5213,7 +5211,7 @@ Running 1 Explore agent...
     fireEvent.pointerDown(screen.getByRole("button", { name: /Sonnet/ }));
     expect(await screen.findByText("Opus (1M context)")).toBeTruthy();
     expect(screen.getByText("Fable")).toBeTruthy();
-    expect(screen.queryByText(/model catalog unavailable/i)).toBeNull();
+    expect(screen.queryByText(/model catalog unavailable/i) === null).toBe(true);
     expect(useClaudeStore.getState().getModelCatalog("env-1")).toBeUndefined();
   });
 
@@ -5248,8 +5246,8 @@ Running 1 Explore agent...
     expect(await screen.findByText("Newer Opus")).toBeTruthy();
     expect(screen.getByText("Newer Haiku")).toBeTruthy();
     // Fallback-only entries are replaced by the live list.
-    expect(screen.queryByText("Opus (1M context)")).toBeNull();
-    expect(screen.queryByText("Fable")).toBeNull();
+    expect(screen.queryByText("Opus (1M context)") === null).toBe(true);
+    expect(screen.queryByText("Fable") === null).toBe(true);
   });
 
   test("uses the SDK list as-is when it already includes the Default sentinel", async () => {
@@ -5306,8 +5304,8 @@ Running 1 Explore agent...
     expect(await screen.findByText("Low")).toBeTruthy();
     expect(screen.getByText("Medium")).toBeTruthy();
     expect(screen.getAllByText("High").length).toBeGreaterThan(0);
-    expect(screen.queryByText("Extra High")).toBeNull();
-    expect(screen.queryByText("Max")).toBeNull();
+    expect(screen.queryByText("Extra High") === null).toBe(true);
+    expect(screen.queryByText("Max") === null).toBe(true);
   });
 
   test("falls back to the first supported level when a model's levels exclude the default", async () => {
@@ -5348,7 +5346,7 @@ Running 1 Explore agent...
     // "high" isn't in Mini's level list, so the stored preference snaps to
     // the first supported level instead of an unsupported default.
     expect(screen.getByRole("button", { name: /\(Low\)/ })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /\(High\)/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /\(High\)/ }) === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Start fresh" }));
 
@@ -5784,7 +5782,7 @@ Running 1 Explore agent...
           .map((message) => message.text),
       ).toEqual(["second queued", "third queued"]);
     });
-    expect(screen.queryByText("first queued")).toBeNull();
+    expect(screen.queryByText("first queued") === null).toBe(true);
   });
 
   test("surfaces a parked tmux dispatch error and retries it explicitly", async () => {
@@ -5828,8 +5826,7 @@ Running 1 Explore agent...
       expect(retryPromptQueueDispatchMock).toHaveBeenCalledWith(
         promptQueueKey("claude-tmux", stateKey),
       );
-      expect(screen.getByText("+1 queued").closest("button")?.getAttribute("aria-label"))
-        .toBeNull();
+      expect(screen.getByText("+1 queued").closest("button")?.getAttribute("aria-label") === null).toBe(true);
     });
   });
 
@@ -6111,7 +6108,7 @@ Running 1 Explore agent...
     );
 
     expect(await screen.findByText("Question")).toBeTruthy();
-    expect(screen.queryByText("claude-test-model")).toBeNull();
+    expect(screen.queryByText("claude-test-model") === null).toBe(true);
   });
 
   test("attributes a compacted reply once and dates it from the block's first message", async () => {
@@ -6709,7 +6706,7 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel
     );
 
     expect(await screen.findByText("Claude needs your input")).toBeTruthy();
-    expect(screen.queryByText("Claude is asking for a choice")).toBeNull();
+    expect(screen.queryByText("Claude is asking for a choice") === null).toBe(true);
   });
 
   test("answers confirmation prompts by sending only the selected option number", async () => {
@@ -6821,9 +6818,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         "Two staged files look like they shouldn't be in the PR. How should I handle them?",
       ),
     ).toBeTruthy();
-    expect(
-      screen.queryByRole("button", { name: /git diff origin\/main/ }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /git diff origin\/main/ }) === null).toBe(true);
     expect(
       screen.getByRole("button", {
         name: /Unstage & add to \.gitignore \(Recommended\)/,
@@ -7005,7 +7000,7 @@ Enter to confirm · Esc to cancel
     );
 
     expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Dismiss" }) === null).toBe(true);
   });
 
   test("keeps selection prompt controls disabled while tmux keys are pending", async () => {
@@ -7066,7 +7061,7 @@ Enter to confirm · Esc to cancel
       resolveSendKeys?.();
     });
     await waitFor(() => {
-      expect(screen.queryByText("Claude is asking for a choice")).toBeNull();
+      expect(screen.queryByText("Claude is asking for a choice") === null).toBe(true);
     });
   });
 

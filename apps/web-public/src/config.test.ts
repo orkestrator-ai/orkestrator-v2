@@ -17,14 +17,16 @@ describe("public client deployment configuration", () => {
     // use Turbo's `--` separator, which would fold into the dependency `build`
     // task's hash and split the cache between `bun run build` and `bun run test`.
     expect(manifest.scripts["test:workspace"]).toBe(
-      "bun test src --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
+      "bun test src --only-failures --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
     );
 
     const tsconfig = JSON.parse(read("tsconfig.json")) as { compilerOptions: { strict: boolean; paths: unknown } };
     expect(tsconfig.compilerOptions.strict).toBe(true);
     expect(tsconfig.compilerOptions.paths).toBeDefined();
     expect(read("vite.config.ts")).toContain('"@": path.resolve(__dirname, "../web/src")');
-    expect(read("bunfig.toml")).toContain('preload = ["../../tests/setup.ts"]');
+    expect(read("bunfig.toml")).toContain(
+      'preload = ["../../tests/register-dom.ts", "../../tests/setup.ts"]',
+    );
     expect(readSharedWeb("src/index.css")).toContain('@source "./"');
   });
 

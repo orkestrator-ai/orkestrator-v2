@@ -168,11 +168,11 @@ describe("NativeMessage", () => {
 
     const { rerender } = render(<NativeMessage message={shortUserMessage} />);
 
-    expect(screen.queryByRole("button", { name: "show more" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "show more" }) === null).toBe(true);
 
     rerender(<NativeMessage message={longAssistantMessage} />);
 
-    expect(screen.queryByRole("button", { name: "show more" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "show more" }) === null).toBe(true);
   });
 
   test("truncates long fallback user content when no text parts are present", () => {
@@ -519,7 +519,7 @@ describe("NativeMessage", () => {
 
     expect(screen.getByText("Generated environment name")).toBeTruthy();
     expect(container.querySelector(".italic")).toBeTruthy();
-    expect(screen.queryByText("Assistant")).toBeNull();
+    expect(screen.queryByText("Assistant") === null).toBe(true);
 
     const errorMessage: NativeMessageType = {
       id: "error-session-1",
@@ -533,7 +533,7 @@ describe("NativeMessage", () => {
 
     expect(screen.getByText("Bridge unavailable")).toBeTruthy();
     expect(container.querySelector(".text-destructive")).toBeTruthy();
-    expect(screen.queryByText("Assistant")).toBeNull();
+    expect(screen.queryByText("Assistant") === null).toBe(true);
 
     const previousMessage: NativeMessageType = {
       id: "assistant-previous",
@@ -561,7 +561,7 @@ describe("NativeMessage", () => {
     expect(screen.getByText("Continuation response")).toBeTruthy();
     // A same-minute continuation repeats no attribution; the model label is
     // shown once, on the first content-bearing message of the block.
-    expect(screen.queryByText("Worker")).toBeNull();
+    expect(screen.queryByText("Worker") === null).toBe(true);
   });
 
   test("opens local image previews and closes the overlay with Escape", async () => {
@@ -589,7 +589,7 @@ describe("NativeMessage", () => {
     fireEvent.keyDown(window, { key: "Escape" });
 
     await waitFor(() => {
-      expect(screen.queryByAltText("screenshot.png")).toBeNull();
+      expect(screen.queryByAltText("screenshot.png") === null).toBe(true);
     });
   });
 
@@ -673,7 +673,7 @@ describe("NativeMessage", () => {
     fireEvent.click(attachment);
     await screen.findByAltText("cached.png");
     fireEvent.keyDown(window, { key: "Escape" });
-    await waitFor(() => expect(screen.queryByAltText("cached.png")).toBeNull());
+    await waitFor(() => expect(screen.queryByAltText("cached.png") === null).toBe(true));
 
     fireEvent.click(attachment);
 
@@ -701,7 +701,7 @@ describe("NativeMessage", () => {
     expect(screen.getByAltText("overlay.png")).toBeTruthy();
 
     fireEvent.click(backdrop);
-    await waitFor(() => expect(screen.queryByAltText("overlay.png")).toBeNull());
+    await waitFor(() => expect(screen.queryByAltText("overlay.png") === null).toBe(true));
 
     fireEvent.click(attachment);
     image = await screen.findByAltText("overlay.png");
@@ -710,7 +710,7 @@ describe("NativeMessage", () => {
     ) as HTMLButtonElement;
     expect(closeButton).toBeTruthy();
     fireEvent.click(closeButton);
-    await waitFor(() => expect(screen.queryByAltText("overlay.png")).toBeNull());
+    await waitFor(() => expect(screen.queryByAltText("overlay.png") === null).toBe(true));
   });
 
   test("keeps non-image attachments disabled and does not perform file reads", () => {
@@ -864,7 +864,7 @@ describe("NativeMessage", () => {
       });
       expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
       expect(mockReadFileBase64).not.toHaveBeenCalled();
-      expect(screen.queryByAltText("passwd.png")).toBeNull();
+      expect(screen.queryByAltText("passwd.png") === null).toBe(true);
     } finally {
       console.error = consoleError;
     }
@@ -941,7 +941,7 @@ describe("NativeMessage", () => {
 
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => {
-      expect(screen.queryByAltText("inline.png")).toBeNull();
+      expect(screen.queryByAltText("inline.png") === null).toBe(true);
     });
 
     const remoteUrl = "https://example.com/remote.webp";
@@ -999,7 +999,7 @@ describe("NativeMessage", () => {
 
     const { container } = render(<NativeMessage message={message} />);
 
-    expect(container.querySelector(`img[src="${remoteUrl}"]`)).toBeNull();
+    expect(container.querySelector(`img[src="${remoteUrl}"]`) === null).toBe(true);
     expect(mockReadFileBase64).not.toHaveBeenCalled();
     expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
 
@@ -1170,7 +1170,7 @@ describe("NativeMessage", () => {
         expect(screen.getByText("preview unavailable")).toBeTruthy();
       });
       expect(mockReadFileBase64).toHaveBeenCalledWith("/tmp/missing.png");
-      expect(screen.queryByAltText("missing.png")).toBeNull();
+      expect(screen.queryByAltText("missing.png") === null).toBe(true);
     } finally {
       console.error = consoleError;
     }
@@ -1202,7 +1202,7 @@ describe("NativeMessage", () => {
       fireEvent.click(trigger);
       const image = await screen.findByAltText("retry.png");
       expect(image.getAttribute("src")).toBe("data:image/png;base64,retry-base64");
-      expect(screen.queryByText("preview unavailable")).toBeNull();
+      expect(screen.queryByText("preview unavailable") === null).toBe(true);
       expect(mockReadFileBase64).toHaveBeenCalledTimes(2);
     } finally {
       console.error = consoleError;
@@ -1280,7 +1280,7 @@ describe("NativeMessage", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /edit/i }));
 
-    expect(screen.queryByTitle("Open diff in new tab")).toBeNull();
+    expect(screen.queryByTitle("Open diff in new tab") === null).toBe(true);
     if (createFileTab) {
       expect(createFileTab).not.toHaveBeenCalled();
     }
@@ -1530,8 +1530,8 @@ describe("NativeMessage", () => {
     fireEvent.click(deleted);
     expect(screen.getByText("+created")).toBeTruthy();
     expect(screen.getByText("-removed")).toBeTruthy();
-    expect(screen.queryByText("+")).toBeNull();
-    expect(screen.queryByText("-")).toBeNull();
+    expect(screen.queryByText("+") === null).toBe(true);
+    expect(screen.queryByText("-") === null).toBe(true);
   });
 
   test("keeps provider diff metadata without change markers authoritative", () => {
@@ -1564,8 +1564,8 @@ describe("NativeMessage", () => {
     fireEvent.click(screen.getByRole("button", { name: /edit fallback\.ts/i }));
 
     expect(screen.getByText("diff metadata without plus or minus markers")).toBeTruthy();
-    expect(screen.queryByText("-old fallback")).toBeNull();
-    expect(screen.queryByText("+new fallback")).toBeNull();
+    expect(screen.queryByText("-old fallback") === null).toBe(true);
+    expect(screen.queryByText("+new fallback") === null).toBe(true);
   });
 
   test("falls back to before and after when the provider diff is an empty string", () => {
@@ -1629,7 +1629,7 @@ describe("NativeMessage", () => {
       </TerminalContextHarness>,
     );
 
-    expect(screen.queryByRole("button", { name: /edit looked-at\.ts/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /edit looked-at\.ts/i }) === null).toBe(true);
     expect(screen.getByText(/^search$/i)).toBeTruthy();
   });
 
@@ -1681,7 +1681,7 @@ describe("NativeMessage", () => {
     );
     expect(screen.getByText("-second old")).toBeTruthy();
     expect(screen.getByText("+second new")).toBeTruthy();
-    expect(screen.queryByText("-first old")).toBeNull();
+    expect(screen.queryByText("-first old") === null).toBe(true);
   });
 
   test("disables edit rows that have no expandable details", () => {
@@ -1715,7 +1715,7 @@ describe("NativeMessage", () => {
         }) as HTMLButtonElement
       ).disabled,
     ).toBe(true);
-    expect(screen.queryByTitle("Open diff in new tab")).toBeNull();
+    expect(screen.queryByTitle("Open diff in new tab") === null).toBe(true);
     expect(createFileTab).not.toHaveBeenCalled();
   });
 
@@ -1745,7 +1745,7 @@ describe("NativeMessage", () => {
       name: /Run Command pwd && rg --files \| head -200 success/i,
     });
     expect(trigger).toBeTruthy();
-    expect(screen.queryByText("Bash")).toBeNull();
+    expect(screen.queryByText("Bash") === null).toBe(true);
 
     fireEvent.click(trigger);
     expect(screen.getByText("$ pwd && rg --files | head -200")).toBeTruthy();
@@ -1867,8 +1867,8 @@ describe("NativeMessage", () => {
 
     const { container } = render(<NativeMessage message={message} />);
 
-    expect(screen.queryByRole("button", { name: /thinking/i })).toBeNull();
-    expect(container.querySelector(".border-zinc-700\\/70")).toBeNull();
+    expect(screen.queryByRole("button", { name: /thinking/i }) === null).toBe(true);
+    expect(container.querySelector(".border-zinc-700\\/70") === null).toBe(true);
   });
 
   test("renders no control for an empty nested thinking update", () => {
@@ -1912,7 +1912,7 @@ describe("NativeMessage", () => {
 
     expect(screen.getByText("Before tools")).toBeTruthy();
     expect(screen.getByText("After tools")).toBeTruthy();
-    expect(container.querySelector(".border-zinc-700\\/70")).toBeNull();
+    expect(container.querySelector(".border-zinc-700\\/70") === null).toBe(true);
   });
 
   test("uses Response when the latest task text update is empty", () => {
@@ -1939,7 +1939,7 @@ describe("NativeMessage", () => {
     render(<NativeMessage message={message} />);
 
     expect(screen.getByText("Response")).toBeTruthy();
-    expect(screen.queryByText("Waiting for activity.")).toBeNull();
+    expect(screen.queryByText("Waiting for activity.") === null).toBe(true);
   });
 
   test("renders transcript-derived subagent groups as collapsible activity stacks", () => {
@@ -1982,7 +1982,7 @@ describe("NativeMessage", () => {
     expect(screen.getByText("1 tool")).toBeTruthy();
     expect(screen.getByText("1 update")).toBeTruthy();
     expect(screen.getByText('rg -n "codex" src')).toBeTruthy();
-    expect(screen.queryByText("Inspect the Codex integration")).toBeNull();
+    expect(screen.queryByText("Inspect the Codex integration") === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: /lovelace/i }));
 
@@ -2134,7 +2134,7 @@ describe("NativeMessage", () => {
     render(<NativeMessage message={message} />);
 
     expect(screen.getByText("Run Command")).toBeTruthy();
-    expect(screen.queryByText("bash")).toBeNull();
+    expect(screen.queryByText("bash") === null).toBe(true);
   });
 
   test("uses the latest task child title when no command is available", () => {
@@ -2212,7 +2212,7 @@ describe("NativeMessage", () => {
 
     fireEvent.click(trigger);
     expect(screen.getByText("No child actions yet.")).toBeTruthy();
-    expect(screen.queryByText("42")).toBeNull();
+    expect(screen.queryByText("42") === null).toBe(true);
   });
 
   test("removes an agent expansion key when the group is closed", () => {
@@ -2248,7 +2248,7 @@ describe("NativeMessage", () => {
     expect(screen.getByText("Inspect expansion state")).toBeTruthy();
 
     fireEvent.click(trigger);
-    expect(screen.queryByText("Inspect expansion state")).toBeNull();
+    expect(screen.queryByText("Inspect expansion state") === null).toBe(true);
 
     fireEvent.click(trigger);
     expect(screen.getByText("Inspect expansion state")).toBeTruthy();
@@ -2278,7 +2278,7 @@ describe("NativeMessage", () => {
     render(<NativeMessage message={message} />);
 
     expect(screen.getByRole("button", { name: /Run Command/i })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /\bbash\b/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /\bbash\b/i }) === null).toBe(true);
   });
 
   test("reveals tool errors for non-edit tools when the row is expanded", () => {
@@ -2304,7 +2304,7 @@ describe("NativeMessage", () => {
     const trigger = screen.getByRole("button", {
       name: /Run Command rg --files failure/i,
     });
-    expect(screen.queryByText("rg: command not found")).toBeNull();
+    expect(screen.queryByText("rg: command not found") === null).toBe(true);
 
     fireEvent.click(trigger);
 
@@ -2374,7 +2374,7 @@ describe("NativeMessage", () => {
     const running = screen.getByText("running...");
     expect(running.className).toContain("animate-pulse");
     expect(running.className).toContain("text-yellow-600");
-    expect(screen.queryByText("pending")).toBeNull();
+    expect(screen.queryByText("pending") === null).toBe(true);
 
     expect(screen.getByText("success").className).toContain("text-green-600");
     expect(screen.getByText("failure").className).toContain("text-red-400");
@@ -2583,14 +2583,14 @@ describe("NativeMessage", () => {
       name: /write added\.ts \+3 success/i,
     });
     expect(additionsOnly.querySelector(".text-green-500")?.textContent).toBe("+3");
-    expect(additionsOnly.querySelector(".text-red-400")).toBeNull();
+    expect(additionsOnly.querySelector(".text-red-400") === null).toBe(true);
     expect(additionsOnly.textContent).not.toContain("-0");
 
     const deletionsOnly = screen.getByRole("button", {
       name: /edit removed\.ts -4 success/i,
     });
     expect(deletionsOnly.querySelector(".text-red-400")?.textContent).toBe("-4");
-    expect(deletionsOnly.querySelector(".text-green-500")).toBeNull();
+    expect(deletionsOnly.querySelector(".text-green-500") === null).toBe(true);
     expect(deletionsOnly.textContent).not.toContain("+0");
   });
 
@@ -2685,7 +2685,7 @@ describe("NativeMessage", () => {
 
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() =>
-      expect(screen.queryByAltText("screenshot.jpg")).toBeNull(),
+      expect(screen.queryByAltText("screenshot.jpg") === null).toBe(true),
     );
 
     fireEvent.click(screen.getByRole("button", { name: /logo\.svg/i }));
@@ -2746,7 +2746,7 @@ describe("NativeMessage", () => {
 
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() =>
-      expect(screen.queryByAltText("photo.webp?v=2#top")).toBeNull(),
+      expect(screen.queryByAltText("photo.webp?v=2#top") === null).toBe(true),
     );
 
     fireEvent.click(screen.getByRole("button", { name: /fragment\.jpg/i }));
@@ -2757,7 +2757,7 @@ describe("NativeMessage", () => {
 
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() =>
-      expect(screen.queryByAltText("fragment.jpg#preview")).toBeNull(),
+      expect(screen.queryByAltText("fragment.jpg#preview") === null).toBe(true),
     );
 
     fireEvent.click(screen.getByRole("button", { name: /archive\.png\.bak/i }));
@@ -2849,7 +2849,7 @@ describe("NativeMessage", () => {
     // chip becomes a large card that never fills in.
     expect(getClassTokens(attachment)).toContain("inline-flex");
     expect(getClassTokens(attachment)).not.toContain("w-40");
-    expect(screen.queryByAltText("Thumbnail: assistant-shot.png")).toBeNull();
+    expect(screen.queryByAltText("Thumbnail: assistant-shot.png") === null).toBe(true);
     // The eager effect runs during render, so a missing call here is decisive.
     expect(mockReadFileBase64).not.toHaveBeenCalled();
 
@@ -2926,7 +2926,7 @@ describe("NativeMessage", () => {
       fireEvent.click(screen.getByRole("button", { name: /broken\.png/i }));
 
       await waitFor(() => expect(screen.getByText("preview unavailable")).toBeTruthy());
-      expect(screen.queryByAltText("broken.png")).toBeNull();
+      expect(screen.queryByAltText("broken.png") === null).toBe(true);
       expect(screen.getByRole("button", { name: /broken\.png/i }).getAttribute("aria-busy"))
         .toBe("false");
     } finally {
@@ -2977,7 +2977,7 @@ describe("NativeMessage", () => {
       unmount();
       fireEvent.keyDown(window, { key: "Escape" });
 
-      expect(screen.queryByAltText("overlay-keys.png")).toBeNull();
+      expect(screen.queryByAltText("overlay-keys.png") === null).toBe(true);
       expect(mockConsoleError).not.toHaveBeenCalled();
     } finally {
       console.error = consoleError;
@@ -3034,7 +3034,7 @@ describe("NativeMessage", () => {
 
     const { rerender } = render(<NativeMessage message={boundaryMessage} />);
 
-    expect(screen.queryByRole("button", { name: "show more" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "show more" }) === null).toBe(true);
 
     rerender(<NativeMessage message={overBoundaryMessage} />);
 
@@ -3054,8 +3054,8 @@ describe("NativeMessage", () => {
 
     expect(screen.getByText("Workspace configuration changed")).toBeTruthy();
     expect(container.querySelector(".italic")).toBeTruthy();
-    expect(screen.queryByText("Assistant")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Copy text" })).toBeNull();
+    expect(screen.queryByText("Assistant") === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Copy text" }) === null).toBe(true);
   });
 
   test("shows a fresh assistant header after a previous error in the same minute", () => {
@@ -3097,7 +3097,7 @@ describe("NativeMessage", () => {
 
     render(<NativeMessage message={message} />);
 
-    expect(screen.queryByText("Fallback copy content")).toBeNull();
+    expect(screen.queryByText("Fallback copy content") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Copy text" }));
 
     await waitFor(() => {
@@ -3152,7 +3152,7 @@ describe("NativeMessage", () => {
 
     expect(resolveModelLabel).toHaveBeenCalledWith("gpt-example");
     expect(screen.getByText("gpt-example label")).toBeTruthy();
-    expect(screen.queryByText("Fallback assistant")).toBeNull();
+    expect(screen.queryByText("Fallback assistant") === null).toBe(true);
   });
 
   test("omits a filename summary for generic tool paths ending in a separator", () => {
@@ -3242,7 +3242,7 @@ describe("NativeMessage", () => {
 
     const trigger = screen.getByRole("button", { name: /inspect success/i });
     expect((trigger as HTMLButtonElement).disabled).toBe(false);
-    expect(screen.queryByText("Inspection completed without input arguments.")).toBeNull();
+    expect(screen.queryByText("Inspection completed without input arguments.") === null).toBe(true);
 
     fireEvent.click(trigger);
     expect(screen.getByText("Inspection completed without input arguments.")).toBeTruthy();

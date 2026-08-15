@@ -272,7 +272,7 @@ describe("AgentRadioGroup descriptions", () => {
       // Just the agent name: nothing is padding out an absent caption.
       expect(card.querySelectorAll("span")).toHaveLength(1);
     }
-    expect(screen.queryByText("Balanced everyday coding")).toBeNull();
+    expect(screen.queryByText("Balanced everyday coding") === null).toBe(true);
   });
 
   test("reserves room only for the described agents", () => {

@@ -96,9 +96,7 @@ describe("MentionableInput", () => {
         placeholder="Describe the change"
       />,
     );
-    expect(
-      input.parentElement?.querySelector("[data-native-compose-placeholder]"),
-    ).toBeNull();
+    expect(input.parentElement?.querySelector("[data-native-compose-placeholder]") === null).toBe(true);
   });
 
   test("syncs external value and mention metadata changes into the editor", () => {
@@ -155,7 +153,7 @@ describe("MentionableInput", () => {
         onChange={() => {}}
       />,
     );
-    expect(input.querySelector("[data-mention='true']")).toBeNull();
+    expect(input.querySelector("[data-mention='true']") === null).toBe(true);
 
     rerender(
       <MentionableInput
@@ -220,7 +218,7 @@ describe("MentionableInput", () => {
     const input = container.querySelector("[contenteditable]") as HTMLElement;
     const mention = input.querySelector("[data-mention='true']");
     expect(input.textContent).toBe(draftText);
-    expect(input.querySelector("script")).toBeNull();
+    expect(input.querySelector("script") === null).toBe(true);
     expect(mention?.getAttribute("data-id")).toBe(`id"&<`);
     expect(mention?.getAttribute("data-filename")).toBe(filename);
     expect(mention?.getAttribute("data-path")).toBe(`src/"<&.ts`);

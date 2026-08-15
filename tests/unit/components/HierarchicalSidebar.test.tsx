@@ -998,7 +998,7 @@ describe("HierarchicalSidebar", () => {
     projectsLoadingValue = true;
     const loadingView = render(<HierarchicalSidebar />);
     expect(screen.getByText("Loading projects...")).toBeTruthy();
-    expect(screen.queryByText("No projects yet")).toBeNull();
+    expect(screen.queryByText("No projects yet") === null).toBe(true);
 
     loadingView.unmount();
     projectsLoadingValue = false;
@@ -1126,7 +1126,7 @@ describe("HierarchicalSidebar", () => {
         "",
         { background: true, silent: true },
       );
-      expect(screen.queryByText(/^Create Ork \(Environment\)/)).toBeNull();
+      expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
     });
 
     resolveStart?.();
@@ -1153,7 +1153,7 @@ describe("HierarchicalSidebar", () => {
       await Promise.resolve();
     });
     await waitFor(() =>
-      expect(screen.queryByText(/^Create Ork \(Environment\)/)).toBeNull(),
+      expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true),
     );
   });
 
@@ -1181,7 +1181,7 @@ describe("HierarchicalSidebar", () => {
         { background: true, silent: true },
       );
       expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
-      expect(screen.queryByText(/^Create Ork \(Environment\)/)).toBeNull();
+      expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
     });
   });
 
@@ -1216,7 +1216,7 @@ describe("HierarchicalSidebar", () => {
     await screen.findByText(/^Create Ork \(Environment\)/);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() =>
-      expect(screen.queryByText(/^Create Ork \(Environment\)/)).toBeNull(),
+      expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true),
     );
 
     fireEvent.click(screen.getByTitle("Create environment"));
@@ -1272,7 +1272,7 @@ describe("HierarchicalSidebar", () => {
       await waitFor(() => expect(consoleErrorMock).toHaveBeenCalledWith(
         "Failed to auto-start environment:", expect.any(Error),
       ));
-      expect(screen.queryByText(/^Create Ork \(Environment\)/)).toBeNull();
+      expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
       expect(createEnvironmentMock).toHaveBeenCalledWith(
         "project-1",
         undefined,
@@ -1644,7 +1644,7 @@ describe("HierarchicalSidebar", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Add project" }));
     await waitFor(() => expect(addProjectMock).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
   });
 
   test("creates a scratch project through the add project dialog", async () => {
@@ -1660,7 +1660,7 @@ describe("HierarchicalSidebar", () => {
     await waitFor(() => {
       expect(createProjectFromScratchMock).toHaveBeenCalledWith("/repos/new-project");
     });
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
     expect(addProjectMock).not.toHaveBeenCalled();
   });
 

@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { parseRuntimeStatusManifest, resolveRuntimeProfile, statusManifestPath } from "../../electron/runtime-profile.js";
 import { atomicWriteJson, initializeProfile, processMatches, processStartTime, readAndValidateSentinel, reserveLoopbackPorts, seedInstalledModelCatalogCaches } from "./profile-io.js";
-import { orphanedRuntimeProcesses, stoppedRuntimeStatusIfUnchanged, stopTrackedRuntimeProcesses } from "./lifecycle.js";
+import { createBoundedLogWriter, orphanedRuntimeProcesses, stoppedRuntimeStatusIfUnchanged, stopTrackedRuntimeProcesses } from "./lifecycle.js";
 
 const directories: string[] = [];
 afterEach(async () => Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))));
@@ -67,6 +67,24 @@ async function modelCacheFixture() {
 }
 
 describe("development profile lifecycle primitives", () => {
+  test("serializes bounded log writes and rotates without rereading the log", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ork-bounded-log-"));
+    directories.push(root);
+    const logPath = path.join(root, "vite.log");
+    const writer = createBoundedLogWriter(logPath, 8);
+
+    await Promise.all([
+      writer.write("aaaaaa"),
+      writer.write("bbbb"),
+      writer.write("0123456789"),
+    ]);
+
+    expect(await readFile(logPath, "utf8")).toBe("23456789");
+    expect(await readFile(`${logPath}.1`, "utf8")).toBe("bbbb");
+    expect((await stat(logPath)).size).toBeLessThanOrEqual(8);
+    expect((await stat(`${logPath}.1`)).size).toBeLessThanOrEqual(8);
+  });
+
   test("creates owner-only profile metadata and a matching sentinel", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "ork-profile-io-"));
     directories.push(root);

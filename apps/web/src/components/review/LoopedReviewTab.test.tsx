@@ -286,8 +286,8 @@ describe("LoopedReviewTab backend snapshot viewer", () => {
 
     expect(screen.getByText("Cancellation in progress")).toBeTruthy();
     expect(screen.getByText(/provider work from fixing/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Pause" }) === null).toBe(true);
   });
 
   test("renders the completed PR from an authoritative terminal snapshot", () => {
@@ -430,7 +430,7 @@ describe("LoopedReviewTab content rendering", () => {
 
     const passTab = screen.getByRole("tab", { name: /Round 1 · Pass 1/ });
     await waitFor(() => expect(passTab.textContent).toContain("paused"));
-    expect(passTab.querySelector(".animate-spin")).toBeNull();
+    expect(passTab.querySelector(".animate-spin") === null).toBe(true);
 
     // Legacy snapshots can carry an errored active session while the nested pass
     // still says `discovering`; the workflow failure remains authoritative.
@@ -449,7 +449,7 @@ describe("LoopedReviewTab content rendering", () => {
       });
     });
     await waitFor(() => expect(passTab.textContent).toContain("failed"));
-    expect(passTab.querySelector(".animate-spin")).toBeNull();
+    expect(passTab.querySelector(".animate-spin") === null).toBe(true);
 
     act(() => {
       useLoopedReviewStore.getState().replaceWorkflow({
@@ -461,7 +461,7 @@ describe("LoopedReviewTab content rendering", () => {
       });
     });
     await waitFor(() => expect(passTab.textContent).toContain("cancelled"));
-    expect(passTab.querySelector(".animate-spin")).toBeNull();
+    expect(passTab.querySelector(".animate-spin") === null).toBe(true);
   });
 
   test("renders pooled issues with their category, symbol and alternatives", () => {
@@ -588,7 +588,7 @@ describe("LoopedReviewTab content rendering", () => {
     );
     // The URL comes from agent output and is read back from disk, so an
     // unvalidated href would be one click from script execution.
-    expect(view.container.querySelector("a")).toBeNull();
+    expect(view.container.querySelector("a") === null).toBe(true);
     view.unmount();
 
     const safe = loopedReviewFixture({

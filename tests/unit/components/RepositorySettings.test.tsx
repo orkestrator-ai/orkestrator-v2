@@ -474,8 +474,7 @@ describe("RepositorySettings", () => {
 
       await waitFor(() => {
         expect(mockGetCachedOpenCodeModelCatalog).toHaveBeenCalledWith("project-1");
-        expect(screen.queryByText("Start an environment to load available models"))
-          .toBeNull();
+        expect(screen.queryByText("Start an environment to load available models") === null).toBe(true);
       });
       const modelSelect = getMockSelects()[2]!;
       expect(Array.from(modelSelect.options).map((option) => option.value))
@@ -514,8 +513,7 @@ describe("RepositorySettings", () => {
           },
         });
 
-        expect(screen.queryByText("Start an environment to load available models"))
-          .toBeNull();
+        expect(screen.queryByText("Start an environment to load available models") === null).toBe(true);
         const selects = getMockSelects();
         expect(Array.from(selects[2]!.options).map((option) => option.value))
           .toContain(`${platform}-cached-model`);
@@ -545,7 +543,7 @@ describe("RepositorySettings", () => {
           .toBeTruthy();
         expect(screen.queryByText(
           platform === "cursor" ? "Cursor automatic" : "Grok Build default",
-        )).toBeNull();
+        ) === null).toBe(true);
       });
 
       test(`clears an incompatible ${label} effort when the model changes`, async () => {

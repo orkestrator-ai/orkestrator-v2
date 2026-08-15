@@ -48,7 +48,7 @@ describe("CommentText", () => {
   test("renders plain text without links", () => {
     render(<CommentText text="Build started" />);
     expect(screen.getByText("Build started")).toBeTruthy();
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("button") === null).toBe(true);
   });
 
   test("renders a single URL as a clickable button", () => {

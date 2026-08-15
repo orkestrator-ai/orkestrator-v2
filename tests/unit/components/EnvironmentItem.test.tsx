@@ -919,9 +919,7 @@ describe("EnvironmentItem menu actions and selection", () => {
     await waitFor(() => {
       expect(findMenuItem(rendered.container, "Start")?.getAttribute("aria-disabled"))
         .toBeNull();
-      expect(
-        rendered.container.querySelector("svg.animate-spin.text-amber-500"),
-      ).toBeNull();
+      expect(rendered.container.querySelector("svg.animate-spin.text-amber-500") === null).toBe(true);
     });
   });
 
@@ -933,7 +931,7 @@ describe("EnvironmentItem menu actions and selection", () => {
     });
     const { container } = renderItem(localEnvironment);
 
-    expect(container.querySelector("svg.animate-spin.text-amber-500")).toBeNull();
+    expect(container.querySelector("svg.animate-spin.text-amber-500") === null).toBe(true);
     expect(container.querySelector("svg.lucide-laptop")).not.toBeNull();
   });
 
@@ -1032,7 +1030,7 @@ describe("EnvironmentItem unread activity indicator", () => {
   test("does not render the unread bell when the environment has no unread activity", () => {
     const { container } = renderItem(makeEnvironment());
 
-    expect(container.querySelector('[aria-label="New completed activity"]')).toBeNull();
+    expect(container.querySelector('[aria-label="New completed activity"]') === null).toBe(true);
   });
 
   test("renders the unread bell when the environment is marked unread", () => {
@@ -1046,7 +1044,7 @@ describe("EnvironmentItem unread activity indicator", () => {
   test("only marks the matching environment unread, not its siblings", () => {
     const { container } = renderItem(makeEnvironment({ id: "env-1", hasUnreadWork: false }));
 
-    expect(container.querySelector('[aria-label="New completed activity"]')).toBeNull();
+    expect(container.querySelector('[aria-label="New completed activity"]') === null).toBe(true);
   });
 
   test("shows the unread bell for local environments too (independent of container status)", () => {
@@ -1316,7 +1314,7 @@ describe("EnvironmentItem on a desktop viewport", () => {
 describe("EnvironmentItem multi-select", () => {
   test("renders a selection checkbox only in multi-select mode", () => {
     const { container: plain } = renderItem(makeEnvironment());
-    expect(plain.querySelector('input[type="checkbox"]')).toBeNull();
+    expect(plain.querySelector('input[type="checkbox"]') === null).toBe(true);
 
     cleanup();
 
@@ -1347,7 +1345,7 @@ describe("EnvironmentItem multi-select", () => {
 
     expect((container.querySelector('input[type="checkbox"]') as HTMLInputElement).checked).toBe(true);
     // The checkbox replaces the status icon rather than sitting beside it.
-    expect(container.querySelector('div[role="button"] svg')).toBeNull();
+    expect(container.querySelector('div[role="button"] svg') === null).toBe(true);
   });
 
   test("a deleting environment shows the delete spinner instead of the checkbox", () => {
@@ -1355,7 +1353,7 @@ describe("EnvironmentItem multi-select", () => {
 
     const { container } = renderItem(makeEnvironment(), { isMultiSelectMode: true });
 
-    expect(container.querySelector('input[type="checkbox"]')).toBeNull();
+    expect(container.querySelector('input[type="checkbox"]') === null).toBe(true);
     const icon = container.querySelector('div[role="button"] svg');
     expect(icon?.getAttribute("class")).toContain("text-destructive");
     expect(icon?.getAttribute("class")).toContain("animate-spin");

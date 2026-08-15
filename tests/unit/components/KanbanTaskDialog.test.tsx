@@ -519,7 +519,7 @@ describe("KanbanTaskDialog", () => {
 
     await waitFor(() => expect(getComposeDraftMock).toHaveBeenCalled());
     expect((screen.getByPlaceholderText("Task title...") as HTMLInputElement).value).toBe("");
-    expect(screen.queryByText("Untrusted description")).toBeNull();
+    expect(screen.queryByText("Untrusted description") === null).toBe(true);
   });
 
   test("reports rejected create-task draft hydration without breaking input", async () => {
@@ -924,7 +924,7 @@ describe("KanbanTaskDialog", () => {
     );
 
     await waitFor(() => expect(getKanbanImageDataMock).toHaveBeenCalledWith("image-missing"));
-    expect(screen.queryByAltText("missing.png")).toBeNull();
+    expect(screen.queryByAltText("missing.png") === null).toBe(true);
     expect(screen.getByRole("dialog").querySelector(".animate-spin")).toBeTruthy();
   });
 
@@ -948,7 +948,7 @@ describe("KanbanTaskDialog", () => {
     view.unmount();
 
     await act(async () => image.resolve("late-base64"));
-    expect(screen.queryByAltText("late.png")).toBeNull();
+    expect(screen.queryByAltText("late.png") === null).toBe(true);
   });
 
   test("create mode attaches selected image files and saves them with the new task", async () => {
@@ -1005,8 +1005,8 @@ describe("KanbanTaskDialog", () => {
     Object.defineProperty(oversized, "size", { value: 5 * 1024 * 1024 + 1 });
     fireEvent.change(fileInput, { target: { files: [oversized] } });
     await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith("Image is too large (max 5 MB)"));
-    expect(screen.queryByAltText("notes.txt")).toBeNull();
-    expect(screen.queryByAltText("large.png")).toBeNull();
+    expect(screen.queryByAltText("notes.txt") === null).toBe(true);
+    expect(screen.queryByAltText("large.png") === null).toBe(true);
   });
 
   test("reports file-reader failures and resets the file input", async () => {
@@ -1025,7 +1025,7 @@ describe("KanbanTaskDialog", () => {
     await waitFor(() => {
       expect(toastErrorMock).toHaveBeenCalledWith("Failed to read image file");
     });
-    expect(screen.queryByAltText("broken.png")).toBeNull();
+    expect(screen.queryByAltText("broken.png") === null).toBe(true);
     expect(fileInput.value).toBe("");
   });
 
@@ -1085,7 +1085,7 @@ describe("KanbanTaskDialog", () => {
     expect(removeButton).toBeTruthy();
     fireEvent.click(removeButton!);
 
-    expect(screen.queryByAltText("remove-me.png")).toBeNull();
+    expect(screen.queryByAltText("remove-me.png") === null).toBe(true);
     fireEvent.change(screen.getByPlaceholderText("Task title..."), {
       target: { value: "No image task" },
     });
@@ -1371,7 +1371,7 @@ describe("KanbanTaskDialog", () => {
     await act(async () => {});
 
     expect(readImageMock).not.toHaveBeenCalled();
-    expect(screen.queryByAltText(/^clipboard-.*\.png$/)).toBeNull();
+    expect(screen.queryByAltText(/^clipboard-.*\.png$/) === null).toBe(true);
     outside.remove();
   });
 
@@ -1386,7 +1386,7 @@ describe("KanbanTaskDialog", () => {
     );
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
     await waitFor(() => expect(readImageMock).toHaveBeenCalledTimes(1));
-    expect(screen.queryByAltText(/^clipboard-.*\.png$/)).toBeNull();
+    expect(screen.queryByAltText(/^clipboard-.*\.png$/) === null).toBe(true);
     expect(toastSuccessMock).not.toHaveBeenCalled();
 
     cleanup();
@@ -1400,7 +1400,7 @@ describe("KanbanTaskDialog", () => {
     );
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
     await waitFor(() => expect(readImageMock).toHaveBeenCalledTimes(1));
-    expect(screen.queryByAltText(/^clipboard-.*\.png$/)).toBeNull();
+    expect(screen.queryByAltText(/^clipboard-.*\.png$/) === null).toBe(true);
     expect(toastSuccessMock).not.toHaveBeenCalled();
   });
 
@@ -1420,7 +1420,7 @@ describe("KanbanTaskDialog", () => {
     await waitFor(() => {
       expect(toastErrorMock).toHaveBeenCalledWith("Image is too large (max 5 MB)");
     });
-    expect(screen.queryByAltText(/^clipboard-.*\.png$/)).toBeNull();
+    expect(screen.queryByAltText(/^clipboard-.*\.png$/) === null).toBe(true);
   });
 
   test("pasted clipboard images attach directly to an existing task", async () => {
@@ -1527,9 +1527,9 @@ describe("KanbanTaskDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     await waitFor(() =>
-      expect(screen.queryByText("Environment Already Exists")).toBeNull());
+      expect(screen.queryByText("Environment Already Exists") === null).toBe(true));
     // The held selection is dropped, so there is nothing left to confirm.
-    expect(screen.queryByRole("button", { name: "Start Build" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Start Build" }) === null).toBe(true);
     expect(startBuildMock).not.toHaveBeenCalled();
   });
 
@@ -1826,10 +1826,8 @@ describe("KanbanTaskDialog", () => {
     );
 
     expect(container.innerHTML).toBe("");
-    expect(
-      screen.queryByText(
+    expect(screen.queryByText(
         "View and edit task details, build actions, images, and comments.",
-      ),
-    ).toBeNull();
+      ) === null).toBe(true);
   });
 });

@@ -86,7 +86,7 @@ describe("LazyLoadBoundary", () => {
       fireEvent.click(screen.getByRole("button", { name: "Reload application" }));
       expect(onReload).toHaveBeenCalledTimes(1);
       // The message embeds the chunk URL, so it must never reach the DOM.
-      expect(screen.queryByText(/assets\/x\.js/)).toBeNull();
+      expect(screen.queryByText(/assets\/x\.js/) === null).toBe(true);
     });
   });
 
@@ -106,8 +106,8 @@ describe("LazyLoadBoundary", () => {
 
       expect(await screen.findByRole("alert")).toBeTruthy();
       expect(screen.getByText("Something went wrong in this view")).toBeTruthy();
-      expect(screen.queryByText("This part of the app failed to load")).toBeNull();
-      expect(screen.queryByText(/Cannot read properties/)).toBeNull();
+      expect(screen.queryByText("This part of the app failed to load") === null).toBe(true);
+      expect(screen.queryByText(/Cannot read properties/) === null).toBe(true);
     });
   });
 

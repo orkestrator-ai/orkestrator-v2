@@ -210,10 +210,10 @@ describe("SkillsSettings", () => {
       "codex",
       "/workspace/.agents/skills/review/SKILL.md",
     );
-    expect(screen.queryByRole("tab", { name: "Claude" })).toBeNull();
-    expect(screen.queryByRole("tab", { name: "Codex" })).toBeNull();
-    expect(screen.queryByRole("tab", { name: "OpenCode" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Reveal skill in file manager" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Claude" }) === null).toBe(true);
+    expect(screen.queryByRole("tab", { name: "Codex" }) === null).toBe(true);
+    expect(screen.queryByRole("tab", { name: "OpenCode" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Reveal skill in file manager" }) === null).toBe(true);
   });
 
   test("lists the agent's skills with name and location, and renders the first one", async () => {
@@ -271,7 +271,7 @@ describe("SkillsSettings", () => {
     clickTab(/Codex/);
 
     await waitFor(() => expect(list().getByText("codex-only")).toBeTruthy());
-    expect(list().queryByText("claude-only")).toBeNull();
+    expect(list().queryByText("claude-only") === null).toBe(true);
     expect(invokeCalls.filter((call) => call.command === "list_agent_skills").map((call) => call.args?.provider))
       .toEqual(["claude", "codex"]);
   });
@@ -288,13 +288,13 @@ describe("SkillsSettings", () => {
 
     // Rendered: the "#" is consumed by the heading, so only the text survives.
     await waitFor(() => expect(screen.getByRole("heading", { name: "Alpha heading" })).toBeTruthy());
-    expect(screen.queryByText("# Alpha heading")).toBeNull();
+    expect(screen.queryByText("# Alpha heading") === null).toBe(true);
 
     clickTab("Raw");
 
     // Raw: the markdown source is shown verbatim, "#" and all.
     await waitFor(() => expect(screen.getByText("# Alpha heading")).toBeTruthy());
-    expect(screen.queryByRole("heading", { name: "Alpha heading" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Alpha heading" }) === null).toBe(true);
   });
 
   test("filters the list by name, location, and description, then shows no-match state", async () => {
@@ -416,7 +416,7 @@ describe("SkillsSettings", () => {
     render(<SkillsSettings />);
 
     await waitFor(() => expect(screen.getByText("bridge unavailable")).toBeTruthy());
-    expect(screen.queryByRole("list", { name: "Skills" })).toBeNull();
+    expect(screen.queryByRole("list", { name: "Skills" }) === null).toBe(true);
   });
 
   test("surfaces a read failure in the detail pane", async () => {
@@ -514,7 +514,7 @@ describe("SkillsSettings", () => {
       });
     });
     expect(list().getByText("fresh")).toBeTruthy();
-    expect(list().queryByText("stale")).toBeNull();
+    expect(list().queryByText("stale") === null).toBe(true);
   });
 
   test("ignores an older file response after selecting another skill", async () => {
@@ -542,7 +542,7 @@ describe("SkillsSettings", () => {
       alphaFile.resolve({ path: "/a/SKILL.md", content: "Stale alpha body", truncated: false });
     });
     expect(screen.getByText("Beta body")).toBeTruthy();
-    expect(screen.queryByText("Stale alpha body")).toBeNull();
+    expect(screen.queryByText("Stale alpha body") === null).toBe(true);
   });
 
   test("warns when the displayed skill file was truncated", async () => {
@@ -637,7 +637,7 @@ describe("SkillsSettings", () => {
 
     // Not the first skill: a lost selection would fall back to alpha.
     await waitFor(() => expect(screen.getByText("Zeta body")).toBeTruthy());
-    expect(screen.queryByText("Alpha body")).toBeNull();
+    expect(screen.queryByText("Alpha body") === null).toBe(true);
   });
 
   test("marks the selected list entry and shows its description in the detail header", async () => {
@@ -660,7 +660,7 @@ describe("SkillsSettings", () => {
 
     await waitFor(() => expect(list().getAllByRole("button")[1]!.getAttribute("aria-current"))
       .toBe("true"));
-    expect(list().getAllByRole("button")[0]!.getAttribute("aria-current")).toBeNull();
+    expect(list().getAllByRole("button")[0]!.getAttribute("aria-current") === null).toBe(true);
     // Rendered mode strips the frontmatter, so the header is the only place the
     // description survives.
     expect(screen.getByText("Runs the deploy")).toBeTruthy();
@@ -687,7 +687,7 @@ describe("SkillsSettings", () => {
     await waitFor(() => expect(listText()).not.toContain("beta"));
 
     expect(screen.getByText("Beta body")).toBeTruthy();
-    expect(screen.queryByText("Alpha body")).toBeNull();
+    expect(screen.queryByText("Alpha body") === null).toBe(true);
     expect(invokeCalls.filter((call) => call.command === "read_agent_skill"))
       .toHaveLength(readsBeforeFilter);
   });
@@ -706,7 +706,7 @@ describe("SkillsSettings", () => {
     render(<SkillsSettings />);
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "Alpha heading" })).toBeTruthy());
-    expect(screen.queryByText(/description: metadata only/)).toBeNull();
+    expect(screen.queryByText(/description: metadata only/) === null).toBe(true);
 
     clickTab("Raw");
 
@@ -729,7 +729,7 @@ describe("SkillsSettings", () => {
     // A skill can come from a plugin or marketplace, so fetching a remote image
     // would leak the viewer's IP and the fact that they opened this skill.
     await waitFor(() => expect(screen.getByText(/remote image blocked/)).toBeTruthy());
-    expect(container.querySelector('img[src="https://attacker.example/px.png"]')).toBeNull();
+    expect(container.querySelector('img[src="https://attacker.example/px.png"]') === null).toBe(true);
     expect(screen.getByText(/Tracker/)).toBeTruthy();
     expect(screen.getByAltText("Diagram").getAttribute("src")).toBe("./diagram.png");
   });
@@ -753,7 +753,7 @@ describe("SkillsSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
     await waitFor(() => expect(screen.getByText("Recovered body")).toBeTruthy());
-    expect(screen.queryByText(/EACCES: permission denied/)).toBeNull();
+    expect(screen.queryByText(/EACCES: permission denied/) === null).toBe(true);
   });
 
   test("drops a pending copy confirmation when the selection changes", async () => {
@@ -776,7 +776,7 @@ describe("SkillsSettings", () => {
     fireEvent.click(list().getByText("beta"));
 
     expect(screen.getByRole("button", { name: "Copy skill path" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Skill path copied" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Skill path copied" }) === null).toBe(true);
   });
 
   test("reports scan progress and failure in the footer instead of zero counts", async () => {
@@ -790,8 +790,8 @@ describe("SkillsSettings", () => {
     await waitFor(() => expect(footerText()).toBe("Scanning…"));
     expect(screen.getByRole("button", { name: "Rescan skill directories" })
       .hasAttribute("disabled")).toBe(true);
-    expect(screen.queryByRole("list", { name: "Skills" })).toBeNull();
-    expect(screen.queryByText(/No skills found/)).toBeNull();
+    expect(screen.queryByRole("list", { name: "Skills" }) === null).toBe(true);
+    expect(screen.queryByText(/No skills found/) === null).toBe(true);
 
     await act(async () => {
       pending.resolve({

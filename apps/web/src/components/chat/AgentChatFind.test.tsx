@@ -129,7 +129,7 @@ describe("agent chat find controls", () => {
     expect(screen.getByText("No results")).toBeTruthy();
 
     fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByRole("search", { name: "Find in agent chat" })).toBeNull();
+    expect(screen.queryByRole("search", { name: "Find in agent chat" }) === null).toBe(true);
     expect(document.activeElement).toBe(previousFocus);
   });
 
@@ -144,7 +144,7 @@ describe("agent chat find controls", () => {
 
     document.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(false);
-    expect(screen.queryByRole("search", { name: "Find in agent chat" })).toBeNull();
+    expect(screen.queryByRole("search", { name: "Find in agent chat" }) === null).toBe(true);
   });
 
   test("reuses an open search by focusing and selecting its query", () => {

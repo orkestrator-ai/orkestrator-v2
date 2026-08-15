@@ -240,7 +240,7 @@ describe("Files panel components", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: "Reveal in file manager" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reveal in file manager" }) === null).toBe(true);
   });
 
   test("ChangedFileItem renders a root-level file without a directory segment", () => {
@@ -254,7 +254,7 @@ describe("Files panel components", () => {
 
     const filename = screen.getByText("README.md");
     expect(filename.parentElement?.childElementCount).toBe(1);
-    expect(screen.queryByText("/")).toBeNull();
+    expect(screen.queryByText("/") === null).toBe(true);
     expect(screen.getByTitle("README.md")).toBeTruthy();
   });
 
@@ -263,13 +263,13 @@ describe("Files panel components", () => {
       <ChangedFileItem change={{ ...change, additions: 0, deletions: 0 }} />,
     );
 
-    expect(screen.queryByText("+0")).toBeNull();
-    expect(screen.queryByText("-0")).toBeNull();
+    expect(screen.queryByText("+0") === null).toBe(true);
+    expect(screen.queryByText("-0") === null).toBe(true);
 
     rerender(<ChangedFileItem change={{ ...change, additions: -2, deletions: -3 }} />);
 
-    expect(screen.queryByText("+-2")).toBeNull();
-    expect(screen.queryByText("--3")).toBeNull();
+    expect(screen.queryByText("+-2") === null).toBe(true);
+    expect(screen.queryByText("--3") === null).toBe(true);
   });
 
   test("ChangedFileItem exposes only the supplied context action", () => {
@@ -279,11 +279,11 @@ describe("Files panel components", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Revert" }));
     expect(onRevert).toHaveBeenCalledWith(change.path);
-    expect(screen.queryByRole("button", { name: "Delete file" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete file" }) === null).toBe(true);
 
     rerender(<ChangedFileItem change={change} onDelete={onDelete} />);
 
-    expect(screen.queryByRole("button", { name: "Revert" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Revert" }) === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Delete file" }));
     expect(onDelete).toHaveBeenCalledWith(change.path);
   });
@@ -325,7 +325,7 @@ describe("Files panel components", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: "Revert" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Revert" }) === null).toBe(true);
     expect(screen.getByRole("button", { name: "Delete file" })).toBeTruthy();
   });
 
@@ -518,7 +518,7 @@ describe("Files panel components", () => {
     );
 
     expect(screen.getByText("src")).toBeTruthy();
-    expect(screen.queryByText("App.tsx")).toBeNull();
+    expect(screen.queryByText("App.tsx") === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: /src/i }));
 
@@ -544,7 +544,7 @@ describe("Files panel components", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /src/i }));
 
-    expect(screen.queryByText("App.tsx")).toBeNull();
+    expect(screen.queryByText("App.tsx") === null).toBe(true);
     expect(useFilesPanelStore.getState().expandedFolders).toEqual([]);
   });
 
@@ -564,7 +564,7 @@ describe("Files panel components", () => {
     // Expanding the parent reveals the nested folder row but NOT its children,
     // because each folder tracks its own expanded state by path.
     expect(screen.getByText("components")).toBeTruthy();
-    expect(screen.queryByText("Button.tsx")).toBeNull();
+    expect(screen.queryByText("Button.tsx") === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: /components/i }));
 
@@ -588,7 +588,7 @@ describe("Files panel components", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Revert" }).at(-1)!);
     await waitFor(() => {
       expect(revertFileMock).toHaveBeenCalledWith(change.path);
-      expect(screen.queryByRole("heading", { name: "Revert file?" })).toBeNull();
+      expect(screen.queryByRole("heading", { name: "Revert file?" }) === null).toBe(true);
     });
 
     deleteFileMock.mockImplementation(async () => {
@@ -601,7 +601,7 @@ describe("Files panel components", () => {
 
     mockEnvironmentId = "env-other";
     rerender(<TerminalProvider><FilesPanel /></TerminalProvider>);
-    await waitFor(() => expect(screen.queryByRole("heading", { name: "Delete file?" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Delete file?" }) === null).toBe(true));
   });
 
   test("FilesPanel does not queue destructive actions without an environment", () => {
@@ -610,7 +610,7 @@ describe("Files panel components", () => {
     render(<TerminalProvider><FilesPanel /></TerminalProvider>);
 
     fireEvent.click(screen.getByRole("button", { name: "Delete file" }));
-    expect(screen.queryByRole("heading", { name: "Delete file?" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Delete file?" }) === null).toBe(true);
     expect(deleteFileMock).not.toHaveBeenCalled();
   });
 
@@ -629,7 +629,7 @@ describe("Files panel components", () => {
     mockIsLocalEnvironment = false;
     mockWorktreePath = null;
     rerender(<TerminalProvider><FilesPanel /></TerminalProvider>);
-    expect(screen.queryByRole("button", { name: "Reveal in file manager" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reveal in file manager" }) === null).toBe(true);
   });
 
   test("reports file-manager reveal failures", async () => {

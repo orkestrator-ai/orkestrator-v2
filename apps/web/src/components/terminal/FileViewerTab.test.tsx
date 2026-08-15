@@ -695,8 +695,8 @@ describe("FileViewerTab component", () => {
         // FileViewerTab must consume this rejection without replacing newer state.
       }
     });
-    expect(screen.queryByText("stale read failure")).toBeNull();
-    expect(screen.queryByText("Failed to load file")).toBeNull();
+    expect(screen.queryByText("stale read failure") === null).toBe(true);
+    expect(screen.queryByText("Failed to load file") === null).toBe(true);
     expect((editor as HTMLTextAreaElement).value).toBe("container text");
   });
 

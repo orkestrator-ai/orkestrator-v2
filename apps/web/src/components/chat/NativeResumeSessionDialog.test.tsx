@@ -93,7 +93,7 @@ describe("NativeResumeSessionDialog", () => {
     );
 
     await waitFor(() => expect(screen.getByText("Other")).toBeTruthy());
-    expect(screen.queryByText("Current")).toBeNull();
+    expect(screen.queryByText("Current") === null).toBe(true);
   });
 
   test("resumes the clicked session by id", async () => {
@@ -147,8 +147,8 @@ describe("NativeResumeSessionDialog", () => {
     renderDialog([{ id: "a", title: "Quiet", status: "idle" }]);
 
     await waitFor(() => expect(screen.getByText("Quiet")).toBeTruthy());
-    expect(screen.queryByText("• Running")).toBeNull();
-    expect(screen.queryByText("• Error")).toBeNull();
+    expect(screen.queryByText("• Running") === null).toBe(true);
+    expect(screen.queryByText("• Error") === null).toBe(true);
   });
 
   test("renders the trailing detail next to the timestamp", async () => {
@@ -171,14 +171,14 @@ describe("NativeResumeSessionDialog", () => {
     );
 
     expect(container.ownerDocument.querySelector(".animate-spin")).toBeTruthy();
-    expect(screen.queryByText("Nothing here")).toBeNull();
+    expect(screen.queryByText("Nothing here") === null).toBe(true);
 
     await act(async () => {
       pending.resolve([]);
       await pending.promise;
     });
 
-    expect(container.ownerDocument.querySelector(".animate-spin")).toBeNull();
+    expect(container.ownerDocument.querySelector(".animate-spin") === null).toBe(true);
     expect(screen.getByText("Nothing here")).toBeTruthy();
   });
 
@@ -289,14 +289,14 @@ describe("NativeResumeSessionDialog", () => {
 
     const { rerender } = render(<NativeResumeSessionDialog {...props("a")} />);
     await waitFor(() => expect(screen.getByText("Session B")).toBeTruthy());
-    expect(screen.queryByText("Session A")).toBeNull();
+    expect(screen.queryByText("Session A") === null).toBe(true);
 
     await act(async () => {
       rerender(<NativeResumeSessionDialog {...props("b")} />);
     });
 
     expect(screen.getByText("Session A")).toBeTruthy();
-    expect(screen.queryByText("Session B")).toBeNull();
+    expect(screen.queryByText("Session B") === null).toBe(true);
     expect(fetchSessions).toHaveBeenCalledTimes(1);
   });
 
@@ -349,7 +349,7 @@ describe("NativeResumeSessionDialog", () => {
       await first.promise;
     });
     expect(screen.getByText("Reopened result")).toBeTruthy();
-    expect(screen.queryByText("Closed result")).toBeNull();
+    expect(screen.queryByText("Closed result") === null).toBe(true);
   });
 
   test("does not report a request failure after unmount", async () => {

@@ -230,7 +230,7 @@ describe("CreateEnvironmentFlowDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Go back" }));
     expect(createEnvironment).not.toHaveBeenCalled();
-    expect(screen.queryByText("No GitHub token configured")).toBeNull();
+    expect(screen.queryByText("No GitHub token configured") === null).toBe(true);
   });
 
   test("shows the generic warning when credential status cannot be checked", async () => {
@@ -292,7 +292,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     });
 
     expect(createEnvironment).not.toHaveBeenCalled();
-    expect(screen.queryByText("No GitHub CLI credentials found")).toBeNull();
+    expect(screen.queryByText("No GitHub CLI credentials found") === null).toBe(true);
   });
 
   test("ignores a delayed credential result after switching projects", async () => {
@@ -330,7 +330,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       await Promise.resolve();
     });
 
-    expect(screen.queryByText("No GitHub CLI credentials found")).toBeNull();
+    expect(screen.queryByText("No GitHub CLI credentials found") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() =>
       expect(createEnvironment).toHaveBeenCalledWith(
@@ -452,7 +452,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       </DockerAvailabilityProvider>,
     );
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "Create anyway" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Create anyway" }) === null).toBe(true);
     });
     expect(createEnvironment).not.toHaveBeenCalled();
   });
@@ -482,7 +482,7 @@ describe("CreateEnvironmentFlowDialog", () => {
 
     await waitFor(() => expect(createEnvironment).toHaveBeenCalledTimes(1));
     await waitFor(() =>
-      expect(screen.queryByText("No GitHub CLI credentials found")).toBeNull(),
+      expect(screen.queryByText("No GitHub CLI credentials found") === null).toBe(true),
     );
   });
 

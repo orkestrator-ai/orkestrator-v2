@@ -8,6 +8,7 @@ import type {
 } from "@/types";
 import { DEFAULT_TERMINAL_SCROLLBACK, TERMINAL_BACKGROUND_COLOR } from "@/constants/terminal";
 import { LEGACY_ENABLED_AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
+import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
 
 const DEFAULT_CONFIG: AppConfig = {
   version: "1.0",
@@ -77,7 +78,7 @@ const DEFAULT_CONFIG: AppConfig = {
     codexModel: "gpt-5.4",
     codexReasoningEffort: "high",
     opencodeMode: "terminal",
-    claudeMode: "native",
+    claudeMode: DEFAULT_CLAUDE_MODE,
     claudeNativeBackend: "sdk",
     claudeNativeFastModeDefault: false,
     codexMode: "native",

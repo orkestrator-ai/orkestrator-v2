@@ -63,14 +63,14 @@ export interface ResolvedStartupLaunch {
 }
 
 export const DEFAULT_STARTUP_LAUNCH_AGENT: AgentPlatform = "claude";
+export const DEFAULT_CLAUDE_MODE: StartupLaunchMode = "native";
 
 /**
- * Absent configuration means "not a native launch".
+ * Non-Claude agents remain conservative when their mode is absent.
  *
- * Deliberately conservative: an unset mode leaves the launch with the terminal
- * coordinator, which is the side that can still deliver the images by rewriting
- * the prompt. Defaulting the other way would hand the launch to a backend that
- * declines it and drop the attachments entirely.
+ * Claude has its own shipped native default above. Codex and OpenCode keep the
+ * terminal fallback here so this resolver does not silently expand their launch
+ * ownership when a partial or legacy config reaches it.
  */
 const DEFAULT_STARTUP_LAUNCH_MODE: StartupLaunchMode = "terminal";
 const DEFAULT_STARTUP_LAUNCH_CLAUDE_BACKEND: StartupLaunchClaudeBackend = "sdk";
@@ -97,7 +97,7 @@ export function resolveStartupLaunch(input: {
       ? (environment?.claudeMode
         ?? repository?.agentStyle
         ?? global?.claudeMode
-        ?? DEFAULT_STARTUP_LAUNCH_MODE)
+        ?? DEFAULT_CLAUDE_MODE)
       : agent === "codex"
         ? (environment?.codexMode
           ?? global?.codexMode

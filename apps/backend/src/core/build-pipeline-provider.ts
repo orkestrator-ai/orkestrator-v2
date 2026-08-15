@@ -2936,14 +2936,16 @@ class HttpBridgeProvider implements BuildPipelineProvider {
   }
 
   async listResumableSessions(): Promise<NativeAgentResumeEntry[]> {
-    if (this.agent === "cursor" || this.agent === "grok") return [];
     const response = await bridgeFetch(
       this.connection,
       "/session/list",
       {},
       this.fetchImpl,
     );
-    assertOk(response, `${this.agent} resumable session list`);
+    // The ACP bridge answers 410 with the reason the agent cannot list its own
+    // history. Dropping that body would reduce a specific, actionable message
+    // to a bare status code in front of the user.
+    await assertOkWithErrorDetail(response, `${this.agent} resumable session list`);
     const payload = asRecord(await boundedJson(
       response,
       `${this.agent} resumable session list`,
@@ -3051,7 +3053,28 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     controls?: NativeAgentControlUpdate,
   ): Promise<string> {
     if (this.agent === "cursor" || this.agent === "grok") {
-      throw new PromptRejectedError(`${this.agent} does not support session resume`);
+      const response = await bridgeFetch(
+        this.connection,
+        "/session/resume",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            sessionId,
+            ...(controls?.modelId ? { modelId: controls.modelId } : {}),
+            ...(controls?.reasoningId ? { reasoningId: controls.reasoningId } : {}),
+            ...(controls?.mode ? { mode: controls.mode } : {}),
+            ...(controls?.fastMode === undefined ? {} : { fastMode: controls.fastMode }),
+          }),
+        },
+        this.fetchImpl,
+      );
+      await assertOkWithErrorDetail(response, `${this.agent} session resume`);
+      const payload = asRecord(await boundedJson(response, `${this.agent} session resume`));
+      const resumedId = nonEmptyString(payload?.sessionId);
+      if (!resumedId) {
+        throw new ProviderUnavailableError(`${this.agent} returned a malformed resumed session`);
+      }
+      return resumedId;
     }
     if (this.agent === "claude") {
       const response = await bridgeFetch(

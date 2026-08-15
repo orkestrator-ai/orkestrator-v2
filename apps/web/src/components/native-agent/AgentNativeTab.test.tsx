@@ -10,6 +10,7 @@ import type { NativeAgentSessionProjection, NativeAgentTabData } from "@orkestra
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as realBackend from "@/lib/backend";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
+import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -210,6 +211,9 @@ afterEach(() => {
   getNativeAgentProjectionMock.mockClear();
   getNativeAgentProjectionMock.mockImplementation(defaultProjection);
   useEnvironmentStore.setState({ environments: [] });
+  useConfigStore.getState().updateGlobalConfig({
+    enabledAgentPlatforms: ["claude", "codex", "opencode"],
+  });
   usePaneLayoutStore.setState({
     environments: new Map(),
     hydration: new Map(),
@@ -298,7 +302,7 @@ function seedUnassignedPane(tabId: string) {
 
 describe("AgentNativeTab", () => {
   test.each(AGENT_PLATFORMS.map((platform) => [platform] as const))(
-    "keeps the context-window control in the %s compose bar before usage arrives",
+    "does not render a context-window control in the %s compose bar before usage arrives",
     async (platform) => {
       render(
         <AgentNativeTab
@@ -308,12 +312,36 @@ describe("AgentNativeTab", () => {
         />,
       );
 
-      const contextButton = await screen.findByRole("button", {
-        name: "Context window usage unavailable",
-      });
+      await screen.findByTestId("shared-native-compose-bar");
       const sendButton = screen.getByTitle("Send");
 
-      expect(contextButton.nextElementSibling).toBe(sendButton);
+      expect(screen.queryByRole("button", { name: /Context window/ })).toBeNull();
+      expect(sendButton).toBeTruthy();
+    },
+  );
+
+  test.each(AGENT_PLATFORMS.map((platform) => [platform] as const))(
+    "renders the context-window control in the %s compose bar once usage arrives",
+    async (platform) => {
+      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+        ...(await defaultProjection(input)),
+        contextUsage: { usedTokens: 4_000, maximumTokens: 16_000, percentage: 25 },
+      }));
+
+      render(
+        <AgentNativeTab
+          tabId={`tab-context-present-${platform}`}
+          data={identity(platform)}
+          isActive
+        />,
+      );
+
+      // The control is conditional, so absence before usage arrives must not be
+      // allowed to become permanent absence after it does.
+      const contextButton = await screen.findByRole("button", {
+        name: "Context window 25% used",
+      });
+      expect(contextButton.nextElementSibling).toBe(screen.getByTitle("Send"));
     },
   );
 
@@ -338,6 +366,9 @@ describe("AgentNativeTab", () => {
   });
 
   test("asks for a platform before opening that provider's normal resume flow", async () => {
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: [...AGENT_PLATFORMS],
+    });
     usePaneLayoutStore.setState({
       environments: new Map([
         ["env-1", {
@@ -366,9 +397,16 @@ describe("AgentNativeTab", () => {
     expect(within(dialog).getByText("Resume a session")).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: /Claude/ })).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: /Codex/ })).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: /Cursor Agent/ })).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: /Grok Build/ })).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: /OpenCode/ })).toBeTruthy();
 
-    fireEvent.click(within(dialog).getByRole("button", { name: /Codex/ }));
+    expect((within(dialog).getByRole("button", { name: /Cursor Agent/ }) as HTMLButtonElement).disabled)
+      .toBe(false);
+    expect((within(dialog).getByRole("button", { name: /Grok Build/ }) as HTMLButtonElement).disabled)
+      .toBe(false);
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /Cursor Agent/ }));
 
     expect(await screen.findByRole("dialog", { name: "Resume Session" })).toBeTruthy();
     await waitFor(() => expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(1));

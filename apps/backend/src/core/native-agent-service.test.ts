@@ -1113,6 +1113,27 @@ describe("NativeAgentService", () => {
     });
   });
 
+  for (const agent of ["cursor", "grok"] as const) {
+    test(`advertises ${agent} session resume through the native projection`, async () => {
+      const stub = createProviderStub(agent, {
+        interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+      });
+      await withService({
+        prefix: `orkestrator-native-${agent}-resume-capability-`,
+        provider: async () => stub.provider,
+      }, async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent,
+          logicalSessionKey: `env-env-1:tab-${agent}-resume`,
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        expect(projection?.capabilities.resume).toBe(true);
+      });
+    });
+  }
+
   test("orders resumable sessions by most recent activity", async () => {
     const stub = createProviderStub("claude", {
       interactiveSnapshot: async () => ({ status: "idle", messages: [] }),

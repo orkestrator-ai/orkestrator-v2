@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, resolve } from "node:path";
@@ -133,6 +133,8 @@ interface SessionState {
   status: SessionStatus;
   error?: string;
   messages: BridgeMessage[];
+  /** Provider message IDs seen during the current process, bounded with the transcript. */
+  historyMessageIds: Map<string, string>;
   child: AcpProcess | null;
   revision: number;
   structured: Map<string, unknown>;
@@ -166,6 +168,8 @@ interface SessionState {
   turnStartedAt?: number;
   /** `available_commands_update` size; both agents advertise their commands. */
   commandCount?: number;
+  /** Whether session/load is replaying transcript updates into this state. */
+  historyReplay: false | "hydrate" | "ignore";
 }
 
 interface PersistedUsage {
@@ -246,7 +250,9 @@ const saturatedText = new WeakSet<BridgeMessage | BridgeMessagePart>();
 const trimmedToolCalls = new WeakMap<BridgeMessage, Set<string>>();
 const clientSessionKeys = new Map<string, string>();
 const sessionCreations = new Map<string, Promise<SessionState>>();
+const sessionResumes = new Map<string, Promise<SessionState>>();
 let anonymousSessionCreations = 0;
+let sessionListProbe: Promise<JsonObject[]> | null = null;
 let persistenceTail = Promise.resolve();
 let persistenceScheduled = false;
 let shuttingDown = false;
@@ -267,6 +273,7 @@ interface AcpSpawnOptions {
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_LINE_BYTES = 4 * 1024 * 1024;
 const MAX_MESSAGES = 500;
+const MAX_HISTORY_MESSAGE_IDS = 1_024;
 /**
  * The rendered-transcript display budget. Overridable only *downwards*, and
  * only inside a bounded range, so a test can reach the aggregate-trim floor
@@ -308,6 +315,8 @@ const MAX_STRUCTURED_RESULT_BYTES = 1024 * 1024;
 const TRANSCRIPT_CHECK_INTERVAL_BYTES = 64 * 1024;
 const MAX_PROMPT_JOURNAL = 512;
 const MAX_STATE_FILE_BYTES = 16 * 1024 * 1024;
+const MAX_RESUMABLE_SESSIONS = 512;
+const MAX_SESSION_LIST_PAGES = 64;
 const RPC_TIMEOUT_MS = parseDuration(process.env.ACP_RPC_TIMEOUT_MS, 30_000);
 const PROMPT_TIMEOUT_MS = parseDuration(process.env.ACP_PROMPT_TIMEOUT_MS, 30 * 60_000);
 const PARENT_WATCHDOG_INTERVAL_MS = parseDuration(
@@ -584,7 +593,246 @@ class AcpProcess {
 }
 
 function activeSessionReservations(): number {
-  return sessions.size + sessionCreations.size + anonymousSessionCreations;
+  return sessions.size + sessionCreations.size + sessionResumes.size + anonymousSessionCreations;
+}
+
+const EXTERNAL_SESSION_PREFIX = "acp-session:";
+
+function externalSessionToken(acpSessionId: string): string {
+  const encoded = Buffer.from(acpSessionId).toString("base64url");
+  const signature = createHmac("sha256", authToken).update(encoded).digest("base64url");
+  return `${EXTERNAL_SESSION_PREFIX}${encoded}.${signature}`;
+}
+
+function parseExternalSessionToken(value: string): string | null {
+  if (!value.startsWith(EXTERNAL_SESSION_PREFIX)) return null;
+  const token = value.slice(EXTERNAL_SESSION_PREFIX.length);
+  const separator = token.lastIndexOf(".");
+  if (separator <= 0) return null;
+  const encoded = token.slice(0, separator);
+  const signature = token.slice(separator + 1);
+  if (!encoded || encoded.length > 1_024 || !signature) return null;
+  const expected = createHmac("sha256", authToken).update(encoded).digest();
+  let supplied: Buffer;
+  try {
+    supplied = Buffer.from(signature, "base64url");
+  } catch {
+    return null;
+  }
+  if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return null;
+  let decoded: Buffer;
+  try {
+    decoded = Buffer.from(encoded, "base64url");
+  } catch {
+    return null;
+  }
+  const sessionId = decoded.toString("utf8");
+  if (!sessionId.trim() || Buffer.byteLength(sessionId) > 512) return null;
+  return decoded.toString("base64url") === encoded ? sessionId : null;
+}
+
+function supportsSessionCapability(initialized: JsonObject, capability: string): boolean {
+  const agentCapabilities = isObject(initialized.agentCapabilities)
+    ? initialized.agentCapabilities
+    : undefined;
+  const sessionCapabilities = isObject(agentCapabilities?.sessionCapabilities)
+    ? agentCapabilities.sessionCapabilities
+    : undefined;
+  return sessionCapabilities?.[capability] === true
+    || isObject(sessionCapabilities?.[capability]);
+}
+
+/**
+ * Query the agent's own durable history through ACP. One shared probe prevents
+ * several simultaneously-open pickers from spawning an unbounded process fanout.
+ */
+async function listResumableSessions(): Promise<JsonObject[]> {
+  if (sessionListProbe) return sessionListProbe;
+  const operation = listResumableSessionsReserved();
+  sessionListProbe = operation;
+  try {
+    return await operation;
+  } finally {
+    if (sessionListProbe === operation) sessionListProbe = null;
+  }
+}
+
+async function listResumableSessionsReserved(): Promise<JsonObject[]> {
+  const child = new AcpProcess();
+  try {
+    const initialized = await child.initialize();
+    const capabilities = isObject(initialized.agentCapabilities)
+      ? initialized.agentCapabilities
+      : undefined;
+    if (!supportsSessionCapability(initialized, "list") || capabilities?.loadSession !== true) {
+      throw new HttpError(410, `${provider} cannot list resumable ACP sessions`);
+    }
+    const knownSessions = new Map(
+      [...sessions.values()].map((state) => [state.acpSessionId, state.id]),
+    );
+    const listed: JsonObject[] = [];
+    const seenSessionIds = new Set<string>();
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    for (let page = 0; page < MAX_SESSION_LIST_PAGES && listed.length < MAX_RESUMABLE_SESSIONS; page += 1) {
+      const result = await child.request("session/list", {
+        cwd: workingDirectory,
+        ...(cursor ? { cursor } : {}),
+      });
+      if (!isObject(result) || !Array.isArray(result.sessions)) {
+        throw new Error(`${provider} returned an invalid ACP session list`);
+      }
+      for (const candidate of result.sessions) {
+        if (!isObject(candidate)) continue;
+        const acpSessionId = boundedString(candidate.sessionId, 512)?.trim();
+        if (!acpSessionId || seenSessionIds.has(acpSessionId)) continue;
+        const cwd = boundedString(candidate.cwd, MAX_TOOL_PATH_BYTES)?.trim();
+        if (!cwd || resolve(cwd) !== workingDirectory) continue;
+        seenSessionIds.add(acpSessionId);
+        const meta = isObject(candidate._meta) ? candidate._meta : undefined;
+        const messageCount = Number.isSafeInteger(meta?.messageCount)
+          && Number(meta?.messageCount) >= 0
+          ? Number(meta!.messageCount)
+          : undefined;
+        const createdAt = boundedString(candidate.createdAt, 64);
+        const updatedAt = boundedString(candidate.updatedAt, 64);
+        listed.push({
+          id: knownSessions.get(acpSessionId) ?? externalSessionToken(acpSessionId),
+          ...(boundedString(candidate.title, MAX_TOOL_TITLE_BYTES)
+            ? { title: boundedString(candidate.title, MAX_TOOL_TITLE_BYTES) }
+            : {}),
+          ...(createdAt ? { createdAt } : {}),
+          ...(updatedAt ? { updatedAt } : {}),
+          ...(messageCount === undefined ? {} : { messageCount }),
+        });
+        if (listed.length >= MAX_RESUMABLE_SESSIONS) break;
+      }
+      const nextCursor = boundedString(result.nextCursor, 4_096)?.trim();
+      if (!nextCursor || seenCursors.has(nextCursor)) break;
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
+    }
+    return listed;
+  } finally {
+    await child.close();
+  }
+}
+
+async function resumeSession(
+  selectedSessionId: string,
+  signal?: AbortSignal,
+  patch?: AcpComposerPatch,
+): Promise<SessionState> {
+  const existing = sessions.get(selectedSessionId);
+  if (existing) return resumeExistingSession(existing, signal, patch);
+  const acpSessionId = parseExternalSessionToken(selectedSessionId);
+  if (!acpSessionId) throw new HttpError(404, "ACP session was not found");
+  // Checked before the `sessions` scan below: an adoption registers its state
+  // before `session/load` returns, so a racing caller would otherwise find a
+  // still-dispatching session and be told 409 for work it should simply join.
+  // The in-flight adoption also carries the *first* caller's controls, so this
+  // caller has to apply its own rather than inherit them silently.
+  const pending = sessionResumes.get(acpSessionId);
+  if (pending) {
+    const adopted = await pending;
+    return patch ? resumeExistingSession(adopted, signal, patch) : adopted;
+  }
+  const alreadyLoaded = [...sessions.values()].find((state) => state.acpSessionId === acpSessionId);
+  if (alreadyLoaded) return resumeExistingSession(alreadyLoaded, signal, patch);
+  if (activeSessionReservations() >= MAX_SESSIONS) throw new HttpError(429, "ACP session limit reached");
+  const operation = resumeSessionReserved(acpSessionId, signal, patch);
+  sessionResumes.set(acpSessionId, operation);
+  try {
+    return await operation;
+  } finally {
+    if (sessionResumes.get(acpSessionId) === operation) sessionResumes.delete(acpSessionId);
+  }
+}
+
+async function resumeExistingSession(
+  state: SessionState,
+  signal?: AbortSignal,
+  patch?: AcpComposerPatch,
+): Promise<SessionState> {
+  if (state.status === "running" || state.dispatching) {
+    throw new HttpError(409, "Session is already running");
+  }
+  state.dispatching = true;
+  try {
+    await ensureSessionProcess(state, signal);
+    if (patch) await applyComposerPatch(state, patch, signal);
+    return state;
+  } finally {
+    state.dispatching = false;
+  }
+}
+
+async function resumeSessionReserved(
+  acpSessionId: string,
+  signal?: AbortSignal,
+  patch?: AcpComposerPatch,
+): Promise<SessionState> {
+  const child = new AcpProcess();
+  let state: SessionState | undefined;
+  try {
+    const initialized = await child.initialize(signal);
+    const capabilities = isObject(initialized.agentCapabilities)
+      ? initialized.agentCapabilities
+      : undefined;
+    if (capabilities?.loadSession !== true) {
+      throw new HttpError(410, `${provider} cannot reload persisted ACP sessions`);
+    }
+    state = {
+      id: randomBytes(16).toString("hex"),
+      acpSessionId,
+      status: "idle",
+      messages: [],
+      historyMessageIds: new Map(),
+      child,
+      revision: 0,
+      structured: new Map(),
+      promptJournal: new Map(),
+      approvals: new Map(),
+      outputTruncated: false,
+      uncheckedTranscriptBytes: 0,
+      currentTurnOutput: null,
+      droppedMessages: 0,
+      sessionConfig: emptySessionConfig(),
+      dispatching: true,
+      historyReplay: "hydrate",
+    };
+    attachChild(state, child);
+    sessions.set(state.id, state);
+    const loaded = await child.request("session/load", {
+      cwd: workingDirectory,
+      additionalDirectories: [],
+      mcpServers: [],
+      sessionId: acpSessionId,
+    }, RPC_TIMEOUT_MS, signal);
+    state.historyReplay = false;
+    if (isObject(loaded)) {
+      const sessionConfig = normalizeAcpSessionConfig(provider, {
+        ...loaded,
+        sessionId: acpSessionId,
+      });
+      if (sessionConfig.composer.models.length > 0 || sessionConfig.composer.modes.length > 0) {
+        state.sessionConfig = sessionConfig;
+        rememberCatalog(sessionConfig.composer);
+      }
+    }
+    state.status = "idle";
+    state.error = undefined;
+    if (patch) await applyComposerPatch(state, patch, signal);
+    state.dispatching = false;
+    await persistState();
+    return state;
+  } catch (error) {
+    if (state && sessions.get(state.id) === state) sessions.delete(state.id);
+    if (state) clearApprovals(state);
+    await child.close();
+    await persistState().catch(() => undefined);
+    throw error;
+  }
 }
 
 async function createSession(
@@ -643,6 +891,7 @@ async function createSessionReserved(
       acpSessionId: created.sessionId,
       status: "idle",
       messages: [],
+      historyMessageIds: new Map(),
       child,
       revision: 0,
       structured: new Map(),
@@ -657,6 +906,7 @@ async function createSessionReserved(
       // configuration finishes, so hold the same claim the config and prompt
       // routes take rather than leaving a window where both see it idle.
       dispatching: true,
+      historyReplay: false,
     };
     attachChild(state, child);
     sessions.set(id, state);
@@ -724,12 +974,14 @@ async function ensureSessionProcess(state: SessionState, signal?: AbortSignal): 
       throw new HttpError(410, `${provider} cannot reload persisted ACP sessions`);
     }
     attachChild(state, child);
+    state.historyReplay = state.messages.length === 0 ? "hydrate" : "ignore";
     const loaded = await child.request("session/load", {
       cwd: workingDirectory,
       additionalDirectories: [],
       mcpServers: [],
       sessionId: state.acpSessionId,
     }, RPC_TIMEOUT_MS, signal);
+    state.historyReplay = false;
     if (isObject(loaded)) {
       const sessionConfig = normalizeAcpSessionConfig(provider, {
         ...loaded,
@@ -747,6 +999,7 @@ async function ensureSessionProcess(state: SessionState, signal?: AbortSignal): 
     return child;
   } catch (error) {
     if (state.child === child) state.child = null;
+    state.historyReplay = false;
     await child.close();
     throw error;
   }
@@ -851,15 +1104,65 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     return;
   }
   if (state.outputTruncated) return;
+  // A reconnect replays a transcript the bridge already holds, so every update
+  // that would mutate it has to be dropped — tool calls included. `tool_call`
+  // upserts by id against the *trailing* message only, so a replayed historical
+  // call finds no owner and appends a duplicate to whatever is at the tail.
+  if (state.historyReplay === "ignore" && isTranscriptUpdateKind(kind)) return;
   if (kind === "tool_call" || kind === "tool_call_update") {
     applyToolCallUpdate(state, update, kind === "tool_call");
     return;
   }
-  if (kind !== "agent_message_chunk" && kind !== "agent_thought_chunk") return;
+  if (kind !== "user_message"
+    && kind !== "user_message_chunk"
+    && kind !== "agent_message"
+    && kind !== "agent_message_chunk"
+    && kind !== "agent_thought_chunk") return;
+  // User content is authored by `/session/prompt`, which pushes the
+  // authoritative message before dispatching the turn. An agent that echoes the
+  // prompt back mid-turn would append the same text onto that message a second
+  // time — and for a structured turn the echo carries the appended JSON Schema
+  // instructions too. Only a `session/load` replay, where the bridge has no
+  // record of its own, may introduce user messages.
+  if ((kind === "user_message" || kind === "user_message_chunk")
+    && state.historyReplay !== "hydrate") return;
   const text = contentText(update.content);
   if (!text) return;
-  const message = currentAssistantMessage(state);
+  const role = kind === "user_message" || kind === "user_message_chunk" ? "user" : "assistant";
   const partType = kind === "agent_thought_chunk" ? "thinking" : "text";
+  // A non-chunk update carries a complete message, so it always begins one.
+  // Only chunks continue the message before them.
+  const isChunk = kind === "user_message_chunk"
+    || kind === "agent_message_chunk"
+    || kind === "agent_thought_chunk";
+  const providerMessageId = boundedString(update.messageId, MAX_TOOL_ID_BYTES)?.trim();
+  let message = providerMessageId
+    ? findHistoryMessage(state, providerMessageId)
+    : undefined;
+  const last = state.messages.at(-1);
+  // With no provider message id there is no explicit boundary, so a chunk
+  // continues the message before it regardless of part type: a thought chunk
+  // followed by a text chunk is one assistant turn, not two.
+  if (!message && !providerMessageId && isChunk && last?.role === role && (
+    state.status === "running" || state.historyReplay === "hydrate"
+  )) {
+    message = last;
+  }
+  if (!message) {
+    const modelId = role === "assistant"
+      ? boundedModelId(state.sessionConfig.composer.selectedModelId)
+      : undefined;
+    message = {
+      id: randomBytes(12).toString("hex"),
+      role,
+      content: "",
+      parts: [],
+      createdAt: new Date().toISOString(),
+      ...(modelId ? { modelId } : {}),
+    };
+    state.messages.push(message);
+  }
+  if (providerMessageId) rememberHistoryMessage(state, providerMessageId, message.id);
   const lastPart = message.parts.at(-1);
   // The trim notice is a marker, not a stream. Appending a chunk to it would
   // rewrite the notice into agent output and lose the announcement.
@@ -891,7 +1194,7 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     ? appendSaturating(message, message.content, text, MAX_MESSAGE_TEXT_BYTES)
     : { value: message.content, truncated: false };
   message.content = nextContent.value;
-  if (partType === "text" && state.currentTurnOutput !== null) {
+  if (role === "assistant" && partType === "text" && state.currentTurnOutput !== null) {
     const captured = appendBounded(state.currentTurnOutput, text, MAX_MESSAGE_TEXT_BYTES);
     state.currentTurnOutput = captured.value;
     if (captured.truncated) state.outputTruncated = true;
@@ -910,6 +1213,35 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     return;
   }
   schedulePersist();
+}
+
+/** Every `session/update` kind that appends to or mutates the transcript. */
+const TRANSCRIPT_UPDATE_KINDS = new Set([
+  "user_message",
+  "user_message_chunk",
+  "agent_message",
+  "agent_message_chunk",
+  "agent_thought_chunk",
+  "tool_call",
+  "tool_call_update",
+]);
+
+function isTranscriptUpdateKind(kind: string): boolean {
+  return TRANSCRIPT_UPDATE_KINDS.has(kind);
+}
+
+function findHistoryMessage(state: SessionState, providerMessageId: string): BridgeMessage | undefined {
+  const messageId = state.historyMessageIds.get(providerMessageId);
+  return messageId ? state.messages.find((message) => message.id === messageId) : undefined;
+}
+
+function rememberHistoryMessage(state: SessionState, providerMessageId: string, messageId: string): void {
+  if (!state.historyMessageIds.has(providerMessageId)
+    && state.historyMessageIds.size >= MAX_HISTORY_MESSAGE_IDS) {
+    const oldest = state.historyMessageIds.keys().next().value;
+    if (typeof oldest === "string") state.historyMessageIds.delete(oldest);
+  }
+  state.historyMessageIds.set(providerMessageId, messageId);
 }
 
 function applyToolCallUpdate(
@@ -1067,7 +1399,10 @@ function setOptionalPartField<TKey extends keyof BridgeToolPart>(
 
 function currentAssistantMessage(state: SessionState): BridgeMessage {
   let message = state.messages.at(-1);
-  if (!message || message.role !== "assistant" || state.status !== "running") {
+  // A hydrating replay is idle by definition, so requiring "running" here would
+  // open a fresh, empty assistant message for every tool call in the history.
+  if (!message || message.role !== "assistant"
+    || (state.status !== "running" && state.historyReplay !== "hydrate")) {
     const modelId = boundedModelId(state.sessionConfig.composer.selectedModelId);
     message = {
       id: randomBytes(12).toString("hex"),
@@ -1541,6 +1876,7 @@ function truncateDisplayText(value: string, maximumBytes: number, notice: string
 
 function contentText(value: unknown): string {
   if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(contentText).filter(Boolean).join("");
   if (!isObject(value)) return "";
   return typeof value.text === "string" ? value.text : "";
 }
@@ -1749,6 +2085,23 @@ async function route(
   if (url.pathname === "/global/models" && request.method === "GET") {
     const models = await listNormalizedModels(clientSignal);
     return json(response, 200, { models });
+  }
+  if (url.pathname === "/session/list" && request.method === "GET") {
+    return json(response, 200, { sessions: await listResumableSessions() });
+  }
+  if (url.pathname === "/session/resume" && request.method === "POST") {
+    const body = await readJson(request);
+    const selectedSessionId = typeof body.sessionId === "string" ? body.sessionId.trim() : "";
+    if (!selectedSessionId) return json(response, 400, { error: "sessionId is required" });
+    if (Buffer.byteLength(selectedSessionId) > 1_024) {
+      return json(response, 400, { error: "sessionId is too long" });
+    }
+    const state = await resumeSession(
+      selectedSessionId,
+      clientSignal,
+      parseComposerPatch(body),
+    );
+    return json(response, 201, publicSession(state));
   }
   if (url.pathname === "/session/create" && request.method === "POST") {
     const body = await readJson(request);
@@ -2559,6 +2912,7 @@ async function loadPersistedState(): Promise<void> {
         ? { error: candidate.error.slice(0, 4_000) }
         : {}),
       messages,
+      historyMessageIds: new Map(),
       child: null,
       revision: Number.isSafeInteger(candidate.revision) ? Number(candidate.revision) : 0,
       structured: new Map(Array.isArray(candidate.structured)
@@ -2575,6 +2929,7 @@ async function loadPersistedState(): Promise<void> {
       droppedMessages: 0,
       sessionConfig: restoreSessionConfig(candidate),
       dispatching: false,
+      historyReplay: false,
       ...(usage ? { usage } : {}),
       ...(Number.isSafeInteger(candidate.commandCount) && Number(candidate.commandCount) >= 0
         ? { commandCount: Number(candidate.commandCount) }

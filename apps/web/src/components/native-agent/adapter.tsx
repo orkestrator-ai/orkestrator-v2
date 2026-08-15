@@ -40,7 +40,7 @@ function acpAdapter(
       // Both ACP agents read inline image content blocks; neither takes files.
       attachments: { files: false, images: true },
       queue: false,
-      resume: false,
+      resume: true,
       fork: false,
       slashCommands: false,
       backgroundTasks: false,

@@ -2404,7 +2404,9 @@ describe("ActionBar workflow tabs", () => {
       clientY: 24,
     });
 
-    expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
+    }, { timeout: 10_000 });
     expect(createTabMock).not.toHaveBeenCalled();
 
     // Mobile browsers synthesize a click after the completed pointer gesture.

@@ -76,18 +76,21 @@ const grokConfig = {
   },
 };
 
-function sessionPayload(): JsonObject {
-  if (provider === "grok") return grokConfig as JsonObject;
+function sessionPayload(sessionId = "fake-session"): JsonObject {
+  const config = provider === "grok" ? grokConfig : cursorConfig;
   // An agent that advertises no model option at all. The bridge must then leave
   // the composer with no selection rather than inventing one, and assistant
   // messages must carry no model attribution.
-  if (process.env.FAKE_ACP_NO_MODEL_OPTION === "1") {
-    return {
-      ...cursorConfig,
-      configOptions: cursorConfig.configOptions.filter((option) => option.id !== "model"),
-    } as JsonObject;
-  }
-  return cursorConfig as JsonObject;
+  const withoutModel = provider !== "grok" && process.env.FAKE_ACP_NO_MODEL_OPTION === "1"
+    ? {
+        ...config,
+        configOptions: config.configOptions.filter((option) => option.id !== "model"),
+      }
+    : config;
+  return {
+    ...withoutModel,
+    sessionId,
+  } as JsonObject;
 }
 
 function isObject(value: unknown): value is JsonObject {
@@ -127,6 +130,9 @@ lines.on("line", (line) => {
         // silently reattached to a session they have never heard of.
         agentCapabilities: {
           loadSession: process.env.FAKE_ACP_NO_LOAD_SESSION !== "1",
+          sessionCapabilities: {
+            ...(process.env.FAKE_ACP_NO_LIST_SESSION === "1" ? {} : { list: {} }),
+          },
           ...(process.env.FAKE_ACP_IMAGE_CAPABILITY
             ? { promptCapabilities: { image: process.env.FAKE_ACP_IMAGE_CAPABILITY === "true" } }
             : {}),
@@ -147,6 +153,87 @@ lines.on("line", (line) => {
         params: { sessionId: "fake-session", question: "Continue?" },
       });
     }
+    return;
+  }
+  if (message.method === "session/list" && typeof message.id === "number") {
+    const params = isObject(message.params) ? message.params : {};
+    const cwd = typeof params.cwd === "string" ? params.cwd : process.cwd();
+    const listedCwd = process.env.FAKE_ACP_LIST_MISSING_CWD === "1"
+      ? {}
+      : { cwd: process.env.FAKE_ACP_LIST_WRONG_CWD === "1" ? `${cwd}-other` : cwd };
+    const cursor = typeof params.cursor === "string" ? params.cursor : "";
+    if (process.env.FAKE_ACP_LIST_COUNTER_FILE) {
+      appendFileSync(process.env.FAKE_ACP_LIST_COUNTER_FILE, `${cursor || "<none>"}\n`);
+    }
+    // An agent that keeps handing back a cursor it has already issued must not
+    // spin the bridge forever, so this loops on one repeated page deliberately.
+    if (process.env.FAKE_ACP_LIST_REPEAT_CURSOR === "1") {
+      write({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          sessions: [{
+            sessionId: "looping-session",
+            ...listedCwd,
+            title: "Looping ACP work",
+          }],
+          nextCursor: "same-cursor",
+        },
+      });
+      return;
+    }
+    const pages = Number(process.env.FAKE_ACP_LIST_PAGES ?? "1");
+    if (Number.isSafeInteger(pages) && pages > 1) {
+      const page = cursor ? Number(cursor.replace("page-", "")) : 0;
+      const last = page >= pages - 1;
+      write({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          sessions: [
+            // Repeated on every page: the bridge must return one entry, not one
+            // per page, so cross-page de-duplication is what is under test.
+            {
+              sessionId: "external-session",
+              ...listedCwd,
+              title: "Previous ACP work",
+              updatedAt: "2026-08-13T20:00:00.000Z",
+              _meta: { messageCount: 12 },
+            },
+            {
+              sessionId: `paged-session-${page}`,
+              ...listedCwd,
+              title: `Paged ACP work ${page}`,
+              updatedAt: "2026-08-12T20:00:00.000Z",
+            },
+          ],
+          ...(last ? {} : { nextCursor: `page-${page + 1}` }),
+        },
+      });
+      return;
+    }
+    write({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        sessions: [
+          {
+            sessionId: "fake-session",
+            ...listedCwd,
+            title: "Current ACP work",
+            updatedAt: "2026-08-14T20:00:00.000Z",
+            _meta: { messageCount: 4 },
+          },
+          {
+            sessionId: "external-session",
+            ...listedCwd,
+            title: "Previous ACP work",
+            updatedAt: "2026-08-13T20:00:00.000Z",
+            _meta: { messageCount: 12 },
+          },
+        ],
+      },
+    });
     return;
   }
   if (message.method === "session/set_config_option" && typeof message.id === "number") {
@@ -203,7 +290,90 @@ lines.on("line", (line) => {
       });
       return;
     }
-    write({ jsonrpc: "2.0", id: message.id, result: {} });
+    const params = isObject(message.params) ? message.params : {};
+    const replaySessionId = typeof params.sessionId === "string"
+      ? params.sessionId
+      : "external-session";
+    const replay = (update: JsonObject): void => write({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: { sessionId: replaySessionId, update },
+    });
+    if (process.env.FAKE_ACP_REPLAY_HISTORY === "1") {
+      replay({
+        sessionUpdate: "user_message_chunk",
+        messageId: "history-user-1",
+        content: { type: "text", text: "Earlier question" },
+      });
+      replay({
+        sessionUpdate: "agent_message_chunk",
+        messageId: "history-agent-1",
+        content: { type: "text", text: "Earlier answer" },
+      });
+      replay({
+        sessionUpdate: "agent_message_chunk",
+        messageId: "history-agent-1",
+        content: { type: "text", text: " continued" },
+      });
+      // A replayed tool call has to be suppressed on reconnect exactly like the
+      // replayed text around it, or the transcript grows one copy per restart.
+      replay({
+        sessionUpdate: "tool_call",
+        toolCallId: "history-tool-1",
+        title: "Read earlier file",
+        status: "completed",
+      });
+    }
+    // The same history without provider message ids, which is all the bridge
+    // gets from an agent that does not stamp them. Message boundaries then have
+    // to come from chunk-versus-whole rather than from part type.
+    if (process.env.FAKE_ACP_REPLAY_NO_MESSAGE_IDS === "1") {
+      replay({
+        sessionUpdate: "user_message",
+        // Array-form content: several blocks in one update.
+        content: [{ type: "text", text: "Earlier " }, { type: "text", text: "question" }],
+      });
+      replay({
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "Thinking first" },
+      });
+      replay({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Earlier answer" },
+      });
+      replay({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: " continued" },
+      });
+      // A whole-message update always starts a new turn, so this must not be
+      // folded into the assistant message above.
+      replay({
+        sessionUpdate: "agent_message",
+        content: { type: "text", text: "Second answer" },
+      });
+    }
+    // Enough distinct provider message ids to push the bridge past its own
+    // history-id bound, so eviction runs against a live transcript.
+    const replayCount = Number(process.env.FAKE_ACP_REPLAY_MESSAGE_COUNT ?? "0");
+    if (Number.isSafeInteger(replayCount) && replayCount > 0) {
+      for (let index = 0; index < replayCount; index += 1) {
+        replay({
+          sessionUpdate: "agent_message_chunk",
+          messageId: `bulk-agent-${index}`,
+          content: { type: "text", text: `Bulk ${index}` },
+        });
+      }
+    }
+    const answer = (): void => write({
+      jsonrpc: "2.0",
+      id: message.id as number,
+      result: sessionPayload(typeof params.sessionId === "string" ? params.sessionId : "fake-session"),
+    });
+    // Holds `session/load` open so a second resume for the same ACP session
+    // genuinely races the first rather than finding it already finished.
+    const loadDelayMs = Number(process.env.FAKE_ACP_LOAD_DELAY_MS ?? "0");
+    if (Number.isSafeInteger(loadDelayMs) && loadDelayMs > 0) setTimeout(answer, loadDelayMs);
+    else answer();
     return;
   }
   if (message.method === "session/prompt" && typeof message.params === "object") {
@@ -257,6 +427,26 @@ lines.on("line", (line) => {
         process.env.FAKE_ACP_PROMPT_BLOCKS_FILE,
         `${JSON.stringify(params?.prompt ?? [])}\n`,
       );
+    }
+    // Agents that mirror the user turn back to the client mid-prompt. The
+    // bridge already holds the authoritative copy from `/session/prompt`, so
+    // this must not reach the transcript in any form.
+    if (process.env.FAKE_ACP_ECHO_USER_PROMPT === "1") {
+      for (const update of [
+        {
+          sessionUpdate: "user_message_chunk",
+          messageId: "live-user-1",
+          content: { type: "text", text: prompt },
+        },
+        // The same echo without a message id, and as a whole message.
+        { sessionUpdate: "user_message", content: { type: "text", text: prompt } },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: "fake-session", update },
+        });
+      }
     }
     // An image-only prompt carries no text block, so none of the keyword
     // branches below can match it. Ending the turn is what a real agent does;

@@ -343,6 +343,21 @@ export interface SessionState {
    */
   retainedQueryControls?: Set<ClaudeQueryControl>;
   /**
+   * Tasks the level signal dropped before their terminal edge explained why.
+   *
+   * `background_tasks_changed` is documented as arriving *before*
+   * `task_notification` for the same transition, so the moment a task stops
+   * running it leaves the live set with no outcome attached. Parking the
+   * snapshot here keeps liveness honest — the task is gone from
+   * {@link backgroundTasks}, so no stale running indicator can wedge — while
+   * still letting the edge settle it with its original description and start
+   * time instead of a fabricated one.
+   */
+  settlingBackgroundTasks?: Map<
+    string,
+    { task: BackgroundTaskSnapshot; owner: ClaudeQueryControl }
+  >;
+  /**
    * Generation of the most recently started turn.
    *
    * A released turn can be superseded by a follow-up while its provider process

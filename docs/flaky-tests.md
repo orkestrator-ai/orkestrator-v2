@@ -120,7 +120,8 @@ history rather than two partial ones.
 
 ## `MobileAppShellLayout > opens the project drawer on initial mobile entry and keeps workspace content mounted` (`apps/web/src/components/layout/MobileAppShellLayout.test.tsx`)
 
-- **Status:** resolved
+- **Status:** open — recurred on 2026-08-14 after the split below, on the
+  close-button half rather than the initial-open half.
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-fix-c4cb555c-full-tests.log`
 - **Worker configuration:** The web workspace package ran `bun test src --parallel=2` while the other workspace, root, bridge, and protocol-lockfile groups ran concurrently.
@@ -137,6 +138,33 @@ history rather than two partial ones.
 - **Isolated rerun:** `set -o pipefail; bun test --cwd apps/web ./src/components/layout/MobileAppShellLayout.test.tsx --parallel 2>&1 | tee /tmp/orkestrator-mobile-app-shell-layout-isolated.log` -> 24 passed, 0 failed, 111 assertions in 8.21 seconds; both affected cases passed.
 - **Verification:** `set -o pipefail; bun run --cwd apps/web test 2>&1 | tee /tmp/orkestrator-web-full-coverage-fix.log` -> 4,846 passed, 1 skipped, 0 failed across 4,847 tests in 24.07 seconds.
 - **Hypothesis:** The two affected cases each await Radix drawer close and focus restoration under the five-second default budget. Their 4.14-second and 3.00-second isolated durations, combined with the aggregate-only failure and a green subsequent aggregate, point to worker scheduling contention rather than a deterministic drawer behavior failure.
+- **Recurrence (2026-08-14, initial-prompt image preview change):** `closes the
+  initial project drawer from its close button and restores trigger focus` — one
+  of the two cases the split above produced — timed out after 5,398.71 ms with no
+  assertion failure during `bun test src --parallel` in `apps/web` (4,845 passed,
+  1 skipped, 2 failed across 211 files in 214.19 s; the other failure is the
+  separate context-wheel entry below). The first isolated rerun of the owning
+  file also timed out at 5,000 ms, but three consecutive reruns after it passed
+  24/0 (~5.4-12.3 s each), and the file passed 24/0 on a stashed clean tree.
+  Unrelated to the change under test, which touches no layout, drawer, or focus
+  code. The split reduced the frequency but did not remove the cause: the
+  close-and-restore-focus transition still spends most of a 5,000 ms budget on
+  Radix focus scheduling, so aggregate contention alone can exhaust it. Raising
+  or removing that single budget is the next thing to evaluate.
+
+## `MobileAppShellLayout` drawer focus-restoration timeouts (`apps/web/src/components/layout/MobileAppShellLayout.test.tsx`)
+
+- **Status:** open
+- **Date observed:** 2026-08-14
+- **Affected tests:** `closes the project drawer from its backdrop and restores trigger focus` (5,811.44 ms in the first run, 6,830.57 ms in the second) and `closes the initial project drawer from its close button and restores trigger focus` (16,456.55 ms, second run only).
+- **Original command:** `set -o pipefail; bun test --cwd apps/web --parallel 2>&1 | tee /tmp/ork-web-tests.log`, and again into `/tmp/ork-web-tests2.log`.
+- **Worker configuration:** the web workspace package ran alone with `--parallel` (18 workers on this machine); no other test group ran concurrently.
+- **Failure:** both cases exceeded Bun's 5,000 ms outer budget and reported `this test timed out after 5000ms`. No assertion mismatch was reported in either run.
+- **Suite counts:** first run 4,835 passed, 1 skipped, 4 failed across 211 files (the other three were two `ActionBar` cases updated by the review-picker change in the same commit and a separate deterministic `AgentNativeTab` failure). Second run 4,836 passed, 1 skipped, 3 failed across 211 files in 268.51 seconds.
+- **Isolated rerun:** `set -o pipefail; bun test --cwd apps/web src/components/layout/MobileAppShellLayout.test.tsx --parallel 2>&1 | tee /tmp/ork-mobile-shell.log` -> 24 passed, 0 failed in 9.17 seconds.
+- **Recurrence 2026-08-15:** `closes the initial project drawer from its close button and restores trigger focus` timed out again at 13,029.58 ms during `set -o pipefail; bun test --cwd apps/web --parallel` (4,845 passed, 1 skipped, 2 failed across 211 files in 193.84 seconds; the other failure was the same unrelated deterministic `AgentNativeTab` case). The backdrop case passed in that run. Isolated rerun of the owning file passed 24/0 in 4.23 seconds. Unrelated test processes from another session were competing for CPU during the aggregate run, which is consistent with the mount-cost hypothesis below.
+- **Relationship to the entry above:** these are the two cases produced by that entry's split. The split gave each focus transition its own budget, and the initial-open case has not recurred, but the two close-and-restore transitions still time out under a fully parallel web-package run.
+- **Hypothesis:** each case still mounts the whole mobile shell before it exercises one Radix focus restoration, so the fixed five-second budget is mostly setup. The dismissal assertions themselves hold in isolation, which points at the shared mount cost under 18-way parallelism rather than at the focus behaviour. A lighter mount, or an explicit per-test budget, should be evaluated before the drawer's focus handling is changed.
 
 ## `MultiReviewService > keeps a provider alive while a transcript read overlaps fix execution` (`apps/backend/src/core/multi-review-service.test.ts`)
 
@@ -295,6 +323,7 @@ history rather than two partial ones.
   2. `starts when the caller's environment already sets NODE_ENV` (5,001.07 ms): `this test timed out after 5000ms`, plus an unhandled `error: Packaged backend did not become ready:` (empty stderr payload) from `startPackagedBackend` at `cli.test.ts:145:15`, called from `cli.test.ts:274:45`.
 - **Suite counts:** CLI package 6 passed, 2 failed, 1 error; Turbo reported `Tasks: 5 successful, 7 total` with `Failed: orkestrator#test:workspace`. Concurrent groups were green: root 3,903 passed / 1 skipped / 0 failed; bridges 2,372 passed / 11 skipped / 0 failed; codex protocol lockfile passed. Turbo aborted the workspace group on this failure, so the web, desktop, and web-public workspace tasks did not execute in that run and iOS never started.
 - **Isolated rerun:** `bun run --cwd packages/cli test` (builds, then `bun test tests --parallel`) -> 8 passed, 0 failed, 27 assertions in 2.17 seconds. Both affected cases passed.
+- **Recurrence (attachment-only startup fix, 2026-08-15):** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-image-only-full-tests.log` failed `starts and gracefully stops the packaged backend` after 5,001.45 ms while the workspace group competed with the root, bridge, and protocol groups. Readiness never arrived before the outer budget, cleanup killed one dangling process, and `startPackagedBackend` subsequently reported an empty-stderr readiness failure between tests. The CLI package reported 7 passed and 1 failed before Turbo aborted the backend task with exit 130; root passed 3,656 with 1 skipped, bridges passed 2,425 with 11 skipped, and the protocol lockfile passed. The immediate isolated rerun, `bun test --cwd packages/cli tests/cli.test.ts`, passed all 8 tests with 27 assertions in 6.79 seconds; the affected case completed in 3,560.81 ms. Evidence: `/tmp/orkestrator-image-only-full-tests.log` and `/tmp/orkestrator-cli-packaged-backend-isolated.log`.
 - **Hypothesis:** No root cause is established from one occurrence. Both cases spawn the real packaged backend and wait on a fixed wall-clock budget — readiness in one, graceful exit in the other — while three other test groups saturate the machine. Neither failure mode involves a missing artifact, which is what separates this from the resolved entry above. A recurrence should capture backend startup and shutdown timings before the budgets are changed, since raising them would also hide a genuine shutdown regression.
 - **Collateral note:** Because a workspace-group failure aborts the remaining Turbo tasks, this flake silently drops web/desktop/web-public coverage from an aggregate run. Treat a workspace-group failure as "the rest of that group did not run", not as "the rest of that group passed".
 
@@ -324,7 +353,7 @@ history rather than two partial ones.
 - **Fix:** Capture every matching 60-second callback, let the startup check settle, and execute each simulated poll in asynchronous `act()` through the following macrotask before asserting the rendered capability state.
 - **Verification:** `bun test --cwd apps/web ./src/App.test.tsx --test-name-pattern "polls every 60 seconds and disables then re-enables container functionality" --rerun-each 20` -> 20 passed, 0 failed; individual runs completed in 9.45-27.46 ms. `bun test --cwd apps/web --parallel` then passed 5,467 tests with 1 skipped and 0 failed across 221 files in 16.98 seconds.
 
-## `standalone backend service > can own a Tailscale Serve listener and publish its HTTPS URL` (`apps/backend/tests/standalone.test.ts`)
+## `standalone backend service` Tailscale Serve lifecycle tests (`apps/backend/tests/standalone.test.ts`)
 
 - **Status:** open
 - **Date observed:** 2026-08-07
@@ -336,7 +365,8 @@ history rather than two partial ones.
 - **Recurrence (2026-08-14):** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-picker-fixes-full-tests.log` ran the backend workspace as `bun test src tests --parallel` alongside the web, root, bridge, and protocol-lockfile groups. The target completed its startup assertions but the final graceful-shutdown assertion expected exit code `0` and received signal-derived exit code `143` (duration: 4,834.76 ms).
 - **Recurrence suite counts:** Backend package: 1,684 total, 1,682 passed, 2 failed across 55 files; the other failure was the separate MultiReview flake below. Root/agent-support and the protocol lockfile passed; the bridge group had one separate aggregate-only failure.
 - **Recurrence isolated rerun:** `bun test ./tests/standalone.test.ts --parallel` from `apps/backend` -> 8 passed, 0 failed in 10.82 seconds; the target passed in 2,304.52 ms. Evidence: `/tmp/orkestrator-picker-fixes-isolated-backend-standalone-cwd.log`.
-- **Hypothesis:** The new signature is not the previously fixed outer-budget timeout: startup completed and the child received `SIGTERM`, but under aggregate load it exited with the raw signal code before the test observed the expected graceful zero exit. The available run does not establish whether shutdown-handler installation, signal delivery, or process teardown ordering caused that race.
+- **Recurrence (attachment-only startup fix, 2026-08-15):** `set -o pipefail; bun run --cwd apps/backend test:workspace 2>&1 | tee /tmp/orkestrator-image-only-backend-suite.log` ran with Bun's two-worker parallel pool and timed out two subprocess lifecycle cases at the five-second outer budget. `exits without a leftover listener when environment-managed Serve setup fails` timed out after 5,009.91 ms, and `rejects Tailscale Serve with a non-IPv4-loopback listener` timed out after 5,013.07 ms. Both produced empty stderr instead of their expected startup errors, and Bun killed one dangling process. The package reported 1,706 passed, 2 failed, and 1 between-test error across 55 files. The immediate isolated rerun, `bun test tests/standalone.test.ts` from `apps/backend`, passed all 8 tests with 36 assertions in 26.78 seconds; the affected cases completed in 2,895.66 ms and 2,473.60 ms. Evidence: `/tmp/orkestrator-image-only-backend-suite.log` and `/tmp/orkestrator-image-only-backend-standalone-isolated.log`.
+- **Hypothesis:** The recurrences consistently involve real backend subprocess startup or shutdown under aggregate load. One run reached shutdown but observed raw signal exit code 143; the latest run exhausted the five-second outer budgets before the expected startup errors became available. The evidence does not yet establish whether process launch latency, shutdown-handler installation, signal delivery, or teardown ordering is the common cause.
 - **Previous root cause:** The original occurrence exhausted the five-second test budget while performing two complete backend lifecycles.
 - **Previous fix:** Give the two-lifecycle integration test a 20-second budget while preserving the startup helper's narrower deadline and all functional assertions.
 - **Previous verification:** After building the standalone backend, `bun test tests/standalone.test.ts --test-name-pattern 'can own a Tailscale Serve listener' --rerun-each 10` from `apps/backend` -> 10 passed, 0 failed; individual runs completed in 2,037.57-2,896.36 ms.
@@ -845,7 +875,8 @@ Post-fix stress verification:
 - **Failure:** Testing Library could not find an accessible `dialog` named `Configure code review` at `ActionBar.test.tsx:2474` (duration: 628.67 ms).
 - **Suite counts:** Web package: 4,808 total, 4,806 passed, 1 skipped, 1 failed across 210 files.
 - **Isolated rerun:** `bun test --cwd apps/web ./src/components/layout/ActionBar.test.tsx --parallel` -> 145 passed, 0 failed, 558 assertions in 15.95 seconds; the target passed in 587.91 ms.
-- **Hypothesis:** The aggregate-only result shows the expected long-press dialog was absent when queried, while the full owning file recreates it in isolation. No narrower trigger is established; a recurrence should capture the long-press timer, pointer events, and unmount/remount state before changing the product behavior or assertion.
+- **Recurrence (attachment-only startup review, 2026-08-15):** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-review-dfc3ad3f-full-tests.log` reproduced the identical signature — no accessible `dialog` named `Configure code review` at `ActionBar.test.tsx:2474` (duration: 608.50 ms) — with the web workspace package running alongside the root, bridge, and protocol-lockfile groups. Web package: 4,851 total, 4,849 passed, 1 skipped, 1 failed across 211 files; every other group passed and Turbo reported `11 successful, 12 total`. The immediate isolated rerun, `bun test --cwd apps/web ./src/components/layout/ActionBar.test.tsx`, passed 145/0 with 558 assertions in 12.79 seconds. Evidence: `/tmp/orkestrator-review-dfc3ad3f-full-tests.log` and `/tmp/orkestrator-review-dfc3ad3f-actionbar-isolated.log`.
+- **Hypothesis:** The aggregate-only result shows the expected long-press dialog was absent when queried, while the full owning file recreates it in isolation. Two occurrences now share the same line and a sub-second duration, so the long press is firing but the dialog has not mounted by the time the query runs — consistent with scheduling contention rather than a product failure. No narrower trigger is established; a further recurrence should capture the long-press timer, pointer events, and unmount/remount state before changing the product behavior or assertion.
 
 ## `ActionBar workflow tabs > opens the review modal after a mobile long press without launching the default review` (`apps/web/src/components/layout/ActionBar.test.tsx`)
 
@@ -871,6 +902,30 @@ Post-fix stress verification:
 - **Suite counts:** Bridges: 2,383 total, 2,371 passed, 11 skipped, 1 failed across 67 files.
 - **Isolated rerun:** `bun test ./bridges/codex-bridge/src/messages/coalescer.test.ts --parallel` -> 9 passed, 0 failed, 23 assertions in 268 ms; the target passed in 78.26 ms.
 - **Hypothesis:** The test coordinates multiple real elapsed-time intervals and observed one additional publish only under aggregate scheduling. A deterministic scheduler or callback boundary should be evaluated if it recurs; the available evidence does not establish a production coalescing defect.
+
+## `MobileAppShellLayout > closes the initial project drawer from its close button and restores trigger focus` (`apps/web/src/components/layout/MobileAppShellLayout.test.tsx`)
+
+- **Status:** open
+- **Date observed:** 2026-08-15
+- **Original command:** `bun test --cwd apps/web src --parallel 2>&1 | tee /tmp/ork-review-web-suite.log`
+- **Worker configuration:** The web package ran `bun test src --parallel` (18 workers) while two suites owned by other sessions ran concurrently in the same checkout: another full `bun test --cwd apps/web --parallel` and a root `bun test ./tests ... --parallel=4` observed at roughly 348% CPU.
+- **Failure:** `this test timed out after 5000ms` (duration: 6,623.04 ms). No assertion failure was reported.
+- **Suite counts:** Web package: 4,865 total, 4,862 passed, 1 skipped, 2 failed across 213 files with 15,071 assertions in 174.66 seconds. The other failure in that run, `AgentNativeTab > capability-driven parity > does not render a context wheel when the provider reports no maximum`, is not a flake and is deliberately not recorded here: it reproduces in isolation and is a real `expect(received).toBeNull()` failure present at commit `989f6c9d` but absent on `origin/main` at `f5961ebc`, so it is a branch-is-behind-main gap rather than nondeterminism.
+- **Isolated rerun:** `bun test --cwd apps/web src/components/layout/MobileAppShellLayout.test.tsx` -> 24 passed, 0 failed; the affected case passed. A later full-suite run of the same tree also passed this case.
+- **Pre-existing:** Unrelated to the reviewed PR-dialog change, which touches no drawer or sidebar code.
+- **Hypothesis:** This case is the close-and-restore half of the split described in the resolved `MobileAppShellLayout > opens the project drawer on initial mobile entry and keeps workspace content mounted` entry above. That split gave each focus transition its own budget, and it held until three parallel suites shared one machine. The recurrence therefore looks like the same asynchronous Radix focus-restore boundary exceeding a 5,000 ms wall-clock budget under extreme contention rather than a return of the original shared-budget cause. Before raising the timeout, establish whether the restore awaits more than one animation frame.
+
+## `QueuedPromptsDialog > moves entries within bounds and removes by id` (`apps/web/src/components/chat/QueuedPromptsDialog.test.tsx`)
+
+- **Status:** open
+- **Date observed:** 2026-08-15
+- **Original command:** `bun test --cwd apps/web src --parallel 2>&1 | tee /tmp/ork-fix-web-suite-final.log`
+- **Worker configuration:** The web package ran `bun test src --parallel` (18 workers) while suites owned by other sessions ran concurrently in the same checkout.
+- **Failure:** Reported as `(fail)` at 1,034.74 ms. Bun's buffered output for this run interleaved another file's `act(...)` warnings immediately after the failure line, so no matcher message was retained.
+- **Suite counts:** Web package: 4,873 total, 4,870 passed, 1 skipped, 2 failed across 213 files in 132.19 seconds. The other failure is the deterministic `AgentNativeTab` case described in the entry above, which is not a flake.
+- **Isolated rerun:** `bun test --cwd apps/web src/components/chat/QueuedPromptsDialog.test.tsx` -> 12 passed, 0 failed.
+- **Pre-existing:** Unrelated to the reviewed PR-dialog change, which touches no prompt-queue code. The same file passed in the immediately preceding full run of the same tree.
+- **Hypothesis:** No matcher message survived, so no cause is established. A recurrence should be captured with the owning file run alone under `--parallel` so the failure message is not interleaved, before any assertion is weakened.
 
 ## `Files panel components > FilesPanel confirms actions and keeps failed actions open for retry` (`tests/unit/components/FilesPanel.test.tsx`)
 
@@ -917,3 +972,14 @@ Post-fix stress verification:
 - **Suite counts:** Root and agent-support group: 3,657 total, 3,655 passed, 1 skipped, 1 failed across 145 files.
 - **Isolated rerun:** `set -o pipefail; bun test ./tests/unit/electron/commands.test.ts` -> 398 passed, 1 skipped, 0 failed, 2,385 assertions in 89.34 seconds; the target passed.
 - **Hypothesis:** The case drives fake `gh` and `docker` child processes and polls for the start to settle on a wall-clock budget, so it is contention-sensitive in the same way as the tmux clusters above. Observed while the only source change was in `bridges/acp-bridge`, which this test never loads. A recurrence should capture whether the admitted-start latch or only the poll budget was late before changing the command's behavior.
+
+## `rate_limit_event > times out a non-settling structured request without blocking turn completion` (`bridges/claude-bridge/src/services/session-manager.test.ts:11606`)
+
+- **Status:** open
+- **Date observed:** 2026-08-15
+- **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-fixes2-full-tests.log`
+- **Worker configuration:** The bridge group ran `bun test bridges --parallel` alongside the workspace, root, and protocol-lockfile groups, while two unrelated agent sessions ran their own suites against the same clone. System load average was above 10 for the whole run.
+- **Failure:** `expect(received).toBeGreaterThanOrEqual(expected)` at `session-manager.test.ts:11617` — expected `>= 950`, received `945` (duration: 1,002.35 ms). The turn itself behaved correctly: `StructuredUsageRequestTimeoutError: Structured usage control request timed out after 1000ms` was raised as designed and the session still settled to `idle`.
+- **Suite counts:** Bridge group: 2,470 total, 2,458 passed, 11 skipped, 1 failed across 70 files in 37.80 seconds.
+- **Isolated rerun:** `set -o pipefail; bun test bridges/claude-bridge/src/services/session-manager.test.ts` -> 397 passed, 0 failed in 9.18 seconds; the target passed. Evidence: `/tmp/ork-verify-session-manager.log.gz`.
+- **Hypothesis:** Not the usual contention-makes-it-slower shape — the measurement came in 5 ms *under* the floor, so the failure is that a nominally 1,000 ms timer completed in 945 ms of `Date.now()` wall time. `startedAt` is captured before `runPromptWithMessages`, so the elapsed span strictly contains the timer and should never be shorter than it. That points at wall-clock versus timer-clock divergence (Bun schedules the timeout on a monotonic clock while the assertion measures `Date.now()`), which a loaded machine or an NTP slew can widen past the assertion's 50 ms lower tolerance. A recurrence should record whether the shortfall grows with load before the tolerance is widened; measuring the span with a monotonic source such as `performance.now()` would remove the coupling without weakening the upper bound.

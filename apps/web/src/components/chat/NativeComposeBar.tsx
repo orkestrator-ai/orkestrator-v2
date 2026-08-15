@@ -44,6 +44,7 @@ export interface NativeComposeBarProps {
   menus?: ReactNode;
   primaryControls: ReactNode;
   contextUsage?: ContextUsageSnapshot | null;
+  showContextUsage?: boolean;
   queue?: NativeComposeQueueState;
   onStop?: () => void | Promise<void>;
   showAddressAll?: boolean;
@@ -80,6 +81,7 @@ export function NativeComposeBar({
   menus,
   primaryControls,
   contextUsage,
+  showContextUsage = true,
   queue,
   onStop,
   showAddressAll = false,
@@ -210,7 +212,7 @@ export function NativeComposeBar({
               </Button>
             ) : null}
 
-            {contextUsage != null ? (
+            {showContextUsage && contextUsage != null ? (
               <ContextUsageWheel usage={contextUsage} className="ml-1" />
             ) : null}
 

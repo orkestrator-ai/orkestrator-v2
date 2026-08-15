@@ -4869,6 +4869,168 @@ describe("HTTP build pipeline provider (codex)", () => {
     ]);
   });
 
+  test("does not hold a Codex transcript behind expired runtime inventory", async () => {
+    let message = "old transcript";
+    let runtimeReads = 0;
+    let releaseRuntime!: () => void;
+    const runtimeGate = new Promise<void>((resolve) => { releaseRuntime = resolve; });
+    const { provider } = httpProvider(async (url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [message] });
+      if (url.endsWith("/config")) {
+        return Response.json({ mode: "build", fastMode: false, durable: true });
+      }
+      if (url.endsWith("/runtime-health")) {
+        runtimeReads += 1;
+        if (runtimeReads > 1) await runtimeGate;
+        return Response.json({
+          engine: { state: runtimeReads > 1 ? "refreshed" : "ready" },
+          mcp: { data: [] },
+          skills: { data: [] },
+          hooks: { data: [] },
+          notices: [],
+        });
+      }
+      return Response.json({ status: "idle", phase: "idle", messageRevision: 1 });
+    }, codexConnection);
+
+    const first = await provider.interactiveSnapshot?.("codex-1");
+    expect(first?.runtime?.state).toBe("ready");
+    const metadata = (provider as unknown as {
+      interactiveMetadata: Map<string, { expiresAt: number }>;
+    }).interactiveMetadata.get("codex-1");
+    expect(metadata).toBeDefined();
+    metadata!.expiresAt = 0;
+    message = "latest transcript";
+
+    const second = await Promise.race([
+      provider.interactiveSnapshot!("codex-1"),
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(() => reject(new Error("Transcript waited for runtime inventory")), 100);
+      }),
+    ]);
+    expect(second.messages).toEqual(["latest transcript"]);
+    expect(second.runtime?.state).toBe("ready");
+    expect(runtimeReads).toBe(2);
+
+    releaseRuntime();
+    const refreshes = (provider as unknown as {
+      codexRuntimeMetadataRefreshes: Map<string, Promise<void>>;
+    }).codexRuntimeMetadataRefreshes;
+    await waitUntil(() => refreshes.size === 0);
+
+    const third = await provider.interactiveSnapshot?.("codex-1");
+    expect(third?.runtime?.state).toBe("refreshed");
+    expect(runtimeReads).toBe(2);
+  });
+
+  test("retains Codex runtime metadata after a malformed background response", async () => {
+    let runtimeReads = 0;
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      if (url.endsWith("/config")) {
+        return Response.json({ mode: "build", fastMode: false, durable: true });
+      }
+      if (url.endsWith("/runtime-health")) {
+        runtimeReads += 1;
+        if (runtimeReads === 2) return Response.json(null);
+        return Response.json({
+          engine: { state: runtimeReads === 1 ? "ready" : "recovered" },
+          mcp: { data: [] },
+          skills: { data: [] },
+          hooks: { data: [] },
+          notices: [],
+        });
+      }
+      return Response.json({ status: "idle", phase: "idle", messageRevision: 1 });
+    }, codexConnection);
+
+    const first = await provider.interactiveSnapshot?.("codex-1");
+    expect(first?.runtime?.state).toBe("ready");
+    const internals = provider as unknown as {
+      interactiveMetadata: Map<string, {
+        expiresAt: number;
+        runtime?: { state?: string };
+      }>;
+      codexRuntimeMetadataRefreshes: Map<string, Promise<void>>;
+    };
+    const retained = internals.interactiveMetadata.get("codex-1");
+    expect(retained).toBeDefined();
+    retained!.expiresAt = 0;
+
+    const stale = await provider.interactiveSnapshot?.("codex-1");
+    expect(stale?.runtime?.state).toBe("ready");
+    await waitUntil(() => internals.codexRuntimeMetadataRefreshes.size === 0);
+    expect(internals.interactiveMetadata.get("codex-1")).toBe(retained);
+    expect(retained!.runtime?.state).toBe("ready");
+    expect(retained!.expiresAt).toBeGreaterThan(Date.now());
+
+    retained!.expiresAt = 0;
+    const retrying = await provider.interactiveSnapshot?.("codex-1");
+    expect(retrying?.runtime?.state).toBe("ready");
+    await waitUntil(() => internals.codexRuntimeMetadataRefreshes.size === 0);
+    const recovered = await provider.interactiveSnapshot?.("codex-1");
+    expect(recovered?.runtime?.state).toBe("recovered");
+    expect(runtimeReads).toBe(3);
+  });
+
+  test("drops a background Codex runtime refresh an explicit catalog refresh superseded", async () => {
+    let runtimeReads = 0;
+    let releaseRuntime!: () => void;
+    const runtimeGate = new Promise<void>((resolve) => { releaseRuntime = resolve; });
+    const { provider } = httpProvider(async (url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      if (url.endsWith("/config")) {
+        return Response.json({ mode: "build", fastMode: false, durable: true });
+      }
+      if (url.endsWith("/runtime-health")) {
+        runtimeReads += 1;
+        if (runtimeReads === 2) await runtimeGate;
+        return Response.json({
+          engine: {
+            state: runtimeReads === 1
+              ? "ready"
+              : runtimeReads === 2 ? "superseded" : "rediscovered",
+          },
+          mcp: { data: [] },
+          skills: { data: [] },
+          hooks: { data: [] },
+          notices: [],
+        });
+      }
+      return Response.json({ status: "idle", phase: "idle", messageRevision: 1 });
+    }, codexConnection);
+
+    const first = await provider.interactiveSnapshot?.("codex-1");
+    expect(first?.runtime?.state).toBe("ready");
+    const internals = provider as unknown as {
+      interactiveMetadata: Map<string, {
+        expiresAt: number;
+        runtime?: { state?: string };
+      }>;
+      codexRuntimeMetadataRefreshes: Map<string, Promise<void>>;
+    };
+    internals.interactiveMetadata.get("codex-1")!.expiresAt = 0;
+
+    // Parks the background refresh on the gate, so it is still in flight when
+    // the user asks for an explicit re-discovery.
+    const stale = await provider.interactiveSnapshot?.("codex-1");
+    expect(stale?.runtime?.state).toBe("ready");
+    expect(runtimeReads).toBe(2);
+
+    provider.refreshCatalog?.();
+    expect(internals.interactiveMetadata.size).toBe(0);
+
+    releaseRuntime();
+    await waitUntil(() => internals.codexRuntimeMetadataRefreshes.size === 0);
+    // The superseded read describes the inventory the refresh just dropped, so
+    // it must not repopulate the map the picker is waiting to re-read.
+    expect(internals.interactiveMetadata.has("codex-1")).toBe(false);
+
+    const rediscovered = await provider.interactiveSnapshot?.("codex-1");
+    expect(rediscovered?.runtime?.state).toBe("rediscovered");
+    expect(runtimeReads).toBe(3);
+  });
+
   test("sends codex attachments as data URLs without claude-only options", async () => {
     const { provider, requests } = httpProvider(
       () => new Response(null, { status: 204 }),
@@ -5502,6 +5664,36 @@ describe("HTTP build pipeline provider (ACP)", () => {
     }]);
   });
 
+  test("gives Cursor and Grok session creation enough time for initialize plus session/new", async () => {
+    const timeouts: number[] = [];
+    const originalTimeout = AbortSignal.timeout.bind(AbortSignal);
+    AbortSignal.timeout = ((ms: number) => {
+      timeouts.push(ms);
+      return originalTimeout(ms);
+    }) as typeof AbortSignal.timeout;
+    try {
+      for (const agent of ["cursor", "grok"] as const) {
+        timeouts.length = 0;
+        const { provider } = httpProvider(
+          () => Response.json({ sessionId: `${agent}-1` }, { status: 201 }),
+          { agent, baseUrl: `http://${agent}.test`, authToken: `${agent}-token` },
+        );
+        await provider.createSession("build", `${agent} session`);
+        expect(timeouts).toEqual([75_000]);
+      }
+
+      timeouts.length = 0;
+      const { provider } = httpProvider(
+        () => Response.json({ sessionId: "claude-1" }, { status: 201 }),
+        { agent: "claude", baseUrl: "http://claude.test", authToken: "claude-token" },
+      );
+      await provider.createSession("build", "Claude session");
+      expect(timeouts).toEqual([30_000]);
+    } finally {
+      AbortSignal.timeout = originalTimeout;
+    }
+  });
+
   test("surfaces the bounded ACP session-creation error detail", async () => {
     const { provider } = httpProvider(
       () => Response.json(
@@ -5925,6 +6117,44 @@ describe("OpenCode build pipeline provider dispatch", () => {
           },
         ],
       });
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("keeps the file part when an attachment-only prompt has no text", async () => {
+    // Reachable since the startup launch began dispatching image-only prompts.
+    // The generated SDK type allows an empty `text`, and the file part is what
+    // actually carries the turn; pinned here so a change to either is visible.
+    const fake = openCodeFake();
+    const provider = createBuildPipelineProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "test-token",
+        directory: "/workspace",
+      },
+      { openCodeClient: fake.client, monitorRetryMs: 1 },
+    );
+    try {
+      await provider.send("owned-session", "", {
+        requestId: "request-image-only",
+        attachments: [{
+          type: "image",
+          path: "/workspace/only.png",
+          filename: "only.png",
+        }],
+      });
+
+      expect(fake.promptCalls[0]?.parts).toEqual([
+        { type: "text", text: "" },
+        {
+          type: "file",
+          mime: "image/png",
+          filename: "only.png",
+          url: "file:///workspace/only.png",
+        },
+      ]);
     } finally {
       await provider.dispose?.();
     }

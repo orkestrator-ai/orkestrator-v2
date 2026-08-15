@@ -24,6 +24,11 @@ export interface ToolDiffMetadata {
 export interface NormalizedPart {
   type: "text" | "thinking" | "tool-invocation" | "tool-result" | "file" | "subagent";
   content: string;
+  /**
+   * Original attachment name, when `content` holds a staged path whose basename
+   * is not what the user picked. The renderer titles the row with this.
+   */
+  filename?: string;
   fileUrl?: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;

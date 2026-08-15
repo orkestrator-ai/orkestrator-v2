@@ -634,6 +634,14 @@ export type ProviderDependencies = {
 };
 
 const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 30_000;
+/**
+ * Cursor and Grok session create runs `initialize` then `session/new` in one
+ * HTTP request. Each RPC is allowed 30s on the bridge, so a 30s fetch timeout
+ * fires while the agent is still coming up — the tab flashes Connection Failed
+ * and then attaches about a second later when the next refresh finds the
+ * session. Cover both RPCs plus a small margin.
+ */
+const ACP_SESSION_START_TIMEOUT_MS = 75_000;
 const DEFAULT_MONITOR_RETRY_MS = 1_000;
 
 const DEFAULT_SESSION_REGISTRATION: ProviderSessionRegistration = Object.freeze({
@@ -656,6 +664,7 @@ const MCP_FORM_CONTENT_QUESTION_ID = "mcp-form-content";
 const MAX_RENDERED_FILE_CHANGES = 48;
 const MAX_RENDERED_FILE_CHANGE_TEXT_LENGTH = 256;
 const INTERACTIVE_RUNTIME_METADATA_TTL_MS = 30_000;
+const INTERACTIVE_RUNTIME_METADATA_RETRY_MS = 5_000;
 const OPENCODE_COMMAND_NAME_TTL_MS = 30_000;
 
 function setBoundedMapEntry<K, V>(
@@ -1384,18 +1393,32 @@ function authHeaders(connection: BridgeConnection): Headers {
   return headers;
 }
 
+function bridgeRequestTimeoutMs(
+  connection: BridgeConnection,
+  kind: "default" | "session-start" = "default",
+): number {
+  if (connection.requestTimeoutMs !== undefined) {
+    return Math.max(1, connection.requestTimeoutMs);
+  }
+  if (
+    kind === "session-start"
+    && (connection.agent === "cursor" || connection.agent === "grok")
+  ) {
+    return ACP_SESSION_START_TIMEOUT_MS;
+  }
+  return DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS;
+}
+
 async function bridgeFetch(
   connection: BridgeConnection,
   path: string,
   init: RequestInit = {},
   fetchImpl: typeof fetch = fetch,
+  timeoutKind: "default" | "session-start" = "default",
 ): Promise<Response> {
   const headers = authHeaders(connection);
   new Headers(init.headers).forEach((value, key) => headers.set(key, value));
-  const timeoutMs = Math.max(
-    1,
-    connection.requestTimeoutMs ?? DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS,
-  );
+  const timeoutMs = bridgeRequestTimeoutMs(connection, timeoutKind);
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const signal = init.signal
     ? AbortSignal.any([init.signal, timeoutSignal])
@@ -1523,6 +1546,9 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     executionProfiles?: NativeAgentComposerState["executionProfiles"];
     runtime?: NativeAgentRuntimeSummary;
   }>();
+  /** Runtime inventory is optional UI metadata and must not delay transcripts. */
+  private readonly codexRuntimeMetadataRefreshes = new Map<string, Promise<void>>();
+  private codexRuntimeMetadataGeneration = 0;
 
   constructor(
     private readonly connection: BridgeConnection,
@@ -1577,6 +1603,7 @@ class HttpBridgeProvider implements BuildPipelineProvider {
             : { title: label, clientSessionKey }),
       },
       this.fetchImpl,
+      "session-start",
     );
     await assertOkWithErrorDetail(response, `${this.agent} session creation`);
     const body = await response.json() as { sessionId?: unknown };
@@ -2605,6 +2632,87 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     return Array.isArray(body.messages) ? body.messages : [];
   }
 
+  private codexRuntimeSummary(payload: unknown): NativeAgentRuntimeSummary | undefined {
+    const health = asRecord(payload);
+    if (!health) return undefined;
+    const engine = asRecord(health.engine);
+    const groupedNotices = new Map<string, number>();
+    if (Array.isArray(health.notices)) {
+      for (const candidate of health.notices.slice(-128)) {
+        const message = asRecord(candidate)?.message;
+        if (typeof message !== "string" || message.length === 0) continue;
+        const bounded = message.slice(0, 1_000);
+        groupedNotices.set(bounded, (groupedNotices.get(bounded) ?? 0) + 1);
+      }
+    }
+    return {
+      mcpServers: providerInventoryCount(health.mcp),
+      skills: providerInventoryCount(health.skills),
+      hooks: providerInventoryCount(health.hooks),
+      ...(typeof engine?.state === "string" ? { state: engine.state.slice(0, 64) } : {}),
+      ...(typeof engine?.codexVersion === "string"
+        ? { version: engine.codexVersion.slice(0, 64) }
+        : {}),
+      ...(groupedNotices.size > 0
+        ? {
+            notices: [...groupedNotices.entries()].slice(-5).map(([message, count]) => ({
+              message,
+              ...(count > 1 ? { count } : {}),
+            })),
+          }
+        : {}),
+    };
+  }
+
+  private refreshCodexRuntimeMetadata(sessionId: string): Promise<void> {
+    const pending = this.codexRuntimeMetadataRefreshes.get(sessionId);
+    if (pending) return pending;
+    const retained = this.interactiveMetadata.get(sessionId);
+    const generation = this.codexRuntimeMetadataGeneration;
+    const operation = (async () => {
+      try {
+        const response = await bridgeFetch(
+          this.connection,
+          `/session/${encodeURIComponent(sessionId)}/runtime-health`,
+          {},
+          this.fetchImpl,
+        );
+        assertOk(response, "Codex runtime health read");
+        const runtime = this.codexRuntimeSummary(await boundedJson(
+          response,
+          "Codex runtime health read",
+          { remaining: 512 * 1024 },
+        ));
+        if (!runtime) {
+          throw new ProviderUnavailableError(
+            "Codex runtime health read returned malformed metadata",
+          );
+        }
+        if (generation !== this.codexRuntimeMetadataGeneration) return;
+        setBoundedMapEntry(this.interactiveMetadata, sessionId, {
+          expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+          runtime,
+        }, MAX_TRACKED_INTERACTION_SESSIONS);
+      } catch {
+        // Keep known inventory usable and avoid retrying a failed optional
+        // endpoint on every 500ms projection poll.
+        if (
+          generation === this.codexRuntimeMetadataGeneration
+          && retained
+          && this.interactiveMetadata.get(sessionId) === retained
+        ) {
+          retained.expiresAt = Date.now() + INTERACTIVE_RUNTIME_METADATA_RETRY_MS;
+        }
+      }
+    })();
+    this.codexRuntimeMetadataRefreshes.set(sessionId, operation);
+    return operation.finally(() => {
+      if (this.codexRuntimeMetadataRefreshes.get(sessionId) === operation) {
+        this.codexRuntimeMetadataRefreshes.delete(sessionId);
+      }
+    });
+  }
+
   async interactiveSnapshot(
     sessionId: string,
   ): Promise<ProviderInteractiveSnapshot> {
@@ -2660,6 +2768,12 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       : `/session/${encodeURIComponent(sessionId)}`;
     const cachedMetadata = this.interactiveMetadata.get(sessionId);
     const refreshMetadata = !cachedMetadata || cachedMetadata.expiresAt <= Date.now();
+    if (this.agent === "codex" && cachedMetadata && refreshMetadata) {
+      // `/runtime-health` fans out to several app-server inventory RPCs. The
+      // previous inventory remains useful while that optional refresh runs;
+      // message/status/config reads below are the foreground critical path.
+      void this.refreshCodexRuntimeMetadata(sessionId);
+    }
     const [sessionResponse, messages, configResponse, initResponse, runtimeResponse] = await Promise.all([
       bridgeFetch(this.connection, sessionPath, {}, this.fetchImpl),
       this.messages(sessionId),
@@ -2679,7 +2793,7 @@ class HttpBridgeProvider implements BuildPipelineProvider {
             this.fetchImpl,
           )
         : Promise.resolve(undefined),
-      this.agent === "codex" && refreshMetadata
+      this.agent === "codex" && refreshMetadata && !cachedMetadata
         ? bridgeFetch(
             this.connection,
             `/session/${encodeURIComponent(sessionId)}/runtime-health`,
@@ -2714,42 +2828,13 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       const rawPhase = payload?.phase;
       let runtime: NativeAgentRuntimeSummary | undefined = cachedMetadata?.runtime;
       if (runtimeResponse?.ok) {
-        const health = asRecord(await boundedJson(
+        runtime = this.codexRuntimeSummary(await boundedJson(
           runtimeResponse,
           "Codex runtime health read",
           { remaining: 512 * 1024 },
         ));
-        if (health) {
-          const engine = asRecord(health.engine);
-          const groupedNotices = new Map<string, number>();
-          if (Array.isArray(health.notices)) {
-            for (const candidate of health.notices.slice(-128)) {
-              const message = asRecord(candidate)?.message;
-              if (typeof message !== "string" || message.length === 0) continue;
-              const bounded = message.slice(0, 1_000);
-              groupedNotices.set(bounded, (groupedNotices.get(bounded) ?? 0) + 1);
-            }
-          }
-          runtime = {
-            mcpServers: providerInventoryCount(health.mcp),
-            skills: providerInventoryCount(health.skills),
-            hooks: providerInventoryCount(health.hooks),
-            ...(typeof engine?.state === "string" ? { state: engine.state.slice(0, 64) } : {}),
-            ...(typeof engine?.codexVersion === "string"
-              ? { version: engine.codexVersion.slice(0, 64) }
-              : {}),
-            ...(groupedNotices.size > 0
-              ? {
-                  notices: [...groupedNotices.entries()].slice(-5).map(([message, count]) => ({
-                    message,
-                    ...(count > 1 ? { count } : {}),
-                  })),
-                }
-              : {}),
-          };
-        }
       }
-      if (refreshMetadata) {
+      if (refreshMetadata && !cachedMetadata) {
         setBoundedMapEntry(this.interactiveMetadata, sessionId, {
           expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
           ...(runtime ? { runtime } : {}),
@@ -2932,6 +3017,7 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     // Execution profiles and runtime inventory are discovered alongside models,
     // so an explicit refresh has to drop them too or the picker re-renders the
     // same stale list it was asked to replace.
+    this.codexRuntimeMetadataGeneration += 1;
     this.interactiveMetadata.clear();
   }
 

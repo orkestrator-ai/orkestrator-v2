@@ -420,9 +420,13 @@ The detailed operational reference is
   reuse a profile owned by another agent or workspace.
 - Always pass `--fixture` for UI workflows that need a project. Use only the
   returned `testProject`; never add this Orkestrator checkout as a project.
-- Agent-test profiles are credential-free by default. Do not add
-  `--credential-source` unless the requested scenario genuinely requires one
-  named provider. Never enable credentials merely to make fixture testing work.
+- Agent-test profiles inherit the host login for Claude, Codex, and OpenCode by
+  default so live agent paths can be tested. This is authorized for this
+  repository's isolated `dev:test` profiles. Use `--credential-source <name>`
+  to narrow a run to one provider, or `--no-agent-credentials` only when the
+  scenario specifically requires a credential-free state. Credentials permit
+  real external requests, so keep prompts and mutations scoped to the seeded
+  fixture and never place secrets in logs or artifacts.
 - Do not assume ports, profile paths, browser URLs, or process IDs. Discover them
   through `dev:status --json` on every run.
 - Never print, paste into chat, add to a URL, or save the gateway token. The
@@ -468,10 +472,23 @@ Wait until the manifest says `status: "ready"` and its liveness block reports
 the launcher, Vite, Electron, and backend as live. Use these returned fields:
 
 - `browserUrl` — exact URL for browser testing; never substitute a remembered port.
-- `electronTitle` — exact native window to target with Computer Use.
+- `electronTitle` — exact native window to target only for Electron-specific QA.
 - `testProject` — the only repository allowed for destructive/manual fixture work.
 - `logDir` — bounded launcher, Vite, Electron, and backend diagnostics.
-- `authFile` — secret-bearing local file path; do not expose its contents.
+- `authFile` — owner-only JSON whose `token` property is the exact login code.
+  It is not an OTP and no other code needs to be generated. Read it locally,
+  enter that exact value in the gateway-token password field, and do not echo,
+  paste into chat, or save it in artifacts.
+
+On startup, `dev:test` also fills any missing isolated-profile caches from the
+installed, bounded model-catalog caches when they exist: Orkestrator's
+host-agent and OpenCode catalogues, Codex's CLI and bridge model caches, and
+Grok's CLI model cache. Cursor's cached catalogue is already part of the shared
+Orkestrator host-agent file; Cursor has no separate portable model-cache file.
+The setup does not copy projects, sessions, prompts, application settings, or
+any extra credential files, and it never replaces catalogue state already
+updated inside the profile. A credential-free run therefore still has
+last-known model metadata.
 
 If startup reports `failed`, inspect the manifest and files below its `logDir`.
 Do not search arbitrary production application-data directories for diagnostics.
@@ -510,13 +527,18 @@ development image. It must never use or retag `orkestrator-v2:latest`.
 
 #### 4. Test the changed frontend in a real browser
 
-Use the in-app Browser, Playwright, or Computer Use against the exact discovered
-`browserUrl`; do not use internet browsing/search tools for a loopback page. For
-repeatable assertions prefer Playwright and accessible roles/names. Use Browser
-or Computer Use for exploratory visual and native-window checks.
+Use the in-app Browser or Playwright against the exact discovered `browserUrl`;
+do not use internet browsing/search tools for a loopback page. This browser
+client is the default for all normal Orkestrator UI workflows, including agent
+chat. Do not open or drive the Electron desktop window with Computer Use unless
+the change specifically concerns native-only behavior such as the window,
+menus, clipboard, preload, IPC, or shutdown. For repeatable assertions prefer
+Playwright and accessible roles/names.
 
-If the login page appears, read the token locally from `authFile` and enter it
-only into the password field. Never put it in a query string, screenshot, shell
+If the login page appears, the requested "code" is exactly the string in the
+`token` property of the JSON file at `authFile`. Read it locally and type it only
+into the gateway-token password field, then submit. Do not search for a separate
+verification code and never put the token in a query string, screenshot, shell
 argument, test report, or commentary. Confirm the page displays the orange DEV
 identity and the expected profile before changing any state.
 

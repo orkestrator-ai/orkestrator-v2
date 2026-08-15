@@ -1,4 +1,5 @@
-import { StrictMode, useRef, useState } from "react";
+import type { VirtuosoHandle } from "react-virtuoso";
+import { StrictMode, createRef, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "../../apps/web/src/index.css";
 import {
@@ -11,6 +12,7 @@ import {
 } from "../../apps/web/src/components/chat/NativeComposeBar";
 import { QueuedPromptsDialog } from "../../apps/web/src/components/chat/QueuedPromptsDialog";
 import { AgentThinkingIndicator } from "../../apps/web/src/components/chat/AgentThinkingIndicator";
+import { NativeChatShell } from "../../apps/web/src/components/chat/NativeChatShell";
 import { MessageShell } from "../../apps/web/src/components/chat/MessageShell";
 import { MentionableInput } from "../../apps/web/src/components/chat/MentionableInput";
 import { AgentModelPicker } from "../../apps/web/src/components/chat/AgentModelPicker";
@@ -277,6 +279,31 @@ function GlobalStylesFixture() {
   return (
     <main className="min-h-screen bg-background p-4 text-foreground">
       <AgentThinkingIndicator agentName="Codex" />
+      <section data-testid="agent-connecting-shell" className="h-64">
+        <NativeChatShell
+          agentLabel="Codex"
+          platform="codex"
+          agentExpansionScope="fixture-connecting"
+          isActive
+          connectionState="connecting"
+          onRetry={() => {}}
+          messages={[]}
+          isLoading={false}
+          elapsedSeconds={null}
+          finalElapsedSeconds={null}
+          centerCompose={false}
+          composer={<textarea aria-label="Prompt" />}
+          isAtBottom
+          scrollToBottom={() => {}}
+          scrollProps={{
+            followOutput: () => false,
+            atBottomStateChange: () => {},
+            atBottomThreshold: 100,
+            restoreStateFrom: undefined,
+          }}
+          virtuosoRef={createRef<VirtuosoHandle>()}
+        />
+      </section>
       <div data-testid="chat-status-row" className="chat-status-row">
         <span data-testid="chat-status-content">Completed</span>
       </div>

@@ -9197,6 +9197,203 @@ describe("background task reducer", () => {
     );
   });
 
+  /**
+   * The SDK documents the level signal as preceding the edge bookend ("in
+   * practice the level precedes them"), so the empty `background_tasks_changed`
+   * lands while the released turn still owes its "I'll report back" reply.
+   * Treating it as permission to tear down closed the CLI and stdin, and the
+   * `task_notification` that would have resumed the model was delivered to a
+   * dead process.
+   */
+  async function releaseTurnHoldingOneBackgroundTask(title: string) {
+    const created = createSession(title);
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "run the suite in the background");
+    const call = await nextQueryCall();
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    const closedState = { inputClosed: false };
+    void input.next().then((result) => {
+      closedState.inputClosed = result.done === true;
+      return result;
+    });
+
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-level-first",
+        content: [{
+          type: "tool_use",
+          id: "bash-tool-lf",
+          name: "Bash",
+          input: { command: "bun run test", run_in_background: true },
+        }],
+      },
+    });
+    call.push({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: "bash-tool-lf",
+          content: "Command running in background with ID: bash-task-lf",
+        }],
+      },
+      parent_tool_use_id: null,
+      tool_use_result: { backgroundTaskId: "bash-task-lf" },
+    });
+    call.push({
+      type: "system",
+      subtype: "background_tasks_changed",
+      tasks: [{
+        task_id: "bash-task-lf",
+        task_type: "bash",
+        description: "Run the full test suite",
+      }],
+    });
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => getSession(created.id)?.status === "idle");
+    expect(closedState.inputClosed).toBe(false);
+    expect(call.isClosed()).toBe(false);
+    return { created, call, promptPromise, closedState };
+  }
+
+  test("an empty level signal before the edge keeps the CLI alive for the continuation", async () => {
+    const { created, call, promptPromise, closedState } =
+      await releaseTurnHoldingOneBackgroundTask("level before edge");
+
+    call.push({
+      type: "system",
+      subtype: "background_tasks_changed",
+      tasks: [],
+    });
+    await waitFor(
+      () => getSession(created.id)?.backgroundTasks?.["bash-task-lf"] === undefined,
+    );
+
+    // Liveness is honest: the task is out of the live set, so no stale running
+    // indicator can wedge. But the continuation has not arrived, so neither the
+    // CLI nor its stdin may be torn down.
+    expect(closedState.inputClosed).toBe(false);
+    expect(call.isClosed()).toBe(false);
+
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "bash-task-lf",
+      tool_use_id: "bash-tool-lf",
+      status: "completed",
+      summary: "Tests passed",
+    });
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-level-first-continuation",
+        content: [{ type: "text", text: "The suite finished; here is the report." }],
+      },
+    });
+
+    // The resumed root loop reclaims the foreground so the UI shows the report
+    // being written rather than a session that silently stayed idle.
+    await waitFor(() => getSession(created.id)?.status === "running");
+
+    // The edge settles the task the level had already dropped, and the parked
+    // snapshot supplies the description the edge itself never carries.
+    expect(getSession(created.id)?.backgroundTasks?.["bash-task-lf"]).toMatchObject({
+      status: "completed",
+      description: "Run the full test suite",
+      toolUseId: "bash-tool-lf",
+    });
+
+    // Closing held input ends the stream, which is what publishes the real idle
+    // edge for the reclaimed turn.
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => closedState.inputClosed);
+    call.finish();
+    await promptPromise;
+    expect(getSession(created.id)?.status).toBe("idle");
+    expect(
+      getSession(created.id)?.messages.some((message) =>
+        message.parts.some((part) =>
+          part.type === "text" && part.content.includes("here is the report")
+        )
+      ),
+    ).toBe(true);
+  });
+
+  test("the continuation watchdog still releases a query parked by a level signal", async () => {
+    const created = createSession("level before edge, no continuation");
+    track(created.id);
+    const promptPromise = sendPrompt(
+      created.id,
+      "run the suite in the background",
+      undefined,
+      { retainedContinuationTimeoutMs: 25 },
+    );
+    const call = await nextQueryCall();
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    const inputCompletion = input.next();
+
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "agent-parked",
+      description: "Parked task",
+    });
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => created.status === "idle");
+
+    call.push({
+      type: "system",
+      subtype: "background_tasks_changed",
+      tasks: [],
+    });
+    await waitFor(() => created.settlingBackgroundTasks !== undefined);
+
+    // The edge never arrives. The watchdog must release the held input, the
+    // retained control and the parked snapshot rather than strand the CLI child
+    // and its metadata for the lifetime of the bridge.
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    await waitFor(() => created.settlingBackgroundTasks === undefined);
+    expect(created.retainedQueryControls).toBeUndefined();
+    call.finish();
+    await promptPromise;
+  });
+
+  test("a level signal mid-turn does not park or retain anything", async () => {
+    const created = createSession("level while still running");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "run work in the background");
+    const call = await nextQueryCall();
+
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "agent-midturn",
+      description: "Mid-turn task",
+    });
+    await waitFor(() => created.backgroundTasks?.["agent-midturn"]?.status === "running");
+
+    // No result has been published, so the turn was never released: the query
+    // still owns the foreground and needs no continuation bookkeeping.
+    call.push({
+      type: "system",
+      subtype: "background_tasks_changed",
+      tasks: [],
+    });
+    await waitFor(() => created.backgroundTasks?.["agent-midturn"] === undefined);
+    expect(created.settlingBackgroundTasks).toBeUndefined();
+    expect(created.retainedQueryControls).toBeUndefined();
+    expect(call.isClosed()).toBe(false);
+
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+    expect(created.status).toBe("idle");
+  });
+
   test("holds from Bash intent before result and recovers an omitted structured task id", async () => {
     const created = createSession("provisional background launch");
     track(created.id);

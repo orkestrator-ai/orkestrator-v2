@@ -13,6 +13,7 @@ import {
   setTranscriptCatalogTtlForTesting,
   setTranscriptPathCacheLimitsForTesting,
   createSharedTranscriptMetaLoader,
+  extractPersistedMessageContent,
   extractPersistedMessageText,
   findTranscriptPath,
   getCodexHomeDir,
@@ -925,6 +926,130 @@ describe("rollout public helpers (continued)", () => {
         "user",
       ),
     ).toBeNull();
+  });
+
+  test("recovers attachment rows from the persisted marker, not from inline image data", () => {
+    const persisted = extractPersistedMessageContent(
+      [
+        {
+          type: "input_text",
+          text: "Inspect the diagram\n\n<attached-files source=\"orkestrator\">\n"
+            + '<attachment type="image" path="/workspace/.orkestrator/initial-prompt/shot.png"'
+            + ' filename="shot.png" />\n</attached-files>',
+        },
+        // Codex rewrites a local image into an inline base64 data URL. Replaying
+        // that would cost megabytes per subscriber per rehydration.
+        { type: "input_image", image_url: `data:image/png;base64,${"A".repeat(5000)}` },
+      ],
+      "user",
+    );
+
+    expect(persisted).toEqual({
+      text: "Inspect the diagram",
+      attachments: [{
+        type: "file",
+        content: "/workspace/.orkestrator/initial-prompt/shot.png",
+        fileUrl: "/workspace/.orkestrator/initial-prompt/shot.png",
+        filename: "shot.png",
+      }],
+    });
+    expect(JSON.stringify(persisted)).not.toContain("base64");
+  });
+
+  test("keeps an attachment-only prompt that has no text left after stripping", () => {
+    expect(
+      extractPersistedMessageContent(
+        [{
+          type: "input_text",
+          text: '<attached-files source="orkestrator"><attachment type="image" path="/workspace/a.png" /></attached-files>',
+        }],
+        "user",
+      ),
+    ).toEqual({
+      text: "",
+      attachments: [{ type: "file", content: "/workspace/a.png", fileUrl: "/workspace/a.png" }],
+    });
+  });
+
+  test("hides the attachment marker from the text used for titles", () => {
+    expect(
+      extractPersistedMessageText(
+        [{
+          type: "input_text",
+          text: 'Fix the layout\n\n<attached-files source="orkestrator"><attachment type="image" path="/workspace/a.png" /></attached-files>',
+        }],
+        "user",
+      ),
+    ).toBe("Fix the layout");
+  });
+
+  test("hydrates a user message with an attachment into text and file parts", async () => {
+    const hydrated = await hydrateRollout("thread-attachment", [
+      sessionMeta("thread-attachment"),
+      {
+        timestamp: "2026-07-25T12:01:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: 'Look\n\n<attached-files source="orkestrator"><attachment type="image" path="/workspace/a.png" filename="a.png" /></attached-files>',
+            },
+            { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgo=" },
+          ],
+        },
+      },
+    ]);
+
+    expect(hydrated.messages).toHaveLength(1);
+    expect(hydrated.messages[0]?.content).toBe("Look");
+    expect(hydrated.messages[0]?.parts).toEqual([
+      { type: "text", content: "Look" },
+      {
+        type: "file",
+        content: "/workspace/a.png",
+        fileUrl: "/workspace/a.png",
+        filename: "a.png",
+      },
+    ]);
+  });
+
+  test("hydrates an attachment-only user message into a file part with no text part", async () => {
+    // The startup launch the backend now dispatches for images with no prompt.
+    // A message with nothing but an attachment is still a message the user
+    // sent, so it must survive hydration rather than being dropped as blank.
+    const hydrated = await hydrateRollout("thread-attachment-only", [
+      sessionMeta("thread-attachment-only"),
+      {
+        timestamp: "2026-07-25T12:01:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: '<attached-files source="orkestrator"><attachment type="image" path="/workspace/only.png" filename="only.png" /></attached-files>',
+            },
+            { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgo=" },
+          ],
+        },
+      },
+    ]);
+
+    expect(hydrated.messages).toHaveLength(1);
+    expect(hydrated.messages[0]?.role).toBe("user");
+    expect(hydrated.messages[0]?.content).toBe("");
+    expect(hydrated.messages[0]?.parts).toEqual([
+      {
+        type: "file",
+        content: "/workspace/only.png",
+        fileUrl: "/workspace/only.png",
+        filename: "only.png",
+      },
+    ]);
   });
 
   test("hydrates one rollout defensively while skipping malformed and synthetic records", async () => {

@@ -173,6 +173,12 @@ let currentRepositoryConfig: Record<string, { prBaseBranch?: string }> = {
 let currentWorkspaceReady = false;
 let currentSetupScriptsRunning = false;
 let currentTabCount = 0;
+/**
+ * Whether a terminal container has registered a tab factory. It is null
+ * whenever the environment's terminal is not mounted or ready, which is a
+ * distinct condition from having reached the tab limit.
+ */
+let currentCreateTabRegistered = true;
 let currentKanbanNotes = "";
 let currentKanbanNotesProjectId: string | null = null;
 let currentTaskAssociation: {
@@ -206,6 +212,19 @@ function expectProviderMenuOrder(action: string) {
     `${action} Codex`,
     `${action} OpenCode`,
   ]);
+}
+
+/**
+ * Points the review dialog's one agent/model/reasoning picker at a provider.
+ *
+ * The menu keeps itself open while the platform rail is browsed and marks the
+ * rest of the dialog `aria-hidden` meanwhile, so it has to be dismissed before
+ * the launch buttons are reachable again.
+ */
+function chooseReviewProvider(platform: string) {
+  fireEvent.pointerDown(screen.getByRole("combobox", { name: "Agent, model and reasoning" }));
+  fireEvent.click(screen.getByRole("button", { name: `${platform} models` }));
+  fireEvent.keyDown(document.body, { key: "Escape" });
 }
 
 function confirmMerge() {
@@ -587,7 +606,7 @@ mock.module("@/contexts", () => ({
   MAX_TABS: 10,
   useTerminalContext: () => ({
     closeActiveTab: closeActiveTabMock,
-    createTab: createTabMock,
+    createTab: currentCreateTabRegistered ? createTabMock : null,
     selectTab: selectTabMock,
     tabCount: currentTabCount,
   }),
@@ -743,6 +762,7 @@ beforeEach(() => {
   currentWorkspaceReady = false;
   currentSetupScriptsRunning = false;
   currentTabCount = 0;
+  currentCreateTabRegistered = true;
   currentKanbanNotes = "";
   currentKanbanNotesProjectId = null;
   currentTaskAssociation = { task: undefined, taskId: undefined };
@@ -2258,11 +2278,16 @@ describe("ActionBar workflow tabs", () => {
     );
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
-    fireEvent.click(screen.getByRole("button", { name: "Create PR with Claude" }));
+    expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
     expect(setModeCreatePendingMock).toHaveBeenCalledTimes(2);
     expect(createTabMock).toHaveBeenLastCalledWith(
-      "claude",
-      expect.objectContaining({ displayTitle: "PR" }),
+      "opencode",
+      expect.objectContaining({
+        agentLaunchMode: "native",
+        displayTitle: "PR",
+        initialAgentModel: expect.any(String),
+      }),
     );
 
     currentEnvironment = {
@@ -2297,7 +2322,7 @@ describe("ActionBar workflow tabs", () => {
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Code review" }));
     expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("radio", { name: /^Codex/ }));
+    chooseReviewProvider("codex");
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(createTabMock).toHaveBeenLastCalledWith(
       "codex",
@@ -2310,7 +2335,30 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
-  test("routes every PR workflow context-menu provider", async () => {
+  test("configures a PR launch in a modal rather than a provider menu", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+
+    expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Create PR with Claude" })).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Agent, model and reasoning" })).toBeTruthy();
+
+    // Dismissing must leave the environment untouched: the modal replaces a menu
+    // whose every item launched an agent immediately.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Configure pull request" })).toBeNull();
+    expect(createTabMock).not.toHaveBeenCalled();
+    expect(setModeCreatePendingMock).not.toHaveBeenCalled();
+  });
+
+  test("keeps the PR modal pinned when the selected environment changes", () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
@@ -2320,26 +2368,244 @@ describe("ActionBar workflow tabs", () => {
     const view = render(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
-    expectProviderMenuOrder("Create PR with");
+    expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy();
 
-    for (const [label, agent] of [
-      ["Codex", "codex"],
-      ["OpenCode", "opencode"],
-    ] as const) {
-      fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
-      fireEvent.click(screen.getByRole("button", { name: `Create PR with ${label}` }));
-      expect(createTabMock).toHaveBeenLastCalledWith(
-        agent,
-        expect.objectContaining({ displayTitle: "PR" }),
-      );
-    }
+    currentSelectedEnvironmentId = "env-2";
+    currentEnvironment = {
+      ...currentEnvironment,
+      id: "env-2",
+      name: "other-environment",
+    };
+    view.rerender(<ActionBar />);
 
+    expect(screen.getByRole("alert").textContent).toContain("selected environment changed");
+    expect((screen.getByRole("button", { name: "Create pull request" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect(screen.getByText(/into main/)).toBeTruthy();
+    expect(createTabMock).not.toHaveBeenCalled();
+    expect(setModeCreatePendingMock).not.toHaveBeenCalled();
+  });
+
+  test("disables a configured PR launch when a PR appears while the modal is open", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    const view = render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+    currentEnvironment = {
+      ...currentEnvironment,
+      prUrl: "https://github.com/org/repo/pull/2",
+      prState: "open",
+    };
+    view.rerender(<ActionBar />);
+
+    expect(screen.getByRole("alert").textContent).toContain("now exists");
+    expect((screen.getByRole("button", { name: "Create pull request" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect(createTabMock).not.toHaveBeenCalled();
+    expect(setModeCreatePendingMock).not.toHaveBeenCalled();
+  });
+
+  test("keeps the PR modal open and monitoring idle when tab creation is rejected", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    createTabMock.mockReturnValueOnce(false);
+    render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
+
+    expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain("could not be created");
+    expect(setModeCreatePendingMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
+    expect(screen.queryByRole("dialog", { name: "Configure pull request" })).toBeNull();
+    expect(createTabMock).toHaveBeenCalledTimes(2);
+    expect(setModeCreatePendingMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("leaves PR monitoring idle when a plain-click launch is rejected", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    createTabMock.mockReturnValueOnce(false);
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
+
+    // Arming create-pending here would leave the backend polling every five
+    // seconds for a PR that no agent was ever launched to create.
+    expect(createTabMock).toHaveBeenCalledTimes(1);
+    expect(setModeCreatePendingMock).not.toHaveBeenCalled();
+  });
+
+  test("falls back to main when the repository stores an empty PR base branch", () => {
+    // Repository settings persist a cleared "PR Base Branch" field verbatim,
+    // so an empty string has to be treated as unset rather than as a branch.
+    currentRepositoryConfig = { "project-1": { prBaseBranch: "" } };
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
+
+    const [, options] = createTabMock.mock.calls[0] as [string, { initialPrompt: string }];
+    expect(options.initialPrompt).toContain("gh pr create --base main --fill");
+    expect(options.initialPrompt).not.toContain("--base  ");
+    expect(options.initialPrompt).not.toContain("git diff origin/...HEAD");
+  });
+
+  test("launches against the base branch pinned when the modal opened", () => {
+    currentRepositoryConfig = { "project-1": { prBaseBranch: "release" } };
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    const view = render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+    expect(screen.getByText(/into release/)).toBeTruthy();
+
+    // Repository settings can be saved while the modal is open. The launch must
+    // use the branch the user reviewed, not the one that replaced it.
+    currentRepositoryConfig = { "project-1": { prBaseBranch: "develop" } };
+    view.rerender(<ActionBar />);
+    expect(screen.getByText(/into release/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
+
+    const [, options] = createTabMock.mock.calls[0] as [string, { initialPrompt: string }];
+    expect(options.initialPrompt).toContain("gh pr create --base release --fill");
+    expect(options.initialPrompt).not.toContain("develop");
+  });
+
+  test("disables a pinned PR launch when the environment stops running", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    const view = render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+    currentEnvironment = { ...currentEnvironment, status: "stopped" };
+    view.rerender(<ActionBar />);
+
+    expect(screen.getByRole("alert").textContent).toContain("no longer running");
+    expect((screen.getByRole("button", { name: "Create pull request" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect(createTabMock).not.toHaveBeenCalled();
+    expect(setModeCreatePendingMock).not.toHaveBeenCalled();
+  });
+
+  test("disables a pinned PR launch when the tab limit is reached", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    const view = render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+    currentTabCount = 10;
+    view.rerender(<ActionBar />);
+
+    expect(screen.getByRole("alert").textContent).toContain("maximum number of tabs");
+    expect((screen.getByRole("button", { name: "Create pull request" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
+
+  test("distinguishes an unready terminal from the tab limit", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    const view = render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+    // No terminal container has registered a tab factory. Reporting the tab
+    // limit here would be false and would send the user looking for tabs to close.
+    currentCreateTabRegistered = false;
+    view.rerender(<ActionBar />);
+
+    const alert = screen.getByRole("alert").textContent ?? "";
+    expect(alert).toContain("not ready to open a new tab");
+    expect(alert).not.toContain("maximum number of tabs");
+    expect((screen.getByRole("button", { name: "Create pull request" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
+
+  test("opens the PR modal after a mobile long press without launching a default PR", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    render(<ActionBar presentation="grid" />);
+
+    const createPrButton = screen.getByRole("button", { name: "Create PR" });
+    fireEvent.pointerDown(createPrButton, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 24,
+      clientY: 24,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 575));
+    fireEvent.pointerUp(createPrButton, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 24,
+      clientY: 24,
+    });
+
+    expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy();
+
+    // The click mobile browsers synthesize after the gesture must be consumed.
+    fireEvent.click(createPrButton);
+    expect(createTabMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
+    expect(createTabMock).toHaveBeenCalledWith(
+      "codex",
+      expect.objectContaining({
+        agentLaunchMode: "native",
+        displayTitle: "PR",
+      }),
+    );
+  }, 20_000);
+
+  test("routes every PR workflow context-menu provider", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prState: "open",
       hasMergeConflicts: true,
     };
-    view.rerender(<ActionBar />);
+    const view = render(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
     expectProviderMenuOrder("Resolve with");
@@ -2534,14 +2800,14 @@ describe("ActionBar workflow tabs", () => {
     expect(createTabMock).not.toHaveBeenCalled();
 
     const cases = [
-      { provider: "Claude", agent: "claude" },
-      { provider: "Codex", agent: "codex" },
-      { provider: "OpenCode", agent: "opencode" },
+      { agent: "claude" },
+      { agent: "codex" },
+      { agent: "opencode" },
     ] as const;
 
     for (const reviewCase of cases) {
       fireEvent.contextMenu(reviewButton);
-      fireEvent.click(screen.getByRole("radio", { name: new RegExp(`^${reviewCase.provider}`) }));
+      chooseReviewProvider(reviewCase.agent);
       fireEvent.click(screen.getByRole("button", { name: "Start review" }));
       expect(createTabMock).toHaveBeenLastCalledWith(
         reviewCase.agent,

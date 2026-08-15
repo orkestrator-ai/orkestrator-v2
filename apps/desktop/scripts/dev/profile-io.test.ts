@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, truncate, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { parseRuntimeStatusManifest, resolveRuntimeProfile, statusManifestPath } from "../../electron/runtime-profile.js";
-import { atomicWriteJson, initializeProfile, processMatches, processStartTime, readAndValidateSentinel, reserveLoopbackPorts } from "./profile-io.js";
+import { atomicWriteJson, initializeProfile, processMatches, processStartTime, readAndValidateSentinel, reserveLoopbackPorts, seedInstalledModelCatalogCaches } from "./profile-io.js";
 import { orphanedRuntimeProcesses, stoppedRuntimeStatusIfUnchanged, stopTrackedRuntimeProcesses } from "./lifecycle.js";
 
 const directories: string[] = [];
@@ -28,6 +28,44 @@ function runtimeStatus() {
   };
 }
 
+async function modelCacheFixture() {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ork-profile-caches-"));
+  directories.push(root);
+  const roots = {
+    developmentRoot: path.join(root, "dev"),
+    productionDataDir: path.join(root, "production"),
+    homeDir: path.join(root, "home"),
+  };
+  const profile = resolveRuntimeProfile({
+    repositoryRoot: path.join(root, "repo"),
+    requestedId: "qa",
+    roots,
+  });
+  await initializeProfile(profile);
+  await mkdir(roots.productionDataDir, { recursive: true });
+  await mkdir(path.join(roots.homeDir, ".codex", "orkestrator-bridge"), { recursive: true });
+  await mkdir(path.join(roots.homeDir, ".grok"), { recursive: true });
+  return {
+    root,
+    roots,
+    profile,
+    sources: {
+      agent: path.join(roots.productionDataDir, "agent-model-catalog.json"),
+      opencode: path.join(roots.productionDataDir, "opencode-model-catalog.json"),
+      codex: path.join(roots.homeDir, ".codex", "models_cache.json"),
+      bridge: path.join(roots.homeDir, ".codex", "orkestrator-bridge", "models-cache.json"),
+      grok: path.join(roots.homeDir, ".grok", "models_cache.json"),
+    },
+    destinations: {
+      agent: path.join(profile.dataDir, "agent-model-catalog.json"),
+      opencode: path.join(profile.dataDir, "opencode-model-catalog.json"),
+      codex: path.join(profile.dataDir, "agent-credentials", "codex", "models_cache.json"),
+      bridge: path.join(profile.dataDir, "agent-credentials", "codex", "orkestrator-bridge", "models-cache.json"),
+      grok: path.join(profile.dataDir, "agent-credentials", "home", ".grok", "models_cache.json"),
+    },
+  };
+}
+
 describe("development profile lifecycle primitives", () => {
   test("creates owner-only profile metadata and a matching sentinel", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "ork-profile-io-"));
@@ -45,6 +83,79 @@ describe("development profile lifecycle primitives", () => {
     const profilePath = await initializeProfile(profile);
     expect((await stat(profilePath)).mode & 0o777).toBe(0o600);
     await expect(readAndValidateSentinel(profile, roots)).resolves.toEqual({ version: 1, profile: "qa" });
+  });
+
+  test("copies stable missing model catalogue caches with owner-only permissions", async () => {
+    const { roots, profile, sources, destinations } = await modelCacheFixture();
+    await writeFile(sources.agent, "agent-cache");
+    await writeFile(sources.opencode, "opencode-cache");
+    await writeFile(sources.codex, "codex-cache");
+    await writeFile(sources.bridge, "bridge-cache");
+    await writeFile(sources.grok, "grok-cache");
+
+    await expect(seedInstalledModelCatalogCaches(profile, { roots, env: {} })).resolves.toEqual([
+      "agent-model-catalog.json",
+      "opencode-model-catalog.json",
+      "codex/models_cache.json",
+      "codex/orkestrator-bridge/models-cache.json",
+      "grok/models_cache.json",
+    ]);
+    expect(await readFile(destinations.agent, "utf8")).toBe("agent-cache");
+    expect(await readFile(destinations.opencode, "utf8")).toBe("opencode-cache");
+    expect(await readFile(destinations.codex, "utf8")).toBe("codex-cache");
+    expect(await readFile(destinations.bridge, "utf8")).toBe("bridge-cache");
+    expect(await readFile(destinations.grok, "utf8")).toBe("grok-cache");
+    for (const destination of Object.values(destinations)) {
+      expect((await stat(destination)).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  test("preserves profile-local catalogue updates when a profile is seeded again", async () => {
+    const { roots, profile, sources, destinations } = await modelCacheFixture();
+    for (const source of Object.values(sources)) await writeFile(source, "initial-host-cache");
+    await seedInstalledModelCatalogCaches(profile, { roots, env: {} });
+    for (const destination of Object.values(destinations)) await writeFile(destination, "profile-live-cache");
+    for (const source of Object.values(sources)) await writeFile(source, "new-host-cache");
+
+    await expect(seedInstalledModelCatalogCaches(profile, { roots, env: {} })).resolves.toEqual([]);
+    for (const destination of Object.values(destinations)) {
+      expect(await readFile(destination, "utf8")).toBe("profile-live-cache");
+    }
+  });
+
+  test("skips missing, symlinked, and oversized model cache sources", async () => {
+    const { root, roots, profile, sources, destinations } = await modelCacheFixture();
+    const linkedCache = path.join(root, "linked-cache.json");
+    await writeFile(linkedCache, "linked-cache");
+    await symlink(linkedCache, sources.opencode);
+    await writeFile(sources.agent, "");
+    await truncate(sources.agent, (16 * 1024 * 1024) + 1);
+
+    await expect(seedInstalledModelCatalogCaches(profile, { roots, env: {} })).resolves.toEqual([]);
+    for (const destination of Object.values(destinations)) {
+      await expect(readFile(destination)).rejects.toThrow();
+    }
+  });
+
+  test("rejects caches that grow or are replaced after descriptor validation", async () => {
+    const { roots, profile, sources, destinations } = await modelCacheFixture();
+    await writeFile(sources.agent, "agent-cache");
+    await writeFile(sources.opencode, "opencode-cache");
+
+    await expect(seedInstalledModelCatalogCaches(profile, {
+      roots,
+      env: {},
+      afterSourceValidation: async (label) => {
+        if (label === "agent-model-catalog.json") {
+          await appendFile(sources.agent, "-changed");
+        } else if (label === "opencode-model-catalog.json") {
+          await rename(sources.opencode, `${sources.opencode}.old`);
+          await writeFile(sources.opencode, "replacement-cache");
+        }
+      },
+    })).resolves.toEqual([]);
+    await expect(readFile(destinations.agent)).rejects.toThrow();
+    await expect(readFile(destinations.opencode)).rejects.toThrow();
   });
 
   test("validates process identity with PID and start time", () => {

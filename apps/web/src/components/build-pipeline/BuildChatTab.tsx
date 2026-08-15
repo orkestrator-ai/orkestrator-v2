@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { MAX_PIPELINE_USER_MESSAGE_LENGTH } from "@orkestrator/protocol/build-pipeline";
+import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { BuildTabData } from "@/types/paneLayout";
 import {
   useBuildPipelineStore,
@@ -838,6 +839,7 @@ export function BuildChatTab({
                 assistantLabel={agentLabel}
                 containerId={containerId}
                 agentExpansionScope={data.environmentId}
+                platform={isAgentPlatform(displayedAgent) ? displayedAgent : undefined}
               />
             )}
             emptyState={

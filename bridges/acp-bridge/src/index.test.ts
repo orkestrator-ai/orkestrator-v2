@@ -1387,6 +1387,99 @@ describe("ACP bridge", () => {
     }).then((response) => response.json())).toEqual({ activity: "idle" });
   });
 
+  test("applies Cursor's cursor/task notification onto the matching Task launch", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASK: summarize" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.messages.some((message) =>
+        message.parts.some((part) =>
+          part.toolUseId === "cursor-task-1"
+          && (part.toolArgs as { description?: string } | undefined)?.description
+            === "Summarize two docs"
+        )
+      ),
+    );
+    expect(settled.messages.flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "cursor-task-1")).toMatchObject({
+      toolName: "task",
+      toolState: "success",
+      agentState: "finished",
+      toolArgs: {
+        description: "Summarize two docs",
+        prompt: "Read docs/upgrade-agents.md and docs/flaky-tests.md. Return one line each.",
+        subagent_type: "explore",
+        model: "composer-2.5",
+        agentId: "bc-abc123",
+        durationMs: 1_240,
+      },
+    });
+  });
+
+  test("acknowledges a cursor/task request instead of refusing it", async () => {
+    const directory = await temporaryDirectory();
+    const responseFile = resolve(directory, "cursor-task-response.log");
+    const { base, headers } = await spawnBridge({
+      env: { FAKE_ACP_CURSOR_TASK_REQUEST_FILE: responseFile },
+    });
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task-request:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASKREQUEST: summarize" }),
+    })).status).toBe(202);
+
+    const response = await waitFor(
+      () => fs.readFile(responseFile, "utf8")
+        .then((value) => JSON.parse(value.trim()))
+        .catch(() => null) as Promise<Record<string, unknown> | null>,
+      Boolean,
+    );
+    expect(response).toMatchObject({
+      id: 903,
+      result: { outcome: { outcome: "completed" } },
+    });
+    expect(response).not.toHaveProperty("error");
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.messages.some((message) =>
+        message.parts.some((part) =>
+          (part.toolArgs as { description?: string } | undefined)?.description
+            === "Summarize two docs"
+        )
+      ),
+    );
+    expect(settled.messages.flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "cursor-task-1")).toMatchObject({
+      agentState: "finished",
+      toolArgs: { subagent_type: "explore" },
+    });
+  });
+
   test("preserves ACP nested child parentToolCallId as parentTaskUseId", async () => {
     const bridge = await spawnBridge();
     const created = await nativeFetch(`${bridge.base}/session/create`, {

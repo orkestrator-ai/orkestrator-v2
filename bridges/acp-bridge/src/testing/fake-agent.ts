@@ -1059,6 +1059,62 @@ lines.on("line", (line) => {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }
+    if (prompt.startsWith("CURSORTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "cursor-task-1",
+            title: "Task: Subagent task",
+            kind: "other",
+            status: "in_progress",
+            rawInput: { _toolName: "task" },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "cursor-task-1",
+            status: "completed",
+            content: [{ type: "content", content: { type: "text", text: "Sub-agent launched." } }],
+            rawOutput: { durationMs: 42, isBackground: true },
+          },
+        },
+      });
+      const taskParams = {
+        toolCallId: "cursor-task-1",
+        description: "Summarize two docs",
+        prompt: "Read docs/upgrade-agents.md and docs/flaky-tests.md. Return one line each.",
+        subagentType: "explore",
+        model: "composer-2.5",
+        agentId: "bc-abc123",
+        durationMs: 1_240,
+      };
+      if (prompt.startsWith("CURSORTASKREQUEST")) {
+        write({
+          jsonrpc: "2.0",
+          id: 903,
+          method: "cursor/task",
+          params: taskParams,
+        });
+      } else {
+        write({
+          jsonrpc: "2.0",
+          method: "cursor/task",
+          params: taskParams,
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
     if (prompt.startsWith("NESTEDSUBAGENT")) {
       write({
         jsonrpc: "2.0",
@@ -2756,5 +2812,13 @@ lines.on("line", (line) => {
       process.env.FAKE_ACP_VENDOR_MODEL_REQUEST_FILE,
       `${JSON.stringify(message)}\n`,
     );
+    return;
+  }
+  if (message.id === 903 && process.env.FAKE_ACP_CURSOR_TASK_REQUEST_FILE) {
+    appendFileSync(
+      process.env.FAKE_ACP_CURSOR_TASK_REQUEST_FILE,
+      `${JSON.stringify(message)}\n`,
+    );
+    return;
   }
 });

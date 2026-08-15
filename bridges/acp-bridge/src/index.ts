@@ -125,6 +125,18 @@ interface AcpToolSourceState {
   contentDiffs: BridgeToolDiff[];
   locationPath?: string;
   /**
+   * Cursor's `cursor/task` extension names the sub-agent. Keep it off the live
+   * `rawInput` patch so a later generic Task update cannot wipe the prompt.
+   */
+  cursorTask?: {
+    description?: string;
+    prompt?: string;
+    subagentType?: string;
+    durationMs?: number;
+    model?: string;
+    agentId?: string;
+  };
+  /**
    * Serialized size of the rendered part the last time it was charged against
    * `uncheckedTranscriptBytes`. Tool parts are patched in place, so charging the
    * whole part on every update would re-bill a 1MiB diff per streaming frame and
@@ -693,6 +705,9 @@ class AcpProcess {
         // than acknowledge a capability we do not have.
         this.onVendor(message.method, params);
         this.respond(message.id, {});
+      } else if (message.method === "cursor/task") {
+        this.onVendor(message.method, params);
+        this.respond(message.id, { outcome: { outcome: "completed" } });
       } else {
         this.#write({
           jsonrpc: "2.0",
@@ -2018,7 +2033,10 @@ function applyAcpToolSourcePatch(source: AcpToolSourceState, update: JsonObject)
   if ("rawInput" in update) {
     if (isObject(update.rawInput)) {
       source.inputName = boundedString(update.rawInput._toolName, MAX_TOOL_NAME_BYTES);
-      source.toolArgs = boundedToolArguments(update.rawInput);
+      source.toolArgs = preserveTaskLaunchArgs(
+        source.toolArgs,
+        boundedToolArguments(update.rawInput),
+      );
     } else {
       source.inputName = undefined;
       source.toolArgs = undefined;
@@ -2054,7 +2072,7 @@ function renderAcpToolSource(part: BridgeToolPart, source: AcpToolSourceState): 
     ?? source.kind;
   setOptionalPartField(part, "toolTitle", source.title);
   setOptionalPartField(part, "toolName", toolName);
-  setOptionalPartField(part, "toolArgs", source.toolArgs);
+  setOptionalPartField(part, "toolArgs", mergeCursorTaskArgs(source.toolArgs, source.cursorTask));
   setOptionalPartField(part, "toolState", source.toolState);
   part.content = source.title ?? toolName ?? "Tool call";
 
@@ -2193,6 +2211,165 @@ function settleActiveSubagent(state: SessionState, toolUseId: string): void {
   for (const [subagentId, mappedToolUseId] of state.subagentToolIds) {
     if (mappedToolUseId === toolUseId) state.subagentToolIds.delete(subagentId);
   }
+}
+
+const MAX_CURSOR_TASK_PROMPT_BYTES = 64 * 1024;
+const TASK_LAUNCH_ARG_KEYS = [
+  "description",
+  "prompt",
+  "subagent_type",
+  "subagentType",
+  "model",
+  "agentId",
+  "agent_id",
+] as const;
+
+function cursorSubagentTypeLabel(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return boundedString(value, MAX_TOOL_NAME_BYTES)?.trim();
+  }
+  if (isObject(value) && typeof value.custom === "string") {
+    return boundedString(value.custom, MAX_TOOL_NAME_BYTES)?.trim();
+  }
+  return undefined;
+}
+
+/**
+ * Cursor's Task `rawInput` is often just `{ _toolName: "task" }`. A later
+ * status patch must not erase the description/prompt that `cursor/task` added.
+ */
+function preserveTaskLaunchArgs(
+  previous: JsonObject | undefined,
+  next: JsonObject,
+): JsonObject {
+  const merged: JsonObject = { ...next };
+  if (!previous) return merged;
+  for (const key of TASK_LAUNCH_ARG_KEYS) {
+    if (merged[key] == null && typeof previous[key] === "string" && previous[key].trim()) {
+      merged[key] = previous[key];
+    }
+  }
+  if (
+    merged.durationMs == null
+    && typeof previous.durationMs === "number"
+    && Number.isFinite(previous.durationMs)
+    && previous.durationMs >= 0
+  ) {
+    merged.durationMs = previous.durationMs;
+  }
+  return merged;
+}
+
+function mergeCursorTaskArgs(
+  toolArgs: JsonObject | undefined,
+  cursorTask: AcpToolSourceState["cursorTask"],
+): JsonObject | undefined {
+  if (!cursorTask) return toolArgs;
+  const merged: JsonObject = { ...(toolArgs ?? {}) };
+  if (cursorTask.description) merged.description = cursorTask.description;
+  if (cursorTask.prompt) merged.prompt = cursorTask.prompt;
+  if (cursorTask.subagentType) merged.subagent_type = cursorTask.subagentType;
+  if (cursorTask.durationMs !== undefined) merged.durationMs = cursorTask.durationMs;
+  if (cursorTask.model) merged.model = cursorTask.model;
+  if (cursorTask.agentId) merged.agentId = cursorTask.agentId;
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function findToolPart(
+  state: SessionState,
+  toolUseId: string,
+): { owner: BridgeMessage; part: BridgeToolPart } | undefined {
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    const owner = state.messages[index]!;
+    const part = owner.parts.find(
+      (messagePart): messagePart is BridgeToolPart =>
+        messagePart.type === "tool-invocation" && messagePart.toolUseId === toolUseId,
+    );
+    if (part) return { owner, part };
+  }
+  return undefined;
+}
+
+/**
+ * Cursor reports sub-agent identity through `cursor/task`, not nested ACP
+ * tool_calls. The live Task tool is typically titled "Task: Subagent task"
+ * with empty input; this notification is what carries description, prompt,
+ * type, and duration.
+ */
+function applyCursorTask(state: SessionState, params: JsonObject): void {
+  const toolCallId = boundedString(params.toolCallId, MAX_TOOL_ID_BYTES)?.trim();
+  if (!toolCallId) return;
+
+  const description = boundedString(params.description, MAX_TOOL_TITLE_BYTES)?.trim();
+  const prompt = boundedString(params.prompt, MAX_CURSOR_TASK_PROMPT_BYTES)?.trim();
+  const subagentType = cursorSubagentTypeLabel(params.subagentType ?? params.subagent_type);
+  const model = boundedString(params.model, MAX_TOOL_NAME_BYTES)?.trim();
+  const agentId = boundedString(params.agentId ?? params.agent_id, MAX_TOOL_ID_BYTES)?.trim();
+  const durationValue = Number(params.durationMs);
+  const durationMs = Number.isFinite(durationValue) && durationValue >= 0
+    ? Math.floor(durationValue)
+    : undefined;
+  if (
+    !description
+    && !prompt
+    && !subagentType
+    && !model
+    && !agentId
+    && durationMs === undefined
+  ) {
+    return;
+  }
+
+  let found = findToolPart(state, toolCallId);
+  if (!found) {
+    const owner = currentAssistantMessage(state);
+    const part: BridgeToolPart = {
+      type: "tool-invocation",
+      content: description ?? "Task",
+      sourcePartId: `tool:${toolCallId}`,
+      sourceMessageId: owner.id,
+      toolUseId: toolCallId,
+      toolName: "task",
+      toolState: durationMs === undefined ? "pending" : "success",
+      agentState: durationMs === undefined ? "active" : "finished",
+    };
+    owner.parts.push(part);
+    found = { owner, part };
+  }
+
+  const { part } = found;
+  let source = acpToolSourceStates.get(part);
+  if (!source) {
+    source = {
+      title: part.toolTitle,
+      explicitName: part.toolName,
+      toolArgs: part.toolArgs,
+      toolState: part.toolState,
+      agentState: part.agentState,
+      rawOutput: part.toolOutput,
+      contentDiffs: part.toolDiff ? [part.toolDiff] : [],
+    };
+    acpToolSourceStates.set(part, source);
+  }
+  source.cursorTask = {
+    ...(source.cursorTask ?? {}),
+    ...(description ? { description } : {}),
+    ...(prompt ? { prompt } : {}),
+    ...(subagentType ? { subagentType } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {}),
+    ...(model ? { model } : {}),
+    ...(agentId ? { agentId } : {}),
+  };
+  if (durationMs !== undefined && source.agentState !== "failed") {
+    source.agentState = "finished";
+    if (source.toolState === "pending" || source.toolState === undefined) {
+      source.toolState = "success";
+    }
+  }
+  renderAcpToolSource(part, source);
+  syncActiveSubagentTool(state, part);
+  state.revision += 1;
+  schedulePersist();
 }
 
 function failAllActiveSubagents(state: SessionState): void {
@@ -3797,6 +3974,10 @@ async function applyComposerPatch(
 }
 
 function applyVendorUpdate(state: SessionState, method: string, params: JsonObject): void {
+  if (method === "cursor/task") {
+    applyCursorTask(state, params);
+    return;
+  }
   const update = isObject(params.update) ? params.update : params;
   const kind = typeof update.sessionUpdate === "string" ? update.sessionUpdate : "";
   if (method.endsWith("/models/update") || kind === "models_update") {

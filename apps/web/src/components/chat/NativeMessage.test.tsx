@@ -1710,8 +1710,8 @@ describe("NativeMessage task list rendering", () => {
     render(<NativeMessage message={message} />);
 
     expect(screen.getByText("Waiting for activity.")).toBeTruthy();
-    expect(screen.getByText("0 tools")).toBeTruthy();
-    expect(screen.getByText("0 updates")).toBeTruthy();
+    expect(screen.queryByText("0 tools") === null).toBe(true);
+    expect(screen.queryByText("0 updates") === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: /subagent/i }));
 
@@ -1800,17 +1800,47 @@ describe("NativeMessage task list rendering", () => {
 
     const agentGroup = screen.getByRole("region", { name: "2 agents" });
     const modelLabel = screen.getByText("gpt-5.6-sol");
+    const sharedCard = agentGroup.querySelector(".rounded-2xl");
+    const reviewerTrigger = screen.getByRole("button", { name: /reviewer/i });
+    const testerTrigger = screen.getByRole("button", { name: /tester/i });
 
     expect(agentGroup).toBeTruthy();
     expect(screen.getByText("Agents")).toBeTruthy();
     expect(screen.getByText("1 active")).toBeTruthy();
     expect(screen.getByText("Reviewer")).toBeTruthy();
     expect(screen.getByText("Tester")).toBeTruthy();
+    expect(agentGroup.querySelectorAll(".rounded-2xl")).toHaveLength(1);
+    expect(sharedCard).toBeTruthy();
+    expect(getClassTokens(sharedCard)).toContain("divide-y");
+    expect(sharedCard?.contains(reviewerTrigger)).toBe(true);
+    expect(sharedCard?.contains(testerTrigger)).toBe(true);
+    expect(getClassTokens(reviewerTrigger.parentElement)).not.toContain("rounded-2xl");
+    expect(getClassTokens(testerTrigger.parentElement)).not.toContain("rounded-2xl");
     expect(screen.getAllByText("gpt-5.6-sol")).toHaveLength(1);
     expect(
       agentGroup.compareDocumentPosition(modelLabel) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  test("keeps a standalone agent in its own card without an agents group", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "subagent",
+            content: "Reviewer",
+            subagentId: "agent-solo",
+            subagentName: "Reviewer",
+            toolState: "success",
+          },
+        ])}
+      />,
+    );
+
+    const trigger = screen.getByRole("button", { name: /reviewer/i });
+    expect(screen.queryByRole("region", { name: /agents/i }) === null).toBe(true);
+    expect(getClassTokens(trigger.parentElement)).toContain("rounded-2xl");
   });
 
   test("counts pending task children and undefined states as active but not terminal agents", () => {
@@ -2493,6 +2523,85 @@ describe("NativeMessage task list rendering", () => {
     render(<NativeMessage message={message} />);
 
     expect(screen.getByText("No activity captured.")).toBeTruthy();
+    expect(screen.queryByText("0 tools") === null).toBe(true);
+    expect(screen.queryByText("0 updates") === null).toBe(true);
+  });
+
+  test("uses the Cursor task prompt as the finished preview when no child activity arrived", () => {
+    const message = makeMessage([
+      {
+        type: "task-group",
+        content: "Task: Subagent task",
+        task: {
+          type: "tool-invocation",
+          content: "Task: Subagent task",
+          toolName: "task",
+          toolTitle: "Task: Subagent task",
+          toolState: "success",
+          agentState: "finished",
+          toolUseCount: 8,
+          toolArgs: {
+            description: "Summarize two docs",
+            prompt: "Read docs/upgrade-agents.md and docs/flaky-tests.md.",
+            subagent_type: "explore",
+            model: "composer-2.5",
+            agentId: "bc-abc123",
+            durationMs: 1_240,
+          },
+        },
+        childTools: [],
+      },
+    ]);
+
+    render(<NativeMessage message={message} platform="cursor" />);
+
+    expect(screen.getByText("Summarize two docs (explore)")).toBeTruthy();
+    expect(screen.getByText("1.2s")).toBeTruthy();
+    expect(screen.queryByText("No activity captured.") === null).toBe(true);
+    expect(screen.queryByText("8 tool uses") === null).toBe(true);
+    expect(screen.queryByText("0 tools") === null).toBe(true);
+    expect(screen.queryByText("0 updates") === null).toBe(true);
+    expect(
+      screen.getByText("Read docs/upgrade-agents.md and docs/flaky-tests.md."),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /summarize two docs/i }));
+    expect(screen.getByText("Type")).toBeTruthy();
+    expect(screen.getByText("explore")).toBeTruthy();
+    expect(screen.getByText("Model")).toBeTruthy();
+    expect(screen.getByText("composer-2.5")).toBeTruthy();
+    expect(screen.getByText("Duration")).toBeTruthy();
+    expect(screen.getByText("Agent ID")).toBeTruthy();
+    expect(screen.getByText("bc-abc123")).toBeTruthy();
+    expect(screen.queryByText("No child actions yet.") === null).toBe(true);
+  });
+
+  test("still shows real tool counts for non-Cursor agents", () => {
+    const message = makeMessage([
+      {
+        type: "task-group",
+        content: "Agent",
+        task: {
+          type: "tool-invocation",
+          content: "Agent",
+          toolName: "Agent",
+          toolTitle: "Agent",
+          toolState: "success",
+          toolUseCount: 8,
+          toolArgs: {
+            description: "Review the diff",
+            prompt: "Inspect src/app.ts",
+            subagent_type: "explore",
+          },
+        },
+        childTools: [],
+      },
+    ]);
+
+    render(<NativeMessage message={message} platform="claude" />);
+
+    expect(screen.getByText("8 tool uses")).toBeTruthy();
+    expect(screen.getByText("Review the diff (explore)")).toBeTruthy();
   });
 
   test("previews the latest child command in the collapsed agent row", () => {
@@ -3855,8 +3964,14 @@ describe("NativeMessage agent status and grouping details", () => {
       />,
     );
 
-    expect(screen.getByRole("region", { name: "2 agents" })).toBeTruthy();
+    const agentGroup = screen.getByRole("region", { name: "2 agents" });
+    const sharedCard = agentGroup.querySelector(".rounded-2xl");
+
+    expect(agentGroup).toBeTruthy();
     expect(screen.getByText("1 active")).toBeTruthy();
+    expect(agentGroup.querySelectorAll(".rounded-2xl")).toHaveLength(1);
+    expect(sharedCard?.contains(screen.getByRole("button", { name: /subagent/i }))).toBe(true);
+    expect(sharedCard?.contains(screen.getByRole("button", { name: /tester/i }))).toBe(true);
   });
 
   test("falls back to the generic subagent label with no name, role or content", () => {

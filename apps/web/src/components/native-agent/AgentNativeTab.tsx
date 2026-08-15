@@ -488,6 +488,11 @@ function UnassignedNativeAgentComposer({
                 enabledPlatforms={enabledPlatforms}
                 selectedPlatform={platform}
                 onPlatformChange={(next) => {
+                  // The picker announces the platform on every model choice, not
+                  // only when it changes. Resetting unconditionally would clear
+                  // the model and effort the user just picked on this provider.
+                  const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+                  if ((current?.platform ?? platform) === next) return;
                   const nextAdapter = findNativeAgentAdapter(next);
                   updateDraft(sessionKey, {
                     platform: next,
@@ -514,9 +519,12 @@ function UnassignedNativeAgentComposer({
                   // Platform selection is applied synchronously by the picker
                   // before model selection. Read it back from the neutral draft so
                   // identical provider-local model ids cannot route to the first
-                  // matching catalog entry from another provider.
-                  const selectedPlatform = useNativeComposeStore.getState().drafts
-                    .get(sessionKey)?.platform ?? platform;
+                  // matching catalog entry from another provider. The reasoning id
+                  // comes from that same fresh snapshot: a platform switch clears
+                  // it, and the render closure still holds the old provider's
+                  // value, which would otherwise be carried across the switch.
+                  const currentDraft = useNativeComposeStore.getState().drafts.get(sessionKey);
+                  const selectedPlatform = currentDraft?.platform ?? platform;
                   const model = models.find((candidate) =>
                     candidate.platform === selectedPlatform && candidate.id === modelId,
                   );
@@ -525,7 +533,7 @@ function UnassignedNativeAgentComposer({
                     platform: selectedPlatform,
                     reasoningId: resolveReasoningId(
                       model?.reasoning ?? [],
-                      draft.reasoningId,
+                      currentDraft?.reasoningId,
                       model?.defaultReasoningId,
                     ) ?? model?.defaultReasoningId,
                   });
@@ -1790,6 +1798,7 @@ function SharedNativeAgentController({
                   const nextReasoningId = resolveReasoningId(
                     supportedReasoning,
                     selectedReasoningId,
+                    nextModel?.defaultReasoningId,
                   ) ?? nextModel?.defaultReasoningId;
                   void updateControlsSafely({
                     modelId,

@@ -13,6 +13,7 @@ import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { useConfigStore } from "@/stores/configStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { getNativeAgentData } from "@/types/paneLayout";
 import { createSessionKey } from "@/lib/utils";
@@ -166,7 +167,13 @@ mock.module("@/lib/pane-layout-persistence", () => ({
 const { AgentNativeTab } = await import("./AgentNativeTab");
 const { useNativeAgentSession } = await import("@/hooks/useNativeAgentSession");
 
+// Favorites and enabled platforms live in the shared config store, which no
+// other hook resets between files. Snapshot it so a test that seeds either one
+// cannot change what a later test's model picker renders.
+let configSnapshot: ReturnType<typeof useConfigStore.getState>["config"];
+
 beforeEach(() => {
+  configSnapshot = useConfigStore.getState().config;
   useEnvironmentStore.setState({
     environments: [{
       id: "env-1",
@@ -180,6 +187,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useConfigStore.getState().setConfig(configSnapshot);
   flushPaneLayoutNowMock.mockClear();
   getNativeAgentModelCatalogMock.mockReset();
   getNativeAgentModelCatalogMock.mockImplementation(async () => []);
@@ -333,6 +341,118 @@ describe("AgentNativeTab", () => {
     expect(screen.getByRole("button", { name: "Resume Session" })).toBeTruthy();
     expect(screen.getByTestId("compose-dock").className).toContain("top-1/2");
     expect(screen.getByTestId("unassigned-native-compose-bar").className).toContain("rounded-2xl");
+  });
+
+  test("drops the previous platform's effort when one click also switches platform", async () => {
+    // The picker calls onPlatformChange and onModelChange from a single event,
+    // so the render closure is still holding the pre-switch draft. Reading the
+    // effort from that closure would carry it onto the new provider even though
+    // the platform switch just cleared it.
+    const reasoning = [
+      { id: "low", label: "Low" },
+      { id: "medium", label: "Medium" },
+      { id: "xhigh", label: "Extra high" },
+    ];
+    getNativeAgentModelCatalogMock.mockImplementation(async () => [
+      {
+        platform: "claude", id: "claude-m", label: "Claude M",
+        reasoning, defaultReasoningId: "medium",
+      },
+      {
+        platform: "codex", id: "codex-m", label: "Codex M",
+        reasoning, defaultReasoningId: "medium",
+      },
+    ] as never);
+    useEnvironmentStore.setState({
+      environments: [{
+        id: "env-1", projectId: "project-1", name: "Effort switch", order: 0,
+      } as never],
+    });
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex"],
+      favoriteModels: [{ platform: "codex", modelId: "codex-m" }],
+    } as never);
+    const sessionKey = createSessionKey("env-1", "tab-effort-platform-switch");
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      platform: "claude",
+      modelId: "claude-m",
+      reasoningId: "xhigh",
+    });
+
+    render(
+      <AgentNativeTab
+        tabId="tab-effort-platform-switch"
+        data={{ environmentId: "env-1" }}
+        isActive
+      />,
+    );
+
+    fireEvent.pointerDown(await screen.findByTitle(/^Choose /));
+    // The favorites view lists models across platforms without switching the
+    // platform itself, which is what makes the single-click path reachable.
+    fireEvent.click(await screen.findByRole("button", { name: "Favorite models" }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Codex M/ }));
+
+    await waitFor(() => expect(
+      useNativeComposeStore.getState().drafts.get(sessionKey)?.modelId,
+    ).toBe("codex-m"));
+    // "xhigh" is a supported effort on the new model, so only a stale read
+    // could produce it here.
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.reasoningId)
+      .toBe("medium");
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.platform).toBe("codex");
+  });
+
+  test("keeps a still-supported effort when the model switch stays on one platform", async () => {
+    const reasoning = [
+      { id: "low", label: "Low" },
+      { id: "medium", label: "Medium" },
+      { id: "xhigh", label: "Extra high" },
+    ];
+    getNativeAgentModelCatalogMock.mockImplementation(async () => [
+      {
+        platform: "claude", id: "claude-m", label: "Claude M",
+        reasoning, defaultReasoningId: "medium",
+      },
+      {
+        platform: "claude", id: "claude-n", label: "Claude N",
+        reasoning, defaultReasoningId: "medium",
+      },
+    ] as never);
+    useEnvironmentStore.setState({
+      environments: [{
+        id: "env-1", projectId: "project-1", name: "Effort same platform", order: 0,
+      } as never],
+    });
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude"],
+      favoriteModels: [],
+    } as never);
+    const sessionKey = createSessionKey("env-1", "tab-same-platform-switch");
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      platform: "claude",
+      modelId: "claude-m",
+      reasoningId: "xhigh",
+    });
+
+    render(
+      <AgentNativeTab
+        tabId="tab-same-platform-switch"
+        data={{ environmentId: "env-1" }}
+        isActive
+      />,
+    );
+
+    fireEvent.pointerDown(await screen.findByTitle(/^Choose /));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Claude N/ }));
+
+    await waitFor(() => expect(
+      useNativeComposeStore.getState().drafts.get(sessionKey)?.modelId,
+    ).toBe("claude-n"));
+    // No platform change, so an explicit choice the new model still supports
+    // must survive rather than resetting to the advertised default.
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.reasoningId)
+      .toBe("xhigh");
   });
 
   test("asks for a platform before opening that provider's normal resume flow", async () => {

@@ -175,6 +175,65 @@ describe("native agent model catalogue command", () => {
       ]);
     });
   });
+
+  test("resolves each provider's default reasoning id from what the model offers", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.updateEnvironment("e1", {
+        claudeModelCatalog: {
+          environmentId: "e1",
+          models: [
+            { id: "claude-broad", name: "Broad", supportedEffortLevels: ["low", "medium", "high"] },
+            // Before the shared policy this still advertised "high", an effort
+            // the model does not accept.
+            { id: "claude-narrow", name: "Narrow", supportedEffortLevels: ["low", "medium"] },
+          ],
+          source: "sdk",
+          fetchedAt: new Date(0).toISOString(),
+          stale: false,
+        },
+      });
+      await storage.cacheAgentModelCatalog("codex", [
+        {
+          id: "codex-with-high",
+          name: "Codex With High",
+          reasoningEfforts: ["low", "medium", "high"],
+          // "high" outranks a medium the catalog merely advertises.
+          defaultReasoningEffort: "medium",
+        },
+        {
+          id: "codex-without-high",
+          name: "Codex Without High",
+          reasoningEfforts: ["low", "medium", "xhigh"],
+          // With no "high" on offer the advertised default must survive rather
+          // than collapsing to the first listed effort.
+          defaultReasoningEffort: "medium",
+        },
+      ]);
+      await storage.cacheOpenCodeModelCatalog("proj-1", [
+        { id: "opencode/a", name: "OpenCode A", provider: "opencode", variants: ["high"] },
+      ]);
+
+      const models = await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+      }) as Array<Record<string, unknown>>;
+      const defaults = new Map(models.map((model) => [model.id, model.defaultReasoningId]));
+
+      expect(defaults.get("claude-broad")).toBe("high");
+      expect(defaults.get("claude-narrow")).toBe("low");
+      expect(defaults.get("codex-with-high")).toBe("high");
+      expect(defaults.get("codex-without-high")).toBe("medium");
+      // OpenCode injects an explicit "Default" choice, which outranks "high".
+      expect(defaults.get("opencode/a")).toBe("default");
+
+      // Every advertised default has to be a selectable option.
+      for (const model of models) {
+        const reasoning = model.reasoning as Array<{ id: string }> | undefined;
+        if (!reasoning?.length) continue;
+        expect(reasoning.map((option) => option.id))
+          .toContain(model.defaultReasoningId as string);
+      }
+    });
+  });
 });
 
 describe("bridge readiness command", () => {

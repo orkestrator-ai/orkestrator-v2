@@ -100,4 +100,35 @@ describe("resolveReasoningId", () => {
     expect(resolveReasoningId(["low", "high"], "xhigh")).toBe(FALLBACK_REASONING_ID);
     expect(resolveReasoningId(["default", "fast"], "missing")).toBe(DEFAULT_REASONING_ID);
   });
+
+  // The third argument is what separates a catalog whose own default must be
+  // honoured (Cursor/Grok carry the agent's live effort there) from one where
+  // the shared policy should win. Every caller that omits it silently degrades
+  // to the first listed option, so pin the behaviour explicitly.
+  test("falls back to the advertised default when neither default nor high is offered", () => {
+    expect(resolveReasoningId(["low", "medium", "xhigh"], undefined, "medium")).toBe("medium");
+    expect(resolveReasoningId(["low", "medium", "xhigh"], "max", "medium")).toBe("medium");
+  });
+
+  test("prefers high over an advertised default the catalog also offers", () => {
+    expect(resolveReasoningId(["low", "medium", "high"], undefined, "medium"))
+      .toBe(FALLBACK_REASONING_ID);
+  });
+
+  test("prefers an explicit default option over the advertised default", () => {
+    expect(resolveReasoningId(["default", "low", "medium"], undefined, "medium"))
+      .toBe(DEFAULT_REASONING_ID);
+  });
+
+  test("keeps a supported preference ahead of the advertised default", () => {
+    expect(resolveReasoningId(["low", "medium", "xhigh"], "xhigh", "medium")).toBe("xhigh");
+  });
+
+  test("ignores an advertised default the catalog no longer offers", () => {
+    expect(resolveReasoningId(["low", "medium"], undefined, "retired")).toBe("low");
+  });
+
+  test("returns undefined for an empty catalog even with a preference", () => {
+    expect(resolveReasoningId([], "high", "medium")).toBeUndefined();
+  });
 });

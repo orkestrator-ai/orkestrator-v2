@@ -1271,7 +1271,13 @@ export class NativeAgentService {
     const selectedReasoningId = providerControls?.reasoningId
       ?? session.controls?.reasoningId
       ?? providerComposer?.selectedReasoningId
-      ?? resolveReasoningId(selectedModel?.reasoning ?? [])
+      // The advertised default matters for Cursor/Grok, where it carries the
+      // agent's own current effort rather than a static catalog value.
+      ?? resolveReasoningId(
+        selectedModel?.reasoning ?? [],
+        undefined,
+        selectedModel?.defaultReasoningId,
+      )
       ?? selectedModel?.defaultReasoningId;
     const supportsSpeed = providerComposer?.fastModeAvailable === true
       || selectedModel?.supportsSpeed === true;

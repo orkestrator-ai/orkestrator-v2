@@ -17,6 +17,7 @@ import {
   CODEX_TIMELINE_ITEM_PREFIX,
   CODEX_TIMELINE_SUBAGENT_PREFIX,
   getCodexSpawnedAgentIdsInOrder,
+  normalizeCodexCollabToolCallItem,
   reconcileCodexSubagentTimeline,
 } from "../codex-collaboration.js";
 import { relative } from "node:path";
@@ -225,7 +226,20 @@ export interface SubagentPartsLoadOptions {
  */
 function ownedSubagentIds(items: EngineItem[]): string[] | undefined {
   const claimed = getCodexSpawnedAgentIdsInOrder(items);
-  if (claimed.length === 0) return undefined;
+  if (claimed.length === 0) {
+    // Codex's custom multi-agent wrapper can omit the native spawn item while
+    // later wait/send collaboration items still name the child. Those receiver
+    // ids are authoritative for this assistant segment and let transcript
+    // hydration restore the child's nickname instead of rendering "subagent".
+    const referenced = new Set<string>();
+    for (const item of items) {
+      const collab = normalizeCodexCollabToolCallItem(item);
+      if (!collab) continue;
+      for (const agentId of collab.receiver_thread_ids ?? []) referenced.add(agentId);
+      for (const agentId of Object.keys(collab.agents_states ?? {})) referenced.add(agentId);
+    }
+    return referenced.size > 0 ? [...referenced] : undefined;
+  }
   // A partially identified segment cannot be filtered without dropping the
   // spawns it failed to name, so fall back rather than lose them.
   if (claimed.some((agentId) => agentId === undefined)) return undefined;

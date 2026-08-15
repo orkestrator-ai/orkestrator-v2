@@ -1,4 +1,5 @@
 import {
+  deriveSubagentPartFromChildRecords,
   deriveSubagentPartsFromTranscriptRecords,
   parseSubAgentActivityRecords,
   type TranscriptRecord,
@@ -102,15 +103,14 @@ export async function deriveTranscriptSubagentPartsForTurn({
     return !Number.isNaN(timestamp) && timestamp >= turnStartedAt;
   });
 
-  if (parentRecords.length === 0) {
-    return [];
-  }
-
   // Scoping by the ids this row's items claim is exact, so the timestamp window
   // is used only when they cannot supply one.
   const owned = ownedSubagentIds && ownedSubagentIds.length > 0
     ? new Set(ownedSubagentIds)
     : undefined;
+  if (parentRecords.length === 0 && !owned) {
+    return [];
+  }
   const resolvedAgentIdBySpawnCallId = new Map<string, string>();
   const spawnCalls = parentRecords.flatMap((record) => {
     if (
@@ -144,13 +144,21 @@ export async function deriveTranscriptSubagentPartsForTurn({
   }
 
   const requestedAgentIds = new Set<string>();
+  // In multi-agent v2 the rollout output may contain only `task_name`, while
+  // the native collab item already knows the child thread id. Positional
+  // pairing is safe when this row owns every spawn in the window one-for-one;
+  // for steered rows spanning other spawns, keep requiring an exact activity
+  // or rollout id so a child cannot be attached to the wrong assistant row.
+  const ownedFallbacksAlign = owned !== undefined
+    && fallbackAgentIdsInSpawnOrder.length === spawnCalls.length
+    && fallbackAgentIdsInSpawnOrder.every((agentId) => {
+      const normalized = asNonEmptyString(agentId);
+      return normalized !== undefined && owned.has(normalized);
+    });
   for (const [spawnIndex, spawnCallId] of spawnCalls.entries()) {
-    // The positional fallback indexes this row's items against the spawns found
-    // in its window. Under `owned` the window spans the whole turn, so the two
-    // no longer line up and a mismatched id would be worse than none.
-    const fallbackAgentId = owned
-      ? undefined
-      : asNonEmptyString(fallbackAgentIdsInSpawnOrder[spawnIndex]);
+    const fallbackAgentId = !owned || ownedFallbacksAlign
+      ? asNonEmptyString(fallbackAgentIdsInSpawnOrder[spawnIndex])
+      : undefined;
     const requestedAgentId = activityAgentIdByCallId.get(spawnCallId)
       ?? outputAgentIdByCallId.get(spawnCallId)
       ?? fallbackAgentId;
@@ -160,6 +168,12 @@ export async function deriveTranscriptSubagentPartsForTurn({
     resolvedAgentIdBySpawnCallId.set(spawnCallId, requestedAgentId);
     requestedAgentIds.add(requestedAgentId);
   }
+  // Native app-server collaboration may be invoked through Codex's custom
+  // tool wrapper. In that form the parent rollout contains no direct
+  // `spawn_agent` record, but the assistant segment still owns the receiver
+  // thread ids. Load those child transcripts so their nicknames and updates do
+  // not disappear behind a generic fallback row.
+  for (const ownedAgentId of owned ?? []) requestedAgentIds.add(ownedAgentId);
   const selectedSpawnCallIds = owned
     ? new Set(resolvedAgentIdBySpawnCallId.keys())
     : new Set(spawnCalls);
@@ -192,9 +206,20 @@ export async function deriveTranscriptSubagentPartsForTurn({
         return !!callId && selectedSpawnCallIds.has(callId);
       });
 
-  return deriveSubagentPartsFromTranscriptRecords(
+  const derivedParts = deriveSubagentPartsFromTranscriptRecords(
     scopedParentRecords,
     childRecordsByAgentId,
     resolvedAgentIdBySpawnCallId,
   );
+  const derivedAgentIds = new Set(
+    derivedParts.flatMap((part) => part.subagentId ? [part.subagentId] : []),
+  );
+  for (const ownedAgentId of owned ?? []) {
+    if (derivedAgentIds.has(ownedAgentId)) continue;
+    derivedParts.push(deriveSubagentPartFromChildRecords(
+      ownedAgentId,
+      childRecordsByAgentId.get(ownedAgentId) ?? [],
+    ));
+  }
+  return derivedParts;
 }

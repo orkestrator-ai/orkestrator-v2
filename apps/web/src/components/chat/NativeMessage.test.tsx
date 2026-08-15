@@ -1692,7 +1692,7 @@ describe("NativeMessage task list rendering", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /reviewer/i }));
-    expect(screen.getByText("Inspect the original task details")).toBeTruthy();
+    expect(screen.getAllByText("Inspect the original task details")).toHaveLength(2);
 
     rerender(
       <NativeMessage
@@ -1711,7 +1711,7 @@ describe("NativeMessage task list rendering", () => {
     );
 
     expect(screen.getByRole("region", { name: "2 agents" })).toBeTruthy();
-    expect(screen.getByText("Inspect the original task details")).toBeTruthy();
+    expect(screen.getAllByText("Inspect the original task details")).toHaveLength(2);
     expect(
       screen.getByRole("button", { name: /reviewer/i }).getAttribute("aria-expanded"),
     ).toBe("true");
@@ -1741,7 +1741,7 @@ describe("NativeMessage task list rendering", () => {
 
     const remountedTrigger = screen.getByRole("button", { name: /reviewer/i });
     expect(remountedTrigger.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByText("Inspect the streaming transcript")).toBeTruthy();
+    expect(screen.getAllByText("Inspect the streaming transcript")).toHaveLength(2);
 
     fireEvent.click(remountedTrigger);
     expect(remountedTrigger.getAttribute("aria-expanded")).toBe("false");
@@ -2086,6 +2086,115 @@ describe("NativeMessage task list rendering", () => {
     render(<NativeMessage message={message} />);
 
     expect(await screen.findByAltText("Thumbnail: diagram.png")).toBeTruthy();
+  });
+
+  test("shows Codex agent identity, counts, and expandable updates", () => {
+    const message = makeMessage([{
+      type: "subagent",
+      content: "Heisenberg",
+      subagentId: "codex-reviewer",
+      subagentName: "Heisenberg",
+      subagentRole: "correctness_review",
+      subagentPrompt: "Review the transcript ordering change.",
+      toolState: "pending",
+      subagentActionCount: 1,
+      subagentActions: [
+        { type: "text", content: "Checking the message ordering." },
+        {
+          type: "tool-invocation",
+          content: "Inspect the renderer",
+          toolName: "read",
+          toolState: "success",
+        },
+      ],
+    }]);
+
+    render(<NativeMessage message={message} />);
+
+    const agent = screen.getByRole("button", {
+      name: /Heisenberg \(correctness_review\)/i,
+    });
+    expect(screen.getByText("1 tool")).toBeTruthy();
+    expect(screen.getByText("2 updates")).toBeTruthy();
+    // Working: the prompt lives in the expanded body only, so the collapsed row
+    // is free to report what the child is doing right now.
+    expect(screen.queryByText("Review the transcript ordering change.") === null).toBe(true);
+    expect(screen.queryByText("Task ·") === null).toBe(true);
+
+    fireEvent.click(agent);
+
+    expect(agent.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("Review the transcript ordering change.")).toBeTruthy();
+    expect(screen.getByText("Checking the message ordering.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Read success$/i })).toBeTruthy();
+  });
+
+  test("previews the spawn prompt once a Codex agent has finished", () => {
+    const message = makeMessage([{
+      type: "subagent",
+      content: "Heisenberg",
+      subagentId: "codex-reviewer-done",
+      subagentName: "Heisenberg",
+      subagentPrompt: "Review the transcript ordering change.",
+      toolState: "success",
+      subagentActions: [
+        {
+          type: "tool-invocation",
+          content: "Inspect the renderer",
+          toolName: "read",
+          toolState: "success",
+        },
+      ],
+    }]);
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByText("Finished")).toBeTruthy();
+    expect(screen.getByText("Task ·")).toBeTruthy();
+    expect(screen.getByText("Review the transcript ordering change.")).toBeTruthy();
+  });
+
+  test("collapses a Codex agent label whose role only restates its name", () => {
+    // Codex multi-agent v2 derives both the name and the role from the same
+    // task path, so rendering both would read "metadata_review (metadata_review)".
+    render(<NativeMessage message={makeMessage([{
+      type: "subagent",
+      content: "metadata_review",
+      subagentId: "codex-task-named",
+      subagentRole: "metadata_review",
+      toolState: "pending",
+    }])} />);
+
+    // The label is one text node, so an uncollapsed label would read
+    // "metadata_review (metadata_review)" here rather than matching exactly.
+    expect(screen.getByText("metadata_review")).toBeTruthy();
+    expect(screen.queryByText(/metadata_review \(metadata_review\)/) === null).toBe(true);
+  });
+
+  test("keeps a genuinely different role beside the agent name, ignoring case", () => {
+    render(<NativeMessage message={makeMessage([
+      {
+        type: "subagent",
+        content: "Lovelace",
+        subagentId: "codex-cased",
+        subagentName: "Lovelace",
+        subagentRole: "lovelace",
+        toolState: "pending",
+      },
+      {
+        type: "subagent",
+        content: "Babbage",
+        subagentId: "codex-distinct",
+        subagentName: "Babbage",
+        subagentRole: "explorer",
+        toolState: "pending",
+      },
+    ])} />);
+
+    // Case alone is not a distinct role, so it collapses like an exact match.
+    expect(screen.getByText("Lovelace")).toBeTruthy();
+    expect(screen.queryByText(/Lovelace \(lovelace\)/) === null).toBe(true);
+    expect(screen.getByText("Babbage (explorer)")).toBeTruthy();
   });
 
   test("can render Claude tmux agent usage as tokens only", () => {

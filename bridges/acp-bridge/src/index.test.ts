@@ -66,8 +66,12 @@ function isRetryableWaitError(error: unknown): boolean {
   return error.code === "ConnectionRefused" || error.code === "ECONNREFUSED";
 }
 
-async function waitFor<T>(read: () => Promise<T>, accept: (value: T) => boolean): Promise<T> {
-  const deadline = Date.now() + 5_000;
+async function waitFor<T>(
+  read: () => Promise<T>,
+  accept: (value: T) => boolean,
+  timeoutMs = 5_000,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
   let latest: T | undefined;
   while (Date.now() < deadline) {
     try {
@@ -82,6 +86,10 @@ async function waitFor<T>(read: () => Promise<T>, accept: (value: T) => boolean)
     await Bun.sleep(20);
   }
   throw new Error(`Timed out waiting for ACP state: ${describeWaitValue(latest)}`);
+}
+
+function codedError(code: string): Error & { code: string } {
+  return Object.assign(new Error(code), { code });
 }
 
 async function spawnBridge(options: {
@@ -145,6 +153,71 @@ async function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void>
   if (child.exitCode !== null || child.signalCode !== null) return;
   await new Promise<void>((resolvePromise) => child.once("exit", () => resolvePromise()));
 }
+
+describe("waitFor", () => {
+  test("retries ConnectionRefused until the read succeeds", async () => {
+    let attempts = 0;
+    const value = await waitFor(async () => {
+      attempts += 1;
+      if (attempts < 3) throw codedError("ConnectionRefused");
+      return { ready: true };
+    }, (current) => current.ready);
+    expect(value).toEqual({ ready: true });
+    expect(attempts).toBe(3);
+  });
+
+  test("retries ECONNREFUSED until the read succeeds", async () => {
+    let attempts = 0;
+    const value = await waitFor(async () => {
+      attempts += 1;
+      if (attempts < 2) throw codedError("ECONNREFUSED");
+      return "up";
+    }, (current) => current === "up");
+    expect(value).toBe("up");
+    expect(attempts).toBe(2);
+  });
+
+  test("retries a real Bun fetch ConnectionRefused until the read succeeds", async () => {
+    const port = await unusedPort();
+    let attempts = 0;
+    const value = await waitFor(async () => {
+      attempts += 1;
+      if (attempts < 3) await nativeFetch(`http://127.0.0.1:${port}/health`);
+      return "recovered";
+    }, (current) => current === "recovered");
+    expect(value).toBe("recovered");
+    expect(attempts).toBe(3);
+  });
+
+  test("rethrows a non-retryable coded error on the first attempt", async () => {
+    const error = codedError("EPERM");
+    let attempts = 0;
+    await expect(waitFor(async () => {
+      attempts += 1;
+      throw error;
+    }, () => true)).rejects.toBe(error);
+    expect(attempts).toBe(1);
+  });
+
+  test("rethrows errors that have no code on the first attempt", async () => {
+    const error = new Error("parse failed");
+    let attempts = 0;
+    await expect(waitFor(async () => {
+      attempts += 1;
+      throw error;
+    }, () => true)).rejects.toBe(error);
+    expect(attempts).toBe(1);
+  });
+
+  test("times out when ConnectionRefused never recovers", async () => {
+    let attempts = 0;
+    await expect(waitFor(async () => {
+      attempts += 1;
+      throw codedError("ConnectionRefused");
+    }, () => true, 80)).rejects.toThrow("Timed out waiting for ACP state: undefined");
+    expect(attempts).toBeGreaterThan(1);
+  });
+});
 
 describe("ACP bridge", () => {
   test("allows authenticated renderer requests from trusted local origins", async () => {

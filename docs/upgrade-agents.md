@@ -415,8 +415,12 @@ contract.
    ```bash
    bun run --cwd apps/web typecheck
    bun run --cwd apps/backend typecheck
-   bun test apps/web/src/lib/opencode-client.test.ts --parallel
-   bun test apps/backend/src/core/build-pipeline-provider.test.ts --parallel
+   bun test --cwd apps/web src/lib/opencode-client.test.ts --parallel
+   bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
+     src/core/opencode-provider-dispatch.test.ts \
+     src/core/opencode-provider-lifecycle.test.ts \
+     src/core/opencode-provider-runtime.test.ts \
+     --parallel
    OPENCODE_CLI_PATH=/absolute/path/to/new/opencode \
      bun run verify:opencode:live
    ```

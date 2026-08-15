@@ -3529,7 +3529,10 @@ describe("TerminalContainer", () => {
     expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
   });
 
-  test("activates the backend-created agent tab when local setup finishes", async () => {
+  // Shared fixture for the setup -> startup-agent focus handoff: a local
+  // environment whose backend-published agent tab already exists while the
+  // setup terminal is still the surface the renderer keeps selected.
+  function seedStartupFocusHandoffConfig(): void {
     useConfigStore.setState((state) => ({
       ...state,
       config: {
@@ -3542,45 +3545,35 @@ describe("TerminalContainer", () => {
         repositories: {},
       },
     }));
-    usePaneLayoutStore.setState({
-      environments: new Map([[
-        "env-hidden",
-        {
-          root: {
-            kind: "leaf",
-            id: "default",
-            tabs: [
-              { id: "default", type: "plain", isSetupTab: true },
-              {
-                id: "startup-agent",
-                type: "agent-native",
-                nativeAgentData: {
-                  platform: "codex",
-                  environmentId: "env-hidden",
-                  isLocal: true,
-                },
-              },
-            ],
-            activeTabId: "default",
-          },
-          activePaneId: "default",
-          containerId: null,
-        },
-      ]]),
-      hydration: new Map([["env-hidden", "done"]]),
-      activeEnvironmentId: "env-hidden",
-    } as never);
+  }
+
+  function startupAgentTabFixture(environmentId: string) {
+    return {
+      id: "startup-agent",
+      type: "agent-native",
+      nativeAgentData: {
+        platform: "codex",
+        environmentId,
+        isLocal: true,
+      },
+    };
+  }
+
+  function seedStartupFocusHandoffEnvironment(
+    environmentId: string,
+    options: { setupReady: boolean },
+  ): void {
     useEnvironmentStore.setState((state) => ({
       ...state,
       environments: state.environments.map((environment) =>
-        environment.id === "env-hidden"
+        environment.id === environmentId
           ? {
               ...environment,
               containerId: null,
               environmentType: "local",
-              worktreePath: "/tmp/env-hidden-worktree",
-              setupPhase: "running",
-              setupScriptsComplete: false,
+              worktreePath: `/tmp/${environmentId}-worktree`,
+              setupPhase: options.setupReady ? "ready" : "running",
+              setupScriptsComplete: options.setupReady,
               defaultAgent: "codex",
               codexMode: "native",
               pendingAgentLaunch: true,
@@ -3594,6 +3587,31 @@ describe("TerminalContainer", () => {
           : environment
       ),
     }));
+  }
+
+  test("activates the backend-created agent tab when local setup finishes", async () => {
+    seedStartupFocusHandoffConfig();
+    usePaneLayoutStore.setState({
+      environments: new Map([[
+        "env-hidden",
+        {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              { id: "default", type: "plain", isSetupTab: true },
+              startupAgentTabFixture("env-hidden"),
+            ],
+            activeTabId: "default",
+          },
+          activePaneId: "default",
+          containerId: null,
+        },
+      ]]),
+      hydration: new Map([["env-hidden", "done"]]),
+      activeEnvironmentId: "env-hidden",
+    } as never);
+    seedStartupFocusHandoffEnvironment("env-hidden", { setupReady: false });
     useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
 
     render(
@@ -3629,6 +3647,172 @@ describe("TerminalContainer", () => {
         usePaneLayoutStore.getState().getPane("default", "env-hidden")?.activeTabId,
       ).toBe("startup-agent");
     });
+  });
+
+  test("leaves a deliberately selected tab alone when local setup finishes", async () => {
+    seedStartupFocusHandoffConfig();
+    usePaneLayoutStore.setState({
+      environments: new Map([[
+        "env-hidden",
+        {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              { id: "default", type: "plain", isSetupTab: true },
+              { id: "shell-2", type: "plain" },
+              startupAgentTabFixture("env-hidden"),
+            ],
+            // The user clicked away from the setup terminal before it finished.
+            activeTabId: "shell-2",
+          },
+          activePaneId: "default",
+          containerId: null,
+        },
+      ]]),
+      hydration: new Map([["env-hidden", "done"]]),
+      activeEnvironmentId: "env-hidden",
+    } as never);
+    seedStartupFocusHandoffEnvironment("env-hidden", { setupReady: false });
+    useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId={null}
+          isActive
+        />
+      </TerminalProvider>,
+    );
+
+    await act(async () => {
+      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+        setupPhase: "ready",
+        setupScriptsComplete: true,
+      });
+    });
+
+    // Nothing here is allowed to move the selection, so settle the effects and
+    // then assert the selection never left the tab the user chose.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      usePaneLayoutStore.getState().getPane("default", "env-hidden")?.activeTabId,
+    ).toBe("shell-2");
+  });
+
+  test("does not hand off setup focus again when the environment is reselected", async () => {
+    seedStartupFocusHandoffConfig();
+    usePaneLayoutStore.setState({
+      environments: new Map([
+        [
+          "env-hidden",
+          {
+            root: {
+              kind: "leaf",
+              id: "default",
+              tabs: [
+                { id: "default", type: "plain", isSetupTab: true },
+                startupAgentTabFixture("env-hidden"),
+              ],
+              activeTabId: "default",
+            },
+            activePaneId: "default",
+            containerId: null,
+          },
+        ],
+        // A second environment that also owns a startup agent. Visiting it is
+        // what used to re-arm a scalar "already handed off" marker.
+        [
+          "env-second",
+          {
+            root: {
+              kind: "leaf",
+              id: "default",
+              tabs: [
+                { id: "second-shell", type: "plain" },
+                startupAgentTabFixture("env-second"),
+              ],
+              activeTabId: "second-shell",
+            },
+            activePaneId: "default",
+            containerId: null,
+          },
+        ],
+      ]),
+      hydration: new Map([["env-hidden", "done"], ["env-second", "done"]]),
+      activeEnvironmentId: "env-hidden",
+    } as never);
+    seedStartupFocusHandoffEnvironment("env-hidden", { setupReady: true });
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: [
+        ...state.environments,
+        {
+          ...state.environments.find((environment) => environment.id === "env-hidden")!,
+          id: "env-second",
+          name: "second",
+          worktreePath: "/tmp/env-second-worktree",
+          setupPhase: "ready",
+          setupScriptsComplete: true,
+          pendingAgentLaunch: false,
+          startupAgentSession: undefined,
+        },
+      ],
+    }));
+    useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
+
+    const { rerender } = render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId={null}
+          isActive
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(
+        usePaneLayoutStore.getState().getPane("default", "env-hidden")?.activeTabId,
+      ).toBe("startup-agent");
+    });
+
+    // The user goes back to the setup terminal, which keeps `isSetupTab` for
+    // the life of the environment, then visits another environment and returns.
+    await act(async () => {
+      usePaneLayoutStore.getState().setActiveTab("default", "default", "env-hidden");
+    });
+    rerender(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-second"
+          containerId={null}
+          isActive
+        />
+      </TerminalProvider>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    rerender(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId={null}
+          isActive
+        />
+      </TerminalProvider>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(
+      usePaneLayoutStore.getState().getPane("default", "env-hidden")?.activeTabId,
+    ).toBe("default");
   });
 
   test("replaces a stale renderer launch with the backend running session", async () => {

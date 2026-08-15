@@ -214,32 +214,40 @@ function findStartupAgentTabId(state: { root: PaneNode }): string | null {
     : candidates[0]!.id;
 }
 
+/** True when a pane is still showing the setup terminal, or nothing valid. */
+function paneSelectionIsSetupHandoffSource(leaf: PaneLeaf): boolean {
+  const selected = leaf.tabs.find((tab) => tab.id === leaf.activeTabId);
+  return !selected || selected.isSetupTab === true;
+}
+
 /**
  * After setup finishes, move focus from the setup terminal onto the startup
  * agent. The backend publishes that tab while setup is still running, and the
  * renderer keeps the setup tab selected so the user can watch it; without this
  * handoff the agent tab exists but stays unselected.
  *
- * A user who already clicked a non-setup tab is left alone. Returns whether
- * selection changed so callers can treat the handoff as one-shot.
+ * A user who already clicked a non-setup tab is left alone — in either the
+ * startup agent's own pane or the pane they are actually looking at, and an
+ * unresolvable focused pane fails closed. Returns whether selection changed so
+ * callers can treat the handoff as one-shot.
  */
 function handoffSetupFocusToStartupAgent(
   environmentId: string,
   state: { root: PaneNode; activePaneId: string },
   startupTabId: string,
 ): boolean {
-  const agentLeaf = getAllLeaves(state.root).find((leaf) =>
+  const leaves = getAllLeaves(state.root);
+  const agentLeaf = leaves.find((leaf) =>
     leaf.tabs.some((tab) => tab.id === startupTabId),
   );
   if (!agentLeaf) return false;
+  const focusedLeaf = leaves.find((leaf) => leaf.id === state.activePaneId);
+  if (!focusedLeaf) return false;
 
-  const focusedLeaf = getAllLeaves(state.root).find((leaf) => leaf.id === state.activePaneId)
-    ?? agentLeaf;
-  const focusedTab = focusedLeaf.tabs.find((tab) => tab.id === focusedLeaf.activeTabId);
-  const agentSelected = agentLeaf.tabs.find((tab) => tab.id === agentLeaf.activeTabId);
-  const focusedIsSetupHandoff = !focusedTab || focusedTab.isSetupTab === true;
-  const agentLeafIsSetupHandoff = !agentSelected || agentSelected.isSetupTab === true;
-  if (!focusedIsSetupHandoff && !agentLeafIsSetupHandoff) return false;
+  if (!paneSelectionIsSetupHandoffSource(agentLeaf)) return false;
+  if (focusedLeaf !== agentLeaf && !paneSelectionIsSetupHandoffSource(focusedLeaf)) {
+    return false;
+  }
   if (
     agentLeaf.activeTabId === startupTabId
     && state.activePaneId === agentLeaf.id
@@ -591,6 +599,9 @@ export function TerminalContainer({
   const setupPhase = environment?.setupPhase ?? "pending";
   const backendSetupRunning = setupPhase === "running";
   const setupReady = setupPhase === "ready";
+  // The backend clears this once the startup launch has converged, so it is the
+  // window in which a setup-to-agent focus handoff is still owed.
+  const isStartupLaunchPending = environment?.pendingAgentLaunch === true;
   const createScriptPrompt = createOrkestratorScriptPrompt(isLocalEnvironment);
   // For local environments, worktreePath must be set before terminal can work
   const worktreePath = environment?.worktreePath;
@@ -667,7 +678,10 @@ export function TerminalContainer({
   const setupSessionBindLifecycleGenerationRef = useRef(0);
   const setupSessionReconnectGenerationRef = useRef(0);
   const durableLaunchClearInFlightRef = useRef(false);
-  const handedOffSetupFocusRef = useRef<string | null>(null);
+  // Keyed by environment, not a single "last handed off" id: this component is
+  // reused across environment selections (see the container-change effect
+  // below), so a scalar would be re-armed by every switch away and back.
+  const handedOffSetupFocusRef = useRef<Set<string>>(new Set());
   // Command+W arrives either from the Electron menu accelerator or, in a
   // browser-served client, from the renderer fallback. These two refs keep
   // exactly one of them closing a tab per keypress.
@@ -1555,20 +1569,23 @@ export function TerminalContainer({
   // renderer keeps the setup terminal selected so the user can watch it. When
   // setup becomes ready, move focus onto that agent — including when the
   // durable-launch effect is still blocked on a `starting` session.
+  //
+  // Gated on the launch intent, not on `setupReady` alone. Setup readiness and
+  // the setup tab's `isSetupTab` flag both outlive the launch by the life of the
+  // environment, so without this gate a reload or a remount would hand focus off
+  // again every time the user happened to be sitting on that terminal.
   useEffect(() => {
-    if (!setupReady) {
-      if (handedOffSetupFocusRef.current === environmentId) {
-        handedOffSetupFocusRef.current = null;
-      }
+    if (!setupReady || !isStartupLaunchPending) {
+      handedOffSetupFocusRef.current.delete(environmentId);
       return;
     }
     if (!currentEnvState) return;
-    if (handedOffSetupFocusRef.current === environmentId) return;
+    if (handedOffSetupFocusRef.current.has(environmentId)) return;
     const startupTabId = findStartupAgentTabId(currentEnvState);
     if (!startupTabId) return;
     handoffSetupFocusToStartupAgent(environmentId, currentEnvState, startupTabId);
-    handedOffSetupFocusRef.current = environmentId;
-  }, [setupReady, currentEnvState, environmentId]);
+    handedOffSetupFocusRef.current.add(environmentId);
+  }, [setupReady, isStartupLaunchPending, currentEnvState, environmentId]);
 
   // Launch native tab after workspace setup completes
   useEffect(() => {

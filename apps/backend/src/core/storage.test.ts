@@ -553,6 +553,16 @@ describe("backend-owned setup and build surfaces", () => {
       });
 
       expect(republished?.root).toMatchObject({ activeTabId: "default" });
+
+      // Binding a session is what unlocks the handoff, but only after setup.
+      // While setup runs the user is still watching the terminal.
+      const bound = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "codex",
+        providerSessionId: "codex-session-1",
+      });
+
+      expect(bound?.root).toMatchObject({ activeTabId: "default" });
     });
   });
 
@@ -651,6 +661,173 @@ describe("backend-owned setup and build surfaces", () => {
       });
 
       expect(republished?.root).toMatchObject({ activeTabId: "notes" });
+    });
+  });
+
+  test("does not re-steal the setup terminal once the startup tab is already bound", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-startup-no-resteal";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      environment.setupPhase = "ready";
+      environment.setupScriptsComplete = true;
+      await storage.addEnvironment(environment);
+      // The state a launch retry loop republishes against: the handoff already
+      // happened, the user has since gone back to the setup terminal, and the
+      // tab already carries this provider session.
+      await storage.savePaneLayout(environment.id, {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "default",
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [
+            { id: "default", type: "plain", isSetupTab: true },
+            {
+              id: "startup-agent",
+              type: "agent-native",
+              nativeAgentData: {
+                platform: "codex",
+                environmentId: environment.id,
+                isLocal: true,
+                sessionId: "codex-session-1",
+              },
+            },
+          ],
+          activeTabId: "default",
+        },
+      }, 0);
+
+      const before = await storage.getPaneLayout(environment.id);
+
+      const rebound = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "codex",
+        providerSessionId: "codex-session-1",
+      });
+      expect(rebound?.root).toMatchObject({ activeTabId: "default" });
+
+      // A sweep that republishes without provider identity at all — the
+      // every-two-seconds call the reconciler makes before the session exists —
+      // must not activate either.
+      const swept = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "codex",
+      });
+      expect(swept?.root).toMatchObject({ activeTabId: "default" });
+      // Neither call changed anything, so neither burns a revision — the sweep
+      // must not announce a layout the renderer would then re-adopt.
+      expect(rebound?.revision).toBe(before!.revision);
+      expect(swept?.revision).toBe(before!.revision);
+    });
+  });
+
+  test("keeps a split layout's user selection when only the other pane shows setup", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-startup-split-focus";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      environment.setupPhase = "ready";
+      environment.setupScriptsComplete = true;
+      await storage.addEnvironment(environment);
+      await storage.savePaneLayout(environment.id, {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "left",
+        root: {
+          kind: "split",
+          id: "split-1",
+          direction: "horizontal",
+          sizes: [0.5, 0.5],
+          children: [
+            {
+              kind: "leaf",
+              id: "left",
+              tabs: [{ id: "default", type: "plain", isSetupTab: true }],
+              activeTabId: "default",
+            },
+            {
+              kind: "leaf",
+              id: "right",
+              tabs: [
+                { id: "notes", type: "plain" },
+                {
+                  id: "startup-agent",
+                  type: "agent-native",
+                  nativeAgentData: {
+                    platform: "codex",
+                    environmentId: environment.id,
+                    isLocal: true,
+                  },
+                },
+              ],
+              activeTabId: "notes",
+            },
+          ],
+        },
+      }, 0);
+
+      const republished = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "codex",
+        providerSessionId: "codex-session-1",
+      });
+
+      // The focused pane is on setup, but the startup agent's own pane holds a
+      // tab the user chose. Neither that selection nor pane focus may move.
+      expect(republished?.root).toMatchObject({
+        children: [
+          { id: "left", activeTabId: "default" },
+          { id: "right", activeTabId: "notes" },
+        ],
+      });
+      expect(republished?.activePaneId).toBe("left");
+    });
+  });
+
+  test("hands off from a setup override that never reported a ready phase", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-startup-setup-override";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      environment.setupPhase = "running";
+      environment.setupScriptsComplete = false;
+      environment.setupOverride = true;
+      await storage.addEnvironment(environment);
+      await storage.savePaneLayout(environment.id, {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "default",
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [
+            { id: "default", type: "plain", isSetupTab: true },
+            {
+              id: "startup-agent",
+              type: "agent-native",
+              nativeAgentData: {
+                platform: "codex",
+                environmentId: environment.id,
+                isLocal: true,
+              },
+            },
+          ],
+          activeTabId: "default",
+        },
+      }, 0);
+
+      const handedOff = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "codex",
+        providerSessionId: "codex-session-1",
+      });
+
+      expect(handedOff?.root).toMatchObject({ activeTabId: "startup-agent" });
     });
   });
 

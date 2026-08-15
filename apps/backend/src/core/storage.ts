@@ -231,13 +231,18 @@ function environmentIsReadyForSetupHandoff(environment: Environment): boolean {
 }
 
 /**
- * True when this leaf is still showing the setup terminal (or has no
+ * True when this leaf is still showing the setup terminal (or has no valid
  * selection). A user who already clicked a non-setup tab is left alone.
+ *
+ * A pane that cannot be resolved fails closed. The alternative — treating an
+ * unknown pane as "still on setup" — silently re-activates the startup tab for
+ * any layout shape this predicate cannot read, which is the one direction that
+ * takes the selection away from the user.
  */
 function selectedTabIsSetupHandoffSource(
-  leaf: MutablePaneLayoutLeaf | undefined,
+  leaf: { tabs: Array<Record<string, unknown>>; activeTabId: string | null } | undefined,
 ): boolean {
-  if (!leaf) return true;
+  if (!leaf) return false;
   const selected = leaf.tabs.find((tab) => tab.id === leaf.activeTabId);
   return !selected || selected.isSetupTab === true;
 }
@@ -4564,11 +4569,12 @@ export class StorageService {
    * `initial*` selections) plus `nativeAgentData.hostPort`, and a wholesale
    * rewrite silently discarded all of it on every backend start.
    *
-   * Creating the tab selects it. Republishing during setup does not: the
-   * renderer is watching the setup terminal, and stealing that focus on every
-   * two-second sweep would fight the user. Once setup is ready, a still-focused
-   * setup tab is the post-setup handoff — the same moment
-   * `ensureBuildPipelineTab` moves selection onto the build surface.
+   * Creating the tab selects it. Republishing does not, with one exception: the
+   * publish that binds a provider session to a still-setup-focused tab is the
+   * post-setup handoff — the same moment `ensureBuildPipelineTab` moves
+   * selection onto the build surface. Every other republish leaves the
+   * selection alone, because the renderer may be watching the setup terminal
+   * and the reconcile sweep runs every two seconds for the whole launch.
    */
   async ensureStartupNativeAgentTab(input: {
     environmentId: string;
@@ -4671,23 +4677,49 @@ export class StorageService {
       if (existingIndex >= 0) target.tabs[existingIndex] = tab;
       else target.tabs.push(tab);
 
+      // The handoff is driven by the publish that first binds a provider session
+      // to the tab, never by "setup is ready" on its own. Readiness stays true
+      // for the life of the environment and `isSetupTab` is never cleared, so a
+      // state-only condition would re-steal the selection on every two-second
+      // reconcile sweep — and every ten-second launch retry — for as long as the
+      // launch stays pending. Binding a session id happens once per launch, and
+      // the launch intent is consumed immediately afterwards.
+      const previousProviderSessionId =
+        typeof previousNativeAgentData?.sessionId === "string"
+          ? previousNativeAgentData.sessionId
+          : undefined;
+      const bindsNewProviderSession = input.providerSessionId !== undefined
+        && previousProviderSessionId !== input.providerSessionId;
+      // Resolved from the same leaf list as `target` so both reads see one
+      // parse of one tree, and a hit can be compared by reference.
       const focusedLeaf = previous
-        ? paneLayoutLeaves(previous.root).find((leaf) => leaf.id === previous.activePaneId)
+        ? leaves.find((leaf) => leaf.id === previous.activePaneId)
         : undefined;
       const shouldActivateStartupAgent = !input.existingOnly && (
         existingIndex < 0
         || (
-          environmentIsReadyForSetupHandoff(environment)
-          && (
-            selectedTabIsSetupHandoffSource(target)
-            || selectedTabIsSetupHandoffSource(focusedLeaf)
-          )
+          bindsNewProviderSession
+          && environmentIsReadyForSetupHandoff(environment)
+          // Both panes must consent: the startup agent's own pane is the one
+          // whose selection changes, and the focused pane is where the user is
+          // actually looking. Either one holding a deliberately chosen tab
+          // means this is no longer a setup handoff.
+          && selectedTabIsSetupHandoffSource(target)
+          && (focusedLeaf === target || selectedTabIsSetupHandoffSource(focusedLeaf))
         )
       );
       if (shouldActivateStartupAgent) target.activeTabId = "startup-agent";
 
+      // Pane focus follows the tab handoff and nothing else. Unconditionally
+      // pointing it at the startup agent's pane moved the user's focus to that
+      // pane on every republish, and — because a mismatch also defeated the
+      // `unchanged` check below — did it on every sweep in a split layout.
+      const nextActivePaneId = !previous || shouldActivateStartupAgent
+        ? target.id
+        : previous.activePaneId;
+
       const unchanged = previous
-        && (input.existingOnly || previous.activePaneId === target.id)
+        && previous.activePaneId === nextActivePaneId
         && JSON.stringify(previous.root) === JSON.stringify(root);
       if (unchanged) return previous;
 
@@ -4695,9 +4727,7 @@ export class StorageService {
         version: PANE_LAYOUT_VERSION,
         environmentId: input.environmentId,
         containerId: environment.containerId,
-        activePaneId: input.existingOnly && previous
-          ? previous.activePaneId
-          : target.id,
+        activePaneId: nextActivePaneId,
         root,
         updatedAt: nowIso(),
         revision: (previous?.revision ?? 0) + 1,

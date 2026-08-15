@@ -22,6 +22,164 @@ import {
 } from "./native-message-adapters";
 
 describe("native message adapters", () => {
+  test("promotes an ACP background Task launch into shared sub-agent activity", () => {
+    const normalized = normalizeNativeMessage({
+      id: "cursor-background-subagent",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-08-15T10:00:00.000Z",
+      parts: [{
+        type: "tool-invocation",
+        content: "Task: Validate the change",
+        toolName: "task",
+        toolTitle: "Task: Validate the change",
+        toolUseId: "cursor-task-1",
+        toolState: "success",
+        agentState: "active",
+        toolOutput: JSON.stringify({ durationMs: 42, isBackground: true }),
+      }],
+    });
+
+    expect(normalized.parts).toEqual([{
+      type: "task-group",
+      content: "Task: Validate the change",
+      task: expect.objectContaining({
+        toolUseId: "cursor-task-1",
+        toolState: "success",
+        agentState: "active",
+      }),
+      childTools: [],
+    }]);
+  });
+
+  test.each(["active", "finished"] as const)(
+    "keeps an unparented ACP tool beside a %s background Task",
+    (agentState) => {
+      const normalized = normalizeNativeMessage({
+        id: `cursor-background-subagent-${agentState}`,
+        role: "assistant",
+        content: "",
+        createdAt: "2026-08-15T10:00:00.000Z",
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "Task: Validate the change",
+            toolName: "task",
+            toolUseId: "cursor-task-1",
+            toolState: "success",
+            agentState,
+          },
+          {
+            type: "tool-invocation",
+            content: "Edit parent-owned file",
+            toolName: "Edit",
+            toolUseId: "parent-edit-1",
+            toolState: "success",
+          },
+        ],
+      });
+
+      expect(normalized.parts.map((part) => part.type)).toEqual([
+        "task-group",
+        "tool-group",
+      ]);
+      expect(normalized.parts[0]).toMatchObject({
+        type: "task-group",
+        childTools: [],
+      });
+      expect(normalized.parts[1]).toMatchObject({
+        type: "tool-group",
+        parts: [expect.objectContaining({ toolUseId: "parent-edit-1" })],
+      });
+    },
+  );
+
+  test("groups an ACP child tool only when it explicitly names its parent Task", () => {
+    const normalized = normalizeNativeMessage({
+      id: "cursor-correlated-subagent-child",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-08-15T10:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Task: Validate the change",
+          toolName: "task",
+          toolUseId: "cursor-task-1",
+          toolState: "success",
+          agentState: "active",
+        },
+        {
+          type: "tool-invocation",
+          content: "Read child-owned file",
+          toolName: "Read",
+          toolUseId: "child-read-1",
+          parentTaskUseId: "cursor-task-1",
+          toolState: "success",
+        },
+      ],
+    });
+
+    expect(normalized.parts).toHaveLength(1);
+    expect(normalized.parts[0]).toMatchObject({
+      type: "task-group",
+      childTools: [expect.objectContaining({ toolUseId: "child-read-1" })],
+    });
+  });
+
+  test("promotes Grok's spawn_subagent tool into shared sub-agent activity", () => {
+    const normalized = normalizeNativeMessage({
+      id: "grok-background-subagent",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-08-15T10:00:00.000Z",
+      parts: [{
+        type: "tool-invocation",
+        content: "Launch validation agent",
+        toolName: "spawn_subagent",
+        toolTitle: "Launch validation agent",
+        toolUseId: "grok-task-1",
+        toolState: "success",
+        agentState: "active",
+        toolArgs: {
+          variant: "Task",
+          run_in_background: true,
+          description: "Validate the implementation",
+          subagent_type: "explore",
+        },
+      }],
+    });
+
+    expect(normalized.parts).toEqual([{
+      type: "task-group",
+      content: "Launch validation agent",
+      task: expect.objectContaining({
+        toolName: "spawn_subagent",
+        toolUseId: "grok-task-1",
+        agentState: "active",
+      }),
+      childTools: [],
+    }]);
+  });
+
+  test("does not infer a sub-agent from an ordinary Task tool name alone", () => {
+    const normalized = normalizeNativeMessage({
+      id: "foreground-task-tool",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-08-15T10:00:00.000Z",
+      parts: [{
+        type: "tool-invocation",
+        content: "Task",
+        toolName: "task",
+        toolUseId: "task-1",
+        toolState: "success",
+      }],
+    });
+
+    expect(normalized.parts[0]?.type).toBe("tool-group");
+  });
+
   test("joins authoritative Claude background-agent state by tool use id", () => {
     const messages: ClaudeMessage[] = [{
       id: "assistant-background-agent",

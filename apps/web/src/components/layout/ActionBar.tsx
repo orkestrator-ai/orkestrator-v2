@@ -10,7 +10,6 @@ import {
   useRef,
   type FocusEvent as ReactFocusEvent,
   type MouseEvent as ReactMouseEvent,
-  type PointerEvent as ReactPointerEvent,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -94,9 +93,18 @@ import {
   type MultiReviewLaunchSelection,
 } from "@/components/review/MultiReviewLaunchDialog";
 import {
+  CreatePRDialog,
+  type CreatePRSelection,
+} from "@/components/pr/CreatePRDialog";
+import {
   resolveDefaultReviewTabType,
 } from "@/lib/review-launch-options";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
+import { useLongPressAction } from "@/hooks/useLongPressAction";
+import {
+  MOBILE_SHELL_MEDIA_QUERY,
+  MOBILE_TOOLS_TRIGGER_SELECTOR,
+} from "./MobileAppShellLayout";
 import { promptQueueKey } from "@/lib/prompt-queue-persistence";
 import { createSessionKey } from "@/lib/utils";
 import { createUuid } from "@/lib/uuid";
@@ -289,15 +297,20 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const multiReviewLaunchInFlightRef = useRef(false);
   const [loopedReviewLaunchPending, setLoopedReviewLaunchPending] = useState(false);
   const loopedReviewLaunchInFlightRef = useRef(false);
-  const reviewLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const reviewClickSuppressionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const reviewLongPressOriginRef = useRef<{ x: number; y: number } | null>(null);
-  const suppressReviewClickRef = useRef(false);
+  const [prDialogTarget, setPrDialogTarget] = useState<{
+    environmentId: string;
+    projectId: string;
+    targetBranch: string;
+  } | null>(null);
+  const [prLaunchError, setPrLaunchError] = useState<string | null>(null);
+  const prDialogOpen = prDialogTarget !== null;
+  const createPrButtonRef = useRef<HTMLButtonElement>(null);
 
-  const anyReviewDialogOpen = reviewDialogOpen || loopedReviewDialogOpen || multiReviewDialogOpen;
+  const anyLaunchDialogOpen =
+    reviewDialogOpen || loopedReviewDialogOpen || multiReviewDialogOpen || prDialogOpen;
   const reviewModelCatalog = useReviewModelCatalog(
     selectedProjectId ?? "",
-    anyReviewDialogOpen,
+    anyLaunchDialogOpen,
   );
   // Drag-to-scroll state for toolbar
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -460,9 +473,13 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   }, [environmentPortAddress]);
 
   // Get the default agent - per-environment override takes precedence over global config
-  const enabledAgents = useMemo(
-    () => new Set<DefaultAgent>(config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]),
+  const enabledAgentList = useMemo<DefaultAgent[]>(
+    () => config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
     [config.global.enabledAgentPlatforms],
+  );
+  const enabledAgents = useMemo(
+    () => new Set<DefaultAgent>(enabledAgentList),
+    [enabledAgentList],
   );
   const configuredDefaultAgent: DefaultAgent = selectedEnvironment?.defaultAgent || config.global.defaultAgent || "claude";
   const defaultAgent: DefaultAgent = enabledAgents.has(configuredDefaultAgent)
@@ -606,44 +623,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     setReviewDialogOpen(true);
   }, [canCreateTab, selectedEnvironment]);
 
-  const clearReviewLongPress = useCallback(() => {
-    if (reviewLongPressTimerRef.current) {
-      clearTimeout(reviewLongPressTimerRef.current);
-      reviewLongPressTimerRef.current = null;
-    }
-    reviewLongPressOriginRef.current = null;
-  }, []);
-
-  useEffect(() => () => {
-    clearReviewLongPress();
-    if (reviewClickSuppressionTimerRef.current) {
-      clearTimeout(reviewClickSuppressionTimerRef.current);
-    }
-  }, [clearReviewLongPress]);
-
-  const handleReviewPointerDown = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
-    if (event.pointerType === "mouse" || !selectedEnvironment || !canCreateTab) return;
-    clearReviewLongPress();
-    reviewLongPressOriginRef.current = { x: event.clientX, y: event.clientY };
-    reviewLongPressTimerRef.current = setTimeout(() => {
-      reviewLongPressTimerRef.current = null;
-      reviewLongPressOriginRef.current = null;
-      suppressReviewClickRef.current = true;
-      reviewClickSuppressionTimerRef.current = setTimeout(() => {
-        suppressReviewClickRef.current = false;
-        reviewClickSuppressionTimerRef.current = null;
-      }, 1_000);
-      openReviewDialog();
-    }, 550);
-  }, [canCreateTab, clearReviewLongPress, openReviewDialog, selectedEnvironment]);
-
-  const handleReviewPointerMove = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
-    const origin = reviewLongPressOriginRef.current;
-    if (!origin) return;
-    if (Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 10) {
-      clearReviewLongPress();
-    }
-  }, [clearReviewLongPress]);
+  const reviewLongPress = useLongPressAction(
+    openReviewDialog,
+    Boolean(selectedEnvironment) && canCreateTab,
+  );
 
   const handleConfiguredReview = useCallback((selection: ReviewLaunchSelection) => {
     const agent = getReviewAgent(selection.tabType);
@@ -1140,21 +1123,112 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   ]);
 
   // Handler for PR creation - launches agent tab with PR workflow prompt
-  const handleCreatePR = useCallback((agentOverride?: "claude" | "opencode" | "codex" | "cursor" | "grok") => {
-    if (!createTab || !selectedProjectId || !canCreateTab) return;
+  const handleCreatePR = useCallback((
+    agentOverride?: "claude" | "opencode" | "codex" | "cursor" | "grok",
+    launchOptions?: {
+      agentLaunchMode?: AgentLaunchModeOverride;
+      initialAgentModel?: string;
+      initialReasoningEffort?: string;
+    },
+    targetBranchOverride?: string,
+  ): boolean => {
+    if (
+      !createTab
+      || !selectedEnvironmentId
+      || !selectedProjectId
+      || !canCreateTab
+      || !isRunning
+      || hasPR
+    ) return false;
 
     const repoConfig = config.repositories[selectedProjectId];
-    const targetBranch = repoConfig?.prBaseBranch || "main";
+    // Falsy, not nullish: repository settings persist a cleared PR base branch
+    // as "", and an empty base would reach the agent as `gh pr create --base `.
+    const targetBranch = targetBranchOverride || repoConfig?.prBaseBranch || "main";
     const prPrompt = createPRPrompt(targetBranch);
 
-    // Set monitoring mode to create-pending for faster PR detection (5s intervals)
-    setModeCreatePending();
-
-    createTab(agentOverride || defaultAgent, {
+    const created = createTab(agentOverride || defaultAgent, {
       initialPrompt: prPrompt,
       displayTitle: "PR",
+      ...launchOptions,
     });
-  }, [createTab, selectedProjectId, canCreateTab, config.repositories, defaultAgent, setModeCreatePending]);
+    if (!created) return false;
+
+    // Set monitoring mode only after the tab exists. Otherwise a rejected
+    // launch leaves the backend polling for a PR no agent is creating.
+    setModeCreatePending();
+    return true;
+  }, [
+    canCreateTab,
+    config.repositories,
+    createTab,
+    defaultAgent,
+    hasPR,
+    isRunning,
+    selectedEnvironmentId,
+    selectedProjectId,
+    setModeCreatePending,
+  ]);
+
+  const canConfigurePR = Boolean(
+    canCreateTab
+    && isRunning
+    && !hasPR
+    && selectedEnvironmentId
+    && selectedProjectId,
+  );
+
+  const openPrDialog = useCallback(() => {
+    if (!canConfigurePR || !selectedEnvironmentId || !selectedProjectId) return;
+    setPrLaunchError(null);
+    setPrDialogTarget({
+      environmentId: selectedEnvironmentId,
+      projectId: selectedProjectId,
+      targetBranch: config.repositories[selectedProjectId]?.prBaseBranch || "main",
+    });
+  }, [
+    canConfigurePR,
+    config.repositories,
+    selectedEnvironmentId,
+    selectedProjectId,
+  ]);
+
+  const prLongPress = useLongPressAction(openPrDialog, canConfigurePR);
+
+  const prEligibilityError = !prDialogTarget
+    ? null
+    : selectedEnvironmentId !== prDialogTarget.environmentId
+      || selectedProjectId !== prDialogTarget.projectId
+      ? "The selected environment changed. Close this dialog and reopen it from the intended environment."
+      : hasPR
+        ? "A pull request now exists for this environment."
+        : !isRunning
+          ? "The environment is no longer running."
+          // `canCreateTab` folds two distinct causes together, so report them
+          // separately: an unregistered `createTab` means the environment's
+          // terminal is not ready, which the tab limit wording would misdescribe.
+          : tabCount >= MAX_TABS
+            ? "The maximum number of tabs has been reached."
+            : !canCreateTab
+              ? "This environment is not ready to open a new tab yet."
+              : null;
+
+  const handleConfiguredCreatePR = useCallback((selection: CreatePRSelection) => {
+    if (!prDialogTarget || prEligibilityError) return;
+    const created = handleCreatePR(selection.agent, {
+      agentLaunchMode: "native",
+      initialAgentModel: selection.model,
+      initialReasoningEffort: selection.reasoningEffort,
+    }, prDialogTarget.targetBranch);
+    if (!created) {
+      setPrLaunchError(
+        "The pull request agent tab could not be created. Check the environment and tab limit, then try again.",
+      );
+      return;
+    }
+    setPrLaunchError(null);
+    setPrDialogTarget(null);
+  }, [handleCreatePR, prDialogTarget, prEligibilityError]);
 
   // Handler for pushing changes to an existing PR - launches agent tab with commit/push prompt
   const handlePushChanges = useCallback((agentOverride?: "claude" | "opencode" | "codex" | "cursor" | "grok") => {
@@ -1617,12 +1691,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     size="icon"
                     className="h-8 w-8 touch-manipulation"
                     onClick={(event) => {
-                      if (suppressReviewClickRef.current) {
-                        suppressReviewClickRef.current = false;
-                        if (reviewClickSuppressionTimerRef.current) {
-                          clearTimeout(reviewClickSuppressionTimerRef.current);
-                          reviewClickSuppressionTimerRef.current = null;
-                        }
+                      if (reviewLongPress.shouldSuppressClick()) {
                         event.preventDefault();
                         return;
                       }
@@ -1630,14 +1699,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     }}
                     onContextMenu={(event) => {
                       event.preventDefault();
-                      clearReviewLongPress();
+                      reviewLongPress.cancel();
                       openReviewDialog();
                     }}
-                    onPointerDown={handleReviewPointerDown}
-                    onPointerMove={handleReviewPointerMove}
-                    onPointerUp={clearReviewLongPress}
-                    onPointerCancel={clearReviewLongPress}
-                    onPointerLeave={clearReviewLongPress}
+                    {...reviewLongPress.handlers}
                     data-toolbar-custom-context-menu="true"
                     disabled={!selectedEnvironment || !canCreateTab}
                     aria-label="Code review"
@@ -1841,50 +1906,47 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           )}
 
           {(isGrid || selectedEnvironment) && !hasPR && (
-            <ContextMenu>
-              <ToolbarContextMenuTrigger
-                tooltip={
-                  !isRunning
-                    ? "Container must be running"
-                    : !canCreateTab
-                      ? "Maximum tabs reached"
-                      : "Launch agent to create a pull request (right-click for agent)"
-                }
+            <ToolbarTooltipTrigger
+              tooltip={
+                !isRunning
+                  ? "Container must be running"
+                  : !canCreateTab
+                    ? "Maximum tabs reached"
+                    : (
+                      <>
+                        <p>Launch agent to create a pull request</p>
+                        <p className="text-xs text-muted-foreground">
+                          Right-click or long-press to choose agent, model, and reasoning
+                        </p>
+                      </>
+                    )
+              }
+            >
+              <Button
+                ref={createPrButtonRef}
+                variant={isGrid ? "ghost" : "default"}
+                size="sm"
+                className="gap-2 touch-manipulation"
+                onClick={(event) => {
+                  if (prLongPress.shouldSuppressClick()) {
+                    event.preventDefault();
+                    return;
+                  }
+                  handleCreatePR();
+                }}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  prLongPress.cancel();
+                  openPrDialog();
+                }}
+                {...prLongPress.handlers}
+                data-toolbar-custom-context-menu="true"
+                disabled={!isRunning || !canCreateTab}
               >
-                <Button
-                  variant={isGrid ? "ghost" : "default"}
-                  size="sm"
-                  className="gap-2"
-                  onClick={() => handleCreatePR()}
-                  disabled={!isRunning || !canCreateTab}
-                >
-                  <GitPullRequest className="h-4 w-4" />
-                  <span className={cn(isGrid && "truncate text-xs")}>Create PR</span>
-                </Button>
-              </ToolbarContextMenuTrigger>
-              <ContextMenuContent>
-                {enabledAgents.has("claude") && <ContextMenuItem onClick={() => handleCreatePR("claude")}>
-                  <ClaudeIcon className="mr-2 h-4 w-4" />
-                  Create PR with Claude
-                </ContextMenuItem>}
-                {enabledAgents.has("codex") && <ContextMenuItem onClick={() => handleCreatePR("codex")}>
-                  <CodexIcon className="mr-2 h-4 w-4" />
-                  Create PR with Codex
-                </ContextMenuItem>}
-                {enabledAgents.has("opencode") && <ContextMenuItem onClick={() => handleCreatePR("opencode")}>
-                  <OpenCodeIcon className="mr-2 h-4 w-4" />
-                  Create PR with OpenCode
-                </ContextMenuItem>}
-                {enabledAgents.has("cursor") && <ContextMenuItem onClick={() => handleCreatePR("cursor")}>
-                  <CursorAgentIcon className="mr-2 h-4 w-4" />
-                  Create PR with Cursor
-                </ContextMenuItem>}
-                {enabledAgents.has("grok") && <ContextMenuItem onClick={() => handleCreatePR("grok")}>
-                  <GrokBuildIcon className="mr-2 h-4 w-4" />
-                  Create PR with Grok
-                </ContextMenuItem>}
-              </ContextMenuContent>
-            </ContextMenu>
+                <GitPullRequest className="h-4 w-4" />
+                <span className={cn(isGrid && "truncate text-xs")}>Create PR</span>
+              </Button>
+            </ToolbarTooltipTrigger>
           )}
 
           {selectedEnvironment && hasPR && (
@@ -2322,6 +2384,41 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         preferredReasoningEfforts={{ codex: config.global.codexReasoningEffort }}
         busy={multiReviewLaunchPending}
         onConfirm={handleMultiReview}
+      />
+      <CreatePRDialog
+        open={prDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPrDialogTarget(null);
+            setPrLaunchError(null);
+          }
+        }}
+        defaultAgent={defaultAgent}
+        catalog={reviewModelCatalog}
+        enabledAgents={enabledAgentList}
+        preferredModels={{
+          claude: config.global.claudeModel,
+          codex: config.global.codexModel,
+          opencode: config.global.opencodeModel,
+        }}
+        preferredReasoningEfforts={{
+          codex: config.global.codexReasoningEffort,
+        }}
+        targetBranch={prDialogTarget?.targetBranch ?? targetBranch}
+        returnFocusRef={createPrButtonRef}
+        // Below the mobile breakpoint this toolbar lives inside the tools
+        // popover, which collapses as the dialog opens. The trigger stays
+        // mounted but hidden, so focus has to return to the popover's own
+        // trigger; the selector only matches while the popover is closed, which
+        // is exactly when the Create PR button is unreachable.
+        returnFocusFallback={() =>
+          window.matchMedia(MOBILE_SHELL_MEDIA_QUERY).matches
+            ? document.querySelector<HTMLButtonElement>(MOBILE_TOOLS_TRIGGER_SELECTOR)
+            : null
+        }
+        confirmDisabled={Boolean(prEligibilityError)}
+        error={prEligibilityError ?? prLaunchError}
+        onConfirm={handleConfiguredCreatePR}
       />
 
       {/* Settings Dialogs */}

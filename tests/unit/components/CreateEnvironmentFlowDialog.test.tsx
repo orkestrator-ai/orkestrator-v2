@@ -655,14 +655,18 @@ describe("CreateEnvironmentFlowDialog", () => {
         reasoningEffort: "high",
       },
     );
-    expect(
-      useConfigStore.getState().config.repositories["project-1"]
-        ?.lastEnvironmentAgentSelection,
-    ).toEqual({
-      platform: "codex",
-      mode: "native",
-      model: "gpt-5.4-mini",
-      reasoningEffort: "high",
+    // The write is deliberately not awaited by the create flow, so the store
+    // catches up on its own tick.
+    await waitFor(() => {
+      expect(
+        useConfigStore.getState().config.repositories["project-1"]
+          ?.lastEnvironmentAgentSelection,
+      ).toEqual({
+        platform: "codex",
+        mode: "native",
+        model: "gpt-5.4-mini",
+        reasoningEffort: "high",
+      });
     });
     expect(
       useClaudeOptionsStore.getState().getOptions("env-selected-options"),
@@ -702,17 +706,60 @@ describe("CreateEnvironmentFlowDialog", () => {
         );
         expect(onOpenChange).toHaveBeenCalledWith(false);
       });
+      await waitFor(() => {
+        expect(console.warn).toHaveBeenCalledWith(
+          "[CreateEnvironmentFlowDialog] Failed to remember agent selection:",
+          preferenceError,
+        );
+      });
       expect(
         useConfigStore.getState().config.repositories["project-1"]
           ?.lastEnvironmentAgentSelection,
       ).toBeUndefined();
-      expect(console.warn).toHaveBeenCalledWith(
-        "[CreateEnvironmentFlowDialog] Failed to remember agent selection:",
-        preferenceError,
-      );
     } finally {
       console.warn = originalConsoleWarn;
     }
+  });
+
+  // The environment already exists by the time the preference is written, so a
+  // config write that never settles must not strand the user in the modal with a
+  // created-but-unstarted environment.
+  test("closes and starts the environment even when the preference write never settles", async () => {
+    rememberEnvironmentAgentSelectionMock.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+    const onOpenChange = mock(() => {});
+    const startEnvironment = mock(async () => {});
+
+    render(
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={onOpenChange}
+        projectId="project-1"
+        createEnvironment={mock(async () => ({ id: "env-preference-hung" }) as Environment)}
+        updateEnvironment={() => {}}
+        startEnvironment={startEnvironment}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(startEnvironment).toHaveBeenCalledWith(
+        "env-preference-hung",
+        "",
+        { background: true, silent: true },
+      );
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+    });
+    expect(rememberEnvironmentAgentSelectionMock).toHaveBeenCalled();
+    // The create button must not be left spinning behind the pending write.
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Create Environment" })
+          .hasAttribute("disabled"),
+      ).toBe(false);
+    });
   });
 
   test("restores the durably remembered selection after closing and reopening", async () => {
@@ -789,6 +836,61 @@ describe("CreateEnvironmentFlowDialog", () => {
     fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
     expect(screen.getByRole("button", { name: "codex models" }).getAttribute("aria-pressed"))
       .toBe("true");
+  });
+
+  // The mirror of the test above, and the reason the re-apply effect exists: an
+  // untouched dialog must keep picking up the remembered selection until the
+  // catalogue that can actually resolve it has loaded.
+  test("applies a remembered selection once a late catalog makes it resolvable", async () => {
+    act(() => {
+      const config = structuredClone(useConfigStore.getState().config);
+      config.repositories["project-1"] = {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+        lastEnvironmentAgentSelection: {
+          platform: "claude",
+          mode: "native",
+          model: "late-claude",
+        },
+      };
+      useConfigStore.getState().setConfig(config);
+    });
+
+    render(
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={() => {}}
+        projectId="project-1"
+        createEnvironment={mock(async () => ({ id: "env-late-remembered" }) as Environment)}
+        updateEnvironment={() => {}}
+        startEnvironment={async () => {}}
+      />,
+    );
+
+    // The remembered model is not in the fallback catalogue, so the dialog shows
+    // a safe current-catalogue choice rather than pinning a model that is not
+    // offered yet.
+    expect(
+      screen.getByRole("combobox", { name: "Agent, model and reasoning" }).textContent,
+    ).not.toContain("Late Claude");
+
+    // The late catalogue keeps `default` on offer, so the pre-existing
+    // "selected model vanished" effect stays quiet. Only the re-apply effect can
+    // move the dialog onto the newly resolvable remembered model.
+    act(() => {
+      useClaudeStore.setState({
+        models: [
+          { id: "default", name: "Default (recommended)", supportsEffort: false },
+          { id: "late-claude", name: "Late Claude", supportsEffort: false },
+        ],
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("combobox", { name: "Agent, model and reasoning" }).textContent,
+      ).toContain("Late Claude");
+    });
   });
 
   test("forwards non-empty launch attachments only while launch is enabled", () => {

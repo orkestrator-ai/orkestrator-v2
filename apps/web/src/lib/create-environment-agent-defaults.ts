@@ -53,6 +53,14 @@ function withRememberedMode(
  * A remembered selection wins only for its own platform and only while that
  * platform remains enabled. Removed models and reasoning levels safely fall
  * back through the current catalogue.
+ *
+ * Model resolution goes through `firstModelFor`, the same helper the review,
+ * multi-review and build launchers use. That matters for Claude: configuration
+ * stores `claude-sonnet-5` while the catalog lists that model under `sonnet`,
+ * and only `firstModelFor` matches the two through `resolvedModel`. Matching on
+ * the catalog id alone would silently ignore the configured Claude preference
+ * and fall back to the catalog's first entry, which is what this dialog used to
+ * do and what made it the one launcher that disagreed with the others.
  */
 export function resolveCreateEnvironmentAgentDefaults(options: {
   catalog: AgentModelCatalog;
@@ -61,10 +69,14 @@ export function resolveCreateEnvironmentAgentDefaults(options: {
   remembered?: LastEnvironmentAgentSelection;
 }): CreateEnvironmentAgentDefaults {
   const { catalog, configured, remembered } = options;
-  const agent = firstEnabledAgentPlatform(
-    options.enabledAgents,
-    remembered?.platform ?? configured.agent,
-  );
+  // A remembered platform that has since been disabled must hand back to the
+  // configured default agent, not to whichever platform happens to sort first.
+  // `firstEnabledAgentPlatform` only takes one preference, so choose it here.
+  const preferredPlatform =
+    remembered && options.enabledAgents.includes(remembered.platform)
+      ? remembered.platform
+      : configured.agent;
+  const agent = firstEnabledAgentPlatform(options.enabledAgents, preferredPlatform);
   const rememberedForAgent = remembered?.platform === agent ? remembered : undefined;
   const rememberedModel = rememberedForAgent
     ? rememberedForAgent.model ?? "default"

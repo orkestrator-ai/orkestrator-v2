@@ -257,25 +257,6 @@ export function CreateEnvironmentFlowDialog({
         launchSettings.initialPromptAttachments,
       );
       updateEnvironment(environment.id, configuredEnvironment);
-      if (options.launchAgent) {
-        try {
-          const updatedConfig = await rememberEnvironmentAgentSelection(projectId, {
-            platform: options.agentType,
-            mode: selectedAgentMode(options.agentType, options),
-            ...(options.model ? { model: options.model } : {}),
-            ...(options.reasoningEffort
-              ? { reasoningEffort: options.reasoningEffort }
-              : {}),
-          });
-          useConfigStore.getState().setConfig(updatedConfig);
-        } catch (preferenceError) {
-          console.warn(
-            "[CreateEnvironmentFlowDialog] Failed to remember agent selection:",
-            preferenceError,
-          );
-          toast.warning("Environment created, but agent preference was not saved");
-        }
-      }
 
       setOptions(configuredEnvironment.id, {
         launchAgent: options.launchAgent,
@@ -303,6 +284,29 @@ export function CreateEnvironmentFlowDialog({
       ).catch((startError) => {
         console.error("Failed to auto-start environment:", startError);
       });
+
+      // Remembering the selection is a convenience for the *next* create, so it
+      // runs after the modal has closed and the start is under way. Awaiting it
+      // here would let a slow or hung config write hold the dialog open with the
+      // environment already created but not yet starting.
+      if (options.launchAgent) {
+        void rememberEnvironmentAgentSelection(projectId, {
+          platform: options.agentType,
+          mode: selectedAgentMode(options.agentType, options),
+          ...(options.model ? { model: options.model } : {}),
+          ...(options.reasoningEffort
+            ? { reasoningEffort: options.reasoningEffort }
+            : {}),
+        }).then((updatedConfig) => {
+          useConfigStore.getState().setConfig(updatedConfig);
+        }).catch((preferenceError) => {
+          console.warn(
+            "[CreateEnvironmentFlowDialog] Failed to remember agent selection:",
+            preferenceError,
+          );
+          toast.warning("Environment created, but agent preference was not saved");
+        });
+      }
       return true;
     } finally {
       setIsCreating(false);

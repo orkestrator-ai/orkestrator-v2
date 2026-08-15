@@ -238,6 +238,29 @@ describe("create-environment agent preference command", () => {
     });
   });
 
+  // `patchRepositoryConfig` seeds `defaultRepositoryConfig()` when the project
+  // has never been saved. Without that seed the patch would write a repository
+  // entry with no `defaultBranch`/`prBaseBranch`, which every later reader treats
+  // as configured rather than defaulted.
+  test("seeds repository defaults when remembering against an unsaved project", async () => {
+    await withCommands(async (invoke, storage) => {
+      const untouched = await storage.getRepositoryConfig("proj-never-saved");
+
+      await invoke("remember_environment_agent_selection", {
+        projectId: "proj-never-saved",
+        platform: "claude",
+        mode: "native",
+      });
+
+      expect(await storage.getRepositoryConfig("proj-never-saved")).toEqual({
+        ...untouched,
+        lastEnvironmentAgentSelection: { platform: "claude", mode: "native" },
+      });
+      expect(untouched.defaultBranch).toBe("main");
+      expect(untouched.prBaseBranch).toBe("main");
+    });
+  });
+
   test("rejects malformed remembered agent selections", async () => {
     await withCommands(async (invoke) => {
       await expect(invoke("remember_environment_agent_selection", {

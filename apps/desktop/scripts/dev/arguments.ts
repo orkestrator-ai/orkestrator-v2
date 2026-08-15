@@ -75,3 +75,7 @@ export function applyAgentTestDefaults(args: DevArguments): DevArguments {
   if (args.agentCredentialsDisabled || args.credentialSources.length > 0) return args;
   return { ...args, credentialSources: [...ALL_AGENT_CREDENTIAL_SOURCES] };
 }
+
+export function parseAgentTestArguments(args: string[]): DevArguments {
+  return applyAgentTestDefaults(parseDevArguments(args));
+}

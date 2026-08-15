@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { chmod, copyFile, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { constants, type Stats } from "node:fs";
+import { chmod, link, lstat, mkdir, open, readFile, rename, rm, writeFile, type FileHandle } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import process from "node:process";
@@ -18,6 +19,7 @@ import {
 } from "../../electron/runtime-profile.js";
 
 const MAX_MODEL_CACHE_BYTES = 16 * 1024 * 1024;
+const MODEL_CACHE_COPY_CHUNK_BYTES = 64 * 1024;
 
 export async function atomicWriteJson(filePath: string, value: unknown, mode = 0o600): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
@@ -55,12 +57,36 @@ export async function initializeProfile(profile: RuntimeProfile): Promise<string
 type ModelCacheSeedOptions = {
   roots?: RuntimeProfileRoots;
   env?: NodeJS.ProcessEnv;
+  afterSourceValidation?: (label: string) => void | Promise<void>;
 };
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await lstat(filePath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function isSameFile(
+  initial: Stats,
+  current: Stats,
+): boolean {
+  return current.isFile()
+    && current.dev === initial.dev
+    && current.ino === initial.ino
+    && current.size === initial.size
+    && current.mtimeMs === initial.mtimeMs
+    && current.ctimeMs === initial.ctimeMs;
+}
 
 /**
  * Seed model metadata into an isolated agent-test profile without copying
  * credentials, sessions, prompts, projects, or application configuration.
- * Invalid caches remain harmless because their normal consumers validate them.
+ * Existing profile caches always win so a restart cannot discard live data.
+ * Invalid seeds remain harmless because their normal consumers validate them.
  */
 export async function seedInstalledModelCatalogCaches(
   profile: RuntimeProfile,
@@ -101,18 +127,69 @@ export async function seedInstalledModelCatalogCaches(
   const copied: string[] = [];
   for (const candidate of candidates) {
     let temporary: string | undefined;
+    let sourceHandle: FileHandle | undefined;
+    let temporaryHandle: FileHandle | undefined;
     try {
-      const sourceInfo = await lstat(candidate.source).catch(() => null);
-      if (!sourceInfo?.isFile() || sourceInfo.size > MAX_MODEL_CACHE_BYTES) continue;
+      if (await pathExists(candidate.destination)) continue;
+      sourceHandle = await open(
+        candidate.source,
+        constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+      );
+      const initialSourceInfo = await sourceHandle.stat();
+      if (!initialSourceInfo.isFile() || initialSourceInfo.size > MAX_MODEL_CACHE_BYTES) continue;
+      await options.afterSourceValidation?.(candidate.label);
+
       await mkdir(path.dirname(candidate.destination), { recursive: true, mode: 0o700 });
       temporary = `${candidate.destination}.${process.pid}.${Date.now()}.tmp`;
-      await copyFile(candidate.source, temporary);
-      await chmod(temporary, 0o600);
-      await rename(temporary, candidate.destination);
+      temporaryHandle = await open(
+        temporary,
+        constants.O_WRONLY
+          | constants.O_CREAT
+          | constants.O_EXCL
+          | (constants.O_NOFOLLOW ?? 0),
+        0o600,
+      );
+
+      let totalBytes = 0;
+      while (totalBytes <= MAX_MODEL_CACHE_BYTES) {
+        const remaining = (MAX_MODEL_CACHE_BYTES + 1) - totalBytes;
+        const chunk = Buffer.allocUnsafe(Math.min(MODEL_CACHE_COPY_CHUNK_BYTES, remaining));
+        const { bytesRead } = await sourceHandle.read(chunk, 0, chunk.length, null);
+        if (bytesRead === 0) break;
+        totalBytes += bytesRead;
+        if (totalBytes > MAX_MODEL_CACHE_BYTES) throw new Error("Model cache exceeds the seed limit");
+
+        let written = 0;
+        while (written < bytesRead) {
+          const result = await temporaryHandle.write(chunk, written, bytesRead - written);
+          if (result.bytesWritten === 0) throw new Error("Model cache seed write made no progress");
+          written += result.bytesWritten;
+        }
+      }
+
+      const [finalSourceInfo, currentSourceInfo] = await Promise.all([
+        sourceHandle.stat(),
+        lstat(candidate.source),
+      ]);
+      if (
+        !isSameFile(initialSourceInfo, finalSourceInfo)
+        || !currentSourceInfo.isFile()
+        || currentSourceInfo.dev !== initialSourceInfo.dev
+        || currentSourceInfo.ino !== initialSourceInfo.ino
+      ) {
+        throw new Error("Model cache changed while it was being seeded");
+      }
+
+      await temporaryHandle.chmod(0o600);
+      await temporaryHandle.close();
+      temporaryHandle = undefined;
+      await link(temporary, candidate.destination);
       copied.push(candidate.label);
     } catch {
       // Installed caches are an optional warm start, never a startup dependency.
     } finally {
+      await sourceHandle?.close().catch(() => undefined);
+      await temporaryHandle?.close().catch(() => undefined);
       if (temporary) await rm(temporary, { force: true }).catch(() => undefined);
     }
   }

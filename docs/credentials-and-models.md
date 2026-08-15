@@ -310,8 +310,10 @@ Cursor/Grok request is still signed out.
 
 ## Agent-test model-cache seeding
 
-Before the isolated backend starts, `dev:test` copies each available regular
-file below into the profile:
+Before the isolated backend starts, `dev:test` fills each missing destination
+below from the corresponding available regular file. A destination already
+present in the profile is never replaced, preserving newer data discovered by
+live providers during earlier runs:
 
 | Source | Isolated destination | Purpose |
 | --- | --- | --- |
@@ -321,10 +323,12 @@ file below into the profile:
 | Host Codex bridge `models-cache.json` | Isolated Codex bridge cache | Immediate bridge warm start |
 | Host Grok `models_cache.json` | Isolated `HOME/.grok` | Grok CLI-native cache |
 
-Each seed source must be a regular, non-symlink file no larger than 16 MiB. The
-destination is written atomically with mode `0600`. Missing, unreadable,
-oversized, or failed optional copies do not prevent profile startup. Normal
-storage and bridge parsers still validate the copied content before using it.
+Each seed source is opened without following a final symlink, must remain the
+same regular file throughout the copy, and is read through that descriptor with
+a hard limit of 16 MiB. The destination is installed atomically without
+replacement and with mode `0600`. Missing, unreadable, oversized, changing, or
+failed optional copies do not prevent profile startup. Normal storage and bridge
+parsers still validate the copied content before using it.
 
 The seeding copies model metadata only. It does not copy Orkestrator projects,
 environments, sessions, prompts, configuration, or extra credential files.
@@ -332,7 +336,8 @@ environments, sessions, prompts, configuration, or extra credential files.
 One limitation is that OpenCode snapshots remain keyed by their production
 project IDs. A newly seeded fixture has a new project ID, so the copied
 OpenCode store may not warm that fixture's picker until a live OpenCode bridge
-discovers and caches the fixture's own catalogue.
+discovers and caches the fixture's own catalogue. That profile-local discovery
+is then preserved across restarts.
 
 ## Browser gateway credential in agent testing
 

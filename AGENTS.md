@@ -480,14 +480,15 @@ the launcher, Vite, Electron, and backend as live. Use these returned fields:
   enter that exact value in the gateway-token password field, and do not echo,
   paste into chat, or save it in artifacts.
 
-On startup, `dev:test` also seeds the isolated profile from the installed,
-bounded model-catalog caches when they exist: Orkestrator's host-agent and
-OpenCode catalogues, Codex's CLI and bridge model caches, and Grok's CLI model
-cache. Cursor's cached catalogue is already part of the shared Orkestrator
-host-agent file; Cursor has no separate portable model-cache file. The setup
-does not copy projects, sessions, prompts, application settings, or any extra
-credential files. A credential-free run therefore still has last-known model
-metadata.
+On startup, `dev:test` also fills any missing isolated-profile caches from the
+installed, bounded model-catalog caches when they exist: Orkestrator's
+host-agent and OpenCode catalogues, Codex's CLI and bridge model caches, and
+Grok's CLI model cache. Cursor's cached catalogue is already part of the shared
+Orkestrator host-agent file; Cursor has no separate portable model-cache file.
+The setup does not copy projects, sessions, prompts, application settings, or
+any extra credential files, and it never replaces catalogue state already
+updated inside the profile. A credential-free run therefore still has
+last-known model metadata.
 
 If startup reports `failed`, inspect the manifest and files below its `logDir`.
 Do not search arbitrary production application-data directories for diagnostics.

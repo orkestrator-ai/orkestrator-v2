@@ -40,14 +40,15 @@ To narrow the profile to one provider, pass `--credential-source codex` (or
 credentials remain disabled. Live agent requests can incur external effects or
 cost, so use only the seeded fixture and do not put credentials in test output.
 
-Startup copies available, bounded model metadata into the isolated profile:
+Startup fills missing profile caches from available, bounded model metadata:
 `agent-model-catalog.json`, `opencode-model-catalog.json`, Codex
 `models_cache.json`, the Codex bridge `models-cache.json`, and Grok
 `models_cache.json`. Cursor and Grok picker entries are also carried in the
 shared `agent-model-catalog.json`; Cursor has no separate portable model-cache
 file. This makes model pickers representative even in a deliberately
-credential-free run. The seeding does not copy projects, sessions, prompts,
-settings, or additional credentials.
+credential-free run. Existing profile caches are preserved across restarts, and
+the seeding does not copy projects, sessions, prompts, settings, or additional
+credentials.
 
 To create and start fixture environments during seeding:
 

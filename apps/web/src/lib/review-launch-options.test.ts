@@ -4,6 +4,7 @@ import { useConfigStore } from "@/stores/configStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
+import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
 const originalClaudeModels = useClaudeStore.getState().models;
 const originalCodexModels = useCodexStore.getState().models;
@@ -13,6 +14,7 @@ afterEach(() => {
   useClaudeStore.setState({ models: originalClaudeModels });
   useCodexStore.setState({ models: originalCodexModels });
   useOpenCodeStore.setState({ models: originalOpenCodeModels });
+  useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [] });
 });
 
 describe("buildReviewModelCatalog", () => {
@@ -111,6 +113,42 @@ describe("buildReviewModelCatalog", () => {
         reasoningEfforts: [],
       }),
     ]);
+  });
+
+  test("uses the shared backend-hydrated Cursor and Grok catalogues", () => {
+    useAgentModelCatalogStore.getState().setAcpModels([
+      {
+        platform: "cursor",
+        id: "composer-2.5",
+        label: "Composer 2.5",
+        description: "Cursor model",
+        reasoning: [
+          { id: "default", label: "Default" },
+          { id: "high", label: "High" },
+          { id: "high", label: "High duplicate" },
+        ],
+      },
+      {
+        platform: "grok",
+        id: "grok-4.6",
+        label: "Grok 4.6",
+        reasoning: [{ id: "xhigh", label: "Extra high" }],
+      },
+    ]);
+
+    const catalog = buildReviewModelCatalog(null);
+    expect(catalog.cursor).toEqual([{
+      id: "composer-2.5",
+      name: "Composer 2.5",
+      description: "Cursor model",
+      reasoningEfforts: ["high"],
+    }]);
+    expect(catalog.grok).toEqual([{
+      id: "grok-4.6",
+      name: "Grok 4.6",
+      description: undefined,
+      reasoningEfforts: ["xhigh"],
+    }]);
   });
 
   test("propagates the resolved Claude model used to match configured defaults", () => {

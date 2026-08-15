@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
 import { useConfigStore } from "@/stores/configStore";
+import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
 const realBackendSnapshot = { ...realBackend };
 const getCachedOpenCodeModelCatalogMock = mock(
@@ -35,6 +36,7 @@ describe("useBuildLaunchOptions", () => {
     getCachedOpenCodeModelCatalogMock.mockImplementation(async () => null);
     getOpencodeModelPreferencesMock.mockImplementation(async () => undefined);
     useConfigStore.setState({ config: baseConfig });
+    useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [] });
   });
 
   test("resolves OpenCode favorite model refs to ids, deduplicated and in order", async () => {
@@ -108,6 +110,23 @@ describe("useBuildLaunchOptions", () => {
     const opencode = result.current.catalog.opencode ?? [];
     expect(opencode.map((model) => model.id)).toEqual(["provider/model-a"]);
     expect(opencode[0]?.description).toBe("Provider A");
+  });
+
+  test("reacts to the shared backend-hydrated Cursor catalogue", async () => {
+    const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
+    await flushPromises();
+
+    expect(result.current.catalog.cursor?.map((model) => model.id)).toEqual(["default"]);
+    act(() => {
+      useAgentModelCatalogStore.getState().setAcpModels([{
+        platform: "cursor",
+        id: "composer-2.5",
+        label: "Composer 2.5",
+      }]);
+    });
+
+    expect(result.current.catalog.cursor?.map((model) => model.id))
+      .toEqual(["composer-2.5"]);
   });
 
   test("ignores a cached catalog snapshot that belongs to another project", async () => {

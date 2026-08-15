@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  useAgentModelCatalogStore,
   useBuildPipelineStore,
   useGitHubIssuesStore,
   useKanbanStore,
@@ -10,5 +11,6 @@ describe("store exports", () => {
     expect(typeof useBuildPipelineStore.getState).toBe("function");
     expect(typeof useGitHubIssuesStore.getState).toBe("function");
     expect(typeof useKanbanStore.getState).toBe("function");
+    expect(typeof useAgentModelCatalogStore.getState).toBe("function");
   });
 });

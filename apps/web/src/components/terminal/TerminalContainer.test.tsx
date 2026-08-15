@@ -2418,6 +2418,139 @@ describe("TerminalContainer", () => {
     ).toEqual(attachments);
   });
 
+  test("still stages images itself for a tmux-backed native Claude launch", async () => {
+    // `native` is not sufficient: a tmux launch needs a real tmux session, so
+    // the backend leaves it to the terminal coordinator. If the renderer stood
+    // down here too, nothing would deliver the image.
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((env) =>
+        env.id === "env-hidden"
+          ? {
+              ...env,
+              containerId: null,
+              environmentType: "local",
+              worktreePath: "/tmp/env-hidden-worktree",
+              defaultAgent: "claude",
+              claudeMode: "native",
+              claudeNativeBackend: "tmux",
+              initialPrompt: "Inspect this screenshot",
+              pendingAgentLaunch: true,
+            }
+          : env
+      ),
+    }));
+    useClaudeOptionsStore.setState({
+      options: {
+        "env-hidden": {
+          launchAgent: true,
+          agentType: "claude",
+          initialPrompt: "Inspect this screenshot",
+          initialPromptAttachments: [{
+            id: "img-tmux",
+            name: "tmux.png",
+            previewUrl: "data:image/png;base64,VE1VWA==",
+            base64Data: "VE1VWA==",
+          }],
+        },
+      },
+      pendingNativeLaunches: {},
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId={null}
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(writeLocalFileMock).toHaveBeenCalledWith(
+        "/tmp/env-hidden-worktree",
+        ".orkestrator/initial-prompt/tmux.png",
+        "VE1VWA==",
+      );
+    });
+  });
+
+  test("stands down for a native launch the repository's agent style selects", async () => {
+    // The backend resolves the Claude style through the repository tier as
+    // well. The renderer has to reach the same verdict from the same tier, or
+    // it rewrites a prompt the backend is about to dispatch with real images.
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: { ...state.config.global, claudeMode: "terminal" },
+        repositories: {
+          ...state.config.repositories,
+          "project-1": {
+            defaultBranch: "main",
+            prBaseBranch: "main",
+            ...state.config.repositories["project-1"],
+            agentStyle: "native" as const,
+          },
+        },
+      },
+    }));
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((env) =>
+        env.id === "env-hidden"
+          ? {
+              ...env,
+              projectId: "project-1",
+              containerId: null,
+              environmentType: "local",
+              worktreePath: "/tmp/env-hidden-worktree",
+              defaultAgent: "claude",
+              claudeMode: undefined,
+              claudeNativeBackend: undefined,
+              initialPrompt: "Inspect this screenshot",
+              pendingAgentLaunch: true,
+            }
+          : env
+      ),
+    }));
+    useClaudeOptionsStore.setState({
+      options: {
+        "env-hidden": {
+          launchAgent: true,
+          agentType: "claude",
+          initialPrompt: "Inspect this screenshot",
+          initialPromptAttachments: [{
+            id: "img-repo",
+            name: "repo.png",
+            previewUrl: "data:image/png;base64,UkVQTw==",
+            base64Data: "UkVQTw==",
+          }],
+        },
+      },
+      pendingNativeLaunches: {},
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId={null}
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      const startupTab = usePaneLayoutStore.getState().getAllTabs("env-hidden")
+        .find((tab) => tab.id === "startup-agent");
+      expect(startupTab?.type).toBe("agent-native");
+    });
+    expect(writeLocalFileMock).not.toHaveBeenCalled();
+    expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
+  });
+
   test("does not reconstruct a second tab while a terminal launch stages images", async () => {
     useConfigStore.setState((state) => ({
       ...state,

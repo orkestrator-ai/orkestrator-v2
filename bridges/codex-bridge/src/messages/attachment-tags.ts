@@ -13,9 +13,13 @@
  * same `file` part the live turn published, so a reloaded tab renders the same
  * thumbnail rather than degrading to a filename.
  *
- * The format is deliberately the Claude bridge's `<attached-files>` block: the
- * renderer already strips it from displayed text and re-derives attachments
- * from it, so this needs no browser-side counterpart.
+ * The format is the Claude bridge's `<attached-files>` block, qualified with
+ * `source="orkestrator"`, and only that qualified form is parsed back.
+ * Rehydration reads the *user's own* persisted text, so an unqualified marker
+ * would make a prompt that merely talks about this markup — plausible for
+ * anyone working on Orkestrator itself — come back from a reload with that text
+ * deleted and attachment rows for files nobody attached. The attribute is what
+ * separates "the bridge wrote this" from "the user typed this".
  */
 import type { NormalizedPart } from "./types.js";
 
@@ -34,8 +38,19 @@ export interface AttachmentTagInput {
 const MAX_TAGGED_ATTACHMENTS = 20;
 const MAX_TAG_VALUE_LENGTH = 1024;
 
-const ATTACHED_FILES_PATTERN =
-  /<attached-files>\s*([\s\S]*?)\s*<\/attached-files>/g;
+/**
+ * Marks a block as one this bridge wrote.
+ *
+ * Only blocks carrying it are stripped and converted back into attachments; a
+ * plain `<attached-files>` block in a user's prompt is left as the text they
+ * wrote.
+ */
+const ATTACHMENT_BLOCK_SOURCE = "orkestrator";
+
+const ATTACHED_FILES_PATTERN = new RegExp(
+  `<attached-files\\s+source="${ATTACHMENT_BLOCK_SOURCE}"\\s*>\\s*([\\s\\S]*?)\\s*</attached-files>`,
+  "g",
+);
 const ATTACHMENT_PATTERN = /<attachment\s+([^>]*?)\s*\/>/g;
 
 function escapeXmlAttribute(value: string): string {
@@ -97,7 +112,7 @@ export function buildAttachmentTagBlock(
       `<attachment type="image" path="${escapeXmlAttribute(attachment.path)}"`
       + ` filename="${escapeXmlAttribute(attachment.filename ?? "")}" />`)
     .join("\n");
-  return `<attached-files>\n${tags}\n</attached-files>`;
+  return `<attached-files source="${ATTACHMENT_BLOCK_SOURCE}">\n${tags}\n</attached-files>`;
 }
 
 /** Append the attachment block to the text Codex will persist for this turn. */
@@ -117,11 +132,16 @@ export function appendAttachmentTags(
  * `fileUrl` is the workspace path rather than inline data: the renderer reads
  * the bytes itself (host or container), which is what keeps a rehydrated
  * transcript bounded no matter how large the original image was.
+ *
+ * Only a block this bridge marked as its own is touched. Text the user wrote
+ * comes back exactly as they wrote it, even when it contains the same markup.
  */
 export function extractAttachmentTags(
   text: string,
 ): { text: string; parts: NormalizedPart[] } {
-  if (!text.includes("<attached-files>")) return { text, parts: [] };
+  if (!text.includes(`<attached-files source="${ATTACHMENT_BLOCK_SOURCE}"`)) {
+    return { text, parts: [] };
+  }
 
   const parts: NormalizedPart[] = [];
   let cleaned = text;

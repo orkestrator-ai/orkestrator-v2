@@ -2289,7 +2289,7 @@ describe("session lifecycle", () => {
     const input = h.child().requests.find((request) => request.method === "turn/start")!
       .params.input as Array<Record<string, unknown>>;
     expect(input[0]!.text).toBe(
-      "Inspect the diagram\n\n<attached-files>\n"
+      "Inspect the diagram\n\n<attached-files source=\"orkestrator\">\n"
       + '<attachment type="image" path="/workspace/.orkestrator/initial-prompt/shot.png"'
       + ' filename="diagram.png" />\n</attached-files>',
     );
@@ -2311,7 +2311,7 @@ describe("session lifecycle", () => {
     const input = h.child().requests.find((request) => request.method === "turn/start")!
       .params.input as Array<Record<string, unknown>>;
     expect(input[0]!.text).toBe(
-      '<attached-files>\n<attachment type="image" path="/workspace/a.png" filename="" />\n</attached-files>',
+      '<attached-files source="orkestrator">\n<attachment type="image" path="/workspace/a.png" filename="" />\n</attached-files>',
     );
     expect(input[1]).toEqual({ type: "localImage", path: "/workspace/a.png" });
   });

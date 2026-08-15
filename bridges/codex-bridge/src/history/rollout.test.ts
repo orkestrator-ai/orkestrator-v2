@@ -933,7 +933,7 @@ describe("rollout public helpers (continued)", () => {
       [
         {
           type: "input_text",
-          text: "Inspect the diagram\n\n<attached-files>\n"
+          text: "Inspect the diagram\n\n<attached-files source=\"orkestrator\">\n"
             + '<attachment type="image" path="/workspace/.orkestrator/initial-prompt/shot.png"'
             + ' filename="shot.png" />\n</attached-files>',
         },
@@ -961,7 +961,7 @@ describe("rollout public helpers (continued)", () => {
       extractPersistedMessageContent(
         [{
           type: "input_text",
-          text: '<attached-files><attachment type="image" path="/workspace/a.png" /></attached-files>',
+          text: '<attached-files source="orkestrator"><attachment type="image" path="/workspace/a.png" /></attached-files>',
         }],
         "user",
       ),
@@ -976,7 +976,7 @@ describe("rollout public helpers (continued)", () => {
       extractPersistedMessageText(
         [{
           type: "input_text",
-          text: 'Fix the layout\n\n<attached-files><attachment type="image" path="/workspace/a.png" /></attached-files>',
+          text: 'Fix the layout\n\n<attached-files source="orkestrator"><attachment type="image" path="/workspace/a.png" /></attached-files>',
         }],
         "user",
       ),
@@ -995,7 +995,7 @@ describe("rollout public helpers (continued)", () => {
           content: [
             {
               type: "input_text",
-              text: 'Look\n\n<attached-files><attachment type="image" path="/workspace/a.png" filename="a.png" /></attached-files>',
+              text: 'Look\n\n<attached-files source="orkestrator"><attachment type="image" path="/workspace/a.png" filename="a.png" /></attached-files>',
             },
             { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgo=" },
           ],
@@ -1012,6 +1012,42 @@ describe("rollout public helpers (continued)", () => {
         content: "/workspace/a.png",
         fileUrl: "/workspace/a.png",
         filename: "a.png",
+      },
+    ]);
+  });
+
+  test("hydrates an attachment-only user message into a file part with no text part", async () => {
+    // The startup launch the backend now dispatches for images with no prompt.
+    // A message with nothing but an attachment is still a message the user
+    // sent, so it must survive hydration rather than being dropped as blank.
+    const hydrated = await hydrateRollout("thread-attachment-only", [
+      sessionMeta("thread-attachment-only"),
+      {
+        timestamp: "2026-07-25T12:01:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: '<attached-files source="orkestrator"><attachment type="image" path="/workspace/only.png" filename="only.png" /></attached-files>',
+            },
+            { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgo=" },
+          ],
+        },
+      },
+    ]);
+
+    expect(hydrated.messages).toHaveLength(1);
+    expect(hydrated.messages[0]?.role).toBe("user");
+    expect(hydrated.messages[0]?.content).toBe("");
+    expect(hydrated.messages[0]?.parts).toEqual([
+      {
+        type: "file",
+        content: "/workspace/only.png",
+        fileUrl: "/workspace/only.png",
+        filename: "only.png",
       },
     ]);
   });

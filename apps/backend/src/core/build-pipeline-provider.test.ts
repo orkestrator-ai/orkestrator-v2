@@ -5960,6 +5960,44 @@ describe("OpenCode build pipeline provider dispatch", () => {
     }
   });
 
+  test("keeps the file part when an attachment-only prompt has no text", async () => {
+    // Reachable since the startup launch began dispatching image-only prompts.
+    // The generated SDK type allows an empty `text`, and the file part is what
+    // actually carries the turn; pinned here so a change to either is visible.
+    const fake = openCodeFake();
+    const provider = createBuildPipelineProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "test-token",
+        directory: "/workspace",
+      },
+      { openCodeClient: fake.client, monitorRetryMs: 1 },
+    );
+    try {
+      await provider.send("owned-session", "", {
+        requestId: "request-image-only",
+        attachments: [{
+          type: "image",
+          path: "/workspace/only.png",
+          filename: "only.png",
+        }],
+      });
+
+      expect(fake.promptCalls[0]?.parts).toEqual([
+        { type: "text", text: "" },
+        {
+          type: "file",
+          mime: "image/png",
+          filename: "only.png",
+          url: "file:///workspace/only.png",
+        },
+      ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test.each([[409], [408], [425], [429], [500]])(
     "maps OpenCode prompt HTTP %i to a retryable dispatch failure",
     async (status) => {

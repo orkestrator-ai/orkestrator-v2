@@ -654,8 +654,9 @@ function isSyntheticPersistedUserText(text: string): boolean {
  * `input_image` items are deliberately not read here. Codex persists them as
  * inline base64 data URLs, so a single screenshot is megabytes that would then
  * be replayed to every subscriber on every rehydration. The bridge writes a
- * bounded `<attached-files>` marker into the prompt text for exactly this
- * reason, and that marker is what rebuilds the attachment rows.
+ * bounded `<attached-files source="orkestrator">` marker into the prompt text
+ * for exactly this reason, and that marker is what rebuilds the attachment
+ * rows. An unqualified block is text the user wrote and is left alone.
  */
 export function extractPersistedMessageContent(
   content: unknown,

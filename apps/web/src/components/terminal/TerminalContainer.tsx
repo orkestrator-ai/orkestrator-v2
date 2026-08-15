@@ -37,6 +37,7 @@ import {
   saveInitialPromptAttachments,
 } from "@/lib/initial-prompt-attachments";
 import { resolveClaudeConfig } from "@/lib/claude-mode-resolver";
+import { resolveStartupLaunch } from "@orkestrator/protocol/startup-launch";
 import { reconcilePersistedLayout } from "@/lib/pane-layout-restore";
 import {
   createPersistedPaneLayoutInput,
@@ -484,6 +485,7 @@ export function TerminalContainer({
   // Get config for agent modes - per-environment overrides take precedence over global
   const config = useConfigStore((state) => state.config);
   const {
+    envDefaultAgent,
     envOpencodeMode,
     envClaudeMode,
     envClaudeNativeBackend,
@@ -493,6 +495,7 @@ export function TerminalContainer({
     useShallow((state) => {
       const env = state.environments.find(e => e.id === environmentId);
       return {
+        envDefaultAgent: env?.defaultAgent,
         envOpencodeMode: env?.opencodeMode,
         envClaudeMode: env?.claudeMode,
         envClaudeNativeBackend: env?.claudeNativeBackend,
@@ -513,6 +516,28 @@ export function TerminalContainer({
   );
   const claudeMode = resolvedClaudeConfig.mode;
   const claudeNativeBackend = resolvedClaudeConfig.nativeBackend;
+  /*
+   * Whether the backend's native agent service will dispatch this environment's
+   * pending launch itself — which is also whether it owns the initial prompt's
+   * image attachments.
+   *
+   * Deliberately the shared resolver rather than the mode values above: those
+   * are the renderer's own view (they default Codex to native and are used for
+   * tab creation), while this question must be answered exactly as
+   * `reconcileInitialLaunchOnce` answers it. When the two disagree, either both
+   * sides consume the attachments or neither delivers them.
+   */
+  const startupLaunchDispatchedByBackend = resolveStartupLaunch({
+    environment: {
+      defaultAgent: envDefaultAgent,
+      claudeMode: envClaudeMode,
+      codexMode: envCodexMode,
+      opencodeMode: envOpencodeMode,
+      claudeNativeBackend: envClaudeNativeBackend,
+    },
+    repository: envProjectId ? config.repositories[envProjectId] : undefined,
+    global: config.global,
+  }).dispatchedByBackend;
 
   // Check if this is a local environment (no container)
   const environment = useEnvironmentStore(
@@ -1240,19 +1265,9 @@ export function TerminalContainer({
        * image. Terminal and Claude-tmux launches keep the rewrite, because a
        * prompt typed into a PTY has no way to carry an attachment.
        */
-      const launchAgentType = claudeOptions?.agentType;
       const backendStagesAttachments =
-        // Mirrors `reconcileInitialLaunchOnce`'s own preconditions. Anything it
-        // would decline to dispatch has to keep the text rewrite, or the images
-        // would be dropped by both sides.
         environment?.pendingAgentLaunch === true
-        && (
-          (launchAgentType === "claude"
-            && claudeMode === "native"
-            && claudeNativeBackend !== "tmux")
-          || (launchAgentType === "codex" && codexMode === "native")
-          || (launchAgentType === "opencode" && opencodeMode === "native")
-        );
+        && startupLaunchDispatchedByBackend;
       if (
         claudeOptions?.launchAgent
         && pendingAttachments.length > 0
@@ -1427,7 +1442,7 @@ export function TerminalContainer({
         }, environmentId);
       }
     }
-  }, [isEnvironmentRunning, containerId, isLocalEnvironmentReady, isLocalEnvironment, setupPhase, backendSetupRunning, claudeOptions, initialize, addTab, environmentId, currentEnvState, environment?.pendingAgentLaunch, hydrationStatus, beginHydration, finishHydration, opencodeMode, claudeMode, claudeNativeBackend, codexMode, setPendingNativeLaunch, setOptions, worktreePath, hasBoundSetupSession, bindBackendSetupSession, setupSessionBindNonce]);
+  }, [isEnvironmentRunning, containerId, isLocalEnvironmentReady, isLocalEnvironment, setupPhase, backendSetupRunning, claudeOptions, initialize, addTab, environmentId, currentEnvState, environment?.pendingAgentLaunch, startupLaunchDispatchedByBackend, hydrationStatus, beginHydration, finishHydration, opencodeMode, claudeMode, claudeNativeBackend, codexMode, setPendingNativeLaunch, setOptions, worktreePath, hasBoundSetupSession, bindBackendSetupSession, setupSessionBindNonce]);
 
   // Reset pane layout when container changes within the same environment
   // (e.g., container was stopped and restarted with a new ID).

@@ -2,6 +2,7 @@
 // Wraps the Claude Agent SDK and exposes HTTP/SSE endpoints for Orkestrator AI
 
 import { Hono } from "hono";
+import { compress } from "hono/compress";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import health from "./routes/health.js";
 import config from "./routes/config.js";
@@ -131,6 +132,11 @@ const requestLogger = createRequestLogger();
 if (requestLogger) {
   app.use("*", requestLogger);
 }
+app.use("/session/:id/messages", async (c, next) => {
+  await next();
+  c.res.headers.append("Vary", "Accept-Encoding");
+});
+app.use("/session/:id/messages", compress({ encoding: "gzip" }));
 
 /**
  * Lightweight authenticated probe used to reject a cached client after token

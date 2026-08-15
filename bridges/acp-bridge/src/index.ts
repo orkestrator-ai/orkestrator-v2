@@ -4,11 +4,13 @@ import { promises as fs } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { gzip } from "node:zlib";
 import {
   PARENT_PID_ENV,
   parseParentPid,
   startParentWatchdog,
 } from "@orkestrator/protocol/parent-watchdog";
+import { boundTranscriptResponse } from "@orkestrator/protocol/transcript-window";
 import type {
   NativeAgentComposerState,
   NativeAgentRuntimeSummary,
@@ -63,8 +65,8 @@ interface BridgeTextPart {
 /**
  * A prompt attachment as the transcript records it. The bytes are sent to the
  * agent but never kept here: the renderer resolves `fileUrl` for its own
- * preview, and inlining a data URL would spend the whole 8MiB transcript budget
- * on one screenshot.
+ * preview, and inlining a data URL could spend half the 16 MiB transcript
+ * budget on one screenshot.
  */
 interface BridgeFilePart {
   type: "file";
@@ -216,6 +218,10 @@ interface SessionState {
   cursorToolReplayRuns?: number;
   /** Messages evicted from the front, so absolute indices stay stable. */
   droppedMessages: number;
+  /** Parts evicted from retained messages over the lifetime of this window. */
+  droppedParts: number;
+  /** Durable signal for content/parts trimmed without dropping a whole message. */
+  transcriptTruncated: boolean;
   /**
    * Vendor ACP wire (configOptions, Grok models._meta, Cursor modes) lives on
    * `sessionConfig.wire` only. Public HTTP snapshots expose `composer`.
@@ -269,6 +275,9 @@ interface PersistedSession {
   status: SessionStatus;
   error?: string;
   messages: BridgeMessage[];
+  droppedMessages?: number;
+  droppedParts?: number;
+  transcriptTruncated?: boolean;
   revision: number;
   structured: Array<[string, unknown]>;
   promptJournal: PromptJournalEntry[];
@@ -353,14 +362,14 @@ const MAX_HISTORY_MESSAGE_IDS = 1_024;
 /**
  * The rendered-transcript display budget. Overridable only *downwards*, and
  * only inside a bounded range, so a test can reach the aggregate-trim floor
- * without pushing eight megabytes through a fixture. Nothing can raise it past
+ * without pushing sixteen megabytes through a fixture. Nothing can raise it past
  * the reviewed cap.
  */
 const MAX_TRANSCRIPT_BYTES = parseBoundedInteger(
   process.env.ACP_MAX_TRANSCRIPT_BYTES,
-  8 * 1024 * 1024,
+  (16 * 1024 * 1024) - (128 * 1024),
   1024 * 1024,
-  8 * 1024 * 1024,
+  (16 * 1024 * 1024) - (128 * 1024),
 );
 const MAX_MESSAGE_TEXT_BYTES = 2 * 1024 * 1024;
 const MAX_PARTS_PER_MESSAGE = 512;
@@ -408,7 +417,7 @@ const MAX_DIFF_EDIT_DISTANCE = 512;
  * Unchanged lines kept either side of a change. Rendering every line instead
  * billed the *whole file* per edit: a one-line change to a 200KiB source file
  * produced a 4,993-line "diff" of which 4,989 lines were untouched context, and
- * 58 such edits exhausted the 8MiB transcript budget in a single turn.
+ * 58 such edits exhausted the former 8 MiB transcript budget in a single turn.
  */
 const DIFF_CONTEXT_LINES = 3;
 const MAX_SESSIONS = parseBoundedInteger(process.env.ACP_MAX_SESSIONS, 256, 1, 256);
@@ -417,7 +426,32 @@ const MAX_STRUCTURED_RESULTS = 4;
 const MAX_STRUCTURED_RESULT_BYTES = 1024 * 1024;
 const TRANSCRIPT_CHECK_INTERVAL_BYTES = 64 * 1024;
 const MAX_PROMPT_JOURNAL = 512;
-const MAX_STATE_FILE_BYTES = 16 * 1024 * 1024;
+const MAX_STATE_FILE_BYTES = parseBoundedInteger(
+  process.env.ACP_MAX_STATE_FILE_BYTES,
+  16 * 1024 * 1024,
+  512 * 1024,
+  16 * 1024 * 1024,
+);
+/** Structured results share one persisted file, so their budget must be global. */
+const MAX_PERSISTED_STRUCTURED_BYTES = Math.min(
+  4 * 1024 * 1024,
+  Math.floor(MAX_STATE_FILE_BYTES / 4),
+);
+/** At-most-once journals are retained newest-first within one global file budget. */
+const MAX_PERSISTED_PROMPT_JOURNAL_BYTES = Math.min(
+  2 * 1024 * 1024,
+  Math.floor(MAX_STATE_FILE_BYTES / 8),
+);
+/** Composer catalogues are reloadable caches and cannot crowd out transcripts. */
+const MAX_PERSISTED_SESSION_CONFIG_BYTES = Math.min(
+  2 * 1024 * 1024,
+  Math.floor(MAX_STATE_FILE_BYTES / 8),
+);
+/** Room for omission counters added while transcript arrays are windowed. */
+const PERSISTED_WINDOW_METADATA_RESERVE_BYTES = Math.min(
+  128 * 1024,
+  Math.floor(MAX_STATE_FILE_BYTES / 16),
+);
 const MAX_RESUMABLE_SESSIONS = 512;
 const MAX_SESSION_LIST_PAGES = 64;
 const RPC_TIMEOUT_MS = parseDuration(process.env.ACP_RPC_TIMEOUT_MS, 30_000);
@@ -910,6 +944,8 @@ async function resumeSessionReserved(
       currentTurnOutput: null,
       promptSequence: 0,
       droppedMessages: 0,
+      droppedParts: 0,
+      transcriptTruncated: false,
       sessionConfig: emptySessionConfig(),
       dispatching: true,
       historyReplay: "hydrate",
@@ -1022,6 +1058,8 @@ async function createSessionReserved(
       currentTurnOutput: null,
       promptSequence: 0,
       droppedMessages: 0,
+      droppedParts: 0,
+      transcriptTruncated: false,
       sessionConfig,
       // The session is reachable from `sessions` before its initial
       // configuration finishes, so hold the same claim the config and prompt
@@ -1303,7 +1341,8 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
       failTranscriptLimit(state);
       return;
     }
-    trimPartsTo(message, MAX_PARTS_PER_MESSAGE - 1);
+    state.droppedParts += trimPartsTo(message, MAX_PARTS_PER_MESSAGE - 1);
+    state.transcriptTruncated = true;
   }
   const streaming = previous?.type === partType ? previous : undefined;
   const currentPartText = streaming?.content ?? "";
@@ -1438,7 +1477,8 @@ function applyToolCallUpdate(
         failTranscriptLimit(state);
         return;
       }
-      trimPartsTo(owner, MAX_PARTS_PER_MESSAGE - 1);
+      state.droppedParts += trimPartsTo(owner, MAX_PARTS_PER_MESSAGE - 1);
+      state.transcriptTruncated = true;
     }
     part = {
       type: "tool-invocation",
@@ -2349,16 +2389,18 @@ function isTrimNotice(
  * silent cut reads as a response that simply never took those steps. The notice
  * is keyed by `sourcePartId`, so repeated trims replace it rather than stack.
  */
-function trimPartsTo(message: BridgeMessage, targetLength: number): void {
+function trimPartsTo(message: BridgeMessage, targetLength: number): number {
   if (isTrimNotice(message, message.parts[0])) message.parts.shift();
   const keep = Math.max(0, targetLength - 1);
-  rememberTrimmedToolCalls(message, message.parts.splice(0, Math.max(1, message.parts.length - keep)));
+  const dropped = message.parts.splice(0, Math.max(1, message.parts.length - keep));
+  rememberTrimmedToolCalls(message, dropped);
   message.parts.unshift({
     type: "text",
     content: TRANSCRIPT_TRIM_NOTICE,
     sourcePartId: trimNoticePartId(message),
     sourceMessageId: message.id,
   });
+  return dropped.length;
 }
 
 /**
@@ -2476,7 +2518,7 @@ function normalizeAcpContentDiff(value: JsonObject): BridgeToolDiff | undefined 
   // The file states are only ever rendered as the fallback for a part that has
   // no diff at all: the renderer treats `diff` as authoritative the moment it
   // exists. Keeping them alongside one stored two more whole copies of the file
-  // per edit — 5.3MiB of one 8MiB transcript — that nothing would ever read.
+  // per edit — 5.3 MiB in the original incident — that nothing would ever read.
   const keepFileStates = keepInline && diff === undefined;
   return {
     ...(filePath ? { filePath } : {}),
@@ -2818,30 +2860,34 @@ function boundTranscript(state: SessionState): boolean {
   while (state.messages.length > MAX_MESSAGES) {
     state.messages.shift();
     state.droppedMessages += 1;
+    state.transcriptTruncated = true;
   }
   let bytes = Buffer.byteLength(JSON.stringify(state.messages));
   while (bytes > MAX_TRANSCRIPT_BYTES && state.messages.length > 1) {
     state.messages.shift();
     state.droppedMessages += 1;
+    state.transcriptTruncated = true;
     bytes = Buffer.byteLength(JSON.stringify(state.messages));
   }
   const onlyMessage = state.messages[0];
   while (bytes > MAX_TRANSCRIPT_BYTES && onlyMessage && onlyMessage.parts.length > 1) {
     // Strictly shorter every pass, so the loop still terminates once only the
     // notice is left.
-    trimPartsTo(onlyMessage, onlyMessage.parts.length - 1);
+    state.droppedParts += trimPartsTo(onlyMessage, onlyMessage.parts.length - 1);
+    state.transcriptTruncated = true;
     truncatedCurrentMessage = true;
     bytes = Buffer.byteLength(JSON.stringify(state.messages));
   }
   if (bytes > MAX_TRANSCRIPT_BYTES) {
     // One part alone is over the whole-transcript budget, so nothing left to
     // drop can bring it back under and the bound is genuinely unenforceable.
-    // Every part is individually capped well below 8MiB, so this is a backstop
+    // Every part is individually capped well below 16 MiB, so this is a backstop
     // against a future cap being raised, not a state the agents can reach.
     state.outputTruncated = true;
     state.status = "error";
     state.error = `${provider} output exceeded the transcript limit`;
     truncatedCurrentMessage = true;
+    state.transcriptTruncated = true;
   }
   // Transcript retention is presentation-only. Active child lifecycle stays
   // in the separately bounded registry until a terminal event or process death.
@@ -2868,6 +2914,36 @@ function publicSession(state: SessionState): JsonObject {
   };
 }
 
+function boundTranscriptForRead(state: SessionState): void {
+  /*
+   * `boundTranscript` opens with a full `JSON.stringify(state.messages)`, so a
+   * poll of a large idle session would otherwise pay a whole extra pass over
+   * the transcript on top of serializing and compressing the response.
+   * `uncheckedTranscriptBytes` is the write path's own dirty counter and
+   * `boundTranscript` resets it, so zero here means these exact messages were
+   * already measured against the budget and re-measuring cannot change them.
+   */
+  if (state.uncheckedTranscriptBytes === 0) return;
+  const previousBaseIndex = state.droppedMessages;
+  const previousPartCount = state.messages.reduce(
+    (total, message) => total + message.parts.length,
+    0,
+  );
+  const truncatedCurrentMessage = boundTranscript(state);
+  const nextPartCount = state.messages.reduce(
+    (total, message) => total + message.parts.length,
+    0,
+  );
+  if (
+    truncatedCurrentMessage
+    || state.droppedMessages !== previousBaseIndex
+    || nextPartCount !== previousPartCount
+  ) {
+    state.revision += 1;
+    schedulePersist();
+  }
+}
+
 /**
  * The neutral usage snapshot, or nothing at all. Cursor reports no token counts
  * whatsoever, and an empty meter reading "0 tokens" would claim a measurement
@@ -2887,7 +2963,7 @@ function publicContextUsage(state: SessionState) {
  * Incremental transcript read. Only the last message mutates (its parts grow as
  * chunks arrive), so a client re-requests from its own last index and receives
  * that message plus anything newer — never the whole transcript, which is
- * bounded at 8 MiB and would otherwise be re-sent on every poll.
+ * bounded below 16 MiB and would otherwise be re-sent on every poll.
  */
 function messageWindow(state: SessionState, fromIndex: number | null): JsonObject {
   const start = fromIndex === null
@@ -2897,10 +2973,16 @@ function messageWindow(state: SessionState, fromIndex: number | null): JsonObjec
     messages: state.messages.slice(start),
     baseIndex: state.droppedMessages + start,
     totalMessages: state.droppedMessages + state.messages.length,
+    messageWindow: {
+      truncated: state.transcriptTruncated || state.droppedMessages + start > 0,
+      ...(state.droppedMessages + start > 0
+        ? { omittedMessages: state.droppedMessages + start }
+        : {}),
+      ...(state.droppedParts > 0 ? { omittedParts: state.droppedParts } : {}),
+    },
     revision: state.revision,
     status: state.status,
     error: state.error,
-    composer: state.sessionConfig.composer,
   };
 }
 
@@ -3138,16 +3220,23 @@ async function route(
     return json(response, 404, { error: "Session not found" });
   }
   const action = match[2];
-  if (!action && request.method === "GET") return json(response, 200, publicSession(state));
+  if (!action && request.method === "GET") {
+    boundTranscriptForRead(state);
+    return json(response, 200, publicSession(state));
+  }
   if (action === "messages" && request.method === "GET") {
+    boundTranscriptForRead(state);
     return json(response, 200, messageWindow(state, parseFromIndex(url.searchParams.get("fromIndex"))));
   }
   if (action === "status" && request.method === "GET") {
+    const contextUsage = publicContextUsage(state);
     return json(response, 200, {
       status: state.status,
       error: state.error,
       revision: state.revision,
       composer: state.sessionConfig.composer,
+      ...(contextUsage ? { contextUsage } : {}),
+      runtime: publicRuntime(state),
     });
   }
   if (action === "config" && request.method === "GET") {
@@ -3512,10 +3601,81 @@ async function readJson(request: IncomingMessage): Promise<JsonObject> {
   return parsed;
 }
 
+const RESPONSE_ACCEPTS_GZIP = Symbol("responseAcceptsGzip");
+
+function acceptsGzip(value: string | string[] | undefined): boolean {
+  const header = Array.isArray(value) ? value.join(",") : value ?? "";
+  let wildcardQuality: number | undefined;
+  for (const entry of header.split(",")) {
+    const [name, ...parameters] = entry.trim().toLowerCase().split(";");
+    if (name !== "gzip" && name !== "*") continue;
+    const qualityParameter = parameters
+      .map((parameter) => parameter.trim())
+      .find((parameter) => parameter.startsWith("q="));
+    const rawQuality = qualityParameter?.slice(2);
+    const quality = rawQuality === undefined
+      ? 1
+      : /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(rawQuality)
+        ? Number(rawQuality)
+        : 0;
+    // An explicit coding always overrides a wildcard, including q=0.
+    if (name === "gzip") return quality > 0;
+    wildcardQuality = quality;
+  }
+  return (wildcardQuality ?? 0) > 0;
+}
+
+function sendJson(
+  response: ServerResponse,
+  status: number,
+  body: Buffer,
+  compressed: boolean,
+): void {
+  if (response.headersSent || response.destroyed) return;
+  const existingVary = response.getHeader("Vary");
+  const vary = typeof existingVary === "string" && existingVary.trim()
+    ? `${existingVary}, Accept-Encoding`
+    : "Accept-Encoding";
+  response.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+    "content-length": String(body.byteLength),
+    vary,
+    ...(compressed ? { "content-encoding": "gzip" } : {}),
+  });
+  response.end(body);
+}
+
 function json(response: ServerResponse, status: number, value: unknown): void {
   if (response.headersSent || response.destroyed) return;
-  response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-  response.end(JSON.stringify(value));
+  const body = Buffer.from(JSON.stringify(value));
+  const shouldCompress = body.byteLength >= 1024
+    && (response as ServerResponse & { [RESPONSE_ACCEPTS_GZIP]?: boolean })[
+      RESPONSE_ACCEPTS_GZIP
+    ] === true;
+  if (!shouldCompress) {
+    sendJson(response, status, body, false);
+    return;
+  }
+  /*
+   * Compression happens on libuv's threadpool, never inline. This process also
+   * runs the agent's JSON-RPC stdio loop and every session's SSE writer, and a
+   * transcript read is allowed up to `MAX_TRANSCRIPT_BYTES` — synchronous gzip
+   * of that much would stall all of them for the duration.
+   *
+   * The write is therefore deferred past the caller's return. Nothing else
+   * writes this response afterwards: the request handler's `.catch` only fires
+   * when routing rejects, and `sendJson` refuses a response that is already
+   * headed or destroyed.
+   */
+  gzip(body, { level: 6 }, (error, encoded) => {
+    if (error) {
+      // Losing the bandwidth win beats losing the response.
+      sendJson(response, status, body, false);
+      return;
+    }
+    sendJson(response, status, encoded, true);
+  });
 }
 
 function isObject(value: unknown): value is JsonObject {
@@ -3828,7 +3988,52 @@ function emptySessionConfig(): AcpNormalizedSessionConfig {
 }
 
 function persistedSnapshot(): PersistedState {
-  return {
+  let retainedStructuredBytes = 0;
+  let retainedPromptJournalBytes = 0;
+  let retainedSessionConfigBytes = 0;
+  const structuredBySession = new Map<string, Array<[string, unknown]>>();
+  const promptJournalBySession = new Map<string, PromptJournalEntry[]>();
+  const sessionConfigBySession = new Map<string, AcpNormalizedSessionConfig>();
+  const newestSessions = [...sessions.values()].reverse();
+  // Prefer the newest sessions and newest results while enforcing one global
+  // budget for the single state file that owns all of them.
+  for (const state of newestSessions) {
+    const retained: Array<[string, unknown]> = [];
+    for (const entry of [...state.structured.entries()].reverse()) {
+      const bytes = Buffer.byteLength(JSON.stringify(entry));
+      if (retainedStructuredBytes + bytes > MAX_PERSISTED_STRUCTURED_BYTES) continue;
+      retained.unshift(entry);
+      retainedStructuredBytes += bytes;
+    }
+    structuredBySession.set(state.id, retained);
+    promptJournalBySession.set(state.id, []);
+
+    const configBytes = Buffer.byteLength(JSON.stringify(state.sessionConfig));
+    if (retainedSessionConfigBytes + configBytes <= MAX_PERSISTED_SESSION_CONFIG_BYTES) {
+      sessionConfigBySession.set(state.id, state.sessionConfig);
+      retainedSessionConfigBytes += configBytes;
+    }
+  }
+  const retainJournalEntries = (accepted: boolean): void => {
+    for (const state of newestSessions) {
+      const retained = promptJournalBySession.get(state.id)!;
+      for (const rawEntry of [...state.promptJournal.values()].reverse()) {
+        if ((rawEntry.state === "accepted") !== accepted) continue;
+        const entry = rawEntry.state === "accepted"
+          ? { ...rawEntry, state: "ambiguous" as const }
+          : rawEntry;
+        const bytes = Buffer.byteLength(JSON.stringify(entry));
+        if (retainedPromptJournalBytes + bytes > MAX_PERSISTED_PROMPT_JOURNAL_BYTES) continue;
+        retained.unshift(entry);
+        retainedPromptJournalBytes += bytes;
+      }
+    }
+  };
+  // A live accepted dispatch becomes ambiguous after restart and must win over
+  // completed history: dropping it could execute the same prompt a second time.
+  retainJournalEntries(true);
+  retainJournalEntries(false);
+  const snapshot: PersistedState = {
     version: 3,
     provider,
     sessions: [...sessions.values()].map((state) => ({
@@ -3840,18 +4045,92 @@ function persistedSnapshot(): PersistedState {
         ? { error: `${provider} prompt outcome is unknown after bridge restart` }
         : state.error ? { error: state.error } : {}),
       messages: state.messages,
+      ...(state.droppedMessages > 0 ? { droppedMessages: state.droppedMessages } : {}),
+      ...(state.droppedParts > 0 ? { droppedParts: state.droppedParts } : {}),
+      ...(state.transcriptTruncated ? { transcriptTruncated: true } : {}),
       revision: state.revision,
-      structured: [...state.structured.entries()],
-      promptJournal: [...state.promptJournal.values()].map((entry) =>
-        entry.state === "accepted" ? { ...entry, state: "ambiguous" as const } : entry
-      ),
-      sessionConfig: state.sessionConfig,
-      composer: state.sessionConfig.composer,
+      structured: structuredBySession.get(state.id) ?? [],
+      promptJournal: promptJournalBySession.get(state.id) ?? [],
+      ...(sessionConfigBySession.has(state.id)
+        ? { sessionConfig: sessionConfigBySession.get(state.id)! }
+        : {}),
       ...(state.usage ? { usage: state.usage } : {}),
       ...(state.commandCount === undefined ? {} : { commandCount: state.commandCount }),
       ...(state.subagentLimitExceeded ? { subagentLimitExceeded: true } : {}),
     })),
   };
+  return boundPersistedSnapshot(snapshot);
+}
+
+function boundPersistedSnapshot(snapshot: PersistedState): PersistedState {
+  const bounded: PersistedState = {
+    ...snapshot,
+    sessions: snapshot.sessions.map((session) => ({
+      ...session,
+      messages: [...session.messages],
+      structured: [...session.structured],
+    })),
+  };
+  const metadataOnly: PersistedState = {
+    ...bounded,
+    sessions: bounded.sessions.map((session) => ({ ...session, messages: [] })),
+  };
+  const metadataBytes = Buffer.byteLength(JSON.stringify(metadataOnly)) + 1;
+  if (metadataBytes > MAX_STATE_FILE_BYTES) {
+    throw new Error("ACP persisted session metadata exceeds its byte limit");
+  }
+
+  const candidates = bounded.sessions.map((session, index) => ({
+    index,
+    extraBytes: Math.max(0, Buffer.byteLength(JSON.stringify(session.messages)) - 2),
+  }));
+  let remaining = Math.max(
+    0,
+    MAX_STATE_FILE_BYTES - metadataBytes - PERSISTED_WINDOW_METADATA_RESERVE_BYTES,
+  );
+  const allocations = new Map<number, number>();
+  let pending = candidates.filter((candidate) => candidate.extraBytes > 0);
+  while (pending.length > 0) {
+    const share = Math.floor(remaining / pending.length);
+    const fitting = pending.filter((candidate) => candidate.extraBytes <= share);
+    if (fitting.length === 0) {
+      for (const candidate of pending) allocations.set(candidate.index, share);
+      remaining = 0;
+      break;
+    }
+    const fittingIndexes = new Set(fitting.map((candidate) => candidate.index));
+    for (const candidate of fitting) {
+      allocations.set(candidate.index, candidate.extraBytes);
+      remaining -= candidate.extraBytes;
+    }
+    pending = pending.filter((candidate) => !fittingIndexes.has(candidate.index));
+  }
+
+  for (const candidate of candidates) {
+    const session = bounded.sessions[candidate.index]!;
+    const allocation = allocations.get(candidate.index) ?? 0;
+    if (candidate.extraBytes <= allocation) continue;
+    const targetBytes = allocation + 2;
+    const originalCount = session.messages.length;
+    const windowed = boundTranscriptResponse(session.messages, targetBytes, {
+      envelopeReserveBytes: 0,
+      contentFallbackBytes: Math.max(0, Math.min(
+        1024 * 1024,
+        targetBytes - 4 * 1024,
+      )),
+    });
+    session.messages = windowed.overflowed ? [] : windowed.messages;
+    const omittedMessages = windowed.overflowed
+      ? originalCount
+      : windowed.messageWindow.omittedMessages ?? 0;
+    const omittedParts = windowed.overflowed
+      ? 0
+      : windowed.messageWindow.omittedParts ?? 0;
+    session.droppedMessages = (session.droppedMessages ?? 0) + omittedMessages;
+    session.droppedParts = (session.droppedParts ?? 0) + omittedParts;
+    session.transcriptTruncated = true;
+  }
+  return bounded;
 }
 
 function schedulePersist(): void {
@@ -3868,7 +4147,11 @@ function schedulePersist(): void {
     persistenceScheduled = false;
     await writePersistedState();
   });
-  persistenceTail = operation.catch(() => undefined);
+  persistenceTail = operation.catch((error) => {
+    console.warn(
+      `[acp-bridge] Failed to persist bounded state: ${error instanceof Error ? error.message : "unknown error"}`,
+    );
+  });
 }
 
 function persistState(): Promise<void> {
@@ -3984,7 +4267,19 @@ async function loadPersistedState(): Promise<void> {
       uncheckedTranscriptBytes: 0,
       currentTurnOutput: null,
       promptSequence: 0,
-      droppedMessages: 0,
+      droppedMessages: Number.isSafeInteger(candidate.droppedMessages)
+        && Number(candidate.droppedMessages) >= 0
+        ? Number(candidate.droppedMessages)
+        : 0,
+      droppedParts: Number.isSafeInteger(candidate.droppedParts)
+        && Number(candidate.droppedParts) >= 0
+        ? Number(candidate.droppedParts)
+        : 0,
+      transcriptTruncated: candidate.transcriptTruncated === true
+        || (Number.isSafeInteger(candidate.droppedMessages)
+          && Number(candidate.droppedMessages) > 0)
+        || (Number.isSafeInteger(candidate.droppedParts)
+          && Number(candidate.droppedParts) > 0),
       sessionConfig: restoreSessionConfig(candidate),
       dispatching: false,
       historyReplay: false,
@@ -4189,8 +4484,8 @@ function normalizeBridgeToolDiff(value: unknown): BridgeToolDiff | undefined {
     ...(filePath ? { filePath } : {}),
     ...(additions !== undefined ? { additions } : {}),
     ...(deletions !== undefined ? { deletions } : {}),
-    ...(keepInline && before !== undefined ? { before } : {}),
-    ...(keepInline && after !== undefined ? { after } : {}),
+    ...(keepInline && diff === undefined && before !== undefined ? { before } : {}),
+    ...(keepInline && diff === undefined && after !== undefined ? { after } : {}),
     ...(diff !== undefined ? { diff } : {}),
   };
 }
@@ -4202,6 +4497,9 @@ function isStringTuple(value: unknown): value is [string, unknown] {
 await restorePersistedState();
 
 const server = createServer((request, response) => {
+  (response as ServerResponse & { [RESPONSE_ACCEPTS_GZIP]?: boolean })[
+    RESPONSE_ACCEPTS_GZIP
+  ] = acceptsGzip(request.headers["accept-encoding"]);
   if (!applyOriginPolicy(request, response)) return;
   const controller = new AbortController();
   const abortDisconnectedClient = () => {

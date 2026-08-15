@@ -10,6 +10,7 @@ import type {
   NativeAgentDispatchOutcome,
   NativeAgentSessionProjection,
   NativeAgentSessionAction,
+  NativeAgentToolDetails,
 } from "@orkestrator/protocol/native-agent";
 import {
   adoptNativeAgentSession,
@@ -18,6 +19,7 @@ import {
   enqueuePromptQueueMessage,
   ensureNativeAgentSession,
   getNativeAgentProjection,
+  getNativeAgentToolDetails,
   forkNativeAgentSession,
   listNativeAgentResumableSessions,
   movePromptQueueMessage,
@@ -615,6 +617,11 @@ export function useNativeAgentSession<TMessage = unknown>({
     if (operationEpoch === projectionOperationEpochRef.current) applyProjection(next);
     return next;
   }, [applyProjection, beginProjectionMutation, identity]);
+  const loadToolDetails = useCallback(
+    (detailRef: string): Promise<NativeAgentToolDetails> =>
+      getNativeAgentToolDetails({ ...identity, detailRef }),
+    [identity],
+  );
   /**
    * Widen the transcript window, then reconcile.
    *
@@ -667,6 +674,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     fork,
     performAction,
     refreshModels,
+    loadToolDetails,
     loadEarlierMessages,
     initialLaunchOptionsRef,
     initialLaunchOptionsPendingRef,

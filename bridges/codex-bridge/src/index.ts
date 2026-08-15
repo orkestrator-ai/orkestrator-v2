@@ -6,7 +6,12 @@ import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
+import { compress } from "hono/compress";
 import { isJsonSchema } from "@orkestrator/protocol/structured-output";
+import {
+  boundTranscriptResponse,
+  type TranscriptWindowMetadata,
+} from "@orkestrator/protocol/transcript-window";
 import { streamSSE } from "hono/streaming";
 import { readCachedTranscript } from "./transcript-cache.js";
 import {
@@ -142,6 +147,18 @@ interface PromptAttachmentInput {
 
 
 export const app = new Hono();
+export const MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES = 16 * 1024 * 1024;
+
+export function boundCodexTranscriptResponse(messages: NormalizedMessage[]): {
+  messages: NormalizedMessage[];
+  messageWindow: TranscriptWindowMetadata;
+} {
+  const { messages: bounded, messageWindow } = boundTranscriptResponse(
+    messages,
+    MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES,
+  );
+  return { messages: bounded, messageWindow };
+}
 const BRIDGE_TOKEN_ENV = "CODEX_BRIDGE_TOKEN";
 const BRIDGE_ALLOWED_ORIGINS_ENV = "CODEX_BRIDGE_ALLOWED_ORIGINS";
 let bridgeAuthToken =
@@ -1040,6 +1057,14 @@ app.use("*", async (c, next) => {
   await next();
 });
 
+// Transcript bodies dominate bridge bandwidth. Keep SSE uncompressed here —
+// its own flush-sensitive writer has different backpressure semantics.
+app.use("/session/:id/messages", async (c, next) => {
+  await next();
+  c.res.headers.append("Vary", "Accept-Encoding");
+});
+app.use("/session/:id/messages", compress({ encoding: "gzip" }));
+
 app.get("/global/health", (c) => {
   const health = appServerRuntime.getHealth();
   // A terminally failed engine must not read as healthy: the backend waits on
@@ -1147,7 +1172,7 @@ app.get("/session/:id/config", async (c) => {
 app.get("/session/:id/messages", async (c) => {
   const messages = await appServerRuntime.getMessages(c.req.param("id"));
   if (!messages) return c.json({ error: "Session not found" }, 404);
-  return c.json({ messages });
+  return c.json(boundCodexTranscriptResponse(messages));
 });
 
 app.get("/session/:id/status", (c) => {

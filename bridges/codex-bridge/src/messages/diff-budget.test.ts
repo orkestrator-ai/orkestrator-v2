@@ -44,8 +44,13 @@ describe("oversized file contents", () => {
     expect(result).toMatchObject({ additions: 3, deletions: 2, filePath: "/repo/bundle.js" });
   });
 
-  test("keeps before/after for ordinary files", () => {
+  test("drops redundant before/after when an ordinary file has a unified diff", () => {
     const result = applyDiffBudget({ before: "a", after: "b", diff: "d" });
+    expect(result).toEqual({ before: undefined, after: undefined, diff: "d" });
+  });
+
+  test("keeps before/after as the fallback when no unified diff exists", () => {
+    const result = applyDiffBudget({ before: "a", after: "b" });
     expect(result).toMatchObject({ before: "a", after: "b" });
   });
 

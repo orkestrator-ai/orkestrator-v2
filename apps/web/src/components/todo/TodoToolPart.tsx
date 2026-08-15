@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId } from "react";
 import { AlertCircle, CheckSquare, ChevronRight, ListTodo, Square } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getTodoItems, getTodoToolLabel } from "@/lib/todo-tool";
@@ -9,6 +9,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 
 export const TOOL_STATE_COLORS = {
   success: "text-green-600",
@@ -17,6 +18,8 @@ export const TOOL_STATE_COLORS = {
 } as const;
 
 interface TodoToolPartProps {
+  /** Shared disclosure identity used by deferred-detail loading. */
+  expansionKey?: string;
   toolName?: string;
   toolState?: "success" | "failure" | "pending";
   toolArgs?: Record<string, unknown>;
@@ -30,6 +33,8 @@ interface TodoToolPartProps {
    * rather than just the task it touched.
    */
   taskSnapshot?: TaskListSnapshot;
+  /** Output exists behind a detail reference and loads when this row opens. */
+  deferredDetails?: boolean;
 }
 
 interface DisplayTask {
@@ -39,14 +44,19 @@ interface DisplayTask {
 }
 
 export function TodoToolPart({
+  expansionKey,
   toolName,
   toolState,
   toolArgs,
   toolOutput,
   toolError,
   taskSnapshot,
+  deferredDetails = false,
 }: TodoToolPartProps) {
-  const [isOpen, setIsOpen] = useState(false);
+  const fallbackExpansionId = useId();
+  const [isOpen, setIsOpen] = useMessagePartExpansion(
+    expansionKey ?? `todo-tool:${fallbackExpansionId}`,
+  );
   const toolLabel = getTodoToolLabel(toolName);
 
   // A snapshot describes the whole list, so it wins over the per-call args and
@@ -74,7 +84,8 @@ export function TodoToolPart({
   const totalCount = todos.length;
 
   const hasExpandableContent =
-    totalCount > 0 || hasSnapshot || Boolean(toolOutput) || Boolean(toolError);
+    totalCount > 0 || hasSnapshot || Boolean(toolOutput) || Boolean(toolError)
+    || deferredDetails;
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0">

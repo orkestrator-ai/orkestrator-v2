@@ -454,17 +454,46 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     return body.activity;
   }
 
-  async messages(sessionId: string): Promise<unknown[]> {
+  private async readTranscript(sessionId: string): Promise<{
+    messages: unknown[];
+    truncated: boolean;
+    revision?: number;
+    status?: "idle" | "running" | "error";
+    error?: string;
+  }> {
     const response = await bridgeFetch(
       this.connection,
       `/session/${encodeURIComponent(sessionId)}/messages`,
       {},
       this.fetchImpl,
     );
-    if (response.status === 404) return [];
+    if (response.status === 404) return { messages: [], truncated: false };
     assertOk(response, `${this.agent} transcript read`);
-    const body = await response.json() as { messages?: unknown };
-    return Array.isArray(body.messages) ? body.messages : [];
+    const body = asRecord(await boundedJson(
+      response,
+      `${this.agent} transcript read`,
+      { remaining: 16 * 1024 * 1024 },
+    ));
+    const messageWindow = asRecord(body?.messageWindow);
+    const transcriptStatus = body?.status;
+    const transcriptRevision = body?.revision;
+    return {
+      messages: Array.isArray(body?.messages) ? body.messages : [],
+      truncated: messageWindow?.truncated === true,
+      ...(Number.isSafeInteger(transcriptRevision)
+        ? { revision: transcriptRevision as number }
+        : {}),
+      ...(transcriptStatus === "idle"
+        || transcriptStatus === "running"
+        || transcriptStatus === "error"
+        ? { status: transcriptStatus }
+        : {}),
+      ...(typeof body?.error === "string" ? { error: body.error } : {}),
+    };
+  }
+
+  async messages(sessionId: string): Promise<unknown[]> {
+    return (await this.readTranscript(sessionId)).messages;
   }
 
   private codexRuntimeSummary(payload: unknown): NativeAgentRuntimeSummary | undefined {
@@ -552,24 +581,32 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     sessionId: string,
   ): Promise<ProviderInteractiveSnapshot> {
     if (this.agent === "cursor" || this.agent === "grok") {
-      const response = await bridgeFetch(
-        this.connection,
-        `/session/${encodeURIComponent(sessionId)}`,
-        {},
-        this.fetchImpl,
-      );
+      const [response, transcript] = await Promise.all([
+        bridgeFetch(
+          this.connection,
+          `/session/${encodeURIComponent(sessionId)}/status`,
+          {},
+          this.fetchImpl,
+        ),
+        this.readTranscript(sessionId),
+      ]);
       if (response.status === 404) return { status: "missing", messages: [] };
-      assertOk(response, `${this.agent} interactive snapshot`);
+      assertOk(response, `${this.agent} interactive status`);
       const payload = asRecord(await boundedJson(
         response,
-        `${this.agent} interactive snapshot`,
-        { remaining: 8 * 1024 * 1024 },
+        `${this.agent} interactive status`,
+        { remaining: 512 * 1024 },
       ));
-      const status = payload?.status;
-      const messages = payload?.messages;
+      // `/messages` returns status and revision from the same synchronous ACP
+      // snapshot as its transcript. Prefer that pair so a turn transition
+      // between the parallel requests cannot combine two different revisions.
+      const hasTranscriptSnapshot = transcript.status !== undefined
+        && transcript.revision !== undefined;
+      const status = hasTranscriptSnapshot ? transcript.status : payload?.status;
+      const messages = transcript.messages;
       const composer = asRecord(payload?.composer);
-      const providerRevision = payload?.revision;
-      const providerError = payload?.error;
+      const providerRevision = hasTranscriptSnapshot ? transcript.revision : payload?.revision;
+      const providerError = hasTranscriptSnapshot ? transcript.error : payload?.error;
       if (
         (status !== "idle" && status !== "running" && status !== "error")
         || !Array.isArray(messages)
@@ -594,6 +631,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         providerRevision: providerRevision as number,
         ...(contextUsage ? { contextUsage } : {}),
         ...(runtime ? { runtime } : {}),
+        ...(transcript.truncated ? {
+          notices: [{
+            kind: "warning" as const,
+            message: "Earlier transcript content was omitted to stay within the 16 MiB transport limit.",
+          }],
+        } : {}),
         ...(typeof providerError === "string" ? { error: providerError } : {}),
       };
     }
@@ -609,9 +652,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       // message/status/config reads below are the foreground critical path.
       void this.refreshCodexRuntimeMetadata(sessionId);
     }
-    const [sessionResponse, messages, configResponse, initResponse, runtimeResponse] = await Promise.all([
+    const [sessionResponse, transcript, configResponse, initResponse, runtimeResponse] = await Promise.all([
       bridgeFetch(this.connection, sessionPath, {}, this.fetchImpl),
-      this.messages(sessionId),
+      this.readTranscript(sessionId),
       this.agent === "codex"
         ? bridgeFetch(
             this.connection,
@@ -637,6 +680,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           )
         : Promise.resolve(undefined),
     ]);
+    const messages = transcript.messages;
     if (sessionResponse.status === 404) return { status: "missing", messages: [] };
     assertOk(sessionResponse, `${this.agent} interactive session read`);
     const payload = asRecord(await boundedJson(
@@ -719,6 +763,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           ? { contextUsage: normalizeProviderContextUsage(payload.contextUsage) }
           : {}),
         ...(runtime ? { runtime } : {}),
+        ...(transcript.truncated ? {
+          notices: [{
+            kind: "warning" as const,
+            message: "Earlier transcript content was omitted to stay within the 16 MiB transport limit.",
+          }],
+        } : {}),
         ...(typeof payload.error === "string" ? { error: payload.error } : {}),
       };
     }
@@ -781,6 +831,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         ? { rateLimits: normalizeProviderRateLimits(payload.rateLimits) }
         : {}),
       ...(runtime ? { runtime } : {}),
+      ...(transcript.truncated ? {
+        notices: [{
+          kind: "warning" as const,
+          message: "Earlier transcript content was omitted to stay within the 16 MiB transport limit.",
+        }],
+      } : {}),
       ...(normalizeClaudeBackgroundTasks(payload.backgroundTasks)
         ? { backgroundTasks: normalizeClaudeBackgroundTasks(payload.backgroundTasks) }
         : {}),

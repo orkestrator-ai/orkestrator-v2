@@ -3073,7 +3073,7 @@ describe("ACP bridge", () => {
   test("starts a new part when a chunk follows a message trimmed to its notice", async () => {
     const { base, headers } = await spawnBridge({
       // The floor is reached when two parts alone still exceed the budget, and
-      // at 8 MiB the per-part caps do not add up to that. Lowering the budget
+      // at 16 MiB the per-part caps do not add up to that. Lowering the budget
       // is the only way to exercise it; it can only ever move downwards.
       env: { ACP_MAX_TRANSCRIPT_BYTES: String(1024 * 1024) },
     });
@@ -3114,6 +3114,14 @@ describe("ACP bridge", () => {
     });
     expect(assistant.parts[1]).toMatchObject({ type: "text", content: "Recovered summary." });
     expect(assistant.content).toBe("Recovered summary.");
+
+    const window = await nativeFetch(`${base}/session/${created.id}/messages`, { headers })
+      .then((response) => response.json()) as {
+        messageWindow: { truncated: boolean; omittedMessages?: number; omittedParts?: number };
+      };
+    expect(window.messageWindow.truncated).toBe(true);
+    expect(window.messageWindow.omittedMessages).toBeGreaterThan(0);
+    expect(window.messageWindow.omittedParts).toBeGreaterThan(0);
   });
 
   test("bounds an aggregate interactive transcript and preserves its trim across restart", async () => {
@@ -3131,11 +3139,13 @@ describe("ACP bridge", () => {
       body: JSON.stringify({ prompt: "TRANSCRIPTOVERFLOW: fill the display budget" }),
     });
     const read = async (base: string, headers: Record<string, string>) =>
-      await nativeFetch(`${base}/session/${created.id}`, { headers })
+      await nativeFetch(`${base}/session/${created.id}/messages`, { headers })
         .then((response) => response.json()) as {
           status: string;
           error?: string;
           messages: Array<{ parts: Array<Record<string, unknown>> }>;
+          revision: number;
+          messageWindow: { truncated: boolean; omittedMessages?: number; omittedParts?: number };
         };
     const bounded = await waitFor(
       () => read(first.base, first.headers),
@@ -3144,13 +3154,15 @@ describe("ACP bridge", () => {
 
     const assistant = bounded.messages.at(-1)!;
     expect(bounded.error).toBeUndefined();
-    expect(Buffer.byteLength(JSON.stringify(bounded.messages))).toBeLessThanOrEqual(8 * 1024 * 1024);
-    expect(assistant.parts.length).toBeLessThan(18);
+    expect(Buffer.byteLength(JSON.stringify(bounded.messages))).toBeLessThanOrEqual(16 * 1024 * 1024);
+    expect(assistant.parts.length).toBeLessThan(34);
     expect(assistant.parts[0]).toMatchObject({
       type: "text",
       content: expect.stringContaining("Earlier steps in this response were dropped"),
     });
-    expect(assistant.parts.at(-1)).toMatchObject({ toolUseId: "large-17", toolState: "success" });
+    expect(bounded.messageWindow.truncated).toBe(true);
+    expect(bounded.messageWindow.omittedParts).toBeGreaterThan(0);
+    expect(assistant.parts.at(-1)).toMatchObject({ toolUseId: "large-33", toolState: "success" });
     const retainedToolIds = assistant.parts.flatMap((part) =>
       typeof part.toolUseId === "string" ? [part.toolUseId] : []
     );
@@ -3161,7 +3173,7 @@ describe("ACP bridge", () => {
     const restoredAssistant = restored.messages.at(-1)!;
     expect(restored.status).toBe("idle");
     expect(restored.error).toBeUndefined();
-    expect(Buffer.byteLength(JSON.stringify(restored.messages))).toBeLessThanOrEqual(8 * 1024 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(restored.messages))).toBeLessThanOrEqual(16 * 1024 * 1024);
     expect(restoredAssistant.parts[0]).toMatchObject({
       type: "text",
       content: expect.stringContaining("Earlier steps in this response were dropped"),
@@ -3169,6 +3181,108 @@ describe("ACP bridge", () => {
     expect(restoredAssistant.parts.flatMap((part) =>
       typeof part.toolUseId === "string" ? [part.toolUseId] : []
     )).toEqual(retainedToolIds);
+    expect(restored.messageWindow).toEqual(bounded.messageWindow);
+
+    // A read re-bounds the transcript, but only when something was appended
+    // since the last check: a steady-state poll of a large idle session must
+    // not re-serialize it, and must not mutate what it returns.
+    const readAgain = await read(second.base, second.headers);
+    expect(readAgain.messages).toEqual(restored.messages);
+    expect(readAgain.revision).toBe(restored.revision);
+
+    const compressed = await nativeFetch(`${second.base}/session/${created.id}/messages`, {
+      headers: { ...second.headers, "accept-encoding": "gzip" },
+    });
+    expect(compressed.headers.get("content-encoding")).toBe("gzip");
+    expect(compressed.headers.get("vary")).toContain("Accept-Encoding");
+    expect(Number(compressed.headers.get("content-length")))
+      .toBeLessThan(Buffer.byteLength(JSON.stringify(restored.messages)));
+    expect((await compressed.json() as { messages: unknown[] }).messages.length)
+      .toBe(restored.messages.length);
+
+    const refused = await nativeFetch(`${second.base}/session/${created.id}/messages`, {
+      headers: { ...second.headers, "accept-encoding": "gzip;q=0, *;q=1" },
+    });
+    expect(refused.headers.get("content-encoding")).toBeNull();
+    expect((await refused.json() as { messages: unknown[] }).messages.length)
+      .toBe(restored.messages.length);
+  });
+
+  test("bounds all persisted sessions while retaining structured output across restart", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const maximumStateBytes = 2 * 1024 * 1024;
+    const env = { ACP_MAX_STATE_FILE_BYTES: String(maximumStateBytes) };
+    const first = await spawnBridge({ stateDirectory, env });
+
+    const largeTranscript = await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ clientSessionKey: "env-persist:large-transcript" }),
+    }).then((response) => response.json()) as { id: string };
+    await nativeFetch(`${first.base}/session/${largeTranscript.id}/prompt`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ prompt: "BIGTOOL: pressure the shared state file" }),
+    });
+    await waitFor(
+      async () => nativeFetch(`${first.base}/session/${largeTranscript.id}/status`, {
+        headers: first.headers,
+      }).then((response) => response.json()) as Promise<{ status: string }>,
+      (value) => value.status === "idle",
+    );
+
+    const structuredSession = await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ clientSessionKey: "env-persist:structured" }),
+    }).then((response) => response.json()) as { id: string };
+    const data = "s".repeat(400 * 1024);
+    await nativeFetch(`${first.base}/session/${structuredSession.id}/prompt`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({
+        prompt: `DIRECT:${JSON.stringify({ data })}`,
+        requestId: "persisted-structured-output",
+        outputSchema: {
+          type: "object",
+          properties: { data: { type: "string" } },
+          required: ["data"],
+        },
+      }),
+    });
+    await waitFor(
+      async () => nativeFetch(`${first.base}/session/${structuredSession.id}/status`, {
+        headers: first.headers,
+      }).then((response) => response.json()) as Promise<{ status: string }>,
+      (value) => value.status === "idle",
+    );
+
+    await stopChild(first.child);
+    const stateFile = resolve(stateDirectory, "state.json");
+    expect((await fs.stat(stateFile)).size).toBeLessThanOrEqual(maximumStateBytes);
+
+    const second = await spawnBridge({ stateDirectory, env });
+    for (const sessionId of [largeTranscript.id, structuredSession.id]) {
+      const response = await nativeFetch(`${second.base}/session/${sessionId}/messages`, {
+        headers: second.headers,
+      });
+      expect(response.status).toBe(200);
+      const restored = await response.json() as {
+        messages: unknown[];
+        messageWindow: { truncated: boolean };
+      };
+      expect(restored.messages.length).toBeGreaterThan(0);
+      expect(restored.messageWindow.truncated).toBe(true);
+    }
+
+    const structured = await nativeFetch(
+      `${second.base}/session/${structuredSession.id}/structured-output?requestId=persisted-structured-output`,
+      { headers: second.headers },
+    ).then((response) => response.json()) as {
+      structuredOutput: { ok: boolean; value?: { data?: string } } | null;
+    };
+    expect(structured.structuredOutput?.ok).toBe(true);
+    expect(structured.structuredOutput?.value?.data?.length).toBe(data.length);
   });
 
   test("fails a structured turn when its parts exhaust the per-message limit", async () => {

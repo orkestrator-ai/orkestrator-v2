@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, test, mock, beforeEach, spyOn } from "bun:test";
 import { Hono } from "hono";
+import { gunzipSync } from "node:zlib";
 import { TaskRegistry } from "@orkestrator/protocol/task-list";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 
@@ -196,11 +197,24 @@ function resetPersistenceMocks(): void {
 }
 
 // Import the route after mocking
-import session from "./session.js";
+import session, {
+  boundClaudeTranscriptResponse,
+  MAX_CLAUDE_TRANSCRIPT_RESPONSE_BYTES,
+} from "./session.js";
 
 // Mount on a test app
 const app = new Hono();
 app.route("/session", session);
+
+/*
+ * The transcript compression middleware is registered on the composition root,
+ * not on this route module, so mounting `session` alone cannot exercise it. The
+ * real app is importable here because the session-manager mocks above are
+ * already installed and the bridge skips `serve()` under these two flags.
+ */
+process.env.CLAUDE_BRIDGE_NO_SERVER = "1";
+process.env.CLAUDE_BRIDGE_AUTH_DISABLED_FOR_TESTING = "1";
+const { app: bridgeApp } = await import("../index.js");
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function jsonBody(res: Response): Promise<any> {
@@ -510,6 +524,81 @@ describe("session routes", () => {
       expect(res.status).toBe(200);
       const data = await jsonBody(res);
       expect(data.messages).toHaveLength(1);
+      expect(data.messageWindow).toEqual({ truncated: false });
+    });
+
+    test("bounds aggregate transcript responses by dropping the oldest messages", () => {
+      const messages = Array.from({ length: 20 }, (_, index) => ({
+        id: `message-${index}`,
+        role: "assistant" as const,
+        content: String(index),
+        parts: [{ type: "text" as const, content: "x".repeat(1024 * 1024) }],
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }));
+      const bounded = boundClaudeTranscriptResponse(messages);
+
+      expect(Buffer.byteLength(JSON.stringify(bounded)))
+        .toBeLessThanOrEqual(MAX_CLAUDE_TRANSCRIPT_RESPONSE_BYTES);
+      expect(bounded.messageWindow).toMatchObject({ truncated: true });
+      expect(bounded.messages.at(-1)?.id).toBe("message-19");
+      expect(bounded.messages[0]?.id).not.toBe("message-0");
+    });
+
+    test("trims parts off a single oversized message rather than dropping it", () => {
+      // A long turn is one message, so message-level dropping has nothing left
+      // to take. The newest parts are what the user is looking at.
+      const parts = Array.from({ length: 40 }, (_, index) => ({
+        type: "text" as const,
+        content: `${index}:${"x".repeat(1024 * 1024)}`,
+      }));
+      const bounded = boundClaudeTranscriptResponse([{
+        id: "message-long-turn",
+        role: "assistant" as const,
+        content: "done",
+        parts,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }]);
+
+      expect(bounded.messages).toHaveLength(1);
+      expect(Buffer.byteLength(JSON.stringify(bounded)))
+        .toBeLessThanOrEqual(MAX_CLAUDE_TRANSCRIPT_RESPONSE_BYTES);
+      expect(bounded.messageWindow.truncated).toBe(true);
+      expect(bounded.messageWindow.omittedParts).toBeGreaterThan(0);
+      expect(bounded.messageWindow.omittedMessages).toBeUndefined();
+      expect(bounded.messages[0]?.parts.at(-1)).toEqual(parts.at(-1)!);
+    });
+
+    test("gzip-compresses the transcript when the client accepts gzip", async () => {
+      mockGetSessionMessages.mockReturnValueOnce([{
+        id: "msg-compress",
+        role: "assistant",
+        content: "Hello",
+        parts: [{ type: "text", content: "compressible ".repeat(8_192) }],
+        timestamp: "2026-01-01T00:00:00Z",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      }] as any);
+      const request = new Request("http://localhost/session/s-1/messages");
+      request.headers.set("Accept-Encoding", "gzip");
+      const res = await bridgeApp.request(request);
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Content-Encoding")).toBe("gzip");
+      // Without Vary a shared cache could hand a gzip body to a client that
+      // never asked for one.
+      expect(res.headers.get("Vary")).toContain("Accept-Encoding");
+      const decoded = JSON.parse(
+        gunzipSync(Buffer.from(await res.arrayBuffer())).toString(),
+      );
+      expect(decoded.messages[0]?.id).toBe("msg-compress");
+    });
+
+    test("leaves the transcript uncompressed when the client does not accept gzip", async () => {
+      const res = await bridgeApp.request("http://localhost/session/s-1/messages");
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Content-Encoding")).toBeNull();
+      expect(res.headers.get("Vary")).toContain("Accept-Encoding");
+      expect((await jsonBody(res)).messages).toHaveLength(1);
     });
 
     test("returns 404 for unknown session", async () => {

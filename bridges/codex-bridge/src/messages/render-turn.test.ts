@@ -1012,12 +1012,13 @@ describe("renderTurn", () => {
         type: "tool-invocation",
         toolName: "apply_patch",
         toolDiff: {
-          before: undefined,
-          after: "one\n",
           additions: 1,
           deletions: 0,
         },
       });
+      expect(added.parts[0]?.toolDiff?.before).toBeUndefined();
+      expect(added.parts[0]?.toolDiff?.after).toBeUndefined();
+      expect(added.parts[0]?.toolDiff?.diff).toContain("+one");
       firstState.fileChange.baselines.set("unused.txt", "cold\n");
 
       await writeFile(path, "one\ntwo\n", "utf8");
@@ -1031,7 +1032,7 @@ describe("renderTurn", () => {
       // item streamed must reuse its original normalized diff rather than read
       // the file's newer contents and silently rewrite history.
       expect(firstAgain.parts[0]).toBe(added.parts[0]);
-      expect(firstAgain.parts[0]?.toolDiff?.after).toBe("one\n");
+      expect(firstAgain.parts[0]?.toolDiff?.after).toBeUndefined();
       expect([...firstState.fileChange.baselines.keys()]).toEqual([
         "unused.txt",
         "example.txt",
@@ -1056,12 +1057,12 @@ describe("renderTurn", () => {
         type: "tool-invocation",
         toolName: "apply_patch",
         toolDiff: {
-          before: "one\n",
-          after: "one\ntwo\n",
           additions: 1,
           deletions: 0,
         },
       });
+      expect(updated.parts[0]?.toolDiff?.before).toBeUndefined();
+      expect(updated.parts[0]?.toolDiff?.after).toBeUndefined();
       expect(updated.parts[0]?.toolDiff?.diff).toContain("+two");
     } finally {
       await rm(cwd, { recursive: true, force: true });

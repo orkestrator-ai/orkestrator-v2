@@ -892,6 +892,185 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.queryByRole("button", { name: /\bbash\b/i }) === null).toBe(true);
   });
 
+  test("loads deferred tool output only after the row is expanded", async () => {
+    const loadToolDetails = mock(async (detailRef: string) => ({
+      detailRef,
+      toolOutput: "deferred command output",
+    }));
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "bun test",
+          toolName: "bash",
+          toolArgs: { command: "bun test" },
+          toolState: "success",
+          detailRef: "detail-1",
+        }])}
+        loadToolDetails={loadToolDetails}
+      />,
+    );
+
+    expect(loadToolDetails).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /Run Command/i }));
+    await waitFor(() => expect(loadToolDetails).toHaveBeenCalledWith("detail-1"));
+    expect(await screen.findByText("deferred command output")).toBeTruthy();
+  });
+
+  test("keeps a deferred row collapsed without parking placeholder prose in it", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "bun test",
+          toolName: "bash",
+          toolArgs: { command: "bun test" },
+          toolState: "success",
+          detailRef: "detail-quiet",
+        }])}
+        loadToolDetails={mock(async (detailRef: string) => ({ detailRef }))}
+      />,
+    );
+
+    expect(screen.queryByText(/Details load when expanded/i) === null).toBe(true);
+    expect(screen.queryByText(/Loading tool details/i) === null).toBe(true);
+  });
+
+  test("keeps a deferred row expandable when it has no other content to show", () => {
+    // A deferred part's output only arrives *because* the row was expanded, so
+    // gating the trigger on already-present output would strand it closed.
+    const loadToolDetails = mock(async (detailRef: string) => ({
+      detailRef,
+      toolOutput: "arrived after expanding",
+    }));
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "cursor_shell",
+          toolName: "cursor_shell",
+          toolState: "success",
+          detailRef: "detail-bare",
+        }])}
+        loadToolDetails={loadToolDetails}
+      />,
+    );
+
+    const trigger = screen.getByRole("button", { name: /cursor.shell/i });
+    expect(trigger.hasAttribute("disabled")).toBe(false);
+  });
+
+  test("loads deferred Todo errors through the Todo row's own expansion", async () => {
+    const loadToolDetails = mock(async (detailRef: string) => ({
+      detailRef,
+      toolError: "Task update failed after dispatch",
+    }));
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "TodoWrite",
+          toolName: "TodoWrite",
+          toolState: "failure",
+          detailRef: "detail-todo-error",
+        }])}
+        loadToolDetails={loadToolDetails}
+      />,
+    );
+
+    const trigger = screen.getByRole("button", { name: /Todo Write/i });
+    expect(trigger.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(trigger);
+    await waitFor(() => expect(loadToolDetails).toHaveBeenCalledWith("detail-todo-error"));
+    expect(await screen.findByText("Task update failed after dispatch")).toBeTruthy();
+  });
+
+  test("keeps the edit treatment on a deferred diff from a non-edit tool name", async () => {
+    /*
+     * ACP providers identify a file mutation by diff content, not tool name.
+     * Deferring the diff body strips `diff`/`before`/`after`, so without an
+     * explicit marker the row is indistinguishable from a location-only hint on
+     * a read tool and silently loses its file name and +/- stats.
+     */
+    const loadToolDetails = mock(async (detailRef: string) => ({
+      detailRef,
+      toolDiff: { diff: "-old\n+new" },
+    }));
+    // EditToolPart reads the terminal context for its open-diff-in-tab action.
+    render(
+      <TerminalProvider>
+        <NativeMessage
+          message={makeMessage([{
+            type: "tool-invocation",
+            content: "src/a.ts",
+            toolName: "cursor_write",
+            toolState: "success",
+            detailRef: "detail-diff",
+            toolDiff: {
+              filePath: "/workspace/src/a.ts",
+              additions: 3,
+              deletions: 2,
+              deferred: true,
+            },
+          }])}
+          loadToolDetails={loadToolDetails}
+        />
+      </TerminalProvider>,
+    );
+
+    // The file name and line stats are the edit row's signature; the generic
+    // tool row renders neither.
+    expect(screen.getByText("a.ts")).toBeTruthy();
+    expect(screen.getByText("+3")).toBeTruthy();
+    expect(screen.getByText("-2")).toBeTruthy();
+
+    const trigger = screen.getByText("a.ts").closest("button")!;
+    expect(trigger.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(trigger);
+    await waitFor(() => expect(loadToolDetails).toHaveBeenCalledWith("detail-diff"));
+    expect(await screen.findByText("+new")).toBeTruthy();
+  });
+
+  test("routes a location-only diff hint to the generic tool row", () => {
+    // The mirror of the case above: metadata with no deferred marker really is
+    // just a hint, and must not be dressed up as an edit.
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "src/a.ts",
+          toolName: "cursor_read",
+          toolState: "success",
+          toolDiff: { filePath: "/workspace/src/a.ts" },
+        }])}
+      />,
+    );
+
+    expect(screen.queryByText("a.ts") === null).toBe(true);
+  });
+
+  test("surfaces a failed detail load as an error rather than an empty body", async () => {
+    const loadToolDetails = mock(async () => {
+      throw new Error("Native agent tool details are no longer available");
+    });
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "bun test",
+          toolName: "bash",
+          toolArgs: { command: "bun test" },
+          toolState: "success",
+          detailRef: "detail-gone",
+        }])}
+        loadToolDetails={loadToolDetails}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Run Command/i }));
+    expect(await screen.findByText(/no longer available/i)).toBeTruthy();
+  });
+
   test("shows the derived command beside a custom exec tool", () => {
     render(
       <NativeMessage
@@ -2445,6 +2624,7 @@ describe("NativeMessage task list rendering", () => {
 describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
   afterEach(() => {
     cleanup();
+    useMessagePartExpansionStore.getState().reset();
   });
 
   test("routes TodoWrite tool-invocation to TodoToolPart", () => {

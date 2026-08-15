@@ -38,6 +38,10 @@ import type {
   MessagesResponse,
 } from "../types/index.js";
 import { isJsonSchema } from "@orkestrator/protocol/structured-output";
+import {
+  boundTranscriptResponse,
+  type TranscriptWindowMetadata,
+} from "@orkestrator/protocol/transcript-window";
 
 const session = new Hono();
 const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
@@ -46,6 +50,17 @@ const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 // object. The semantic answer payload is still capped separately below.
 const MAX_QUESTION_ANSWER_REQUEST_BYTES =
   AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes + 1_024;
+export const MAX_CLAUDE_TRANSCRIPT_RESPONSE_BYTES = 16 * 1024 * 1024;
+
+export function boundClaudeTranscriptResponse(
+  messages: MessagesResponse["messages"],
+): MessagesResponse & { messageWindow: TranscriptWindowMetadata } {
+  const { messages: bounded, messageWindow } = boundTranscriptResponse(
+    messages,
+    MAX_CLAUDE_TRANSCRIPT_RESPONSE_BYTES,
+  );
+  return { messages: bounded, messageWindow };
+}
 
 const questionAnswerBodyLimit = bodyLimit({
   maxSize: MAX_QUESTION_ANSWER_REQUEST_BYTES,
@@ -367,9 +382,7 @@ session.get("/:id/messages", async (c) => {
     sessionData.persistedMessagesLoaded === false
       ? await hydratePersistedSessionMessages(id)
       : getSessionMessages(id);
-  const response: MessagesResponse = { messages };
-
-  return c.json(response);
+  return c.json(boundClaudeTranscriptResponse(messages));
 });
 
 // Send a prompt to a session

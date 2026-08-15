@@ -38,9 +38,11 @@ import type {
   NativeAgentSessionAction,
   NativeAgentSessionActionOutcome,
   NativeAgentSlashCommand,
+  NativeAgentToolDetails,
 } from "@orkestrator/protocol/native-agent";
 import { resolveReasoningId } from "@orkestrator/protocol/native-agent";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
+import { boundTranscriptResponse } from "@orkestrator/protocol/transcript-window";
 import { resolveStartupLaunch } from "@orkestrator/protocol/startup-launch";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import type {
@@ -235,6 +237,10 @@ export interface NativeAgentServiceOptions {
     observation: AgentInteractionObservation,
   ) => void | Promise<void>;
   onActivityTransition?: (event: NativeAgentActivityTransition) => void;
+  /** Test seam for exercising deterministic detail-cache capacity eviction. */
+  toolDetailCacheMaxEntries?: number;
+  /** Test seam for exercising deterministic detail-cache byte eviction. */
+  toolDetailCacheMaxBytes?: number;
 }
 
 export interface AgentInteractionObservation {
@@ -281,7 +287,10 @@ const NATIVE_PROJECTION_MAX_MESSAGES = 512;
  * `NATIVE_PROJECTION_MAX_BYTES`.
  */
 const NATIVE_PROJECTION_MAX_WINDOW_MESSAGES = 4_096;
-const NATIVE_PROJECTION_MAX_BYTES = 8 * 1024 * 1024;
+export const NATIVE_PROJECTION_MAX_BYTES = 16 * 1024 * 1024;
+const NATIVE_TOOL_DETAIL_CACHE_MAX_ENTRIES = 4_096;
+const NATIVE_TOOL_DETAIL_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+const NATIVE_TOOL_DETAIL_MAX_BYTES = 4 * 1024 * 1024;
 const NATIVE_MODEL_CATALOG_TTL_MS = 30_000;
 const NATIVE_MODEL_CATALOG_CACHE_LIMIT = 128;
 const NATIVE_SLASH_COMMAND_TTL_MS = 30_000;
@@ -521,6 +530,15 @@ export class NativeAgentService {
     string,
     NativeAgentProjectionCacheEntry
   >();
+  /** Heavy, reconstructible fields omitted from ordinary renderer snapshots. */
+  private readonly toolDetailCache = new Map<string, {
+    sessionKey: string;
+    details: NativeAgentToolDetails;
+    bytes: number;
+  }>();
+  /** Entries temporarily protected while an authoritative refresh recreates them. */
+  private readonly pinnedToolDetailRefs = new Set<string>();
+  private toolDetailCacheBytes = 0;
   private readonly modelCatalogCache = new Map<
     string,
     { models: AgentModel[]; expiresAt: number }
@@ -1231,11 +1249,137 @@ export class NativeAgentService {
     return { key, session, provider };
   }
 
+  private cacheToolDetails(
+    sessionKey: string,
+    messageId: string,
+    partPath: string,
+    details: Omit<NativeAgentToolDetails, "detailRef">,
+  ): string {
+    const serializedDetails = JSON.stringify(details);
+    const detailRef = createHash("sha256")
+      .update(`${sessionKey}\0${messageId}\0${partPath}\0${serializedDetails}`)
+      .digest("hex")
+      .slice(0, 32);
+    let stored: NativeAgentToolDetails = { detailRef, ...details };
+    let bytes = Buffer.byteLength(serializedDetails) + detailRef.length + 32;
+    if (bytes > NATIVE_TOOL_DETAIL_MAX_BYTES) {
+      stored = {
+        detailRef,
+        toolError: "Tool details exceeded the deferred display limit.",
+      };
+      bytes = Buffer.byteLength(JSON.stringify(stored));
+    }
+
+    const previous = this.toolDetailCache.get(detailRef);
+    if (previous) this.toolDetailCacheBytes -= previous.bytes;
+    this.toolDetailCache.delete(detailRef);
+    this.toolDetailCache.set(detailRef, { sessionKey, details: stored, bytes });
+    this.toolDetailCacheBytes += bytes;
+    this.pruneToolDetailCache();
+    return detailRef;
+  }
+
+  private pruneToolDetailCache(): void {
+    while (
+      this.toolDetailCache.size
+        > (this.options.toolDetailCacheMaxEntries ?? NATIVE_TOOL_DETAIL_CACHE_MAX_ENTRIES)
+      || this.toolDetailCacheBytes
+        > (this.options.toolDetailCacheMaxBytes ?? NATIVE_TOOL_DETAIL_CACHE_MAX_BYTES)
+    ) {
+      const oldest = [...this.toolDetailCache.keys()].find(
+        (candidate) => !this.pinnedToolDetailRefs.has(candidate),
+      );
+      if (!oldest) break;
+      const entry = this.toolDetailCache.get(oldest);
+      if (entry) this.toolDetailCacheBytes -= entry.bytes;
+      this.toolDetailCache.delete(oldest);
+    }
+  }
+
+  private projectionPart(
+    sessionKey: string,
+    messageId: string,
+    raw: unknown,
+    partPath: string,
+  ): unknown {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+    const part = raw as Record<string, unknown>;
+    const projected: Record<string, unknown> = { ...part };
+
+    // A staged path is the durable image reference. Re-sending the same image
+    // as an inline data URL on every snapshot only duplicates transport bytes.
+    if (
+      part.type === "file"
+      && typeof part.content === "string"
+      && (
+        part.content.startsWith("/")
+        || part.content.startsWith("file://")
+        || /^[A-Za-z]:[\\/]/.test(part.content)
+      )
+      && typeof part.fileUrl === "string"
+      && part.fileUrl.startsWith("data:image/")
+    ) {
+      delete projected.fileUrl;
+    }
+
+    const rawDiff = part.toolDiff && typeof part.toolDiff === "object"
+      && !Array.isArray(part.toolDiff)
+      ? part.toolDiff as Record<string, unknown>
+      : undefined;
+    const hasHeavyDiff = Boolean(rawDiff && (
+      typeof rawDiff.diff === "string"
+      || typeof rawDiff.before === "string"
+      || typeof rawDiff.after === "string"
+    ));
+    if (
+      typeof part.toolOutput === "string"
+      || typeof part.toolError === "string"
+      || hasHeavyDiff
+    ) {
+      projected.detailRef = this.cacheToolDetails(sessionKey, messageId, partPath, {
+        ...(typeof part.toolOutput === "string" ? { toolOutput: part.toolOutput } : {}),
+        ...(typeof part.toolError === "string" ? { toolError: part.toolError } : {}),
+        ...(rawDiff ? { toolDiff: rawDiff } : {}),
+      });
+      delete projected.toolOutput;
+      delete projected.toolError;
+      if (rawDiff) {
+        projected.toolDiff = {
+          ...(typeof rawDiff.filePath === "string" ? { filePath: rawDiff.filePath } : {}),
+          ...(typeof rawDiff.additions === "number" ? { additions: rawDiff.additions } : {}),
+          ...(typeof rawDiff.deletions === "number" ? { deletions: rawDiff.deletions } : {}),
+          // Without this the renderer cannot tell a stripped diff from a
+          // location-only hint, and every provider that identifies a file
+          // mutation by diff content rather than tool name loses its edit
+          // treatment until the row is expanded.
+          ...(hasHeavyDiff ? { deferred: true } : {}),
+        };
+      }
+    }
+
+    for (const field of ["parts", "childTools", "subagentActions"] as const) {
+      if (!Array.isArray(part[field])) continue;
+      projected[field] = part[field].map((child, index) =>
+        this.projectionPart(sessionKey, messageId, child, `${partPath}/${field}/${index}`)
+      );
+    }
+    if (part.task && typeof part.task === "object" && !Array.isArray(part.task)) {
+      projected.task = this.projectionPart(
+        sessionKey,
+        messageId,
+        part.task,
+        `${partPath}/task`,
+      );
+    }
+    return projected;
+  }
+
   private projectionMessages(
+    sessionKey: string,
     messages: unknown[],
     limit: number,
   ): { messages: unknown[]; window: NativeAgentMessageWindow } {
-    const bounded = messages.slice(-limit).map((raw) => {
+    const requested = messages.slice(-limit).map((raw) => {
       const message = raw && typeof raw === "object" && !Array.isArray(raw)
         ? raw as Record<string, unknown>
         : null;
@@ -1256,27 +1400,95 @@ export class NativeAgentService {
         id: message.id,
         role,
         content: message.content,
-        parts: message.parts,
+        parts: message.parts.map((part, index) =>
+          this.projectionPart(sessionKey, message.id as string, part, String(index))
+        ),
         createdAt: message.createdAt,
         ...(typeof message.modelId === "string" ? { modelId: message.modelId } : {}),
         ...(typeof message.turnId === "string" ? { turnId: message.turnId } : {}),
         ...(typeof message.planReview === "boolean" ? { planReview: message.planReview } : {}),
       };
     });
-    let bytes = Number.POSITIVE_INFINITY;
+    let boundedTranscript;
     try {
-      bytes = Buffer.byteLength(JSON.stringify(bounded));
-    } catch {
-      // The normalized provider contract is JSON. Non-serializable messages
-      // are a transport violation, never something to leak to a renderer.
+      boundedTranscript = boundTranscriptResponse(requested, NATIVE_PROJECTION_MAX_BYTES, {
+        // The bound applies to the bare message array; the surrounding
+        // projection is not what this ceiling protects.
+        envelopeReserveBytes: 0,
+        // A half-rendered final message is worse than an explicit failure here:
+        // the renderer has a recovery path for an unavailable projection, and
+        // the bridges have already bounded their own responses well below this.
+        contentFallbackBytes: null,
+      });
+    } catch (error) {
+      /*
+       * The bound's only failure mode is the `JSON.stringify` it uses to
+       * measure, which throws a `TypeError` on a circular structure or a
+       * BigInt. The normalized provider contract is JSON, so that is a
+       * transport violation rather than something to leak to a renderer.
+       * Measuring separately up front just to say so would serialize the whole
+       * transcript twice on every refresh.
+       */
+      if (!(error instanceof TypeError)) throw error;
+      throw new ProviderUnavailableError(
+        "Provider returned a non-serializable native transcript",
+      );
     }
-    if (bytes > NATIVE_PROJECTION_MAX_BYTES) {
-      throw new ProviderUnavailableError("Provider transcript projection is oversized");
+    const { messages: bounded, messageWindow, overflowed } = boundedTranscript;
+    if (overflowed) {
+      throw new ProviderUnavailableError(
+        "Provider transcript contains one message body larger than 16 MiB",
+      );
     }
+    const omittedParts = messageWindow.omittedParts ?? 0;
+    const truncatedByCount = messages.length > requested.length;
+    const truncatedByBytes = bounded.length < requested.length || omittedParts > 0;
+    const omittedMessages = messages.length - bounded.length;
     return {
       messages: bounded,
-      window: { limit, truncated: messages.length > bounded.length },
+      window: {
+        limit,
+        truncated: truncatedByCount || truncatedByBytes,
+        ...(truncatedByBytes
+          ? {
+              truncationReason: "bytes" as const,
+              ...(omittedMessages > 0 ? { omittedMessages } : {}),
+              ...(omittedParts > 0 ? { omittedParts } : {}),
+            }
+          : truncatedByCount ? { truncationReason: "count" as const } : {}),
+      },
     };
+  }
+
+  async getProjectionToolDetails(
+    input: NativeAgentProjectionInput & { detailRef: string },
+  ): Promise<NativeAgentToolDetails> {
+    this.assertProjectionInput(input);
+    if (!nonBlank(input.detailRef) || input.detailRef.length > 128) {
+      throw new Error("Native agent tool detail reference is invalid");
+    }
+    const sessionKey = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    let entry = this.toolDetailCache.get(input.detailRef);
+    if (!entry || entry.sessionKey !== sessionKey) {
+      this.pinnedToolDetailRefs.add(input.detailRef);
+      try {
+        await this.refreshProjection(input, true);
+        entry = this.toolDetailCache.get(input.detailRef);
+      } finally {
+        this.pinnedToolDetailRefs.delete(input.detailRef);
+        this.pruneToolDetailCache();
+      }
+    }
+    if (!entry || entry.sessionKey !== sessionKey) {
+      throw new Error("Native agent tool details are no longer available");
+    }
+    this.toolDetailCache.delete(input.detailRef);
+    this.toolDetailCache.set(input.detailRef, entry);
+    return entry.details;
   }
 
   /**
@@ -1671,7 +1883,7 @@ export class NativeAgentService {
               : {}),
           }
         : undefined;
-      const transcript = this.projectionMessages(snapshot.messages, messageLimit);
+      const transcript = this.projectionMessages(key, snapshot.messages, messageLimit);
       const terminalNotices = [
         ...(snapshot.notices ?? []).filter(
           (notice) => notice.kind === "error" || notice.kind === "stopped",
@@ -2128,6 +2340,9 @@ export class NativeAgentService {
     this.modelCatalogRefreshes.clear();
     this.slashCommandRefreshes.clear();
     this.projectionCache.clear();
+    this.toolDetailCache.clear();
+    this.pinnedToolDetailRefs.clear();
+    this.toolDetailCacheBytes = 0;
     this.projectionRefreshes.clear();
     this.projectionEpochs.clear();
   }

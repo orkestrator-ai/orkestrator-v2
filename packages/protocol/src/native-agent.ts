@@ -488,8 +488,29 @@ export interface NativeAgentSlashCommand {
 export interface NativeAgentMessageWindow {
   /** Messages the projection was allowed to carry. */
   limit: number;
-  /** True when the provider had more messages than the window. */
+  /** True when the provider had more messages or parts than the window carries. */
   truncated: boolean;
+  /** Why the authoritative projection omitted earlier transcript content. */
+  truncationReason?: "count" | "bytes";
+  /** Whole messages omitted from the front of this projection. */
+  omittedMessages?: number;
+  /** Parts omitted from the front of the oldest retained message. */
+  omittedParts?: number;
+}
+
+/** Heavy tool fields fetched only after the user expands a transcript row. */
+export interface NativeAgentToolDetails {
+  detailRef: string;
+  toolOutput?: string;
+  toolError?: string;
+  toolDiff?: {
+    filePath?: string;
+    additions?: number;
+    deletions?: number;
+    before?: string;
+    after?: string;
+    diff?: string;
+  };
 }
 
 export interface NativeAgentControlUpdate {

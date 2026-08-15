@@ -1726,9 +1726,9 @@ lines.on("line", (line) => {
     }
     if (prompt.startsWith("TRANSCRIPTOVERFLOW")) {
       // Individually valid parts whose combined rendered transcript crosses the
-      // 8 MiB budget. Each update is terminal so persistence/reload can verify
+      // 16 MiB budget. Each update is terminal so persistence/reload can verify
       // trimming without stale-tool reconciliation changing the snapshot.
-      for (let index = 0; index < 18; index += 1) {
+      for (let index = 0; index < 34; index += 1) {
         write({
           jsonrpc: "2.0",
           method: "session/update",

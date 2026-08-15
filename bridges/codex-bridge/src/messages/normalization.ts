@@ -306,6 +306,7 @@ export async function itemToParts(
         : [];
     case "command_execution": {
       const output = capCommandOutput(item.aggregated_output);
+      const failed = item.status === "failed";
       return [{
         type: "tool-invocation",
         content: item.command,
@@ -318,8 +319,11 @@ export async function itemToParts(
               ? "success"
               : "pending",
         toolTitle: item.command,
-        toolOutput: output || undefined,
-        toolError: item.status === "failed" ? output || "Command failed" : undefined,
+        // A failed command used to duplicate the same potentially 256 KiB
+        // string into both fields. The renderer already gives `toolError` its
+        // error treatment, so keep the payload exactly once.
+        toolOutput: failed ? undefined : output || undefined,
+        toolError: failed ? output || "Command failed" : undefined,
       }];
     }
     case "file_change":

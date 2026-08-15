@@ -51,7 +51,13 @@ export async function boundedJson(
 }
 
 function authHeaders(connection: BridgeConnection): Headers {
-  const headers = new Headers({ "Content-Type": "application/json" });
+  const headers = new Headers({
+    "Content-Type": "application/json",
+    // This is a server-to-server fetch, so unlike a browser client it must
+    // advertise compression explicitly. Fetch transparently decodes the body;
+    // the byte guards below continue to measure the decoded JSON contract.
+    "Accept-Encoding": "gzip",
+  });
   if (connection.agent === "claude") {
     headers.set("X-Orkestrator-Claude-Token", connection.authToken);
   } else if (connection.agent === "codex") {

@@ -1,10 +1,24 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { CompressionStream as NodeCompressionStream } from "node:stream/web";
+import { gunzipSync } from "node:zlib";
 
 process.env.CODEX_BRIDGE_NO_ENGINE = "1";
 process.env.CODEX_BRIDGE_NO_SERVER = "1";
 process.env.CODEX_BRIDGE_AUTH_DISABLED_FOR_TESTING = "1";
 
-const { app, __testing } = await import("./index.js");
+// The UI-test preload replaces browser globals before the bridge module is
+// evaluated. Hono captures this constructor while installing its middleware.
+const originalCompressionStream = globalThis.CompressionStream;
+globalThis.CompressionStream = NodeCompressionStream as typeof CompressionStream;
+const {
+  app,
+  __testing,
+  boundCodexTranscriptResponse,
+  MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES,
+} = await import("./index.js");
+afterAll(() => {
+  globalThis.CompressionStream = originalCompressionStream;
+});
 const runtime = __testing.runtimeForTesting();
 const runtimeMethods = runtime as unknown as Record<string, unknown>;
 const AUTH_TOKEN = "test-codex-bridge-token";
@@ -344,7 +358,10 @@ describe("session detail route outcomes", () => {
     await withRuntimeMethod("getMessages", async () => messages, async () => {
       const response = await app.request("/session/session-1/messages");
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ messages });
+      expect(await response.json()).toEqual({
+        messages,
+        messageWindow: { truncated: false },
+      });
     });
 
     await withRuntimeMethod(
@@ -364,6 +381,69 @@ describe("session detail route outcomes", () => {
         });
       },
     );
+  });
+
+  test("bounds aggregate transcript responses by dropping the oldest messages", () => {
+    const messages = Array.from({ length: 20 }, (_, index) => ({
+      id: `message-${index}`,
+      role: "assistant" as const,
+      content: String(index),
+      parts: [{ type: "text" as const, content: "x".repeat(1024 * 1024) }],
+      createdAt: "2026-07-25T12:00:00.000Z",
+    }));
+
+    const bounded = boundCodexTranscriptResponse(messages);
+    expect(Buffer.byteLength(JSON.stringify(bounded)))
+      .toBeLessThanOrEqual(MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES);
+    expect(bounded.messageWindow).toMatchObject({ truncated: true });
+    expect(bounded.messages.at(-1)?.id).toBe("message-19");
+    expect(bounded.messages[0]?.id).not.toBe("message-0");
+  });
+
+  test("trims parts off a single oversized message rather than dropping it", () => {
+    // A long turn is one message, so message-level dropping has nothing left to
+    // take. The newest parts are what the user is looking at and must survive.
+    const parts = Array.from({ length: 40 }, (_, index) => ({
+      type: "text" as const,
+      content: `${index}:${"x".repeat(1024 * 1024)}`,
+    }));
+    const bounded = boundCodexTranscriptResponse([{
+      id: "message-long-turn",
+      role: "assistant" as const,
+      content: "done",
+      parts,
+      createdAt: "2026-07-25T12:00:00.000Z",
+    }]);
+
+    expect(bounded.messages).toHaveLength(1);
+    expect(Buffer.byteLength(JSON.stringify(bounded)))
+      .toBeLessThanOrEqual(MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES);
+    expect(bounded.messageWindow.truncated).toBe(true);
+    expect(bounded.messageWindow.omittedParts).toBeGreaterThan(0);
+    expect(bounded.messageWindow.omittedMessages).toBeUndefined();
+    expect(bounded.messages[0]?.parts.at(-1)).toEqual(parts.at(-1)!);
+  });
+
+  test("gzip-compresses transcript responses when the client accepts gzip", async () => {
+    const messages = [{
+      id: "message-compress",
+      role: "assistant" as const,
+      content: "done",
+      parts: [{ type: "text" as const, content: "compressible ".repeat(8_192) }],
+      createdAt: "2026-07-25T12:00:00.000Z",
+    }];
+    await withRuntimeMethod("getMessages", async () => messages, async () => {
+      // happy-dom filters Accept-Encoding from RequestInit as a forbidden
+      // browser header, so install it on the already-built test request.
+      const request = new Request("http://localhost/session/session-1/messages");
+      request.headers.set("Accept-Encoding", "gzip");
+      const response = await app.request(request);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Encoding")).toBe("gzip");
+      expect(response.headers.get("Vary")).toContain("Accept-Encoding");
+      const decoded = JSON.parse(gunzipSync(Buffer.from(await response.arrayBuffer())).toString());
+      expect(decoded.messages[0]?.id).toBe("message-compress");
+    });
   });
 
   test("reports missing message and status snapshots as missing sessions", async () => {

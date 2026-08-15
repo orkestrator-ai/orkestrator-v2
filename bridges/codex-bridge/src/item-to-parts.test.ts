@@ -492,13 +492,14 @@ describe("itemToParts", () => {
       expect(addParts[0]?.toolDiff?.additions).toBe(2);
       expect(addParts[0]?.toolDiff?.deletions).toBe(0);
       expect(addParts[0]?.toolDiff?.before).toBeUndefined();
-      expect(addParts[0]?.toolDiff?.after).toBe("alpha\nbeta\n");
+      expect(addParts[0]?.toolDiff?.after).toBeUndefined();
       expect(addParts[0]?.toolDiff?.diff).toContain("+alpha");
       expect(updateParts[0]?.toolDiff?.additions).toBe(1);
       expect(updateParts[0]?.toolDiff?.deletions).toBe(0);
       expect(updateParts[0]?.toolDiff?.diff).toContain("+gamma");
       expect(deleteParts[0]?.toolDiff?.additions).toBe(0);
       expect(deleteParts[0]?.toolDiff?.deletions).toBe(3);
+      expect(deleteParts[0]?.toolDiff?.before).toBeUndefined();
       expect(deleteParts[0]?.toolDiff?.after).toBeUndefined();
       expect(deleteParts[0]?.toolDiff?.diff).toContain("-gamma");
     });
@@ -564,15 +565,17 @@ describe("itemToParts", () => {
       expect(firstParts[0]?.toolDiff).toMatchObject({
         additions: 1,
         deletions: 0,
-        before: "base\n",
-        after: "base\nfirst\n",
       });
+      expect(firstParts[0]?.toolDiff?.before).toBeUndefined();
+      expect(firstParts[0]?.toolDiff?.after).toBeUndefined();
+      expect(firstParts[0]?.toolDiff?.diff).toContain("+first");
       expect(secondParts[0]?.toolDiff).toMatchObject({
         additions: 2,
         deletions: 0,
-        before: "base\n",
-        after: "base\nfirst\nsecond\n",
       });
+      expect(secondParts[0]?.toolDiff?.before).toBeUndefined();
+      expect(secondParts[0]?.toolDiff?.after).toBeUndefined();
+      expect(secondParts[0]?.toolDiff?.diff).toContain("+second");
     });
   });
 

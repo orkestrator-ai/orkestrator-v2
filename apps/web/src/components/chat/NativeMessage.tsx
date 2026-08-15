@@ -81,6 +81,7 @@ import {
 } from "@/lib/chat/image-preview-cache";
 import { writeText } from "@/lib/native/clipboard";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
+import type { NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
 
 /** Custom link component that opens URLs in the system browser */
 function ExternalLink({
@@ -129,9 +130,47 @@ interface NativeMessageProps {
   agentExpansionScope?: string;
   actions?: ReactNode;
   resolveModelLabel?: (modelId: string) => string;
+  loadToolDetails?: (detailRef: string) => Promise<NativeAgentToolDetails>;
 }
 
 const MessageExpansionScopeContext = createContext("native-message");
+const ToolDetailLoaderContext = createContext<
+  ((detailRef: string) => Promise<NativeAgentToolDetails>) | undefined
+>(undefined);
+const TOOL_DETAIL_BROWSER_CACHE_MAX_ENTRIES = 256;
+const TOOL_DETAIL_BROWSER_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+const toolDetailBrowserCache = new Map<string, {
+  details: NativeAgentToolDetails;
+  bytes: number;
+}>();
+let toolDetailBrowserCacheBytes = 0;
+
+function cachedToolDetails(detailRef: string): NativeAgentToolDetails | undefined {
+  const entry = toolDetailBrowserCache.get(detailRef);
+  if (!entry) return undefined;
+  toolDetailBrowserCache.delete(detailRef);
+  toolDetailBrowserCache.set(detailRef, entry);
+  return entry.details;
+}
+
+function cacheToolDetails(details: NativeAgentToolDetails): void {
+  const bytes = new TextEncoder().encode(JSON.stringify(details)).byteLength;
+  const previous = toolDetailBrowserCache.get(details.detailRef);
+  if (previous) toolDetailBrowserCacheBytes -= previous.bytes;
+  toolDetailBrowserCache.delete(details.detailRef);
+  toolDetailBrowserCache.set(details.detailRef, { details, bytes });
+  toolDetailBrowserCacheBytes += bytes;
+  while (
+    toolDetailBrowserCache.size > TOOL_DETAIL_BROWSER_CACHE_MAX_ENTRIES
+    || toolDetailBrowserCacheBytes > TOOL_DETAIL_BROWSER_CACHE_MAX_BYTES
+  ) {
+    const oldest = toolDetailBrowserCache.keys().next().value;
+    if (!oldest) break;
+    const entry = toolDetailBrowserCache.get(oldest);
+    if (entry) toolDetailBrowserCacheBytes -= entry.bytes;
+    toolDetailBrowserCache.delete(oldest);
+  }
+}
 
 function getAgentExpansionKey(
   part: NativeAgentActivityPart,
@@ -282,6 +321,7 @@ function ToolPart({
   toolOutput,
   toolError,
   backgroundTask,
+  deferredDetails = false,
 }: {
   expansionKey: string;
   toolName?: string;
@@ -291,6 +331,8 @@ function ToolPart({
   toolOutput?: string;
   toolError?: string;
   backgroundTask?: NativeBackgroundTask;
+  /** Output exists but is fetched on expand, so the row must stay expandable. */
+  deferredDetails?: boolean;
 }) {
   const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
   const displayToolName = getToolDisplayName(toolName);
@@ -313,9 +355,12 @@ function ToolPart({
     pending: "text-yellow-600 animate-pulse",
   };
 
-  // Determine if there's content to show when expanded
+  // Determine if there's content to show when expanded. A deferred part counts:
+  // its output only loads *because* the row was expanded, so gating the trigger
+  // on already-present output would make it permanently unreachable.
   const hasExpandableContent =
-    toolOutput || toolError || (toolArgs && Object.keys(toolArgs).length > 0);
+    toolOutput || toolError || deferredDetails
+    || (toolArgs && Object.keys(toolArgs).length > 0);
 
   // The collapsed row is a single truncating line, so anything shown there is
   // flattened and capped rather than relying on CSS alone — the accessible name
@@ -597,7 +642,11 @@ function ToolPart({
 function hasRenderableDiff(toolDiff?: ToolDiffMetadata): boolean {
   return Boolean(toolDiff?.diff)
     || toolDiff?.before !== undefined
-    || toolDiff?.after !== undefined;
+    || toolDiff?.after !== undefined
+    // A deferred diff has a body waiting behind `detailRef`; routing it to the
+    // generic tool row would drop the edit treatment for the whole collapsed
+    // lifetime of the part.
+    || toolDiff?.deferred === true;
 }
 
 /** Parse unified diff output into lines with +/- indicators */
@@ -718,6 +767,7 @@ function EditToolPart({
   toolOutput,
   toolError,
   toolDiff,
+  deferredDetails = false,
 }: {
   expansionKey: string;
   toolName?: string;
@@ -726,6 +776,8 @@ function EditToolPart({
   toolOutput?: string;
   toolError?: string;
   toolDiff?: ToolDiffMetadata;
+  /** Diff body exists but is fetched on expand, so the row must stay expandable. */
+  deferredDetails?: boolean;
 }) {
   const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
   const { createFileTab } = useTerminalContext();
@@ -792,14 +844,17 @@ function EditToolPart({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- value deps, see above
   }, [toolOutput, diffSource, diffBefore, diffAfter]);
 
-  // Determine if there's content to show when expanded
+  // Determine if there's content to show when expanded. A deferred part counts:
+  // its diff only loads *because* the row was expanded, so gating the trigger
+  // on already-present content would make it permanently unreachable.
   const hasExpandableContent =
     toolOutput ||
     toolError ||
     diffLines.length > 0 ||
     toolDiff?.diff ||
     toolDiff?.before ||
-    toolDiff?.after;
+    toolDiff?.after ||
+    deferredDetails;
 
   // Handle pop-out to open diff in new tab
   const handlePopOut = useCallback(
@@ -1780,6 +1835,102 @@ function TaskGroupPart({
   );
 }
 
+function DeferredToolMessagePart({
+  part,
+  partKey,
+  showTextCopy,
+  truncateUserPrompt,
+  renderJsonPayload,
+  containerId,
+  eagerImagePreview,
+}: {
+  part: Extract<NativeMessagePart, { type: "tool-invocation" }>;
+  partKey: string;
+  showTextCopy: boolean;
+  truncateUserPrompt: boolean;
+  renderJsonPayload: boolean;
+  containerId?: string;
+  eagerImagePreview: boolean;
+}) {
+  const loadToolDetails = useContext(ToolDetailLoaderContext);
+  const expansionScope = useContext(MessageExpansionScopeContext);
+  const expansionKey = `native-tool:${expansionScope}:${getToolExpansionKey(part, partKey)}`;
+  const [isOpen] = useMessagePartExpansion(expansionKey);
+  const detailRef = part.detailRef!;
+  const [details, setDetails] = useState<NativeAgentToolDetails | undefined>(
+    () => cachedToolDetails(detailRef),
+  );
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const cached = cachedToolDetails(detailRef);
+    if (cached) {
+      setDetails(cached);
+      setLoadError(null);
+      return;
+    }
+    setDetails(undefined);
+    setLoadError(null);
+  }, [detailRef]);
+
+  useEffect(() => {
+    if (!isOpen || details || loadError || !loadToolDetails) return;
+    let cancelled = false;
+    void loadToolDetails(detailRef)
+      .then((loaded) => {
+        if (cancelled) return;
+        cacheToolDetails(loaded);
+        setDetails(loaded);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setLoadError(error instanceof Error ? error.message : "Tool details are unavailable");
+      });
+    return () => { cancelled = true; };
+  }, [detailRef, details, isOpen, loadError, loadToolDetails]);
+
+  /*
+   * The collapsed row shows the part's own metadata and nothing else. Earlier
+   * revisions parked prose in `toolOutput` to keep the expand trigger enabled,
+   * which put "Details load when expanded." where a diff summary belongs; the
+   * `deferredDetails` prop carries that signal instead, leaving the body empty
+   * until there is something real to put in it.
+   */
+  const materialized: Extract<NativeMessagePart, { type: "tool-invocation" }> = {
+    ...part,
+    detailRef: undefined,
+    ...(details?.toolOutput !== undefined ? { toolOutput: details.toolOutput } : {}),
+    ...(details?.toolError !== undefined ? { toolError: details.toolError } : {}),
+    ...(!details && loadError ? { toolError: loadError } : {}),
+    ...(!details && !loadError && isOpen
+      ? { toolOutput: "Loading tool details…" }
+      : {}),
+    ...(part.toolDiff || details?.toolDiff
+      ? {
+          toolDiff: {
+            ...part.toolDiff,
+            ...details?.toolDiff,
+            // Cleared once the body is in hand: `deferred` exists to say the
+            // real diff is still elsewhere.
+            ...(details ? { deferred: undefined } : {}),
+          },
+        }
+      : {}),
+  };
+  return (
+    <MessagePart
+      part={materialized}
+      deferredDetails={!details}
+      partKey={partKey}
+      showTextCopy={showTextCopy}
+      truncateUserPrompt={truncateUserPrompt}
+      renderJsonPayload={renderJsonPayload}
+      containerId={containerId}
+      eagerImagePreview={eagerImagePreview}
+    />
+  );
+}
+
 /** Render a single message part based on its type */
 function MessagePart({
   part,
@@ -1789,6 +1940,7 @@ function MessagePart({
   containerId,
   eagerImagePreview = false,
   partKey,
+  deferredDetails = false,
 }: {
   part: NativeMessagePart;
   showTextCopy?: boolean;
@@ -1798,8 +1950,28 @@ function MessagePart({
   eagerImagePreview?: boolean;
   /** Stable identity for this part's position, used to persist expansion state. */
   partKey: string;
+  /**
+   * Set by `DeferredToolMessagePart` while a tool row's heavy fields are still
+   * behind their `detailRef`. Tool rows gate their expand trigger on having
+   * something to show, and a deferred row has nothing until it is expanded.
+   */
+  deferredDetails?: boolean;
 }) {
+  const loadToolDetails = useContext(ToolDetailLoaderContext);
   const expansionScope = useContext(MessageExpansionScopeContext);
+  if (part.type === "tool-invocation" && part.detailRef && loadToolDetails) {
+    return (
+      <DeferredToolMessagePart
+        part={part}
+        partKey={partKey}
+        showTextCopy={showTextCopy}
+        truncateUserPrompt={truncateUserPrompt}
+        renderJsonPayload={renderJsonPayload}
+        containerId={containerId}
+        eagerImagePreview={eagerImagePreview}
+      />
+    );
+  }
   const toolExpansionKey = part.type === "tool-invocation"
     ? `native-tool:${expansionScope}:${getToolExpansionKey(part, partKey)}`
     : "";
@@ -1833,6 +2005,7 @@ function MessagePart({
             toolOutput={part.toolOutput}
             toolError={part.toolError}
             toolDiff={part.toolDiff}
+            deferredDetails={deferredDetails}
           />
         );
       }
@@ -1840,12 +2013,14 @@ function MessagePart({
       if (isTodoTool(part.toolName)) {
         return (
           <TodoToolPart
+            expansionKey={toolExpansionKey}
             toolName={part.toolName}
             toolState={part.toolState}
             toolArgs={part.toolArgs}
             toolOutput={part.toolOutput}
             toolError={part.toolError}
             taskSnapshot={part.taskSnapshot}
+            deferredDetails={deferredDetails}
           />
         );
       }
@@ -1860,6 +2035,7 @@ function MessagePart({
           toolOutput={part.toolOutput}
           toolError={part.toolError}
           backgroundTask={part.backgroundTask}
+          deferredDetails={deferredDetails}
         />
       );
     case "tool-result":
@@ -1908,6 +2084,7 @@ export const NativeMessage = memo(function NativeMessage({
   agentExpansionScope,
   actions: messageActions,
   resolveModelLabel,
+  loadToolDetails,
 }: NativeMessageProps) {
   const normalizedMessage = useMemo(() => normalizeNativeMessage(message), [message]);
   const normalizedPreviousMessage = useMemo(
@@ -2055,8 +2232,9 @@ export const NativeMessage = memo(function NativeMessage({
   }
 
   return (
-    <MessageExpansionScopeContext.Provider value={messageAgentExpansionScope}>
-      <MessageShell
+    <ToolDetailLoaderContext.Provider value={loadToolDetails}>
+      <MessageExpansionScopeContext.Provider value={messageAgentExpansionScope}>
+        <MessageShell
         isUser={isUser}
         authorLabel={
           isUser
@@ -2093,8 +2271,9 @@ export const NativeMessage = memo(function NativeMessage({
             expansionKey={`${message.id}-content/json`}
           />
         )}
-      </MessageShell>
-    </MessageExpansionScopeContext.Provider>
+        </MessageShell>
+      </MessageExpansionScopeContext.Provider>
+    </ToolDetailLoaderContext.Provider>
   );
 });
 

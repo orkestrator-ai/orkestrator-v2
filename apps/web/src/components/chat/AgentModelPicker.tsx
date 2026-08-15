@@ -307,10 +307,19 @@ export function AgentModelPicker({
       // Moving focus onto the new list is what announces the switch; the rail
       // itself is not in the roving focus group and cannot take focus.
       focusModelListRef.current = true;
-      if (next !== "favorites") onPlatformChange?.(next);
+      // Favourites is a view, not a provider. Landing back on the already
+      // selected platform is the same: consumers treat onPlatformChange as a
+      // provider switch and reset model and effort.
+      if (next !== "favorites" && next !== selectedPlatform) onPlatformChange?.(next);
       return true;
     },
-    [availablePlatforms, catalogView, onPlatformChange, platformSelectionLocked],
+    [
+      availablePlatforms,
+      catalogView,
+      onPlatformChange,
+      platformSelectionLocked,
+      selectedPlatform,
+    ],
   );
   useLayoutEffect(() => {
     if (!focusModelListRef.current) return;

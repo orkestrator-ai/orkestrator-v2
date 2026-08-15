@@ -237,6 +237,7 @@ export function ReviewLaunchDialog({
   ]);
 
   const handleAgentChange = (nextAgent: ReviewAgent) => {
+    if (nextAgent === agent) return;
     const nextModel = firstModelFor(nextAgent, catalog, preferredModels);
     setTabType(nativeTabType(nextAgent));
     setModel(nextModel);

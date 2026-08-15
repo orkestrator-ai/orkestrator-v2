@@ -356,6 +356,34 @@ describe("ReviewLaunchDialog", () => {
     closePicker();
   });
 
+  test("keeps the chosen model after a keyboard glance at favourites", () => {
+    const { onConfirm } = renderDialog();
+
+    chooseModel(/Claude B/);
+    chooseReasoning(/^Extra high$/);
+    expect(picker().textContent).toContain("Claude B");
+    expect(picker().textContent).toContain("Extra high");
+
+    openPicker();
+    const list = document.querySelector("[data-native-model-list]")!;
+    fireEvent.keyDown(list, { key: "ArrowLeft" });
+    expect(screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"))
+      .toBe("true");
+    fireEvent.keyDown(list, { key: "ArrowRight" });
+    expect(screen.getByRole("button", { name: "claude models" }).getAttribute("aria-pressed"))
+      .toBe("true");
+    closePicker();
+
+    expect(picker().textContent).toContain("Claude B");
+    expect(picker().textContent).toContain("Extra high");
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith({
+      tabType: "claude",
+      model: "claude-b",
+      reasoningEffort: "xhigh",
+    });
+  });
+
   test("captions each model row with its catalog description", () => {
     renderDialog({
       catalog: {

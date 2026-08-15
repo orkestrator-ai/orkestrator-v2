@@ -7446,6 +7446,46 @@ describe("NativeAgentService", () => {
       });
     });
 
+    test("hands focus from the setup terminal to the startup agent once setup is ready", async () => {
+      const { provider, createSession } = createProviderStub("cursor");
+      await withService({
+        prefix: "orkestrator-native-cursor-startup-setup-handoff-",
+        environment: {
+          pendingAgentLaunch: true,
+          defaultAgent: "cursor",
+          opencodeMode: "native",
+          setupPhase: "running",
+          setupScriptsComplete: false,
+        },
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        await internals(service).reconcilePendingLaunches();
+        expect(createSession).not.toHaveBeenCalled();
+
+        const duringSetup = await storage.getPaneLayout("env-1");
+        if (!duringSetup || !duringSetup.root || typeof duringSetup.root !== "object") {
+          throw new Error("expected a pane layout");
+        }
+        await storage.savePaneLayout("env-1", {
+          version: duringSetup.version,
+          containerId: duringSetup.containerId,
+          activePaneId: duringSetup.activePaneId,
+          root: { ...(duringSetup.root as Record<string, unknown>), activeTabId: "default" },
+        }, duringSetup.revision);
+
+        await storage.updateEnvironment("env-1", {
+          setupPhase: "ready",
+          setupScriptsComplete: true,
+        });
+        await service.reconcileInitialLaunch("env-1");
+
+        expect(createSession).toHaveBeenCalled();
+        expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
+          activeTabId: "startup-agent",
+        });
+      });
+    });
+
     test("publishes Cursor's native startup tab before consuming the launch", async () => {
       const { provider } = createProviderStub("cursor");
       await withService({

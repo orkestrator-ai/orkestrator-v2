@@ -2124,6 +2124,42 @@ describe("ActionBar workflow tabs", () => {
         .toBe(true));
   });
 
+  test("keeps the Resolve dialog open through dismissals while the launch is arming", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    let resolveArm!: (armedAt: string | null) => void;
+    armRefreshAfterAgentCompletionMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveArm = resolve;
+    }));
+    createTabMock.mockReturnValueOnce(false);
+    render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+    fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Configure conflict resolution" });
+    expect(screen.getByRole("status").textContent).toContain("Launching");
+
+    // Escape and Cancel must not unmount the reporting surface: a refused
+    // createTab after the arm would otherwise have nowhere to put the error
+    // and no toast to fall back on.
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy();
+    expect(createTabMock).not.toHaveBeenCalled();
+
+    resolveArm("armed-during-dismiss-attempt");
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain("maximum tab count"));
+    expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(disarmRefreshAfterAgentCompletionMock).toHaveBeenCalledWith("armed-during-dismiss-attempt");
+  });
+
   test("reports a refused Resolve tab in the dialog without a duplicate toast", async () => {
     currentEnvironment = {
       ...selectedEnvironment,

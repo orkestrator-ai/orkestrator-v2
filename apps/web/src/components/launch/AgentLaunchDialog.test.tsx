@@ -232,11 +232,17 @@ describe("AgentLaunchDialog", () => {
     const confirm = screen.getByRole("button", { name: "Create pull request" });
     expect((confirm as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(confirm);
+    fireEvent.submit(confirm.closest("form")!);
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
   test("presents a launch in flight as progress rather than a fault", () => {
-    const { onConfirm } = renderDialog({ kind: "resolve-conflicts", busy: true });
+    const onOpenChange = mock((_open: boolean) => undefined);
+    const { onConfirm } = renderDialog({
+      kind: "resolve-conflicts",
+      busy: true,
+      onOpenChange,
+    });
 
     // The user submitted successfully a moment ago. A destructive alert here
     // would tell them their own launch had failed for as long as it took.
@@ -244,9 +250,17 @@ describe("AgentLaunchDialog", () => {
     expect(screen.queryByRole("alert") === null).toBe(true);
 
     const confirm = screen.getByRole("button", { name: "Resolve conflicts" });
+    const cancel = screen.getByRole("button", { name: "Cancel" });
     expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    expect((cancel as HTMLButtonElement).disabled).toBe(true);
+    expect(picker().closest("fieldset")?.disabled).toBe(true);
+    expect(confirm.closest("form")?.getAttribute("aria-busy")).toBe("true");
+
     fireEvent.click(confirm);
+    fireEvent.submit(confirm.closest("form")!);
+    fireEvent.click(cancel);
     expect(onConfirm).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalled();
   });
 
   test("lets a retry in flight supersede the error it is retrying", () => {

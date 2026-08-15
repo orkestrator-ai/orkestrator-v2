@@ -2530,6 +2530,9 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         kind="resolve-conflicts"
         open={resolveDialogOpen}
         onOpenChange={(open) => {
+          // The dialog also refuses dismiss while busy; keep the target so a
+          // refused createTab still has a surface after the arm resolves.
+          if (!open && resolveLaunchEnvironmentIdRef.current !== null) return;
           if (!open) {
             setResolveDialogTarget(null);
             setResolveLaunchError(null);

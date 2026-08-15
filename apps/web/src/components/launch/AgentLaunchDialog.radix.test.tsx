@@ -48,14 +48,24 @@ afterEach(() => {
   });
 });
 
-function Harness() {
-  const [open, setOpen] = useState(false);
+function Harness({
+  kind,
+  busy = false,
+  initiallyOpen = false,
+}: {
+  kind?: "create-pr" | "resolve-conflicts";
+  busy?: boolean;
+  initiallyOpen?: boolean;
+} = {}) {
+  const [open, setOpen] = useState(initiallyOpen);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const onConfirm = mock((_selection: AgentLaunchSelection) => undefined);
+  const triggerName = kind === "resolve-conflicts" ? "Open resolve dialog" : "Open PR dialog";
   return (
     <>
-      <button ref={triggerRef} type="button" onClick={() => setOpen(true)}>Open PR dialog</button>
+      <button ref={triggerRef} type="button" onClick={() => setOpen(true)}>{triggerName}</button>
       <AgentLaunchDialog
+        kind={kind}
         open={open}
         onOpenChange={setOpen}
         defaultAgent="claude"
@@ -63,6 +73,7 @@ function Harness() {
         enabledAgents={["claude", "codex", "opencode"]}
         targetBranch="main"
         returnFocusRef={triggerRef}
+        busy={busy}
         onConfirm={onConfirm}
       />
     </>
@@ -140,6 +151,40 @@ describe("AgentLaunchDialog with real Radix primitives", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
     await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  test("keeps the resolve picker accessible and restores trigger focus on close", async () => {
+    render(<Harness kind="resolve-conflicts" />);
+    const trigger = screen.getByRole("button", { name: "Open resolve dialog" });
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    const dialog = await screen.findByRole("dialog", { name: "Configure conflict resolution" });
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+
+    const picker = screen.getByRole("combobox", { name: "Agent, model and reasoning" });
+    fireEvent.pointerDown(picker);
+    fireEvent.click(picker);
+
+    expect(await screen.findByRole("group", { name: "Agent platforms" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "codex models" })).toBeTruthy();
+
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  test("ignores Escape and Cancel while a resolve launch is busy", async () => {
+    render(<Harness kind="resolve-conflicts" busy initiallyOpen />);
+    const dialog = await screen.findByRole("dialog", { name: "Configure conflict resolution" });
+
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("Launching");
   });
 
   test("prefers the fallback over a still-connected trigger", async () => {

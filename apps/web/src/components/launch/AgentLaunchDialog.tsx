@@ -173,7 +173,14 @@ export function AgentLaunchDialog({
   const confirmLabel = isResolve ? "Resolve conflicts" : "Create pull request";
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        // A launch already in flight must keep this surface mounted: the
+        // parent reports refusal here, and dismissing would swallow it.
+        if (!busy) onOpenChange(nextOpen);
+      }}
+    >
       <DialogContent
         className="flex w-[min(calc(100%-1rem),34rem)] flex-col gap-0 overflow-hidden border-zinc-700/80 bg-[#111113] p-0 sm:max-w-[34rem]"
         onCloseAutoFocus={(event) => {
@@ -212,8 +219,10 @@ export function AgentLaunchDialog({
 
         <form
           className="flex min-h-0 flex-1 flex-col overflow-hidden"
+          aria-busy={busy}
           onSubmit={(event) => {
             event.preventDefault();
+            if (busy || confirmDisabled) return;
             onConfirm({
               agent,
               model: selectedModel?.id ?? model,
@@ -222,6 +231,16 @@ export function AgentLaunchDialog({
             });
           }}
         >
+          {/*
+            `display: contents` rather than a flex column: a rendered fieldset
+            wraps its children in an anonymous content box that sizes to
+            content, so a `flex-1 min-h-0` child resolves against that box
+            instead of the fieldset's own constrained height and the scroll
+            region grows until it pushes the footer out of the dialog. Removing
+            the box makes the region and footer direct children of the form.
+            `disabled` still propagates — that is a DOM rule, not a layout one.
+          */}
+          <fieldset disabled={busy} className="contents">
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-6">
             <Label
               htmlFor={pickerId}
@@ -283,13 +302,14 @@ export function AgentLaunchDialog({
           </div>
 
           <DialogFooter className="shrink-0 flex-row justify-end border-t border-zinc-800 bg-zinc-950/40 px-5 py-4 sm:px-6">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            <Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
             <Button type="submit" disabled={confirmDisabled || busy}>
               {confirmLabel}
             </Button>
           </DialogFooter>
+          </fieldset>
         </form>
       </DialogContent>
     </Dialog>

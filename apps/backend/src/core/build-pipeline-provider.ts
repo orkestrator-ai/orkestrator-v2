@@ -1382,7 +1382,13 @@ async function boundedJson(
 }
 
 function authHeaders(connection: BridgeConnection): Headers {
-  const headers = new Headers({ "Content-Type": "application/json" });
+  const headers = new Headers({
+    "Content-Type": "application/json",
+    // This is a server-to-server fetch, so unlike a browser client it must
+    // advertise compression explicitly. Fetch transparently decodes the body;
+    // the byte guards below continue to measure the decoded JSON contract.
+    "Accept-Encoding": "gzip",
+  });
   if (connection.agent === "claude") {
     headers.set("X-Orkestrator-Claude-Token", connection.authToken);
   } else if (connection.agent === "codex") {
@@ -2619,17 +2625,32 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     };
   }
 
-  async messages(sessionId: string): Promise<unknown[]> {
+  private async readTranscript(sessionId: string): Promise<{
+    messages: unknown[];
+    truncated: boolean;
+  }> {
     const response = await bridgeFetch(
       this.connection,
       `/session/${encodeURIComponent(sessionId)}/messages`,
       {},
       this.fetchImpl,
     );
-    if (response.status === 404) return [];
+    if (response.status === 404) return { messages: [], truncated: false };
     assertOk(response, `${this.agent} transcript read`);
-    const body = await response.json() as { messages?: unknown };
-    return Array.isArray(body.messages) ? body.messages : [];
+    const body = asRecord(await boundedJson(
+      response,
+      `${this.agent} transcript read`,
+      { remaining: 16 * 1024 * 1024 },
+    ));
+    const messageWindow = asRecord(body?.messageWindow);
+    return {
+      messages: Array.isArray(body?.messages) ? body.messages : [],
+      truncated: messageWindow?.truncated === true,
+    };
+  }
+
+  async messages(sessionId: string): Promise<unknown[]> {
+    return (await this.readTranscript(sessionId)).messages;
   }
 
   private codexRuntimeSummary(payload: unknown): NativeAgentRuntimeSummary | undefined {
@@ -2717,21 +2738,24 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     sessionId: string,
   ): Promise<ProviderInteractiveSnapshot> {
     if (this.agent === "cursor" || this.agent === "grok") {
-      const response = await bridgeFetch(
-        this.connection,
-        `/session/${encodeURIComponent(sessionId)}`,
-        {},
-        this.fetchImpl,
-      );
+      const [response, transcript] = await Promise.all([
+        bridgeFetch(
+          this.connection,
+          `/session/${encodeURIComponent(sessionId)}/status`,
+          {},
+          this.fetchImpl,
+        ),
+        this.readTranscript(sessionId),
+      ]);
       if (response.status === 404) return { status: "missing", messages: [] };
-      assertOk(response, `${this.agent} interactive snapshot`);
+      assertOk(response, `${this.agent} interactive status`);
       const payload = asRecord(await boundedJson(
         response,
-        `${this.agent} interactive snapshot`,
-        { remaining: 8 * 1024 * 1024 },
+        `${this.agent} interactive status`,
+        { remaining: 512 * 1024 },
       ));
       const status = payload?.status;
-      const messages = payload?.messages;
+      const messages = transcript.messages;
       const composer = asRecord(payload?.composer);
       const providerRevision = payload?.revision;
       const providerError = payload?.error;
@@ -2759,6 +2783,12 @@ class HttpBridgeProvider implements BuildPipelineProvider {
         providerRevision: providerRevision as number,
         ...(contextUsage ? { contextUsage } : {}),
         ...(runtime ? { runtime } : {}),
+        ...(transcript.truncated ? {
+          notices: [{
+            kind: "warning" as const,
+            message: "Earlier transcript content was omitted to stay within the 16 MiB transport limit.",
+          }],
+        } : {}),
         ...(typeof providerError === "string" ? { error: providerError } : {}),
       };
     }
@@ -2774,9 +2804,9 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       // message/status/config reads below are the foreground critical path.
       void this.refreshCodexRuntimeMetadata(sessionId);
     }
-    const [sessionResponse, messages, configResponse, initResponse, runtimeResponse] = await Promise.all([
+    const [sessionResponse, transcript, configResponse, initResponse, runtimeResponse] = await Promise.all([
       bridgeFetch(this.connection, sessionPath, {}, this.fetchImpl),
-      this.messages(sessionId),
+      this.readTranscript(sessionId),
       this.agent === "codex"
         ? bridgeFetch(
             this.connection,
@@ -2802,6 +2832,7 @@ class HttpBridgeProvider implements BuildPipelineProvider {
           )
         : Promise.resolve(undefined),
     ]);
+    const messages = transcript.messages;
     if (sessionResponse.status === 404) return { status: "missing", messages: [] };
     assertOk(sessionResponse, `${this.agent} interactive session read`);
     const payload = asRecord(await boundedJson(
@@ -2884,6 +2915,12 @@ class HttpBridgeProvider implements BuildPipelineProvider {
           ? { contextUsage: normalizeProviderContextUsage(payload.contextUsage) }
           : {}),
         ...(runtime ? { runtime } : {}),
+        ...(transcript.truncated ? {
+          notices: [{
+            kind: "warning" as const,
+            message: "Earlier transcript content was omitted to stay within the 16 MiB transport limit.",
+          }],
+        } : {}),
         ...(typeof payload.error === "string" ? { error: payload.error } : {}),
       };
     }
@@ -2946,6 +2983,12 @@ class HttpBridgeProvider implements BuildPipelineProvider {
         ? { rateLimits: normalizeProviderRateLimits(payload.rateLimits) }
         : {}),
       ...(runtime ? { runtime } : {}),
+      ...(transcript.truncated ? {
+        notices: [{
+          kind: "warning" as const,
+          message: "Earlier transcript content was omitted to stay within the 16 MiB transport limit.",
+        }],
+      } : {}),
       ...(normalizeClaudeBackgroundTasks(payload.backgroundTasks)
         ? { backgroundTasks: normalizeClaudeBackgroundTasks(payload.backgroundTasks) }
         : {}),

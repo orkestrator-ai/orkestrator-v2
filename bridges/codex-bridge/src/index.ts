@@ -6,6 +6,7 @@ import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
+import { compress } from "hono/compress";
 import { isJsonSchema } from "@orkestrator/protocol/structured-output";
 import { streamSSE } from "hono/streaming";
 import { readCachedTranscript } from "./transcript-cache.js";
@@ -142,6 +143,66 @@ interface PromptAttachmentInput {
 
 
 export const app = new Hono();
+export const MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES = 16 * 1024 * 1024;
+
+export function boundCodexTranscriptResponse(messages: NormalizedMessage[]): {
+  messages: NormalizedMessage[];
+  messageWindow: {
+    truncated: boolean;
+    omittedMessages?: number;
+    omittedParts?: number;
+  };
+} {
+  const selected = [...messages];
+  const sizes = selected.map((message) => Buffer.byteLength(JSON.stringify(message)));
+  let start = 0;
+  // JSON envelope, array brackets and separators. The fixed reserve covers the
+  // bounded window metadata without repeatedly serializing the whole response.
+  let bytes = 256 + 2 + sizes.reduce((total, size) => total + size, 0)
+    + Math.max(0, sizes.length - 1);
+  while (bytes > MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES && start < selected.length - 1) {
+    bytes -= sizes[start]! + 1;
+    start += 1;
+  }
+
+  let omittedParts = 0;
+  if (bytes > MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES && selected[start]) {
+    const original = selected[start]!;
+    const parts = [...original.parts];
+    while (parts.length > 0 && bytes > MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES) {
+      parts.shift();
+      omittedParts += 1;
+      selected[start] = { ...original, parts };
+      bytes = 256 + Buffer.byteLength(JSON.stringify(selected[start]));
+    }
+    if (bytes > MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES) {
+      const maximumContentBytes = 1024 * 1024;
+      const encoded = Buffer.from(original.content);
+      let contentStart = Math.max(0, encoded.length - maximumContentBytes);
+      while (
+        contentStart < encoded.length
+        && (encoded[contentStart]! & 0b1100_0000) === 0b1000_0000
+      ) contentStart += 1;
+      selected[start] = {
+        ...original,
+        content: encoded.subarray(contentStart).toString("utf8"),
+        parts: [],
+      };
+      omittedParts = original.parts.length;
+    }
+  }
+
+  const bounded = selected.slice(start);
+  const omittedMessages = messages.length - bounded.length;
+  return {
+    messages: bounded,
+    messageWindow: {
+      truncated: omittedMessages > 0 || omittedParts > 0,
+      ...(omittedMessages > 0 ? { omittedMessages } : {}),
+      ...(omittedParts > 0 ? { omittedParts } : {}),
+    },
+  };
+}
 const BRIDGE_TOKEN_ENV = "CODEX_BRIDGE_TOKEN";
 const BRIDGE_ALLOWED_ORIGINS_ENV = "CODEX_BRIDGE_ALLOWED_ORIGINS";
 let bridgeAuthToken =
@@ -1040,6 +1101,14 @@ app.use("*", async (c, next) => {
   await next();
 });
 
+// Transcript bodies dominate bridge bandwidth. Keep SSE uncompressed here —
+// its own flush-sensitive writer has different backpressure semantics.
+app.use("/session/:id/messages", async (c, next) => {
+  await next();
+  c.res.headers.append("Vary", "Accept-Encoding");
+});
+app.use("/session/:id/messages", compress({ encoding: "gzip" }));
+
 app.get("/global/health", (c) => {
   const health = appServerRuntime.getHealth();
   // A terminally failed engine must not read as healthy: the backend waits on
@@ -1147,7 +1216,7 @@ app.get("/session/:id/config", async (c) => {
 app.get("/session/:id/messages", async (c) => {
   const messages = await appServerRuntime.getMessages(c.req.param("id"));
   if (!messages) return c.json({ error: "Session not found" }, 404);
-  return c.json({ messages });
+  return c.json(boundCodexTranscriptResponse(messages));
 });
 
 app.get("/session/:id/status", (c) => {

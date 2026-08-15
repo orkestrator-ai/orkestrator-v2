@@ -99,6 +99,7 @@ import type {
   NativeAgentForkOutcome,
   NativeAgentResumeEntry,
   NativeAgentSessionProjection,
+  NativeAgentToolDetails,
 } from "@orkestrator/protocol/native-agent";
 
 /** PR detection result containing URL, state, and merge conflict status */
@@ -2157,6 +2158,15 @@ export async function getNativeAgentProjection<TMessage = unknown>(input: {
   messageLimit?: number;
 }): Promise<NativeAgentSessionProjection<TMessage> | null> {
   return invoke("get_native_agent_projection", input);
+}
+
+export async function getNativeAgentToolDetails(input: {
+  environmentId: string;
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  logicalSessionKey: string;
+  detailRef: string;
+}): Promise<NativeAgentToolDetails> {
+  return invoke("get_native_agent_tool_details", input);
 }
 
 export async function refreshNativeAgentModels<TMessage = unknown>(input: {

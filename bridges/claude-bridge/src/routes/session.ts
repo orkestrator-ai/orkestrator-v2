@@ -46,6 +46,63 @@ const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 // object. The semantic answer payload is still capped separately below.
 const MAX_QUESTION_ANSWER_REQUEST_BYTES =
   AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes + 1_024;
+export const MAX_CLAUDE_TRANSCRIPT_RESPONSE_BYTES = 16 * 1024 * 1024;
+
+export function boundClaudeTranscriptResponse(
+  messages: MessagesResponse["messages"],
+): MessagesResponse & {
+  messageWindow: {
+    truncated: boolean;
+    omittedMessages?: number;
+    omittedParts?: number;
+  };
+} {
+  const selected = [...messages];
+  const sizes = selected.map((message) => Buffer.byteLength(JSON.stringify(message)));
+  let start = 0;
+  let bytes = 256 + 2 + sizes.reduce((total, size) => total + size, 0)
+    + Math.max(0, sizes.length - 1);
+  while (bytes > MAX_CLAUDE_TRANSCRIPT_RESPONSE_BYTES && start < selected.length - 1) {
+    bytes -= sizes[start]! + 1;
+    start += 1;
+  }
+  let omittedParts = 0;
+  if (bytes > MAX_CLAUDE_TRANSCRIPT_RESPONSE_BYTES && selected[start]) {
+    const original = selected[start]!;
+    const parts = [...original.parts];
+    while (parts.length > 0 && bytes > MAX_CLAUDE_TRANSCRIPT_RESPONSE_BYTES) {
+      parts.shift();
+      omittedParts += 1;
+      selected[start] = { ...original, parts };
+      bytes = 256 + Buffer.byteLength(JSON.stringify(selected[start]));
+    }
+    if (bytes > MAX_CLAUDE_TRANSCRIPT_RESPONSE_BYTES) {
+      const encoded = Buffer.from(original.content);
+      const maximumContentBytes = 1024 * 1024;
+      let contentStart = Math.max(0, encoded.length - maximumContentBytes);
+      while (
+        contentStart < encoded.length
+        && (encoded[contentStart]! & 0b1100_0000) === 0b1000_0000
+      ) contentStart += 1;
+      selected[start] = {
+        ...original,
+        content: encoded.subarray(contentStart).toString("utf8"),
+        parts: [],
+      };
+      omittedParts = original.parts.length;
+    }
+  }
+  const bounded = selected.slice(start);
+  const omittedMessages = messages.length - bounded.length;
+  return {
+    messages: bounded,
+    messageWindow: {
+      truncated: omittedMessages > 0 || omittedParts > 0,
+      ...(omittedMessages > 0 ? { omittedMessages } : {}),
+      ...(omittedParts > 0 ? { omittedParts } : {}),
+    },
+  };
+}
 
 const questionAnswerBodyLimit = bodyLimit({
   maxSize: MAX_QUESTION_ANSWER_REQUEST_BYTES,
@@ -367,9 +424,7 @@ session.get("/:id/messages", async (c) => {
     sessionData.persistedMessagesLoaded === false
       ? await hydratePersistedSessionMessages(id)
       : getSessionMessages(id);
-  const response: MessagesResponse = { messages };
-
-  return c.json(response);
+  return c.json(boundClaudeTranscriptResponse(messages));
 });
 
 // Send a prompt to a session

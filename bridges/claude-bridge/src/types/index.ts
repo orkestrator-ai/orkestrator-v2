@@ -612,6 +612,11 @@ export interface SessionListResponse {
 
 export interface MessagesResponse {
   messages: NormalizedMessage[];
+  messageWindow?: {
+    truncated: boolean;
+    omittedMessages?: number;
+    omittedParts?: number;
+  };
 }
 
 export interface ModelsResponse {

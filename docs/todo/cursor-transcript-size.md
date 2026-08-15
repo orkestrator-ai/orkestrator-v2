@@ -1,6 +1,33 @@
 # Cursor / ACP interactive snapshot size limit
 
-Status: observed in production on 2026-08-15; not yet fixed.
+Status: fixed on 2026-08-15. The incident analysis below describes the former
+8 MiB transport path and is retained for regression context.
+
+## Resolution
+
+The native transcript path now uses a 16 MiB byte-aware ceiling and degrades to
+an explicit tail window instead of failing the connection. The implementation
+also reduces both serialized size and transfer bandwidth:
+
+- Cursor and Grok fetch bounded `/messages` and `/status` responses separately,
+  so composer/runtime metadata no longer consumes the transcript body budget.
+- ACP re-bounds persisted state on every transcript read and reserves envelope
+  headroom below the 16 MiB consumer cap.
+- Codex and Claude bound aggregate `/messages` responses to 16 MiB as well.
+- Large tool output, errors, and diff bodies are omitted from ordinary renderer
+  projections and loaded through an opaque, session-scoped reference only when
+  the user expands that tool row.
+- A unified diff is no longer accompanied by redundant full before/after file
+  snapshots, and failed-command output is no longer duplicated as both output
+  and error.
+- Staged images retain their path but do not resend their inline data URL in
+  every projection.
+- Transcript HTTP responses negotiate gzip internally. The browser gateway's
+  existing Brotli/gzip compression continues to cover the renderer hop.
+
+Regression coverage includes aggregate single-turn overflow, persistence and
+restart, exact response-size bounds, deferred-detail loading, and compressed
+transcript responses.
 
 This document records why a live Cursor native tab can render **Connection
 Failed** with the exact message `cursor interactive snapshot is oversized`, even

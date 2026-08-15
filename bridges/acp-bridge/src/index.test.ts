@@ -2806,7 +2806,7 @@ describe("ACP bridge", () => {
   test("starts a new part when a chunk follows a message trimmed to its notice", async () => {
     const { base, headers } = await spawnBridge({
       // The floor is reached when two parts alone still exceed the budget, and
-      // at 8 MiB the per-part caps do not add up to that. Lowering the budget
+      // at 16 MiB the per-part caps do not add up to that. Lowering the budget
       // is the only way to exercise it; it can only ever move downwards.
       env: { ACP_MAX_TRANSCRIPT_BYTES: String(1024 * 1024) },
     });
@@ -2877,13 +2877,13 @@ describe("ACP bridge", () => {
 
     const assistant = bounded.messages.at(-1)!;
     expect(bounded.error).toBeUndefined();
-    expect(Buffer.byteLength(JSON.stringify(bounded.messages))).toBeLessThanOrEqual(8 * 1024 * 1024);
-    expect(assistant.parts.length).toBeLessThan(18);
+    expect(Buffer.byteLength(JSON.stringify(bounded.messages))).toBeLessThanOrEqual(16 * 1024 * 1024);
+    expect(assistant.parts.length).toBeLessThan(34);
     expect(assistant.parts[0]).toMatchObject({
       type: "text",
       content: expect.stringContaining("Earlier steps in this response were dropped"),
     });
-    expect(assistant.parts.at(-1)).toMatchObject({ toolUseId: "large-17", toolState: "success" });
+    expect(assistant.parts.at(-1)).toMatchObject({ toolUseId: "large-33", toolState: "success" });
     const retainedToolIds = assistant.parts.flatMap((part) =>
       typeof part.toolUseId === "string" ? [part.toolUseId] : []
     );
@@ -2894,7 +2894,7 @@ describe("ACP bridge", () => {
     const restoredAssistant = restored.messages.at(-1)!;
     expect(restored.status).toBe("idle");
     expect(restored.error).toBeUndefined();
-    expect(Buffer.byteLength(JSON.stringify(restored.messages))).toBeLessThanOrEqual(8 * 1024 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(restored.messages))).toBeLessThanOrEqual(16 * 1024 * 1024);
     expect(restoredAssistant.parts[0]).toMatchObject({
       type: "text",
       content: expect.stringContaining("Earlier steps in this response were dropped"),
@@ -2902,6 +2902,16 @@ describe("ACP bridge", () => {
     expect(restoredAssistant.parts.flatMap((part) =>
       typeof part.toolUseId === "string" ? [part.toolUseId] : []
     )).toEqual(retainedToolIds);
+
+    const compressed = await nativeFetch(`${second.base}/session/${created.id}/messages`, {
+      headers: { ...second.headers, "accept-encoding": "gzip" },
+    });
+    expect(compressed.headers.get("content-encoding")).toBe("gzip");
+    expect(compressed.headers.get("vary")).toContain("Accept-Encoding");
+    expect(Number(compressed.headers.get("content-length")))
+      .toBeLessThan(Buffer.byteLength(JSON.stringify(restored.messages)));
+    expect((await compressed.json() as { messages: unknown[] }).messages.length)
+      .toBe(restored.messages.length);
   });
 
   test("fails a structured turn when its parts exhaust the per-message limit", async () => {

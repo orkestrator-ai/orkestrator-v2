@@ -892,6 +892,31 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.queryByRole("button", { name: /\bbash\b/i }) === null).toBe(true);
   });
 
+  test("loads deferred tool output only after the row is expanded", async () => {
+    const loadToolDetails = mock(async (detailRef: string) => ({
+      detailRef,
+      toolOutput: "deferred command output",
+    }));
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "bun test",
+          toolName: "bash",
+          toolArgs: { command: "bun test" },
+          toolState: "success",
+          detailRef: "detail-1",
+        }])}
+        loadToolDetails={loadToolDetails}
+      />,
+    );
+
+    expect(loadToolDetails).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /Run Command/i }));
+    await waitFor(() => expect(loadToolDetails).toHaveBeenCalledWith("detail-1"));
+    expect(await screen.findByText("deferred command output")).toBeTruthy();
+  });
+
   test("shows the derived command beside a custom exec tool", () => {
     render(
       <NativeMessage

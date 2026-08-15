@@ -19,6 +19,7 @@ import { NativeMessage } from "@/components/chat/NativeMessage";
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
 import { formatElapsed } from "@/lib/format-elapsed";
 import type { NativeMessage as NativeMessageType } from "@/lib/chat/native-message-types";
+import type { NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 
 export type NativeConnectionState = "connecting" | "connected" | "error";
@@ -82,6 +83,8 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
   messageActions?: (message: TMessage) => ReactNode;
   /** Maps a backend-confirmed id to the friendly name from this tab's catalog. */
   resolveModelLabel?: (modelId: string) => string;
+  /** Fetches heavy output/diff fields after a tool row is expanded. */
+  loadToolDetails?: (detailRef: string) => Promise<NativeAgentToolDetails>;
   /**
    * Extra content in the dock's top strip, beside the scroll-to-bottom button
    * — Claude's prompt-suggestion chip.
@@ -140,6 +143,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   bottomSpacerClassName = "h-32",
   messageActions,
   resolveModelLabel,
+  loadToolDetails,
   topAccessory,
   centerCompose,
   composer,
@@ -279,6 +283,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
               agentExpansionScope={agentExpansionScope}
               actions={messageActions?.(message)}
               resolveModelLabel={resolveModelLabel}
+              loadToolDetails={loadToolDetails}
             />
           )}
           header={transcriptHeader}

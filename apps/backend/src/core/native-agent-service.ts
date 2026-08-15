@@ -38,6 +38,7 @@ import type {
   NativeAgentSessionAction,
   NativeAgentSessionActionOutcome,
   NativeAgentSlashCommand,
+  NativeAgentToolDetails,
 } from "@orkestrator/protocol/native-agent";
 import { resolveReasoningId } from "@orkestrator/protocol/native-agent";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
@@ -281,7 +282,10 @@ const NATIVE_PROJECTION_MAX_MESSAGES = 512;
  * `NATIVE_PROJECTION_MAX_BYTES`.
  */
 const NATIVE_PROJECTION_MAX_WINDOW_MESSAGES = 4_096;
-const NATIVE_PROJECTION_MAX_BYTES = 8 * 1024 * 1024;
+export const NATIVE_PROJECTION_MAX_BYTES = 16 * 1024 * 1024;
+const NATIVE_TOOL_DETAIL_CACHE_MAX_ENTRIES = 4_096;
+const NATIVE_TOOL_DETAIL_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+const NATIVE_TOOL_DETAIL_MAX_BYTES = 4 * 1024 * 1024;
 const NATIVE_MODEL_CATALOG_TTL_MS = 30_000;
 const NATIVE_MODEL_CATALOG_CACHE_LIMIT = 128;
 const NATIVE_SLASH_COMMAND_TTL_MS = 30_000;
@@ -521,6 +525,13 @@ export class NativeAgentService {
     string,
     NativeAgentProjectionCacheEntry
   >();
+  /** Heavy, reconstructible fields omitted from ordinary renderer snapshots. */
+  private readonly toolDetailCache = new Map<string, {
+    sessionKey: string;
+    details: NativeAgentToolDetails;
+    bytes: number;
+  }>();
+  private toolDetailCacheBytes = 0;
   private readonly modelCatalogCache = new Map<
     string,
     { models: AgentModel[]; expiresAt: number }
@@ -1231,11 +1242,124 @@ export class NativeAgentService {
     return { key, session, provider };
   }
 
+  private cacheToolDetails(
+    sessionKey: string,
+    messageId: string,
+    partPath: string,
+    details: Omit<NativeAgentToolDetails, "detailRef">,
+  ): string {
+    const serializedDetails = JSON.stringify(details);
+    const detailRef = createHash("sha256")
+      .update(`${sessionKey}\0${messageId}\0${partPath}\0${serializedDetails}`)
+      .digest("hex")
+      .slice(0, 32);
+    let stored: NativeAgentToolDetails = { detailRef, ...details };
+    let bytes = Buffer.byteLength(serializedDetails) + detailRef.length + 32;
+    if (bytes > NATIVE_TOOL_DETAIL_MAX_BYTES) {
+      stored = {
+        detailRef,
+        toolError: "Tool details exceeded the deferred display limit.",
+      };
+      bytes = Buffer.byteLength(JSON.stringify(stored));
+    }
+
+    const previous = this.toolDetailCache.get(detailRef);
+    if (previous) this.toolDetailCacheBytes -= previous.bytes;
+    this.toolDetailCache.delete(detailRef);
+    this.toolDetailCache.set(detailRef, { sessionKey, details: stored, bytes });
+    this.toolDetailCacheBytes += bytes;
+    while (
+      this.toolDetailCache.size > NATIVE_TOOL_DETAIL_CACHE_MAX_ENTRIES
+      || this.toolDetailCacheBytes > NATIVE_TOOL_DETAIL_CACHE_MAX_BYTES
+    ) {
+      const oldest = this.toolDetailCache.keys().next().value as string | undefined;
+      if (!oldest) break;
+      const entry = this.toolDetailCache.get(oldest);
+      if (entry) this.toolDetailCacheBytes -= entry.bytes;
+      this.toolDetailCache.delete(oldest);
+    }
+    return detailRef;
+  }
+
+  private projectionPart(
+    sessionKey: string,
+    messageId: string,
+    raw: unknown,
+    partPath: string,
+  ): unknown {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+    const part = raw as Record<string, unknown>;
+    const projected: Record<string, unknown> = { ...part };
+
+    // A staged path is the durable image reference. Re-sending the same image
+    // as an inline data URL on every snapshot only duplicates transport bytes.
+    if (
+      part.type === "file"
+      && typeof part.content === "string"
+      && (
+        part.content.startsWith("/")
+        || part.content.startsWith("file://")
+        || /^[A-Za-z]:[\\/]/.test(part.content)
+      )
+      && typeof part.fileUrl === "string"
+      && part.fileUrl.startsWith("data:image/")
+    ) {
+      delete projected.fileUrl;
+    }
+
+    const rawDiff = part.toolDiff && typeof part.toolDiff === "object"
+      && !Array.isArray(part.toolDiff)
+      ? part.toolDiff as Record<string, unknown>
+      : undefined;
+    const hasHeavyDiff = Boolean(rawDiff && (
+      typeof rawDiff.diff === "string"
+      || typeof rawDiff.before === "string"
+      || typeof rawDiff.after === "string"
+    ));
+    if (
+      typeof part.toolOutput === "string"
+      || typeof part.toolError === "string"
+      || hasHeavyDiff
+    ) {
+      projected.detailRef = this.cacheToolDetails(sessionKey, messageId, partPath, {
+        ...(typeof part.toolOutput === "string" ? { toolOutput: part.toolOutput } : {}),
+        ...(typeof part.toolError === "string" ? { toolError: part.toolError } : {}),
+        ...(rawDiff ? { toolDiff: rawDiff } : {}),
+      });
+      delete projected.toolOutput;
+      delete projected.toolError;
+      if (rawDiff) {
+        projected.toolDiff = {
+          ...(typeof rawDiff.filePath === "string" ? { filePath: rawDiff.filePath } : {}),
+          ...(typeof rawDiff.additions === "number" ? { additions: rawDiff.additions } : {}),
+          ...(typeof rawDiff.deletions === "number" ? { deletions: rawDiff.deletions } : {}),
+        };
+      }
+    }
+
+    for (const field of ["parts", "childTools", "subagentActions"] as const) {
+      if (!Array.isArray(part[field])) continue;
+      projected[field] = part[field].map((child, index) =>
+        this.projectionPart(sessionKey, messageId, child, `${partPath}/${field}/${index}`)
+      );
+    }
+    if (part.task && typeof part.task === "object" && !Array.isArray(part.task)) {
+      projected.task = this.projectionPart(
+        sessionKey,
+        messageId,
+        part.task,
+        `${partPath}/task`,
+      );
+    }
+    return projected;
+  }
+
   private projectionMessages(
+    sessionKey: string,
     messages: unknown[],
     limit: number,
   ): { messages: unknown[]; window: NativeAgentMessageWindow } {
-    const bounded = messages.slice(-limit).map((raw) => {
+    const requested = messages.slice(-limit).map((raw) => {
       const message = raw && typeof raw === "object" && !Array.isArray(raw)
         ? raw as Record<string, unknown>
         : null;
@@ -1256,27 +1380,94 @@ export class NativeAgentService {
         id: message.id,
         role,
         content: message.content,
-        parts: message.parts,
+        parts: message.parts.map((part, index) =>
+          this.projectionPart(sessionKey, message.id as string, part, String(index))
+        ),
         createdAt: message.createdAt,
         ...(typeof message.modelId === "string" ? { modelId: message.modelId } : {}),
         ...(typeof message.turnId === "string" ? { turnId: message.turnId } : {}),
         ...(typeof message.planReview === "boolean" ? { planReview: message.planReview } : {}),
       };
     });
-    let bytes = Number.POSITIVE_INFINITY;
-    try {
-      bytes = Buffer.byteLength(JSON.stringify(bounded));
-    } catch {
-      // The normalized provider contract is JSON. Non-serializable messages
-      // are a transport violation, never something to leak to a renderer.
+    const messageBytes = requested.map((message) => {
+      try {
+        return Buffer.byteLength(JSON.stringify(message));
+      } catch {
+        throw new ProviderUnavailableError(
+          "Provider returned a non-serializable native transcript",
+        );
+      }
+    });
+    let start = 0;
+    let bytes = 2 + messageBytes.reduce((total, size) => total + size, 0)
+      + Math.max(0, messageBytes.length - 1);
+    while (bytes > NATIVE_PROJECTION_MAX_BYTES && start < requested.length - 1) {
+      bytes -= messageBytes[start]! + 1;
+      start += 1;
+    }
+
+    let omittedParts = 0;
+    if (bytes > NATIVE_PROJECTION_MAX_BYTES && requested[start]) {
+      const message = requested[start] as Record<string, unknown>;
+      const parts = Array.isArray(message.parts) ? [...message.parts] : [];
+      while (parts.length > 0 && bytes > NATIVE_PROJECTION_MAX_BYTES) {
+        parts.shift();
+        omittedParts += 1;
+        requested[start] = {
+          ...message,
+          parts,
+        } as (typeof requested)[number];
+        bytes = Buffer.byteLength(JSON.stringify([requested[start]]));
+      }
     }
     if (bytes > NATIVE_PROJECTION_MAX_BYTES) {
-      throw new ProviderUnavailableError("Provider transcript projection is oversized");
+      throw new ProviderUnavailableError(
+        "Provider transcript contains one message body larger than 16 MiB",
+      );
     }
+    const bounded = requested.slice(start);
+    const truncatedByCount = messages.length > requested.length;
+    const truncatedByBytes = start > 0 || omittedParts > 0;
+    const omittedMessages = messages.length - bounded.length;
     return {
       messages: bounded,
-      window: { limit, truncated: messages.length > bounded.length },
+      window: {
+        limit,
+        truncated: truncatedByCount || truncatedByBytes,
+        ...(truncatedByBytes
+          ? {
+              truncationReason: "bytes" as const,
+              ...(omittedMessages > 0 ? { omittedMessages } : {}),
+              ...(omittedParts > 0 ? { omittedParts } : {}),
+            }
+          : truncatedByCount ? { truncationReason: "count" as const } : {}),
+      },
     };
+  }
+
+  async getProjectionToolDetails(
+    input: NativeAgentProjectionInput & { detailRef: string },
+  ): Promise<NativeAgentToolDetails> {
+    this.assertProjectionInput(input);
+    if (!nonBlank(input.detailRef) || input.detailRef.length > 128) {
+      throw new Error("Native agent tool detail reference is invalid");
+    }
+    const sessionKey = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    let entry = this.toolDetailCache.get(input.detailRef);
+    if (!entry || entry.sessionKey !== sessionKey) {
+      await this.refreshProjection(input, true);
+      entry = this.toolDetailCache.get(input.detailRef);
+    }
+    if (!entry || entry.sessionKey !== sessionKey) {
+      throw new Error("Native agent tool details are no longer available");
+    }
+    this.toolDetailCache.delete(input.detailRef);
+    this.toolDetailCache.set(input.detailRef, entry);
+    return entry.details;
   }
 
   /**
@@ -1671,7 +1862,7 @@ export class NativeAgentService {
               : {}),
           }
         : undefined;
-      const transcript = this.projectionMessages(snapshot.messages, messageLimit);
+      const transcript = this.projectionMessages(key, snapshot.messages, messageLimit);
       const terminalNotices = [
         ...(snapshot.notices ?? []).filter(
           (notice) => notice.kind === "error" || notice.kind === "stopped",
@@ -2128,6 +2319,8 @@ export class NativeAgentService {
     this.modelCatalogRefreshes.clear();
     this.slashCommandRefreshes.clear();
     this.projectionCache.clear();
+    this.toolDetailCache.clear();
+    this.toolDetailCacheBytes = 0;
     this.projectionRefreshes.clear();
     this.projectionEpochs.clear();
   }

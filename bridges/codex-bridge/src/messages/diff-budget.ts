@@ -21,7 +21,10 @@
 import type { FileChangeDiffContext, ToolDiffMetadata } from "./types.js";
 
 /**
- * Above this, `before`/`after` are dropped and only the unified diff is kept.
+ * `before`/`after` are only a fallback for providers that could not produce a
+ * unified diff. Once `diff` exists the renderer always prefers it, so shipping
+ * the two whole-file snapshots as well only duplicates payload and retained
+ * memory.
  *
  * The diff is what the UI renders by default; before/after exist for
  * side-by-side. For a 5MB minified bundle the side-by-side view is useless
@@ -62,15 +65,17 @@ export function applyDiffBudget(metadata: ToolDiffMetadata): ToolDiffMetadata {
     diff = `${diff.slice(0, MAX_DIFF_BYTES)}${TRUNCATED_NOTICE}`;
   }
 
-  if (!tooLarge) return { ...metadata, diff };
+  if (!tooLarge && !diff) return { ...metadata, diff };
 
   return {
     filePath: metadata.filePath,
     additions: metadata.additions,
     deletions: metadata.deletions,
     diff,
-    // `before`/`after` deliberately omitted rather than truncated: a half file
-    // rendered in a side-by-side view is worse than no side-by-side view.
+    // `before`/`after` are deliberately omitted when either side is oversized
+    // or a unified diff already carries the same visible information. The
+    // baseline map remains separate, so future edits can still diff against
+    // the previous file state without serializing that state to the renderer.
   };
 }
 

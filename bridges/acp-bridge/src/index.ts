@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { gzipSync } from "node:zlib";
 import {
   PARENT_PID_ENV,
   parseParentPid,
@@ -63,8 +64,8 @@ interface BridgeTextPart {
 /**
  * A prompt attachment as the transcript records it. The bytes are sent to the
  * agent but never kept here: the renderer resolves `fileUrl` for its own
- * preview, and inlining a data URL would spend the whole 8MiB transcript budget
- * on one screenshot.
+ * preview, and inlining a data URL could spend half the 16 MiB transcript
+ * budget on one screenshot.
  */
 interface BridgeFilePart {
   type: "file";
@@ -349,14 +350,14 @@ const MAX_HISTORY_MESSAGE_IDS = 1_024;
 /**
  * The rendered-transcript display budget. Overridable only *downwards*, and
  * only inside a bounded range, so a test can reach the aggregate-trim floor
- * without pushing eight megabytes through a fixture. Nothing can raise it past
+ * without pushing sixteen megabytes through a fixture. Nothing can raise it past
  * the reviewed cap.
  */
 const MAX_TRANSCRIPT_BYTES = parseBoundedInteger(
   process.env.ACP_MAX_TRANSCRIPT_BYTES,
-  8 * 1024 * 1024,
+  (16 * 1024 * 1024) - (128 * 1024),
   1024 * 1024,
-  8 * 1024 * 1024,
+  (16 * 1024 * 1024) - (128 * 1024),
 );
 const MAX_MESSAGE_TEXT_BYTES = 2 * 1024 * 1024;
 const MAX_PARTS_PER_MESSAGE = 512;
@@ -404,7 +405,7 @@ const MAX_DIFF_EDIT_DISTANCE = 512;
  * Unchanged lines kept either side of a change. Rendering every line instead
  * billed the *whole file* per edit: a one-line change to a 200KiB source file
  * produced a 4,993-line "diff" of which 4,989 lines were untouched context, and
- * 58 such edits exhausted the 8MiB transcript budget in a single turn.
+ * 58 such edits exhausted the former 8 MiB transcript budget in a single turn.
  */
 const DIFF_CONTEXT_LINES = 3;
 const MAX_SESSIONS = parseBoundedInteger(process.env.ACP_MAX_SESSIONS, 256, 1, 256);
@@ -2439,7 +2440,7 @@ function normalizeAcpContentDiff(value: JsonObject): BridgeToolDiff | undefined 
   // The file states are only ever rendered as the fallback for a part that has
   // no diff at all: the renderer treats `diff` as authoritative the moment it
   // exists. Keeping them alongside one stored two more whole copies of the file
-  // per edit — 5.3MiB of one 8MiB transcript — that nothing would ever read.
+  // per edit — 5.3 MiB in the original incident — that nothing would ever read.
   const keepFileStates = keepInline && diff === undefined;
   return {
     ...(filePath ? { filePath } : {}),
@@ -2799,7 +2800,7 @@ function boundTranscript(state: SessionState): boolean {
   if (bytes > MAX_TRANSCRIPT_BYTES) {
     // One part alone is over the whole-transcript budget, so nothing left to
     // drop can bring it back under and the bound is genuinely unenforceable.
-    // Every part is individually capped well below 8MiB, so this is a backstop
+    // Every part is individually capped well below 16 MiB, so this is a backstop
     // against a future cap being raised, not a state the agents can reach.
     state.outputTruncated = true;
     state.status = "error";
@@ -2831,6 +2832,27 @@ function publicSession(state: SessionState): JsonObject {
   };
 }
 
+function boundTranscriptForRead(state: SessionState): void {
+  const previousBaseIndex = state.droppedMessages;
+  const previousPartCount = state.messages.reduce(
+    (total, message) => total + message.parts.length,
+    0,
+  );
+  const truncatedCurrentMessage = boundTranscript(state);
+  const nextPartCount = state.messages.reduce(
+    (total, message) => total + message.parts.length,
+    0,
+  );
+  if (
+    truncatedCurrentMessage
+    || state.droppedMessages !== previousBaseIndex
+    || nextPartCount !== previousPartCount
+  ) {
+    state.revision += 1;
+    schedulePersist();
+  }
+}
+
 /**
  * The neutral usage snapshot, or nothing at all. Cursor reports no token counts
  * whatsoever, and an empty meter reading "0 tokens" would claim a measurement
@@ -2850,7 +2872,7 @@ function publicContextUsage(state: SessionState) {
  * Incremental transcript read. Only the last message mutates (its parts grow as
  * chunks arrive), so a client re-requests from its own last index and receives
  * that message plus anything newer — never the whole transcript, which is
- * bounded at 8 MiB and would otherwise be re-sent on every poll.
+ * bounded below 16 MiB and would otherwise be re-sent on every poll.
  */
 function messageWindow(state: SessionState, fromIndex: number | null): JsonObject {
   const start = fromIndex === null
@@ -2860,10 +2882,15 @@ function messageWindow(state: SessionState, fromIndex: number | null): JsonObjec
     messages: state.messages.slice(start),
     baseIndex: state.droppedMessages + start,
     totalMessages: state.droppedMessages + state.messages.length,
+    messageWindow: {
+      truncated: state.droppedMessages + start > 0,
+      ...(state.droppedMessages + start > 0
+        ? { omittedMessages: state.droppedMessages + start }
+        : {}),
+    },
     revision: state.revision,
     status: state.status,
     error: state.error,
-    composer: state.sessionConfig.composer,
   };
 }
 
@@ -2960,16 +2987,23 @@ async function route(
     return json(response, 404, { error: "Session not found" });
   }
   const action = match[2];
-  if (!action && request.method === "GET") return json(response, 200, publicSession(state));
+  if (!action && request.method === "GET") {
+    boundTranscriptForRead(state);
+    return json(response, 200, publicSession(state));
+  }
   if (action === "messages" && request.method === "GET") {
+    boundTranscriptForRead(state);
     return json(response, 200, messageWindow(state, parseFromIndex(url.searchParams.get("fromIndex"))));
   }
   if (action === "status" && request.method === "GET") {
+    const contextUsage = publicContextUsage(state);
     return json(response, 200, {
       status: state.status,
       error: state.error,
       revision: state.revision,
       composer: state.sessionConfig.composer,
+      ...(contextUsage ? { contextUsage } : {}),
+      runtime: publicRuntime(state),
     });
   }
   if (action === "config" && request.method === "GET") {
@@ -3320,10 +3354,40 @@ async function readJson(request: IncomingMessage): Promise<JsonObject> {
   return parsed;
 }
 
+const RESPONSE_ACCEPTS_GZIP = Symbol("responseAcceptsGzip");
+
+function acceptsGzip(value: string | string[] | undefined): boolean {
+  const header = Array.isArray(value) ? value.join(",") : value ?? "";
+  return header.split(",").some((entry) => {
+    const [name, ...parameters] = entry.trim().toLowerCase().split(";");
+    if (name !== "gzip" && name !== "*") return false;
+    const quality = parameters
+      .map((parameter) => parameter.trim())
+      .find((parameter) => parameter.startsWith("q="));
+    return quality === undefined || Number(quality.slice(2)) > 0;
+  });
+}
+
 function json(response: ServerResponse, status: number, value: unknown): void {
   if (response.headersSent || response.destroyed) return;
-  response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-  response.end(JSON.stringify(value));
+  const body = Buffer.from(JSON.stringify(value));
+  const shouldCompress = body.byteLength >= 1024
+    && (response as ServerResponse & { [RESPONSE_ACCEPTS_GZIP]?: boolean })[
+      RESPONSE_ACCEPTS_GZIP
+    ] === true;
+  const encoded = shouldCompress ? gzipSync(body, { level: 6 }) : body;
+  const existingVary = response.getHeader("Vary");
+  const vary = typeof existingVary === "string" && existingVary.trim()
+    ? `${existingVary}, Accept-Encoding`
+    : "Accept-Encoding";
+  response.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+    "content-length": String(encoded.byteLength),
+    vary,
+    ...(shouldCompress ? { "content-encoding": "gzip" } : {}),
+  });
+  response.end(encoded);
 }
 
 function isObject(value: unknown): value is JsonObject {
@@ -3995,8 +4059,8 @@ function normalizeBridgeToolDiff(value: unknown): BridgeToolDiff | undefined {
     ...(filePath ? { filePath } : {}),
     ...(additions !== undefined ? { additions } : {}),
     ...(deletions !== undefined ? { deletions } : {}),
-    ...(keepInline && before !== undefined ? { before } : {}),
-    ...(keepInline && after !== undefined ? { after } : {}),
+    ...(keepInline && diff === undefined && before !== undefined ? { before } : {}),
+    ...(keepInline && diff === undefined && after !== undefined ? { after } : {}),
     ...(diff !== undefined ? { diff } : {}),
   };
 }
@@ -4008,6 +4072,9 @@ function isStringTuple(value: unknown): value is [string, unknown] {
 await restorePersistedState();
 
 const server = createServer((request, response) => {
+  (response as ServerResponse & { [RESPONSE_ACCEPTS_GZIP]?: boolean })[
+    RESPONSE_ACCEPTS_GZIP
+  ] = acceptsGzip(request.headers["accept-encoding"]);
   if (!applyOriginPolicy(request, response)) return;
   const controller = new AbortController();
   const abortDisconnectedClient = () => {

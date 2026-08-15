@@ -79,6 +79,7 @@ import {
 } from "@/lib/chat/image-preview-cache";
 import { writeText } from "@/lib/native/clipboard";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
+import type { NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
 
 /** Custom link component that opens URLs in the system browser */
 function ExternalLink({
@@ -127,9 +128,47 @@ interface NativeMessageProps {
   agentExpansionScope?: string;
   actions?: ReactNode;
   resolveModelLabel?: (modelId: string) => string;
+  loadToolDetails?: (detailRef: string) => Promise<NativeAgentToolDetails>;
 }
 
 const MessageExpansionScopeContext = createContext("native-message");
+const ToolDetailLoaderContext = createContext<
+  ((detailRef: string) => Promise<NativeAgentToolDetails>) | undefined
+>(undefined);
+const TOOL_DETAIL_BROWSER_CACHE_MAX_ENTRIES = 256;
+const TOOL_DETAIL_BROWSER_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+const toolDetailBrowserCache = new Map<string, {
+  details: NativeAgentToolDetails;
+  bytes: number;
+}>();
+let toolDetailBrowserCacheBytes = 0;
+
+function cachedToolDetails(detailRef: string): NativeAgentToolDetails | undefined {
+  const entry = toolDetailBrowserCache.get(detailRef);
+  if (!entry) return undefined;
+  toolDetailBrowserCache.delete(detailRef);
+  toolDetailBrowserCache.set(detailRef, entry);
+  return entry.details;
+}
+
+function cacheToolDetails(details: NativeAgentToolDetails): void {
+  const bytes = new TextEncoder().encode(JSON.stringify(details)).byteLength;
+  const previous = toolDetailBrowserCache.get(details.detailRef);
+  if (previous) toolDetailBrowserCacheBytes -= previous.bytes;
+  toolDetailBrowserCache.delete(details.detailRef);
+  toolDetailBrowserCache.set(details.detailRef, { details, bytes });
+  toolDetailBrowserCacheBytes += bytes;
+  while (
+    toolDetailBrowserCache.size > TOOL_DETAIL_BROWSER_CACHE_MAX_ENTRIES
+    || toolDetailBrowserCacheBytes > TOOL_DETAIL_BROWSER_CACHE_MAX_BYTES
+  ) {
+    const oldest = toolDetailBrowserCache.keys().next().value;
+    if (!oldest) break;
+    const entry = toolDetailBrowserCache.get(oldest);
+    if (entry) toolDetailBrowserCacheBytes -= entry.bytes;
+    toolDetailBrowserCache.delete(oldest);
+  }
+}
 
 function getAgentExpansionKey(
   part: NativeAgentActivityPart,
@@ -1776,6 +1815,86 @@ function TaskGroupPart({
   );
 }
 
+function DeferredToolMessagePart({
+  part,
+  partKey,
+  showTextCopy,
+  truncateUserPrompt,
+  renderJsonPayload,
+  containerId,
+  eagerImagePreview,
+}: {
+  part: Extract<NativeMessagePart, { type: "tool-invocation" }>;
+  partKey: string;
+  showTextCopy: boolean;
+  truncateUserPrompt: boolean;
+  renderJsonPayload: boolean;
+  containerId?: string;
+  eagerImagePreview: boolean;
+}) {
+  const loadToolDetails = useContext(ToolDetailLoaderContext);
+  const expansionScope = useContext(MessageExpansionScopeContext);
+  const expansionKey = `native-tool:${expansionScope}:${getToolExpansionKey(part, partKey)}`;
+  const [isOpen] = useMessagePartExpansion(expansionKey);
+  const detailRef = part.detailRef!;
+  const [details, setDetails] = useState<NativeAgentToolDetails | undefined>(
+    () => cachedToolDetails(detailRef),
+  );
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const cached = cachedToolDetails(detailRef);
+    if (cached) {
+      setDetails(cached);
+      setLoadError(null);
+      return;
+    }
+    setDetails(undefined);
+    setLoadError(null);
+  }, [detailRef]);
+
+  useEffect(() => {
+    if (!isOpen || details || loadError || !loadToolDetails) return;
+    let cancelled = false;
+    void loadToolDetails(detailRef)
+      .then((loaded) => {
+        if (cancelled) return;
+        cacheToolDetails(loaded);
+        setDetails(loaded);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setLoadError(error instanceof Error ? error.message : "Tool details are unavailable");
+      });
+    return () => { cancelled = true; };
+  }, [detailRef, details, isOpen, loadError, loadToolDetails]);
+
+  const materialized: Extract<NativeMessagePart, { type: "tool-invocation" }> = {
+    ...part,
+    detailRef: undefined,
+    ...(details?.toolOutput !== undefined
+      ? { toolOutput: details.toolOutput }
+      : details ? {} : {
+          toolOutput: loadError ?? (isOpen ? "Loading tool details…" : "Details load when expanded."),
+        }),
+    ...(details?.toolError !== undefined ? { toolError: details.toolError } : {}),
+    ...(details?.toolDiff ? {
+      toolDiff: { ...part.toolDiff, ...details.toolDiff },
+    } : {}),
+  };
+  return (
+    <MessagePart
+      part={materialized}
+      partKey={partKey}
+      showTextCopy={showTextCopy}
+      truncateUserPrompt={truncateUserPrompt}
+      renderJsonPayload={renderJsonPayload}
+      containerId={containerId}
+      eagerImagePreview={eagerImagePreview}
+    />
+  );
+}
+
 /** Render a single message part based on its type */
 function MessagePart({
   part,
@@ -1795,7 +1914,21 @@ function MessagePart({
   /** Stable identity for this part's position, used to persist expansion state. */
   partKey: string;
 }) {
+  const loadToolDetails = useContext(ToolDetailLoaderContext);
   const expansionScope = useContext(MessageExpansionScopeContext);
+  if (part.type === "tool-invocation" && part.detailRef && loadToolDetails) {
+    return (
+      <DeferredToolMessagePart
+        part={part}
+        partKey={partKey}
+        showTextCopy={showTextCopy}
+        truncateUserPrompt={truncateUserPrompt}
+        renderJsonPayload={renderJsonPayload}
+        containerId={containerId}
+        eagerImagePreview={eagerImagePreview}
+      />
+    );
+  }
   const toolExpansionKey = part.type === "tool-invocation"
     ? `native-tool:${expansionScope}:${getToolExpansionKey(part, partKey)}`
     : "";
@@ -1904,6 +2037,7 @@ export const NativeMessage = memo(function NativeMessage({
   agentExpansionScope,
   actions: messageActions,
   resolveModelLabel,
+  loadToolDetails,
 }: NativeMessageProps) {
   const normalizedMessage = useMemo(() => normalizeNativeMessage(message), [message]);
   const normalizedPreviousMessage = useMemo(
@@ -2051,8 +2185,9 @@ export const NativeMessage = memo(function NativeMessage({
   }
 
   return (
-    <MessageExpansionScopeContext.Provider value={messageAgentExpansionScope}>
-      <MessageShell
+    <ToolDetailLoaderContext.Provider value={loadToolDetails}>
+      <MessageExpansionScopeContext.Provider value={messageAgentExpansionScope}>
+        <MessageShell
         isUser={isUser}
         authorLabel={
           isUser
@@ -2089,8 +2224,9 @@ export const NativeMessage = memo(function NativeMessage({
             expansionKey={`${message.id}-content/json`}
           />
         )}
-      </MessageShell>
-    </MessageExpansionScopeContext.Provider>
+        </MessageShell>
+      </MessageExpansionScopeContext.Provider>
+    </ToolDetailLoaderContext.Provider>
   );
 });
 

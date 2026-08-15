@@ -196,7 +196,10 @@ function resetPersistenceMocks(): void {
 }
 
 // Import the route after mocking
-import session from "./session.js";
+import session, {
+  boundClaudeTranscriptResponse,
+  MAX_CLAUDE_TRANSCRIPT_RESPONSE_BYTES,
+} from "./session.js";
 
 // Mount on a test app
 const app = new Hono();
@@ -510,6 +513,24 @@ describe("session routes", () => {
       expect(res.status).toBe(200);
       const data = await jsonBody(res);
       expect(data.messages).toHaveLength(1);
+      expect(data.messageWindow).toEqual({ truncated: false });
+    });
+
+    test("bounds aggregate transcript responses by dropping the oldest messages", () => {
+      const messages = Array.from({ length: 20 }, (_, index) => ({
+        id: `message-${index}`,
+        role: "assistant" as const,
+        content: String(index),
+        parts: [{ type: "text" as const, content: "x".repeat(1024 * 1024) }],
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }));
+      const bounded = boundClaudeTranscriptResponse(messages);
+
+      expect(Buffer.byteLength(JSON.stringify(bounded)))
+        .toBeLessThanOrEqual(MAX_CLAUDE_TRANSCRIPT_RESPONSE_BYTES);
+      expect(bounded.messageWindow).toMatchObject({ truncated: true });
+      expect(bounded.messages.at(-1)?.id).toBe("message-19");
+      expect(bounded.messages[0]?.id).not.toBe("message-0");
     });
 
     test("returns 404 for unknown session", async () => {

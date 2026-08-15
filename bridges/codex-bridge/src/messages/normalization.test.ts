@@ -310,7 +310,7 @@ describe("getFileChangeDiffMetadata", () => {
 });
 
 describe("command normalization bounds", () => {
-  test("caps oversized authoritative command output for both output and error", async () => {
+  test("caps oversized failed command output without duplicating it", async () => {
     const oversized = "x".repeat(DEFAULT_MAX_COMMAND_OUTPUT_CHARS + 10);
     const [part] = await itemToParts({
       id: "command",
@@ -320,14 +320,13 @@ describe("command normalization bounds", () => {
       status: "failed",
     }, "/tmp");
 
-    expect(part?.toolOutput?.length).toBeLessThan(oversized.length);
+    expect(part?.toolOutput).toBeUndefined();
     // The cap is a memory bound, so the truncated result must fit *inside* it —
     // appending the notice must not push it back over.
-    expect(part?.toolOutput?.length).toBeLessThanOrEqual(
+    expect(part?.toolError?.length).toBeLessThanOrEqual(
       DEFAULT_MAX_COMMAND_OUTPUT_CHARS,
     );
-    expect(part?.toolOutput).toEndWith("… output truncated");
-    expect(part?.toolError).toBe(part?.toolOutput);
+    expect(part?.toolError).toEndWith("… output truncated");
   });
 
   test("passes output of exactly the cap through untouched", async () => {

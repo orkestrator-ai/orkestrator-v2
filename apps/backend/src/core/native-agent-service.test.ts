@@ -31,6 +31,7 @@ import type { Environment } from "./models.js";
 import {
   isAgentTurnEndTransition,
   NATIVE_PROJECTION_CACHE_LIMIT,
+  NATIVE_PROJECTION_MAX_BYTES,
   NativeAgentService,
   nativeAgentSessionStorageKey,
   type AgentInteractionObservation,
@@ -1567,7 +1568,11 @@ describe("NativeAgentService", () => {
       await service.ensureSession(identity);
       const bounded = await service.getProjection(identity);
       expect(bounded?.messages).toHaveLength(512);
-      expect(bounded?.messageWindow).toEqual({ limit: 512, truncated: true });
+      expect(bounded?.messageWindow).toEqual({
+        limit: 512,
+        truncated: true,
+        truncationReason: "count",
+      });
 
       const expanded = await service.getProjection({ ...identity, messageLimit: 1_024 });
       expect(expanded?.messages).toHaveLength(600);
@@ -1577,6 +1582,117 @@ describe("NativeAgentService", () => {
       // inherits the expanded window instead of collapsing the tab's view.
       const inherited = await service.getProjection(identity);
       expect(inherited?.messages).toHaveLength(600);
+    });
+  });
+
+  test("defers heavy tool fields and removes a staged image data URL", async () => {
+    const messages = [{
+      id: "user-1",
+      role: "user" as const,
+      content: "see image",
+      parts: [{
+        type: "file",
+        content: "/workspace/.orkestrator/initial-prompt/image.png",
+        fileUrl: `data:image/png;base64,${"a".repeat(64_000)}`,
+      }, {
+        type: "file",
+        content: "clipboard.png",
+        fileUrl: "data:image/png;base64,still-required",
+      }],
+      createdAt: "2026-08-15T10:00:00.000Z",
+    }, {
+      id: "assistant-1",
+      role: "assistant" as const,
+      content: "done",
+      parts: [{
+        type: "tool-invocation",
+        content: "src/a.ts",
+        toolName: "apply_patch",
+        toolState: "success",
+        toolOutput: "updated src/a.ts",
+        toolDiff: {
+          filePath: "/workspace/src/a.ts",
+          additions: 1,
+          deletions: 1,
+          before: "old",
+          after: "new",
+          diff: "-old\n+new",
+        },
+      }],
+      createdAt: "2026-08-15T10:00:01.000Z",
+    }];
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages }),
+    });
+    await withService({
+      prefix: "orkestrator-native-deferred-tool-details-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-details",
+      };
+      await service.ensureSession(identity);
+      const projection = await service.getProjection(identity);
+      const projected = projection?.messages as Array<{
+        parts: Array<Record<string, unknown>>;
+      }>;
+      expect(projected[0]?.parts[0]?.fileUrl).toBeUndefined();
+      expect(projected[0]?.parts[1]?.fileUrl).toBe(
+        "data:image/png;base64,still-required",
+      );
+      const tool = projected[1]?.parts[0];
+      expect(tool?.toolOutput).toBeUndefined();
+      expect(tool?.toolDiff).toEqual({
+        filePath: "/workspace/src/a.ts",
+        additions: 1,
+        deletions: 1,
+      });
+      expect(tool?.detailRef).toBeString();
+
+      const details = await service.getProjectionToolDetails({
+        ...identity,
+        detailRef: tool!.detailRef as string,
+      });
+      expect(details).toMatchObject({
+        toolOutput: "updated src/a.ts",
+        toolDiff: { before: "old", after: "new", diff: "-old\n+new" },
+      });
+    });
+  });
+
+  test("uses a byte-aware tail instead of failing an oversized projection", async () => {
+    const messages = Array.from({ length: 20 }, (_, index) => ({
+      id: `message-${index}`,
+      role: "assistant" as const,
+      content: String(index).repeat(1024 * 1024),
+      parts: [],
+      createdAt: "2026-08-15T10:00:00.000Z",
+    }));
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages }),
+    });
+    await withService({
+      prefix: "orkestrator-native-byte-window-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-byte-window",
+      };
+      await service.ensureSession(identity);
+      const projection = await service.getProjection(identity);
+      expect(projection?.connection).toBe("connected");
+      expect(projection?.messageWindow).toMatchObject({
+        truncated: true,
+        truncationReason: "bytes",
+      });
+      expect(Buffer.byteLength(JSON.stringify(projection?.messages)))
+        .toBeLessThanOrEqual(NATIVE_PROJECTION_MAX_BYTES);
+      expect(projection?.messages.length).toBeLessThan(messages.length);
+      expect((projection?.messages.at(-1) as { id?: string })?.id).toBe("message-19");
     });
   });
 

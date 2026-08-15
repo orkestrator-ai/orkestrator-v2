@@ -1,5 +1,29 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight, RefreshCw, Star, Zap } from "lucide-react";
+import {
+  useCallback,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MutableRefObject,
+} from "react";
+import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { ChevronDown, ChevronLeft, ChevronRight, GripVertical, RefreshCw, Star, Zap } from "lucide-react";
+import { favoriteModelKey, reorderFavoriteModels } from "@/hooks/useAgentModelFavorites";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,6 +51,7 @@ interface AgentModelPickerProps {
   favorites?: AgentModelRef[];
   onPlatformChange?: (platform: AgentPlatform) => void;
   onToggleFavorite?: (model: AgentModel) => void;
+  onReorderFavorites?: (favorites: AgentModelRef[]) => void;
   /**
    * Applies a chosen model and its platform in one update.
    *
@@ -61,6 +86,8 @@ const VISIBLE_MODEL_ROWS = 5;
  * belonging to the model name.
  */
 const RADIO_ROW_CLASS = "items-start py-2 [&>span:first-child]:top-2 [&>span:first-child]:h-5";
+const FAVORITE_LONG_PRESS_MS = 400;
+const FAVORITE_DRAG_TOLERANCE_PX = 8;
 type MobileSubmenu = "reasoning" | "speed";
 
 const PLATFORM_LABELS: Record<AgentPlatform, string> = {
@@ -75,6 +102,191 @@ function PlatformIcon({ platform }: { platform: AgentPlatform }) {
   return <AgentPlatformIcon platform={platform} className="size-4" />;
 }
 
+function modelRowKey(model: AgentModel): string {
+  return `${model.platform}:${model.id}`;
+}
+
+function ModelRow({
+  model,
+  isFavorite,
+  disabled,
+  sortable = false,
+  suppressSelectRef,
+  onToggleFavorite,
+}: {
+  model: AgentModel;
+  isFavorite: boolean;
+  disabled?: boolean;
+  sortable?: boolean;
+  suppressSelectRef?: MutableRefObject<boolean>;
+  onToggleFavorite?: (model: AgentModel) => void;
+}) {
+  const modelKey = modelRowKey(model);
+  return (
+    <div className="relative">
+      <DropdownMenuRadioItem
+        value={modelKey}
+        disabled={disabled || model.description === "Unavailable in the current catalog"}
+        onSelect={(event) => {
+          if (suppressSelectRef?.current) event.preventDefault();
+        }}
+        className={cn(
+          MODEL_ROW_HEIGHT_CLASS,
+          RADIO_ROW_CLASS,
+          onToggleFavorite && "pr-9",
+          sortable && "cursor-grab active:cursor-grabbing",
+        )}
+      >
+        {sortable ? (
+          <GripVertical
+            aria-hidden="true"
+            className="mt-0.5 size-3.5 shrink-0 self-center text-muted-foreground/70"
+          />
+        ) : null}
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="min-w-0 truncate text-sm font-medium">{model.label}</span>
+          </span>
+          <span className="truncate text-[10px] text-muted-foreground/80">
+            {model.providerLabel ?? PLATFORM_LABELS[model.platform]}
+          </span>
+        </span>
+      </DropdownMenuRadioItem>
+      {onToggleFavorite ? (
+        <button
+          type="button"
+          aria-label={`${isFavorite ? "Remove" : "Add"} ${model.label} ${isFavorite ? "from" : "to"} favorites`}
+          aria-pressed={isFavorite}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onToggleFavorite(model);
+          }}
+          className="absolute right-1 top-1/2 z-10 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-amber-400"
+        >
+          <Star className={cn("size-3.5", isFavorite && "fill-amber-400 text-amber-400")} />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function SortableModelRow({
+  model,
+  isFavorite,
+  disabled,
+  suppressSelectRef,
+  onToggleFavorite,
+}: Omit<Parameters<typeof ModelRow>[0], "sortable">) {
+  const modelKey = modelRowKey(model);
+  const { setNodeRef, listeners, transform, transition, isDragging } = useSortable({
+    id: modelKey,
+  });
+  return (
+    <div
+      ref={setNodeRef}
+      data-favorite-sortable={modelKey}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={cn("select-none", isDragging && "z-10 opacity-50")}
+      onContextMenu={(event) => event.preventDefault()}
+      {...listeners}
+    >
+      <ModelRow
+        model={model}
+        isFavorite={isFavorite}
+        disabled={disabled}
+        sortable
+        suppressSelectRef={suppressSelectRef}
+        onToggleFavorite={onToggleFavorite}
+      />
+    </div>
+  );
+}
+
+function SortableFavoriteItems({
+  models,
+  favorites,
+  selectedModelKey,
+  disabled,
+  isMobile,
+  onSelect,
+  onToggleFavorite,
+  onReorderFavorites,
+}: {
+  models: AgentModel[];
+  favorites: AgentModelRef[];
+  selectedModelKey: string;
+  disabled?: boolean;
+  isMobile: boolean;
+  onSelect: (model: AgentModel) => void;
+  onToggleFavorite?: (model: AgentModel) => void;
+  onReorderFavorites: (favorites: AgentModelRef[]) => void;
+}) {
+  const suppressSelectRef = useRef(false);
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: isMobile
+        ? { delay: FAVORITE_LONG_PRESS_MS, tolerance: FAVORITE_DRAG_TOLERANCE_PX }
+        : { distance: FAVORITE_DRAG_TOLERANCE_PX },
+    }),
+  );
+  const favoriteKeys = new Set(favorites.map(favoriteModelKey));
+  const itemIds = models.map(modelRowKey);
+  const clearSuppressSelect = () => {
+    window.setTimeout(() => {
+      suppressSelectRef.current = false;
+    }, 0);
+  };
+  const handleDragStart = () => {
+    suppressSelectRef.current = true;
+  };
+  const handleDragEnd = (event: DragEndEvent) => {
+    const overId = event.over?.id;
+    if (overId != null) {
+      const next = reorderFavoriteModels(favorites, String(event.active.id), String(overId));
+      if (next) onReorderFavorites(next);
+    }
+    clearSuppressSelect();
+  };
+
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      onDragCancel={clearSuppressSelect}
+    >
+      <SortableContext items={itemIds} strategy={verticalListSortingStrategy}>
+        <DropdownMenuRadioGroup
+          value={selectedModelKey}
+          onValueChange={(modelKey) => {
+            if (suppressSelectRef.current) return;
+            const model = models.find((candidate) => modelRowKey(candidate) === modelKey);
+            if (!model) return;
+            onSelect(model);
+          }}
+        >
+          {models.map((model) => (
+            <SortableModelRow
+              key={modelRowKey(model)}
+              model={model}
+              isFavorite={favoriteKeys.has(modelRowKey(model))}
+              disabled={disabled}
+              suppressSelectRef={suppressSelectRef}
+              onToggleFavorite={onToggleFavorite}
+            />
+          ))}
+        </DropdownMenuRadioGroup>
+      </SortableContext>
+    </DndContext>
+  );
+}
+
 function ModelItems({
   models,
   selectedModelId,
@@ -83,71 +295,65 @@ function ModelItems({
   onSelect,
   emptyLabel = "No models available",
   favorites = [],
+  sortable = false,
+  isMobile = false,
   onToggleFavorite,
+  onReorderFavorites,
 }: Pick<
   AgentModelPickerProps,
-  "models" | "selectedModelId" | "selectedPlatform" | "disabled" | "favorites" | "onToggleFavorite"
-> & { emptyLabel?: string; onSelect: (model: AgentModel) => void }) {
-  const favoriteKeys = new Set(favorites.map((favorite) => `${favorite.platform}:${favorite.modelId}`));
+  | "models"
+  | "selectedModelId"
+  | "selectedPlatform"
+  | "disabled"
+  | "favorites"
+  | "onToggleFavorite"
+  | "onReorderFavorites"
+> & {
+  emptyLabel?: string;
+  sortable?: boolean;
+  isMobile?: boolean;
+  onSelect: (model: AgentModel) => void;
+}) {
+  const favoriteKeys = new Set(favorites.map(favoriteModelKey));
   const selectedModelKey = selectedModelId
     ? `${selectedPlatform ?? models.find((model) => model.id === selectedModelId)?.platform}:${selectedModelId}`
     : "";
   if (models.length === 0) {
     return <DropdownMenuItem disabled>{emptyLabel}</DropdownMenuItem>;
   }
+  if (sortable && onReorderFavorites) {
+    return (
+      <SortableFavoriteItems
+        models={models}
+        favorites={favorites}
+        selectedModelKey={selectedModelKey}
+        disabled={disabled}
+        isMobile={isMobile}
+        onSelect={onSelect}
+        onToggleFavorite={onToggleFavorite}
+        onReorderFavorites={onReorderFavorites}
+      />
+    );
+  }
 
   return (
     <DropdownMenuRadioGroup
       value={selectedModelKey}
       onValueChange={(modelKey) => {
-        const model = models.find(
-          (candidate) => `${candidate.platform}:${candidate.id}` === modelKey,
-        );
+        const model = models.find((candidate) => modelRowKey(candidate) === modelKey);
         if (!model) return;
         onSelect(model);
       }}
     >
-      {models.map((model) => {
-        const modelKey = `${model.platform}:${model.id}`;
-        const isFavorite = favoriteKeys.has(modelKey);
-        return (
-          <div key={modelKey} className="relative">
-            <DropdownMenuRadioItem
-              value={modelKey}
-              disabled={disabled || model.description === "Unavailable in the current catalog"}
-              className={cn(MODEL_ROW_HEIGHT_CLASS, RADIO_ROW_CLASS, onToggleFavorite && "pr-9")}
-            >
-              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <span className="min-w-0 truncate text-sm font-medium">{model.label}</span>
-                </span>
-                <span className="truncate text-[10px] text-muted-foreground/80">
-                  {model.providerLabel ?? PLATFORM_LABELS[model.platform]}
-                </span>
-              </span>
-            </DropdownMenuRadioItem>
-            {onToggleFavorite ? (
-              <button
-                type="button"
-                aria-label={`${isFavorite ? "Remove" : "Add"} ${model.label} ${isFavorite ? "from" : "to"} favorites`}
-                aria-pressed={isFavorite}
-                onPointerDown={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                }}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  onToggleFavorite(model);
-                }}
-                className="absolute right-1 top-1/2 z-10 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-amber-400"
-              >
-                <Star className={cn("size-3.5", isFavorite && "fill-amber-400 text-amber-400")} />
-              </button>
-            ) : null}
-          </div>
-        );
-      })}
+      {models.map((model) => (
+        <ModelRow
+          key={modelRowKey(model)}
+          model={model}
+          isFavorite={favoriteKeys.has(modelRowKey(model))}
+          disabled={disabled}
+          onToggleFavorite={onToggleFavorite}
+        />
+      ))}
     </DropdownMenuRadioGroup>
   );
 }
@@ -237,6 +443,7 @@ export function AgentModelPicker({
   favorites = [],
   onPlatformChange,
   onToggleFavorite,
+  onReorderFavorites,
   onModelSelect,
   selectedModelId,
   selectedModelLabel,
@@ -253,9 +460,7 @@ export function AgentModelPicker({
   onRefreshModels,
 }: AgentModelPickerProps) {
   const [search, setSearch] = useState("");
-  const [catalogView, setCatalogView] = useState<AgentPlatform | "favorites">(
-    selectedPlatform ?? models[0]?.platform ?? "favorites",
-  );
+  const [catalogView, setCatalogView] = useState<AgentPlatform | "favorites">("favorites");
   const [mobileSubmenu, setMobileSubmenu] = useState<MobileSubmenu | null>(null);
   const mobileViewId = useId();
   const mobileReasoningTriggerRef = useRef<HTMLDivElement>(null);
@@ -271,9 +476,6 @@ export function AgentModelPicker({
     () => enabledPlatforms ?? Array.from(new Set(models.map((model) => model.platform))),
     [enabledPlatforms, models],
   );
-  useEffect(() => {
-    if (selectedPlatform) setCatalogView(selectedPlatform);
-  }, [selectedPlatform]);
   // The one place that decides how a model choice reaches the consumer, so the
   // rendered lists cannot disagree about it.
   const commitModelSelection = useCallback(
@@ -328,7 +530,7 @@ export function AgentModelPicker({
       ?.querySelector<HTMLElement>("[role='menuitemradio'], [role='menuitem']")
       ?.focus();
   }, [catalogView]);
-  const handleCatalogKeyDown = (event: React.KeyboardEvent) => {
+  const handleCatalogKeyDown = (event: ReactKeyboardEvent) => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     // A rail that cannot move — one platform, or a locked selection — leaves the
     // key to whatever else would have handled it rather than swallowing it.
@@ -363,6 +565,11 @@ export function AgentModelPicker({
     : `${selectedModelLabel}${fastModeEnabled ? " (⚡)" : fastModeUnknown ? " (speed unknown)" : ""}`;
   const moreModelCount = Math.max(0, visibleModels.length - VISIBLE_MODEL_ROWS);
   const showSpeedControls = Boolean(onFastModeChange);
+  const canReorderFavorites = catalogView === "favorites"
+    && Boolean(onReorderFavorites)
+    && !normalizedSearch
+    && visibleModels.length > 1;
+  const favoriteEmptyLabel = normalizedSearch ? "No matches" : "No favorite models";
   const choiceLabels = [
     "model",
     showReasoningControls ? "reasoning" : null,
@@ -410,6 +617,7 @@ export function AgentModelPicker({
           setSearch("");
           setMobileSubmenu(null);
           mobileReturnFocusRef.current = null;
+          setCatalogView("favorites");
         }
       }}
     >
@@ -625,16 +833,25 @@ export function AgentModelPicker({
             <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
               Model
             </DropdownMenuLabel>
-            <div className="max-h-70 overflow-y-auto overscroll-contain" data-native-model-list>
+            <div
+              className="max-h-70 overflow-y-auto overscroll-contain"
+              data-native-model-list
+              data-favorite-reorder={canReorderFavorites ? "long-press" : undefined}
+            >
               <ModelItems
                 models={visibleModels}
                 selectedModelId={selectedModelId}
                 selectedPlatform={selectedPlatform}
                 disabled={disabled}
                 onSelect={commitModelSelection}
-                emptyLabel={normalizedSearch ? "No matches" : "No models available"}
+                emptyLabel={catalogView === "favorites"
+                  ? favoriteEmptyLabel
+                  : normalizedSearch ? "No matches" : "No models available"}
                 favorites={favorites}
+                sortable={canReorderFavorites}
+                isMobile
                 onToggleFavorite={onToggleFavorite}
+                onReorderFavorites={onReorderFavorites}
               />
             </div>
             {moreModelCount > 0 ? (
@@ -779,6 +996,7 @@ export function AgentModelPicker({
                 ref={modelListRef}
                 className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
                 data-native-model-list
+                data-favorite-reorder={canReorderFavorites ? "drag" : undefined}
               >
                 <ModelItems
                   models={visibleModels}
@@ -786,9 +1004,14 @@ export function AgentModelPicker({
                   selectedPlatform={selectedPlatform}
                   disabled={disabled}
                   onSelect={commitModelSelection}
-                  emptyLabel={models.length > 0 ? "No matches" : "No models available"}
+                  emptyLabel={catalogView === "favorites"
+                    ? favoriteEmptyLabel
+                    : models.length > 0 ? "No matches" : "No models available"}
                   favorites={favorites}
+                  sortable={canReorderFavorites}
+                  isMobile={false}
                   onToggleFavorite={onToggleFavorite}
+                  onReorderFavorites={onReorderFavorites}
                 />
               </div>
               {moreModelCount > 0 ? (

@@ -74,7 +74,7 @@ export function CreatePRDialog({
   error,
   onConfirm,
 }: CreatePRDialogProps) {
-  const { favorites, toggleFavorite } = useAgentModelFavorites();
+  const { favorites, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
   const initialModel = firstModelFor(defaultAgent, catalog, preferredModels);
   const [agent, setAgent] = useState<LaunchAgent>(defaultAgent);
   const [model, setModel] = useState(initialModel);
@@ -214,6 +214,7 @@ export function CreatePRDialog({
               favorites={favorites}
               onPlatformChange={selectAgent}
               onToggleFavorite={toggleFavorite}
+              onReorderFavorites={reorderFavorites}
               selectedModelId={selectedModel?.id ?? model}
               selectedModelLabel={selectedModel?.name ?? "Choose a model"}
               onModelChange={(nextModelId) =>

@@ -172,6 +172,9 @@ test("chooses a provider, a model and an effort with the keyboard alone", async 
   await page.keyboard.press("Enter");
   // Every step waits for focus before sending the next key: the menu mounts and
   // autofocuses asynchronously, and keys sent before that are dropped.
+  await expect(page.getByRole("button", { name: "Favorite models" }))
+    .toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("ArrowRight");
   await expect(page.getByRole("menuitemradio", { name: /Claude Sonnet/ })).toBeFocused();
 
   // A Radix menu is a single tab stop and calls preventDefault on Tab, so the

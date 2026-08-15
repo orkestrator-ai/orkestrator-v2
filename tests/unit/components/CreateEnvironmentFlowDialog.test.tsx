@@ -634,6 +634,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     await waitFor(() => expect(picker.getAttribute("aria-expanded")).toBe("false"));
 
     fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByRole("button", { name: "codex models" }));
     fireEvent.click(
       await screen.findByRole("menuitemradio", { name: /GPT-5\.4-Mini/ }),
     );
@@ -802,8 +803,9 @@ describe("CreateEnvironmentFlowDialog", () => {
     expect(picker.textContent).toContain("GPT-5.4-Mini");
     expect(picker.textContent).toContain("High");
     fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
-    expect(screen.getByRole("button", { name: "codex models" }).getAttribute("aria-pressed"))
+    expect(screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"))
       .toBe("true");
+    expect(screen.getByRole("button", { name: "codex models" })).toBeTruthy();
   });
 
   test("does not let a late catalog refresh replace a user-touched agent selection", async () => {
@@ -834,8 +836,10 @@ describe("CreateEnvironmentFlowDialog", () => {
     });
 
     fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
+    fireEvent.click(screen.getByRole("button", { name: "codex models" }));
     expect(screen.getByRole("button", { name: "codex models" }).getAttribute("aria-pressed"))
       .toBe("true");
+    expect(screen.queryByRole("menuitemradio", { name: /Late Claude/ }) === null).toBe(true);
   });
 
   // The mirror of the test above, and the reason the re-apply effect exists: an

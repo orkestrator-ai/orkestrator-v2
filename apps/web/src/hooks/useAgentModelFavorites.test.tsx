@@ -4,7 +4,11 @@ import { invoke } from "@/lib/native/backend";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { mockToastError } from "../../../../tests/mocks/sonner";
 import { useConfigStore } from "@/stores/configStore";
-import { useAgentModelFavorites } from "./useAgentModelFavorites";
+import {
+  favoriteModelKey,
+  reorderFavoriteModels,
+  useAgentModelFavorites,
+} from "./useAgentModelFavorites";
 
 const invokeMock = invoke as ReturnType<typeof mock>;
 
@@ -204,5 +208,90 @@ describe("useAgentModelFavorites", () => {
       { platform: "codex", modelId: "gpt-codex" },
     ]);
     expect(mockToastError).toHaveBeenCalledWith("Could not save model favorites");
+  });
+
+  test("reorders favorites by key and persists the new order", async () => {
+    const claude = { platform: "claude" as const, modelId: "claude-opus" };
+    const codex = { platform: "codex" as const, modelId: "gpt-codex" };
+    const grok = { platform: "grok" as const, modelId: "grok-4" };
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          favoriteModels: [claude, codex, grok],
+        },
+      },
+    }));
+    const hook = renderHook();
+
+    await act(async () => {
+      hook.current.reorderFavorites([codex, claude, grok]);
+    });
+
+    expect(globalConfig().favoriteModels).toEqual([codex, claude, grok]);
+    expect(invokeMock).toHaveBeenCalledWith("update_global_config", {
+      global: expect.objectContaining({ favoriteModels: [codex, claude, grok] }),
+    });
+  });
+
+  test("does not persist when the favourite order is unchanged", async () => {
+    const claude = { platform: "claude" as const, modelId: "claude-opus" };
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: { ...state.config.global, favoriteModels: [claude] },
+      },
+    }));
+    const hook = renderHook();
+
+    await act(async () => {
+      hook.current.reorderFavorites([claude]);
+    });
+
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  test("rolls back a failed reorder", async () => {
+    const claude = { platform: "claude" as const, modelId: "claude-opus" };
+    const codex = { platform: "codex" as const, modelId: "gpt-codex" };
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: { ...state.config.global, favoriteModels: [claude, codex] },
+      },
+    }));
+    invokeMock.mockRejectedValue(new Error("backend unavailable"));
+    const hook = renderHook();
+
+    await act(async () => {
+      hook.current.reorderFavorites([codex, claude]);
+    });
+
+    expect(globalConfig().favoriteModels).toEqual([claude, codex]);
+    expect(mockToastError).toHaveBeenCalledWith("Could not save model favorites");
+  });
+});
+
+describe("reorderFavoriteModels", () => {
+  const claude = { platform: "claude" as const, modelId: "opus" };
+  const codex = { platform: "codex" as const, modelId: "gpt" };
+  const grok = { platform: "grok" as const, modelId: "grok" };
+
+  test("moves a favourite before another and keeps the rest stable", () => {
+    expect(
+      reorderFavoriteModels(
+        [claude, codex, grok],
+        favoriteModelKey(grok),
+        favoriteModelKey(claude),
+      ),
+    ).toEqual([grok, claude, codex]);
+  });
+
+  test("returns null when the drop target is the same item or unknown", () => {
+    expect(
+      reorderFavoriteModels([claude, codex], favoriteModelKey(claude), favoriteModelKey(claude)),
+    ).toBeNull();
+    expect(reorderFavoriteModels([claude, codex], favoriteModelKey(claude), "missing")).toBeNull();
   });
 });

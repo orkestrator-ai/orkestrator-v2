@@ -119,7 +119,7 @@ export function ReviewLaunchDialog({
   busy = false,
   onConfirm,
 }: ReviewLaunchDialogProps) {
-  const { favorites, enabledPlatforms, toggleFavorite } = useAgentModelFavorites();
+  const { favorites, enabledPlatforms, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
   // Configuration guarantees at least one enabled platform, but retain a safe
   // fallback for older or malformed persisted state. `firstEnabledAgentPlatform`
   // already answers "the preferred one, or the first enabled one, or Claude", so
@@ -351,6 +351,7 @@ export function ReviewLaunchDialog({
                 selectedPlatform={agent}
                 favorites={pickerFavorites}
                 onToggleFavorite={toggleFavorite}
+                onReorderFavorites={reorderFavorites}
                 onPlatformChange={handleAgentChange}
                 selectedModelId={selectedModel?.id ?? model}
                 selectedModelLabel={selectedModel?.name ?? "Choose a model"}

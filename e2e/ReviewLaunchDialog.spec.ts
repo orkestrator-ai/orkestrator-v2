@@ -170,18 +170,14 @@ test("chooses a provider, a model and an effort with the keyboard alone", async 
   const reasoning = page.getByRole("group", { name: "Reasoning" });
   await trigger.focus();
   await page.keyboard.press("Enter");
-  // Every step waits for focus before sending the next key: the menu mounts and
-  // autofocuses asynchronously, and keys sent before that are dropped.
-  await expect(page.getByRole("button", { name: "Favorite models" }))
+  // With no saved favourites, opening the picker starts on the selected
+  // provider so the model list is immediately usable.
+  await expect(page.getByRole("button", { name: "claude models" }))
     .toHaveAttribute("aria-pressed", "true");
-  await page.keyboard.press("ArrowRight");
-  await expect(page.getByRole("menuitemradio", { name: /Claude Sonnet/ })).toBeFocused();
 
   // A Radix menu is a single tab stop and calls preventDefault on Tab, so the
   // platform rail answers Left/Right instead — the keys the provider radio
   // group this control replaced also used.
-  await expect(page.getByRole("button", { name: "claude models" }))
-    .toHaveAttribute("aria-pressed", "true");
   await page.keyboard.press("ArrowRight");
   await expect(page.getByRole("button", { name: "codex models" }))
     .toHaveAttribute("aria-pressed", "true");
@@ -192,9 +188,14 @@ test("chooses a provider, a model and an effort with the keyboard alone", async 
   await page.keyboard.press("Enter");
   await expect(trigger).toContainText("Codex Review");
 
-  // Reasoning shares the menu's roving focus group, so arrows reach it.
+  // Closing and reopening the picker restores the currently selected provider.
+  await trigger.focus();
   await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: "codex models" }))
+    .toHaveAttribute("aria-pressed", "true");
   await expect(codexModel).toBeFocused();
+
+  // Reasoning shares the menu's roving focus group, so arrows reach it.
   await page.keyboard.press("ArrowDown");
   await expect(reasoning.getByRole("menuitemradio", { name: "Default" })).toBeFocused();
   await page.keyboard.press("ArrowDown");

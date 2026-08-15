@@ -6,6 +6,7 @@ import { mockToastError } from "../../../../tests/mocks/sonner";
 import { useConfigStore } from "@/stores/configStore";
 import {
   favoriteModelKey,
+  mergeReorderedFavoriteModels,
   reorderFavoriteModels,
   useAgentModelFavorites,
 } from "./useAgentModelFavorites";
@@ -25,6 +26,16 @@ const CODEX_GPT: AgentModel = {
 
 type HookValue = ReturnType<typeof useAgentModelFavorites>;
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
 function renderHook(): { current: HookValue } {
   const ref = { current: null as unknown as HookValue };
   function Probe() {
@@ -43,6 +54,7 @@ describe("useAgentModelFavorites", () => {
   beforeEach(() => {
     cleanup();
     invokeMock.mockReset();
+    mockToastError.mockClear();
     invokeMock.mockImplementation((_command: string, args: { global: unknown }) =>
       Promise.resolve({ ...useConfigStore.getState().config, global: args.global }),
     );
@@ -271,6 +283,182 @@ describe("useAgentModelFavorites", () => {
     expect(globalConfig().favoriteModels).toEqual([claude, codex]);
     expect(mockToastError).toHaveBeenCalledWith("Could not save model favorites");
   });
+
+  test("serializes rapid reorders and ignores an older response", async () => {
+    const claude = { platform: "claude" as const, modelId: "claude-opus" };
+    const codex = { platform: "codex" as const, modelId: "gpt-codex" };
+    const firstWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
+    const secondWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: { ...state.config.global, favoriteModels: [claude, codex] },
+      },
+    }));
+    invokeMock
+      .mockImplementationOnce(() => firstWrite.promise)
+      .mockImplementationOnce(() => secondWrite.promise);
+    const hook = renderHook();
+
+    act(() => {
+      hook.current.reorderFavorites([codex, claude]);
+    });
+    await Promise.resolve();
+    act(() => {
+      hook.current.reorderFavorites([claude, codex]);
+    });
+
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    firstWrite.resolve({
+      ...useConfigStore.getState().config,
+      global: { ...globalConfig(), favoriteModels: [codex, claude] },
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+    // The stale first response must not overwrite the second optimistic order.
+    expect(globalConfig().favoriteModels).toEqual([claude, codex]);
+
+    secondWrite.resolve({
+      ...useConfigStore.getState().config,
+      global: { ...globalConfig(), favoriteModels: [claude, codex] },
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(globalConfig().favoriteModels).toEqual([claude, codex]);
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  test("does not roll back a newer reorder when an older save fails", async () => {
+    const claude = { platform: "claude" as const, modelId: "claude-opus" };
+    const codex = { platform: "codex" as const, modelId: "gpt-codex" };
+    const firstWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
+    const secondWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: { ...state.config.global, favoriteModels: [claude, codex] },
+      },
+    }));
+    invokeMock
+      .mockImplementationOnce(() => firstWrite.promise)
+      .mockImplementationOnce(() => secondWrite.promise);
+    const hook = renderHook();
+
+    act(() => {
+      hook.current.reorderFavorites([codex, claude]);
+    });
+    await Promise.resolve();
+    act(() => {
+      hook.current.reorderFavorites([claude, codex]);
+    });
+
+    firstWrite.reject(new Error("first save failed"));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+
+    secondWrite.resolve({
+      ...useConfigStore.getState().config,
+      global: { ...globalConfig(), favoriteModels: [claude, codex] },
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(globalConfig().favoriteModels).toEqual([claude, codex]);
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  test("rolls back to the last committed order when the latest save fails", async () => {
+    const claude = { platform: "claude" as const, modelId: "claude-opus" };
+    const codex = { platform: "codex" as const, modelId: "gpt-codex" };
+    const firstWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
+    const secondWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: { ...state.config.global, favoriteModels: [claude, codex] },
+      },
+    }));
+    invokeMock
+      .mockImplementationOnce(() => firstWrite.promise)
+      .mockImplementationOnce(() => secondWrite.promise);
+    const hook = renderHook();
+
+    act(() => {
+      hook.current.reorderFavorites([codex, claude]);
+    });
+    await Promise.resolve();
+    act(() => {
+      hook.current.reorderFavorites([claude, codex]);
+    });
+
+    firstWrite.resolve({
+      ...useConfigStore.getState().config,
+      global: { ...globalConfig(), favoriteModels: [codex, claude] },
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    secondWrite.reject(new Error("latest save failed"));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(globalConfig().favoriteModels).toEqual([codex, claude]);
+    expect(mockToastError).toHaveBeenCalledWith("Could not save model favorites");
+  });
+
+  test("rolls back to the pre-queue order when every queued save fails", async () => {
+    const claude = { platform: "claude" as const, modelId: "claude-opus" };
+    const codex = { platform: "codex" as const, modelId: "gpt-codex" };
+    const firstWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
+    const secondWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: { ...state.config.global, favoriteModels: [claude, codex] },
+      },
+    }));
+    invokeMock
+      .mockImplementationOnce(() => firstWrite.promise)
+      .mockImplementationOnce(() => secondWrite.promise);
+    const hook = renderHook();
+
+    act(() => {
+      hook.current.reorderFavorites([codex, claude]);
+    });
+    await Promise.resolve();
+    act(() => {
+      hook.current.reorderFavorites([claude, codex]);
+    });
+
+    firstWrite.reject(new Error("first save failed"));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    secondWrite.reject(new Error("second save failed"));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(globalConfig().favoriteModels).toEqual([claude, codex]);
+    expect(mockToastError).toHaveBeenCalledWith("Could not save model favorites");
+  });
 });
 
 describe("reorderFavoriteModels", () => {
@@ -293,5 +481,19 @@ describe("reorderFavoriteModels", () => {
       reorderFavoriteModels([claude, codex], favoriteModelKey(claude), favoriteModelKey(claude)),
     ).toBeNull();
     expect(reorderFavoriteModels([claude, codex], favoriteModelKey(claude), "missing")).toBeNull();
+  });
+
+  test("merges a filtered reorder back into the original favorite slots", () => {
+    const hidden = { platform: "opencode" as const, modelId: "hidden" };
+    const visibleFirst = { platform: "claude" as const, modelId: "first" };
+    const visibleSecond = { platform: "claude" as const, modelId: "second" };
+
+    expect(
+      mergeReorderedFavoriteModels(
+        [visibleFirst, hidden, visibleSecond],
+        [visibleFirst, visibleSecond],
+        [visibleSecond, visibleFirst],
+      ),
+    ).toEqual([visibleSecond, hidden, visibleFirst]);
   });
 });

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bot, BrainCircuit, Layers3 } from "lucide-react";
-import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
+import type { AgentModel, AgentModelRef, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
 import { firstEnabledAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,7 +20,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
-import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
+import {
+  mergeReorderedFavoriteModels,
+  useAgentModelFavorites,
+} from "@/hooks/useAgentModelFavorites";
 import {
   defaultEffortFor,
   effortLabel,
@@ -209,6 +212,14 @@ export function ReviewLaunchDialog({
     () => favorites.filter((favorite) => reviewPlatforms.includes(favorite.platform)),
     [favorites, reviewPlatforms],
   );
+  const reorderReviewFavorites = useCallback((reorderedVisibleFavorites: AgentModelRef[]) => {
+    const merged = mergeReorderedFavoriteModels(
+      favorites,
+      pickerFavorites,
+      reorderedVisibleFavorites,
+    );
+    if (merged) reorderFavorites(merged);
+  }, [favorites, pickerFavorites, reorderFavorites]);
   const reasoningOptions: AgentReasoningOption[] = effortAvailable
     ? [
         { id: "default", label: "Default" },
@@ -351,7 +362,7 @@ export function ReviewLaunchDialog({
                 selectedPlatform={agent}
                 favorites={pickerFavorites}
                 onToggleFavorite={toggleFavorite}
-                onReorderFavorites={reorderFavorites}
+                onReorderFavorites={reorderReviewFavorites}
                 onPlatformChange={handleAgentChange}
                 selectedModelId={selectedModel?.id ?? model}
                 selectedModelLabel={selectedModel?.name ?? "Choose a model"}

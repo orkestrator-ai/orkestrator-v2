@@ -79,6 +79,7 @@ import {
   type ReviewModelCatalog,
   type ReviewTabType,
 } from "./ReviewLaunchDialog";
+import { mergeReorderedFavoriteModels } from "@/hooks/useAgentModelFavorites";
 import { useConfigStore } from "@/stores/configStore";
 
 /**
@@ -354,6 +355,20 @@ describe("ReviewLaunchDialog", () => {
     expect(models().queryByRole("menuitemradio", { name: /provider\/model-a/ }) === null).toBe(true);
     expect(models().queryByRole("menuitemradio", { name: /OpenCode/ }) === null).toBe(true);
     closePicker();
+  });
+
+  test("preserves disabled-provider favorites when visible review favorites reorder", () => {
+    const hidden = { platform: "opencode" as const, modelId: "provider/model-a" };
+    const first = { platform: "claude" as const, modelId: "claude-a" };
+    const second = { platform: "claude" as const, modelId: "claude-b" };
+
+    expect(
+      mergeReorderedFavoriteModels(
+        [first, hidden, second],
+        [first, second],
+        [second, first],
+      ),
+    ).toEqual([second, hidden, first]);
   });
 
   test("keeps the chosen model after a keyboard glance at favourites", () => {

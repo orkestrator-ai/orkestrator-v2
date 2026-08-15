@@ -10,6 +10,7 @@ import {
 } from "react";
 import {
   DndContext,
+  KeyboardSensor,
   PointerSensor,
   closestCenter,
   useSensor,
@@ -18,6 +19,7 @@ import {
 } from "@dnd-kit/core";
 import {
   SortableContext,
+  sortableKeyboardCoordinates,
   useSortable,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
@@ -106,6 +108,16 @@ function modelRowKey(model: AgentModel): string {
   return `${model.platform}:${model.id}`;
 }
 
+function preferredCatalogView(
+  favorites: AgentModelRef[],
+  selectedPlatform: AgentPlatform | undefined,
+  models: AgentModel[],
+): AgentPlatform | "favorites" {
+  return favorites.length > 0
+    ? "favorites"
+    : selectedPlatform ?? models[0]?.platform ?? "favorites";
+}
+
 function ModelRow({
   model,
   isFavorite,
@@ -183,7 +195,14 @@ function SortableModelRow({
   onToggleFavorite,
 }: Omit<Parameters<typeof ModelRow>[0], "sortable">) {
   const modelKey = modelRowKey(model);
-  const { setNodeRef, listeners, transform, transition, isDragging } = useSortable({
+  const {
+    setNodeRef,
+    attributes,
+    listeners,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
     id: modelKey,
   });
   return (
@@ -193,6 +212,7 @@ function SortableModelRow({
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={cn("select-none", isDragging && "z-10 opacity-50")}
       onContextMenu={(event) => event.preventDefault()}
+      {...attributes}
       {...listeners}
     >
       <ModelRow
@@ -233,6 +253,7 @@ function SortableFavoriteItems({
         ? { delay: FAVORITE_LONG_PRESS_MS, tolerance: FAVORITE_DRAG_TOLERANCE_PX }
         : { distance: FAVORITE_DRAG_TOLERANCE_PX },
     }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
   const favoriteKeys = new Set(favorites.map(favoriteModelKey));
   const itemIds = models.map(modelRowKey);
@@ -460,7 +481,9 @@ export function AgentModelPicker({
   onRefreshModels,
 }: AgentModelPickerProps) {
   const [search, setSearch] = useState("");
-  const [catalogView, setCatalogView] = useState<AgentPlatform | "favorites">("favorites");
+  const [catalogView, setCatalogView] = useState<AgentPlatform | "favorites">(() =>
+    preferredCatalogView(favorites, selectedPlatform, models),
+  );
   const [mobileSubmenu, setMobileSubmenu] = useState<MobileSubmenu | null>(null);
   const mobileViewId = useId();
   const mobileReasoningTriggerRef = useRef<HTMLDivElement>(null);
@@ -613,11 +636,18 @@ export function AgentModelPicker({
   return (
     <DropdownMenu
       onOpenChange={(open) => {
+        if (open) {
+          // Hydrated favorites may arrive after the first render. Choose the
+          // current preferred view at the start of each interaction, while
+          // still leaving the rail free to browse during the open menu.
+          setCatalogView(preferredCatalogView(favorites, selectedPlatform, models));
+          return;
+        }
         if (!open) {
           setSearch("");
           setMobileSubmenu(null);
           mobileReturnFocusRef.current = null;
-          setCatalogView("favorites");
+          setCatalogView(preferredCatalogView(favorites, selectedPlatform, models));
         }
       }}
     >

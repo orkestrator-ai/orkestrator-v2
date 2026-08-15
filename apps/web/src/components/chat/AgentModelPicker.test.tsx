@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { AgentModelPicker } from "./AgentModelPicker";
 import { PLATFORM_ICON_CLASS } from "@/components/icons/AgentIcons";
@@ -73,6 +73,58 @@ function getMobileTrigger(kind: "reasoning" | "speed") {
   return document.querySelector<HTMLElement>(`[data-native-mobile-${kind}-trigger]`)!;
 }
 
+function setSortableRect(element: Element, top: number) {
+  Object.defineProperty(element, "getBoundingClientRect", {
+    configurable: true,
+    value: () => ({
+      bottom: top + 56,
+      height: 56,
+      left: 0,
+      right: 320,
+      top,
+      width: 320,
+      x: 0,
+      y: top,
+      toJSON: () => ({}),
+    }),
+  });
+}
+
+async function dragFavoriteRow(activeKey: string, overKey: string) {
+  const active = document.querySelector(`[data-favorite-sortable="${activeKey}"]`)!;
+  const over = document.querySelector(`[data-favorite-sortable="${overKey}"]`)!;
+  setSortableRect(active, 0);
+  setSortableRect(over, 100);
+  fireEvent.pointerDown(active, {
+    button: 0,
+    clientX: 16,
+    clientY: 16,
+    isPrimary: true,
+    pointerId: 1,
+  });
+  await act(async () => {
+    await Promise.resolve();
+  });
+  fireEvent.pointerMove(over, {
+    clientX: 16,
+    clientY: 40,
+    isPrimary: true,
+    pointerId: 1,
+  });
+  fireEvent.pointerMove(over, {
+    clientX: 16,
+    clientY: 130,
+    isPrimary: true,
+    pointerId: 1,
+  });
+  fireEvent.pointerUp(over, {
+    clientX: 16,
+    clientY: 130,
+    isPrimary: true,
+    pointerId: 1,
+  });
+}
+
 describe("AgentModelPicker", () => {
   afterEach(() => cleanup());
 
@@ -103,9 +155,6 @@ describe("AgentModelPicker", () => {
     fireEvent.click(screen.getByRole("button", { name: "Hydrate Codex" }));
     fireEvent.pointerDown(screen.getByTitle("Choose model"));
 
-    expect(screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"))
-      .toBe("true");
-    showPlatformCatalog("codex");
     expect(screen.getByRole("button", { name: "codex models" }).getAttribute("aria-pressed"))
       .toBe("true");
     expect(screen.getByRole("menuitemradio", { name: /Codex model/ })).toBeTruthy();
@@ -451,6 +500,7 @@ describe("AgentModelPicker", () => {
       enabledPlatforms: ["claude", "codex"],
       selectedPlatform: "claude",
       selectedModelId: "claude-model",
+      favorites: [{ platform: "codex", modelId: "codex-model" }],
       onPlatformChange,
     });
 
@@ -504,6 +554,7 @@ describe("AgentModelPicker", () => {
       enabledPlatforms: ["claude", "codex"],
       selectedPlatform: "claude",
       selectedModelId: "claude-model",
+      favorites: [{ platform: "codex", modelId: "codex-model" }],
       onPlatformChange,
     });
 
@@ -533,6 +584,7 @@ describe("AgentModelPicker", () => {
       selectedPlatform: "claude",
       selectedModelId: "claude-model",
       platformSelectionLocked: true,
+      favorites: [{ platform: "codex", modelId: "codex-model" }],
       onPlatformChange,
     });
 
@@ -1038,6 +1090,131 @@ describe("AgentModelPicker", () => {
     expect(document.querySelector("[data-favorite-sortable]") === null).toBe(true);
     expect(document.querySelector("[data-native-model-list]")?.getAttribute("data-favorite-reorder"))
       .toBeNull();
+  });
+
+  test("opens on the selected platform when no favorites exist", () => {
+    setMobileViewport(false);
+    renderPicker({
+      models: models.slice(0, 2),
+      enabledPlatforms: ["codex"],
+      selectedPlatform: "codex",
+      favorites: [],
+    });
+    openPicker();
+
+    expect(screen.getByRole("button", { name: "codex models" }).getAttribute("aria-pressed"))
+      .toBe("true");
+    expect(screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"))
+      .toBe("false");
+    expect(screen.getByRole("menuitemradio", { name: /Model 1/ })).toBeTruthy();
+  });
+
+  test("persists the new order after a desktop pointer drag", async () => {
+    setMobileViewport(false);
+    const onReorderFavorites = mock(() => {});
+    renderPicker({
+      models: models.slice(0, 2),
+      enabledPlatforms: ["codex"],
+      selectedPlatform: "codex",
+      favorites: [
+        { platform: "codex", modelId: "model-1" },
+        { platform: "codex", modelId: "model-2" },
+      ],
+      onReorderFavorites,
+    });
+    openPicker();
+
+    await dragFavoriteRow("codex:model-1", "codex:model-2");
+
+    await waitFor(() => expect(onReorderFavorites).toHaveBeenCalledWith([
+      { platform: "codex", modelId: "model-2" },
+      { platform: "codex", modelId: "model-1" },
+    ]));
+  });
+
+  test("supports keyboard drag activation and movement for favorite rows", async () => {
+    setMobileViewport(false);
+    const onReorderFavorites = mock(() => {});
+    renderPicker({
+      models: models.slice(0, 2),
+      enabledPlatforms: ["codex"],
+      selectedPlatform: "codex",
+      favorites: [
+        { platform: "codex", modelId: "model-1" },
+        { platform: "codex", modelId: "model-2" },
+      ],
+      onReorderFavorites,
+    });
+    openPicker();
+
+    const active = document.querySelector('[data-favorite-sortable="codex:model-1"]')!;
+    setSortableRect(active, 0);
+    expect(active.getAttribute("role")).toBe("button");
+    expect(active.getAttribute("tabindex")).toBe("0");
+    (active as HTMLElement).focus();
+    fireEvent.keyDown(active, { code: "Space", key: " " });
+    expect(active.className).toContain("opacity-50");
+    await act(async () => {
+      fireEvent.keyDown(active, { code: "ArrowDown", key: "ArrowDown" });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect((active as HTMLElement).style.transform).not.toBe("");
+    fireEvent.keyDown(active, { code: "Space", key: " " });
+    await waitFor(() => expect(active.className).not.toContain("opacity-50"));
+    expect(onReorderFavorites).not.toHaveBeenCalled();
+  });
+
+  test("persists the new order after a mobile long press", async () => {
+    setMobileViewport(true);
+    const onReorderFavorites = mock(() => {});
+    renderPicker({
+      models: models.slice(0, 2),
+      enabledPlatforms: ["codex"],
+      selectedPlatform: "codex",
+      favorites: [
+        { platform: "codex", modelId: "model-1" },
+        { platform: "codex", modelId: "model-2" },
+      ],
+      onReorderFavorites,
+    });
+    openPicker();
+
+    const active = document.querySelector('[data-favorite-sortable="codex:model-1"]')!;
+    const over = document.querySelector('[data-favorite-sortable="codex:model-2"]')!;
+    setSortableRect(active, 0);
+    setSortableRect(over, 100);
+    fireEvent.pointerDown(active, {
+      button: 0,
+      clientX: 16,
+      clientY: 16,
+      isPrimary: true,
+      pointerId: 2,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    fireEvent.pointerMove(over, {
+      clientX: 16,
+      clientY: 40,
+      isPrimary: true,
+      pointerId: 2,
+    });
+    fireEvent.pointerMove(over, {
+      clientX: 16,
+      clientY: 130,
+      isPrimary: true,
+      pointerId: 2,
+    });
+    fireEvent.pointerUp(over, {
+      clientX: 16,
+      clientY: 130,
+      isPrimary: true,
+      pointerId: 2,
+    });
+
+    await waitFor(() => expect(onReorderFavorites).toHaveBeenCalledWith([
+      { platform: "codex", modelId: "model-2" },
+      { platform: "codex", modelId: "model-1" },
+    ]));
   });
 
   test("uses a long-press drag on mobile favourite rows", () => {

@@ -354,6 +354,108 @@ lines.on("line", (line) => {
         rawOutput: { content: "package contents" },
       });
     }
+    // The same first turn as above, preceded by tool calls from turns the live
+    // transcript has already enriched or never held. Exercises the collector's
+    // count bound: only the trailing `capacity` calls may survive.
+    if (process.env.FAKE_ACP_REPLAY_CURSOR_HISTORY_TOOL_METADATA === "1") {
+      for (const stale of [
+        { id: "replay-stale-1", title: "Read stale-one.json", path: "/workspace/stale-one.json" },
+        { id: "replay-stale-2", title: "Read stale-two.json", path: "/workspace/stale-two.json" },
+      ]) {
+        replay({
+          sessionUpdate: "tool_call",
+          toolCallId: stale.id,
+          title: stale.title,
+          kind: "read",
+          status: "pending",
+          rawInput: { path: stale.path },
+        });
+        replay({
+          sessionUpdate: "tool_call_update",
+          toolCallId: stale.id,
+          status: "completed",
+          rawOutput: { content: "stale contents" },
+        });
+      }
+      replay({
+        sessionUpdate: "tool_call",
+        toolCallId: "replay-search-1",
+        title: "grep --include=\"*.json\" \"scripts\"",
+        kind: "search",
+        status: "pending",
+        rawInput: { pattern: "scripts", path: "/workspace" },
+      });
+      replay({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "replay-search-1",
+        status: "completed",
+        rawOutput: { totalMatches: 1, truncated: false },
+      });
+      replay({
+        sessionUpdate: "tool_call",
+        toolCallId: "replay-read-1",
+        title: "Read package.json (1 - 80)",
+        kind: "read",
+        status: "pending",
+        rawInput: { path: "/workspace/package.json" },
+      });
+      replay({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "replay-read-1",
+        status: "completed",
+        rawOutput: { content: "package contents" },
+      });
+    }
+    // Two complete turns' worth of tool calls, so a replay that loads late
+    // enough to see the *second* turn can be caught handing its paths and
+    // titles to the first turn's parts.
+    if (process.env.FAKE_ACP_REPLAY_CURSOR_TWO_TURN_METADATA === "1") {
+      for (const replayed of [
+        {
+          id: "replay-search-1",
+          title: "grep --include=\"*.json\" \"scripts\"",
+          kind: "search",
+          rawInput: { pattern: "scripts", path: "/workspace" },
+          rawOutput: { totalMatches: 1, truncated: false },
+        },
+        {
+          id: "replay-read-1",
+          title: "Read package.json (1 - 80)",
+          kind: "read",
+          rawInput: { path: "/workspace/package.json" },
+          rawOutput: { content: "package contents" },
+        },
+        {
+          id: "replay-read-2",
+          title: "Read tsconfig.json (1 - 40)",
+          kind: "read",
+          rawInput: { path: "/workspace/tsconfig.json" },
+          rawOutput: { content: "tsconfig contents" },
+        },
+        {
+          id: "replay-search-2",
+          title: "grep --include=\"*.ts\" \"strict\"",
+          kind: "search",
+          rawInput: { pattern: "strict", path: "/workspace/src" },
+          rawOutput: { totalMatches: 2, truncated: false },
+        },
+      ]) {
+        replay({
+          sessionUpdate: "tool_call",
+          toolCallId: replayed.id,
+          title: replayed.title,
+          kind: replayed.kind,
+          status: "pending",
+          rawInput: replayed.rawInput,
+        });
+        replay({
+          sessionUpdate: "tool_call_update",
+          toolCallId: replayed.id,
+          status: "completed",
+          rawOutput: replayed.rawOutput,
+        });
+      }
+    }
     if (process.env.FAKE_ACP_REPLAY_CURSOR_SAME_KIND_METADATA === "1") {
       for (const replayed of [
         { id: "replay-read-c", title: "Read c.json", path: "/workspace/c.json", output: "shared" },
@@ -1490,6 +1592,49 @@ lines.on("line", (line) => {
           },
         },
       });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    // A second turn's worth of generic Cursor tool calls, distinguishable from
+    // `CURSOR_GENERIC_TOOLS` only by their outputs — which is exactly what the
+    // replay join has to key on to keep the two turns apart.
+    if (prompt.startsWith("CURSOR_SECOND_TURN_TOOLS")) {
+      for (const update of [
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-read-2",
+          title: "Read File",
+          kind: "read",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "live-read-2",
+          status: "completed",
+          rawOutput: { content: "tsconfig contents" },
+        },
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-search-2",
+          title: "grep",
+          kind: "search",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "live-search-2",
+          status: "completed",
+          rawOutput: { totalMatches: 2, truncated: false },
+        },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: "fake-session", update },
+        });
+      }
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }

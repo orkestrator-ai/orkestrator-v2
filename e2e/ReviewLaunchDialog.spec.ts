@@ -4,7 +4,9 @@ test("short mobile viewports scroll configuration while keeping actions visible"
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile project only");
-  await page.setViewportSize({ width: 390, height: 360 });
+  // Short enough that the configuration cannot fit whatever it currently holds,
+  // so the footer has to stay pinned rather than being pushed out of the dialog.
+  await page.setViewportSize({ width: 390, height: 300 });
   await page.goto("/review-launch");
 
   const dialog = page.getByRole("dialog", { name: "Configure code review" });
@@ -38,9 +40,9 @@ test("short mobile viewports scroll configuration while keeping actions visible"
 
   expect(layout.scrollHeight).toBeGreaterThan(layout.clientHeight);
   expect(layout.dialogTop).toBeGreaterThanOrEqual(0);
-  expect(layout.dialogBottom).toBeLessThanOrEqual(360);
+  expect(layout.dialogBottom).toBeLessThanOrEqual(300);
   expect(layout.regionBottom).toBeLessThanOrEqual(layout.footerTop);
-  expect(layout.footerBottom).toBeLessThanOrEqual(360);
+  expect(layout.footerBottom).toBeLessThanOrEqual(300);
 
   await configuration.evaluate((element) => {
     element.scrollTop = element.scrollHeight;
@@ -58,81 +60,68 @@ test("short mobile viewports scroll configuration while keeping actions visible"
     .toHaveText("claude|claude-sonnet|default");
 });
 
-test("provider choices follow native radio keyboard behavior", async ({
+test("one picker chooses the provider, the model, and the reasoning effort", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop project only");
   await page.goto("/review-launch");
 
-  const providerGroup = page.getByRole("radiogroup", { name: "Review provider" });
-  const claudeRadio = providerGroup.getByRole("radio", { name: "Claude" });
-  const codexRadio = providerGroup.getByRole("radio", { name: "Codex" });
-  const openCodeRadio = providerGroup.getByRole("radio", { name: "OpenCode" });
+  const trigger = page.getByRole("combobox", { name: "Agent, model and reasoning" });
+  await expect(trigger).toContainText("Claude Sonnet");
+  await expect(trigger).toContainText("Default");
 
-  await claudeRadio.focus();
-  await claudeRadio.press("ArrowRight");
-  await expect(codexRadio).toBeChecked();
-  await expect(codexRadio).toBeFocused();
-  await expect(codexRadio).toHaveAttribute("tabindex", "0");
-  await expect(claudeRadio).toHaveAttribute("tabindex", "-1");
+  // Another provider's model is one hop away: no separate provider control.
+  await trigger.click();
+  // The fixture uses the legacy Claude/Codex/OpenCode allowlist. Providers
+  // disabled in global settings must not reappear through the shared picker.
+  await expect(page.getByRole("button", { name: "claude models" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "opencode models" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "cursor models" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "grok models" })).toHaveCount(0);
+  await page.getByRole("button", { name: "codex models" }).click();
+  await page.getByRole("group", { name: "Models" })
+    .getByRole("menuitemradio", { name: /Codex Review/ })
+    .click();
+  await expect(trigger).toContainText("Codex Review");
 
-  await codexRadio.press("ArrowRight");
-  await expect(openCodeRadio).toBeChecked();
+  await trigger.click();
+  await page.getByRole("group", { name: "Reasoning" })
+    .getByRole("menuitemradio", { name: "High" })
+    .click();
+  await expect(trigger).toContainText("High");
 
-  // Both ends wrap around.
-  await openCodeRadio.press("ArrowRight");
-  await expect(claudeRadio).toBeChecked();
-  await expect(claudeRadio).toBeFocused();
-  await claudeRadio.press("ArrowLeft");
-  await expect(openCodeRadio).toBeChecked();
-  await expect(openCodeRadio).toBeFocused();
-
-  // Home and End jump straight to the ends.
-  await openCodeRadio.press("Home");
-  await expect(claudeRadio).toBeChecked();
-  await claudeRadio.press("End");
-  await expect(openCodeRadio).toBeChecked();
-  await expect(openCodeRadio).toHaveAttribute("tabindex", "0");
-  await expect(claudeRadio).toHaveAttribute("tabindex", "-1");
+  await page.getByRole("button", { name: "Start review" }).click();
+  await expect(page.getByTestId("review-launch-selection"))
+    .toHaveText("codex|codex-review|high");
 });
 
-test("model trigger grows to contain its name and description", async ({
+test("the picker trigger stays a comfortable target and names the current choice", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop project only");
   await page.goto("/review-launch");
 
-  const modelTrigger = page.getByRole("combobox", { name: "Model" });
-  await expect(modelTrigger).toContainText("Claude Sonnet");
-  await expect(modelTrigger).toContainText("Balanced reviews for everyday code changes");
+  const trigger = page.getByRole("combobox", { name: "Agent, model and reasoning" });
+  await expect(trigger).toContainText("Claude Sonnet");
 
-  const layout = await modelTrigger.evaluate((element) => {
-    const trigger = element as HTMLElement;
-    const textStack = trigger.firstElementChild as HTMLElement;
-    const name = textStack.children[0] as HTMLElement;
-    const description = textStack.children[1] as HTMLElement;
-    const triggerRect = trigger.getBoundingClientRect();
-    const nameRect = name.getBoundingClientRect();
-    const descriptionRect = description.getBoundingClientRect();
-
+  const layout = await trigger.evaluate((element) => {
+    const button = element as HTMLButtonElement;
+    const rect = button.getBoundingClientRect();
+    const label = button.querySelector(".truncate") as HTMLElement;
     return {
-      clientHeight: trigger.clientHeight,
-      scrollHeight: trigger.scrollHeight,
-      triggerTop: triggerRect.top,
-      triggerBottom: triggerRect.bottom,
-      triggerHeight: triggerRect.height,
-      nameTop: nameRect.top,
-      nameBottom: nameRect.bottom,
-      descriptionTop: descriptionRect.top,
-      descriptionBottom: descriptionRect.bottom,
+      height: rect.height,
+      width: rect.width,
+      scrollWidth: button.scrollWidth,
+      clientWidth: button.clientWidth,
+      labelWidth: label.getBoundingClientRect().width,
     };
   });
 
-  expect(layout.triggerHeight).toBeGreaterThan(44);
-  expect(layout.scrollHeight).toBeLessThanOrEqual(layout.clientHeight);
-  expect(layout.nameTop).toBeGreaterThanOrEqual(layout.triggerTop);
-  expect(layout.descriptionTop).toBeGreaterThanOrEqual(layout.nameBottom);
-  expect(layout.descriptionBottom).toBeLessThanOrEqual(layout.triggerBottom);
+  // `min-h-11` keeps it the same size as the other review controls, and the
+  // label truncates rather than widening the trigger past the dialog.
+  expect(layout.height).toBeGreaterThanOrEqual(44);
+  expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
+  expect(layout.labelWidth).toBeLessThanOrEqual(layout.width);
 });
 
 test("step and header icon badges render as equally sized circles", async ({
@@ -159,8 +148,8 @@ test("step and header icon badges render as equally sized circles", async ({
       }),
   );
 
-  // The dialog header badge plus one marker per step.
-  expect(badges).toHaveLength(4);
+  // The dialog header badge plus the single configuration step.
+  expect(badges).toHaveLength(2);
   for (const badge of badges) {
     // Squares, not rectangles: shrink-0 keeps flex siblings from squashing them.
     expect(badge.width).toBe(32);
@@ -171,3 +160,76 @@ test("step and header icon badges render as equally sized circles", async ({
     expect(badge.glyphHeight).toBe(16);
   }
 });
+
+test("chooses a provider, a model and an effort with the keyboard alone", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop project only");
+  await page.goto("/review-launch");
+
+  const trigger = page.getByRole("combobox", { name: "Agent, model and reasoning" });
+  const reasoning = page.getByRole("group", { name: "Reasoning" });
+  await trigger.focus();
+  await page.keyboard.press("Enter");
+  // Every step waits for focus before sending the next key: the menu mounts and
+  // autofocuses asynchronously, and keys sent before that are dropped.
+  await expect(page.getByRole("menuitemradio", { name: /Claude Sonnet/ })).toBeFocused();
+
+  // A Radix menu is a single tab stop and calls preventDefault on Tab, so the
+  // platform rail answers Left/Right instead — the keys the provider radio
+  // group this control replaced also used.
+  await expect(page.getByRole("button", { name: "claude models" }))
+    .toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("button", { name: "codex models" }))
+    .toHaveAttribute("aria-pressed", "true");
+
+  // Focus lands on the new provider's list, which is what announces the switch.
+  const codexModel = page.getByRole("menuitemradio", { name: /Codex Review/ });
+  await expect(codexModel).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(trigger).toContainText("Codex Review");
+
+  // Reasoning shares the menu's roving focus group, so arrows reach it.
+  await page.keyboard.press("Enter");
+  await expect(codexModel).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(reasoning.getByRole("menuitemradio", { name: "Default" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(reasoning.getByRole("menuitemradio", { name: "Medium" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(reasoning.getByRole("menuitemradio", { name: "High" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(trigger).toContainText("High");
+
+  await page.getByRole("button", { name: "Start review" }).click();
+  await expect(page.getByTestId("review-launch-selection"))
+    .toHaveText("codex|codex-review|high");
+});
+
+test("the phone layout reaches every choice through its drill-in views", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "mobile project only");
+  await page.goto("/review-launch");
+
+  const trigger = page.getByRole("combobox", { name: "Agent, model and reasoning" });
+  await trigger.click();
+
+  // The phone layout stacks the choices instead of showing three columns.
+  await expect(page.getByRole("group", { name: "Agent platforms" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Models" })).toHaveCount(0);
+  await page.getByRole("button", { name: "codex models" }).click();
+  await page.getByRole("menuitemradio", { name: /Codex Review/ }).click();
+  await expect(trigger).toContainText("Codex Review");
+
+  await trigger.click();
+  await page.locator("[data-native-mobile-reasoning-trigger]").click();
+  await page.getByRole("menuitemradio", { name: "High" }).click();
+  await expect(trigger).toContainText("High");
+
+  await page.getByRole("button", { name: "Start review" }).click();
+  await expect(page.getByTestId("review-launch-selection"))
+    .toHaveText("codex|codex-review|high");
+});
+

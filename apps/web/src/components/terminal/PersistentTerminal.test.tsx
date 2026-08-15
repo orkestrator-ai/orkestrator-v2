@@ -707,7 +707,7 @@ describe("PersistentTerminal", () => {
       />,
     );
 
-    expect(screen.queryByRole("toolbar", { name: "Terminal keys" })).toBeNull();
+    expect(screen.queryByRole("toolbar", { name: "Terminal keys" }) === null).toBe(true);
   });
 
   it("uses application cursor sequences for mobile arrow keys when the terminal requests them", () => {
@@ -762,7 +762,7 @@ describe("PersistentTerminal", () => {
       />,
     );
 
-    expect(screen.queryByRole("toolbar", { name: "Terminal keys" })).toBeNull();
+    expect(screen.queryByRole("toolbar", { name: "Terminal keys" }) === null).toBe(true);
 
     useTerminalIsConnected = false;
     view.rerender(
@@ -2922,7 +2922,7 @@ describe("PersistentTerminal", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(view.queryByText("Mark setup complete")).toBeNull();
+    expect(view.queryByText("Mark setup complete") === null).toBe(true);
   });
 
   it("still offers the manual setup-complete button while setup is unfinished", async () => {
@@ -3809,7 +3809,7 @@ describe("PersistentTerminal", () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 400));
     expect(bootstrapWrites()).toHaveLength(1);
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("status") === null).toBe(true);
   });
 
   it("stops retrying once a bootstrap attempt succeeds", async () => {
@@ -3848,7 +3848,7 @@ describe("PersistentTerminal", () => {
     await new Promise((resolve) => setTimeout(resolve, 800));
     expect(attempts).toBe(2);
     expect(bootstrapWrites()).toHaveLength(2);
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("status") === null).toBe(true);
   });
 
   it("stays quiet when a mid-flight disconnect rejects the bootstrap publish", async () => {
@@ -3887,7 +3887,7 @@ describe("PersistentTerminal", () => {
       { timeout: 2_000 },
     );
     await new Promise((resolve) => setTimeout(resolve, 800));
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("status") === null).toBe(true);
     expect(bootstrapWrites()).toHaveLength(1);
 
     // The reconnect reads `bootstrapped` back from the backend session record,
@@ -3896,7 +3896,7 @@ describe("PersistentTerminal", () => {
     view.rerender(<PersistentTerminal {...props} />);
     await new Promise((resolve) => setTimeout(resolve, 400));
     expect(bootstrapWrites()).toHaveLength(1);
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("status") === null).toBe(true);
   });
 
   it("clears a stale launch warning when the terminal moves to a new session", async () => {
@@ -3930,7 +3930,7 @@ describe("PersistentTerminal", () => {
     // report a failure against a terminal that has not tried yet.
     useTerminalSessionId = "session-2";
     view.rerender(<PersistentTerminal {...props} />);
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("status") === null).toBe(true);
   });
 
   it("launches Codex terminal mode without an initial prompt", async () => {

@@ -91,13 +91,13 @@ describe("OpenFileDialog", () => {
 
     expect(await screen.findByRole("dialog")).toBeTruthy();
     await waitFor(() => expect(refreshMock).toHaveBeenCalledTimes(1));
-    expect(screen.queryByText("src", { selector: ".font-medium" })).toBeNull();
+    expect(screen.queryByText("src", { selector: ".font-medium" }) === null).toBe(true);
     const input = screen.getByRole("textbox", { name: "Search files" });
     fireEvent.keyDown(input, { key: "ArrowDown" });
     fireEvent.keyDown(input, { key: "Enter" });
 
     expect(createFileTabMock).toHaveBeenCalledWith("src/index.ts");
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
   });
 
   test("reports missing and unavailable environments without opening files", async () => {
@@ -129,7 +129,7 @@ describe("OpenFileDialog", () => {
       shiftKey: true,
       altKey: true,
     });
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("dialog") === null).toBe(true);
 
     fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });
     expect(await screen.findByText("Workspace scan failed")).toBeTruthy();

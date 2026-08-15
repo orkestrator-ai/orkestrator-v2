@@ -45,7 +45,7 @@ describe("InitializationLogs", () => {
     render(<InitializationLogs containerId="container-1" />);
 
     await waitFor(() => expect(screen.getByText("line-509")).toBeTruthy());
-    expect(screen.queryByText("line-0")).toBeNull();
+    expect(screen.queryByText("line-0") === null).toBe(true);
     expect(screen.getByText("line-10")).toBeTruthy();
     expect(getContainerLogsMock).toHaveBeenCalledWith("container-1", "500");
   });
@@ -77,7 +77,7 @@ describe("InitializationLogs", () => {
       await act(async () => runPoll?.());
 
       await waitFor(() => expect(screen.getByText("container ready")).toBeTruthy());
-      expect(screen.queryByText(/Failed to load container logs/)).toBeNull();
+      expect(screen.queryByText(/Failed to load container logs/) === null).toBe(true);
     } finally {
       cleanup();
       globalThis.setInterval = originalSetInterval;
@@ -141,7 +141,7 @@ describe("InitializationLogs", () => {
     expect(stale.textContent).toContain("stopped refreshing");
     // The last good tail is still the best view of the container.
     expect(screen.getByText("still useful")).toBeTruthy();
-    expect(screen.queryByText(/Failed to load container logs/)).toBeNull();
+    expect(screen.queryByText(/Failed to load container logs/) === null).toBe(true);
     expect(consoleWarn).toHaveBeenCalledWith(
       "[InitializationLogs] Container logs stopped refreshing:",
       "daemon unavailable",
@@ -154,7 +154,7 @@ describe("InitializationLogs", () => {
 
     getContainerLogsMock.mockResolvedValue("recovered");
     await waitFor(() => expect(screen.getByText("recovered")).toBeTruthy());
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("status") === null).toBe(true);
     consoleWarn.mockRestore();
   });
 
@@ -167,7 +167,7 @@ describe("InitializationLogs", () => {
     render(<InitializationLogs containerId="container-1" pollIntervalMs={5} />);
 
     await waitFor(() => expect(screen.getByText("second")).toBeTruthy());
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("status") === null).toBe(true);
     expect(consoleWarn).not.toHaveBeenCalled();
     consoleWarn.mockRestore();
   });

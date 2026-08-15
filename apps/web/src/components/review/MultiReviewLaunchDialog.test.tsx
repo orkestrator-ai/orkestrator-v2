@@ -27,7 +27,7 @@ describe("MultiReviewLaunchDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add model" }));
     expect(screen.getByLabelText("Reviewer 3 model")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Remove reviewer 2" }));
-    expect(screen.queryByLabelText("Reviewer 3 model")).toBeNull();
+    expect(screen.queryByLabelText("Reviewer 3 model") === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
     expect(onConfirm).toHaveBeenCalledTimes(1);

@@ -12,7 +12,7 @@ describe("AgentThinkingIndicator", () => {
 
     expect(indicator.textContent).toBe("Codex is thinking...");
     expect(indicator.classList.contains("agent-thinking-shimmer")).toBe(true);
-    expect(indicator.querySelector("svg")).toBeNull();
+    expect(indicator.querySelector("svg") === null).toBe(true);
   });
 
   test("merges a caller-provided class name with the shared shimmer classes", () => {

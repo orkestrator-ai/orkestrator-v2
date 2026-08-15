@@ -64,7 +64,7 @@ describe("GitHubIssueCard", () => {
     expect(screen.getByText("enhancement")).toBeTruthy();
     expect(screen.getByText("priority")).toBeTruthy();
     expect(screen.getByText("backend")).toBeTruthy();
-    expect(screen.queryByText("customer")).toBeNull();
+    expect(screen.queryByText("customer") === null).toBe(true);
     expect(screen.getByText("+1")).toBeTruthy();
     expect(screen.getByLabelText("3 comments")).toBeTruthy();
     expect(screen.getByLabelText("Assigned to grace")).toBeTruthy();

@@ -151,7 +151,7 @@ describe("ProjectNotesView", () => {
 
     expect(saveProjectNotesMock).toHaveBeenCalledWith("project-1", "typed and left alone");
     await waitFor(() => expect(deleteComposeDraftMock).toHaveBeenCalled());
-    expect(screen.queryByText("Unsaved changes")).toBeNull();
+    expect(screen.queryByText("Unsaved changes") === null).toBe(true);
   });
 
   test("keeps a newer keystroke recoverable when an autosave completes behind it", async () => {
@@ -282,7 +282,7 @@ describe("ProjectNotesView", () => {
 
     await waitFor(() => expect(editor.value).toBe("recovered notes"));
     expect(editor.disabled).toBe(false);
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("alert") === null).toBe(true);
     consoleError.mockRestore();
   });
 

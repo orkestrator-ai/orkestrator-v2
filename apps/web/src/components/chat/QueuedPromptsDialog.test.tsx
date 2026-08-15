@@ -167,7 +167,7 @@ describe("QueuedPromptsDialog", () => {
     view.rerender(<QueuedPromptsDialog open {...props} />);
 
     await waitFor(() => {
-      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.queryByRole("alert") === null).toBe(true);
     });
   });
 
@@ -330,6 +330,6 @@ describe("QueuedPromptsDialog", () => {
 
     expect(screen.getByRole("alert").textContent)
       .toContain("Queued prompt was not sent");
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
   });
 });

@@ -23,8 +23,8 @@
     "build": "bun scripts/build.ts",
     "prepack": "bun run build",
     "smoke:pack": "bun scripts/smoke-packed.ts",
-    "test": "bun run build && bun test tests --parallel",
-    "test:workspace": "bun test tests --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
+    "test": "bun run build && bun test --preload ../../tests/setup-node.ts tests --parallel",
+    "test:workspace": "bun test --preload ../../tests/setup-node.ts tests --only-failures --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
     "typecheck": "bunx tsc --noEmit -p tsconfig.json"
   },
   "//dependencies": "Only modules scripts/build.ts leaves unbundled belong here; everything else is inlined into dist/ and resources/. tests/cli.test.ts derives this list from the built artifacts and fails if it drifts.",

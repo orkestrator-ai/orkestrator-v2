@@ -295,7 +295,7 @@ describe("BuildLaunchDialog", () => {
 
     expect(screen.getByRole("heading", { name: "Configure build" })).toBeTruthy();
     // One shared section, so no per-step controls are on screen.
-    expect(screen.queryByRole("radiogroup", { name: "Review agent" })).toBeNull();
+    expect(screen.queryByRole("radiogroup", { name: "Review agent" }) === null).toBe(true);
     submit();
 
     const shared = { agent: "claude", model: "claude-b", reasoningEffort: "xhigh" };

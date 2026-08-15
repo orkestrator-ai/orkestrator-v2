@@ -234,7 +234,7 @@ describe("MarkdownEditorTab", () => {
     ).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Rendered" }).getAttribute("data-state"))
       .toBe("active");
-    expect(screen.queryByText(/cannot preserve/i)).toBeNull();
+    expect(screen.queryByText(/cannot preserve/i) === null).toBe(true);
   });
 
   test("preserves frontmatter when a rendered edit switches to Raw mode", async () => {
@@ -391,7 +391,7 @@ describe("MarkdownEditorTab", () => {
     });
 
     expect(await screen.findByRole("heading", { name: "Safe again" })).toBeTruthy();
-    expect(screen.queryByText(/cannot preserve/i)).toBeNull();
+    expect(screen.queryByText(/cannot preserve/i) === null).toBe(true);
   });
 
   test("falls back to Raw mode when Tiptap reports a content error", async () => {

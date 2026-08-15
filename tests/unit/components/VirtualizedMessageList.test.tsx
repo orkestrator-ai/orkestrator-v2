@@ -263,7 +263,7 @@ describe("VirtualizedMessageList", () => {
     );
 
     expect(screen.getByText("No messages yet")).toBeTruthy();
-    expect(screen.queryByText("should not render")).toBeNull();
+    expect(screen.queryByText("should not render") === null).toBe(true);
   });
 
   test("does not render EmptyPlaceholder when messages exist", () => {
@@ -280,7 +280,7 @@ describe("VirtualizedMessageList", () => {
       />
     );
 
-    expect(screen.queryByText("No messages yet")).toBeNull();
+    expect(screen.queryByText("No messages yet") === null).toBe(true);
     expect(screen.getByText("Hi")).toBeTruthy();
   });
 
@@ -314,7 +314,7 @@ describe("VirtualizedMessageList", () => {
       />
     );
 
-    expect(screen.queryByTestId("virtuoso-footer")).toBeNull();
+    expect(screen.queryByTestId("virtuoso-footer") === null).toBe(true);
   });
 
   test("passes scroll props through to Virtuoso", () => {
@@ -509,7 +509,7 @@ describe("VirtualizedMessageList", () => {
 
     expect(lastVirtuosoProps.components.Footer).toBeUndefined();
     expect(lastVirtuosoProps.components.EmptyPlaceholder).toBeUndefined();
-    expect(screen.queryByTestId("virtuoso-footer")).toBeNull();
+    expect(screen.queryByTestId("virtuoso-footer") === null).toBe(true);
   });
 
   test("opens find, counts the full list, and centers the current row", () => {

@@ -99,7 +99,7 @@ describe("KanbanCard", () => {
   test("does not render clear status menu item for unlinked cards", () => {
     renderCard(makeTask(), { canClearStatus: false });
 
-    expect(screen.queryByText("Clear status")).toBeNull();
+    expect(screen.queryByText("Clear status") === null).toBe(true);
   });
 
   test("does not render clear status menu item while a build is active", () => {
@@ -110,6 +110,6 @@ describe("KanbanCard", () => {
       buildPhase: "building",
     });
 
-    expect(screen.queryByText("Clear status")).toBeNull();
+    expect(screen.queryByText("Clear status") === null).toBe(true);
   });
 });

@@ -11,6 +11,7 @@ import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import * as backend from "@/lib/backend";
 import { clearStoredPaneSelection } from "@/lib/pane-selection-storage";
 import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping, PrState } from "@/types";
+import { rendererDebugLog } from "@/lib/debug-log";
 
 /**
  * Extract error message from various error types.
@@ -612,7 +613,7 @@ export function useEnvironments(
 
     const setupListener = async () => {
       const stop = await listen<EnvironmentRenamedPayload>("environment-renamed", (event) => {
-        console.log("[useEnvironments] Received environment-renamed event:", event.payload);
+        rendererDebugLog("[useEnvironments] Received environment-renamed event:", event.payload);
         const { environment_id, new_name, new_branch } = event.payload;
 
         // If the branch changed, clear stale PR state so monitoring starts
@@ -620,7 +621,7 @@ export function useEnvironments(
         // the old branch would be preserved indefinitely.
         const currentEnv = useEnvironmentStore.getState().getEnvironmentById(environment_id);
         if (currentEnv && currentEnv.branch !== new_branch && currentEnv.prUrl) {
-          console.log(
+          rendererDebugLog(
             `[useEnvironments] Branch changed (${currentEnv.branch} -> ${new_branch}), clearing stale PR state`
           );
           backend.clearEnvironmentPr(environment_id).catch((err) => {
@@ -780,7 +781,7 @@ export function useEnvironments(
 
   const startEnvironment = useCallback(
     async (environmentId: string, initialPrompt?: string, options?: StartEnvironmentOptions) => {
-      console.log("[useEnvironments] startEnvironment called:", environmentId);
+      rendererDebugLog("[useEnvironments] startEnvironment called:", environmentId);
       // Read from store directly to avoid stale closure over `environments`.
       // When called from handleCreateEnvironment, the useCallback closure may
       // capture an older environments array that doesn't include the new env.
@@ -813,19 +814,19 @@ export function useEnvironments(
       updateEnvironmentInStore(environmentId, { lifecycleError: null });
 
       try {
-        console.log("[useEnvironments] Setting status to creating...");
+        rendererDebugLog("[useEnvironments] Setting status to creating...");
         updateStatusInStore(environmentId, "creating");
         if (options?.background) {
-          console.log("[useEnvironments] Handing environment start to backend...");
+          rendererDebugLog("[useEnvironments] Handing environment start to backend...");
           await backend.startEnvironmentInBackground(environmentId);
           finishAttemptAdmission();
           return [];
         }
 
-        console.log("[useEnvironments] Calling backend.startEnvironment...");
+        rendererDebugLog("[useEnvironments] Calling backend.startEnvironment...");
         const result = await backend.startEnvironment(environmentId);
         finishAttemptAdmission();
-        console.log("[useEnvironments] backend.startEnvironment completed, refreshing environment...", {
+        rendererDebugLog("[useEnvironments] backend.startEnvironment completed, refreshing environment...", {
           setupStarted: result.setupStarted,
           setupSessionId: result.setupSessionId,
         });
@@ -833,7 +834,7 @@ export function useEnvironments(
         // Refresh the full environment data (including containerId / worktreePath)
         const updatedEnv = await backend.getEnvironment(environmentId);
         if (updatedEnv) {
-          console.log("[useEnvironments] Got updated environment:", updatedEnv);
+          rendererDebugLog("[useEnvironments] Got updated environment:", updatedEnv);
           if (updatedEnv.environmentType === "local" && !updatedEnv.worktreePath) {
             console.warn("[useEnvironments] Local environment started without worktreePath:", {
               environmentId,
@@ -881,22 +882,22 @@ export function useEnvironments(
 
   const stopEnvironment = useCallback(
     async (environmentId: string) => {
-      console.log("[useEnvironments] stopEnvironment called:", environmentId);
+      rendererDebugLog("[useEnvironments] stopEnvironment called:", environmentId);
       setError(null);
       try {
         // Immediately set status to stopping for user feedback
-        console.log("[useEnvironments] Setting status to stopping...");
+        rendererDebugLog("[useEnvironments] Setting status to stopping...");
         updateStatusInStore(environmentId, "stopping");
-        console.log("[useEnvironments] Calling backend.stopEnvironment...");
+        rendererDebugLog("[useEnvironments] Calling backend.stopEnvironment...");
         await backend.stopEnvironment(environmentId);
-        console.log("[useEnvironments] backend.stopEnvironment completed, updating status...");
+        rendererDebugLog("[useEnvironments] backend.stopEnvironment completed, updating status...");
         updateStatusInStore(environmentId, "stopped");
-        console.log("[useEnvironments] Status updated to stopped");
+        rendererDebugLog("[useEnvironments] Status updated to stopped");
 
         // Disconnect all sessions for this environment since container is stopped
-        console.log("[useEnvironments] Disconnecting sessions for environment...");
+        rendererDebugLog("[useEnvironments] Disconnecting sessions for environment...");
         await disconnectEnvironmentSessions(environmentId);
-        console.log("[useEnvironments] Sessions disconnected");
+        rendererDebugLog("[useEnvironments] Sessions disconnected");
         toast.success("Environment stopped");
       } catch (err) {
         console.error("[useEnvironments] Error stopping environment:", err);

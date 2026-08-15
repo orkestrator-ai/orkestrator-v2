@@ -443,7 +443,7 @@ describe("GlobalSettings", () => {
     const dialog = await screen.findByRole("alertdialog");
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
-    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("alertdialog") === null).toBe(true));
     expect(mockResetWebClientServe).not.toHaveBeenCalled();
   });
 
@@ -532,7 +532,7 @@ describe("GlobalSettings", () => {
 
     render(<GlobalSettings activeSection="web-client" />);
     expect(await screen.findByText("Off")).toBeTruthy();
-    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.queryByRole("link") === null).toBe(true);
   });
 
   test("displays, reveals, edits, and saves the gateway token", async () => {
@@ -611,7 +611,7 @@ describe("GlobalSettings", () => {
     expect(saveButton.disabled).toBe(true);
 
     fireEvent.change(input, { target: { value: "valid-token-value-123456" } });
-    expect(screen.queryByText(/Gateway token must|too large to store/)).toBeNull();
+    expect(screen.queryByText(/Gateway token must|too large to store/) === null).toBe(true);
     expect(saveButton.disabled).toBe(false);
   });
 
@@ -726,8 +726,8 @@ describe("GlobalSettings", () => {
       firstToken.resolve({ token: "stale-gateway-token", editable: true, source: "file" });
       await Promise.resolve();
     });
-    expect(screen.queryByText("stale status")).toBeNull();
-    expect(screen.queryByDisplayValue("stale-gateway-token")).toBeNull();
+    expect(screen.queryByText("stale status") === null).toBe(true);
+    expect(screen.queryByDisplayValue("stale-gateway-token") === null).toBe(true);
     expect(screen.getByDisplayValue("new-gateway-token-123456")).toBeTruthy();
   });
 
@@ -746,7 +746,7 @@ describe("GlobalSettings", () => {
       token.resolve({ token: "late-gateway-token", editable: true, source: "file" });
       await Promise.resolve();
     });
-    expect(screen.queryByDisplayValue("late-gateway-token")).toBeNull();
+    expect(screen.queryByDisplayValue("late-gateway-token") === null).toBe(true);
   });
 
   test("shows unavailable and status-fetch errors", async () => {
@@ -760,7 +760,7 @@ describe("GlobalSettings", () => {
 
     expect(await screen.findByText("Unavailable")).toBeTruthy();
     expect(screen.getByText("No Tailscale connection was found")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Reset Tailscale Serve" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reset Tailscale Serve" }) === null).toBe(true);
     unmount();
 
     mockGetWebClientStatus.mockRejectedValueOnce(new Error("IPC unavailable"));
@@ -807,7 +807,7 @@ describe("GlobalSettings", () => {
 
       expect(providerItems()).toEqual(["opencode", "opencode-go"]);
       // Nothing is dirty yet, so the section must not offer a reset.
-      expect(screen.queryByRole("button", { name: "Reset to defaults" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Reset to defaults" }) === null).toBe(true);
     });
 
     test("adds a provider and saves the widened list", async () => {
@@ -1096,8 +1096,7 @@ describe("GlobalSettings", () => {
     });
 
     expect(screen.getByText("Review instruction must be 100,000 characters or fewer.")).toBeTruthy();
-    expect(screen.queryByText(/Long review instructions are repeated across review passes/))
-      .toBeNull();
+    expect(screen.queryByText(/Long review instructions are repeated across review passes/) === null).toBe(true);
     expect(instruction.getAttribute("aria-describedby"))
       .not.toContain("review-instruction-warning");
     expect(instruction.getAttribute("aria-invalid")).toBe("true");
@@ -1113,8 +1112,7 @@ describe("GlobalSettings", () => {
       target: { value: "x".repeat(REVIEW_INSTRUCTION_RECOMMENDED_LENGTH) },
     });
 
-    expect(screen.queryByText(/Long review instructions are repeated across review passes/))
-      .toBeNull();
+    expect(screen.queryByText(/Long review instructions are repeated across review passes/) === null).toBe(true);
     expect(instruction.getAttribute("aria-describedby"))
       .toBe("review-instruction-description review-instruction-status");
   });
@@ -1164,8 +1162,7 @@ describe("GlobalSettings", () => {
       .toBe(false);
 
     fireEvent.change(instruction, { target: { value: "Short review instruction." } });
-    expect(screen.queryByText(/Long review instructions are repeated across review passes/))
-      .toBeNull();
+    expect(screen.queryByText(/Long review instructions are repeated across review passes/) === null).toBe(true);
     expect(instruction.getAttribute("aria-describedby"))
       .not.toContain("review-instruction-warning");
   });
@@ -1354,7 +1351,7 @@ describe("GlobalSettings", () => {
 
     // Nothing is stored, so there is no clear button and the field is empty —
     // without this notice the pane implies no key reaches new containers.
-    expect(screen.queryByRole("button", { name: "Clear stored Cursor API key" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Clear stored Cursor API key" }) === null).toBe(true);
     expect((screen.getByLabelText("Cursor API key") as HTMLInputElement).placeholder)
       .toBe("Cursor API key");
     expect(screen.getByText(/inherited CURSOR_API_KEY from its own environment/))
@@ -1374,7 +1371,7 @@ describe("GlobalSettings", () => {
     }));
     render(<GlobalSettings activeSection="cursor" />);
 
-    expect(screen.queryByText(/inherited CURSOR_API_KEY from its own environment/)).toBeNull();
+    expect(screen.queryByText(/inherited CURSOR_API_KEY from its own environment/) === null).toBe(true);
     expect(screen.getByRole("button", { name: "Clear stored Cursor API key" })).toBeTruthy();
   });
 
@@ -1441,7 +1438,7 @@ describe("GlobalSettings", () => {
       name: "Use host GitHub CLI credentials",
     });
     expect(hostCredentials.getAttribute("data-state")).toBe("checked");
-    expect(screen.queryByLabelText("GitHub token")).toBeNull();
+    expect(screen.queryByLabelText("GitHub token") === null).toBe(true);
 
     fireEvent.click(hostCredentials);
     expect(screen.getByLabelText("GitHub token")).toBeTruthy();
@@ -1576,7 +1573,7 @@ describe("GlobalSettings", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Reset" }).at(-1)!);
 
     expect(screen.getByText("1,000 lines")).toBeTruthy();
-    expect(screen.queryByText("Invalid hex color format. Use #RGB or #RRGGBB.")).toBeNull();
+    expect(screen.queryByText("Invalid hex color format. Use #RGB or #RRGGBB.") === null).toBe(true);
   });
 
   test("saves terminal font and scrollback selections", async () => {
@@ -1590,7 +1587,7 @@ describe("GlobalSettings", () => {
     fireEvent.pointerUp(option, { pointerType: "mouse" });
     await waitFor(() => expect(font.textContent).toContain("JetBrains Mono"));
     fireEvent.animationEnd(listbox);
-    await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("listbox") === null).toBe(true));
     const scrollback = screen.getAllByRole("slider")[1]!;
     fireEvent.keyDown(scrollback, { key: "ArrowRight" });
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
@@ -1856,7 +1853,7 @@ describe("GlobalSettings", () => {
 
     fireEvent.click(screen.getAllByRole("button", { name: "Reset" }).at(-1)!);
     expect(domains.value).toBe("");
-    expect(screen.queryByText(/Invalid domain format/)).toBeNull();
+    expect(screen.queryByText(/Invalid domain format/) === null).toBe(true);
   });
 
   test("renders every DNS result state and recovers from a test failure", async () => {
@@ -1902,12 +1899,12 @@ describe("GlobalSettings", () => {
     expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(true);
 
     fireEvent.change(colorTextInput, { target: { value: "#123456" } });
-    expect(screen.queryByText("Invalid hex color format. Use #RGB or #RRGGBB.")).toBeNull();
+    expect(screen.queryByText("Invalid hex color format. Use #RGB or #RRGGBB.") === null).toBe(true);
     fireEvent.change(colorTextInput, { target: { value: "invalid" } });
 
     fireEvent.click(screen.getAllByRole("button", { name: "Reset" }).at(-1)!);
     expect(colorTextInput.value).toBe("#000000");
-    expect(screen.queryByText("Invalid hex color format. Use #RGB or #RRGGBB.")).toBeNull();
+    expect(screen.queryByText("Invalid hex color format. Use #RGB or #RRGGBB.") === null).toBe(true);
   });
 
   test("propagates changed GitHub credentials without failing a saved config", async () => {

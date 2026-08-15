@@ -494,9 +494,7 @@ describe("GitHubIssueDetail", () => {
     renderDetail();
 
     expect(screen.getByText("Build phase: creating-environment")).toBeTruthy();
-    expect(
-      screen.queryByRole("button", { name: /View Build/ }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /View Build/ }) === null).toBe(true);
     expect(
       (screen.getByRole("button", { name: "Build Container" }) as HTMLButtonElement)
         .disabled,

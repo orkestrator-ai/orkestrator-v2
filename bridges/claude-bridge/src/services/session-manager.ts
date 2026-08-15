@@ -623,7 +623,7 @@ async function refreshStructuredRateLimits(
   } catch (error) {
     // The API is explicitly experimental. A failure must not discard the
     // sparse windows already retained from rate_limit_event notifications.
-    console.debug("[session-manager] Structured usage control request failed:", error);
+    debugLog("[session-manager] Structured usage control request failed:", error);
     return error instanceof StructuredUsageRequestTimeoutError
       ? "timed-out"
       : "unchanged";
@@ -779,7 +779,7 @@ async function buildClaudeUsageSnapshot(
         };
       }
     } catch (error) {
-      console.debug("[session-manager] Context usage control request failed:", error);
+      debugLog("[session-manager] Context usage control request failed:", error);
     }
   }
 
@@ -995,7 +995,7 @@ export function runClaudeTitleCommand(
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (error) {
-      console.debug(
+      debugLog(
         "[session-manager] CLI title generation spawn error:",
         error instanceof Error ? error.message : String(error),
       );
@@ -1020,7 +1020,7 @@ export function runClaudeTitleCommand(
     // stuck child — then escalate SIGTERM→SIGKILL after the grace period.
     const terminate = (reason: string) => {
       if (settled) return;
-      console.debug("[session-manager] CLI title generation terminated:", reason);
+      debugLog("[session-manager] CLI title generation terminated:", reason);
       settle(null);
       try {
         child.kill("SIGTERM");
@@ -1056,7 +1056,7 @@ export function runClaudeTitleCommand(
     });
 
     child.on("error", (error: Error) => {
-      console.debug("[session-manager] CLI title generation spawn error:", error.message);
+      debugLog("[session-manager] CLI title generation spawn error:", error.message);
       settle(null);
     });
 
@@ -1064,7 +1064,7 @@ export function runClaudeTitleCommand(
       if (killTimer) clearTimeout(killTimer);
       if (settled) return;
       if (code !== 0) {
-        console.debug("[session-manager] CLI title generation failed:", { code, stderr: stderr.slice(0, 200) });
+        debugLog("[session-manager] CLI title generation failed:", { code, stderr: stderr.slice(0, 200) });
         settle(null);
         return;
       }
@@ -1082,10 +1082,10 @@ export function runClaudeTitleCommand(
 async function generateTitleViaCli(userMessage: string): Promise<string | null> {
   const cliPath = await findClaudeCliExecutable();
   if (!cliPath) {
-    console.debug("[session-manager] Claude CLI not found for title generation");
+    debugLog("[session-manager] Claude CLI not found for title generation");
     return null;
   }
-  console.debug("[session-manager] Using Claude CLI for title generation:", cliPath);
+  debugLog("[session-manager] Using Claude CLI for title generation:", cliPath);
 
   const args = [
     "--print",
@@ -1114,7 +1114,7 @@ async function generateTitleViaCli(userMessage: string): Promise<string | null> 
 
   const title = sanitizeSessionTitle(stdout);
   if (!title) {
-    console.debug("[session-manager] CLI title generation returned empty output");
+    debugLog("[session-manager] CLI title generation returned empty output");
     return null;
   }
   return title;
@@ -1135,7 +1135,7 @@ async function generateAndSetSessionTitle(
 
     // Fallback: extract a simple title from the user message
     if (!title) {
-      console.debug("[session-manager] CLI title generation unavailable, using text extraction fallback");
+      debugLog("[session-manager] CLI title generation unavailable, using text extraction fallback");
       const cleaned = userMessage
         .replace(/```[\s\S]*?```/g, "")
         .replace(/`[^`]+`/g, "")
@@ -1154,7 +1154,7 @@ async function generateAndSetSessionTitle(
     }
 
     if (!title) {
-      console.debug("[session-manager] Title generation returned empty result");
+      debugLog("[session-manager] Title generation returned empty result");
       return;
     }
 
@@ -1162,7 +1162,7 @@ async function generateAndSetSessionTitle(
     if (!session) return;
 
     session.title = title;
-    console.debug("[session-manager] Generated session title:", { sessionId, title });
+    debugLog("[session-manager] Generated session title:", { sessionId, title });
 
     // Written through to the rollout, not just held in memory: without a
     // durable custom title the next `reconcilePersistedSessions` has nothing to
@@ -1170,7 +1170,7 @@ async function generateAndSetSessionTitle(
     try {
       await persistSessionTitle(session, title);
     } catch (error) {
-      console.debug("[session-manager] Failed to persist generated title:", error);
+      debugLog("[session-manager] Failed to persist generated title:", error);
     }
 
     eventEmitter.emit({
@@ -1179,7 +1179,7 @@ async function generateAndSetSessionTitle(
       data: { title },
     });
   } catch (error) {
-    console.debug("[session-manager] Title generation failed:", error);
+    debugLog("[session-manager] Title generation failed:", error);
   } finally {
     const session = sessions.get(sessionId);
     if (session) {
@@ -1296,7 +1296,7 @@ async function ensureClientSessionAlias(
   } catch (error) {
     // Best effort: the next materialization retries, and failing here would
     // stop the user opening a session whose rollout is perfectly readable.
-    console.debug(
+    debugLog(
       "[session-manager] Failed to re-assert the client session alias:",
       error instanceof Error ? error.message : String(error),
     );
@@ -3467,7 +3467,7 @@ export function evictIdleHydratedTranscripts(now: number = Date.now()): string[]
 
   lastIdleTranscriptSweep = { scanned, evicted: evicted.length, skipped };
   if (isDebugLoggingEnabled || evicted.length > 0) {
-    console.debug("[session-manager] Idle hydrated transcript sweep", {
+    debugLog("[session-manager] Idle hydrated transcript sweep", {
       scanned,
       evicted: evicted.length,
       sessionIds: evicted,
@@ -3721,7 +3721,7 @@ async function rewindViaTransientQuery(
     try {
       await iterator.return?.();
     } catch (error) {
-      console.debug("[session-manager] Failed to close rewind query:", error);
+      debugLog("[session-manager] Failed to close rewind query:", error);
     }
   }
 }
@@ -4174,7 +4174,7 @@ async function closeQueryControl(control: NonNullable<SessionState["queryControl
   try {
     await control.close();
   } catch (error) {
-    console.debug("[session-manager] Failed to close query control:", error);
+    debugLog("[session-manager] Failed to close query control:", error);
   }
 }
 
@@ -5072,7 +5072,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
 
     const fastMode = options?.fastMode === true;
 
-    console.log("[session-manager] Starting query", {
+    debugLog("[session-manager] Starting query", {
       sessionId,
       cwd,
       model: options?.model,
@@ -5086,7 +5086,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       pluginPaths: plugins.map((p) => p.path),
     });
     const envPath = process.env.PATH;
-    console.log("[session-manager] SDK env PATH", { path: envPath });
+    debugLog("[session-manager] SDK env PATH", { path: envPath });
     const sdkPrompt = await buildSdkPrompt(
       finalPrompt,
       options?.attachments,
@@ -5448,7 +5448,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
 
           // Handle EnterPlanMode - emit event so frontend can update plan mode state
           if (toolName === "EnterPlanMode") {
-            console.log("[session-manager] EnterPlanMode requested", { sessionId });
+            debugLog("[session-manager] EnterPlanMode requested", { sessionId });
 
             // The agent itself switched the session into plan mode; record it
             // like a user toggle so the preference survives a restart.
@@ -5480,7 +5480,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
 
           // Handle ExitPlanMode - wait for user approval before allowing
           if (toolName === "ExitPlanMode") {
-            console.log("[session-manager] ExitPlanMode requested, waiting for user approval", { sessionId });
+            debugLog("[session-manager] ExitPlanMode requested, waiting for user approval", { sessionId });
 
             // Create a plan approval request and wait for user decision
             const approvalId = generateMessageId();
@@ -5613,7 +5613,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           model: agent.model,
         }));
       } catch (error) {
-        console.debug("[session-manager] Agent discovery unavailable:", error);
+        debugLog("[session-manager] Agent discovery unavailable:", error);
       }
     }
 
@@ -6060,7 +6060,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         if (sdkSessionId) {
           const gainedDurableIdentity = session.sdkSessionId !== sdkSessionId;
           session.sdkSessionId = sdkSessionId;
-          console.log("[session-manager] Session initialized, stored SDK session ID:", sdkSessionId);
+          debugLog("[session-manager] Session initialized, stored SDK session ID:", sdkSessionId);
           // A plan-mode preference set before the first turn had no durable key
           // to be written under; the id assigned here is that key.
           if (gainedDurableIdentity) await persistSessionMetadata(session);
@@ -6113,7 +6113,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           agents: supportedAgents,
         };
 
-        console.log("[session-manager] Session init data captured", {
+        debugLog("[session-manager] Session init data captured", {
           sessionId,
           mcpServerCount: mcpServerStatuses.length,
           pluginCount: pluginStatuses.length,
@@ -6131,7 +6131,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         const compactMsg = message as SdkCompactBoundaryMessage;
         const compactMetadata = compactMsg.compact_metadata || {};
 
-        console.log("[session-manager] Compact boundary received", {
+        debugLog("[session-manager] Compact boundary received", {
           sessionId,
           preTokens: compactMetadata.pre_tokens,
           trigger: compactMetadata.trigger,
@@ -6208,7 +6208,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       } else if (message.type === "system") {
         // Handle other system messages (log for debugging)
         const sysMsg = message as SdkSystemMessage;
-        console.log("[session-manager] System message received", {
+        debugLog("[session-manager] System message received", {
           sessionId,
           subtype: sysMsg.subtype,
         });
@@ -6475,7 +6475,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         // the SDK continued the agent loop and Claude did see the feedback.
         // Clear the pending feedback so we don't re-prompt unnecessarily.
         if (pendingPlanRejectionFeedback) {
-          console.log("[session-manager] Claude responded after plan denial, clearing re-prompt feedback", { sessionId });
+          debugLog("[session-manager] Claude responded after plan denial, clearing re-prompt feedback", { sessionId });
           pendingPlanRejectionFeedback = null;
         }
 
@@ -6677,7 +6677,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         // Query completed - log full result for debugging
         const resultMsg = message as SdkResultMessage;
         receivedResult = true;
-        console.log("[session-manager] Query result", {
+        debugLog("[session-manager] Query result", {
           sessionId,
           subtype: resultMsg.subtype,
           result: resultMsg.result,
@@ -6758,7 +6758,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
               value: resultMsg.structured_output,
             });
           }
-          console.log("[session-manager] Query completed successfully", { sessionId });
+          debugLog("[session-manager] Query completed successfully", { sessionId });
           finishTurnInputIfSettled();
         } else {
           console.error("[session-manager] Query error:", resultMsg.subtype, { sessionId });
@@ -6806,7 +6806,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       const feedbackPrompt = pendingPlanRejectionFeedback;
       pendingPlanRejectionFeedback = null;
 
-      console.log("[session-manager] Re-prompting with plan rejection feedback", { sessionId });
+      debugLog("[session-manager] Re-prompting with plan rejection feedback", { sessionId });
 
       // Reset status to idle temporarily so sendPrompt can be called
       session.status = "idle";
@@ -6846,7 +6846,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       const continuationPrompt = pendingPlanApprovalContinuation;
       pendingPlanApprovalContinuation = null;
 
-      console.log("[session-manager] Re-prompting after approved-plan ExitPlanMode failure", {
+      debugLog("[session-manager] Re-prompting after approved-plan ExitPlanMode failure", {
         sessionId,
       });
 
@@ -6896,7 +6896,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       data: { success: true },
     });
 
-    console.debug("[session-manager] Prompt completed", {
+    debugLog("[session-manager] Prompt completed", {
       sessionId,
       sdkMessageCount,
       durationMs: Date.now() - startedAt,
@@ -7038,7 +7038,7 @@ export function answerQuestion(
 ): boolean {
   const question = pendingQuestions.get(requestId);
   if (!question) {
-    console.log("[session-manager] Question not found for requestId:", requestId);
+    debugLog("[session-manager] Question not found for requestId:", requestId);
     return false;
   }
 
@@ -7049,11 +7049,11 @@ export function answerQuestion(
 
   const resolver = questionResolvers.get(requestId);
   if (resolver) {
-    console.log("[session-manager] Resolving promise for question:", requestId);
+    debugLog("[session-manager] Resolving promise for question:", requestId);
     resolver.resolve(answers);
     questionResolvers.delete(requestId);
   } else {
-    console.log("[session-manager] No resolver found for question:", requestId);
+    debugLog("[session-manager] No resolver found for question:", requestId);
   }
 
   pendingQuestions.delete(requestId);
@@ -7118,7 +7118,7 @@ export function respondToPlanApproval(
 ): boolean {
   const approval = pendingPlanApprovals.get(requestId);
   if (!approval) {
-    console.log("[session-manager] Plan approval not found for requestId:", requestId);
+    debugLog("[session-manager] Plan approval not found for requestId:", requestId);
     return false;
   }
 
@@ -7130,11 +7130,11 @@ export function respondToPlanApproval(
 
   const resolver = planApprovalResolvers.get(requestId);
   if (resolver) {
-    console.log("[session-manager] Resolving promise for plan approval:", requestId);
+    debugLog("[session-manager] Resolving promise for plan approval:", requestId);
     resolver.resolve({ approved, feedback });
     planApprovalResolvers.delete(requestId);
   } else {
-    console.log("[session-manager] No resolver found for plan approval:", requestId);
+    debugLog("[session-manager] No resolver found for plan approval:", requestId);
   }
 
   pendingPlanApprovals.delete(requestId);
@@ -7180,7 +7180,7 @@ export async function getAvailableModelCatalog(): Promise<{
   let q: ReturnType<typeof query> | undefined;
   try {
     const cwd = process.env.CWD || process.cwd();
-    console.log("[session-manager] Fetching supported models", { cwd });
+    debugLog("[session-manager] Fetching supported models", { cwd });
     // Create a query object to access supportedModels()
     // We use maxTurns: 0 to prevent any actual processing
     q = query({
@@ -7194,7 +7194,7 @@ export async function getAvailableModelCatalog(): Promise<{
 
     // Get supported models from the query object
     const models = await q.supportedModels();
-    console.log("[session-manager] Supported models fetched", { count: models.length });
+    debugLog("[session-manager] Supported models fetched", { count: models.length });
 
     return {
       source: "sdk",
@@ -7263,7 +7263,7 @@ export async function getAvailableModelCatalog(): Promise<{
       try {
         await q.return();
       } catch (error) {
-        console.debug("[session-manager] Failed to clean up model query:", error);
+        debugLog("[session-manager] Failed to clean up model query:", error);
       }
     }
   }
@@ -7287,7 +7287,7 @@ export async function getClaudeRuntimeVersions(): Promise<{
     sdkVersion = manifest.version;
     bundledCliVersion = manifest.claudeCodeVersion;
   } catch (error) {
-    console.debug("[session-manager] Failed to read Claude SDK version:", error);
+    debugLog("[session-manager] Failed to read Claude SDK version:", error);
   }
 
   const executable = process.env.CLAUDE_CLI_PATH?.trim();
@@ -7302,7 +7302,7 @@ export async function getClaudeRuntimeVersions(): Promise<{
       cliVersion: output.match(/\d+\.\d+\.\d+/)?.[0] ?? bundledCliVersion,
     };
   } catch (error) {
-    console.debug("[session-manager] Failed to read Claude CLI version:", error);
+    debugLog("[session-manager] Failed to read Claude CLI version:", error);
     return { sdkVersion, cliVersion: bundledCliVersion };
   }
 }

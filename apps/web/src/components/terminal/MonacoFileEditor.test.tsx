@@ -227,7 +227,7 @@ describe("MonacoFileEditor component", () => {
       />,
     );
 
-    expect(screen.queryByRole("textbox", { name: "Mock Monaco editor" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Mock Monaco editor" }) === null).toBe(true);
     resolveConfiguration();
     expect(
       await screen.findByRole("textbox", { name: "Mock Monaco editor" }),
@@ -250,7 +250,7 @@ describe("MonacoFileEditor component", () => {
     );
 
     expect(await screen.findByText("Failed to load editor")).toBeTruthy();
-    expect(screen.queryByText("worker chunk unavailable")).toBeNull();
+    expect(screen.queryByText("worker chunk unavailable") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
     expect(

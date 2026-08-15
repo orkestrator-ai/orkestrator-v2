@@ -98,7 +98,7 @@ describe("PublicApp connection form", () => {
     fireEvent.change(screen.getByLabelText("Backend address"), {
       target: { value: "https://workstation.example" },
     });
-    expect(screen.queryByText(/Most browsers will block/)).toBeNull();
+    expect(screen.queryByText(/Most browsers will block/) === null).toBe(true);
   });
 
   test("reveals the token and forgets saved browser credentials", () => {
@@ -113,7 +113,7 @@ describe("PublicApp connection form", () => {
     fireEvent.click(screen.getByRole("button", { name: "Forget saved connection" }));
 
     expect(loadSavedConnection()).toEqual({ address: "", token: "" });
-    expect(screen.queryByRole("button", { name: "Forget saved connection" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Forget saved connection" }) === null).toBe(true);
   });
 
   test("aborts an automatic connection check when unmounted", async () => {

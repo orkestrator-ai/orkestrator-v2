@@ -1,14 +1,24 @@
 import { describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import {
   ALLOW_MISSING_PROTOCOL_BINARY_ENV,
   buildConcurrentGroups,
+  createTestLogDirectory,
   defaultRunGroup,
+  finalizeTestLogs,
+  INCLUDE_IOS_TESTS_ENV,
   main,
   MAX_AGGREGATE_TEST_WORKERS,
   MIN_AGGREGATE_TEST_WORKERS,
   MIN_BRIDGE_WORKERS,
   planWorkers,
+  pruneExpiredTestLogDirectories,
   runAllTests,
+  TEST_LOG_DIRECTORY_ENV,
+  TEST_LOG_RETENTION_MS,
+  TEST_MAX_OUTPUT_BYTES_ENV,
   WORKSPACE_WORKERS_ENV,
   type CommandResult,
   type TestAllDependencies,
@@ -91,6 +101,14 @@ const ROOT = "root and agent-support tests";
 const BRIDGES = "bridges";
 const PROTOCOL = "codex protocol lockfile";
 
+function isolatedRunnerEnvironment(
+  overrides: NodeJS.ProcessEnv = {},
+): NodeJS.ProcessEnv {
+  const environment = { ...process.env, ...overrides };
+  delete environment[TEST_LOG_DIRECTORY_ENV];
+  return environment;
+}
+
 describe("scripts/test-all.ts", () => {
   test("runs every non-iOS group with inherited environment", async () => {
     const { dependencies, invocations } = createDependencies();
@@ -123,8 +141,11 @@ describe("scripts/test-all.ts", () => {
     const { dependencies, started } = createDependencies({ gate });
 
     const run = runAllTests(dependencies);
-    // Let the other groups start while the workspace group is still blocked.
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    // Pruning old runner artifacts precedes group creation and can take more
+    // than one event-loop turn on a busy host. Wait for the observable group
+    // boundary rather than assuming it occurs within five milliseconds.
+    const deadline = Date.now() + 1_000;
+    while (started.length < 4 && Date.now() < deadline) await Bun.sleep(5);
 
     // Sequential execution would have started only the first group by now.
     expect(started).toContain(ROOT);
@@ -149,6 +170,7 @@ describe("scripts/test-all.ts", () => {
     expect(rootGroup.args).toContain("./test-fixtures/agent-project/server.test.ts");
     expect(workspaceGroup.args).toContain("--filter=@orkestrator/desktop");
     expect(bridgeGroup.args).toContain("--parallel=2");
+    expect(bridgeGroup.args.slice(0, 2)).toEqual(["test", "bridges"]);
   });
 
   test("the workspace worker count travels by environment, never through Turbo's `--`", () => {
@@ -220,9 +242,10 @@ describe("scripts/test-all.ts", () => {
     }
   });
 
-  test("the root suite outgrows the bridge pool once the budget can pay for it", () => {
+  test("the root suite receives the additional large-host capacity", () => {
     const large = planWorkers(20);
-    expect(large.root).toBeGreaterThan(large.bridges);
+    expect(large.root).toBe(6);
+    expect(large.workspaceConcurrency).toBe(2);
     expect(
       large.root
       + large.bridges
@@ -237,7 +260,8 @@ describe("scripts/test-all.ts", () => {
     const bridgeGroup = groups.find((group) => group.name === BRIDGES)!;
 
     expect(bridgeGroup.command).toBe("bun");
-    expect(bridgeGroup.args.slice(0, 2)).toEqual(["test", "bridges"]);
+    expect(bridgeGroup.args).toContain("test");
+    expect(bridgeGroup.args).toContain("bridges");
   });
 
   test("runs the Codex protocol check with an explicit offline fallback", () => {
@@ -288,16 +312,16 @@ describe("scripts/test-all.ts", () => {
     expect(await runAllTests(dependencies)).toBe(1);
   });
 
-  test("prints each group's captured output under its own banner", async () => {
+  test("prints only failing output under its group banner", async () => {
     const { dependencies, logs } = createDependencies({
+      statusByName: { [ROOT]: 1 },
       outputByName: { [ROOT]: "root suite details", [BRIDGES]: "bridge suite details" },
     });
 
     await runAllTests(dependencies);
     const report = logs.join("\n");
     expect(report).toContain("root suite details");
-    expect(report).toContain("bridge suite details");
-    // Buffered per group, so a failure can be attributed to a suite.
+    expect(report).not.toContain("bridge suite details");
     expect(report.indexOf(ROOT)).toBeLessThan(report.indexOf("root suite details"));
   });
 
@@ -323,7 +347,10 @@ describe("scripts/test-all.ts", () => {
   });
 
   test("runs iOS last and only after the other groups pass", async () => {
-    const environment = { DEVELOPER_DIR: "/custom/Xcode/Developer" };
+    const environment = {
+      DEVELOPER_DIR: "/custom/Xcode/Developer",
+      [INCLUDE_IOS_TESTS_ENV]: "1",
+    };
     const { dependencies, existsChecks, invocations } = createDependencies({
       environment,
       exists: true,
@@ -339,6 +366,7 @@ describe("scripts/test-all.ts", () => {
 
   test("skips iOS when another group failed", async () => {
     const { dependencies, invocations } = createDependencies({
+      environment: { [INCLUDE_IOS_TESTS_ENV]: "1" },
       exists: true,
       platform: "darwin",
       statusByName: { [ROOT]: 3 },
@@ -350,6 +378,7 @@ describe("scripts/test-all.ts", () => {
 
   test("uses the standard Xcode path when DEVELOPER_DIR is absent", async () => {
     const { dependencies, existsChecks, invocations } = createDependencies({
+      environment: { [INCLUDE_IOS_TESTS_ENV]: "1" },
       exists: true,
       platform: "darwin",
     });
@@ -361,6 +390,7 @@ describe("scripts/test-all.ts", () => {
 
   test("propagates an iOS test failure", async () => {
     const { dependencies, invocations } = createDependencies({
+      environment: { [INCLUDE_IOS_TESTS_ENV]: "1" },
       exists: true,
       platform: "darwin",
       statusByName: { ios: 10 },
@@ -372,6 +402,7 @@ describe("scripts/test-all.ts", () => {
 
   test("skips iOS tests when Xcode is missing on macOS", async () => {
     const { dependencies, existsChecks, invocations } = createDependencies({
+      environment: { [INCLUDE_IOS_TESTS_ENV]: "1" },
       exists: false,
       platform: "darwin",
     });
@@ -383,6 +414,7 @@ describe("scripts/test-all.ts", () => {
 
   test("does not inspect Xcode or run iOS tests on non-macOS platforms", async () => {
     const { dependencies, existsChecks, invocations } = createDependencies({
+      environment: { [INCLUDE_IOS_TESTS_ENV]: "1" },
       exists: true,
       platform: "linux",
     });
@@ -390,6 +422,17 @@ describe("scripts/test-all.ts", () => {
     expect(await runAllTests(dependencies)).toBe(0);
     expect(existsChecks).toHaveLength(0);
     expect(invocations).toHaveLength(4);
+  });
+
+  test("keeps the default suite platform-independent and leaves iOS opt-in", async () => {
+    const { dependencies, existsChecks, invocations } = createDependencies({
+      exists: true,
+      platform: "darwin",
+    });
+
+    expect(await runAllTests(dependencies)).toBe(0);
+    expect(existsChecks).toHaveLength(0);
+    expect(invocations.map((entry) => entry.name)).not.toContain("ios");
   });
 
   test("CLI entrypoint exits with the failing group status", async () => {
@@ -404,11 +447,8 @@ describe("scripts/test-all.ts", () => {
   });
 
   test("the default exit path sets a status instead of tearing the process down", async () => {
-    // Every group's output is printed as one buffered block, and a pipe — which
-    // is what the documented `| tee` workflow makes stdout — accepts that write
-    // asynchronously. `process.exit` would kill the process mid-flush and
-    // truncate the failing group's output at the pipe buffer, discarding the
-    // only text that explains why the run failed.
+    // A direct `process.exit` could truncate the bounded failure summary or
+    // interrupt artifact finalization.
     const previousExitCode = process.exitCode;
     try {
       const { dependencies } = createDependencies({ statusByName: { [ROOT]: 13 } });
@@ -438,11 +478,12 @@ describe("scripts/test-all.ts", () => {
       name: "fixture",
       command: process.execPath,
       args: ["-e", "process.stdout.write('out'); process.stderr.write('err')"],
-    }, process.env);
+    }, isolatedRunnerEnvironment());
 
     expect(result.status).toBe(0);
     expect(result.output).toContain("out");
     expect(result.output).toContain("err");
+    if (result.logPath) await rm(path.dirname(result.logPath), { recursive: true, force: true });
   });
 
   test("default runner converts spawn errors into a failed result", async () => {
@@ -450,9 +491,137 @@ describe("scripts/test-all.ts", () => {
       name: "missing",
       command: "/definitely/not/a/real/executable",
       args: [],
-    }, process.env);
+    }, isolatedRunnerEnvironment());
 
     expect(result.status).toBe(1);
     expect(result.output).toMatch(/ENOENT|not found/i);
+    if (result.logPath) await rm(path.dirname(result.logPath), { recursive: true, force: true });
+  });
+
+  test("terminates a group whose diagnostic output exceeds the byte budget", async () => {
+    const result = await defaultRunGroup({
+      name: "noisy fixture",
+      command: process.execPath,
+      args: ["-e", "process.stdout.write('x'.repeat(32_000))"],
+    }, isolatedRunnerEnvironment({ [TEST_MAX_OUTPUT_BYTES_ENV]: "4096" }));
+
+    expect(result.status).toBe(1);
+    expect(result.outputLimitExceeded).toBe(true);
+    expect(result.output).toContain("Output exceeded 4096 bytes");
+    if (result.logPath) await rm(path.dirname(result.logPath), { recursive: true, force: true });
+  });
+
+  test("fails a group when its authoritative log cannot be opened", async () => {
+    const logDirectory = await mkdtemp(path.join(os.tmpdir(), "ork-test-log-error-"));
+    await mkdir(path.join(logDirectory, "fixture.log"));
+    try {
+      const result = await defaultRunGroup({
+        name: "fixture",
+        command: process.execPath,
+        args: ["-e", "process.stdout.write('hi')"],
+      }, { ...process.env, [TEST_LOG_DIRECTORY_ENV]: logDirectory });
+
+      expect(result.status).toBe(1);
+      expect(result.output).toMatch(/EISDIR|directory/i);
+    } finally {
+      await rm(logDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("prunes expired completed and abandoned runs but preserves unsafe or recent targets", async () => {
+    const now = Date.now();
+    const expired = createTestLogDirectory();
+    const recent = createTestLogDirectory();
+    const invalid = createTestLogDirectory();
+    const unrelated = await mkdtemp(path.join(os.tmpdir(), "unrelated-test-log-"));
+    const oldCreatedAt = new Date(now - TEST_LOG_RETENTION_MS - 1_000).toISOString();
+    try {
+      await writeFile(path.join(expired, ".orkestrator-test-log"), JSON.stringify({
+        version: 1,
+        pid: process.pid,
+        createdAt: oldCreatedAt,
+      }));
+      await writeFile(path.join(invalid, ".orkestrator-test-log"), JSON.stringify({
+        version: 999,
+        createdAt: oldCreatedAt,
+      }));
+
+      await pruneExpiredTestLogDirectories(now);
+
+      expect(await stat(expired).catch(() => null)).toBeNull();
+      expect(await stat(recent).catch(() => null)).not.toBeNull();
+      expect(await stat(invalid).catch(() => null)).not.toBeNull();
+      expect(await stat(unrelated).catch(() => null)).not.toBeNull();
+    } finally {
+      await Promise.all([recent, invalid, unrelated].map((target) => rm(target, {
+        recursive: true,
+        force: true,
+      })));
+    }
+  });
+
+  test("finalizes passing and failing logs with bounded private artifacts", async () => {
+    const passingDirectory = createTestLogDirectory();
+    const failingDirectory = createTestLogDirectory();
+    const passingLog = path.join(passingDirectory, "passing.log");
+    const failingLog = path.join(failingDirectory, "failing.log");
+    const group = { name: "fixture", command: "bun", args: [] };
+    await writeFile(passingLog, "passing output", { mode: 0o600 });
+    await writeFile(failingLog, "failing output", { mode: 0o600 });
+    try {
+      await finalizeTestLogs(passingDirectory, [{
+        group,
+        result: { status: 0, logPath: passingLog, outputBytes: 14 },
+        elapsedMs: 1,
+      }], true);
+      await finalizeTestLogs(failingDirectory, [{
+        group,
+        result: { status: 1, logPath: failingLog, outputBytes: 14 },
+        elapsedMs: 2,
+      }], false);
+
+      expect(await stat(passingLog).catch(() => null)).toBeNull();
+      expect(await stat(`${failingLog}.gz`)).not.toBeNull();
+      expect(await stat(failingLog).catch(() => null)).toBeNull();
+      const passingSummary = JSON.parse(await readFile(
+        path.join(passingDirectory, "summary.json"),
+        "utf8",
+      )) as { succeeded: boolean };
+      const failingSummary = JSON.parse(await readFile(
+        path.join(failingDirectory, "summary.json"),
+        "utf8",
+      )) as { succeeded: boolean; groups: Array<{ artifact?: string }> };
+      expect(passingSummary.succeeded).toBe(true);
+      expect(failingSummary.succeeded).toBe(false);
+      expect(failingSummary.groups[0]?.artifact).toBe("failing.log.gz");
+      expect((await stat(passingDirectory)).mode & 0o777).toBe(0o700);
+      expect((await stat(path.join(passingDirectory, "summary.json"))).mode & 0o777).toBe(0o600);
+    } finally {
+      await Promise.all([passingDirectory, failingDirectory].map((target) => rm(target, {
+        recursive: true,
+        force: true,
+      })));
+    }
+  });
+
+  test("records missing and unreadable logs without aborting finalization", async () => {
+    const directory = createTestLogDirectory();
+    const missingLog = path.join(directory, "missing.log");
+    const unreadableLog = path.join(directory, "unreadable.log");
+    await mkdir(unreadableLog);
+    try {
+      await finalizeTestLogs(directory, [missingLog, unreadableLog].map((logPath) => ({
+        group: { name: path.basename(logPath), command: "bun", args: [] },
+        result: { status: 1, logPath },
+        elapsedMs: 1,
+      })), false);
+      const summary = JSON.parse(await readFile(path.join(directory, "summary.json"), "utf8")) as {
+        groups: Array<{ artifactError?: string }>;
+      };
+      expect(summary.groups).toHaveLength(2);
+      expect(summary.groups.every((entry) => Boolean(entry.artifactError))).toBe(true);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

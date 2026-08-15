@@ -609,8 +609,8 @@ describe("App background processing mounts", () => {
     await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
 
     expect(screen.getByTestId("terminal-env-visible").getAttribute("data-active")).toBe("true");
-    expect(screen.queryByTestId("terminal-env-background")).toBeNull();
-    expect(screen.queryByTestId("background-terminal-host")).toBeNull();
+    expect(screen.queryByTestId("terminal-env-background") === null).toBe(true);
+    expect(screen.queryByTestId("background-terminal-host") === null).toBe(true);
   });
 
   test("hydrates looped reviews exactly once per environment, starting from an empty store", async () => {
@@ -812,7 +812,7 @@ describe("App background processing mounts", () => {
         .toMatchObject({ backendRevision: 2, phase: "preparing" });
     });
     expect(mockListLoopedReviewWorkflows).toHaveBeenCalledWith("env-looped");
-    expect(screen.queryByTestId("terminal-env-looped")).toBeNull();
+    expect(screen.queryByTestId("terminal-env-looped") === null).toBe(true);
   });
 
   test("routes the empty selection to the launcher and forwards environment operations", async () => {
@@ -843,7 +843,7 @@ describe("App background processing mounts", () => {
     render(<App />);
 
     expect(screen.getByTestId("kanban-board").textContent).toBe("project-1");
-    expect(screen.queryByTestId("project-launcher")).toBeNull();
+    expect(screen.queryByTestId("project-launcher") === null).toBe(true);
     await waitFor(() => expect(mockCheckDocker).toHaveBeenCalled());
   });
 
@@ -892,8 +892,8 @@ describe("App background processing mounts", () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
-    expect(screen.queryByTestId("terminal-env-pending-setup")).toBeNull();
-    expect(screen.queryByTestId("background-terminal-host")).toBeNull();
+    expect(screen.queryByTestId("terminal-env-pending-setup") === null).toBe(true);
+    expect(screen.queryByTestId("background-terminal-host") === null).toBe(true);
   });
 
   test("does not duplicate setup-running environments that are already visible", async () => {
@@ -926,7 +926,7 @@ describe("App background processing mounts", () => {
       expect(screen.getByTestId("terminal-env-visible")).toBeTruthy();
     });
 
-    expect(screen.queryByTestId("terminal-env-sibling")).toBeNull();
+    expect(screen.queryByTestId("terminal-env-sibling") === null).toBe(true);
   });
 
   test("does not mount an active pipeline sibling because the backend owns advancement", async () => {
@@ -979,7 +979,7 @@ describe("App background processing mounts", () => {
     });
 
     expect(screen.getByTestId("terminal-env-visible").getAttribute("data-active")).toBe("true");
-    expect(screen.queryByTestId("terminal-env-sibling")).toBeNull();
+    expect(screen.queryByTestId("terminal-env-sibling") === null).toBe(true);
   });
 
   test("does not mount off-screen environments for renderer launch projections", async () => {
@@ -1003,7 +1003,7 @@ describe("App background processing mounts", () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
-    expect(screen.queryByTestId("terminal-env-pending-launch")).toBeNull();
+    expect(screen.queryByTestId("terminal-env-pending-launch") === null).toBe(true);
   });
 
   test("does not mount off-screen environments for durable launch intents", async () => {
@@ -1022,7 +1022,7 @@ describe("App background processing mounts", () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
-    expect(screen.queryByTestId("terminal-env-durable-launch")).toBeNull();
+    expect(screen.queryByTestId("terminal-env-durable-launch") === null).toBe(true);
   });
 
   test("does not mount off-screen environments for backend startup sessions", async () => {
@@ -1049,7 +1049,7 @@ describe("App background processing mounts", () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
-    expect(screen.queryByTestId("terminal-env-startup-session")).toBeNull();
+    expect(screen.queryByTestId("terminal-env-startup-session") === null).toBe(true);
   });
 
   test.each(["starting", "error"] as const)(
@@ -1079,7 +1079,7 @@ describe("App background processing mounts", () => {
       render(<App />);
 
       await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
-      expect(screen.queryByTestId(`terminal-env-startup-${status}`)).toBeNull();
+      expect(screen.queryByTestId(`terminal-env-startup-${status}`) === null).toBe(true);
     },
   );
 
@@ -1104,7 +1104,7 @@ describe("App background processing mounts", () => {
     });
     // A stopped environment cannot act on the launch, so mounting it would buy a
     // terminal, store subscriptions and listeners for no work at all.
-    expect(screen.queryByTestId("terminal-env-stopped-launch")).toBeNull();
+    expect(screen.queryByTestId("terminal-env-stopped-launch") === null).toBe(true);
   });
 
   test("does not mount off-screen environments for pending tab prompts", async () => {
@@ -1150,7 +1150,7 @@ describe("App background processing mounts", () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
-    expect(screen.queryByTestId("terminal-env-pending-prompt")).toBeNull();
+    expect(screen.queryByTestId("terminal-env-pending-prompt") === null).toBe(true);
   });
 
   test("does not mount an off-screen environment merely because prompts are queued", async () => {
@@ -1222,10 +1222,10 @@ describe("App background processing mounts", () => {
     // `NativeAgentService` and `PromptQueueDrainer` dispatch these server-side.
     // Force-mounting a hidden terminal for them kept an environment alive for
     // work the renderer was not doing.
-    expect(screen.queryByTestId("terminal-env-queued-claude")).toBeNull();
-    expect(screen.queryByTestId("terminal-env-queued-tmux")).toBeNull();
-    expect(screen.queryByTestId("terminal-env-queued-codex")).toBeNull();
-    expect(screen.queryByTestId("terminal-env-queued-opencode")).toBeNull();
+    expect(screen.queryByTestId("terminal-env-queued-claude") === null).toBe(true);
+    expect(screen.queryByTestId("terminal-env-queued-tmux") === null).toBe(true);
+    expect(screen.queryByTestId("terminal-env-queued-codex") === null).toBe(true);
+    expect(screen.queryByTestId("terminal-env-queued-opencode") === null).toBe(true);
   });
 
   test("does not mount off-screen environments for loading native sessions", async () => {
@@ -1255,7 +1255,7 @@ describe("App background processing mounts", () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
-    expect(screen.queryByTestId("terminal-env-loading-codex")).toBeNull();
+    expect(screen.queryByTestId("terminal-env-loading-codex") === null).toBe(true);
   });
 
   test("does not mount off-screen environments for busy tmux sessions", async () => {
@@ -1278,7 +1278,7 @@ describe("App background processing mounts", () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
-    expect(screen.queryByTestId("terminal-env-busy-tmux")).toBeNull();
+    expect(screen.queryByTestId("terminal-env-busy-tmux") === null).toBe(true);
   });
 
   test("does not mount off-screen environments for pending tmux hooks", async () => {
@@ -1307,7 +1307,7 @@ describe("App background processing mounts", () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
-    expect(screen.queryByTestId("terminal-env-waiting-tmux")).toBeNull();
+    expect(screen.queryByTestId("terminal-env-waiting-tmux") === null).toBe(true);
   });
 });
 
@@ -1415,7 +1415,7 @@ describe("App Docker availability", () => {
       });
 
       act(() => screen.getByRole("button", { name: "Continue Without Docker" }).click());
-      expect(screen.queryByText("Docker Is Not Running")).toBeNull();
+      expect(screen.queryByText("Docker Is Not Running") === null).toBe(true);
       expect(screen.getByTestId("app-shell")).toBeTruthy();
       expect(mockExit).not.toHaveBeenCalled();
     } finally {
@@ -1478,7 +1478,7 @@ describe("App Docker availability", () => {
       await runPoll();
       await waitFor(() => {
         expect(mockCheckDocker).toHaveBeenCalledTimes(4);
-        expect(screen.queryByText("Docker Is Not Running")).toBeNull();
+        expect(screen.queryByText("Docker Is Not Running") === null).toBe(true);
       });
       expect(mockSyncAllEnvironmentsWithDocker).toHaveBeenCalledTimes(2);
     } finally {
@@ -1523,7 +1523,7 @@ describe("App Docker availability", () => {
       });
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(3));
 
-      expect(screen.queryByText("Docker Is Not Running")).toBeNull();
+      expect(screen.queryByText("Docker Is Not Running") === null).toBe(true);
       expect(screen.getByTestId("terminal-env-visible").getAttribute("data-container-running"))
         .toBe("true");
       // Docker never left the "available" state, so nothing needed re-syncing
@@ -1641,7 +1641,7 @@ describe("App startup checks and global events", () => {
     await waitFor(
       () => {
         expect(mockCheckClaudeCli).toHaveBeenCalledTimes(2);
-        expect(screen.queryByText("AI CLI Required")).toBeNull();
+        expect(screen.queryByText("AI CLI Required") === null).toBe(true);
       },
       {
         // The aggregate runner executes the bridge suites concurrently; allow
@@ -1769,7 +1769,7 @@ describe("App startup checks and global events", () => {
     });
 
     await waitFor(() => {
-      expect(screen.queryByText("GitHub CLI Not Found")).toBeNull();
+      expect(screen.queryByText("GitHub CLI Not Found") === null).toBe(true);
     });
   });
 

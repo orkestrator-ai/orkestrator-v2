@@ -121,7 +121,7 @@ describe("DraggableTabBar", () => {
 
     expect(onTabRefresh).toHaveBeenCalledTimes(5);
     fireEvent.contextMenu(screen.getByText("Terminal 6"));
-    expect(screen.queryByText("Refresh")).toBeNull();
+    expect(screen.queryByText("Refresh") === null).toBe(true);
   });
 
   test("clears a clean file buffer when the tab is explicitly closed", async () => {

@@ -165,7 +165,7 @@ describe("DraggableTab title precedence", () => {
     renderTab(tab, 0);
 
     expect(screen.getByText("Review 1")).toBeDefined();
-    expect(screen.queryByText("Auto Title")).toBeNull();
+    expect(screen.queryByText("Auto Title") === null).toBe(true);
   });
 
   test("workflow tabs keep their label and reveal the user-defined session name on hover", async () => {
@@ -201,14 +201,14 @@ describe("DraggableTab title precedence", () => {
     renderTab(tab);
 
     const trigger = screen.getByText("Review 1").closest("div")!;
-    expect(screen.queryByText("Payment retry review")).toBeNull();
-    expect(screen.queryByText("Generated review title")).toBeNull();
+    expect(screen.queryByText("Payment retry review") === null).toBe(true);
+    expect(screen.queryByText("Generated review title") === null).toBe(true);
     fireEvent.mouseEnter(trigger);
 
     await waitFor(() => {
       expect(screen.getByText("Payment retry review")).toBeTruthy();
     });
-    expect(screen.queryByText("Generated review title")).toBeNull();
+    expect(screen.queryByText("Generated review title") === null).toBe(true);
   });
 
   test("workflow hover text falls back to the agent-generated session title", async () => {
@@ -252,7 +252,7 @@ describe("DraggableTab title precedence", () => {
     renderTab(tab);
 
     expect(screen.getByText("PR 1")).toBeDefined();
-    expect(screen.queryByText("Codex title")).toBeNull();
+    expect(screen.queryByText("Codex title") === null).toBe(true);
   });
 
   test("resolve tabs keep their numbered workflow title after OpenCode names the session", () => {
@@ -271,7 +271,7 @@ describe("DraggableTab title precedence", () => {
     renderTab(tab, 2);
 
     expect(screen.getByText("Resolve 3")).toBeDefined();
-    expect(screen.queryByText("OpenCode title")).toBeNull();
+    expect(screen.queryByText("OpenCode title") === null).toBe(true);
   });
 
   test("restored legacy Conflict tabs use the Resolve label", () => {
@@ -290,7 +290,7 @@ describe("DraggableTab title precedence", () => {
     renderTab(tab, 1);
 
     expect(screen.getByText("Resolve 2")).toBeDefined();
-    expect(screen.queryByText("Codex title")).toBeNull();
+    expect(screen.queryByText("Codex title") === null).toBe(true);
   });
 
   test("uses the OpenCode title before the workflow display title", () => {
@@ -309,7 +309,7 @@ describe("DraggableTab title precedence", () => {
     renderTab(tab);
 
     expect(screen.getByText("OpenCode title")).toBeDefined();
-    expect(screen.queryByText("Implementation 1")).toBeNull();
+    expect(screen.queryByText("Implementation 1") === null).toBe(true);
   });
 
   test("a custom terminal session name beats a Codex session title", () => {
@@ -343,7 +343,7 @@ describe("DraggableTab title precedence", () => {
     renderTab(tab, 2);
 
     expect(screen.getByText("Pinned name 3")).toBeDefined();
-    expect(screen.queryByText("Codex title")).toBeNull();
+    expect(screen.queryByText("Codex title") === null).toBe(true);
   });
 
   test("displayTitle is used when no claude session title exists", () => {
@@ -469,7 +469,7 @@ describe("DraggableTab title precedence", () => {
     });
 
     expect(screen.getByText("Foo")).toBeDefined();
-    expect(screen.queryByText("src/components/Foo/")).toBeNull();
+    expect(screen.queryByText("src/components/Foo/") === null).toBe(true);
   });
 
   test("a Claude-native tab ignores a same-key Codex session title", () => {
@@ -501,8 +501,8 @@ describe("DraggableTab title precedence", () => {
     renderTab(tab, 0);
 
     expect(screen.getByText("Claude title")).toBeDefined();
-    expect(screen.queryByText("Codex title")).toBeNull();
-    expect(screen.queryByText("OpenCode title")).toBeNull();
+    expect(screen.queryByText("Codex title") === null).toBe(true);
+    expect(screen.queryByText("OpenCode title") === null).toBe(true);
   });
 
   test("a Claude-native tab with only Codex and OpenCode titles falls back to displayTitle", () => {
@@ -575,7 +575,7 @@ describe("DraggableTab title precedence", () => {
     }, 0);
 
     expect(screen.getByText("Pipeline 1")).toBeDefined();
-    expect(screen.queryByText("Build: Add search")).toBeNull();
+    expect(screen.queryByText("Build: Add search") === null).toBe(true);
   });
 
   test("root tabs use the ROOT label", () => {
@@ -721,7 +721,7 @@ describe("DraggableTab icons", () => {
     );
 
     expect(container.querySelector("svg.lucide-earth")).toBeTruthy();
-    expect(container.querySelector("svg.lucide-terminal")).toBeNull();
+    expect(container.querySelector("svg.lucide-terminal") === null).toBe(true);
   });
 });
 
@@ -767,7 +767,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
 
     renderTab(tab, 0);
 
-    expect(screen.getByText("Terminal 1").getAttribute("data-slot")).toBeNull();
+    expect(screen.getByText("Terminal 1").getAttribute("data-slot") === null).toBe(true);
   });
 
   test("marks an active tab with an accent even when its pane is not focused", () => {
@@ -824,7 +824,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
       />,
     );
 
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("button") === null).toBe(true);
   });
 
   test("exposes the close actions through the context menu", () => {
@@ -848,7 +848,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
     expect(screen.getByText("Close all")).toBeDefined();
     expect(screen.getByText("Close others")).toBeDefined();
     expect(screen.getByText("Close to the right")).toBeDefined();
-    expect(screen.queryByText("Refresh")).toBeNull();
+    expect(screen.queryByText("Refresh") === null).toBe(true);
 
     fireEvent.click(screen.getByText("Close"));
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -895,7 +895,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
     fireEvent.mouseLeave(trigger);
 
     await waitFor(() => {
-      expect(screen.queryByText("src/components/Foo/Bar.tsx")).toBeNull();
+      expect(screen.queryByText("src/components/Foo/Bar.tsx") === null).toBe(true);
     }, { timeout: 10_000 });
   }, 20_000);
 
@@ -915,7 +915,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
     fireEvent.blur(trigger);
 
     await waitFor(() => {
-      expect(screen.queryByText("src/lib/util.ts")).toBeNull();
+      expect(screen.queryByText("src/lib/util.ts") === null).toBe(true);
     }, { timeout: 10_000 });
   }, 20_000);
 
@@ -1005,7 +1005,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
       fileData: { filePath: "src/lib/util.ts" },
     }, 0);
 
-    expect(container.querySelector("[title='Unsaved changes']")).toBeNull();
+    expect(container.querySelector("[title='Unsaved changes']") === null).toBe(true);
   });
 
   test("never renders the dot for a non-file tab sharing the dirty tab id", () => {
@@ -1017,7 +1017,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
 
     const { container } = renderTab({ id: "tab-terminal", type: "plain" }, 0);
 
-    expect(container.querySelector("[title='Unsaved changes']")).toBeNull();
+    expect(container.querySelector("[title='Unsaved changes']") === null).toBe(true);
   });
 
   test("invokes the bulk close handlers from the context menu", () => {
@@ -1076,7 +1076,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
       expect(screen.getByText(label).getAttribute("aria-disabled")).toBe("true");
     }
     // Close itself stays available: canClose is true and onClose was provided.
-    expect(screen.getByText("Close").getAttribute("aria-disabled")).toBeNull();
+    expect(screen.getByText("Close").getAttribute("aria-disabled") === null).toBe(true);
   });
 
   test("disables bulk close items when their handlers are absent", () => {

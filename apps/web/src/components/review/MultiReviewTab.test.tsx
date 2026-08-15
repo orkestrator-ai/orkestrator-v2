@@ -228,7 +228,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     await waitFor(() => expect(retry).toHaveBeenCalledWith(ready.id));
     await waitFor(() =>
       expect(useMultiReviewStore.getState().workflows.get(ready.id)?.phase).toBe("reviewing"));
-    expect(screen.queryByRole("button", { name: "Retry failed stage" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry failed stage" }) === null).toBe(true);
   });
 });
 
@@ -290,7 +290,7 @@ describe("MultiReviewReviewerTab", () => {
     expect(await screen.findByRole("article", { name: "Reviewer report" })).toBeTruthy();
     expect(screen.getByText(/Ready: with-fixes · 1 issue · 1 coverage gap/)).toBeTruthy();
     expect(document.body.textContent).not.toContain(finalJson);
-    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("textbox") === null).toBe(true);
 
     const normalized = toMultiReviewReviewerMessages(await loadTranscript());
     expect(normalized.map((message) => message.id)).toEqual(["progress"]);

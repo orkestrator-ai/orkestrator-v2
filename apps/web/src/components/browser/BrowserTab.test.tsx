@@ -169,7 +169,7 @@ describe("BrowserTab", () => {
 
     expect(screen.getByText("Preview a backend service")).toBeDefined();
     expect(screen.getByPlaceholderText("localhost:3000")).toBeDefined();
-    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.querySelector("iframe") === null).toBe(true);
   });
 
   test("reflows its toolbar against the pane width and clamps horizontal overflow", () => {
@@ -501,9 +501,9 @@ describe("BrowserTab", () => {
 
     expect(screen.getByText("Browser tabs aren’t supported on iOS")).toBeDefined();
     expect(screen.getByText(/Open this browser tab in the Orkestrator desktop app/)).toBeDefined();
-    expect(container.querySelector("iframe")).toBeNull();
-    expect(screen.queryByRole("textbox", { name: "Browser address" })).toBeNull();
-    expect(container.querySelector(".animate-spin")).toBeNull();
+    expect(container.querySelector("iframe") === null).toBe(true);
+    expect(screen.queryByRole("textbox", { name: "Browser address" }) === null).toBe(true);
+    expect(container.querySelector(".animate-spin") === null).toBe(true);
   });
 
   test("uses an isolated native surface and opens DevTools for that preview in Electron", async () => {
@@ -544,7 +544,7 @@ describe("BrowserTab", () => {
     );
 
     await waitFor(() => expect(attach).toHaveBeenCalled());
-    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.querySelector("iframe") === null).toBe(true);
     expect(container.querySelector('[data-native-browser-preview="browser-1"]')).not.toBeNull();
     const devToolsButton = screen.getByRole("button", { name: "Open preview DevTools" });
     await waitFor(() => expect(devToolsButton.hasAttribute("disabled")).toBe(false));
@@ -585,7 +585,7 @@ describe("BrowserTab", () => {
     );
 
     expect(screen.getByText("Browser tabs aren’t supported here")).toBeDefined();
-    expect(view.container.querySelector('[data-native-browser-preview="browser-1"]')).toBeNull();
+    expect(view.container.querySelector('[data-native-browser-preview="browser-1"]') === null).toBe(true);
     await waitFor(() => {
       expect(native.browserPreview.setVisible).toHaveBeenCalledWith("browser-1", false);
     });
@@ -606,7 +606,7 @@ describe("BrowserTab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Go" }));
 
     expect(screen.getByRole("alert").textContent).toContain("Orkestrator app itself");
-    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.querySelector("iframe") === null).toBe(true);
   });
 
   test("stays mounted but hidden while another tab is active", () => {
@@ -806,7 +806,7 @@ describe("BrowserTab", () => {
     fireEvent.change(address, { target: { value: "3000" } });
     fireEvent.click(screen.getByRole("button", { name: "Go" }));
 
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("alert") === null).toBe(true);
     expect(address.getAttribute("aria-invalid")).toBe("false");
     expect(container.querySelector("iframe")?.getAttribute("src")).toBe("http://localhost:3000/");
   });
@@ -828,7 +828,7 @@ describe("BrowserTab", () => {
       />,
     );
 
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("alert") === null).toBe(true);
     expect(screen.getByLabelText("Browser address").getAttribute("aria-invalid")).toBe("false");
     expect(view.container.querySelector("iframe")?.getAttribute("src")).toBe(
       "http://localhost:4000/external",
@@ -855,8 +855,8 @@ describe("BrowserTab", () => {
       />,
     );
 
-    expect(view.container.querySelector("iframe")).toBeNull();
-    expect(view.container.querySelector(".animate-spin")).toBeNull();
+    expect(view.container.querySelector("iframe") === null).toBe(true);
+    expect(view.container.querySelector(".animate-spin") === null).toBe(true);
     for (const name of ["Back", "Forward", "Reload preview"]) {
       expect(screen.getByRole("button", { name }).hasAttribute("disabled")).toBe(true);
     }
@@ -980,11 +980,11 @@ describe("BrowserTab", () => {
       />,
     );
 
-    expect(view.container.querySelector("iframe")).toBeNull();
+    expect(view.container.querySelector("iframe") === null).toBe(true);
     expect(screen.getByText("Browser tabs aren’t supported here")).toBeDefined();
     expect(screen.getByText(/Open this browser tab in the Orkestrator desktop app/)).toBeDefined();
-    expect(screen.queryByRole("textbox", { name: "Browser address" })).toBeNull();
-    expect(view.container.querySelector(".animate-spin")).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Browser address" }) === null).toBe(true);
+    expect(view.container.querySelector(".animate-spin") === null).toBe(true);
 
     for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
       const addressShortcut = new KeyboardEvent("keydown", {
@@ -1012,8 +1012,8 @@ describe("BrowserTab", () => {
     expect(screen.getByRole("alert").textContent).toContain("Enter an address such as");
     expect(screen.getByRole("textbox", { name: "Browser address" }).getAttribute("aria-invalid")).toBe("true");
     expect(screen.getByRole("button", { name: "Reload preview" }).hasAttribute("disabled")).toBe(true);
-    expect(container.querySelector("iframe")).toBeNull();
-    expect(container.querySelector(".animate-spin")).toBeNull();
+    expect(container.querySelector("iframe") === null).toBe(true);
+    expect(container.querySelector(".animate-spin") === null).toBe(true);
   });
 
   test("clears loading state when the iframe reports a load", () => {
@@ -1028,7 +1028,7 @@ describe("BrowserTab", () => {
     );
     expect(container.querySelector(".animate-spin")).not.toBeNull();
     fireEvent.load(container.querySelector("iframe") as HTMLIFrameElement);
-    expect(container.querySelector(".animate-spin")).toBeNull();
+    expect(container.querySelector(".animate-spin") === null).toBe(true);
   });
 
   test("rehydrates native state events, maps gateway URLs, and ignores other tabs and scopes", async () => {
@@ -1049,7 +1049,7 @@ describe("BrowserTab", () => {
       <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
     );
     await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
-    await waitFor(() => expect(view.container.querySelector(".animate-spin")).toBeNull());
+    await waitFor(() => expect(view.container.querySelector(".animate-spin") === null).toBe(true));
 
     native.emitState(previewState({
       tabId: "browser-other",
@@ -1060,14 +1060,14 @@ describe("BrowserTab", () => {
       url: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/4000/wrong-scope",
     }));
     expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe("http://localhost:3000/");
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("alert") === null).toBe(true);
 
     native.emitState(previewState({ url: "", loading: true, error: "empty URL state" }));
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("empty URL state"));
     expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe("http://localhost:3000/");
     expect(view.container.querySelector(".animate-spin")).not.toBeNull();
     native.emitState(previewState({ url: "not a URL" }));
-    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("alert") === null).toBe(true));
     expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe("http://localhost:3000/");
 
     native.emitState(previewState({
@@ -1099,7 +1099,7 @@ describe("BrowserTab", () => {
       error: "native load failed",
     }));
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("native load failed"));
-    expect(view.container.querySelector(".animate-spin")).toBeNull();
+    expect(view.container.querySelector(".animate-spin") === null).toBe(true);
   });
 
   test("persists changed direct HTTP native URLs and ignores non-HTTP native URLs", async () => {
@@ -1474,7 +1474,7 @@ describe("BrowserTab", () => {
       expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(
         "http://localhost:4000/",
       );
-      expect(view.container.querySelector(".animate-spin")).toBeNull();
+      expect(view.container.querySelector(".animate-spin") === null).toBe(true);
       expect(
         screen.getByRole("button", { name: "Open preview DevTools" }).hasAttribute("disabled"),
       ).toBe(false);
@@ -1486,7 +1486,7 @@ describe("BrowserTab", () => {
       );
       await Promise.resolve();
     });
-    expect(screen.queryByText("stale attach error")).toBeNull();
+    expect(screen.queryByText("stale attach error") === null).toBe(true);
   });
 
   test("reports native navigation, forward, toolbar reload, and refresh reload failures", async () => {
@@ -1548,13 +1548,13 @@ describe("BrowserTab", () => {
       <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
     );
     await waitFor(() => expect(native.browserPreview.setVisible).toHaveBeenCalledWith("browser-1", false));
-    expect(view.container.querySelector('[data-native-browser-preview="browser-1"]')).toBeNull();
+    expect(view.container.querySelector('[data-native-browser-preview="browser-1"]') === null).toBe(true);
 
     view.rerender(
       <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "not a preview address" }} isActive />,
     );
     await waitFor(() => expect(native.browserPreview.setVisible.mock.calls.length).toBeGreaterThanOrEqual(2));
-    expect(view.container.querySelector('[data-native-browser-preview="browser-1"]')).toBeNull();
+    expect(view.container.querySelector('[data-native-browser-preview="browser-1"]') === null).toBe(true);
     expect(native.browserPreview.attach).not.toHaveBeenCalled();
   });
 
@@ -1570,7 +1570,7 @@ describe("BrowserTab", () => {
 
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("visibility failed"));
     expect(setVisible).toHaveBeenCalledWith("browser-1", false);
-    expect(container.querySelector(".animate-spin")).toBeNull();
+    expect(container.querySelector(".animate-spin") === null).toBe(true);
   });
 
   test("contains a native visibility rejection during cleanup", async () => {
@@ -1912,7 +1912,7 @@ describe("BrowserTab", () => {
     view.unmount();
     resolveDisposed?.(previewState({ error: "late attach error" }));
     await Promise.resolve();
-    expect(screen.queryByText("late attach error")).toBeNull();
+    expect(screen.queryByText("late attach error") === null).toBe(true);
   });
 
   test("ignores a disposed native attach rejection", async () => {
@@ -1934,7 +1934,7 @@ describe("BrowserTab", () => {
     await Promise.resolve();
 
     expect(consoleErrorSpy).not.toHaveBeenCalled();
-    expect(screen.queryByText("late attach rejection")).toBeNull();
+    expect(screen.queryByText("late attach rejection") === null).toBe(true);
   });
 
   test("reports a native attach rejection", async () => {

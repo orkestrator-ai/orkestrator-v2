@@ -54,7 +54,7 @@ describe("ContextUsageWheel", () => {
     });
 
     expect(button.className).toContain("text-muted-foreground/50");
-    expect(container.querySelector("[data-context-usage-progress]")).toBeNull();
+    expect(container.querySelector("[data-context-usage-progress]") === null).toBe(true);
     expect(await openTooltip(button)).toEqual([
       "Context window:",
       "Usage is not available yet.",

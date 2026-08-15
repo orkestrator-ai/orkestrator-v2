@@ -243,7 +243,7 @@ describe("LinearTicketsView", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Add Linear integration")).toBeTruthy();
-      expect(screen.queryByText("Polish dashboard")).toBeNull();
+      expect(screen.queryByText("Polish dashboard") === null).toBe(true);
     });
 
     fireEvent.click(screen.getByText("Clear"));
@@ -838,7 +838,7 @@ describe("LinearTicketsView", () => {
     ));
     expect((screen.getByLabelText("Add Linear comment") as HTMLTextAreaElement).value)
       .toBe("Keep this second-ticket draft");
-    expect(screen.queryByText("Comment for the first ticket")).toBeNull();
+    expect(screen.queryByText("Comment for the first ticket") === null).toBe(true);
   });
 
   test("does not clear a newer draft after returning to the submitted ticket", async () => {
@@ -966,7 +966,7 @@ describe("LinearTicketsView", () => {
       await Promise.resolve();
     });
 
-    expect(screen.queryByText("Build Linear support")).toBeNull();
+    expect(screen.queryByText("Build Linear support") === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: /^build/i }));
     fireEvent.click(await screen.findByRole("button", { name: "Start build" }));
@@ -1014,7 +1014,7 @@ describe("LinearTicketsView", () => {
     });
 
     expect(screen.getByText("Add Linear integration")).toBeTruthy();
-    expect(screen.queryByText("Connect a Linear workspace before loading tickets.")).toBeNull();
+    expect(screen.queryByText("Connect a Linear workspace before loading tickets.") === null).toBe(true);
   });
 
   test("uses the active Linear pipeline when the same issue has older completed runs", async () => {

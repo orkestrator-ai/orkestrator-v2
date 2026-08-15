@@ -193,7 +193,7 @@ describe("CreatePRDialog", () => {
 
     openPicker();
     expect(screen.getByRole("button", { name: "claude models" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "opencode models" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "opencode models" }) === null).toBe(true);
   });
 
   test("closes without launching when cancelled", () => {
@@ -224,7 +224,7 @@ describe("CreatePRDialog", () => {
       open: false,
       preferredModels: { claude: "claude-fixed" },
     });
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("dialog") === null).toBe(true);
 
     rerender(<CreatePRDialog {...props} open />);
     expect(picker().textContent).toContain("Claude Fixed");

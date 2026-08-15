@@ -96,18 +96,18 @@ describe("NativeAttachmentMenu", () => {
     );
 
     expect(await screen.findByRole("dialog")).toBeTruthy();
-    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.queryByRole("menu") === null).toBe(true);
     expect(fileSearch.refresh).toHaveBeenCalledTimes(1);
     expect(document.activeElement).toBe(
       screen.getByRole("textbox", { name: "Search workspace files" }),
     );
-    expect(screen.queryByText("screenshots")).toBeNull();
+    expect(screen.queryByText("screenshots") === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: /architecture\.md/ }));
 
     await waitFor(() => {
       expect(onSelectFile).toHaveBeenCalledWith(workspaceFiles[0]);
-      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(screen.queryByRole("dialog") === null).toBe(true);
       expect(onCloseAutoFocus).toHaveBeenCalledTimes(1);
     });
   });
@@ -160,7 +160,7 @@ describe("NativeAttachmentMenu", () => {
 
     await waitFor(() => {
       expect(onSelectFile).toHaveBeenCalledWith(workspaceFiles[2]);
-      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(screen.queryByRole("dialog") === null).toBe(true);
     });
   });
 
@@ -236,7 +236,7 @@ describe("NativeAttachmentMenu", () => {
     fireEvent.keyDown(input, { key: "ArrowDown" });
     fireEvent.keyDown(document, { key: "Escape" });
 
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
     await openFilePicker();
 
     expect(
@@ -252,7 +252,7 @@ describe("NativeAttachmentMenu", () => {
     );
     await waitFor(() => {
       expect(onSelectFile).toHaveBeenCalledWith(workspaceFiles[0]);
-      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(screen.queryByRole("dialog") === null).toBe(true);
     });
   });
 
@@ -378,7 +378,7 @@ describe("NativeAttachmentMenu", () => {
 
     const trigger = screen.getByRole("button", { name: "Add attachment" });
     expect(trigger.getAttribute("disabled")).not.toBeNull();
-    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.queryByRole("menu") === null).toBe(true);
 
     rerender(
       <NativeAttachmentMenu
@@ -404,7 +404,7 @@ describe("NativeAttachmentMenu", () => {
         onSelectFile={() => {}}
       />,
     );
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
   });
 });
 

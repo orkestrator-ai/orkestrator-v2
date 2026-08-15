@@ -84,7 +84,7 @@ describe("BlockingPromptCard", () => {
 
     const outcome = screen.getAllByRole("status").find((node) => message.test(node.textContent ?? ""));
     expect(outcome).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Dismiss" }) === null).toBe(true);
   });
 
   test("shows a retryable inline error and invokes retry and dismissal actions", () => {
@@ -123,7 +123,7 @@ describe("BlockingPromptCard", () => {
     );
 
     expect(screen.getByText(/invalid deadline/i)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Approve" }) === null).toBe(true);
   });
 
   test("marks a retry in progress as busy and disables only the retry control", () => {
@@ -164,8 +164,8 @@ describe("BlockingPromptCard", () => {
     );
 
     expect(screen.getByRole("alert").textContent).toContain("The provider disconnected.");
-    expect(screen.queryByText(/withdrawn and is no longer actionable/i)).toBeNull();
-    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(screen.queryByText(/withdrawn and is no longer actionable/i) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Approve" }) === null).toBe(true);
     expect(screen.getByText("Review the command.")).toBeTruthy();
     expect(screen.getByText("Custom icon")).toBeTruthy();
     expect(screen.getByText("Terminal")).toBeTruthy();

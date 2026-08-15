@@ -253,7 +253,7 @@ describe("AppShell", () => {
     const slot = screen.getByTestId("mobile-agent-info-slot");
     expect(slot.contains(screen.getByTestId("agent-info-button"))).toBe(true);
     expect(screen.getByTestId("agent-info-button").getAttribute("data-mobile")).toBe("true");
-    expect(screen.queryByTestId("desktop-agent-info-slot")).toBeNull();
+    expect(screen.queryByTestId("desktop-agent-info-slot") === null).toBe(true);
   });
 
   test("resolves the active tab through the active pane of the selected environment", () => {

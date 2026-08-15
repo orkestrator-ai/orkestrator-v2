@@ -289,7 +289,7 @@ describe("DiffViewerTab content loading", () => {
     expect(editor.dataset.modified).toBe("");
     expect(editor.dataset.language).toBe("javascript");
     expect(screen.getByText("Deleted")).toBeTruthy();
-    expect(screen.queryByTitle("View file")).toBeNull();
+    expect(screen.queryByTitle("View file") === null).toBe(true);
   });
 
   test("uses prop and plaintext language fallbacks for deleted files", async () => {
@@ -482,7 +482,7 @@ describe("DiffViewerTab content loading", () => {
       "latest original",
     );
     expect(screen.getByTestId("diff-editor").dataset.language).toBe("typescript");
-    expect(screen.queryByText("Failed to load diff")).toBeNull();
+    expect(screen.queryByText("Failed to load diff") === null).toBe(true);
   });
 
   test("ignores a stale original-read rejection after the requested file changes", async () => {
@@ -532,7 +532,7 @@ describe("DiffViewerTab content loading", () => {
         // A cancelled request must not replace the latest successful state.
       }
     });
-    expect(screen.queryByText("stale base failure")).toBeNull();
+    expect(screen.queryByText("stale base failure") === null).toBe(true);
     expect(screen.getByTestId("diff-editor").dataset.original).toBe(
       "latest original",
     );
@@ -787,7 +787,7 @@ describe("DiffViewerTab editor lifecycle and controls", () => {
 
     expect(screen.getByText("Loading diff...")).toBeTruthy();
     await waitFor(() => expect(readFileAtBranchMock).toHaveBeenCalledTimes(1));
-    expect(screen.queryByTestId("diff-editor")).toBeNull();
+    expect(screen.queryByTestId("diff-editor") === null).toBe(true);
 
     await act(async () => {
       configuration.resolve();
@@ -805,7 +805,7 @@ describe("DiffViewerTab editor lifecycle and controls", () => {
     render(<DiffViewerTab {...baseProps} containerId="container-1" />);
 
     expect(await screen.findByText("Failed to load diff editor")).toBeTruthy();
-    expect(screen.queryByText("diff worker unavailable")).toBeNull();
+    expect(screen.queryByText("diff worker unavailable") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
     expect(await screen.findByTestId("diff-editor")).toBeTruthy();
@@ -1000,7 +1000,7 @@ describe("DiffViewerTab editor lifecycle and controls", () => {
     expect(screen.getByTestId("diff-editor").dataset.sideBySide).toBe("false");
 
     setViewportWidth(767);
-    expect(screen.queryByRole("button", { name: "Side by side" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Side by side" }) === null).toBe(true);
     expect(screen.getByTestId("diff-editor").dataset.sideBySide).toBe("false");
 
     setViewportWidth(768);
@@ -1047,8 +1047,8 @@ describe("DiffViewerTab on a mobile viewport", () => {
     );
 
     expect((await screen.findByTestId("diff-editor")).dataset.sideBySide).toBe("false");
-    expect(screen.queryByRole("button", { name: "Side by side" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Inline" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Side by side" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Inline" }) === null).toBe(true);
     fireEvent.click(screen.getByTitle("View file"));
     expect(onSwitchToFileView).toHaveBeenCalledTimes(1);
   });

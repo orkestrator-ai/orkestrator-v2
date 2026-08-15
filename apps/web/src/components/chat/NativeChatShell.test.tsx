@@ -183,9 +183,7 @@ describe("NativeChatShell", () => {
     );
 
     expect(screen.getByText(/Live updates disconnected/)).toBeTruthy();
-    expect(
-      screen.queryByRole("button", { name: "Scroll to bottom of conversation" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Scroll to bottom of conversation" }) === null).toBe(true);
   });
 
   test("forwards the model-label resolver to each rendered message", () => {
@@ -272,7 +270,7 @@ describe("NativeChatShell", () => {
       />,
     );
 
-    expect(screen.queryByRole("region", { name: "2 agents" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "2 agents" }) === null).toBe(true);
     expect(screen.getByText("Inspect the original task details")).toBeTruthy();
     expect(
       screen.getByRole("button", { name: /reviewer/i }).getAttribute("aria-expanded"),
@@ -330,7 +328,7 @@ describe("NativeChatShell", () => {
 
     expect(spacer.className).not.toContain("h-32");
     expect(spacer.style.height).toBe("500px");
-    expect(dock.querySelector(".max-h-\\[60vh\\]")).toBeNull();
+    expect(dock.querySelector(".max-h-\\[60vh\\]") === null).toBe(true);
   });
 
   test("reserves a conservative spacer for pinned content before the dock is measured", () => {
@@ -453,13 +451,13 @@ describe("NativeChatShell", () => {
 
       const status = screen.getByRole("status");
       expect(status.textContent).toBe("Connecting to Codex...");
-      expect(screen.queryByTestId("compose-dock")).toBeNull();
-      expect(screen.queryByTestId("transcript-bottom-spacer")).toBeNull();
+      expect(screen.queryByTestId("compose-dock") === null).toBe(true);
+      expect(screen.queryByTestId("transcript-bottom-spacer") === null).toBe(true);
       const logo = container.querySelector("svg.agent-connecting-logo");
       expect(logo).toBeTruthy();
       expect(logo?.getAttribute("class")).toContain("h-16");
       expect(logo?.closest("[aria-hidden='true']")).toBeTruthy();
-      expect(container.querySelector(".animate-spin")).toBeNull();
+      expect(container.querySelector(".animate-spin") === null).toBe(true);
     });
 
     test("uses the selected platform logo while connecting", () => {
@@ -500,7 +498,7 @@ describe("NativeChatShell", () => {
 
       expect(screen.getByText("Connection Failed")).toBeTruthy();
       expect(screen.getByText("spawn ENOENT")).toBeTruthy();
-      expect(screen.queryByTestId("compose-dock")).toBeNull();
+      expect(screen.queryByTestId("compose-dock") === null).toBe(true);
 
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
       expect(onRetry).toHaveBeenCalledTimes(1);
@@ -517,7 +515,7 @@ describe("NativeChatShell", () => {
       );
 
       expect(screen.getByText("Unable to connect to OpenCode")).toBeTruthy();
-      expect(screen.queryByRole("button", { name: /Log/ })).toBeNull();
+      expect(screen.queryByRole("button", { name: /Log/ }) === null).toBe(true);
     });
 
     test("toggles the server log on and off", () => {
@@ -529,13 +527,13 @@ describe("NativeChatShell", () => {
         />,
       );
 
-      expect(screen.queryByText(/EADDRINUSE/)).toBeNull();
+      expect(screen.queryByText(/EADDRINUSE/) === null).toBe(true);
 
       fireEvent.click(screen.getByRole("button", { name: "Show Log" }));
       expect(screen.getByText(/EADDRINUSE/)).toBeTruthy();
 
       fireEvent.click(screen.getByRole("button", { name: "Hide Log" }));
-      expect(screen.queryByText(/EADDRINUSE/)).toBeNull();
+      expect(screen.queryByText(/EADDRINUSE/) === null).toBe(true);
     });
 
     test("says so rather than opening an empty log box", () => {
@@ -571,14 +569,14 @@ describe("NativeChatShell", () => {
       );
 
       expect(screen.getByText("Pick a session to get going.")).toBeTruthy();
-      expect(screen.queryByText(/No messages yet/)).toBeNull();
+      expect(screen.queryByText(/No messages yet/) === null).toBe(true);
     });
 
     test("suppresses the empty state while the composer is centered", () => {
       // The centered composer already is the empty state; a second one below it
       // would be duplicate copy.
       render(<NativeChatShell {...shellProps()} centerCompose />);
-      expect(screen.queryByText(/No messages yet/)).toBeNull();
+      expect(screen.queryByText(/No messages yet/) === null).toBe(true);
     });
 
     test("offers Resume Session from the empty transcript", () => {
@@ -595,7 +593,7 @@ describe("NativeChatShell", () => {
 
     test("omits Resume Session when there is nothing to resume", () => {
       render(<NativeChatShell {...shellProps()} />);
-      expect(screen.queryByText("Resume Session")).toBeNull();
+      expect(screen.queryByText("Resume Session") === null).toBe(true);
     });
   });
 
@@ -671,9 +669,9 @@ describe("NativeChatShell", () => {
       );
 
       expect(screen.getByText("Stopping…")).toBeTruthy();
-      expect(screen.queryByRole("status")).toBeNull();
+      expect(screen.queryByRole("status") === null).toBe(true);
       // A zero elapsed reads as noise next to a status that just started.
-      expect(screen.queryByText("0s")).toBeNull();
+      expect(screen.queryByText("0s") === null).toBe(true);
     });
 
     test("reports the completed duration once the turn ends", () => {
@@ -686,7 +684,7 @@ describe("NativeChatShell", () => {
         />,
       );
 
-      expect(screen.queryByText(/Completed in/)).toBeNull();
+      expect(screen.queryByText(/Completed in/) === null).toBe(true);
 
       rerender(
         <NativeChatShell
@@ -698,7 +696,7 @@ describe("NativeChatShell", () => {
       );
 
       expect(screen.getByText("Completed in 12s")).toBeTruthy();
-      expect(screen.queryByRole("status")).toBeNull();
+      expect(screen.queryByRole("status") === null).toBe(true);
     });
   });
 
@@ -713,7 +711,7 @@ describe("NativeChatShell", () => {
         />,
       );
 
-      expect(screen.queryByText("Scroll down")).toBeNull();
+      expect(screen.queryByText("Scroll down") === null).toBe(true);
 
       rerender(
         <NativeChatShell

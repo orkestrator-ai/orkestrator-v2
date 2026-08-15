@@ -146,7 +146,7 @@ describe("NetworkWhitelistDialog", () => {
     );
 
     expect(screen.getByText("Full Network Access")).toBeTruthy();
-    expect(screen.queryByRole("textbox", { name: "Allowed Domains" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Save Changes" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Allowed Domains" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Save Changes" }) === null).toBe(true);
   });
 });

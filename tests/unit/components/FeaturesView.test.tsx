@@ -969,7 +969,7 @@ describe("FeaturesView backend-owned planning controls", () => {
     expect(refresh.hasAttribute("disabled")).toBe(true);
     fireEvent.click(refresh);
     expect(loadFeaturesMock).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Check again" }) === null).toBe(true);
   });
 
   test("shows failed planning recovery and wires retry and stop", async () => {
@@ -1198,7 +1198,7 @@ describe("FeaturesView conversation ordering", () => {
 
     render(<FeaturesView projectId="project-1" />);
 
-    expect(screen.queryByText("Other project feature")).toBeNull();
+    expect(screen.queryByText("Other project feature") === null).toBe(true);
     const buttons = screen.getAllByRole("button").filter((button) =>
       button.textContent?.includes("project feature")
     );
@@ -1262,8 +1262,8 @@ describe("FeaturesView lifecycle and navigation", () => {
     render(<FeaturesView projectId="project-1" />);
 
     expect(screen.getAllByText("Loading features...")).toHaveLength(2);
-    expect(screen.queryByText("Create a feature to start discovery.")).toBeNull();
-    expect(screen.queryByText("Select or create a feature.")).toBeNull();
+    expect(screen.queryByText("Create a feature to start discovery.") === null).toBe(true);
+    expect(screen.queryByText("Select or create a feature.") === null).toBe(true);
 
     act(() => useFeaturePlanStore.setState({ isLoading: false }));
     await waitFor(() => expect(screen.getByText("Create a feature to start discovery.")).toBeTruthy());
@@ -1291,7 +1291,7 @@ describe("FeaturesView lifecycle and navigation", () => {
 
     await waitFor(() => expect(loadFeaturesMock).toHaveBeenCalledWith("project-2"));
     expect(screen.getByText("Project two")).toBeTruthy();
-    expect(screen.queryByText("Project one")).toBeNull();
+    expect(screen.queryByText("Project one") === null).toBe(true);
   });
 
   test("creates and selects a new feature while preserving the chat default", async () => {
@@ -1358,14 +1358,14 @@ describe("FeaturesView lifecycle and navigation", () => {
     expect(screen.getAllByRole("tab", { name: "Story One" })).toHaveLength(1);
 
     fireEvent.keyDown(screen.getByRole("button", { name: "Close Story One" }), { key: "Enter" });
-    await waitFor(() => expect(screen.queryByRole("tab", { name: "Story One" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("tab", { name: "Story One" }) === null).toBe(true));
     expect(screen.getByRole("tab", { name: "Stories" }).getAttribute("aria-selected")).toBe("true");
 
     fireEvent.click(screen.getByRole("button", {
       name: "Story Two Story description 1 acceptance criteria",
     }));
     fireEvent.click(screen.getByRole("button", { name: "Close Story Two" }));
-    await waitFor(() => expect(screen.queryByRole("tab", { name: "Story Two" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("tab", { name: "Story Two" }) === null).toBe(true));
   });
 
   test("recovers when the active story is removed without changing the feature id", async () => {
@@ -1383,7 +1383,7 @@ describe("FeaturesView lifecycle and navigation", () => {
       useFeaturePlanStore.setState({ features: [{ ...feature, stories: [feature.stories[1]!] }] });
     });
 
-    await waitFor(() => expect(screen.queryByRole("tab", { name: "Story One" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("tab", { name: "Story One" }) === null).toBe(true));
     expect(screen.getByRole("tab", { name: "Stories" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByRole("button", { name: /Story Two/ })).toBeTruthy();
   });
@@ -1490,7 +1490,7 @@ describe("NativeStyleChatPanel", () => {
     });
 
     expect(screen.getByTestId("native-message-visible").textContent).toBe("Visible reply");
-    expect(screen.queryByTestId("native-message-state-only")).toBeNull();
+    expect(screen.queryByTestId("native-message-state-only") === null).toBe(true);
     expect(screen.getByTestId("native-message-second").dataset.previousId).toBe("visible");
     // The panel opts into block-level continuity, so an empty assistant
     // placeholder cannot become a row's attribution anchor.
@@ -1540,7 +1540,7 @@ describe("NativeStyleChatPanel", () => {
 
     expect(screen.queryByRole("button", {
       name: "Scroll to bottom of conversation",
-    })).toBeNull();
+    }) === null).toBe(true);
   });
 
   test("wires optional refresh and disables it while running", () => {
@@ -1558,7 +1558,7 @@ describe("NativeStyleChatPanel", () => {
     expect(screen.getByText("Working...")).toBeTruthy();
 
     view.rerender(<NativeStyleChatPanel {...view.props} onRefresh={undefined} />);
-    expect(screen.queryByTitle("Refresh Codex status")).toBeNull();
+    expect(screen.queryByTitle("Refresh Codex status") === null).toBe(true);
   });
 
   test("sends the original draft by button and Enter but not Shift+Enter", () => {
@@ -1693,7 +1693,7 @@ describe("FeaturesView build action", () => {
 
     render(<FeaturesView projectId="project-1" />);
 
-    expect(screen.queryByRole("button", { name: "Build" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Build" }) === null).toBe(true);
   });
 
   test("clicking Build creates a Kanban task and starts the build pipeline", async () => {

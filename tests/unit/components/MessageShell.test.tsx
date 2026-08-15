@@ -66,7 +66,7 @@ describe("MessageShell", () => {
       </MessageShell>,
     );
 
-    expect(screen.queryByText("You")).toBeNull();
+    expect(screen.queryByText("You") === null).toBe(true);
     expect(screen.getByText("Headerless user content")).toBeTruthy();
     expect(screen.getByText("1:00 PM")).toBeTruthy();
   });
@@ -697,7 +697,7 @@ describe("MessageShell", () => {
       </MessageShell>,
     );
 
-    expect(screen.queryByRole("button", { name: "Fork" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Fork" }) === null).toBe(true);
   });
 
   test("hides only the author label when showAuthorLabel is false", () => {
@@ -712,7 +712,7 @@ describe("MessageShell", () => {
       </MessageShell>,
     );
 
-    expect(screen.queryByText("Claude")).toBeNull();
+    expect(screen.queryByText("Claude") === null).toBe(true);
     expect(screen.getByText("1:00 PM · 45s")).toBeTruthy();
   });
 
@@ -743,7 +743,7 @@ describe("MessageShell", () => {
     );
 
     expect(screen.getByRole("button", { name: "Fork" })).toBeTruthy();
-    expect(screen.queryByText("Claude")).toBeNull();
+    expect(screen.queryByText("Claude") === null).toBe(true);
   });
 
   test("still renders user actions when there is no metadata to show", () => {
@@ -775,8 +775,8 @@ describe("MessageShell", () => {
       </MessageShell>,
     );
 
-    expect(screen.queryByText("1:00 PM")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Fork" })).toBeNull();
+    expect(screen.queryByText("1:00 PM") === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Fork" }) === null).toBe(true);
   });
 });
 

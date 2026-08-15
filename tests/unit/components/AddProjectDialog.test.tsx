@@ -226,7 +226,7 @@ describe("AddProjectDialog", () => {
     await act(async () => resolveFirst?.(false));
 
     expect(gitUrlInput.className).toContain("border-green-500");
-    expect(screen.queryByText("Enter a valid Git URL (SSH or HTTPS format)")).toBeNull();
+    expect(screen.queryByText("Enter a valid Git URL (SSH or HTTPS format)") === null).toBe(true);
   });
 
   test("shows URL validation failures without leaving an unhandled rejection", async () => {
@@ -477,7 +477,7 @@ describe("AddProjectDialog", () => {
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Existing repository" }), { button: 0 });
 
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("alert") === null).toBe(true);
   });
 
   test("clears a scratch creation error when the project path changes", async () => {
@@ -494,7 +494,7 @@ describe("AddProjectDialog", () => {
 
     fireEvent.change(pathInput, { target: { value: "/Users/alice/another-project" } });
 
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("alert") === null).toBe(true);
   });
 
   test("shows a generic message for a non-Error scratch creation failure", async () => {
@@ -636,7 +636,7 @@ describe("AddProjectDialog", () => {
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect((screen.getByLabelText(/Git URL/i) as HTMLInputElement).value).toBe("");
-    expect(screen.queryByText("Enter a valid Git URL (SSH or HTTPS format)")).toBeNull();
+    expect(screen.queryByText("Enter a valid Git URL (SSH or HTTPS format)") === null).toBe(true);
   });
 });
 

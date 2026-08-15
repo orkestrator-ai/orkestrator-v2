@@ -475,7 +475,7 @@ describe("BuildChatTab backend projection", () => {
     }} />);
 
     expect(screen.getAllByText("Unexpected authorization")).toHaveLength(1);
-    expect(screen.queryByRole("button", { name: "Retry Review" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry Review" }) === null).toBe(true);
     const retry = screen.getByRole("button", { name: "Retry failed build phase" });
     fireEvent.click(retry);
 
@@ -568,7 +568,7 @@ describe("BuildChatTab presentation", () => {
     expect(screen.getByText("Shell")).toBeTruthy();
     expect(screen.getByText("git diff --stat")).toBeTruthy();
     expect(screen.getByText("The review is complete")).toBeTruthy();
-    expect(screen.queryByText(/"toolArgs"/)).toBeNull();
+    expect(screen.queryByText(/"toolArgs"/) === null).toBe(true);
   });
 
   test("shows the structured review report only on the stage that produced it", async () => {
@@ -576,13 +576,13 @@ describe("BuildChatTab presentation", () => {
     const reportLabel = "Structured review report";
 
     // The pipeline is following its verification stage, which did not review.
-    expect(screen.queryByLabelText(reportLabel)).toBeNull();
+    expect(screen.queryByLabelText(reportLabel) === null).toBe(true);
 
     fireEvent.click(screen.getByText("Review Session"));
     await waitFor(() => expect(screen.getByLabelText(reportLabel)).toBeTruthy());
 
     fireEvent.click(screen.getByText("Build Session"));
-    await waitFor(() => expect(screen.queryByLabelText(reportLabel)).toBeNull());
+    await waitFor(() => expect(screen.queryByLabelText(reportLabel) === null).toBe(true));
   });
 
   test("hides provisional transcript reports and shows the authoritative report once", async () => {
@@ -627,7 +627,7 @@ describe("BuildChatTab presentation", () => {
       expect(screen.getByLabelText("Structured review report")).toBeTruthy());
 
     expect(screen.getAllByText("Structured review report")).toHaveLength(1);
-    expect(screen.queryByText(/Ready: no/)).toBeNull();
+    expect(screen.queryByText(/Ready: no/) === null).toBe(true);
     expect(listProps.messages[0]?.parts).toEqual([
       expect.objectContaining({
         type: "tool-invocation",
@@ -685,7 +685,7 @@ describe("BuildChatTab presentation", () => {
       ],
     });
 
-    expect(screen.queryByText("Verification failed")).toBeNull();
+    expect(screen.queryByText("Verification failed") === null).toBe(true);
     expect(screen.getAllByText("Verification passed")).toHaveLength(1);
     expect(
       listProps.messages[0]?.parts
@@ -727,7 +727,7 @@ describe("BuildChatTab presentation", () => {
       ],
     });
 
-    expect(screen.queryByText("Verification failed")).toBeNull();
+    expect(screen.queryByText("Verification failed") === null).toBe(true);
     expect(listProps.messages[0]?.parts).toEqual([
       expect.objectContaining({
         type: "tool-invocation",
@@ -768,7 +768,7 @@ describe("BuildChatTab presentation", () => {
       pausedFromPhase: "verifying",
       sessions: [pipeline.sessions[0]!, verification],
     });
-    expect(screen.queryByText("Verification failed")).toBeNull();
+    expect(screen.queryByText("Verification failed") === null).toBe(true);
     expect(listProps.messages[0]?.parts).toEqual([
       expect.objectContaining({ type: "tool-invocation", content: "bun test" }),
     ]);
@@ -780,7 +780,7 @@ describe("BuildChatTab presentation", () => {
       error: "Build cancelled",
       sessions: [pipeline.sessions[0]!, verification],
     });
-    expect(screen.queryByText("Verification failed")).toBeNull();
+    expect(screen.queryByText("Verification failed") === null).toBe(true);
     expect(screen.getByText("Build cancelled")).toBeTruthy();
   });
 
@@ -808,7 +808,7 @@ describe("BuildChatTab presentation", () => {
       ],
     });
 
-    expect(screen.queryByText("Verification failed")).toBeNull();
+    expect(screen.queryByText("Verification failed") === null).toBe(true);
     expect(listProps.messages).toEqual([]);
   });
 
@@ -858,7 +858,7 @@ describe("BuildChatTab presentation", () => {
       expect(screen.getByText("Structured review report")).toBeTruthy());
     expect(listProps.messages[0]?.parts.map((part: { content: string }) => part.content))
       .toEqual([historical]);
-    expect(screen.queryByText("Still reviewing.")).toBeNull();
+    expect(screen.queryByText("Still reviewing.") === null).toBe(true);
   });
 
   test("reveals a legacy historical review only while the pipeline still holds its report", async () => {
@@ -911,7 +911,7 @@ describe("BuildChatTab presentation", () => {
       expect(screen.getByText("Structured review report")).toBeTruthy());
     expect(listProps.messages[0]?.parts.map((part: { content: string }) => part.content))
       .toEqual([historical]);
-    expect(screen.queryByText("Still reviewing.")).toBeNull();
+    expect(screen.queryByText("Still reviewing.") === null).toBe(true);
 
     cleanup();
     renderTab({
@@ -930,7 +930,7 @@ describe("BuildChatTab presentation", () => {
     });
 
     fireEvent.click(screen.getByText("Legacy Review Session"));
-    expect(screen.queryByText("Structured review report")).toBeNull();
+    expect(screen.queryByText("Structured review report") === null).toBe(true);
     expect(listProps.messages).toEqual([]);
   });
 
@@ -982,7 +982,7 @@ describe("BuildChatTab presentation", () => {
       sessions: [pipeline.sessions[0]!, legacyVerify, prSession],
     });
     fireEvent.click(screen.getByText("Verification Session"));
-    expect(screen.queryByText("Verification failed")).toBeNull();
+    expect(screen.queryByText("Verification failed") === null).toBe(true);
     expect(screen.getAllByText("Verification passed")).toHaveLength(1);
     expect(
       listProps.messages[0]?.parts
@@ -999,7 +999,7 @@ describe("BuildChatTab presentation", () => {
       sessions: [pipeline.sessions[0]!, legacyVerify, prSession],
     });
     fireEvent.click(screen.getByText("Verification Session"));
-    expect(screen.queryByText("Verification failed")).toBeNull();
+    expect(screen.queryByText("Verification failed") === null).toBe(true);
     expect(listProps.messages[0]?.parts).toEqual([
       expect.objectContaining({ type: "tool-invocation", content: "bun test" }),
     ]);
@@ -1011,9 +1011,9 @@ describe("BuildChatTab presentation", () => {
     await waitFor(() =>
       expect(screen.getByLabelText("Structured review report")).toBeTruthy());
 
-    expect(screen.queryByRole("button", { name: /Inspect raw JSON/ })).toBeNull();
-    expect(screen.queryByLabelText("Raw structured review JSON")).toBeNull();
-    expect(screen.queryByText("Updates the review workflow.")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Inspect raw JSON/ }) === null).toBe(true);
+    expect(screen.queryByLabelText("Raw structured review JSON") === null).toBe(true);
+    expect(screen.queryByText("Updates the review workflow.") === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: /What Changed/ }));
     await waitFor(() =>
@@ -1102,7 +1102,7 @@ describe("BuildChatTab presentation", () => {
     });
 
     expect(screen.getByText("Implementation complete")).toBeTruthy();
-    expect(screen.queryByText("The review is complete")).toBeNull();
+    expect(screen.queryByText("The review is complete") === null).toBe(true);
   });
 
   test("keeps one stage in the page tab sequence, not all of them", async () => {
@@ -1148,7 +1148,7 @@ describe("BuildChatTab presentation", () => {
     await waitFor(() =>
       expect(screen.getByLabelText("Structured review report")).toBeTruthy());
     // Once the report is on screen the pointer to it is redundant.
-    expect(screen.queryByRole("button", { name: /The review reported/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /The review reported/ }) === null).toBe(true);
   });
 
   test("badges the stage that holds the report, and only that stage", () => {
@@ -1163,8 +1163,8 @@ describe("BuildChatTab presentation", () => {
   test("says nothing about a review for a pipeline that has not had one", () => {
     renderTab({ ...pipeline, backendRevision: 42 });
 
-    expect(screen.queryByRole("button", { name: /The review reported/ })).toBeNull();
-    expect(screen.queryByText(/Report ·/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /The review reported/ }) === null).toBe(true);
+    expect(screen.queryByText(/Report ·/) === null).toBe(true);
   });
 
   test("names the transcript panel after the stage whose tab is selected", async () => {
@@ -1230,7 +1230,7 @@ describe("BuildChatTab presentation", () => {
     // warning on every terminal and paused transition, so a snapshot that still
     // carries one was written by an older build and must not make that claim.
     renderTab({ ...reviewed, phase: "paused", stallWarning: stalled, backendRevision: 54 });
-    expect(screen.queryByText(/transcript has not changed/)).toBeNull();
+    expect(screen.queryByText(/transcript has not changed/) === null).toBe(true);
 
     cleanup();
     renderTab({
@@ -1240,7 +1240,7 @@ describe("BuildChatTab presentation", () => {
       stallWarning: stalled,
       backendRevision: 55,
     });
-    expect(screen.queryByText(/transcript has not changed/)).toBeNull();
+    expect(screen.queryByText(/transcript has not changed/) === null).toBe(true);
     expect(screen.getByText("Verification crashed")).toBeTruthy();
   });
 
@@ -1273,10 +1273,9 @@ describe("BuildChatTab presentation", () => {
     // Only an interactive-request failure moves the message and the control
     // into the recovery banner; every other failure keeps both here.
     expect(screen.getAllByText("The prompt was never dispatched")).toHaveLength(1);
-    expect(screen.queryByRole("button", { name: "Retry Review" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry Review" }) === null).toBe(true);
     const retry = screen.getByRole("button", { name: "Retry Build Stage" });
-    expect(screen.queryByRole("button", { name: "Retry failed build phase" }))
-      .toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry failed build phase" }) === null).toBe(true);
     fireEvent.click(retry);
     await waitFor(() => expect(retryStageMock).toHaveBeenCalledWith(reviewed.id));
   });
@@ -1374,8 +1373,8 @@ describe("BuildChatTab presentation", () => {
       backendRevision: 58,
     });
 
-    expect(screen.queryByText(/input request/)).toBeNull();
-    expect(screen.queryByText(/auto-declined/)).toBeNull();
+    expect(screen.queryByText(/input request/) === null).toBe(true);
+    expect(screen.queryByText(/auto-declined/) === null).toBe(true);
   });
 
   test("shows singular and plural auto-decline badges and passes each stage history", async () => {
@@ -1418,7 +1417,7 @@ describe("BuildChatTab presentation", () => {
 
     fireEvent.click(screen.getByText("Build Session"));
     await waitFor(() => expect(screen.getByText(/Build choice/)).toBeTruthy());
-    expect(screen.queryByText(/Verify choice/)).toBeNull();
+    expect(screen.queryByText(/Verify choice/) === null).toBe(true);
   });
 });
 
@@ -1662,13 +1661,13 @@ describe("BuildChatTab per-step harnesses", () => {
     // session being read, which per-step configuration makes different from the
     // pipeline's build agent.
     expect(screen.getByText("codex")).toBeTruthy();
-    expect(screen.queryByText("claude")).toBeNull();
+    expect(screen.queryByText("claude") === null).toBe(true);
     expect(listProps.renderMessage(0, listProps.messages[0], null).props)
       .toMatchObject({ assistantLabel: "Codex" });
 
     fireEvent.click(screen.getByText("Claude Build Session"));
     await waitFor(() => expect(screen.getByText("claude")).toBeTruthy());
-    expect(screen.queryByText("codex")).toBeNull();
+    expect(screen.queryByText("codex") === null).toBe(true);
     expect(listProps.renderMessage(0, listProps.messages[0], null).props)
       .toMatchObject({ assistantLabel: "Claude" });
   });
@@ -2054,7 +2053,7 @@ describe("BuildChatTab agent messaging", () => {
     });
     renderTab();
 
-    expect(screen.queryByLabelText("Send a message to the agent")).toBeNull();
+    expect(screen.queryByLabelText("Send a message to the agent") === null).toBe(true);
   });
 
   test("restarts the review through the backend", async () => {
@@ -2080,7 +2079,7 @@ describe("BuildChatTab agent messaging", () => {
     renderTab();
 
     expect(screen.getByText(/2 messages queued/)).toBeTruthy();
-    expect(screen.queryByText(/1 message queued/)).toBeNull();
+    expect(screen.queryByText(/1 message queued/) === null).toBe(true);
   });
 
   test("disables the send button and shows progress while a send is in flight", async () => {
@@ -2112,7 +2111,7 @@ describe("BuildChatTab agent messaging", () => {
       release?.();
       await Promise.resolve();
     });
-    expect(button.querySelector(".animate-spin")).toBeNull();
+    expect(button.querySelector(".animate-spin") === null).toBe(true);
   });
 
   test("re-enables the retry control when the backend refuses a review restart", async () => {
@@ -2197,6 +2196,6 @@ describe("BuildChatTab agent messaging", () => {
     });
     renderTab();
 
-    expect(screen.queryByRole("button", { name: /Retry Review/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Retry Review/ }) === null).toBe(true);
   });
 });

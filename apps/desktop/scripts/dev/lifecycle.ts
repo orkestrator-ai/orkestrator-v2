@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { appendFile, readFile, readdir, rm, stat, truncate } from "node:fs/promises";
+import { appendFile, readdir, rename, rm, stat, truncate } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
@@ -42,19 +42,56 @@ type ElectronReady = {
   browserUrl?: string;
 };
 
-async function appendBounded(filePath: string, chunk: Buffer | string): Promise<void> {
-  await appendFile(filePath, chunk);
-  const info = await stat(filePath).catch(() => null);
-  if (!info || info.size <= MAX_LOG_BYTES) return;
-  const content = await readFile(filePath);
-  await truncate(filePath, 0);
-  await appendFile(filePath, content.subarray(Math.max(0, content.length - MAX_LOG_BYTES / 2)));
+export type BoundedLogWriter = {
+  write: (chunk: Buffer | string) => Promise<void>;
+};
+
+/**
+ * Serializes writes and rotates before the active log exceeds its byte bound.
+ * The old implementation launched overlapping append/stat/read/truncate jobs
+ * for every child-process chunk, which both raced and re-read the whole file.
+ */
+export function createBoundedLogWriter(
+  filePath: string,
+  maxBytes = MAX_LOG_BYTES,
+): BoundedLogWriter {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+    throw new Error("A bounded log writer requires a positive integer byte limit");
+  }
+  let queued = Promise.resolve();
+  let size: number | undefined;
+  const rotatedPath = `${filePath}.1`;
+
+  return {
+    write(chunk) {
+      const source = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      // A single write can itself exceed the cap. Preserve its tail, which is
+      // where compilers and process launchers normally put the useful summary.
+      const bounded = source.byteLength > maxBytes
+        ? source.subarray(source.byteLength - maxBytes)
+        : source;
+      queued = queued.then(async () => {
+        size ??= (await stat(filePath).catch(() => null))?.size ?? 0;
+        if (size > 0 && size + bounded.byteLength > maxBytes) {
+          await rm(rotatedPath, { force: true });
+          await rename(filePath, rotatedPath).catch(async (error: NodeJS.ErrnoException) => {
+            if (error.code !== "ENOENT") throw error;
+          });
+          size = 0;
+        }
+        await appendFile(filePath, bounded, { mode: 0o600 });
+        size += bounded.byteLength;
+      });
+      return queued;
+    },
+  };
 }
 
 function attachLog(child: ChildProcess, filePath: string, onLine?: (line: string) => void): void {
+  const writer = createBoundedLogWriter(filePath);
   let pending = "";
   const consume = (chunk: Buffer) => {
-    void appendBounded(filePath, chunk).catch(() => undefined);
+    void writer.write(chunk).catch(() => undefined);
     if (!onLine) return;
     pending += chunk.toString("utf8");
     const lines = pending.split("\n");
@@ -62,7 +99,7 @@ function attachLog(child: ChildProcess, filePath: string, onLine?: (line: string
     for (const line of lines) onLine(line);
   };
   child.stdout?.on("data", consume);
-  child.stderr?.on("data", (chunk: Buffer) => void appendBounded(filePath, chunk).catch(() => undefined));
+  child.stderr?.on("data", (chunk: Buffer) => void writer.write(chunk).catch(() => undefined));
 }
 
 async function waitForUrl(url: string, timeoutMs = 45_000): Promise<void> {
@@ -279,7 +316,8 @@ export async function startDevelopment(args: DevArguments, flavor: "development"
       cwd: packageRoot,
       encoding: "utf8",
     });
-    await appendBounded(path.join(profile.logDir, "build.log"), `${build.stdout}${build.stderr}`);
+    await createBoundedLogWriter(path.join(profile.logDir, "build.log"))
+      .write(`${build.stdout}${build.stderr}`);
     if (build.status !== 0) throw new Error(`Electron compilation failed; see ${path.join(profile.logDir, "build.log")}`);
 
     if (args.fixtureEnvironments.includes("container")) {
@@ -290,7 +328,8 @@ export async function startDevelopment(args: DevArguments, flavor: "development"
           ["build", "-t", profile.dockerImage, "-f", path.join(repositoryRoot, "docker", "Dockerfile"), repositoryRoot],
           { encoding: "utf8" },
         );
-        await appendBounded(path.join(profile.logDir, "docker-build.log"), `${imageBuild.stdout}${imageBuild.stderr}`);
+        await createBoundedLogWriter(path.join(profile.logDir, "docker-build.log"))
+          .write(`${imageBuild.stdout}${imageBuild.stderr}`);
         if (imageBuild.status !== 0) {
           throw new Error(`Development Docker image build failed; see ${path.join(profile.logDir, "docker-build.log")}`);
         }

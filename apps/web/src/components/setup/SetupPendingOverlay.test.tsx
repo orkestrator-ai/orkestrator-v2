@@ -87,7 +87,7 @@ describe("SetupPendingOverlay", () => {
     render(<SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />);
 
     expect(screen.getByText("Environment setup failed.")).toBeTruthy();
-    expect(screen.queryByText("Waiting for setup scripts to complete...")).toBeNull();
+    expect(screen.queryByText("Waiting for setup scripts to complete...") === null).toBe(true);
     expect(screen.getByRole("button", { name: /retry setup/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /skip setup/i })).toBeTruthy();
   });

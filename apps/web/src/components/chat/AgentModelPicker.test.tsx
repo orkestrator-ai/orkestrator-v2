@@ -236,7 +236,7 @@ describe("AgentModelPicker", () => {
     });
 
     const trigger = screen.getByTitle("Choose model, reasoning, and speed");
-    expect(trigger.querySelector("[data-native-model-platform]")).toBeNull();
+    expect(trigger.querySelector("[data-native-model-platform]") === null).toBe(true);
     expect(trigger.textContent).toContain("Loading models");
   });
 
@@ -319,7 +319,7 @@ describe("AgentModelPicker", () => {
       const view = document.querySelector<HTMLElement>(`[data-native-mobile-${kind}-view]`)!;
       expect(view.getAttribute("role")).toBe("group");
       expect(sectionTrigger.getAttribute("aria-controls")).toBe(view.id);
-      expect(screen.queryByPlaceholderText("Search models...")).toBeNull();
+      expect(screen.queryByPlaceholderText("Search models...") === null).toBe(true);
 
       const back = screen.getByRole("menuitem", { name: "Back to model choices" });
       await waitFor(() => expect(document.activeElement).toBe(back));
@@ -329,7 +329,7 @@ describe("AgentModelPicker", () => {
       expect(screen.getByPlaceholderText("Search models...")).toBeTruthy();
       expect(getMobileTrigger("reasoning")).toBeTruthy();
       expect(getMobileTrigger("speed")).toBeTruthy();
-      expect(document.querySelector("[data-native-mobile-back]")).toBeNull();
+      expect(document.querySelector("[data-native-mobile-back]") === null).toBe(true);
     },
   );
 
@@ -387,12 +387,12 @@ describe("AgentModelPicker", () => {
     fireEvent.click(getMobileTrigger("reasoning"));
     const view = screen.getByRole("group", { name: "Reasoning choices" });
     fireEvent.keyDown(view, { key: "Escape" });
-    await waitFor(() => expect(document.querySelector("[data-native-model-picker]")).toBeNull());
+    await waitFor(() => expect(document.querySelector("[data-native-model-picker]") === null).toBe(true));
 
     fireEvent.pointerDown(trigger);
     expect((screen.getByPlaceholderText("Search models...") as HTMLInputElement).value).toBe("");
     expect(getMobileTrigger("reasoning")).toBeTruthy();
-    expect(document.querySelector("[data-native-mobile-back]")).toBeNull();
+    expect(document.querySelector("[data-native-mobile-back]") === null).toBe(true);
   });
 
   test("uses three desktop columns and routes each selection", () => {
@@ -571,8 +571,8 @@ describe("AgentModelPicker", () => {
 
     renderPicker({ reasoningOptions: [], selectedReasoningId: undefined });
     fireEvent.pointerDown(screen.getByTitle("Choose model and speed"));
-    expect(screen.queryByRole("group", { name: "Reasoning" })).toBeNull();
-    expect(screen.queryByText("No reasoning options")).toBeNull();
+    expect(screen.queryByRole("group", { name: "Reasoning" }) === null).toBe(true);
+    expect(screen.queryByText("No reasoning options") === null).toBe(true);
     expect(document.querySelector("[data-native-model-picker] .grid")?.className)
       .toContain("grid-cols-[3rem_repeat(2,minmax(0,1fr))]");
   });
@@ -585,9 +585,9 @@ describe("AgentModelPicker", () => {
 
     expect(document.querySelector("[data-native-model-picker] .grid")?.className)
       .toContain("grid-cols-[3rem_repeat(2,minmax(0,1fr))]");
-    expect(screen.queryByRole("group", { name: "Speed mode" })).toBeNull();
-    expect(screen.queryByText("Normal")).toBeNull();
-    expect(screen.queryByText("Fast")).toBeNull();
+    expect(screen.queryByRole("group", { name: "Speed mode" }) === null).toBe(true);
+    expect(screen.queryByText("Normal") === null).toBe(true);
+    expect(screen.queryByText("Fast") === null).toBe(true);
   });
 
   test("filters searchable metadata with normalized queries, orders favorites, and refreshes", () => {
@@ -617,19 +617,19 @@ describe("AgentModelPicker", () => {
     });
     expect(screen.getByText("1 model found")).toBeTruthy();
     expect(screen.getByRole("menuitemradio", { name: /By id/ })).toBeTruthy();
-    expect(screen.queryByText("Plain")).toBeNull();
+    expect(screen.queryByText("Plain") === null).toBe(true);
 
     fireEvent.change(screen.getByPlaceholderText("Search models..."), {
       target: { value: "  dEeP rEaSoNiNg  " },
     });
     expect(screen.getByRole("menuitemradio", { name: /By description/ })).toBeTruthy();
-    expect(screen.queryByText("By id")).toBeNull();
+    expect(screen.queryByText("By id") === null).toBe(true);
 
     fireEvent.change(screen.getByPlaceholderText("Search models..."), {
       target: { value: " HIDDEN ALIAS " },
     });
     expect(screen.getByRole("menuitemradio", { name: /Hidden Alias/ })).toBeTruthy();
-    expect(screen.queryByText("By description")).toBeNull();
+    expect(screen.queryByText("By description") === null).toBe(true);
 
     fireEvent.click(screen.getByTitle("Refresh models"));
     expect(onRefreshModels).toHaveBeenCalledTimes(1);
@@ -754,7 +754,7 @@ describe("AgentModelPicker", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
     expect(screen.getByRole("menuitemradio", { name: /Model 2/ })).toBeTruthy();
-    expect(screen.queryByRole("menuitemradio", { name: /Model 1/ })).toBeNull();
+    expect(screen.queryByRole("menuitemradio", { name: /Model 1/ }) === null).toBe(true);
   });
 
   test("does not render numeric shortcut hints for model rows", () => {
@@ -770,7 +770,7 @@ describe("AgentModelPicker", () => {
     renderPicker({ models: models.slice(0, 6) });
     openPicker();
     expect(screen.getByText("Scroll for 1 more model")).toBeTruthy();
-    expect(screen.queryByText("Scroll for 1 more models")).toBeNull();
+    expect(screen.queryByText("Scroll for 1 more models") === null).toBe(true);
   });
 
   test("shows empty and unmatched states without offering phantom choices", () => {
@@ -831,7 +831,7 @@ describe("AgentModelPicker", () => {
 
     renderPicker({ title: "Select runtime" });
     expect(screen.getByTitle("Select runtime")).toBeTruthy();
-    expect(screen.queryByTitle("Choose model, reasoning, and speed")).toBeNull();
+    expect(screen.queryByTitle("Choose model, reasoning, and speed") === null).toBe(true);
   });
 
   test("disables the trigger and unavailable fast selection", () => {
@@ -860,13 +860,13 @@ describe("AgentModelPicker", () => {
     fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
     expect(screen.getByText("Model 1")).toBeTruthy();
     expect(screen.getAllByText("Codex").length).toBeGreaterThan(0);
-    expect(screen.queryByText("Model 1 description")).toBeNull();
+    expect(screen.queryByText("Model 1 description") === null).toBe(true);
     expect(screen.getByRole("menuitemradio", { name: "Low" })).toBeTruthy();
     expect(screen.getByRole("menuitemradio", { name: "High" })).toBeTruthy();
-    expect(screen.queryByText("Low (current)")).toBeNull();
-    expect(screen.queryByText("High (default)")).toBeNull();
-    expect(screen.queryByText("Quick answers")).toBeNull();
-    expect(screen.queryByText("Deep reasoning")).toBeNull();
+    expect(screen.queryByText("Low (current)") === null).toBe(true);
+    expect(screen.queryByText("High (default)") === null).toBe(true);
+    expect(screen.queryByText("Quick answers") === null).toBe(true);
+    expect(screen.queryByText("Deep reasoning") === null).toBe(true);
   });
 
   test("keeps search keystrokes in the input and clears the query after close", () => {
@@ -897,7 +897,7 @@ describe("AgentModelPicker", () => {
     const trigger = screen.getByTitle("Choose model and speed");
     fireEvent.pointerDown(trigger);
     expect(screen.getByText("No models available")).toBeTruthy();
-    expect(screen.queryByText("Reasoning")).toBeNull();
+    expect(screen.queryByText("Reasoning") === null).toBe(true);
     const speed = document.querySelector<HTMLElement>("[data-native-mobile-speed-trigger]")!;
     expect(speed.textContent).toContain("Unavailable");
     expect(speed.hasAttribute("data-disabled")).toBe(false);

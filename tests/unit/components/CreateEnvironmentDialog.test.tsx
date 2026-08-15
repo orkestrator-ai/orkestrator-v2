@@ -298,8 +298,8 @@ describe("resolveAgentDefaults", () => {
         name: "Create Ork (Environment) - Orkestrator",
       }),
     ).toBeTruthy();
-    expect(screen.queryByRole("radiogroup", { name: "Default Agent" })).toBeNull();
-    expect(screen.queryByRole("combobox", { name: "Reasoning effort" })).toBeNull();
+    expect(screen.queryByRole("radiogroup", { name: "Default Agent" }) === null).toBe(true);
+    expect(screen.queryByRole("combobox", { name: "Reasoning effort" }) === null).toBe(true);
     expect(getAgentModelPicker()).toBeTruthy();
     expect(
       (screen.getByRole("checkbox", { name: "Use TUI" }) as HTMLButtonElement)
@@ -401,8 +401,8 @@ describe("resolveAgentDefaults", () => {
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Setup" }), { button: 0, ctrlKey: false });
     fireEvent.click(screen.getByRole("button", { name: /Local/ }));
 
-    expect(screen.queryByRole("tab", { name: "Access" })).toBeNull();
-    expect(screen.queryByRole("tab", { name: "Ports" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Access" }) === null).toBe(true);
+    expect(screen.queryByRole("tab", { name: "Ports" }) === null).toBe(true);
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
       "Prompt",
       "Setup",
@@ -438,7 +438,7 @@ describe("resolveAgentDefaults", () => {
           .closest('[role="tabpanel"]')
           ?.getAttribute("data-mobile-transition"),
       ).toBe("backward");
-      expect(screen.queryByRole("tab", { name: tabName })).toBeNull();
+      expect(screen.queryByRole("tab", { name: tabName }) === null).toBe(true);
     },
   );
 
@@ -491,12 +491,10 @@ describe("resolveAgentDefaults", () => {
     await waitFor(() => {
       expect(screen.getByRole("tab", { name: "Prompt" }).getAttribute("aria-selected")).toBe("true");
     });
-    expect(
-      screen
+    expect(screen
         .getByLabelText(/Initial Prompt/i)
         .closest('[role="tabpanel"]')
-        ?.getAttribute("data-mobile-transition"),
-    ).toBeNull();
+        ?.getAttribute("data-mobile-transition") === null).toBe(true);
   });
 
   test("clears the delayed prompt autofocus when the dialog unmounts", async () => {
@@ -1018,7 +1016,7 @@ describe("resolveAgentDefaults", () => {
     await selectAgentPlatform("OpenCode");
     expect(getAgentModelPicker().hasAttribute("disabled")).toBe(false);
     openAgentModelPicker();
-    expect(screen.queryByRole("group", { name: "Reasoning" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Reasoning" }) === null).toBe(true);
     expect(screen.getByPlaceholderText("Search models...")).toBeTruthy();
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     await waitFor(() =>
@@ -1477,8 +1475,7 @@ describe("resolveAgentDefaults", () => {
     });
     expect(await screen.findByRole("menuitemradio", { name: /Live Model/ }))
       .toBeTruthy();
-    expect(screen.queryByRole("menuitemradio", { name: /Cached Model/ }))
-      .toBeNull();
+    expect(screen.queryByRole("menuitemradio", { name: /Cached Model/ }) === null).toBe(true);
   });
 
   test("does not read an unscoped durable catalog without a project id", async () => {
@@ -1835,7 +1832,7 @@ describe("resolveAgentDefaults", () => {
     expect(
       await screen.findByRole("menuitemradio", { name: /Durable Model A/ }),
     ).toBeTruthy();
-    expect(screen.queryByText("Favorites")).toBeNull();
+    expect(screen.queryByText("Favorites") === null).toBe(true);
   });
 
   test.each([
@@ -1888,7 +1885,7 @@ describe("resolveAgentDefaults", () => {
     expect(
       await screen.findByRole("menuitemradio", { name: /Durable Model A/ }),
     ).toBeTruthy();
-    expect(screen.queryByText("Favorites")).toBeNull();
+    expect(screen.queryByText("Favorites") === null).toBe(true);
   });
 
   test("keeps a model chosen before the durable catalog arrives", async () => {
@@ -2423,7 +2420,7 @@ describe("resolveAgentDefaults", () => {
         }),
       );
     });
-    expect(screen.queryByAltText(/initial-prompt-/)).toBeNull();
+    expect(screen.queryByAltText(/initial-prompt-/) === null).toBe(true);
     expect(toastSuccessMock).not.toHaveBeenCalled();
   });
 
@@ -2454,7 +2451,7 @@ describe("resolveAgentDefaults", () => {
     fireEvent.click(removeButton);
 
     await waitFor(() => {
-      expect(screen.queryByAltText(/initial-prompt-/)).toBeNull();
+      expect(screen.queryByAltText(/initial-prompt-/) === null).toBe(true);
     });
 
     fireEvent.change(prompt, {
@@ -2502,7 +2499,7 @@ describe("resolveAgentDefaults", () => {
     expect(wasNotCancelled).toBe(true);
     expect(pasteEvent.defaultPrevented).toBe(false);
     expect(toastSuccessMock).not.toHaveBeenCalled();
-    expect(screen.queryByAltText(/initial-prompt-/)).toBeNull();
+    expect(screen.queryByAltText(/initial-prompt-/) === null).toBe(true);
   });
 
   test("shows an error and leaves paste untouched when clipboard image encoding is empty", async () => {
@@ -2535,7 +2532,7 @@ describe("resolveAgentDefaults", () => {
       }),
     );
     expect(toastSuccessMock).not.toHaveBeenCalled();
-    expect(screen.queryByAltText(/initial-prompt-/)).toBeNull();
+    expect(screen.queryByAltText(/initial-prompt-/) === null).toBe(true);
   });
 
   test("lets normal paste continue when the clipboard has no image", async () => {
@@ -2560,7 +2557,7 @@ describe("resolveAgentDefaults", () => {
     });
     expect(wasNotCancelled).toBe(true);
     expect(pasteEvent.defaultPrevented).toBe(false);
-    expect(screen.queryByAltText(/initial-prompt-/)).toBeNull();
+    expect(screen.queryByAltText(/initial-prompt-/) === null).toBe(true);
   });
 
   test("does not inspect clipboard images when the prompt is unfocused or unavailable", async () => {
@@ -2577,7 +2574,7 @@ describe("resolveAgentDefaults", () => {
 
     fireEvent.click(screen.getByRole("switch", { name: "Launch Agent" }));
     await waitFor(() => {
-      expect(screen.queryByLabelText(/Initial Prompt/i)).toBeNull();
+      expect(screen.queryByLabelText(/Initial Prompt/i) === null).toBe(true);
     });
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
     await Promise.resolve();
@@ -2687,7 +2684,7 @@ describe("resolveAgentDefaults", () => {
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(size).not.toHaveBeenCalled();
-    expect(screen.queryByAltText(/initial-prompt-/)).toBeNull();
+    expect(screen.queryByAltText(/initial-prompt-/) === null).toBe(true);
     expect(toastSuccessMock).not.toHaveBeenCalled();
   });
 
@@ -2714,7 +2711,7 @@ describe("resolveAgentDefaults", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
-    expect(screen.queryByAltText(/initial-prompt-/)).toBeNull();
+    expect(screen.queryByAltText(/initial-prompt-/) === null).toBe(true);
     expect(putImageData).not.toHaveBeenCalled();
     expect(toastSuccessMock).not.toHaveBeenCalled();
   });
@@ -2745,7 +2742,7 @@ describe("resolveAgentDefaults", () => {
 
     expect(rgba).not.toHaveBeenCalled();
     expect(size).not.toHaveBeenCalled();
-    expect(screen.queryByAltText(/initial-prompt-/)).toBeNull();
+    expect(screen.queryByAltText(/initial-prompt-/) === null).toBe(true);
     expect(toastSuccessMock).not.toHaveBeenCalled();
   });
 

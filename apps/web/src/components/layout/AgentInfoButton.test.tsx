@@ -482,7 +482,7 @@ describe("AgentInfoButton popover lifecycle", () => {
     expect(isPopoverOpen()).toBe(false);
     expect(popover().className).toContain("invisible");
     expect(popover().className).toContain("pointer-events-none");
-    expect(screen.queryByRole("dialog", { name: "Agent information" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Agent information" }) === null).toBe(true);
     expect(
       screen.getByRole("button", { name: "Open agent information" }).getAttribute("aria-expanded"),
     ).toBe("false");
@@ -498,7 +498,7 @@ describe("AgentInfoButton popover lifecycle", () => {
 
     fireEvent.click(screen.getAllByRole("button", { name: "Close agent information" })[0]!);
     expect(isPopoverOpen()).toBe(false);
-    expect(screen.queryByRole("dialog", { name: "Agent information" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Agent information" }) === null).toBe(true);
   });
 
   test("the X button closes the panel and returns focus to the trigger", async () => {
@@ -653,7 +653,7 @@ describe("AgentInfoButton provider resolution", () => {
 
     expect(screen.getByText("No native agent")).toBeTruthy();
     expect(screen.getByText("Select a native agent tab.")).toBeTruthy();
-    expect(screen.queryByText("Session actions")).toBeNull();
+    expect(screen.queryByText("Session actions") === null).toBe(true);
   });
 
   test("a tab whose native data is missing is treated as no session", () => {
@@ -769,8 +769,8 @@ describe("AgentInfoButton usage panel", () => {
     expect(screen.getByText("Weekly")).toBeTruthy();
     expect(screen.getByText("claude-sonnet")).toBeTruthy();
     expect(screen.getByText("Provider reported")).toBeTruthy();
-    expect(screen.queryByText(/first token snapshot/)).toBeNull();
-    expect(screen.queryByText("Context")).toBeNull();
+    expect(screen.queryByText(/first token snapshot/) === null).toBe(true);
+    expect(screen.queryByText("Context") === null).toBe(true);
   });
 
   test("renders context, token split, cache, reasoning, elapsed and denial rows", () => {
@@ -860,7 +860,7 @@ describe("AgentInfoButton usage panel", () => {
     open();
 
     for (const label of ["Input", "Output", "Cache read", "Reasoning", "Cost", "Elapsed", "Denied", "Credits"]) {
-      expect(screen.queryByText(label)).toBeNull();
+      expect(screen.queryByText(label) === null).toBe(true);
     }
   });
 
@@ -871,7 +871,7 @@ describe("AgentInfoButton usage panel", () => {
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(screen.getByText("Estimated")).toBeTruthy();
-    expect(screen.queryByText("Provider reported")).toBeNull();
+    expect(screen.queryByText("Provider reported") === null).toBe(true);
   });
 
   test("prefers the model named by the snapshot over the store's selection", () => {
@@ -882,7 +882,7 @@ describe("AgentInfoButton usage panel", () => {
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(screen.getByText("snapshot-model")).toBeTruthy();
-    expect(screen.queryByText("store-model")).toBeNull();
+    expect(screen.queryByText("store-model") === null).toBe(true);
   });
 
   test("shows 'Model unavailable' when neither source names one", () => {
@@ -1070,7 +1070,7 @@ describe("AgentInfoButton usage panel", () => {
       } as never);
       const view = render(<AgentInfoButton activeTab={claudeTab()} />);
       open();
-      expect(screen.queryByRole("img")).toBeNull();
+      expect(screen.queryByRole("img") === null).toBe(true);
       expect(setIntervalCalls).toBe(0);
 
       nowMs = resetMs - 3.5 * 24 * 60 * 60 * 1_000;
@@ -1157,8 +1157,8 @@ describe("AgentInfoButton usage panel", () => {
     open();
 
     expect(screen.getByText("Weekly")).toBeTruthy();
-    expect(screen.queryByText(/Resets/)).toBeNull();
-    expect(screen.queryByText(/Invalid Date/)).toBeNull();
+    expect(screen.queryByText(/Resets/) === null).toBe(true);
+    expect(screen.queryByText(/Invalid Date/) === null).toBe(true);
   });
 
   test("omits the limits section entirely when there are none", () => {
@@ -1167,7 +1167,7 @@ describe("AgentInfoButton usage panel", () => {
     } as never);
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
-    expect(screen.queryByText("Limits")).toBeNull();
+    expect(screen.queryByText("Limits") === null).toBe(true);
   });
 
   test("an authoritative empty Claude limit snapshot hides stale nested limits", () => {
@@ -1181,8 +1181,8 @@ describe("AgentInfoButton usage panel", () => {
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
-    expect(screen.queryByText("Limits")).toBeNull();
-    expect(screen.queryByText("Stale 5h")).toBeNull();
+    expect(screen.queryByText("Limits") === null).toBe(true);
+    expect(screen.queryByText("Stale 5h") === null).toBe(true);
     expect(screen.getByText("Context")).toBeTruthy();
   });
 });
@@ -1259,7 +1259,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
     open();
 
     await waitFor(() => expect(screen.getByText("notice six")).toBeTruthy());
-    expect(screen.queryByText("notice one")).toBeNull();
+    expect(screen.queryByText("notice one") === null).toBe(true);
     expect(screen.getByText("notice two")).toBeTruthy();
   });
 
@@ -1283,9 +1283,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
         screen.getByText("Codex reported mcpServer startupStatus updated (8)"),
       ).toBeTruthy(),
     );
-    expect(
-      screen.queryByText("Codex reported mcpServer startupStatus updated"),
-    ).toBeNull();
+    expect(screen.queryByText("Codex reported mcpServer startupStatus updated") === null).toBe(true);
     expect(screen.getByText("Codex reported warning")).toBeTruthy();
   });
 
@@ -1307,7 +1305,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
     open();
 
     await waitFor(() => expect(screen.getByText("notice one (2)")).toBeTruthy());
-    expect(screen.queryByText("notice two")).toBeNull();
+    expect(screen.queryByText("notice two") === null).toBe(true);
     expect(screen.getByText("notice three")).toBeTruthy();
     expect(screen.getByText("notice six")).toBeTruthy();
   });
@@ -1322,7 +1320,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
 
     // The panel must leave the loading state even on failure.
     await waitFor(
-      () => expect(screen.queryByText("Loading Codex runtime…")).toBeNull(),
+      () => expect(screen.queryByText("Loading Codex runtime…") === null).toBe(true),
       { timeout: 10_000 },
     );
     expect(screen.getByText("state unavailable")).toBeTruthy();
@@ -1411,7 +1409,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
       });
     });
 
-    expect(screen.queryByText("stale-session")).toBeNull();
+    expect(screen.queryByText("stale-session") === null).toBe(true);
     expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toEqual([
       { label: "Primary", usedPercent: 20 },
     ]);
@@ -1471,7 +1469,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
       });
     });
 
-    expect(screen.queryByText("stale-first-tab")).toBeNull();
+    expect(screen.queryByText("stale-first-tab") === null).toBe(true);
     expect(useCodexStore.getState().contextUsage.get(nextKey)?.rateLimits).toEqual([
       { label: "Primary", usedPercent: 30 },
     ]);
@@ -1565,7 +1563,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
       ])
     );
     expect(screen.getByText("ready")).toBeTruthy();
-    expect(screen.queryByText(/Runtime health unavailable/)).toBeNull();
+    expect(screen.queryByText(/Runtime health unavailable/) === null).toBe(true);
   });
 
   test("skips a window the health payload does not report at all", async () => {
@@ -1699,7 +1697,7 @@ describe("AgentInfoButton Claude session options", () => {
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
-    expect(screen.queryByLabelText("Execution profile")).toBeNull();
+    expect(screen.queryByLabelText("Execution profile") === null).toBe(true);
     expect(screen.getByText("Include .claude/settings.local.json")).toBeTruthy();
     expect(screen.getByText("Suggest a follow-up after each turn")).toBeTruthy();
   });
@@ -2026,7 +2024,7 @@ describe("AgentInfoButton session actions", () => {
     expect(continueButton.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByRole("button", { name: "Codex" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "OpenCode" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Claude" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Claude" }) === null).toBe(true);
     expect(screen.getByText(/source session stays intact/)).toBeTruthy();
   });
 
@@ -2511,7 +2509,7 @@ describe("AgentInfoButton session actions", () => {
 
     // Without native data there is no container or locality to copy onto the
     // destination tab, so the panel offers no session controls at all.
-    expect(screen.queryByRole("button", { name: /Continue in/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Continue in/ }) === null).toBe(true);
     expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
   });
 
@@ -2982,7 +2980,7 @@ describe("AgentInfoButton session actions", () => {
 
     expect(screen.getByText("Run the suite")).toBeTruthy();
     // Completed tasks are not offered a stop control.
-    expect(screen.queryByText("Finished")).toBeNull();
+    expect(screen.queryByText("Finished") === null).toBe(true);
 
     mockStopClaudeBackgroundTask.mockImplementation(async () => false);
     fireEvent.click(screen.getByRole("button", { name: /Stop/ }));
@@ -3006,7 +3004,7 @@ describe("AgentInfoButton session actions", () => {
     } as never);
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
-    expect(screen.queryByText("Background tasks")).toBeNull();
+    expect(screen.queryByText("Background tasks") === null).toBe(true);
   });
 
   test.each(["pending", "paused"] as const)(
@@ -3059,8 +3057,8 @@ describe("AgentInfoButton session actions", () => {
       render(<AgentInfoButton activeTab={claudeTab()} />);
       open();
 
-      expect(screen.queryByText("Background tasks")).toBeNull();
-      expect(screen.queryByText("Settled")).toBeNull();
+      expect(screen.queryByText("Background tasks") === null).toBe(true);
+      expect(screen.queryByText("Settled") === null).toBe(true);
     },
   );
 });
@@ -3314,7 +3312,7 @@ describe("AgentInfoButton OpenCode sharing", () => {
     seedShareableSession();
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
-    expect(screen.queryByRole("button", { name: /Stop sharing/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
     await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith("Share link copied"));
@@ -3365,7 +3363,7 @@ describe("AgentInfoButton OpenCode sharing", () => {
 
     await waitFor(() => expect(confirmMessages).toHaveLength(1));
     expect(mockShareOpenCodeSession).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: /Stop sharing/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
   });
 
   test("a share failure reports and offers no revocation", async () => {
@@ -3380,7 +3378,7 @@ describe("AgentInfoButton OpenCode sharing", () => {
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith("OpenCode share endpoint unavailable"),
     );
-    expect(screen.queryByRole("button", { name: /Stop sharing/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
   });
 
   test("rehydrates the shared state from the server when the panel opens", async () => {
@@ -3433,7 +3431,7 @@ describe("AgentInfoButton OpenCode sharing", () => {
     reopen();
 
     await waitFor(
-      () => expect(screen.queryByRole("button", { name: /Stop sharing/ })).toBeNull(),
+      () => expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true),
       { timeout: 10_000 },
     );
   }, 20_000);
@@ -3444,7 +3442,7 @@ describe("AgentInfoButton OpenCode sharing", () => {
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     await waitFor(() => expect(screen.getByText("Session actions")).toBeTruthy());
-    expect(screen.queryByRole("button", { name: /Stop sharing/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
   });
 
   test("stop sharing revokes and hides the control", async () => {
@@ -3462,7 +3460,7 @@ describe("AgentInfoButton OpenCode sharing", () => {
       openCodeClient,
       "opencode-session-1",
     );
-    expect(screen.queryByRole("button", { name: /Stop sharing/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
   });
 
   test("a failed unshare remains visible and can be retried", async () => {
@@ -3502,7 +3500,7 @@ describe("AgentInfoButton OpenCode sharing", () => {
       expect(mockToastSuccess).toHaveBeenCalledWith("OpenCode share link disabled"),
     );
     expect(mockUnshareOpenCodeSession).toHaveBeenCalledTimes(2);
-    expect(screen.queryByRole("button", { name: /Stop sharing/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
   });
 
   test("switching tabs clears the optimistic shared flag", async () => {
@@ -3514,7 +3512,7 @@ describe("AgentInfoButton OpenCode sharing", () => {
 
     rerender(<AgentInfoButton activeTab={openCodeTab({ id: "tab-9" })} />);
     reopen();
-    expect(screen.queryByRole("button", { name: /Stop sharing/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
   });
 
   test("a delayed share cannot mark a resumed session as shared", async () => {
@@ -3544,7 +3542,7 @@ describe("AgentInfoButton OpenCode sharing", () => {
     await act(async () => {
       releaseShare("https://share.opencode.test/session-a");
     });
-    expect(screen.queryByRole("button", { name: /Stop sharing/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
     expect(clipboardWrites).toEqual([]);
     expect(mockToastSuccess).not.toHaveBeenCalledWith("Share link copied");
   });
@@ -3616,7 +3614,7 @@ describe("AgentInfoButton Codex steering", () => {
     } as never);
     render(<AgentInfoButton activeTab={codexTab()} />);
     open();
-    expect(screen.queryByPlaceholderText("Correct or redirect Codex")).toBeNull();
+    expect(screen.queryByPlaceholderText("Correct or redirect Codex") === null).toBe(true);
   });
 
   test("sends the trimmed text to the active turn and clears the field", async () => {
@@ -4165,9 +4163,9 @@ describe("AgentInfoButton ACP agents", () => {
     expect(popover().textContent).toContain(
       "Usage will appear after this session reports its first token snapshot.",
     );
-    expect(screen.queryByText("Context")).toBeNull();
+    expect(screen.queryByText("Context") === null).toBe(true);
     // Cursor advertises no MCP inventory, so the panel must not claim it has none.
-    expect(screen.queryByText("MCP")).toBeNull();
+    expect(screen.queryByText("MCP") === null).toBe(true);
   });
 
   test("shows token metrics without inventing a context window", () => {
@@ -4196,10 +4194,8 @@ describe("AgentInfoButton ACP agents", () => {
     // runtime panel below renders "state unavailable"/"version unavailable" for
     // an agent that reports neither, so a substring match there would pass or
     // fail for reasons that have nothing to do with the context window.
-    expect(screen.queryByText("Context")).toBeNull();
-    expect(
-      screen.queryByRole("progressbar", { name: /percent of context used/ }),
-    ).toBeNull();
+    expect(screen.queryByText("Context") === null).toBe(true);
+    expect(screen.queryByRole("progressbar", { name: /percent of context used/ }) === null).toBe(true);
     expect(
       screen.queryAllByText((_content, element) => /^\S+ available$/.test(element?.textContent ?? "")),
     ).toHaveLength(0);
@@ -4212,8 +4208,8 @@ describe("AgentInfoButton ACP agents", () => {
     render(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
 
-    expect(screen.queryByRole("button", { name: /Fork session/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Compact/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Fork session/ }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: /Compact/ }) === null).toBe(true);
     // A transfer needs nothing from the provider beyond reading its own
     // transcript, so it survives a capability set that refuses everything else.
     expect(screen.getByRole("button", { name: /Continue in/ })).toBeTruthy();
@@ -4234,7 +4230,7 @@ describe("AgentInfoButton ACP agents", () => {
       expect(screen.getByRole("button", { name: label })).toBeTruthy();
     }
     // The source is named as the origin chip, never offered as a destination.
-    expect(screen.queryByRole("button", { name: "Cursor" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cursor" }) === null).toBe(true);
   });
 
   test("hides the transfer when no other agent is enabled", () => {
@@ -4244,9 +4240,9 @@ describe("AgentInfoButton ACP agents", () => {
     render(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
 
-    expect(screen.queryByRole("button", { name: /Continue in/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Continue in/ }) === null).toBe(true);
     // Nothing else is available for an ACP session, so the heading goes too.
-    expect(screen.queryByText("Session actions")).toBeNull();
+    expect(screen.queryByText("Session actions") === null).toBe(true);
   });
 
   test("transfers an ACP conversation read from its authoritative projection", async () => {

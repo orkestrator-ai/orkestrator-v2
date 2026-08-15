@@ -151,7 +151,8 @@ describe("monorepo orchestration scripts", () => {
     // bridges/* are not in the turbo `test:workspace` filters and declare no
     // `test` script, so they only run if test-all.ts invokes them directly.
     const source = read("scripts/test-all.ts");
-    expect(source).toContain('args: ["test", "bridges"');
+    expect(source).toContain('name: "bridges"');
+    expect(source).toContain('"test", "bridges"');
 
     for (const bridge of ["bridges/claude-bridge/package.json", "bridges/codex-bridge/package.json"]) {
       const scripts = (JSON.parse(read(bridge)) as { scripts?: Record<string, string> }).scripts ?? {};

@@ -13,8 +13,8 @@
     "start": "bun dist/main.js",
     "start:web": "bun dist/main.js --fallback-host 127.0.0.1",
     "start:web-public": "bun dist/main.js --tailscale-serve --allowed-origins https://orkestrator.dev,https://www.orkestrator.dev",
-    "test": "bun test src tests --parallel",
-    "test:workspace": "bun test src tests --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
+    "test": "bun test --preload ../../tests/setup-node.ts src tests --parallel",
+    "test:workspace": "bun test --preload ../../tests/setup-node.ts src tests --only-failures --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
     "typecheck": "bunx tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

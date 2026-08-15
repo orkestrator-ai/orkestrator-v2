@@ -138,7 +138,7 @@ describe("CreatePRDialog with real Radix primitives", () => {
 
     fireEvent.keyDown(document.body, { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
     await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
@@ -149,7 +149,7 @@ describe("CreatePRDialog with real Radix primitives", () => {
     // An open modal hides everything outside it from the accessibility tree, so
     // both buttons are only queryable once the dialog has gone.
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
 
     const trigger = screen.getByRole("button", { name: "Create PR" });
     const fallback = screen.getByRole("button", { name: "Open tools" });
@@ -165,7 +165,7 @@ describe("CreatePRDialog with real Radix primitives", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     const fallback = screen.getByRole("button", { name: "Open tools" });
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
     await waitFor(() => expect(document.activeElement).toBe(fallback));
   });
 });

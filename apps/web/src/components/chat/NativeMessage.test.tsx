@@ -94,7 +94,7 @@ describe("NativeMessage assistant attribution", () => {
     );
 
     expect(screen.getByText("gpt-5.6-sol")).toBeTruthy();
-    expect(screen.queryByText("Codex")).toBeNull();
+    expect(screen.queryByText("Codex") === null).toBe(true);
   });
 
   test("keeps the provider label for legacy messages with no confirmed model", () => {
@@ -136,7 +136,7 @@ describe("NativeMessage assistant attribution", () => {
 
     expect(screen.getByText("Claude Sonnet 4").getAttribute("title"))
       .toBe("Claude Sonnet 4");
-    expect(screen.queryByText("anthropic/claude-sonnet-4")).toBeNull();
+    expect(screen.queryByText("anthropic/claude-sonnet-4") === null).toBe(true);
   });
 
   test.each(["", "   \n"])(
@@ -154,7 +154,7 @@ describe("NativeMessage assistant attribution", () => {
       );
 
       expect(screen.getByText("anthropic/claude-sonnet-4")).toBeTruthy();
-      expect(screen.queryByText("OpenCode")).toBeNull();
+      expect(screen.queryByText("OpenCode") === null).toBe(true);
     },
   );
 
@@ -170,7 +170,7 @@ describe("NativeMessage assistant attribution", () => {
     );
 
     expect(screen.getByText("You")).toBeTruthy();
-    expect(screen.queryByText("gpt-5.6-sol")).toBeNull();
+    expect(screen.queryByText("gpt-5.6-sol") === null).toBe(true);
   });
 
   test("hides the model label on an empty assistant message with no streamed content", () => {
@@ -184,8 +184,8 @@ describe("NativeMessage assistant attribution", () => {
       />,
     );
 
-    expect(screen.queryByText("GPT 5.6 Sol")).toBeNull();
-    expect(screen.queryByText("gpt-5.6-sol")).toBeNull();
+    expect(screen.queryByText("GPT 5.6 Sol") === null).toBe(true);
+    expect(screen.queryByText("gpt-5.6-sol") === null).toBe(true);
   });
 
   test("renders nothing at all for an empty assistant message with no actions", () => {
@@ -220,7 +220,7 @@ describe("NativeMessage assistant attribution", () => {
 
     // The action keeps the row alive, but nothing attributes it.
     expect(screen.getByRole("button", { name: "Fork" })).toBeTruthy();
-    expect(screen.queryByText("GPT 5.6 Sol")).toBeNull();
+    expect(screen.queryByText("GPT 5.6 Sol") === null).toBe(true);
   });
 
   test("keeps a caller-supplied action reachable on a content-empty assistant message", () => {
@@ -239,7 +239,7 @@ describe("NativeMessage assistant attribution", () => {
     );
 
     expect(screen.getByRole("button", { name: "Fork response" })).toBeTruthy();
-    expect(screen.queryByText("GPT 5.6 Sol")).toBeNull();
+    expect(screen.queryByText("GPT 5.6 Sol") === null).toBe(true);
   });
 
   test("shows attribution on a thinking-only assistant message", () => {
@@ -326,7 +326,7 @@ describe("NativeMessage assistant attribution", () => {
     );
 
     // The continuation keeps its timestamp row but must not repeat the model.
-    expect(screen.queryByText("GPT 5.6 Sol")).toBeNull();
+    expect(screen.queryByText("GPT 5.6 Sol") === null).toBe(true);
     expect(screen.getByText(expectedTimeLabel("2026-03-21T10:00:40.000Z"))).toBeTruthy();
     expect(screen.getByRole("button", { name: "Copy text" })).toBeTruthy();
   });
@@ -889,7 +889,7 @@ describe("NativeMessage task list rendering", () => {
     render(<NativeMessage message={message} />);
 
     expect(screen.getByRole("button", { name: /Run Command/i })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /\bbash\b/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /\bbash\b/i }) === null).toBe(true);
   });
 
   test("shows the derived command beside a custom exec tool", () => {
@@ -1202,7 +1202,7 @@ describe("NativeMessage task list rendering", () => {
         .getByRole("button", { name: /Run Command bun run build success/i })
         .getAttribute("aria-expanded"),
     ).toBe("false");
-    expect(screen.queryByText("bun run build finished")).toBeNull();
+    expect(screen.queryByText("bun run build finished") === null).toBe(true);
   });
 
   test("keeps an edit diff expanded when its virtualized row remounts", () => {
@@ -1373,7 +1373,7 @@ describe("NativeMessage task list rendering", () => {
 
     expect(container.textContent).toContain("Before tools");
     expect(container.textContent).toContain("After tools");
-    expect(container.querySelector(".border-zinc-700\\/70")).toBeNull();
+    expect(container.querySelector(".border-zinc-700\\/70") === null).toBe(true);
   });
 
   test("renders Claude Agent task groups as compact agent activity rows", () => {
@@ -1563,7 +1563,7 @@ describe("NativeMessage task list rendering", () => {
     render(<NativeMessage message={message} />);
 
     expect(screen.getByText("Response")).toBeTruthy();
-    expect(screen.queryByText("Waiting for activity.")).toBeNull();
+    expect(screen.queryByText("Waiting for activity.") === null).toBe(true);
   });
 
   test("uses external tmux usage counts for agent task rows when available", () => {
@@ -1593,7 +1593,7 @@ describe("NativeMessage task list rendering", () => {
 
     expect(screen.getByText("8 tool uses")).toBeTruthy();
     expect(screen.getByText("20.4k tokens")).toBeTruthy();
-    expect(screen.queryByText("0 updates")).toBeNull();
+    expect(screen.queryByText("0 updates") === null).toBe(true);
   });
 
   test("renders adjacent agents inside a compact shared block", () => {
@@ -2032,7 +2032,7 @@ describe("NativeMessage task list rendering", () => {
     render(<NativeMessage message={message} />);
 
     expect(screen.getByText("Use this screenshot")).toBeTruthy();
-    expect(screen.queryByText(/attached-files/)).toBeNull();
+    expect(screen.queryByText(/attached-files/) === null).toBe(true);
     expect(await screen.findByAltText("Thumbnail: initial-shot.png")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", {
@@ -2114,8 +2114,8 @@ describe("NativeMessage task list rendering", () => {
     render(<NativeMessage message={message} />);
 
     expect(screen.getByText("45.7k tokens")).toBeTruthy();
-    expect(screen.queryByText("0 tools")).toBeNull();
-    expect(screen.queryByText("0 updates")).toBeNull();
+    expect(screen.queryByText("0 tools") === null).toBe(true);
+    expect(screen.queryByText("0 updates") === null).toBe(true);
   });
 
   test("uses external tmux usage counts for standalone subagent rows when available", () => {
@@ -2138,7 +2138,7 @@ describe("NativeMessage task list rendering", () => {
 
     expect(screen.getByText("8 tool uses")).toBeTruthy();
     expect(screen.getByText("20.4k tokens")).toBeTruthy();
-    expect(screen.queryByText("0 updates")).toBeNull();
+    expect(screen.queryByText("0 updates") === null).toBe(true);
   });
 
   test("can render standalone Claude tmux subagent usage as tokens only", () => {
@@ -2160,8 +2160,8 @@ describe("NativeMessage task list rendering", () => {
     render(<NativeMessage message={message} />);
 
     expect(screen.getByText("37.3k tokens")).toBeTruthy();
-    expect(screen.queryByText("0 tools")).toBeNull();
-    expect(screen.queryByText("0 updates")).toBeNull();
+    expect(screen.queryByText("0 tools") === null).toBe(true);
+    expect(screen.queryByText("0 updates") === null).toBe(true);
   });
 
   test("uses singular tool-use wording for a single external tool use", () => {
@@ -2270,7 +2270,7 @@ describe("NativeMessage task list rendering", () => {
       await waitFor(() => {
         expect(toastErrorMock).toHaveBeenCalledWith("Failed to copy message text");
       });
-      expect(screen.queryByRole("button", { name: "Copied text" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Copied text" }) === null).toBe(true);
     } finally {
       console.error = consoleError;
     }
@@ -2779,10 +2779,10 @@ describe("NativeMessage thinking parts", () => {
       <NativeMessage message={makeMessage([{ type: "thinking", content: "" }])} />,
     );
 
-    expect(screen.queryByRole("button", { name: /thinking/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /thinking/i }) === null).toBe(true);
     expect(container.textContent).not.toContain("Thinking");
     // Not even the grouped activity block, which would paint an empty border.
-    expect(container.querySelector(".rounded-lg.border")).toBeNull();
+    expect(container.querySelector(".rounded-lg.border") === null).toBe(true);
   });
 
   test("renders nothing for a thinking part that is only whitespace", () => {
@@ -2792,9 +2792,9 @@ describe("NativeMessage thinking parts", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: /thinking/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /thinking/i }) === null).toBe(true);
     expect(container.textContent).not.toContain("Thinking");
-    expect(container.querySelector(".rounded-lg.border")).toBeNull();
+    expect(container.querySelector(".rounded-lg.border") === null).toBe(true);
   });
 
   test("keeps the activity block for real reasoning alongside an empty part", () => {
@@ -3047,7 +3047,7 @@ describe("NativeMessage part routing and message-level fallbacks", () => {
       <NativeMessage message={makeMessage([], { id: "assistant-empty", content: "" })} />,
     );
 
-    expect(screen.queryByRole("button", { name: "Copy text" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy text" }) === null).toBe(true);
     // An info-only message with no streamed content must not carry a dangling
     // model attribution; the label appears only once real content lands.
     expect(container.textContent).not.toContain("Assistant");
@@ -3151,7 +3151,7 @@ describe("NativeMessage agent status and grouping details", () => {
       />,
     );
 
-    expect(screen.queryByText(/active$/i)).toBeNull();
+    expect(screen.queryByText(/active$/i) === null).toBe(true);
     expect(screen.getAllByText("Finished")).toHaveLength(2);
   });
 
@@ -3169,7 +3169,7 @@ describe("NativeMessage agent status and grouping details", () => {
     );
 
     expect(screen.getByText("Active")).toBeTruthy();
-    expect(screen.queryByText("Finished")).toBeNull();
+    expect(screen.queryByText("Finished") === null).toBe(true);
     expect(screen.getByText("Waiting for activity.")).toBeTruthy();
   });
 
@@ -3197,7 +3197,7 @@ describe("NativeMessage agent status and grouping details", () => {
     );
 
     expect(screen.getAllByText("Failed")).toHaveLength(2);
-    expect(screen.queryByText("Finished")).toBeNull();
+    expect(screen.queryByText("Finished") === null).toBe(true);
     expect(screen.getAllByText("No activity captured.")).toHaveLength(2);
   });
 
@@ -3426,7 +3426,7 @@ describe("NativeMessage agent status and grouping details", () => {
 
     expect(screen.getByText("Response")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /whitespace reviewer/i }));
-    expect(screen.queryByText("Task")).toBeNull();
+    expect(screen.queryByText("Task") === null).toBe(true);
   });
 
   test("previews the latest thinking and file updates in task agents", () => {
@@ -3510,8 +3510,8 @@ describe("NativeMessage agent status and grouping details", () => {
 
     expect(container.textContent).toContain("Before agents");
     expect(container.textContent).toContain("After agents");
-    expect(screen.queryByRole("region", { name: /agents/i })).toBeNull();
-    expect(screen.queryByText("Agents")).toBeNull();
+    expect(screen.queryByRole("region", { name: /agents/i }) === null).toBe(true);
+    expect(screen.queryByText("Agents") === null).toBe(true);
   });
 
   test("omits the active badge when every grouped agent has finished", () => {
@@ -3537,7 +3537,7 @@ describe("NativeMessage agent status and grouping details", () => {
     );
 
     expect(screen.getByRole("region", { name: "2 agents" })).toBeTruthy();
-    expect(screen.queryByText(/active$/i)).toBeNull();
+    expect(screen.queryByText(/active$/i) === null).toBe(true);
   });
 
   test("counts active agents across mixed subagent and task-group children", () => {
@@ -3625,7 +3625,7 @@ describe("NativeMessage agent status and grouping details", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /reviewer/i }));
 
-    expect(screen.queryByText("Task")).toBeNull();
+    expect(screen.queryByText("Task") === null).toBe(true);
     expect(screen.getByText("No child actions yet.")).toBeTruthy();
   });
 
@@ -3716,7 +3716,7 @@ describe("NativeMessage agent status and grouping details", () => {
     );
 
     expect(screen.getByText("Subagent")).toBeTruthy();
-    expect(screen.queryByText("Task")).toBeNull();
+    expect(screen.queryByText("Task") === null).toBe(true);
   });
 
   test("falls back to an update count when an external agent reports no token text", () => {
@@ -3850,7 +3850,7 @@ describe("NativeMessage actions slot", () => {
     );
 
     expect(screen.getByRole("button", { name: "Fork from here" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Copy text" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy text" }) === null).toBe(true);
   });
 
   test("leaves the copy-only layout undisturbed when no actions are passed", () => {
@@ -3871,7 +3871,7 @@ describe("NativeMessage actions slot", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: "Copy text" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy text" }) === null).toBe(true);
     expect(container.textContent).not.toContain("Fork from here");
   });
 });

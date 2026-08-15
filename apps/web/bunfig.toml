@@ -1,3 +1,3 @@
 [test]
-preload = ["../../tests/setup.ts"]
+preload = ["../../tests/register-dom.ts", "../../tests/setup.ts"]
 pathIgnorePatterns = ["dist/**"]

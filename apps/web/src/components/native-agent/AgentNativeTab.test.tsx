@@ -326,7 +326,7 @@ describe("AgentNativeTab", () => {
       await screen.findByTestId("shared-native-compose-bar");
       const sendButton = screen.getByTitle("Send");
 
-      expect(screen.queryByRole("button", { name: /Context window/ })).toBeNull();
+      expect(screen.queryByRole("button", { name: /Context window/ }) === null).toBe(true);
       expect(sendButton).toBeTruthy();
     },
   );
@@ -676,7 +676,7 @@ describe("AgentNativeTab", () => {
     await waitFor(() => expect(screen.getByTitle(/Choose model/).textContent)
       .toContain("Grok Build"));
     expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText("No models available")).toBeNull();
+    expect(screen.queryByText("No models available") === null).toBe(true);
   });
 
   test("drops attachments the newly selected platform cannot receive", async () => {
@@ -862,7 +862,7 @@ describe("AgentNativeTab", () => {
     const pendingDraft = useNativeComposeStore.getState().drafts.get(sessionKey);
     expect(pendingDraft?.text).toBe("Keep this first prompt");
     expect(pendingDraft?.requestId).toMatch(/\S/);
-    await waitFor(() => expect(screen.queryByTitle("Send")).toBeNull());
+    await waitFor(() => expect(screen.queryByTitle("Send") === null).toBe(true));
     expect(input.getAttribute("aria-disabled")).toBe("true");
     fireEvent.keyDown(input, { key: "Enter" });
     expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
@@ -1504,7 +1504,7 @@ describe("AgentNativeTab", () => {
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 25));
       });
-      expect(screen.queryByTestId("active-subagent-rail")).toBeNull();
+      expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true);
 
       await act(async () => {
         view.rerender(<AgentNativeTab tabId="tab-grok-subagent" data={identity("grok")} isActive />);
@@ -1585,7 +1585,7 @@ describe("AgentNativeTab", () => {
         />,
       );
 
-      await waitFor(() => expect(screen.queryByTestId("active-subagent-rail")).toBeNull());
+      await waitFor(() => expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true));
       expect(useNativeAgentProjectionStore.getState().projections.get(
         createSessionKey("env-1", "tab-cursor-subagent-transition"),
       )?.messages[0]).toMatchObject({
@@ -1606,7 +1606,7 @@ describe("AgentNativeTab", () => {
 
       expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
       await waitFor(() => {
-        expect(screen.queryByRole("button", { name: /Context window/ })).toBeNull();
+        expect(screen.queryByRole("button", { name: /Context window/ }) === null).toBe(true);
       });
     });
 
@@ -1744,10 +1744,10 @@ describe("AgentNativeTab", () => {
       render(<AgentNativeTab tabId="tab-settings" data={identity("claude")} isActive />);
 
       await screen.findByRole("textbox");
-      expect(screen.queryByRole("combobox", { name: "Execution profile" })).toBeNull();
-      expect(screen.queryByText("Provider default")).toBeNull();
-      expect(screen.queryByText("Local settings")).toBeNull();
-      expect(screen.queryByText("Suggestions")).toBeNull();
+      expect(screen.queryByRole("combobox", { name: "Execution profile" }) === null).toBe(true);
+      expect(screen.queryByText("Provider default") === null).toBe(true);
+      expect(screen.queryByText("Local settings") === null).toBe(true);
+      expect(screen.queryByText("Suggestions") === null).toBe(true);
     });
 
     test("uses a projection updated by the separate settings surface for the next prompt", async () => {

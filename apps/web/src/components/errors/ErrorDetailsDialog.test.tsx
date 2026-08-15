@@ -85,7 +85,7 @@ describe("ErrorDetailsDialog", () => {
     });
     render(<ErrorDetailsDialog />);
 
-    expect(screen.queryByText("Initial Prompt")).toBeNull();
+    expect(screen.queryByText("Initial Prompt") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Copy" }));
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith(

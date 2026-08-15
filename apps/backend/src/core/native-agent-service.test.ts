@@ -89,6 +89,7 @@ function createProviderStub(
     dismissSuggestedPrompt?: NativeAgentRuntimeProvider["dismissSuggestedPrompt"];
     updateInteractiveControls?: NativeAgentRuntimeProvider["updateInteractiveControls"];
     slashCommands?: NativeAgentRuntimeProvider["slashCommands"];
+    refreshCatalog?: NativeAgentRuntimeProvider["refreshCatalog"];
   } = {},
 ) {
   const createSession = mock(
@@ -124,6 +125,9 @@ function createProviderStub(
   const slashCommands = behaviour.slashCommands
     ? mock(behaviour.slashCommands)
     : undefined;
+  const refreshCatalog = behaviour.refreshCatalog
+    ? mock(behaviour.refreshCatalog)
+    : undefined;
   const provider = {
     agent,
     createSession,
@@ -139,6 +143,7 @@ function createProviderStub(
     rawModelCatalog,
     updateInteractiveControls,
     slashCommands,
+    refreshCatalog,
     structured: async () => null,
     abort,
     stopBackgroundTask,
@@ -161,6 +166,7 @@ function createProviderStub(
     rawModelCatalog,
     updateInteractiveControls,
     slashCommands,
+    refreshCatalog,
     dispose,
   };
 }
@@ -1083,6 +1089,260 @@ describe("NativeAgentService", () => {
       now += 30_001;
       await service.getProjection(identity);
       expect(stub.slashCommands).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  test("does not hold an updated transcript behind expired discovery metadata", async () => {
+    let now = 1_000;
+    let message = "old transcript";
+    let releaseCatalog!: () => void;
+    let releaseCommands!: () => void;
+    const catalogGate = new Promise<void>((resolve) => { releaseCatalog = resolve; });
+    const commandGate = new Promise<void>((resolve) => { releaseCommands = resolve; });
+    let catalogReads = 0;
+    let catalogRefreshFinished = false;
+    const invoke: Invoke = async <T>(command: string): Promise<T> => {
+      if (command !== "get_native_agent_model_catalog") {
+        throw new Error(`Unexpected backend command: ${command}`);
+      }
+      catalogReads += 1;
+      if (catalogReads > 1) {
+        await catalogGate;
+        catalogRefreshFinished = true;
+      }
+      return [{
+        platform: "codex",
+        id: catalogReads > 1 ? "gpt-new" : "gpt-old",
+        label: catalogReads > 1 ? "GPT new" : "GPT old",
+      }] as T;
+    };
+    let commandReads = 0;
+    let commandRefreshFinished = false;
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [{
+          id: "message-1",
+          role: "assistant",
+          content: message,
+          parts: [],
+          createdAt: "2026-08-14T10:00:00.000Z",
+        }],
+      }),
+      slashCommands: async () => {
+        commandReads += 1;
+        if (commandReads > 1) {
+          await commandGate;
+          commandRefreshFinished = true;
+        }
+        return [{ name: commandReads > 1 ? "/new" : "/old" }];
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-stale-discovery-",
+      provider: async () => stub.provider,
+      invoke,
+      now: () => now,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-stale-discovery",
+      };
+      await service.ensureSession(identity);
+      await service.getProjection(identity);
+
+      now += 30_001;
+      message = "latest transcript";
+      const projection = await Promise.race([
+        service.getProjection(identity),
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("Transcript waited for discovery metadata")), 100);
+        }),
+      ]);
+
+      expect(projection?.messages).toEqual([
+        expect.objectContaining({ content: "latest transcript" }),
+      ]);
+      expect(projection?.composer?.models).toEqual([
+        expect.objectContaining({ id: "gpt-old" }),
+      ]);
+      expect(projection?.slashCommands?.map((command) => command.name))
+        .toEqual(["/old", "/steer"]);
+
+      releaseCatalog();
+      releaseCommands();
+      await waitForCondition(() => catalogRefreshFinished && commandRefreshFinished);
+      const updated = await service.getProjection(identity);
+      expect(updated?.composer?.models).toEqual([
+        expect.objectContaining({ id: "gpt-new" }),
+      ]);
+      expect(updated?.slashCommands?.map((command) => command.name))
+        .toEqual(["/new", "/steer"]);
+    });
+  });
+
+  test("runs fresh discovery after an explicit refresh overlaps stale background work", async () => {
+    let now = 1_000;
+    let releaseCatalog!: () => void;
+    let releaseCommands!: () => void;
+    const catalogGate = new Promise<void>((resolve) => { releaseCatalog = resolve; });
+    const commandGate = new Promise<void>((resolve) => { releaseCommands = resolve; });
+    let catalogReads = 0;
+    let staleCatalogSettled = false;
+    const invoke: Invoke = async <T>(command: string): Promise<T> => {
+      if (command !== "get_native_agent_model_catalog") {
+        throw new Error(`Unexpected backend command: ${command}`);
+      }
+      catalogReads += 1;
+      if (catalogReads === 2) {
+        await catalogGate;
+        staleCatalogSettled = true;
+      }
+      return [{
+        platform: "codex",
+        id: catalogReads > 2 ? "gpt-new" : "gpt-old",
+        label: catalogReads > 2 ? "GPT new" : "GPT old",
+      }] as T;
+    };
+    let commandReads = 0;
+    let staleCommandsSettled = false;
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+      slashCommands: async () => {
+        commandReads += 1;
+        if (commandReads === 2) {
+          await commandGate;
+          staleCommandsSettled = true;
+        }
+        return [{ name: commandReads > 2 ? "/new" : "/old" }];
+      },
+      refreshCatalog: () => undefined,
+    });
+    await withService({
+      prefix: "orkestrator-native-forced-discovery-",
+      provider: async () => stub.provider,
+      invoke,
+      now: () => now,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-forced-discovery",
+      };
+      try {
+        await service.ensureSession(identity);
+        const initial = await service.getProjection(identity);
+        expect(initial?.composer?.models.map((model) => model.id)).toEqual(["gpt-old"]);
+        expect(initial?.slashCommands?.map((command) => command.name))
+          .toEqual(["/old", "/steer"]);
+
+        now += 30_001;
+        await service.getProjection(identity);
+        await waitForCondition(() => catalogReads === 2 && commandReads === 2);
+
+        const refreshedProjection = service.refreshProjectionModels(identity);
+        await Promise.resolve();
+        expect(catalogReads).toBe(2);
+        expect(commandReads).toBe(2);
+
+        // Both gates are still closed: an explicit refresh discards the stale
+        // reads instead of inheriting their latency, which for a wedged bridge
+        // is a full request timeout.
+        const refreshed = await refreshedProjection;
+        expect(staleCatalogSettled).toBe(false);
+        expect(staleCommandsSettled).toBe(false);
+        expect(stub.refreshCatalog).toHaveBeenCalledTimes(1);
+        expect(catalogReads).toBe(3);
+        expect(commandReads).toBe(3);
+        expect(refreshed?.composer?.models.map((model) => model.id)).toEqual(["gpt-new"]);
+        expect(refreshed?.slashCommands?.map((command) => command.name))
+          .toEqual(["/new", "/steer"]);
+
+        // The discarded reads finishing later must not overwrite the catalogue
+        // the explicit refresh just installed.
+        releaseCatalog();
+        releaseCommands();
+        await waitForCondition(() => staleCatalogSettled && staleCommandsSettled);
+        const settled = await service.getProjection(identity);
+        expect(catalogReads).toBe(3);
+        expect(commandReads).toBe(3);
+        expect(settled?.composer?.models.map((model) => model.id)).toEqual(["gpt-new"]);
+        expect(settled?.slashCommands?.map((command) => command.name))
+          .toEqual(["/new", "/steer"]);
+      } finally {
+        releaseCatalog();
+        releaseCommands();
+      }
+    });
+  });
+
+  test("backs a failed background discovery off instead of retrying every poll", async () => {
+    let now = 1_000;
+    let catalogReads = 0;
+    const invoke: Invoke = async <T>(command: string): Promise<T> => {
+      if (command !== "get_native_agent_model_catalog") {
+        throw new Error(`Unexpected backend command: ${command}`);
+      }
+      catalogReads += 1;
+      if (catalogReads > 1) throw new Error("Model discovery is unavailable");
+      return [{ platform: "codex", id: "gpt-old", label: "GPT old" }] as T;
+    };
+    let commandReads = 0;
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+      slashCommands: async () => {
+        commandReads += 1;
+        if (commandReads > 1) throw new Error("Command discovery is unavailable");
+        return [{ name: "/old" }];
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-discovery-backoff-",
+      provider: async () => stub.provider,
+      invoke,
+      now: () => now,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-discovery-backoff",
+      };
+      await service.ensureSession(identity);
+      await service.getProjection(identity);
+      expect(catalogReads).toBe(1);
+      expect(commandReads).toBe(1);
+
+      now += 30_001;
+      const stale = await service.getProjection(identity);
+      expect(stale?.composer?.models.map((model) => model.id)).toEqual(["gpt-old"]);
+      expect(stale?.slashCommands?.map((command) => command.name))
+        .toEqual(["/old", "/steer"]);
+
+      // A failed optional endpoint must not be re-probed on every 500ms
+      // projection poll, so the retained entry carries an explicit back-off.
+      const caches = service as unknown as {
+        modelCatalogCache: Map<string, { expiresAt: number }>;
+        slashCommandCache: Map<string, { expiresAt: number }>;
+      };
+      await waitForCondition(() => (
+        caches.modelCatalogCache.get("env-1")?.expiresAt === now + 5_000
+        && caches.slashCommandCache.get("env-1\0codex")?.expiresAt === now + 5_000
+      ));
+      expect(catalogReads).toBe(2);
+      expect(commandReads).toBe(2);
+
+      now += 4_999;
+      const withinBackoff = await service.getProjection(identity);
+      expect(catalogReads).toBe(2);
+      expect(commandReads).toBe(2);
+      expect(withinBackoff?.composer?.models.map((model) => model.id)).toEqual(["gpt-old"]);
+      expect(withinBackoff?.slashCommands?.map((command) => command.name))
+        .toEqual(["/old", "/steer"]);
+
+      now += 2;
+      await service.getProjection(identity);
+      await waitForCondition(() => catalogReads === 3 && commandReads === 3);
     });
   });
 

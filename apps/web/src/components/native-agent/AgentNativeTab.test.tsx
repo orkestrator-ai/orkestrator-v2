@@ -19,6 +19,7 @@ import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionSto
 import { getNativeAgentData } from "@/types/paneLayout";
 import { createSessionKey } from "@/lib/utils";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { dispatchResourceChange } from "@/lib/resource-sync";
 
 // Snapshot before installing the stubs so the real modules are restored for
 // any suite that runs after this file in the same module registry.
@@ -260,17 +261,20 @@ function PaneBackedAgentNativeTab({ tabId = "tab-resume" }: { tabId?: string }) 
   );
 }
 
-function NativeSessionHarness() {
+function NativeSessionHarness({ isActive = true }: { isActive?: boolean } = {}) {
   const session = useNativeAgentSession<NativeMessage>({
     platform: "claude",
     environmentId: "env-1",
     tabId: "tab-hook-race",
     initialProviderSessionId: "session-a",
-    isActive: true,
+    isActive,
   });
   return (
     <div>
       <output data-testid="hook-session-id">{session.projection?.sessionId}</output>
+      <output data-testid="hook-message">
+        {(session.projection?.messages[0] as NativeMessage | undefined)?.content}
+      </output>
       <button type="button" onClick={() => { void session.refresh(); }}>Refresh</button>
       <button type="button" onClick={() => { void session.resume("session-b"); }}>Resume B</button>
     </div>
@@ -936,6 +940,176 @@ describe("AgentNativeTab", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(screen.getByTestId("hook-session-id").textContent).toBe("session-b");
+  });
+
+  test("hydrates a cached session while its remount adoption probe is still pending", async () => {
+    const sessionKey = createSessionKey("env-1", "tab-hook-race");
+    useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+      ...(await defaultProjection({ agent: "claude", environmentId: "env-1" })),
+      sessionId: "session-a",
+      messages: [{
+        id: "assistant-stale",
+        role: "assistant",
+        content: "stale transcript",
+        parts: [],
+        createdAt: "2026-08-14T10:00:00.000Z",
+      }],
+    });
+    let releaseAdoption!: () => void;
+    adoptNativeAgentSessionMock.mockImplementationOnce(async (input) => {
+      await new Promise<void>((resolve) => { releaseAdoption = resolve; });
+      return {
+        providerSessionId: input.providerSessionId,
+        logicalSessionKey: input.logicalSessionKey,
+        environmentId: input.environmentId,
+        agent: input.agent,
+      };
+    });
+    getNativeAgentProjectionMock.mockImplementationOnce(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      sessionId: "session-a",
+      messages: [{
+        id: "assistant-latest",
+        role: "assistant",
+        content: "latest transcript",
+        parts: [],
+        createdAt: "2026-08-14T10:00:01.000Z",
+      }],
+      revision: 2,
+    }));
+
+    render(<NativeSessionHarness />);
+    expect(screen.getByTestId("hook-message").textContent).toBe("stale transcript");
+    await waitFor(() => expect(screen.getByTestId("hook-message").textContent)
+      .toBe("latest transcript"));
+    expect(adoptNativeAgentSessionMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      releaseAdoption();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  });
+
+  /**
+   * Park the very first projection read so the invalidation below is
+   * guaranteed to land while a read is genuinely in flight. Gating a later
+   * read instead races the mount's own reads, and a dispatch that arrives with
+   * nothing in flight takes the ordinary path and proves nothing.
+   */
+  async function parkFirstProjectionRead(): Promise<() => void> {
+    let releaseRefresh!: () => void;
+    const parked = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    getNativeAgentProjectionMock.mockImplementationOnce(async (input) => {
+      await parked;
+      return {
+        ...(await defaultProjection(input as never)),
+        messages: [{
+          id: "assistant-stale",
+          role: "assistant",
+          content: "stale transcript",
+          parts: [],
+          createdAt: "2026-08-14T10:00:00.000Z",
+        }],
+      };
+    });
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      messages: [{
+        id: "assistant-latest",
+        role: "assistant",
+        content: "latest transcript",
+        parts: [],
+        createdAt: "2026-08-14T10:00:01.000Z",
+      }],
+      revision: 2,
+    }));
+    return releaseRefresh;
+  }
+
+  test("coalesces a resource invalidation into one trailing projection read", async () => {
+    const releaseRefresh = await parkFirstProjectionRead();
+    render(<NativeSessionHarness />);
+    await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length)
+      .toBeGreaterThan(0));
+    const callsWhileParked = getNativeAgentProjectionMock.mock.calls.length;
+
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
+      });
+      // The dispatcher coalesces for 50ms, so the invalidation has to be given
+      // time to actually reach the hook while the read above is still parked.
+      await new Promise<void>((resolve) => { setTimeout(resolve, 80); });
+    });
+    // Coalesced, not executed: proof the read below is the trailing
+    // reconciliation rather than the invalidation's own read.
+    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked);
+
+    await act(async () => {
+      releaseRefresh();
+      await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
+    });
+    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked + 1);
+    await waitFor(() => expect(screen.getByTestId("hook-message").textContent)
+      .toBe("latest transcript"));
+  });
+
+  test("drops the queued reconciliation read when the tab stops being active", async () => {
+    const releaseRefresh = await parkFirstProjectionRead();
+    const { rerender } = render(<NativeSessionHarness />);
+    await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length)
+      .toBeGreaterThan(0));
+    const callsWhileParked = getNativeAgentProjectionMock.mock.calls.length;
+
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
+      });
+      await new Promise<void>((resolve) => { setTimeout(resolve, 80); });
+    });
+    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked);
+    // The tab stops being visible before the in-flight read drains. A tab the
+    // user cannot see must not keep reading; the next activation reconnects
+    // and reads authoritatively anyway.
+    rerender(<NativeSessionHarness isActive={false} />);
+
+    await act(async () => {
+      releaseRefresh();
+      // A full macrotask turn drains every queued microtask, so a trailing
+      // read would already have been recorded by the time this resolves.
+      await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
+    });
+    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked);
+  });
+
+  test("drops the queued reconciliation read when the tab unmounts", async () => {
+    const releaseRefresh = await parkFirstProjectionRead();
+    const { unmount } = render(<NativeSessionHarness />);
+    await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length)
+      .toBeGreaterThan(0));
+    const callsWhileParked = getNativeAgentProjectionMock.mock.calls.length;
+
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
+      });
+      await new Promise<void>((resolve) => { setTimeout(resolve, 80); });
+    });
+    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked);
+    unmount();
+
+    await act(async () => {
+      releaseRefresh();
+      await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
+    });
+    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked);
   });
 
   test("polls an active tab faster while a turn runs and stops entirely when inactive", async () => {

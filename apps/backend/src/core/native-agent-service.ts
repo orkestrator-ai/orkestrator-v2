@@ -56,6 +56,7 @@ import {
   readProviderStatus,
   type BridgeConnection,
   type NativeAgentRuntimeProvider,
+  type ProviderInteractiveSnapshot,
   type ProviderInteractionObservationEvent,
   type ProviderExecutionMode,
 } from "./build-pipeline-provider.js";
@@ -283,6 +284,8 @@ const NATIVE_MODEL_CATALOG_TTL_MS = 30_000;
 const NATIVE_MODEL_CATALOG_CACHE_LIMIT = 128;
 const NATIVE_SLASH_COMMAND_TTL_MS = 30_000;
 const NATIVE_SLASH_COMMAND_CACHE_LIMIT = 256;
+/** Prevent a failed optional discovery endpoint from being retried every poll. */
+const NATIVE_DISCOVERY_RETRY_MS = 5_000;
 
 const RICH_NATIVE_CAPABILITIES: NativeAgentCapabilities = Object.freeze({
   attachments: { files: true, images: true },
@@ -523,6 +526,18 @@ export class NativeAgentService {
   private readonly slashCommandCache = new Map<
     string,
     { commands: NativeAgentSlashCommand[]; expiresAt: number }
+  >();
+  /** Coalesced stale-while-revalidate tasks for projection-only metadata. */
+  private readonly modelCatalogRefreshes = new Map<string, {
+    operation: Promise<AgentModel[]>;
+    validity: { current: boolean };
+  }>();
+  private readonly slashCommandRefreshes = new Map<
+    string,
+    {
+      operation: Promise<NativeAgentSlashCommand[]>;
+      validity: { current: boolean };
+    }
   >();
   private readonly launchTasks = new Map<string, Promise<void>>();
   private readonly launchRetryAt = new Map<string, number>();
@@ -791,10 +806,26 @@ export class NativeAgentService {
     input: NativeAgentProjectionInput,
   ): Promise<NativeAgentSessionProjection | null> {
     this.assertProjectionInput(input);
-    this.modelCatalogCache.delete(input.environmentId);
-    this.slashCommandCache.delete(`${input.environmentId}\0${input.agent}`);
     const provider = await this.provider(input);
+    const slashCommandKey = `${input.environmentId}\0${input.agent}`;
+    // Discard in-flight discovery rather than waiting for it. Each refresh
+    // re-checks its validity flag immediately before writing its cache, with no
+    // await in between, so an invalidated read can no longer land. Awaiting one
+    // would only make this explicit user action inherit the latency of the very
+    // work it just discarded — up to a full bridge request timeout.
+    const pendingModelCatalog = this.modelCatalogRefreshes.get(input.environmentId);
+    if (pendingModelCatalog) {
+      pendingModelCatalog.validity.current = false;
+      this.modelCatalogRefreshes.delete(input.environmentId);
+    }
+    const pendingSlashCommands = this.slashCommandRefreshes.get(slashCommandKey);
+    if (pendingSlashCommands) {
+      pendingSlashCommands.validity.current = false;
+      this.slashCommandRefreshes.delete(slashCommandKey);
+    }
     await provider.refreshCatalog?.();
+    this.modelCatalogCache.delete(input.environmentId);
+    this.slashCommandCache.delete(slashCommandKey);
     return this.refreshProjection(input, true);
   }
 
@@ -1273,23 +1304,30 @@ export class NativeAgentService {
     let models = providerComposer?.models ?? [];
     if (models.length === 0) {
       const cached = this.modelCatalogCache.get(input.environmentId);
-      if (cached && cached.expiresAt > this.now()) {
+      if (cached) {
         models = cached.models.filter((model) => model.platform === input.agent);
+        if (cached.expiresAt <= this.now()) {
+          // Model discovery can probe several runtimes and take seconds. An
+          // expired entry is still perfectly adequate for rendering the
+          // transcript and existing picker selection, so refresh it out of the
+          // transcript-critical path. The next projection poll observes the
+          // refreshed catalogue.
+          void this.refreshProjectionModelCatalog(input.environmentId)
+            .then(() => {
+              if (!this.stopped) {
+                this.storage.announceNativeAgentSessionProjection(input.environmentId);
+              }
+            })
+            .catch(() => {
+              const retained = this.modelCatalogCache.get(input.environmentId);
+              if (retained === cached) {
+                retained.expiresAt = this.now() + NATIVE_DISCOVERY_RETRY_MS;
+              }
+            });
+        }
       } else {
         try {
-          const catalog = await this.invoke<AgentModel[]>(
-            "get_native_agent_model_catalog",
-            { environmentId: input.environmentId },
-          );
-          const bounded = Array.isArray(catalog) ? catalog.slice(0, 512) : [];
-          if (this.modelCatalogCache.size >= NATIVE_MODEL_CATALOG_CACHE_LIMIT) {
-            const oldest = this.modelCatalogCache.keys().next().value as string | undefined;
-            if (oldest) this.modelCatalogCache.delete(oldest);
-          }
-          this.modelCatalogCache.set(input.environmentId, {
-            models: bounded,
-            expiresAt: this.now() + NATIVE_MODEL_CATALOG_TTL_MS,
-          });
+          const bounded = await this.refreshProjectionModelCatalog(input.environmentId);
           models = bounded.filter((model) => model.platform === input.agent);
         } catch {
           // A stale or unavailable catalog must not hide the transcript.
@@ -1366,6 +1404,75 @@ export class NativeAgentService {
     };
   }
 
+  private refreshProjectionModelCatalog(environmentId: string): Promise<AgentModel[]> {
+    const pending = this.modelCatalogRefreshes.get(environmentId);
+    if (pending) return pending.operation;
+    const validity = { current: true };
+    const operation = (async () => {
+      const catalog = await this.invoke<AgentModel[]>(
+        "get_native_agent_model_catalog",
+        { environmentId },
+      );
+      const bounded = Array.isArray(catalog) ? catalog.slice(0, 512) : [];
+      if (!validity.current) {
+        throw new ProviderUnavailableError("Model catalog refresh was invalidated");
+      }
+      if (
+        !this.modelCatalogCache.has(environmentId)
+        && this.modelCatalogCache.size >= NATIVE_MODEL_CATALOG_CACHE_LIMIT
+      ) {
+        const oldest = this.modelCatalogCache.keys().next().value as string | undefined;
+        if (oldest) this.modelCatalogCache.delete(oldest);
+      }
+      this.modelCatalogCache.set(environmentId, {
+        models: bounded,
+        expiresAt: this.now() + NATIVE_MODEL_CATALOG_TTL_MS,
+      });
+      return bounded;
+    })();
+    const entry = { operation, validity };
+    this.modelCatalogRefreshes.set(environmentId, entry);
+    return operation.finally(() => {
+      if (this.modelCatalogRefreshes.get(environmentId) === entry) {
+        this.modelCatalogRefreshes.delete(environmentId);
+      }
+    });
+  }
+
+  private refreshProjectionSlashCommands(
+    key: string,
+    provider: NativeAgentRuntimeProvider,
+  ): Promise<NativeAgentSlashCommand[]> {
+    const pending = this.slashCommandRefreshes.get(key);
+    if (pending) return pending.operation;
+    const validity = { current: true };
+    const operation = (async () => {
+      const commands = (await provider.slashCommands!()).slice(0, 512);
+      if (!validity.current) {
+        throw new ProviderUnavailableError("Slash command refresh was invalidated");
+      }
+      if (
+        !this.slashCommandCache.has(key)
+        && this.slashCommandCache.size >= NATIVE_SLASH_COMMAND_CACHE_LIMIT
+      ) {
+        const oldest = this.slashCommandCache.keys().next().value as string | undefined;
+        if (oldest) this.slashCommandCache.delete(oldest);
+      }
+      this.slashCommandCache.set(key, {
+        commands,
+        expiresAt: this.now() + NATIVE_SLASH_COMMAND_TTL_MS,
+      });
+      return commands;
+    })();
+    const entry = { operation, validity };
+    this.slashCommandRefreshes.set(key, entry);
+    return operation.finally(() => {
+      if (this.slashCommandRefreshes.get(key) === entry) {
+        this.slashCommandRefreshes.delete(key);
+      }
+    });
+  }
+
   private async projectionSlashCommands(
     input: NativeAgentProjectionInput,
     provider: NativeAgentRuntimeProvider,
@@ -1380,22 +1487,33 @@ export class NativeAgentService {
     }
     const key = `${input.environmentId}\0${input.agent}`;
     const cached = this.slashCommandCache.get(key);
-    if (cached && cached.expiresAt > this.now()) return withActions(cached.commands);
-    try {
-      const commands = (await provider.slashCommands()).slice(0, 512);
-      if (!cached && this.slashCommandCache.size >= NATIVE_SLASH_COMMAND_CACHE_LIMIT) {
-        const oldest = this.slashCommandCache.keys().next().value as string | undefined;
-        if (oldest) this.slashCommandCache.delete(oldest);
+    if (cached) {
+      if (cached.expiresAt <= this.now()) {
+        // Command discovery is optional UI metadata. Keep the expired list
+        // visible and update it asynchronously so a transcript refresh never
+        // waits on /global/slash-commands or a provider SDK request.
+        void this.refreshProjectionSlashCommands(key, provider)
+          .then(() => {
+            if (!this.stopped) {
+              this.storage.announceNativeAgentSessionProjection(input.environmentId);
+            }
+          })
+          .catch(() => {
+            const retained = this.slashCommandCache.get(key);
+            if (retained === cached) {
+              retained.expiresAt = this.now() + NATIVE_DISCOVERY_RETRY_MS;
+            }
+          });
       }
-      this.slashCommandCache.set(key, {
-        commands,
-        expiresAt: this.now() + NATIVE_SLASH_COMMAND_TTL_MS,
-      });
+      return withActions(cached.commands);
+    }
+    try {
+      const commands = await this.refreshProjectionSlashCommands(key, provider);
       return withActions(commands);
     } catch {
       // Discovery metadata is optional. Keep the transcript usable when a
       // provider temporarily cannot enumerate commands.
-      return withActions(cached?.commands ?? []);
+      return withActions([]);
     }
   }
 
@@ -1474,11 +1592,15 @@ export class NativeAgentService {
       const providerCacheKey = `${input.environmentId}\0${input.agent}`;
       generation = this.providerConnections.get(providerCacheKey)
         ?? `in-process:${input.agent}`;
-      const snapshot = resolved.provider.interactiveSnapshot
-        ? await resolved.provider.interactiveSnapshot(
+      const capabilities = nativeCapabilities(input.agent);
+      // These reads describe independent parts of one projection. Keeping
+      // them serial made a transcript wait for every approval, queue and slash
+      // command round trip in turn, even though none produces message text.
+      const snapshotPromise: Promise<ProviderInteractiveSnapshot> = resolved.provider.interactiveSnapshot
+        ? resolved.provider.interactiveSnapshot(
             resolved.session.providerSessionId,
           )
-        : {
+        : (async () => ({
             // A terminal turn error belongs in the projection as `error` plus
             // its detail, not as a thrown read that would report the whole
             // runtime as unreachable.
@@ -1487,22 +1609,31 @@ export class NativeAgentService {
               resolved.session.providerSessionId,
             ),
             messages: await resolved.provider.messages(resolved.session.providerSessionId),
-          };
+          }))();
+      const interactionSnapshotPromise = resolved.provider.interactions
+        ? resolved.provider.interactions.listPendingInteractions(
+            resolved.session.providerSessionId,
+          )
+        : Promise.resolve({ requests: [], revision: 0 });
+      const queuePromise = capabilities.queue
+        ? this.storage.getPromptQueue(`${input.agent}\0${input.logicalSessionKey}`)
+        : Promise.resolve(null);
+      const slashCommandsPromise = this.projectionSlashCommands(
+        input,
+        resolved.provider,
+      );
+      const [snapshot, interactionSnapshot, queue, slashCommands] = await Promise.all([
+        snapshotPromise,
+        interactionSnapshotPromise,
+        queuePromise,
+        slashCommandsPromise,
+      ]);
       if (snapshot.providerGeneration !== undefined) {
         generation = `${generation}:${String(snapshot.providerGeneration)}`;
       }
       if (snapshot.status === "missing") {
         throw new ProviderUnavailableError("Native agent provider session is recovering");
       }
-      const interactionSnapshot = resolved.provider.interactions
-        ? await resolved.provider.interactions.listPendingInteractions(
-            resolved.session.providerSessionId,
-          )
-        : { requests: [], revision: 0 };
-      const capabilities = nativeCapabilities(input.agent);
-      const queue = capabilities.queue
-        ? await this.storage.getPromptQueue(`${input.agent}\0${input.logicalSessionKey}`)
-        : null;
       const blocked = interactionSnapshot.requests.length > 0;
       const composer = await this.projectionComposer(
         input,
@@ -1533,10 +1664,6 @@ export class NativeAgentService {
               : {}),
           }
         : undefined;
-      const slashCommands = await this.projectionSlashCommands(
-        input,
-        resolved.provider,
-      );
       const transcript = this.projectionMessages(snapshot.messages, messageLimit);
       const terminalNotices = [
         ...(snapshot.notices ?? []).filter(
@@ -1960,7 +2087,11 @@ export class NativeAgentService {
     this.launchTimer = null;
     if (this.interactionTimer) clearInterval(this.interactionTimer);
     this.interactionTimer = null;
-    await Promise.allSettled([...this.projectionRefreshes.values()]);
+    await Promise.allSettled([
+      ...this.projectionRefreshes.values(),
+      ...[...this.modelCatalogRefreshes.values()].map((entry) => entry.operation),
+      ...[...this.slashCommandRefreshes.values()].map((entry) => entry.operation),
+    ]);
     await Promise.allSettled([...this.scanTasks]);
     while (
       this.launchTasks.size > 0
@@ -1983,6 +2114,8 @@ export class NativeAgentService {
     this.providerConnections.clear();
     this.modelCatalogCache.clear();
     this.slashCommandCache.clear();
+    this.modelCatalogRefreshes.clear();
+    this.slashCommandRefreshes.clear();
     this.projectionCache.clear();
     this.projectionRefreshes.clear();
     this.projectionEpochs.clear();

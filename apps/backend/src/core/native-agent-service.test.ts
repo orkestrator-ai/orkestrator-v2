@@ -18,6 +18,7 @@ import {
   PromptRejectedError,
   ProviderSessionFailedError,
   ProviderUnavailableError,
+  ProviderUnreachableError,
   type BridgeConnection,
   type AgentSessionProvider,
   type NativeAgentRuntimeProvider,
@@ -2515,6 +2516,62 @@ describe("NativeAgentService", () => {
         prompt: "Something else",
         requestId: "second",
       })).resolves.toEqual({ outcome: "accepted", requestId: "second" });
+    });
+  });
+
+  test("keeps a parked dispatch recoverable when its retry cannot reach the provider", async () => {
+    let sendOutcome: "ambiguous" | "unreachable" | "accepted" = "ambiguous";
+    const stub = createProviderStub("cursor", {
+      send: async () => {
+        if (sendOutcome === "ambiguous") {
+          throw new AmbiguousPromptDispatchError("Response was lost");
+        }
+        if (sendOutcome === "unreachable") {
+          throw new ProviderUnreachableError("Bridge is offline");
+        }
+      },
+      dispatchStatus: async () => "unknown" as const,
+    });
+    await withService({
+      prefix: "orkestrator-native-dispatch-retry-unreachable-",
+      provider: async () => stub.provider,
+    }, async ({ service, storage }) => {
+      const base = {
+        environmentId: "env-1",
+        agent: "cursor" as const,
+        logicalSessionKey: "env-env-1:tab-1",
+        prompt: "Do the work",
+      };
+      const key = nativeAgentSessionStorageKey(
+        base.environmentId,
+        base.agent,
+        base.logicalSessionKey,
+      );
+      await expect(service.dispatchIntent({ ...base, requestId: "parked" }))
+        .resolves.toMatchObject({ outcome: "unknown" });
+
+      sendOutcome = "unreachable";
+      await expect(service.retryRecoverableDispatch({
+        ...base,
+        requestId: "parked",
+      })).resolves.toEqual({ outcome: "rejected", error: "Bridge is offline" });
+      expect((await storage.getNativeAgentSession(key))?.pendingDispatch)
+        .toMatchObject({ requestId: "parked", prompt: "Do the work" });
+
+      await expect(service.dispatchIntent({
+        ...base,
+        prompt: "A different turn",
+        requestId: "second",
+      })).resolves.toMatchObject({ outcome: "rejected" });
+      expect((await storage.getNativeAgentSession(key))?.pendingDispatch)
+        .toMatchObject({ requestId: "parked" });
+
+      sendOutcome = "accepted";
+      await expect(service.retryRecoverableDispatch({
+        ...base,
+        requestId: "parked",
+      })).resolves.toEqual({ outcome: "accepted", requestId: "parked" });
+      expect((await storage.getNativeAgentSession(key))?.pendingDispatch).toBeUndefined();
     });
   });
 

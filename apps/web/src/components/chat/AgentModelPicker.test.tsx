@@ -1081,7 +1081,7 @@ describe("AgentModelPicker", () => {
       target: { value: "model 1" },
     });
     expect(document.querySelector("[data-native-model-list]")?.getAttribute("data-favorite-reorder"))
-      .toBeNull();
+      .toBe(null);
     fireEvent.change(screen.getByPlaceholderText("Search models..."), {
       target: { value: "" },
     });
@@ -1089,7 +1089,7 @@ describe("AgentModelPicker", () => {
     showPlatformCatalog("claude");
     expect(document.querySelector("[data-favorite-sortable]") === null).toBe(true);
     expect(document.querySelector("[data-native-model-list]")?.getAttribute("data-favorite-reorder"))
-      .toBeNull();
+      .toBe(null);
   });
 
   test("opens on the selected platform when no favorites exist", () => {

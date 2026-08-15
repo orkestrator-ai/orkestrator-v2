@@ -2255,6 +2255,37 @@ describe("AgentNativeTab", () => {
       }));
     });
 
+    test("rehydrates a parked dispatch after the environment unmounts and the renderer cache resets", async () => {
+      seedProjection({
+        recoverableDispatch: {
+          requestId: "recoverable-remount-1",
+          createdAt: "2026-08-14T10:00:00.000Z",
+        },
+      });
+      const first = render(
+        <AgentNativeTab tabId="tab-recoverable-remount" data={identity("codex")} isActive />,
+      );
+      expect(await screen.findByRole("button", { name: "Retry send" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Discard" })).toBeTruthy();
+
+      // Switching environments unmounts this tree. Resetting the shared store
+      // additionally models a renderer reload, so the second banner can only
+      // come from the backend-owned projection returned during reconnect.
+      first.unmount();
+      useNativeAgentProjectionStore.getState().reset();
+      getNativeAgentProjectionMock.mockClear();
+      render(
+        <AgentNativeTab tabId="tab-recoverable-remount" data={identity("codex")} isActive />,
+      );
+
+      expect(await screen.findByRole("button", { name: "Retry send" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Discard" })).toBeTruthy();
+      // Drafting remains available, but there is no action that can submit a
+      // second request id while the recovered one is parked.
+      expect(screen.queryByTitle("Send") === null).toBe(true);
+      expect(getNativeAgentProjectionMock).toHaveBeenCalled();
+    });
+
     test("discards an ambiguous dispatch without re-sending it", async () => {
       seedProjection({
         recoverableDispatch: {

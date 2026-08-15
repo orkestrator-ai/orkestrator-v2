@@ -315,11 +315,17 @@ lines.on("line", (line) => {
       appendFileSync(process.env.FAKE_ACP_LIFECYCLE_FILE, `load:${process.pid}\n`);
     }
     if (process.env.FAKE_ACP_FAIL_LOAD_SESSION === "1") {
-      write({
+      const fail = (): void => write({
         jsonrpc: "2.0",
         id: message.id,
         error: { code: -32603, message: "fake agent cannot load that session" },
       });
+      const failDelayMs = Number(process.env.FAKE_ACP_FAIL_LOAD_DELAY_MS ?? "0");
+      if (Number.isSafeInteger(failDelayMs) && failDelayMs > 0) {
+        setTimeout(fail, failDelayMs);
+      } else {
+        fail();
+      }
       return;
     }
     const params = isObject(message.params) ? message.params : {};

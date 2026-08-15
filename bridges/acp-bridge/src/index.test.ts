@@ -4326,6 +4326,54 @@ describe("ACP bridge", () => {
     expect(await dispatchStatus("sent-1")).toEqual({ dispatch: "dispatched" });
   });
 
+  test("does not confirm a request while a cold session load is still preparing it", async () => {
+    const directory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "preparing-dispatch-lifecycle.log");
+    const bridge = await spawnBridge({ env: {
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+      FAKE_ACP_LOAD_DELAY_MS: "800",
+    } });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+    }).then((response) => response.json()) as { id: string };
+    process.kill(
+      Number(/^start:(\d+)$/m.exec(await fs.readFile(lifecycleFile, "utf8"))?.[1]),
+      "SIGKILL",
+    );
+    await waitFor(
+      async () => nativeFetch(`${bridge.base}/session/${created.id}/status`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{ status: string }>,
+      (session) => session.status === "error",
+    );
+
+    const prompt = nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "DIRECT:prepared", requestId: "preparing-1" }),
+    });
+    await waitFor(
+      () => fs.readFile(lifecycleFile, "utf8").catch(() => ""),
+      (contents) => (contents.match(/^load:/gm)?.length ?? 0) === 1,
+    );
+    expect(await nativeFetch(
+      `${bridge.base}/session/${created.id}/dispatch?requestId=preparing-1`,
+      { headers: bridge.headers },
+    ).then((response) => response.json())).toEqual({ dispatch: "unknown" });
+    const duplicate = await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "DIRECT:prepared", requestId: "preparing-1" }),
+    });
+    expect(duplicate.status).toBe(409);
+
+    expect((await prompt).status).toBe(202);
+    expect(await nativeFetch(
+      `${bridge.base}/session/${created.id}/dispatch?requestId=preparing-1`,
+      { headers: bridge.headers },
+    ).then((response) => response.json())).toEqual({ dispatch: "dispatched" });
+  });
+
   test("reports a turn lost to a bridge restart as unknown, not dispatched", async () => {
     const directory = await temporaryDirectory();
     const stateDirectory = await temporaryDirectory();
@@ -4423,6 +4471,69 @@ describe("ACP bridge", () => {
     }).then((response) => response.json())).resolves.toMatchObject({
       status: "idle",
     });
+  });
+
+  test("keeps later attaches and prompts behind an in-flight session load", async () => {
+    const directory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "attach-load-barrier-lifecycle.log");
+    const counterFile = resolve(directory, "attach-load-barrier-prompts.log");
+    const bridge = await spawnBridge({ env: {
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_LOAD_DELAY_MS: "800",
+    } });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+    }).then((response) => response.json()) as { id: string };
+    process.kill(
+      Number(/^start:(\d+)$/m.exec(await fs.readFile(lifecycleFile, "utf8"))?.[1]),
+      "SIGKILL",
+    );
+    await waitFor(
+      async () => nativeFetch(`${bridge.base}/session/${created.id}/status`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{ status: string }>,
+      (session) => session.status === "error",
+    );
+
+    const firstAttach = nativeFetch(`${bridge.base}/session/${created.id}/attach`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: "{}",
+    });
+    // The fake only records `load:` after the replacement child has been
+    // assigned. Requests started after this point exercise the dangerous
+    // child-present/load-incomplete interval, not merely concurrent spawning.
+    await waitFor(
+      () => fs.readFile(lifecycleFile, "utf8").catch(() => ""),
+      (contents) => (contents.match(/^load:/gm)?.length ?? 0) === 1,
+    );
+    const secondAttach = nativeFetch(`${bridge.base}/session/${created.id}/attach`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: "{}",
+    });
+    const prompt = nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "DIRECT:after load", requestId: "after-load-1" }),
+    });
+    const settlesWithin = (pending: Promise<Response>, milliseconds: number) => Promise.race([
+      pending.then(() => true, () => true),
+      Bun.sleep(milliseconds).then(() => false),
+    ]);
+    expect(await settlesWithin(secondAttach, 150)).toBe(false);
+    expect(await settlesWithin(prompt, 150)).toBe(false);
+    expect(await fs.readFile(counterFile, "utf8").catch(() => "")).toBe("");
+
+    expect((await firstAttach).status).toBe(200);
+    expect((await secondAttach).status).toBe(200);
+    expect((await prompt).status).toBe(202);
+    await waitFor(
+      () => fs.readFile(counterFile, "utf8").catch(() => ""),
+      (contents) => contents.trim() === "prompt",
+    );
+    expect((await fs.readFile(lifecycleFile, "utf8")).match(/^load:/gm)).toHaveLength(1);
   });
 
   test("answers attach for a session this bridge does not hold", async () => {
@@ -4972,6 +5083,7 @@ describe("ACP bridge", () => {
     const bridge = await spawnBridge({ env: {
       FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
       FAKE_ACP_FAIL_LOAD_SESSION: "1",
+      FAKE_ACP_FAIL_LOAD_DELAY_MS: "800",
     } });
     const created = await nativeFetch(`${bridge.base}/session/create`, { method: "POST", headers: bridge.headers })
       .then((response) => response.json()) as { id: string };
@@ -4989,9 +5101,22 @@ describe("ACP bridge", () => {
       headers: bridge.headers,
       body: JSON.stringify({ prompt: "DIRECT:retry", requestId: "retry-me" }),
     });
-    const first = await send();
+    const firstPending = send();
+    await waitFor(
+      () => fs.readFile(lifecycleFile, "utf8").catch(() => ""),
+      (contents) => (contents.match(/^load:/gm)?.length ?? 0) === 1,
+    );
+    expect(await nativeFetch(
+      `${bridge.base}/session/${created.id}/dispatch?requestId=retry-me`,
+      { headers: bridge.headers },
+    ).then((response) => response.json())).toEqual({ dispatch: "unknown" });
+    const first = await firstPending;
     expect(first.status).toBe(500);
     expect(await first.json()).toMatchObject({ error: "fake agent cannot load that session" });
+    expect(await nativeFetch(
+      `${bridge.base}/session/${created.id}/dispatch?requestId=retry-me`,
+      { headers: bridge.headers },
+    ).then((response) => response.json())).toEqual({ dispatch: "unknown" });
     // The turn provably never ran, so the claim must be released rather than
     // leaving the requestId permanently journaled as a duplicate.
     const second = await send();

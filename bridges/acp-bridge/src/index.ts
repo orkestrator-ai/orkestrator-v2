@@ -154,7 +154,7 @@ type BridgeMessagePart = BridgeTextPart | BridgeFilePart | BridgeToolPart;
 
 interface PromptJournalEntry {
   requestId: string;
-  state: "accepted" | "completed" | "failed" | "ambiguous";
+  state: "prepared" | "accepted" | "completed" | "failed" | "ambiguous";
   acceptedAt: number;
 }
 
@@ -1178,6 +1178,9 @@ function attachSessionProcess(state: SessionState): Promise<AcpProcess> {
 }
 
 async function ensureSessionProcess(state: SessionState, signal?: AbortSignal): Promise<AcpProcess> {
+  if (state.attaching) {
+    return signal ? raceAbort(state.attaching, signal) : state.attaching;
+  }
   if (state.child) return state.child;
   const attach = attachSessionProcess(state);
   return signal ? raceAbort(attach, signal) : attach;
@@ -3341,9 +3344,14 @@ async function route(
     const requestId = url.searchParams.get("requestId") || "";
     const entry = requestId ? state.promptJournal.get(requestId) : undefined;
     return json(response, 200, {
-      // An `ambiguous` record is a previous process saying it died mid-turn.
-      // That is the question this route is being asked, not an answer to it.
-      dispatch: entry && entry.state !== "ambiguous" ? "dispatched" : "unknown",
+      // `prepared` means the route owns the id but has not handed the prompt to
+      // the agent yet. `ambiguous` means a previous process died without a
+      // durable answer. Neither is an explicit positive.
+      dispatch: entry && (
+        entry.state === "accepted"
+        || entry.state === "completed"
+        || entry.state === "failed"
+      ) ? "dispatched" : "unknown",
     });
   }
   /**
@@ -3356,7 +3364,6 @@ async function route(
    * unambiguously empty: nothing was journaled and no prompt was written.
    */
   if (action === "attach" && request.method === "POST") {
-    if (state.child) return json(response, 200, { attached: true });
     await ensureSessionProcess(state, clientSignal);
     return json(response, 200, { attached: true });
   }
@@ -3414,6 +3421,9 @@ async function route(
           error: `${provider} prompt outcome is unknown after a bridge restart; resubmit with a new requestId`,
         });
       }
+      if (journaled.state === "prepared") {
+        return json(response, 409, { error: "Prompt dispatch is still preparing" });
+      }
       return json(response, 202, { accepted: true, duplicate: true });
     }
     if (state.status === "running" || state.dispatching) {
@@ -3427,7 +3437,7 @@ async function route(
     state.dispatching = true;
     if (requestId) setPromptJournal(state, {
       requestId,
-      state: "accepted",
+      state: "prepared",
       acceptedAt: Date.now(),
     });
     let child: AcpProcess;
@@ -3486,10 +3496,7 @@ async function route(
     boundTranscript(state);
     await persistState();
     const acpPrompt = schema ? `${prompt}\n\n${structuredPromptInstruction(schema)}` : prompt;
-    // The turn is now dispatched and `status` is "running", so the busy check
-    // is authoritative again and the claim can be released.
-    state.dispatching = false;
-    void requestPromptWithResourceExhaustedRetries(state, child, {
+    const promptCompletion = requestPromptWithResourceExhaustedRetries(state, child, {
       sessionId: state.acpSessionId,
       prompt: [
         ...(acpPrompt ? [{ type: "text", text: acpPrompt }] : []),
@@ -3502,7 +3509,19 @@ async function route(
           data: image.data,
         })),
       ],
-    }, promptSequence, schema).then((result) => {
+    }, promptSequence, schema);
+    // Calling the async dispatcher above synchronously writes the first
+    // `session/prompt` frame before it returns its promise. Only now can the
+    // journal answer an acknowledgement-recovery probe positively.
+    if (requestId) setPromptJournal(state, {
+      requestId,
+      state: "accepted",
+      acceptedAt: state.promptJournal.get(requestId)?.acceptedAt ?? Date.now(),
+    });
+    // The turn is now dispatched and `status` is "running", so the busy check
+    // is authoritative again and the claim can be released.
+    state.dispatching = false;
+    void promptCompletion.then((result) => {
       // The result `_meta` is the last and most complete usage carrier, so it is
       // read before `turnStartedAt` is cleared and the elapsed time is lost.
       recordTurnUsage(state, isObject(result) ? result._meta : undefined);
@@ -4106,12 +4125,13 @@ function persistedSnapshot(): PersistedState {
       retainedSessionConfigBytes += configBytes;
     }
   }
-  const retainJournalEntries = (accepted: boolean): void => {
+  const retainJournalEntries = (unfinished: boolean): void => {
     for (const state of newestSessions) {
       const retained = promptJournalBySession.get(state.id)!;
       for (const rawEntry of [...state.promptJournal.values()].reverse()) {
-        if ((rawEntry.state === "accepted") !== accepted) continue;
-        const entry = rawEntry.state === "accepted"
+        const isUnfinished = rawEntry.state === "prepared" || rawEntry.state === "accepted";
+        if (isUnfinished !== unfinished) continue;
+        const entry = isUnfinished
           ? { ...rawEntry, state: "ambiguous" as const }
           : rawEntry;
         const bytes = Buffer.byteLength(JSON.stringify(entry));
@@ -4121,8 +4141,9 @@ function persistedSnapshot(): PersistedState {
       }
     }
   };
-  // A live accepted dispatch becomes ambiguous after restart and must win over
-  // completed history: dropping it could execute the same prompt a second time.
+  // A live prepared or accepted dispatch becomes ambiguous after restart and
+  // must win over completed history: dropping it could execute the same prompt
+  // a second time.
   retainJournalEntries(true);
   retainJournalEntries(false);
   const snapshot: PersistedState = {
@@ -4384,10 +4405,12 @@ async function loadPersistedState(): Promise<void> {
       for (const rawEntry of candidate.promptJournal.slice(-MAX_PROMPT_JOURNAL)) {
         if (!isObject(rawEntry) || typeof rawEntry.requestId !== "string") continue;
         const journalState = rawEntry.state;
-        if (journalState !== "accepted" && journalState !== "completed" && journalState !== "failed" && journalState !== "ambiguous") continue;
+        if (journalState !== "prepared" && journalState !== "accepted" && journalState !== "completed" && journalState !== "failed" && journalState !== "ambiguous") continue;
         const entry: PromptJournalEntry = {
           requestId: rawEntry.requestId.slice(0, 512),
-          state: journalState === "accepted" ? "ambiguous" : journalState,
+          state: journalState === "prepared" || journalState === "accepted"
+            ? "ambiguous"
+            : journalState,
           acceptedAt: Number.isSafeInteger(rawEntry.acceptedAt) ? Number(rawEntry.acceptedAt) : 0,
         };
         state.promptJournal.set(entry.requestId, entry);

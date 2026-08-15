@@ -935,6 +935,13 @@ export class NativeAgentService {
   async dispatchIntent(
     input: DispatchNativeAgentPromptInput,
   ): Promise<NativeAgentDispatchOutcome> {
+    return this.dispatchIntentInternal(input, false);
+  }
+
+  private async dispatchIntentInternal(
+    input: DispatchNativeAgentPromptInput,
+    preserveExistingPending: boolean,
+  ): Promise<NativeAgentDispatchOutcome> {
     let manualOpenCodeSession: PersistedNativeAgentSession | null = null;
     try {
       const isManualOpenCode = input.agent === "opencode"
@@ -949,19 +956,21 @@ export class NativeAgentService {
           requestId: input.requestId,
         });
       }
-      return await this.attemptDispatch(input, true);
+      return await this.attemptDispatch(input, true, preserveExistingPending);
     } catch (error) {
       // Everything before the first dispatch attempt: session creation, the
-      // OpenCode manual claim. None of them has written a pending record for
-      // this request id, so there is nothing to settle or preserve.
-      await this.storage.clearPendingNativeAgentDispatch(
-        nativeAgentSessionStorageKey(
-          input.environmentId,
-          input.agent,
-          input.logicalSessionKey,
-        ),
-        input.requestId,
-      ).catch(() => false);
+      // OpenCode manual claim. A normal send has no earlier record to preserve;
+      // an explicit recovery retry does, and must leave it parked on failure.
+      if (!preserveExistingPending) {
+        await this.storage.clearPendingNativeAgentDispatch(
+          nativeAgentSessionStorageKey(
+            input.environmentId,
+            input.agent,
+            input.logicalSessionKey,
+          ),
+          input.requestId,
+        ).catch(() => false);
+      }
       return {
         outcome: "rejected",
         error: error instanceof Error ? error.message : "Prompt dispatch failed",
@@ -990,6 +999,7 @@ export class NativeAgentService {
   private async attemptDispatch(
     input: DispatchNativeAgentPromptInput,
     allowRecoveryRetry: boolean,
+    preserveExistingPending: boolean,
   ): Promise<NativeAgentDispatchOutcome> {
     const key = nativeAgentSessionStorageKey(
       input.environmentId,
@@ -1013,7 +1023,7 @@ export class NativeAgentService {
             error.pendingRequestId,
           )
         ) {
-          return this.attemptDispatch(input, false);
+          return this.attemptDispatch(input, false, preserveExistingPending);
         }
         void this.refreshProjection(input, true).catch(() => undefined);
         return { outcome: "rejected", error: PARKED_DISPATCH_CONFLICT_MESSAGE };
@@ -1033,10 +1043,12 @@ export class NativeAgentService {
           error: error.message,
         };
       }
-      await this.storage.clearPendingNativeAgentDispatch(
-        key,
-        input.requestId,
-      ).catch(() => false);
+      if (!preserveExistingPending) {
+        await this.storage.clearPendingNativeAgentDispatch(
+          key,
+          input.requestId,
+        ).catch(() => false);
+      }
       return {
         outcome: "rejected",
         error: error instanceof Error ? error.message : "Prompt dispatch failed",
@@ -1170,7 +1182,7 @@ export class NativeAgentService {
         error: "The recoverable dispatch changed; refresh before retrying",
       };
     }
-    return this.dispatchIntent({
+    return this.dispatchIntentInternal({
       environmentId: session.environmentId,
       agent: session.agent,
       logicalSessionKey: session.logicalSessionKey,
@@ -1189,7 +1201,7 @@ export class NativeAgentService {
       promptSuggestions: pending.promptSuggestions,
       model: pending.model,
       reasoningEffort: pending.reasoningEffort,
-    });
+    }, true);
   }
 
   async stopProjectionSession(

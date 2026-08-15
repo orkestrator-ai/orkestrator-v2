@@ -36,6 +36,16 @@ function defaultExtensionCatalogs(): AgentExtensionCatalog[] {
       plugins: [{ name: "codex-browser", status: "configured", source: "bundled" }],
     },
     {
+      agent: "cursor",
+      mcpServers: [{ name: "cursor-linear", status: "configured" }],
+      plugins: [{ name: "cursor-review", status: "configured", source: "user" }],
+    },
+    {
+      agent: "grok",
+      mcpServers: [{ name: "grok-filesystem", status: "configured" }],
+      plugins: [{ name: "grok-superpowers", status: "configured" }],
+    },
+    {
       agent: "opencode",
       mcpServers: [{ name: "opencode-linear", status: "disabled" }],
       plugins: [{ name: "@team/opencode-review", status: "configured" }],
@@ -305,7 +315,13 @@ describe("EnvironmentSettingsDialog", () => {
     const tabs = within(
       screen.getByRole("tablist", { name: "Agent extensions" }),
     ).getAllByRole("tab");
-    expect(tabs.map((tab) => tab.textContent?.trim())).toEqual(["Claude", "Codex", "OpenCode"]);
+    expect(tabs.map((tab) => tab.textContent?.trim())).toEqual([
+      "Claude",
+      "Codex",
+      "Cursor",
+      "Grok",
+      "OpenCode",
+    ]);
     expect(screen.getByText("claude-review")).toBeTruthy();
     await waitFor(() => expect(screen.getAllByText("claude-skill").length).toBeGreaterThan(0));
     expect(screen.getByText("Project")).toBeTruthy();
@@ -315,6 +331,16 @@ describe("EnvironmentSettingsDialog", () => {
     expect(screen.getByText("codex-browser")).toBeTruthy();
     await waitFor(() => expect(screen.getAllByText("codex-skill").length).toBeGreaterThan(0));
 
+    clickAgentTab("Cursor");
+    await waitFor(() => expect(screen.getByText("cursor-linear")).toBeTruthy());
+    expect(screen.getByText("cursor-review")).toBeTruthy();
+    await waitFor(() => expect(screen.getAllByText("cursor-skill").length).toBeGreaterThan(0));
+
+    clickAgentTab("Grok");
+    await waitFor(() => expect(screen.getByText("grok-filesystem")).toBeTruthy());
+    expect(screen.getByText("grok-superpowers")).toBeTruthy();
+    await waitFor(() => expect(screen.getAllByText("grok-skill").length).toBeGreaterThan(0));
+
     clickAgentTab("OpenCode");
     await waitFor(() => expect(screen.getByText("opencode-linear")).toBeTruthy());
     expect(screen.getByText("@team/opencode-review")).toBeTruthy();
@@ -323,13 +349,13 @@ describe("EnvironmentSettingsDialog", () => {
     const skillCalls = mockListEnvironmentAgentSkills.mock.calls.map((call) => call.slice(0, 2));
     expect(skillCalls.every(([environmentId]) => environmentId === "env-1")).toBe(true);
     expect(new Set(skillCalls.map(([, provider]) => provider))).toEqual(
-      new Set(["claude", "codex", "opencode"]),
+      new Set(["claude", "codex", "cursor", "grok", "opencode"]),
     );
     await waitFor(() => {
       const readCalls = mockReadEnvironmentAgentSkill.mock.calls;
       expect(readCalls.every(([environmentId]) => environmentId === "env-1")).toBe(true);
       expect(new Set(readCalls.map(([, provider]) => provider))).toEqual(
-        new Set(["claude", "codex", "opencode"]),
+        new Set(["claude", "codex", "cursor", "grok", "opencode"]),
       );
     });
     expect(screen.queryByRole("button", { name: "Reveal skill in file manager" }) === null).toBe(true);
@@ -555,12 +581,18 @@ describe("EnvironmentSettingsDialog", () => {
     );
 
     await waitFor(() => expect(screen.getByText("claude-docs")).toBeTruthy());
-    for (const label of ["Claude", "Codex", "OpenCode"]) {
+    for (const label of ["Claude", "Codex", "Cursor", "Grok", "OpenCode"]) {
       expect(screen.getByRole("tab", { name: label })).toBeTruthy();
     }
     clickAgentTab("Codex");
     expect(screen.getByText("Could not read Codex MCP servers.")).toBeTruthy();
     expect(screen.getByText("Could not read Codex plugins.")).toBeTruthy();
+    clickAgentTab("Cursor");
+    expect(screen.getByText("Could not read Cursor MCP servers.")).toBeTruthy();
+    expect(screen.getByText("Could not read Cursor plugins.")).toBeTruthy();
+    clickAgentTab("Grok");
+    expect(screen.getByText("Could not read Grok MCP servers.")).toBeTruthy();
+    expect(screen.getByText("Could not read Grok plugins.")).toBeTruthy();
     clickAgentTab("OpenCode");
     expect(screen.getByText("Could not read OpenCode MCP servers.")).toBeTruthy();
     expect(screen.getByText("Could not read OpenCode plugins.")).toBeTruthy();
@@ -580,7 +612,7 @@ describe("EnvironmentSettingsDialog", () => {
       />
     );
 
-    expect(screen.getByText(/Reading Claude, Codex, and OpenCode configuration/)).toBeTruthy();
+    expect(screen.getByText(/Reading each agent's configuration/)).toBeTruthy();
     expect(screen.getByRole("button", { name: /Refresh/ }).hasAttribute("disabled")).toBe(true);
 
     await act(async () => {
@@ -588,7 +620,7 @@ describe("EnvironmentSettingsDialog", () => {
     });
 
     await waitFor(() => expect(screen.getByText("claude-docs")).toBeTruthy());
-    expect(screen.queryByText(/Reading Claude, Codex, and OpenCode configuration/) === null).toBe(true);
+    expect(screen.queryByText(/Reading each agent's configuration/) === null).toBe(true);
     expect(screen.getByRole("button", { name: /Refresh/ }).hasAttribute("disabled")).toBe(false);
   });
 
@@ -633,7 +665,7 @@ describe("EnvironmentSettingsDialog", () => {
 
     // Mid-refresh the panel keeps showing what it already had.
     expect(screen.getByText("claude-docs")).toBeTruthy();
-    expect(screen.queryByText(/Reading Claude, Codex, and OpenCode configuration/) === null).toBe(true);
+    expect(screen.queryByText(/Reading each agent's configuration/) === null).toBe(true);
 
     await act(async () => {
       refreshGate.resolve([
@@ -700,7 +732,7 @@ describe("EnvironmentSettingsDialog", () => {
     );
 
     expect(screen.queryByText("env-1-only-server") === null).toBe(true);
-    expect(screen.getByText(/Reading Claude, Codex, and OpenCode configuration/)).toBeTruthy();
+    expect(screen.getByText(/Reading each agent's configuration/)).toBeTruthy();
 
     await act(async () => {
       nextGate.resolve([
@@ -760,7 +792,7 @@ describe("EnvironmentSettingsDialog", () => {
 
       // The abandoned failure must not paint an error over the new load.
       expect(screen.queryByText(/Extension settings could not be loaded/) === null).toBe(true);
-      expect(screen.getByText(/Reading Claude, Codex, and OpenCode configuration/)).toBeTruthy();
+      expect(screen.getByText(/Reading each agent's configuration/)).toBeTruthy();
     } finally {
       consoleError.mockRestore();
     }

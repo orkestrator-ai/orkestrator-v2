@@ -1260,7 +1260,7 @@ describe("agent skill commands", () => {
     await expect(commands.get("list_agent_skills")?.(
       { provider: "other" },
       context,
-    )).rejects.toThrow("Expected provider to be claude, codex or opencode");
+    )).rejects.toThrow("Expected provider to be claude, codex, cursor, grok or opencode");
     await expect(commands.get("read_agent_skill")?.(
       { provider: "claude" },
       context,
@@ -1330,7 +1330,7 @@ describe("agent skill commands", () => {
     await expect(commands.get("list_environment_agent_skills")?.(
       { environmentId: environment.id, provider: "other" },
       context,
-    )).rejects.toThrow("Expected provider to be claude, codex or opencode");
+    )).rejects.toThrow("Expected provider to be claude, codex, cursor, grok or opencode");
     await expect(commands.get("list_environment_agent_skills")?.(
       { environmentId: environment.id, provider: "claude", unexpected: true },
       context,
@@ -18437,6 +18437,36 @@ describe("agent extension discovery commands", () => {
     expect(calls[0]!.options).toMatchObject({ timeoutMs: 20_000 });
   });
 
+  test("runs Cursor Agent discovery as cursor-agent inside a container", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      worktreePath: undefined,
+    });
+    const { context } = createContext(environment);
+    const { run, calls } = recordingRun("[]");
+
+    const runner = commandTesting.createExtensionCommandRunner(environment, context, run);
+    await expect(runner("cursor", ["mcp", "list", "--format", "json"])).resolves.toBe("[]");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.command).toBe("docker");
+    expect(calls[0]!.args).toEqual([
+      "exec",
+      "-e",
+      "NO_COLOR=1",
+      "-w",
+      "/workspace",
+      "container-1",
+      "cursor-agent",
+      "mcp",
+      "list",
+      "--format",
+      "json",
+    ]);
+  });
+
   test("runs environment skill discovery inside the selected container", async () => {
     const environment = createEnvironment({
       id: "env-container",
@@ -18759,7 +18789,13 @@ describe("agent extension discovery commands", () => {
       context,
     ) as Array<Record<string, unknown>>;
 
-    expect(catalogs.map((catalog) => catalog.agent)).toEqual(["claude", "codex", "opencode"]);
+    expect(catalogs.map((catalog) => catalog.agent)).toEqual([
+      "claude",
+      "codex",
+      "cursor",
+      "grok",
+      "opencode",
+    ]);
     for (const catalog of catalogs) {
       expect(catalog.mcpServers).toEqual([]);
       expect(catalog.plugins).toEqual([]);

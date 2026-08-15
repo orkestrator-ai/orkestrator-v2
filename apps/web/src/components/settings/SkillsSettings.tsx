@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
-import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
+import { ClaudeIcon, CodexIcon, CursorAgentIcon, GrokBuildIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import * as backend from "@/lib/backend";
 import type {
   AgentSkill,
@@ -28,6 +28,8 @@ import { cn } from "@/lib/utils";
 const PROVIDERS: Array<{ id: AgentSkillProvider; label: string; icon: React.ReactNode }> = [
   { id: "claude", label: "Claude", icon: <ClaudeIcon className="h-3.5 w-3.5" /> },
   { id: "codex", label: "Codex", icon: <CodexIcon className="h-3.5 w-3.5 text-emerald-400" /> },
+  { id: "cursor", label: "Cursor", icon: <CursorAgentIcon className="h-3.5 w-3.5 text-violet-400" /> },
+  { id: "grok", label: "Grok", icon: <GrokBuildIcon className="h-3.5 w-3.5 text-sky-400" /> },
   { id: "opencode", label: "OpenCode", icon: <OpenCodeIcon className="h-3.5 w-3.5" /> },
 ];
 
@@ -346,7 +348,7 @@ export function SkillsSettings({
             value={provider}
             onValueChange={(value) => setInternalProvider(value as AgentSkillProvider)}
           >
-            <TabsList className="h-8 bg-zinc-900/80">
+            <TabsList className="h-auto min-h-8 flex-wrap bg-zinc-900/80">
               {PROVIDERS.map((entry) => (
                 <TabsTrigger key={entry.id} value={entry.id} className={TAB_TRIGGER_CLASSES}>
                   {entry.icon}

@@ -6,6 +6,10 @@ import {
   parseClaudePlugins,
   parseCodexMcpList,
   parseCodexPlugins,
+  parseCursorMcpList,
+  parseCursorPlugins,
+  parseGrokMcpList,
+  parseGrokPlugins,
   parseOpenCodeConfig,
   parseOpenCodeMcpServers,
   parseOpenCodePlugins,
@@ -34,7 +38,29 @@ const EMPTY_CODEX = {
   "codex mcp list --json": "[]",
   "codex plugin list --json": "[]",
 };
+const EMPTY_CURSOR = {
+  "cursor mcp list --format json": "{\"mcpServers\":{}}",
+  "cursor plugin list --format json": "[]",
+};
+const EMPTY_GROK = {
+  "grok mcp list --json": "[]",
+  "grok plugin list --json": "[]",
+};
 const EMPTY_OPENCODE = { "opencode debug config": "{}" };
+const EMPTY_ALL = {
+  ...EMPTY_CLAUDE,
+  ...EMPTY_CODEX,
+  ...EMPTY_CURSOR,
+  ...EMPTY_GROK,
+  ...EMPTY_OPENCODE,
+};
+
+function catalogFor(
+  catalogs: AgentExtensionCatalog[],
+  agent: AgentExtensionId,
+): AgentExtensionCatalog | undefined {
+  return catalogs.find((catalog) => catalog.agent === agent);
+}
 
 describe("extension discovery parsers", () => {
   test("parses Claude MCP names and health without retaining command details", () => {
@@ -42,7 +68,7 @@ describe("extension discovery parsers", () => {
       "Checking MCP server health…",
       "docs: npx docs-mcp --token hidden - ✔ Connected",
       "plugin:github:github: https://example.test/mcp (HTTP) - ✘ Failed",
-      "review: command - ⏸ Pending approval",
+      "review: command - ❸ Pending approval",
     ].join("\n");
 
     expect(parseClaudeMcpList(output)).toEqual([
@@ -353,6 +379,44 @@ describe("parseOpenCodeConfig edge cases", () => {
       { name: "named", status: "configured" },
     ]);
   });
+
+  test("parses Cursor mcp.json maps and plugin arrays", () => {
+    expect(parseCursorMcpList(JSON.stringify({
+      mcpServers: {
+        github: { command: "npx", args: ["-y", "github"] },
+        linear: { url: "https://mcp.linear.app/mcp", disabled: true },
+      },
+    }))).toEqual([
+      { name: "github", status: "configured" },
+      { name: "linear", status: "disabled" },
+    ]);
+    expect(parseCursorPlugins(JSON.stringify([
+      { name: "cursor-review", enabled: true, source: "user" },
+      { id: "lint@cursor", enabled: false },
+    ]))).toEqual([
+      { name: "cursor-review", status: "configured", source: "user" },
+      { name: "lint", status: "disabled" },
+    ]);
+  });
+
+  test("parses Grok MCP and plugin JSON lists", () => {
+    expect(parseGrokMcpList(JSON.stringify([
+      { name: "filesystem", enabled: true },
+      { name: "linear", enabled: false, scope: "project" },
+    ]))).toEqual([
+      { name: "filesystem", status: "configured" },
+      { name: "linear", status: "disabled", source: "project" },
+    ]);
+    expect(parseGrokPlugins(JSON.stringify({
+      plugins: [
+        { name: "superpowers", enabled: true },
+        { name: "review", enabled: false },
+      ],
+    }))).toEqual([
+      { name: "review", status: "disabled" },
+      { name: "superpowers", status: "configured" },
+    ]);
+  });
 });
 
 describe("discoverAgentExtensions", () => {
@@ -362,6 +426,10 @@ describe("discoverAgentExtensions", () => {
       ["claude plugin list --json", "not-json"],
       ["codex mcp list --json", "[]"],
       ["codex plugin list --json", "[]"],
+      ["cursor mcp list --format json", JSON.stringify({ mcpServers: {} })],
+      ["cursor plugin list --format json", "[]"],
+      ["grok mcp list --json", "[]"],
+      ["grok plugin list --json", "[]"],
       [
         "opencode debug config",
         JSON.stringify({ mcp: { docs: { type: "local", command: ["docs"] } } }),
@@ -377,19 +445,25 @@ describe("discoverAgentExtensions", () => {
       },
     );
 
-    expect(result).toHaveLength(3);
-    expect(result[0]).toMatchObject({
+    expect(result.map((catalog) => catalog.agent)).toEqual([
+      "claude",
+      "codex",
+      "cursor",
+      "grok",
+      "opencode",
+    ]);
+    expect(catalogFor(result, "claude")).toMatchObject({
       agent: "claude",
       mcpServers: [{ name: "docs", status: "connected" }],
       plugins: [],
       pluginError: "Could not read Claude plugins.",
     });
-    expect(result[1]).toMatchObject({
+    expect(catalogFor(result, "codex")).toMatchObject({
       agent: "codex",
       mcpServers: [],
       plugins: [],
     });
-    expect(result[2]).toMatchObject({
+    expect(catalogFor(result, "opencode")).toMatchObject({
       agent: "opencode",
       mcpServers: [{ name: "docs", status: "configured" }],
       plugins: [],
@@ -404,6 +478,8 @@ describe("discoverAgentExtensions", () => {
     expect(result.map((catalog) => catalog.agent)).toEqual([
       "claude",
       "codex",
+      "cursor",
+      "grok",
       "opencode",
     ]);
     for (const catalog of result) {
@@ -428,11 +504,9 @@ describe("discoverAgentExtensions", () => {
   });
 
   test("marks both OpenCode collections unreadable when the config dump fails", async () => {
-    const { run } = fixtureRunner({ ...EMPTY_CLAUDE, ...EMPTY_CODEX });
+    const { run } = fixtureRunner({ ...EMPTY_CLAUDE, ...EMPTY_CODEX, ...EMPTY_CURSOR, ...EMPTY_GROK });
 
-    const [, , opencode] = await discoverAgentExtensions(run);
-
-    expect(opencode).toEqual({
+    expect(catalogFor(await discoverAgentExtensions(run), "opencode")).toEqual({
       agent: "opencode",
       mcpServers: [],
       plugins: [],
@@ -445,10 +519,12 @@ describe("discoverAgentExtensions", () => {
     const { run } = fixtureRunner({
       ...EMPTY_CLAUDE,
       ...EMPTY_CODEX,
+      ...EMPTY_CURSOR,
+      ...EMPTY_GROK,
       "opencode debug config": "opencode: command not found",
     });
 
-    const [, , opencode] = await discoverAgentExtensions(run);
+    const opencode = catalogFor(await discoverAgentExtensions(run), "opencode");
 
     expect(opencode?.mcpError).toBe("Could not read OpenCode MCP servers.");
     expect(opencode?.pluginError).toBe("Could not read OpenCode plugins.");
@@ -457,13 +533,13 @@ describe("discoverAgentExtensions", () => {
   test("keeps Codex MCP servers when only its plugin listing fails", async () => {
     const { run } = fixtureRunner({
       ...EMPTY_CLAUDE,
+      ...EMPTY_CURSOR,
+      ...EMPTY_GROK,
       ...EMPTY_OPENCODE,
       "codex mcp list --json": JSON.stringify([{ name: "github" }]),
     });
 
-    const [, codex] = await discoverAgentExtensions(run);
-
-    expect(codex).toEqual({
+    expect(catalogFor(await discoverAgentExtensions(run), "codex")).toEqual({
       agent: "codex",
       mcpServers: [{ name: "github", status: "configured" }],
       plugins: [],
@@ -474,13 +550,13 @@ describe("discoverAgentExtensions", () => {
   test("keeps Claude plugins when only its MCP listing fails", async () => {
     const { run } = fixtureRunner({
       ...EMPTY_CODEX,
+      ...EMPTY_CURSOR,
+      ...EMPTY_GROK,
       ...EMPTY_OPENCODE,
       "claude plugin list --json": JSON.stringify([{ id: "review@official" }]),
     });
 
-    const [claude] = await discoverAgentExtensions(run);
-
-    expect(claude).toEqual({
+    expect(catalogFor(await discoverAgentExtensions(run), "claude")).toEqual({
       agent: "claude",
       mcpServers: [],
       plugins: [{ name: "review", status: "configured" }],
@@ -496,15 +572,15 @@ describe("discoverAgentExtensions", () => {
     const { run } = fixtureRunner({
       ...EMPTY_CLAUDE,
       ...EMPTY_CODEX,
+      ...EMPTY_CURSOR,
+      ...EMPTY_GROK,
       "opencode debug config": JSON.stringify({
         mcp: "servers-moved-elsewhere",
         plugin: ["@team/review"],
       }),
     });
 
-    const [, , opencode] = await discoverAgentExtensions(run);
-
-    expect(opencode).toEqual({
+    expect(catalogFor(await discoverAgentExtensions(run), "opencode")).toEqual({
       agent: "opencode",
       mcpServers: [],
       plugins: [{ name: "@team/review", status: "configured" }],
@@ -516,15 +592,15 @@ describe("discoverAgentExtensions", () => {
     const { run } = fixtureRunner({
       ...EMPTY_CLAUDE,
       ...EMPTY_CODEX,
+      ...EMPTY_CURSOR,
+      ...EMPTY_GROK,
       "opencode debug config": JSON.stringify({
         mcp: { docs: { type: "local", command: ["docs"] } },
         plugin: { "@team/review": true },
       }),
     });
 
-    const [, , opencode] = await discoverAgentExtensions(run);
-
-    expect(opencode).toEqual({
+    expect(catalogFor(await discoverAgentExtensions(run), "opencode")).toEqual({
       agent: "opencode",
       mcpServers: [{ name: "docs", status: "configured" }],
       plugins: [],
@@ -533,11 +609,7 @@ describe("discoverAgentExtensions", () => {
   });
 
   test("omits error fields entirely when every CLI succeeds", async () => {
-    const { run, calls } = fixtureRunner({
-      ...EMPTY_CLAUDE,
-      ...EMPTY_CODEX,
-      ...EMPTY_OPENCODE,
-    });
+    const { run, calls } = fixtureRunner(EMPTY_ALL);
 
     const result = await discoverAgentExtensions(run);
 
@@ -550,6 +622,10 @@ describe("discoverAgentExtensions", () => {
       "claude plugin list --json",
       "codex mcp list --json",
       "codex plugin list --json",
+      "cursor mcp list --format json",
+      "cursor plugin list --format json",
+      "grok mcp list --json",
+      "grok plugin list --json",
       "opencode debug config",
     ]);
   });

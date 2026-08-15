@@ -212,6 +212,8 @@ describe("SkillsSettings", () => {
     );
     expect(screen.queryByRole("tab", { name: "Claude" }) === null).toBe(true);
     expect(screen.queryByRole("tab", { name: "Codex" }) === null).toBe(true);
+    expect(screen.queryByRole("tab", { name: "Cursor" }) === null).toBe(true);
+    expect(screen.queryByRole("tab", { name: "Grok" }) === null).toBe(true);
     expect(screen.queryByRole("tab", { name: "OpenCode" }) === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Reveal skill in file manager" }) === null).toBe(true);
   });
@@ -274,6 +276,39 @@ describe("SkillsSettings", () => {
     expect(list().queryByText("claude-only") === null).toBe(true);
     expect(invokeCalls.filter((call) => call.command === "list_agent_skills").map((call) => call.args?.provider))
       .toEqual(["claude", "codex"]);
+  });
+
+  test("exposes Cursor Agent and Grok Build alongside the other agents", async () => {
+    skillScans.cursor = {
+      ...emptyScan("cursor"),
+      skills: [skill({
+        name: "cursor-only",
+        filePath: "/cursor/SKILL.md",
+        location: "~/.cursor/skills/cursor-only",
+      })],
+    };
+    skillScans.grok = {
+      ...emptyScan("grok"),
+      skills: [skill({
+        name: "grok-only",
+        filePath: "/grok/SKILL.md",
+        location: "~/.grok/skills/grok-only",
+      })],
+    };
+
+    render(<SkillsSettings />);
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Cursor" })).toBeTruthy());
+    expect(screen.getByRole("tab", { name: "Grok" })).toBeTruthy();
+
+    clickTab(/Cursor/);
+    await waitFor(() => expect(list().getByText("cursor-only")).toBeTruthy());
+    expect(list().getByText("~/.cursor/skills/cursor-only")).toBeTruthy();
+
+    clickTab(/Grok/);
+    await waitFor(() => expect(list().getByText("grok-only")).toBeTruthy());
+    expect(list().getByText("~/.grok/skills/grok-only")).toBeTruthy();
+    expect(invokeCalls.filter((call) => call.command === "list_agent_skills").map((call) => call.args?.provider))
+      .toEqual(["claude", "cursor", "grok"]);
   });
 
   test("the raw toggle shows the file source instead of rendered markdown", async () => {

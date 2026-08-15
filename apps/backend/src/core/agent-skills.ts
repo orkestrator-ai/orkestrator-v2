@@ -14,7 +14,7 @@ import type { FileHandle } from "node:fs/promises";
  * renderer must not be able to turn this into an arbitrary host file reader.
  */
 
-export const AGENT_SKILL_PROVIDERS = ["claude", "codex", "opencode"] as const;
+export const AGENT_SKILL_PROVIDERS = ["claude", "codex", "cursor", "grok", "opencode"] as const;
 export type AgentSkillProvider = (typeof AGENT_SKILL_PROVIDERS)[number];
 
 export function isAgentSkillProvider(value: unknown): value is AgentSkillProvider {
@@ -365,6 +365,12 @@ async function codexPluginRoots(home: string): Promise<RootSpec[]> {
  * location) > `~/.agents/skills` > `$CODEX_HOME/skills/.system` > plugins.
  *
  * OpenCode: its own config dir plus the Claude- and agent-compatible roots.
+ *
+ * Cursor Agent: `~/.cursor/skills` (user) > `~/.cursor/skills-cursor` (built-in)
+ * > `~/.agents/skills` > Claude/Codex compatibility roots. Cursor walks these
+ * recursively, including category folders.
+ *
+ * Grok Build: `~/.grok/skills` > `~/.agents/skills` > Claude compatibility.
  */
 async function rootSpecsFor(provider: AgentSkillProvider): Promise<RootSpec[]> {
   const home = homeDir();
@@ -394,6 +400,24 @@ async function rootSpecsFor(provider: AgentSkillProvider): Promise<RootSpec[]> {
       { path: agentsSkills, scope: "shared", recursive: true },
       { path: path.join(codex, "skills", ".system"), scope: "system", recursive: true },
       ...(await codexPluginRoots(codex)),
+    ];
+  }
+
+  if (provider === "cursor") {
+    return [
+      { path: path.join(home, ".cursor", "skills"), scope: "user", recursive: true },
+      { path: path.join(home, ".cursor", "skills-cursor"), scope: "system", recursive: true },
+      { path: agentsSkills, scope: "shared", recursive: true },
+      { path: path.join(home, ".claude", "skills"), scope: "shared", recursive: true },
+      { path: path.join(codexHome(), "skills"), scope: "shared", skip: [".system"], recursive: true },
+    ];
+  }
+
+  if (provider === "grok") {
+    return [
+      { path: path.join(home, ".grok", "skills"), scope: "user", recursive: true },
+      { path: agentsSkills, scope: "shared", recursive: true },
+      { path: path.join(home, ".claude", "skills"), scope: "shared", recursive: true },
     ];
   }
 

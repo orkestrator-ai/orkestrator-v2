@@ -1,4 +1,4 @@
-export type AgentExtensionId = "claude" | "codex" | "opencode";
+export type AgentExtensionId = "claude" | "codex" | "cursor" | "grok" | "opencode";
 
 export type ExtensionStatus =
   | "connected"
@@ -281,6 +281,102 @@ export function parseOpenCodeConfig(output: string): {
   };
 }
 
+function recordStatus(value: Record<string, unknown>): ExtensionStatus {
+  if (value.enabled === false || value.disabled === true) return "disabled";
+  const status = nonBlankString(value.status)?.toLowerCase();
+  if (status?.includes("connected")) return "connected";
+  if (status?.includes("failed") || status?.includes("error") || status?.includes("disconnected")) {
+    return "failed";
+  }
+  if (
+    status?.includes("pending")
+    || status?.includes("approval")
+    || status?.includes("auth")
+  ) {
+    return "pending";
+  }
+  return "configured";
+}
+
+function namedRecordItem(value: unknown, allowString = false): KeyedItem | undefined {
+  if (typeof value === "string") {
+    if (!allowString) return undefined;
+    const name = nonBlankString(value);
+    return name ? { key: name, item: { name, status: "configured" } } : undefined;
+  }
+  if (!isRecord(value)) return undefined;
+  const id = nonBlankString(value.id) ?? nonBlankString(value.pluginId);
+  const name = nonBlankString(value.name)
+    ?? (id ? pluginShortName(id) : undefined)
+    ?? nonBlankString(value.spec);
+  if (!name) return undefined;
+  const source = nonBlankString(value.source)
+    ?? nonBlankString(value.scope)
+    ?? nonBlankString(value.marketplaceName);
+  return {
+    key: id ?? name,
+    item: {
+      name,
+      status: recordStatus(value),
+      ...(source ? { source } : {}),
+    },
+  };
+}
+
+function collectNamedRecords(value: unknown, result: KeyedItem[], fromArray = false): void {
+  if (Array.isArray(value)) {
+    for (const child of value) collectNamedRecords(child, result, true);
+    return;
+  }
+  const item = namedRecordItem(value, fromArray);
+  if (item) {
+    result.push(item);
+    return;
+  }
+  if (!isRecord(value)) return;
+  for (const child of Object.values(value)) collectNamedRecords(child, result, false);
+}
+
+/**
+ * Cursor and Grok both emit JSON lists, but the wrapping varies: a bare array,
+ * `{ servers: [...] }` / `{ plugins: [...] }`, or Cursor's mcp.json map of
+ * `{ mcpServers: { name: { command, url, disabled } } }`.
+ */
+function parseNamedJsonCollection(output: string, mapKey?: string): ExtensionItem[] {
+  const parsed = parseJsonOutput(output);
+  if (mapKey && isRecord(parsed) && isRecord(parsed[mapKey])) {
+    const mapped = Object.entries(parsed[mapKey]).flatMap(([name, value]): KeyedItem[] => {
+      if (!nonBlankString(name) || (value != null && !isRecord(value))) return [];
+      const record = isRecord(value) ? value : {};
+      return [{
+        key: name,
+        item: { name, status: recordStatus(record) },
+      }];
+    });
+    if (mapped.length > 0 || parsed[mapKey] !== undefined) return sortAndDedupeKeyed(mapped);
+  }
+
+  const result: KeyedItem[] = [];
+  collectNamedRecords(parsed, result);
+  return sortAndDedupeKeyed(result);
+}
+
+export function parseCursorMcpList(output: string): ExtensionItem[] {
+  return parseNamedJsonCollection(output, "mcpServers");
+}
+
+export function parseCursorPlugins(output: string): ExtensionItem[] {
+  return parseNamedJsonCollection(output);
+}
+
+export function parseGrokMcpList(output: string): ExtensionItem[] {
+  return parseNamedJsonCollection(output);
+}
+
+export function parseGrokPlugins(output: string): ExtensionItem[] {
+  return parseNamedJsonCollection(output);
+}
+
 function parseCommandResult(
   result: PromiseSettledResult<string>,
   parser: (output: string) => ExtensionItem[],
@@ -346,6 +442,58 @@ async function discoverCodex(
   };
 }
 
+async function discoverCursor(
+  run: ExtensionCommandRunner,
+): Promise<AgentExtensionCatalog> {
+  const [mcp, plugins] = await Promise.allSettled([
+    run("cursor", ["mcp", "list", "--format", "json"]),
+    run("cursor", ["plugin", "list", "--format", "json"]),
+  ]);
+  const mcpResult = parseCommandResult(
+    mcp,
+    parseCursorMcpList,
+    "Could not read Cursor MCP servers.",
+  );
+  const pluginResult = parseCommandResult(
+    plugins,
+    parseCursorPlugins,
+    "Could not read Cursor plugins.",
+  );
+  return {
+    agent: "cursor",
+    mcpServers: mcpResult.items,
+    plugins: pluginResult.items,
+    ...(mcpResult.error ? { mcpError: mcpResult.error } : {}),
+    ...(pluginResult.error ? { pluginError: pluginResult.error } : {}),
+  };
+}
+
+async function discoverGrok(
+  run: ExtensionCommandRunner,
+): Promise<AgentExtensionCatalog> {
+  const [mcp, plugins] = await Promise.allSettled([
+    run("grok", ["mcp", "list", "--json"]),
+    run("grok", ["plugin", "list", "--json"]),
+  ]);
+  const mcpResult = parseCommandResult(
+    mcp,
+    parseGrokMcpList,
+    "Could not read Grok MCP servers.",
+  );
+  const pluginResult = parseCommandResult(
+    plugins,
+    parseGrokPlugins,
+    "Could not read Grok plugins.",
+  );
+  return {
+    agent: "grok",
+    mcpServers: mcpResult.items,
+    plugins: pluginResult.items,
+    ...(mcpResult.error ? { mcpError: mcpResult.error } : {}),
+    ...(pluginResult.error ? { pluginError: pluginResult.error } : {}),
+  };
+}
+
 async function discoverOpenCode(
   run: ExtensionCommandRunner,
 ): Promise<AgentExtensionCatalog> {
@@ -383,6 +531,8 @@ export async function discoverAgentExtensions(
   return Promise.all([
     discoverClaude(run),
     discoverCodex(run),
+    discoverCursor(run),
+    discoverGrok(run),
     discoverOpenCode(run),
   ]);
 }

@@ -83,8 +83,8 @@ function sessionPayload(sessionId = "fake-session"): JsonObject {
   // messages must carry no model attribution.
   const withoutModel = provider !== "grok" && process.env.FAKE_ACP_NO_MODEL_OPTION === "1"
     ? {
-        ...config,
-        configOptions: config.configOptions.filter((option) => option.id !== "model"),
+        ...cursorConfig,
+        configOptions: cursorConfig.configOptions.filter((option) => option.id !== "model"),
       }
     : config;
   return {
@@ -322,6 +322,36 @@ lines.on("line", (line) => {
         toolCallId: "history-tool-1",
         title: "Read earlier file",
         status: "completed",
+      });
+    }
+    if (process.env.FAKE_ACP_REPLAY_CURSOR_TOOL_METADATA === "1") {
+      replay({
+        sessionUpdate: "tool_call",
+        toolCallId: "replay-search-1",
+        title: "grep --include=\"*.json\" \"scripts\"",
+        kind: "search",
+        status: "pending",
+        rawInput: { pattern: "scripts", path: "/workspace" },
+      });
+      replay({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "replay-search-1",
+        status: "completed",
+        rawOutput: { totalMatches: 1, truncated: false },
+      });
+      replay({
+        sessionUpdate: "tool_call",
+        toolCallId: "replay-read-1",
+        title: "Read package.json (1 - 80)",
+        kind: "read",
+        status: "pending",
+        rawInput: { path: "/workspace/package.json" },
+      });
+      replay({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "replay-read-1",
+        status: "completed",
+        rawOutput: { content: "package contents" },
       });
     }
     // The same history without provider message ids, which is all the bridge
@@ -1365,6 +1395,57 @@ lines.on("line", (line) => {
           _meta: { totalTokens: 15_675, usage: { inputTokens: 15_639, outputTokens: 36 } },
         },
       });
+      return;
+    }
+    if (prompt.startsWith("CURSOR_GENERIC_TOOLS")) {
+      for (const update of [
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-read-1",
+          title: "Read File",
+          kind: "read",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "live-read-1",
+          status: "completed",
+          rawOutput: { content: "package contents" },
+        },
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-search-1",
+          title: "grep",
+          kind: "search",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "live-search-1",
+          status: "completed",
+          rawOutput: { totalMatches: 1, truncated: false },
+        },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: "fake-session", update },
+        });
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Done." },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }
     if (prompt.startsWith("TOOLS")) {

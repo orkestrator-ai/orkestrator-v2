@@ -1142,6 +1142,52 @@ describe("ACP bridge", () => {
     expect(restored.messages[1]?.parts).toEqual(assistantParts);
   });
 
+  test("enriches Cursor's generic live tool calls from its post-turn ACP replay", async () => {
+    const bridge = await spawnBridge({
+      env: { FAKE_ACP_REPLAY_CURSOR_TOOL_METADATA: "1" },
+    });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-tools:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    const promptResponse = await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "CURSOR_GENERIC_TOOLS" }),
+    });
+    expect(promptResponse.status).toBe(202);
+
+    const session = await waitFor(
+      async () => nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    const tools = session.messages[1]?.parts.filter((part) => part.type === "tool-invocation");
+    expect(tools).toEqual([
+      expect.objectContaining({
+        toolUseId: "live-read-1",
+        toolName: "read",
+        toolTitle: "Read package.json (1 - 80)",
+        content: "Read package.json (1 - 80)",
+        toolArgs: { path: "/workspace/package.json" },
+        toolState: "success",
+      }),
+      expect.objectContaining({
+        toolUseId: "live-search-1",
+        toolName: "search",
+        toolTitle: "grep --include=\"*.json\" \"scripts\"",
+        content: "grep --include=\"*.json\" \"scripts\"",
+        toolArgs: { pattern: "scripts", path: "/workspace" },
+        toolState: "success",
+      }),
+    ]);
+  });
+
   test("normalizes failing tool calls into failed parts with an error message", async () => {
     const { base, headers } = await spawnBridge();
     const created = await nativeFetch(`${base}/session/create`, {

@@ -118,6 +118,23 @@ interface AcpToolSourceState {
   chargedBytes?: number;
 }
 
+interface AcpReplayToolMetadata {
+  id: string;
+  title?: string;
+  toolName?: string;
+  toolArgs?: JsonObject;
+  contentOutput?: string;
+  rawOutput?: string;
+}
+
+interface AcpToolReplayCollector {
+  capacity: number;
+  calls: AcpReplayToolMetadata[];
+  next: number;
+  total: number;
+  byId: Map<string, AcpReplayToolMetadata>;
+}
+
 type BridgeMessagePart = BridgeTextPart | BridgeFilePart | BridgeToolPart;
 
 interface PromptJournalEntry {
@@ -252,6 +269,7 @@ const clientSessionKeys = new Map<string, string>();
 const sessionCreations = new Map<string, Promise<SessionState>>();
 const sessionResumes = new Map<string, Promise<SessionState>>();
 let anonymousSessionCreations = 0;
+let activeCursorToolReplays = 0;
 let sessionListProbe: Promise<JsonObject[]> | null = null;
 let persistenceTail = Promise.resolve();
 let persistenceScheduled = false;
@@ -299,6 +317,8 @@ const MAX_MODEL_ID_BYTES = 1_024;
 const MAX_TOOL_NAME_BYTES = 256;
 const MAX_TOOL_TITLE_BYTES = 4 * 1024;
 const MAX_TOOL_PATH_BYTES = 16 * 1024;
+const MAX_REPLAY_RECONCILE_TOOLS = 4_096;
+const MAX_CURSOR_TOOL_REPLAY_PROCESSES = 8;
 /** Bounds both the time and the retained memory of `diffFileLines`. */
 const MAX_DIFF_EDIT_DISTANCE = 512;
 /**
@@ -1323,6 +1343,216 @@ function applyToolCallUpdate(
   schedulePersist();
 }
 
+function collectReplayToolMetadata(
+  collector: AcpToolReplayCollector,
+  update: JsonObject,
+  isInitial: boolean,
+): void {
+  const id = boundedString(update.toolCallId, MAX_TOOL_ID_BYTES)?.trim();
+  if (!id) return;
+
+  let call = collector.byId.get(id);
+  if (!call && isInitial) {
+    call = { id };
+    if (collector.calls.length < collector.capacity) {
+      collector.calls.push(call);
+    } else {
+      const replaced = collector.calls[collector.next];
+      if (replaced) collector.byId.delete(replaced.id);
+      collector.calls[collector.next] = call;
+      collector.next = (collector.next + 1) % collector.capacity;
+    }
+    collector.total += 1;
+    collector.byId.set(id, call);
+  }
+  if (!call) return;
+
+  if ("title" in update) {
+    call.title = boundedNullableString(update.title, MAX_TOOL_TITLE_BYTES);
+  }
+  if ("name" in update) {
+    call.toolName = boundedNullableString(update.name, MAX_TOOL_NAME_BYTES);
+  }
+  if ("kind" in update && !call.toolName) {
+    call.toolName = boundedNullableString(update.kind, MAX_TOOL_NAME_BYTES);
+  }
+  if ("rawInput" in update && isObject(update.rawInput)) {
+    call.toolName ??= boundedString(update.rawInput._toolName, MAX_TOOL_NAME_BYTES);
+    call.toolArgs = boundedToolArguments(update.rawInput);
+  }
+  if ("content" in update) {
+    call.contentOutput = toolCallContentText(update.content);
+  }
+  if ("rawOutput" in update) {
+    call.rawOutput = update.rawOutput === null
+      ? undefined
+      : stringifyToolPayload(update.rawOutput);
+  }
+}
+
+function orderedReplayTools(collector: AcpToolReplayCollector): AcpReplayToolMetadata[] {
+  if (collector.total <= collector.capacity || collector.next === 0) return collector.calls;
+  return [
+    ...collector.calls.slice(collector.next),
+    ...collector.calls.slice(0, collector.next),
+  ];
+}
+
+function currentTurnToolParts(state: SessionState): BridgeToolPart[] {
+  let lastUserIndex = -1;
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    if (state.messages[index]?.role !== "user") continue;
+    lastUserIndex = index;
+    break;
+  }
+  return state.messages.slice(lastUserIndex + 1).flatMap((message) => message.parts.flatMap(
+    (part) => part.type === "tool-invocation" ? [part] : [],
+  ));
+}
+
+function normalizedToolKind(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized || undefined;
+}
+
+function hasToolArguments(value: JsonObject | undefined): boolean {
+  return value !== undefined && Object.keys(value).length > 0;
+}
+
+function isGenericCursorToolTitle(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "read file"
+    || normalized === "read lints"
+    || normalized === "edit file"
+    || normalized === "grep"
+    || normalized === "find";
+}
+
+function needsCursorToolReplay(state: SessionState): boolean {
+  return currentTurnToolParts(state).some((part) =>
+    isGenericCursorToolTitle(part.toolTitle)
+    && !hasToolArguments(part.toolArgs)
+  );
+}
+
+function applyReplayToolMetadata(
+  state: SessionState,
+  collector: AcpToolReplayCollector,
+): boolean {
+  const targets = currentTurnToolParts(state).slice(-collector.capacity);
+  const replayed = orderedReplayTools(collector);
+  if (targets.length === 0 || replayed.length === 0) return false;
+  const unused = new Set(replayed.keys());
+
+  let changed = false;
+  // Cursor replays concurrent calls in completion order, while the live stream
+  // starts them in launch order. Join on a unique path or normalized output,
+  // with a unique tool kind as the final safe fallback; ambiguous calls stay
+  // generic rather than borrowing a neighbour's filename or search pattern.
+  for (const part of targets) {
+    const targetKind = normalizedToolKind(part.toolName);
+    const sameKind = [...unused].filter(
+      (index) => normalizedToolKind(replayed[index]?.toolName) === targetKind,
+    );
+    const targetPath = part.toolDiff?.filePath ?? toolArgumentPath(part.toolArgs);
+    const pathMatches = targetPath
+      ? sameKind.filter((index) => toolArgumentPath(replayed[index]?.toolArgs) === targetPath)
+      : [];
+    const outputMatches = part.toolOutput
+      ? sameKind.filter((index) => {
+          const replay = replayed[index];
+          return (replay?.contentOutput ?? replay?.rawOutput) === part.toolOutput;
+        })
+      : [];
+    const candidateIndexes = pathMatches.length > 0 ? pathMatches : outputMatches;
+    const replayIndex = candidateIndexes.length === 1
+      ? candidateIndexes[0]
+      : sameKind.length === 1
+        ? sameKind[0]
+        : undefined;
+    if (replayIndex === undefined) continue;
+    const replay = replayed[replayIndex];
+    if (!replay) continue;
+    unused.delete(replayIndex);
+    let partChanged = false;
+    if (!part.toolName && replay.toolName) {
+      part.toolName = replay.toolName;
+      partChanged = true;
+    }
+    if (!hasToolArguments(part.toolArgs) && hasToolArguments(replay.toolArgs)) {
+      part.toolArgs = replay.toolArgs;
+      partChanged = true;
+    }
+    if (replay.title && isGenericCursorToolTitle(part.toolTitle) && replay.title !== part.toolTitle) {
+      const previousTitle = part.toolTitle;
+      part.toolTitle = replay.title;
+      if (!part.content || part.content === previousTitle) part.content = replay.title;
+      partChanged = true;
+    }
+    if (partChanged) {
+      changed = true;
+      acpToolSourceStates.delete(part);
+    }
+  }
+  return changed;
+}
+
+async function reconcileCursorToolMetadata(state: SessionState, child: AcpProcess): Promise<void> {
+  if (provider !== "cursor" || state.child !== child || !needsCursorToolReplay(state)) return;
+  if (activeCursorToolReplays >= MAX_CURSOR_TOOL_REPLAY_PROCESSES) return;
+  const capacity = Math.min(currentTurnToolParts(state).length, MAX_REPLAY_RECONCILE_TOOLS);
+  if (capacity === 0) return;
+  const collector: AcpToolReplayCollector = {
+    capacity,
+    calls: [],
+    next: 0,
+    total: 0,
+    byId: new Map(),
+  };
+  activeCursorToolReplays += 1;
+  let replayChild: AcpProcess | undefined;
+  try {
+    // Cursor's live ACP process reports generic Read/Grep calls with empty
+    // input. A newly attached process replays the same session with its indexed
+    // path, pattern and descriptive title; the process that ran the turn does
+    // not. Concurrency is capped above so simultaneous turns cannot double the
+    // bridge's process count without bound.
+    replayChild = new AcpProcess();
+    replayChild.onUpdate = (params) => {
+      if (params.sessionId !== state.acpSessionId || !isObject(params.update)) return;
+      const update = params.update;
+      const kind = typeof update.sessionUpdate === "string"
+        ? update.sessionUpdate
+        : typeof update.type === "string"
+          ? update.type
+          : "";
+      if (kind === "tool_call" || kind === "tool_call_update") {
+        collectReplayToolMetadata(collector, update, kind === "tool_call");
+      }
+    };
+    const initialized = await replayChild.initialize();
+    const capabilities = isObject(initialized.agentCapabilities)
+      ? initialized.agentCapabilities
+      : undefined;
+    if (capabilities?.loadSession !== true) return;
+    await replayChild.request("session/load", {
+      cwd: workingDirectory,
+      additionalDirectories: [],
+      mcpServers: [],
+      sessionId: state.acpSessionId,
+    });
+    if (state.child === child && applyReplayToolMetadata(state, collector)) {
+      state.revision += 1;
+    }
+  } catch {
+    // Display enrichment is best-effort. The completed turn remains valid even
+    // when an older Cursor build cannot replay its session from a fresh child.
+  } finally {
+    await replayChild?.close();
+    activeCursorToolReplays -= 1;
+  }
+}
+
 function applyAcpToolSourcePatch(source: AcpToolSourceState, update: JsonObject): void {
   if ("title" in update) {
     source.title = boundedNullableString(update.title, MAX_TOOL_TITLE_BYTES);
@@ -2294,8 +2524,7 @@ async function route(
           data: image.data,
         })),
       ],
-    }, PROMPT_TIMEOUT_MS).then((result) => {
-      if (!state.outputTruncated) state.status = "idle";
+    }, PROMPT_TIMEOUT_MS).then(async (result) => {
       // The result `_meta` is the last and most complete usage carrier, so it is
       // read before `turnStartedAt` is cleared and the elapsed time is lost.
       recordTurnUsage(state, isObject(result) ? result._meta : undefined);
@@ -2330,6 +2559,8 @@ async function route(
       // by the agent — ACP has no status for that, so settle it explicitly.
       reconcileStaleToolParts(state);
       state.currentTurnOutput = null;
+      await reconcileCursorToolMetadata(state, child);
+      if (!state.outputTruncated && state.child === child) state.status = "idle";
       state.revision += 1;
       schedulePersist();
     }, (error: unknown) => {

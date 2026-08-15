@@ -37,7 +37,7 @@ const temporaryDirectories: string[] = [];
  *
  * Session titles are the one thing that still spawns `codex exec` directly — a
  * deliberately hermetic subprocess with its own model catalog, read-only sandbox
- * and user config ignored (see docs/adr/0001-codex-app-server-engine.md). The
+ * and user config ignored (see docs/technical-architecture/agent-engines.md). The
  * version comes from the single source of truth so a bump cannot silently point
  * this at a stale CLI, and the managed toolchain is preferred over PATH so the
  * test exercises the binary the app actually ships.

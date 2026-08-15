@@ -208,7 +208,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     await waitFor(() => expect(address).toHaveBeenCalledWith(ready.id));
     expect(await screen.findByText("The fix model is working interactively")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Open fix session" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: ADDRESS_ALL_REVIEW_PROMPT })).toBeNull();
+    expect(screen.queryByRole("button", { name: ADDRESS_ALL_REVIEW_PROMPT }) === null).toBe(true);
     // The backend owns both the transition and prompt dispatch, so the tab is
     // presentation-only and must be opened after that durable work completes.
     expect(addressedBeforeTab).toBe(true);

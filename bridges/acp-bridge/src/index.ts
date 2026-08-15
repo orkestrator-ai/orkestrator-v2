@@ -694,11 +694,16 @@ class AcpProcess {
         this.onVendor(message.method, params);
         this.respond(message.id, {});
       } else if (isCursorTaskMethod(message.method)) {
-        // Cursor documents `cursor/task` as a notification, but it also
-        // arrives as a request. Either form is the sub-agent completion
-        // signal; refusing it with -32601 leaves the launch card Active.
+        // `cursor/task` is the sub-agent completion signal, and refusing it
+        // with -32601 leaves the launch card Active. Answered with `{}`: the
+        // result is discarded (see `applyCursorTask`), and inventing a payload
+        // would be claiming a response schema this method does not publish.
+        // ACP's only structured client answer is the permission outcome, whose
+        // members are `selected` and `cancelled` — neither describes a child
+        // that ended, so borrowing that shape here would be a lie in both
+        // directions. The notification form is handled below.
         this.onVendor(message.method, params);
-        this.respond(message.id, cursorTaskAck(params));
+        this.respond(message.id, {});
       } else {
         this.#write({
           jsonrpc: "2.0",
@@ -2291,9 +2296,27 @@ function applySubagentFinished(state: SessionState, update: JsonObject): void {
 }
 
 /**
- * Cursor's documented sub-agent completion signal. The Task launch tool
- * resolves as soon as the child starts (`isBackground: true`); this method is
- * what tells the client the child actually ended.
+ * Cursor's sub-agent completion signal, as observed in `cursor-agent`
+ * 2026.08.11-e8db854 (`src/acp/agent-session.ts`, `src/acp/types.ts`):
+ *
+ * - It is sent through `extMethod`, which is `sendRequest` — so on the wire it
+ *   is a **request**, despite Cursor naming its own helper
+ *   `sendNonBlockingExtensionNotification`. `extNotification` sits beside it
+ *   unused. The notification form is still accepted here because that naming
+ *   says which way Cursor intends to move, and a notification costs nothing.
+ * - Cursor discards the response: the helper only `.catch()`es, and the SDK
+ *   does not validate the result. Even a `-32601` is just a debug log there.
+ * - The payload is `toolCallId`, `description`, `prompt`, `subagentType`,
+ *   `model`, `agentId`, `durationMs`. There is **no status or outcome field**,
+ *   and `durationMs` is populated only when the tool result case is `success`.
+ * - The one send site is `toolCallCompleted`, immediately after the
+ *   `status: "completed"` tool call update, so today it can only ever be
+ *   terminal. The launch tool itself resolves with `isBackground: true` still
+ *   set, which is why that flag cannot be read as liveness.
+ *
+ * The status/outcome handling below is therefore forward-compatibility, not an
+ * observed contract: it is written so that a future Cursor which does start
+ * reporting a state cannot be read as an ending unless it says so.
  */
 function applyCursorTask(state: SessionState, params: JsonObject): void {
   if (params.sessionId !== undefined && params.sessionId !== state.acpSessionId) return;
@@ -2354,12 +2377,14 @@ function terminalAgentState(status: string | undefined): "finished" | "failed" |
 
 /**
  * The child state a `cursor/task` frame reports, or `undefined` when it names a
- * state that is not terminal. Absent state is completion: the method is only
- * sent when a child ends, so a bare frame is an ending. A *present* but
- * non-terminal state has to be distinguishable from that, or a progress report
- * would settle a running child — which is why this cannot default to
- * `"finished"` the way the by-definition-terminal `subagent_finished`
- * notification does.
+ * state that is not terminal.
+ *
+ * Absent state is completion, and that is the only branch Cursor reaches today
+ * — it sends neither field (see `applyCursorTask`). The rest guards the version
+ * that starts to: a *present* but non-terminal state has to be distinguishable
+ * from an absent one, or a progress report would settle a running child. That
+ * is why this cannot default to `"finished"` the way the by-definition-terminal
+ * `subagent_finished` notification does.
  */
 function cursorTaskAgentState(payload: JsonObject): "finished" | "failed" | undefined {
   const outcome = typeof payload.outcome === "string"
@@ -2370,20 +2395,6 @@ function cursorTaskAgentState(payload: JsonObject): "finished" | "failed" | unde
   const status = typeof payload.status === "string" ? payload.status : undefined;
   if (outcome === undefined && status === undefined) return "finished";
   return terminalAgentState(outcome) ?? terminalAgentState(status);
-}
-
-/**
- * Answer the request form. A non-terminal frame is still acknowledged rather
- * than refused: the agent is blocked on this response, and declining to answer
- * a progress report would stall the turn that owns the child.
- */
-function cursorTaskAck(params: JsonObject): JsonObject {
-  const payload = isObject(params.update) ? params.update : params;
-  return {
-    outcome: {
-      outcome: cursorTaskAgentState(payload) === "failed" ? "cancelled" : "completed",
-    },
-  };
 }
 
 function setOptionalPartField<TKey extends keyof BridgeToolPart>(

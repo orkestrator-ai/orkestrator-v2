@@ -1363,8 +1363,11 @@ lines.on("line", (line) => {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }
-    // Cursor's rejected spelling. Distinct from `cancelled` so the terminal
-    // vocabulary is proven rather than assumed to be one synonym wide.
+    // The `cursor/task` frames below carry a `status`/`outcome` field. Real
+    // Cursor (2026.08.11-e8db854) sends neither — its payload is toolCallId,
+    // description, prompt, subagentType, model, agentId, durationMs — so these
+    // model the version that starts reporting a state, not today's contract.
+    // They exist to pin which values settle a child and which must not.
     if (prompt.startsWith("REJECTCURSORTASK")) {
       write({
         jsonrpc: "2.0",
@@ -1380,8 +1383,8 @@ lines.on("line", (line) => {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }
-    // A `cursor/task` that names a non-terminal state is a progress report. The
-    // child is still running, so nothing may settle.
+    // Forward-compat, as above: a `cursor/task` that names a non-terminal state
+    // is a progress report, so nothing may settle.
     if (prompt.startsWith("RUNNINGCURSORTASK")) {
       write({
         jsonrpc: "2.0",

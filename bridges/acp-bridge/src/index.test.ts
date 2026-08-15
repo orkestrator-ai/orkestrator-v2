@@ -1644,11 +1644,15 @@ describe("ACP bridge", () => {
     });
   }
 
+  // The request form is the only one the pinned `cursor-agent` sends: its
+  // `sendNonBlockingExtensionNotification` helper calls `extMethod`, which is
+  // `sendRequest`. The answer is a bare `{}` because Cursor discards the result
+  // and the method publishes no response schema to fill in.
   for (const request of [
-    { prompt: "FINISHCURSORTASKREQUEST", outcome: "completed", agentState: "finished" },
-    { prompt: "FAILCURSORTASKREQUEST", outcome: "cancelled", agentState: "failed" },
+    { prompt: "FINISHCURSORTASKREQUEST", label: "a completed child", agentState: "finished" },
+    { prompt: "FAILCURSORTASKREQUEST", label: "a failed child", agentState: "failed" },
   ] as const) {
-    test(`answers Cursor's cursor/task request with ${request.outcome} and settles the matching child`, async () => {
+    test(`answers Cursor's cursor/task request for ${request.label} and settles it`, async () => {
       const directory = await temporaryDirectory();
       const responseFile = resolve(directory, "cursor-task-response.log");
       const { base, headers } = await spawnBridge({ env: {
@@ -1680,11 +1684,11 @@ describe("ACP bridge", () => {
           .catch(() => null) as Promise<Record<string, unknown> | null>,
         Boolean,
       );
-      expect(response).toMatchObject({
-        id: 903,
-        result: { outcome: { outcome: request.outcome } },
-      });
+      expect(response).toMatchObject({ id: 903, result: {} });
       expect(response).not.toHaveProperty("error");
+      // Not the ACP permission outcome. Its members are `selected` and
+      // `cancelled`; neither describes a child that ended.
+      expect(response).not.toHaveProperty("result.outcome");
       const settled = await waitFor(
         async () => nativeFetch(`${base}/session/${created.id}`, { headers })
           .then((response) => response.json()) as Promise<{

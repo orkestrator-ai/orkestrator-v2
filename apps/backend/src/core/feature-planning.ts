@@ -878,7 +878,7 @@ export class FeaturePlanningService {
         ...(repository?.defaultModel || config.global.codexModel
           ? { model: repository?.defaultModel || config.global.codexModel }
           : {}),
-        effort: repository?.defaultEffort || config.global.codexReasoningEffort || "medium",
+        effort: repository?.defaultEffort || config.global.codexReasoningEffort || "high",
       }),
     );
     await this.storage.updateFeaturePlan(record.featureId, { codexSessionId: created });

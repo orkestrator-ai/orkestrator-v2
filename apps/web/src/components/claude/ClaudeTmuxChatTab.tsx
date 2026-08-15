@@ -136,6 +136,7 @@ import {
 } from "@/lib/backend";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { serializeClaudeQuestionAnswer } from "@orkestrator/protocol/agent-interactions";
+import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
 import type { ClaudeTmuxData } from "@/types/paneLayout";
 import type { FileCandidate, FileMention } from "@/types";
 
@@ -272,7 +273,7 @@ function supportedEffortLevels(model: ClaudeModel): ClaudeEffortLevel[] {
  * `options` is non-empty.
  */
 function fallbackEffort(options: ClaudeEffortLevel[]): ClaudeEffortLevel {
-  return options.includes(DEFAULT_EFFORT) ? DEFAULT_EFFORT : options[0]!;
+  return (fallbackReasoningId(options) as ClaudeEffortLevel | undefined) ?? options[0]!;
 }
 
 /**

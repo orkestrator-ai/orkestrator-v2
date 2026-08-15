@@ -1,4 +1,5 @@
 import type { ModelReasoningEffort } from "./codex-item-types.js";
+import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
 
 // The Codex CLI can expose reasoning levels before the SDK's declarations are
 // updated. Keep the bridge catalog aligned with the CLI's authoritative model
@@ -48,7 +49,7 @@ export const MODEL_REASONING_EFFORTS = new Set<BridgeReasoningEffort>([
   "ultra",
 ]);
 
-export const DEFAULT_REASONING_EFFORT: BridgeReasoningEffort = "medium";
+export const DEFAULT_REASONING_EFFORT: BridgeReasoningEffort = "high";
 
 export const REASONING_LABELS: Record<BridgeReasoningEffort, string> = {
   minimal: "Minimal",
@@ -155,9 +156,8 @@ export function parseModelCatalog(raw: string): BridgeModel[] {
             : undefined,
         reasoningEfforts,
         reasoningOptions,
-        defaultReasoningEffort: reasoningEfforts.includes(DEFAULT_REASONING_EFFORT)
-          ? DEFAULT_REASONING_EFFORT
-          : reasoningEfforts[0] ?? DEFAULT_REASONING_EFFORT,
+        defaultReasoningEffort: (fallbackReasoningId(reasoningEfforts) as BridgeReasoningEffort)
+          ?? DEFAULT_REASONING_EFFORT,
       } satisfies BridgeModel;
     });
 }

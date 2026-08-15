@@ -6,6 +6,7 @@
  * launcher cannot drift on what a catalog is or how a default is resolved.
  */
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { resolveReasoningId } from "@orkestrator/protocol/native-agent";
 
 export type LaunchAgent = AgentPlatform;
 
@@ -89,7 +90,12 @@ export function defaultEffortFor(
   const options =
     modelsForAgent(catalog, agent).find((model) => model.id === modelId)?.reasoningEfforts ?? [];
   const preferred = preferredEfforts?.[agent];
-  return preferred && options.includes(preferred) ? preferred : "default";
+  // Launch dialogs always offer Default as a selectable setting, so the shared
+  // fallback prefers it over high unless a still-supported preference hits.
+  return resolveReasoningId(
+    options.length > 0 ? ["default", ...options] : ["default"],
+    preferred,
+  ) ?? "default";
 }
 
 export function effortLabel(effort: string): string {

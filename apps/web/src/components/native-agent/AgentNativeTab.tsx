@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, History, X } from "lucide-react";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type { AgentModel } from "@orkestrator/protocol/native-agent";
+import { resolveReasoningId, type AgentModel } from "@orkestrator/protocol/native-agent";
 import {
   isProviderSlashCommand,
   resolveSessionActionCommand,
@@ -305,7 +305,11 @@ function UnassignedNativeAgentComposer({
     ?? platformModels[0];
   const canConfigureReasoning = selectedAdapter?.capabilities.composer.reasoning === true;
   const canConfigureMode = selectedAdapter?.capabilities.composer.mode === true;
-  const selectedReasoningId = draft.reasoningId ?? selectedModel?.defaultReasoningId;
+  const selectedReasoningId = resolveReasoningId(
+    selectedModel?.reasoning ?? [],
+    draft.reasoningId,
+    selectedModel?.defaultReasoningId,
+  ) ?? selectedModel?.defaultReasoningId;
   const selectedReasoningLabel = selectedModel?.reasoning?.find(
     (option) => option.id === selectedReasoningId,
   )?.label ?? "Default";
@@ -493,6 +497,11 @@ function UnassignedNativeAgentComposer({
                 enabledPlatforms={enabledPlatforms}
                 selectedPlatform={platform}
                 onPlatformChange={(next) => {
+                  // The picker announces the platform on every model choice, not
+                  // only when it changes. Resetting unconditionally would clear
+                  // the model and effort the user just picked on this provider.
+                  const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+                  if ((current?.platform ?? platform) === next) return;
                   const nextAdapter = findNativeAgentAdapter(next);
                   updateDraft(sessionKey, {
                     platform: next,
@@ -519,16 +528,23 @@ function UnassignedNativeAgentComposer({
                   // Platform selection is applied synchronously by the picker
                   // before model selection. Read it back from the neutral draft so
                   // identical provider-local model ids cannot route to the first
-                  // matching catalog entry from another provider.
-                  const selectedPlatform = useNativeComposeStore.getState().drafts
-                    .get(sessionKey)?.platform ?? platform;
+                  // matching catalog entry from another provider. The reasoning id
+                  // comes from that same fresh snapshot: a platform switch clears
+                  // it, and the render closure still holds the old provider's
+                  // value, which would otherwise be carried across the switch.
+                  const currentDraft = useNativeComposeStore.getState().drafts.get(sessionKey);
+                  const selectedPlatform = currentDraft?.platform ?? platform;
                   const model = models.find((candidate) =>
                     candidate.platform === selectedPlatform && candidate.id === modelId,
                   );
                   updateDraft(sessionKey, {
                     modelId,
                     platform: selectedPlatform,
-                    reasoningId: model?.defaultReasoningId,
+                    reasoningId: resolveReasoningId(
+                      model?.reasoning ?? [],
+                      currentDraft?.reasoningId,
+                      model?.defaultReasoningId,
+                    ) ?? model?.defaultReasoningId,
                   });
                 }}
                 reasoningOptions={selectedModel?.reasoning ?? []}
@@ -1797,11 +1813,11 @@ function SharedNativeAgentController({
                 onModelChange={(modelId) => {
                   const nextModel = composer.models.find((model) => model.id === modelId);
                   const supportedReasoning = nextModel?.reasoning ?? [];
-                  const nextReasoningId = supportedReasoning.some(
-                    (option) => option.id === selectedReasoningId,
-                  )
-                    ? selectedReasoningId
-                    : nextModel?.defaultReasoningId ?? supportedReasoning[0]?.id;
+                  const nextReasoningId = resolveReasoningId(
+                    supportedReasoning,
+                    selectedReasoningId,
+                    nextModel?.defaultReasoningId,
+                  ) ?? nextModel?.defaultReasoningId;
                   void updateControlsSafely({
                     modelId,
                     ...(nextReasoningId ? { reasoningId: nextReasoningId } : {}),

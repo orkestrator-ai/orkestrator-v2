@@ -1767,7 +1767,7 @@ describe("KanbanTaskDialog", () => {
     expect(options.steps.build).toEqual({
       agent: "codex",
       model: "gpt-5.4-mini",
-      reasoningEffort: "medium",
+      reasoningEffort: "high",
     });
   });
 

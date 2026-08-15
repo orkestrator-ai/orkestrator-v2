@@ -1695,7 +1695,12 @@ export function defaultConfig(): AppConfig {
       opencodeModel: "opencode/claude-sonnet-5",
       claudeModel: "claude-sonnet-5",
       codexModel: "gpt-5.4",
-      codexReasoningEffort: "medium",
+      // New installs only. An existing config.json already holds a concrete
+      // effort, and nothing records whether the user chose it or merely
+      // inherited the previous "medium" default, so migrating would overwrite
+      // deliberate choices. Existing installs keep their stored value until the
+      // user changes it in settings.
+      codexReasoningEffort: "high",
       opencodeMode: "terminal",
       openCodeModelProviders: [...DEFAULT_OPENCODE_MODEL_PROVIDERS],
       claudeMode: "terminal",

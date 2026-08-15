@@ -6605,6 +6605,57 @@ describe("models", () => {
     // Hidden models stay out of the picker.
     expect(result.models.map((model) => model.id)).toEqual(["gpt-5.6-sol"]);
     expect(result.models[0]!.reasoningEfforts).toEqual(["low", "medium", "xhigh"]);
+    // "high" is not on offer, so app-server's own default has to survive
+    // instead of collapsing to the first listed effort.
+    expect(result.models[0]!.defaultReasoningEffort).toBe("medium");
+  });
+
+  test("raises the advertised default to high when the model offers it", async () => {
+    const h = await harness({
+      "model/list": () => ({
+        data: [
+          {
+            id: "gpt-5.6-sol",
+            displayName: "GPT-5.6-Sol",
+            hidden: false,
+            defaultReasoningEffort: "medium",
+            supportedReasoningEfforts: [
+              { reasoningEffort: "low" },
+              { reasoningEffort: "medium" },
+              { reasoningEffort: "high" },
+            ],
+          },
+        ],
+        nextCursor: null,
+      }),
+    });
+
+    const result = await h.runtime.listModels();
+    expect(result.models[0]!.defaultReasoningEffort).toBe("high");
+    // The default must always be a selectable option.
+    expect(result.models[0]!.reasoningEfforts)
+      .toContain(result.models[0]!.defaultReasoningEffort);
+  });
+
+  test("keeps app-server's default when the model advertises no efforts", async () => {
+    const h = await harness({
+      "model/list": () => ({
+        data: [
+          {
+            id: "gpt-effortless",
+            displayName: "Effortless",
+            hidden: false,
+            defaultReasoningEffort: "medium",
+            supportedReasoningEfforts: [],
+          },
+        ],
+        nextCursor: null,
+      }),
+    });
+
+    const result = await h.runtime.listModels();
+    expect(result.models[0]!.reasoningEfforts).toEqual([]);
+    expect(result.models[0]!.defaultReasoningEffort).toBe("medium");
   });
 
   test("falls back to the persisted cache when model/list fails", async () => {

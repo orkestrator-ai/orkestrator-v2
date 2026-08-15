@@ -63,10 +63,10 @@ describe("parseModelCatalog", () => {
     expect(mini?.name).toBe("gpt-5-mini");
   });
 
-  test("maps reasoning levels and picks medium as default when available", () => {
+  test("maps reasoning levels and picks high as default when available", () => {
     const [first] = parseModelCatalog(JSON.stringify(SAMPLE_CATALOG));
     expect(first?.reasoningEfforts).toEqual(["medium", "high", "xhigh", "max", "ultra"]);
-    expect(first?.defaultReasoningEffort).toBe("medium");
+    expect(first?.defaultReasoningEffort).toBe("high");
     expect(first?.reasoningOptions.map((o) => o.effort)).toEqual([
       "medium",
       "high",
@@ -79,8 +79,8 @@ describe("parseModelCatalog", () => {
   test("returns a default reasoning option when levels are missing", () => {
     const models = parseModelCatalog(JSON.stringify(SAMPLE_CATALOG));
     const mini = models.find((m) => m.id === "gpt-5-mini");
-    expect(mini?.reasoningEfforts).toEqual(["medium"]);
-    expect(mini?.defaultReasoningEffort).toBe("medium");
+    expect(mini?.reasoningEfforts).toEqual(["high"]);
+    expect(mini?.defaultReasoningEffort).toBe("high");
   });
 
   test("returns empty array when payload.models is not an array", () => {
@@ -130,9 +130,9 @@ describe("normalizeReasoningOptions", () => {
     ]);
   });
 
-  test("falls back to medium for non-array and wholly invalid inputs", () => {
+  test("falls back to high for non-array and wholly invalid inputs", () => {
     for (const value of [null, {}, [{ effort: "unknown" }]]) {
-      expect(normalizeReasoningOptions(value).map((option) => option.effort)).toEqual(["medium"]);
+      expect(normalizeReasoningOptions(value).map((option) => option.effort)).toEqual(["high"]);
     }
   });
 });

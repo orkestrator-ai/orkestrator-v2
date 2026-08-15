@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { AGENT_PLATFORMS } from "./agent-platforms";
 import {
   DEFAULT_OPENCODE_MODEL_PROVIDERS,
+  DEFAULT_REASONING_ID,
+  FALLBACK_REASONING_ID,
   MAX_OPENCODE_MODEL_PROVIDERS,
+  fallbackReasoningId,
   isNativeAgentTabData,
   isSelectableOpenCodeModelId,
   isSelectableOpenCodeProvider,
@@ -10,6 +13,7 @@ import {
   normalizeOpenCodeModelProviders,
   openCodeModelProviderId,
   openCodeModelProvidersKey,
+  resolveReasoningId,
 } from "./native-agent";
 
 describe("opencode model provider allowlist", () => {
@@ -198,5 +202,75 @@ describe("native agent protocol", () => {
       sessionId: undefined,
       isLocal: undefined,
     })).toBe(true);
+  });
+});
+
+describe("fallbackReasoningId", () => {
+  test("prefers an explicit default option over high", () => {
+    expect(fallbackReasoningId(["default", "low", "high"])).toBe(DEFAULT_REASONING_ID);
+    expect(fallbackReasoningId([{ id: "high" }, { id: "default" }])).toBe(DEFAULT_REASONING_ID);
+  });
+
+  test("prefers high when the catalog has no default option", () => {
+    expect(fallbackReasoningId(["low", "medium", "high", "xhigh"])).toBe(FALLBACK_REASONING_ID);
+  });
+
+  test("falls back to the first option when neither default nor high exists", () => {
+    expect(fallbackReasoningId(["medium"])).toBe("medium");
+    expect(fallbackReasoningId(["fast", "deep"])).toBe("fast");
+  });
+
+  test("keeps an advertised default when high is not offered", () => {
+    expect(fallbackReasoningId(["low", "medium", "xhigh"], "medium")).toBe("medium");
+  });
+
+  test("overrides an advertised medium default when high is offered", () => {
+    expect(fallbackReasoningId(["low", "medium", "high"], "medium")).toBe(FALLBACK_REASONING_ID);
+  });
+
+  test("returns undefined for an empty catalog", () => {
+    expect(fallbackReasoningId([])).toBeUndefined();
+  });
+});
+
+describe("resolveReasoningId", () => {
+  test("keeps a still-supported preference", () => {
+    expect(resolveReasoningId(["low", "high"], "low")).toBe("low");
+  });
+
+  test("drops an unsupported preference and applies the fallback policy", () => {
+    expect(resolveReasoningId(["low", "high"], "xhigh")).toBe(FALLBACK_REASONING_ID);
+    expect(resolveReasoningId(["default", "fast"], "missing")).toBe(DEFAULT_REASONING_ID);
+  });
+
+  // The third argument is what separates a catalog whose own default must be
+  // honoured (Cursor/Grok carry the agent's live effort there) from one where
+  // the shared policy should win. Every caller that omits it silently degrades
+  // to the first listed option, so pin the behaviour explicitly.
+  test("falls back to the advertised default when neither default nor high is offered", () => {
+    expect(resolveReasoningId(["low", "medium", "xhigh"], undefined, "medium")).toBe("medium");
+    expect(resolveReasoningId(["low", "medium", "xhigh"], "max", "medium")).toBe("medium");
+  });
+
+  test("prefers high over an advertised default the catalog also offers", () => {
+    expect(resolveReasoningId(["low", "medium", "high"], undefined, "medium"))
+      .toBe(FALLBACK_REASONING_ID);
+  });
+
+  test("prefers an explicit default option over the advertised default", () => {
+    expect(resolveReasoningId(["default", "low", "medium"], undefined, "medium"))
+      .toBe(DEFAULT_REASONING_ID);
+  });
+
+  test("keeps a supported preference ahead of the advertised default", () => {
+    expect(resolveReasoningId(["low", "medium", "xhigh"], "xhigh", "medium")).toBe("xhigh");
+  });
+
+  test("ignores an advertised default the catalog no longer offers", () => {
+    expect(resolveReasoningId(["low", "medium"], undefined, "retired")).toBe("low");
+  });
+
+  test("returns undefined for an empty catalog even with a preference", () => {
+    expect(resolveReasoningId([], "high", "medium")).toBeUndefined();
   });
 });

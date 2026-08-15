@@ -211,6 +211,75 @@ describe("normalizeAcpSessionConfig", () => {
     expect(composer.models[1]?.id).toBe("grok-composer-2.5-fast");
   });
 
+  test("keeps each Grok model's own advertised effort as its default", () => {
+    const { composer } = normalizeAcpSessionConfig("grok", {
+      models: {
+        currentModelId: "grok-build",
+        availableModels: [
+          {
+            // The agent's own current effort wins over the shared policy: it is
+            // what the model is actually running at.
+            modelId: "grok-build",
+            name: "Grok Build",
+            _meta: {
+              reasoningEffort: "low",
+              reasoningEfforts: [{ value: "low" }, { value: "high" }],
+            },
+          },
+          {
+            // No advertised effort, and "high" is on offer.
+            modelId: "grok-fallback-high",
+            name: "Grok Fallback High",
+            _meta: { reasoningEfforts: ["low", "high"] },
+          },
+          {
+            // No advertised effort and no "high" — the first option is all
+            // that is left.
+            modelId: "grok-fallback-first",
+            name: "Grok Fallback First",
+            _meta: { reasoningEfforts: ["medium", "xhigh"] },
+          },
+        ],
+      },
+    });
+
+    const defaults = new Map(composer.models.map((model) => [model.id, model.defaultReasoningId]));
+    expect(defaults.get("grok-build")).toBe("low");
+    expect(defaults.get("grok-fallback-high")).toBe("high");
+    expect(defaults.get("grok-fallback-first")).toBe("medium");
+
+    // A default the model does not offer would be unselectable in the picker.
+    for (const model of composer.models) {
+      if (!model.reasoning?.length) continue;
+      expect(model.reasoning.map((option) => option.id)).toContain(model.defaultReasoningId);
+    }
+  });
+
+  test("prefers Cursor's live thought_level over a per-model default", () => {
+    const { composer } = normalizeAcpSessionConfig("cursor", {
+      ...cursorSessionResult(),
+      configOptions: [
+        {
+          configId: "thought_level",
+          category: "thought_level",
+          type: "select",
+          currentValue: "xhigh",
+          options: [
+            { value: "medium", name: "Medium" },
+            { value: "high", name: "High" },
+            { value: "xhigh", name: "Extra High" },
+          ],
+        },
+      ],
+    });
+
+    // The config option is the authoritative surface, so every model inherits
+    // the agent's live selection rather than the shared "high" fallback.
+    for (const model of composer.models) {
+      expect(model.defaultReasoningId).toBe("xhigh");
+    }
+  });
+
   test("reads the Grok context window so the usage meter has a denominator", () => {
     const { composer } = normalizeAcpSessionConfig("grok", {
       models: {

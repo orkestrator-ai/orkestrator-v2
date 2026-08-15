@@ -435,7 +435,7 @@ const FALLBACK_MODELS: BridgeModel[] = [
         description: REASONING_DESCRIPTIONS.xhigh,
       },
     ],
-    defaultReasoningEffort: "medium",
+    defaultReasoningEffort: "high",
   },
   {
     id: "gpt-5.4-mini",
@@ -464,7 +464,7 @@ const FALLBACK_MODELS: BridgeModel[] = [
         description: REASONING_DESCRIPTIONS.xhigh,
       },
     ],
-    defaultReasoningEffort: "medium",
+    defaultReasoningEffort: "high",
   },
 ];
 

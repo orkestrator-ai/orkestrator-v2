@@ -34,6 +34,60 @@ export interface AgentReasoningOption {
   annotation?: string;
 }
 
+/**
+ * Catalog option meaning "leave this to the model / agent default".
+ *
+ * OpenCode injects this as a real choice; launch dialogs do too. When it is
+ * present, it is the app default — do not substitute "high".
+ */
+export const DEFAULT_REASONING_ID = "default";
+
+/**
+ * Concrete effort used when a catalog has no `default` option.
+ *
+ * Last-selected values and inherited settings still win over this.
+ */
+export const FALLBACK_REASONING_ID = "high";
+
+function reasoningOptionIds(
+  options: readonly string[] | readonly { id: string }[],
+): string[] {
+  return options.map((option) => typeof option === "string" ? option : option.id);
+}
+
+/**
+ * Reasoning id to use when nothing else (last selection, inherited setting,
+ * live agent state) has already chosen one.
+ *
+ * Prefers an explicit "default" option when the catalog offers one; otherwise
+ * "high" when that effort exists; otherwise the catalog's advertised default
+ * when it is still offered; otherwise the first remaining option.
+ */
+export function fallbackReasoningId(
+  options: readonly string[] | readonly { id: string }[],
+  advertisedDefault?: string,
+): string | undefined {
+  const ids = reasoningOptionIds(options);
+  if (ids.includes(DEFAULT_REASONING_ID)) return DEFAULT_REASONING_ID;
+  if (ids.includes(FALLBACK_REASONING_ID)) return FALLBACK_REASONING_ID;
+  if (advertisedDefault && ids.includes(advertisedDefault)) return advertisedDefault;
+  return ids[0];
+}
+
+/**
+ * Keep a still-supported preference (last selected or inherited), otherwise
+ * apply {@link fallbackReasoningId}.
+ */
+export function resolveReasoningId(
+  options: readonly string[] | readonly { id: string }[],
+  preferred?: string,
+  advertisedDefault?: string,
+): string | undefined {
+  const ids = reasoningOptionIds(options);
+  if (preferred && ids.includes(preferred)) return preferred;
+  return fallbackReasoningId(ids, advertisedDefault);
+}
+
 /** Provider-neutral model catalog entry consumed by renderer presentation. */
 export interface AgentModel {
   platform: AgentPlatform;

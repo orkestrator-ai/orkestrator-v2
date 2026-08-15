@@ -990,6 +990,127 @@ describe("NativeAgentService", () => {
     });
   });
 
+  test("resolves a composer reasoning id the selected model actually offers", async () => {
+    // No `selectedReasoningId` on the provider composer and no persisted
+    // controls, so the projection has to derive one from the catalogue.
+    const composerWith = (
+      reasoning: Array<{ id: string; label: string }>,
+      defaultReasoningId: string,
+    ) => async () => ({
+      status: "idle" as const,
+      messages: [],
+      composer: {
+        models: [{
+          platform: "claude" as const,
+          id: "model-1",
+          label: "Model 1",
+          reasoning,
+          defaultReasoningId,
+        }],
+        selectedModelId: "model-1",
+        fastModeEnabled: false,
+        fastModeAvailable: false,
+        modes: [{ id: "build" as const, label: "Build" }],
+      },
+    });
+
+    // "high" is on offer, so it outranks an advertised medium.
+    await withService({
+      prefix: "orkestrator-native-projection-reasoning-high-",
+      provider: async () => createProviderStub("claude", {
+        interactiveSnapshot: composerWith(
+          [
+            { id: "low", label: "Low" },
+            { id: "medium", label: "Medium" },
+            { id: "high", label: "High" },
+          ],
+          "medium",
+        ),
+      }).provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "env-env-1:tab-reasoning-high",
+      };
+      await service.ensureSession(identity);
+      await expect(service.getProjection(identity)).resolves.toMatchObject({
+        composer: { selectedReasoningId: "high" },
+      });
+    });
+
+    // With no "high" the model's advertised default must survive rather than
+    // collapsing to the first listed option.
+    await withService({
+      prefix: "orkestrator-native-projection-reasoning-advertised-",
+      provider: async () => createProviderStub("claude", {
+        interactiveSnapshot: composerWith(
+          [
+            { id: "low", label: "Low" },
+            { id: "medium", label: "Medium" },
+            { id: "xhigh", label: "Extra high" },
+          ],
+          "medium",
+        ),
+      }).provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "env-env-1:tab-reasoning-advertised",
+      };
+      await service.ensureSession(identity);
+      await expect(service.getProjection(identity)).resolves.toMatchObject({
+        composer: { selectedReasoningId: "medium" },
+      });
+    });
+  });
+
+  test("keeps a persisted reasoning id ahead of the catalogue fallback", async () => {
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        composer: {
+          models: [{
+            platform: "claude" as const,
+            id: "model-1",
+            label: "Model 1",
+            reasoning: [
+              { id: "low", label: "Low" },
+              { id: "high", label: "High" },
+            ],
+            defaultReasoningId: "high",
+          }],
+          selectedModelId: "model-1",
+          fastModeEnabled: false,
+          fastModeAvailable: false,
+          modes: [{ id: "build" as const, label: "Build" }],
+        },
+      }),
+    });
+    await withService({
+      prefix: "orkestrator-native-projection-reasoning-persisted-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "env-env-1:tab-reasoning-persisted",
+      };
+      await service.ensureSession(identity);
+      await service.updateProjectionControls({
+        ...identity,
+        update: { reasoningId: "low" },
+      });
+
+      // An explicit user choice must not be re-raised to "high" on every read.
+      await expect(service.getProjection(identity)).resolves.toMatchObject({
+        composer: { selectedReasoningId: "low" },
+      });
+    });
+  });
+
   test("keeps persisted session options ahead of provider composer defaults", async () => {
     const stub = createProviderStub("claude", {
       interactiveSnapshot: async () => ({

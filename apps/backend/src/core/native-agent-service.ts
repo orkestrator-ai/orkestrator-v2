@@ -39,6 +39,7 @@ import type {
   NativeAgentSessionActionOutcome,
   NativeAgentSlashCommand,
 } from "@orkestrator/protocol/native-agent";
+import { resolveReasoningId } from "@orkestrator/protocol/native-agent";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
 import { resolveStartupLaunch } from "@orkestrator/protocol/startup-launch";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
@@ -1341,21 +1342,26 @@ export class NativeAgentService {
       ?? models[0]?.id;
     const selectedModel = models.find((model) => model.id === selectedModelId)
       ?? models[0];
+    const selectedReasoningId = providerControls?.reasoningId
+      ?? session.controls?.reasoningId
+      ?? providerComposer?.selectedReasoningId
+      // The advertised default matters for Cursor/Grok, where it carries the
+      // agent's own current effort rather than a static catalog value.
+      ?? resolveReasoningId(
+        selectedModel?.reasoning ?? [],
+        undefined,
+        selectedModel?.defaultReasoningId,
+      )
+      ?? selectedModel?.defaultReasoningId;
     const supportsSpeed = providerComposer?.fastModeAvailable === true
       || selectedModel?.supportsSpeed === true;
     const capabilities = nativeCapabilities(input.agent);
     return {
       models,
       ...(selectedModel ? { selectedModelId: selectedModel.id } : {}),
-      ...(providerControls?.reasoningId
-        ?? session.controls?.reasoningId
-        ?? providerComposer?.selectedReasoningId
-        ?? selectedModel?.defaultReasoningId
+      ...(selectedReasoningId
         ? {
-            selectedReasoningId: providerControls?.reasoningId
-              ?? session.controls?.reasoningId
-              ?? providerComposer?.selectedReasoningId
-              ?? selectedModel?.defaultReasoningId,
+            selectedReasoningId,
           }
         : {}),
       fastModeAvailable: supportsSpeed,

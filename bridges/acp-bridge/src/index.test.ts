@@ -324,6 +324,244 @@ describe("ACP bridge", () => {
     ]);
   });
 
+  for (const { provider, modelId } of [
+    { provider: "cursor", modelId: "gpt-5.5" },
+    { provider: "grok", modelId: "grok-composer-2.5-fast" },
+  ] as const) {
+    test(`attributes ${provider} assistant messages to the selected model across restart`, async () => {
+      const stateDirectory = await temporaryDirectory();
+      const first = await spawnBridge({
+        stateDirectory,
+        env: { ACP_PROVIDER: provider },
+      });
+      const created = await nativeFetch(`${first.base}/session/create`, {
+        method: "POST",
+        headers: first.headers,
+        body: JSON.stringify({ clientSessionKey: `env-model:${provider}` }),
+      }).then((response) => response.json()) as { id: string };
+
+      const dispatched = await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers: first.headers,
+        body: JSON.stringify({
+          prompt: "DIRECT:model attribution",
+          requestId: `model-attribution-${provider}`,
+          modelId,
+        }),
+      });
+      expect(dispatched.status).toBe(202);
+
+      const session = await waitFor(
+        () => nativeFetch(`${first.base}/session/${created.id}`, { headers: first.headers })
+          .then((response) => response.json()) as Promise<{
+            status: string;
+            messages: Array<{ role: string; modelId?: string }>;
+          }>,
+        (value) => value.status === "idle",
+      );
+      expect(session.messages.find((message) => message.role === "assistant")?.modelId)
+        .toBe(modelId);
+
+      await waitFor(
+        () => fs.readFile(resolve(stateDirectory, "state.json"), "utf8")
+          .then((contents) => JSON.parse(contents) as {
+            sessions: Array<{ messages: Array<{ role: string; modelId?: string }> }>;
+          }),
+        (value) => value.sessions.some((persisted) =>
+          persisted.messages.some((message) =>
+            message.role === "assistant" && message.modelId === modelId
+          )
+        ),
+      );
+      await stopChild(first.child);
+
+      const restarted = await spawnBridge({
+        stateDirectory,
+        env: { ACP_PROVIDER: provider },
+      });
+      const restored = await nativeFetch(`${restarted.base}/session/${created.id}`, {
+        headers: restarted.headers,
+      }).then((response) => response.json()) as {
+        messages: Array<{ role: string; modelId?: string }>;
+      };
+      expect(restored.messages.find((message) => message.role === "assistant")?.modelId)
+        .toBe(modelId);
+    });
+  }
+
+  // The attribution has to be *stored per message*, not derived from whatever
+  // the composer currently has selected. Switching models mid-session is the
+  // only assertion that separates the two: a restart alone cannot, because the
+  // composer restores to the same selection the messages were stamped with.
+  test("keeps each assistant message on the model that produced it when the model changes", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const first = await spawnBridge({ stateDirectory });
+    const created = await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ clientSessionKey: "env-switch:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    const readSession = (bridge: { base: string; headers: Record<string, string> }) =>
+      waitFor(
+        () => nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+          .then((response) => response.json()) as Promise<{
+            status: string;
+            messages: Array<{ role: string; content: string; modelId?: string }>;
+          }>,
+        (value) => value.status === "idle",
+      );
+
+    // No `modelId` in the body: the turn runs on the agent's own default, and
+    // that default is what the message must record.
+    const firstTurn = await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ prompt: "DIRECT:first turn", requestId: "switch-1" }),
+    });
+    expect(firstTurn.status).toBe(202);
+    await readSession(first);
+
+    const secondTurn = await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({
+        prompt: "DIRECT:second turn",
+        requestId: "switch-2",
+        modelId: "gpt-5.5",
+      }),
+    });
+    expect(secondTurn.status).toBe(202);
+    // The 202 is written after the route has already set the session running,
+    // so this cannot observe the previous turn's idle snapshot.
+    const session = await readSession(first);
+
+    expect(session.messages.map((message) => [message.role, message.modelId])).toEqual([
+      // A user message is never attributed to a model.
+      ["user", undefined],
+      ["assistant", "composer-2.5"],
+      ["user", undefined],
+      ["assistant", "gpt-5.5"],
+    ]);
+    // The first reply keeps its own model even though the composer has since
+    // moved on, which is what a derived-at-read-time stamp would get wrong.
+    expect(session.messages[1]?.content).toBe("first turn");
+    expect(session.messages[3]?.content).toBe("second turn");
+
+    await waitFor(
+      () => fs.readFile(resolve(stateDirectory, "state.json"), "utf8")
+        .then((contents) => JSON.parse(contents) as {
+          sessions: Array<{ messages: Array<{ role: string; modelId?: string }> }>;
+        }),
+      (value) => value.sessions.some((persisted) =>
+        persisted.messages.filter((message) => message.role === "assistant").length === 2
+      ),
+    );
+    await stopChild(first.child);
+
+    const restarted = await spawnBridge({ stateDirectory });
+    const restored = await nativeFetch(`${restarted.base}/session/${created.id}`, {
+      headers: restarted.headers,
+    }).then((response) => response.json()) as {
+      messages: Array<{ role: string; modelId?: string }>;
+    };
+    expect(
+      restored.messages
+        .filter((message) => message.role === "assistant")
+        .map((message) => message.modelId),
+    ).toEqual(["composer-2.5", "gpt-5.5"]);
+  });
+
+  test("omits model attribution entirely when the agent advertises no model", async () => {
+    const { base, headers } = await spawnBridge({ env: { FAKE_ACP_NO_MODEL_OPTION: "1" } });
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-nomodel:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    const dispatched = await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "DIRECT:no model", requestId: "no-model-1" }),
+    });
+    expect(dispatched.status).toBe(202);
+
+    const session = await waitFor(
+      () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          composer: { selectedModelId?: string; models: unknown[] };
+          messages: Array<Record<string, unknown>>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    expect(session.composer.models).toEqual([]);
+    expect(session.composer.selectedModelId).toBeUndefined();
+    const assistant = session.messages.find((message) => message.role === "assistant");
+    // Absent, not an empty string: the renderer distinguishes "no model
+    // recorded" from a model whose id happens to be blank.
+    expect(assistant && "modelId" in assistant).toBe(false);
+  });
+
+  test("drops a persisted model id that is blank, oversized, or not a string", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const assistantMessage = (id: string, modelId: unknown) => ({
+      id,
+      role: "assistant",
+      content: id,
+      parts: [{
+        type: "text",
+        content: id,
+        sourcePartId: `${id}:0`,
+        sourceMessageId: id,
+      }],
+      createdAt: "2026-08-01T00:00:00.000Z",
+      modelId,
+    });
+    await fs.writeFile(
+      resolve(stateDirectory, "state.json"),
+      JSON.stringify({
+        version: 3,
+        provider: "cursor",
+        sessions: [{
+          id: "session-model-ids",
+          clientSessionKey: "env-1:tab-1",
+          acpSessionId: "acp-session-model-ids",
+          status: "idle",
+          revision: 4,
+          structured: [],
+          promptJournal: [],
+          messages: [
+            assistantMessage("kept", "  gpt-5.5  "),
+            assistantMessage("blank", "   "),
+            // One byte past the bound the live composer enforces. An identifier
+            // must be dropped rather than shortened into one that matches no
+            // catalogue entry.
+            assistantMessage("oversized", "m".repeat(1025)),
+            assistantMessage("nonstring", 42),
+            assistantMessage("absent", undefined),
+          ],
+        }],
+      }),
+    );
+
+    const bridge = await spawnBridge({ stateDirectory });
+    const session = await nativeFetch(`${bridge.base}/session/session-model-ids`, {
+      headers: bridge.headers,
+    }).then((response) => response.json()) as {
+      messages: Array<Record<string, unknown>>;
+    };
+
+    expect(session.messages.map((message) => message.id))
+      .toEqual(["kept", "blank", "oversized", "nonstring", "absent"]);
+    // Trimmed and kept, then dropped outright for every unusable form.
+    expect(session.messages[0]?.modelId).toBe("gpt-5.5");
+    expect(session.messages.slice(1).map((message) => "modelId" in message))
+      .toEqual([false, false, false, false]);
+  });
+
   test("keeps usage scoped to one turn and rehydrates the latest turn after restart", async () => {
     const stateDirectory = await temporaryDirectory();
     const first = await spawnBridge({ stateDirectory });
@@ -513,13 +751,14 @@ describe("ACP bridge", () => {
         filePath: "src/example.ts",
         additions: 2,
         deletions: 1,
-        before: "const value = 1;",
-        after: "const value = 2;\nconst ready = true;",
       },
     });
-    expect((assistantParts?.[1]?.toolDiff as { diff?: string } | undefined)?.diff).toContain(
-      "-const value = 1;\n+const value = 2;\n+const ready = true;",
-    );
+    const editDiff = assistantParts?.[1]?.toolDiff as Record<string, unknown> | undefined;
+    expect(editDiff?.diff).toContain("-const value = 1;\n+const value = 2;\n+const ready = true;");
+    // The rendered diff is what the renderer reads, so the whole-file states it
+    // would never fall back to are not carried alongside it.
+    expect(editDiff?.before).toBeUndefined();
+    expect(editDiff?.after).toBeUndefined();
     expect(assistantParts?.[2]).toMatchObject({
       type: "tool-invocation",
       content: "Search for references",
@@ -703,6 +942,120 @@ describe("ACP bridge", () => {
     expect(rendered).toContain("+after");
   });
 
+  test("renders a small edit to a large file as hunks, not the whole file", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-context" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CONTEXTEDIT: touch one line" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    const tool = session.messages[1]?.parts.find((part) => part.toolUseId === "context-1");
+    const diff = tool?.toolDiff as Record<string, unknown> | undefined;
+    expect(diff).toMatchObject({ filePath: "src/large.ts", additions: 1, deletions: 1 });
+    const rendered = diff?.diff as string;
+    // The change, three lines of context either side, and the headers — not the
+    // 5,000-line file. Rendering every line is what exhausted the transcript.
+    expect(rendered.split("\n")).toHaveLength(11);
+    expect(rendered).toContain("@@ -2498,7 +2498,7 @@");
+    expect(rendered).toContain("-const line_2500 = 2500;");
+    expect(rendered).toContain("+const line_2500 = 2500; // touched");
+    expect(rendered).toContain(" const line_2497 = 2497;");
+    expect(rendered).toContain(" const line_2503 = 2503;");
+    expect(rendered).not.toContain("line_2496");
+    expect(rendered).not.toContain("line_2504");
+    // The whole-file states are not carried alongside the rendering either, so
+    // one edit costs its hunk rather than three copies of the file.
+    expect(diff?.before).toBeUndefined();
+    expect(diff?.after).toBeUndefined();
+    expect(Buffer.byteLength(JSON.stringify(tool))).toBeLessThan(1024);
+  });
+
+  test("renders separated changes and file boundaries as correctly positioned hunks", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-multi-hunk" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "MULTIHUNK: touch the boundaries and middle" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    const tool = session.messages[1]?.parts.find((part) => part.toolUseId === "multi-hunk-1");
+    const diff = (tool?.toolDiff as { diff?: string } | undefined)?.diff ?? "";
+    expect(diff.match(/^@@/gm)).toEqual([
+      "@@",
+      "@@",
+      "@@",
+    ]);
+    expect(diff).toContain("@@ -1,4 +1,4 @@");
+    expect(diff).toContain("@@ -7,7 +7,7 @@");
+    expect(diff).toContain("@@ -17,4 +17,4 @@");
+    expect(diff).toContain("-line 1\n+line 1 changed");
+    expect(diff).toContain("-line 10\n+line 10 changed");
+    expect(diff).toContain("-line 20\n+line 20 changed");
+    expect(diff).not.toContain(" line 5");
+    expect(diff).not.toContain(" line 15");
+  });
+
+  test("renders an edit with no changed lines as an empty hunk", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-noop-edit" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "NOOPEDIT: rewrite a file unchanged" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    const tool = session.messages[1]?.parts.find((part) => part.toolUseId === "noop-1");
+    const diff = tool?.toolDiff as Record<string, unknown> | undefined;
+    // Nothing changed, so there is no hunk to place: the headers and a bare
+    // `@@` say exactly that, where rendering every line said the opposite.
+    expect(diff?.diff).toBe("--- src/noop.ts\n+++ src/noop.ts\n@@");
+    expect(diff).toMatchObject({ filePath: "src/noop.ts", additions: 0, deletions: 0 });
+    expect(diff?.before).toBeUndefined();
+    expect(diff?.after).toBeUndefined();
+  });
+
   test("normalizes terminal and text tool content in protocol order", async () => {
     const { base, headers } = await spawnBridge();
     const created = await nativeFetch(`${base}/session/create`, {
@@ -811,7 +1164,7 @@ describe("ACP bridge", () => {
     expect(toolDiff?.after).toBeUndefined();
   });
 
-  test("fails the session when tool parts exhaust the per-message limit", async () => {
+  test("trims the oldest parts, and announces it, when a turn exhausts the per-message limit", async () => {
     const { base, headers } = await spawnBridge();
     const created = await nativeFetch(`${base}/session/create`, {
       method: "POST",
@@ -831,9 +1184,193 @@ describe("ACP bridge", () => {
           error?: string;
           messages: Array<{ parts: Array<Record<string, unknown>> }>;
         }>,
+      (value) => (value.messages[1]?.parts.length ?? 0) >= 512,
+    );
+
+    // An interactive turn survives its own volume: failing here would strand
+    // the whole conversation behind the tab's connection-failure screen.
+    expect(session.status).toBe("running");
+    expect(session.error).toBeUndefined();
+    expect(session.messages[1]?.parts).toHaveLength(512);
+    // The oldest tool calls went, and the cut says so rather than reading as a
+    // turn that never made those calls.
+    expect(session.messages[1]?.parts[0]).toMatchObject({
+      type: "text",
+      content: expect.stringContaining("Earlier steps in this response were dropped"),
+    });
+    expect(session.messages[1]?.parts.slice(1).every((part) => part.type === "tool-invocation"))
+      .toBe(true);
+    expect(session.messages[1]?.parts.at(-1)).toMatchObject({ toolUseId: "many-512" });
+  });
+
+  test("does not rebuild a trimmed tool call from its own late update", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-trimmed-tool" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "TRIMMEDTOOLUPDATE: complete an evicted call" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    const parts = session.messages[1]?.parts ?? [];
+    expect(session.error).toBeUndefined();
+    expect(parts).toHaveLength(512);
+    expect(parts[0]).toMatchObject({
+      type: "text",
+      content: expect.stringContaining("Earlier steps in this response were dropped"),
+    });
+    // `early-1` was trimmed, and its completion arrived afterwards. Rebuilding
+    // it there would append an empty `Tool call` at the end of the turn, after
+    // the notice that says those steps went, with none of its title or output.
+    expect(parts.filter((part) => part.toolUseId === "early-1")).toEqual([]);
+    expect(parts.at(-1)).toMatchObject({ toolUseId: "filler-519" });
+    expect(parts.slice(1).every((part) => part.type === "tool-invocation")).toBe(true);
+  });
+
+  test("starts a new part when a chunk follows a message trimmed to its notice", async () => {
+    const { base, headers } = await spawnBridge({
+      // The floor is reached when two parts alone still exceed the budget, and
+      // at 8 MiB the per-part caps do not add up to that. Lowering the budget
+      // is the only way to exercise it; it can only ever move downwards.
+      env: { ACP_MAX_TRANSCRIPT_BYTES: String(1024 * 1024) },
+    });
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-trim-to-text" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "TRIMTOTEXT: empty the message, then speak" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ role: string; content: string; parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    // The lowered budget evicts whole messages before it trims parts, so the
+    // prompt itself is gone and the assistant message is all that is left.
+    const assistant = session.messages.at(-1)!;
+    expect(session.error).toBeUndefined();
+    expect(assistant.role).toBe("assistant");
+    // Both tool parts went, so the notice is the message's *only* part and
+    // therefore also its last. The chunk that follows must start its own part:
+    // streaming into the notice would rewrite the announcement as agent output
+    // and lose it.
+    expect(assistant.parts).toHaveLength(2);
+    expect(assistant.parts[0]).toMatchObject({
+      type: "text",
+      content: expect.stringContaining("Earlier steps in this response were dropped"),
+    });
+    expect(assistant.parts[1]).toMatchObject({ type: "text", content: "Recovered summary." });
+    expect(assistant.content).toBe("Recovered summary.");
+  });
+
+  test("bounds an aggregate interactive transcript and preserves its trim across restart", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const first = await spawnBridge({ stateDirectory });
+    const created = await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-transcript-overflow" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ prompt: "TRANSCRIPTOVERFLOW: fill the display budget" }),
+    });
+    const read = async (base: string, headers: Record<string, string>) =>
+      await nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as {
+          status: string;
+          error?: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        };
+    const bounded = await waitFor(
+      () => read(first.base, first.headers),
+      (value) => value.status === "idle",
+    );
+
+    const assistant = bounded.messages.at(-1)!;
+    expect(bounded.error).toBeUndefined();
+    expect(Buffer.byteLength(JSON.stringify(bounded.messages))).toBeLessThanOrEqual(8 * 1024 * 1024);
+    expect(assistant.parts.length).toBeLessThan(18);
+    expect(assistant.parts[0]).toMatchObject({
+      type: "text",
+      content: expect.stringContaining("Earlier steps in this response were dropped"),
+    });
+    expect(assistant.parts.at(-1)).toMatchObject({ toolUseId: "large-17", toolState: "success" });
+    const retainedToolIds = assistant.parts.flatMap((part) =>
+      typeof part.toolUseId === "string" ? [part.toolUseId] : []
+    );
+
+    await stopChild(first.child);
+    const second = await spawnBridge({ stateDirectory });
+    const restored = await read(second.base, second.headers);
+    const restoredAssistant = restored.messages.at(-1)!;
+    expect(restored.status).toBe("idle");
+    expect(restored.error).toBeUndefined();
+    expect(Buffer.byteLength(JSON.stringify(restored.messages))).toBeLessThanOrEqual(8 * 1024 * 1024);
+    expect(restoredAssistant.parts[0]).toMatchObject({
+      type: "text",
+      content: expect.stringContaining("Earlier steps in this response were dropped"),
+    });
+    expect(restoredAssistant.parts.flatMap((part) =>
+      typeof part.toolUseId === "string" ? [part.toolUseId] : []
+    )).toEqual(retainedToolIds);
+  });
+
+  test("fails a structured turn when its parts exhaust the per-message limit", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-many-structured" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: "MANYTOOLS: flood the turn",
+        requestId: "many-structured-1",
+        outputSchema: { type: "object" },
+      }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
       (value) => value.status === "error",
     );
 
+    // A structured turn is worth exactly its complete output, so trimming it
+    // has to fail rather than hand back a partial answer as a whole one.
     expect(session.error).toContain("exceeded the transcript limit");
     expect(session.messages[1]?.parts).toHaveLength(512);
     expect(session.messages[1]?.parts.every((part) => part.type === "tool-invocation")).toBe(true);
@@ -970,6 +1507,68 @@ describe("ACP bridge", () => {
       toolState: "failure",
       toolError: "Tool call ended without a result",
     });
+  });
+
+  test("heals a session an older build failed for exceeding the transcript limit", async () => {
+    const stateDirectory = await temporaryDirectory();
+    await fs.writeFile(
+      resolve(stateDirectory, "state.json"),
+      JSON.stringify({
+        version: 3,
+        provider: "cursor",
+        sessions: [
+          {
+            id: "session-trim-failed",
+            clientSessionKey: "env-1:tab-trimmed",
+            acpSessionId: "acp-session-trimmed",
+            status: "error",
+            error: "cursor output exceeded the transcript limit",
+            revision: 9,
+            structured: [],
+            promptJournal: [],
+            messages: [{
+              id: "message-1",
+              role: "assistant",
+              content: "Done.",
+              parts: [{
+                type: "text",
+                content: "Done.",
+                sourcePartId: "message-1:0",
+                sourceMessageId: "message-1",
+              }],
+              createdAt: "2026-08-01T00:00:00.000Z",
+            }],
+          },
+          {
+            id: "session-really-failed",
+            clientSessionKey: "env-1:tab-broken",
+            acpSessionId: "acp-session-broken",
+            status: "error",
+            error: "cursor exited before the turn completed",
+            revision: 2,
+            structured: [],
+            promptJournal: [],
+            messages: [],
+          },
+        ],
+      }),
+    );
+
+    const bridge = await spawnBridge({ stateDirectory });
+    const read = async (id: string) =>
+      await nativeFetch(`${bridge.base}/session/${id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as { status: string; error?: string };
+
+    // The persisted failure is a display-budget artifact of an older build, and
+    // nothing in the tab can clear it: the only control there reads it back.
+    const healed = await read("session-trim-failed");
+    expect(healed.status).toBe("idle");
+    expect(healed.error).toBeUndefined();
+
+    // Every other failure is the agent's, and still has to survive the restart.
+    const broken = await read("session-really-failed");
+    expect(broken.status).toBe("error");
+    expect(broken.error).toBe("cursor exited before the turn completed");
   });
 
   test("drops malformed persisted tool parts on load", async () => {
@@ -1525,7 +2124,7 @@ describe("ACP bridge", () => {
     expect((await nativeFetch(`${bridge.base}/global/health`)).ok).toBe(true);
   });
 
-  test("bounds one oversized response and marks the turn failed", async () => {
+  test("bounds one oversized response without failing the session", async () => {
     const { base, headers } = await spawnBridge();
     const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
       .then((response) => response.json()) as { id: string };
@@ -1533,6 +2132,99 @@ describe("ACP bridge", () => {
       method: "POST",
       headers,
       body: JSON.stringify({ prompt: "OVERSIZED", requestId: "oversized-1" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) => response.json()) as Promise<{ status: string; error?: string; messages: Array<{ content: string }> }>,
+      (value) => value.status === "idle",
+    );
+    expect(session.error).toBeUndefined();
+    expect(Buffer.byteLength(JSON.stringify(session.messages))).toBeLessThan(8 * 1024 * 1024);
+    // Bounded, and the cut is announced in the transcript the user reads.
+    expect(session.messages[1]?.content.endsWith("[output truncated by Orkestrator]")).toBe(true);
+  });
+
+  test("announces overflow when earlier stream chunks leave no room for the marker", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "STREAMOVERFLOW: cross the cap in two chunks" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ content: string; parts: Array<{ type: string; content: string }> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    const assistant = session.messages[1]!;
+    const textPart = assistant.parts.find((part) => part.type === "text")!;
+    expect(session.error).toBeUndefined();
+    expect(Buffer.byteLength(assistant.content)).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(Buffer.byteLength(textPart.content)).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(assistant.content.endsWith("[output truncated by Orkestrator]")).toBe(true);
+    expect(textPart.content.endsWith("[output truncated by Orkestrator]")).toBe(true);
+    expect(assistant.content).not.toContain("�");
+    expect(textPart.content).not.toContain("�");
+  });
+
+  test("discards a chunk small enough to fit in what truncation left over", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "SATURATEDSTREAM: one chunk past the cap" }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ content: string; parts: Array<{ type: string; content: string }> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    const assistant = session.messages[1]!;
+    const textPart = assistant.parts.find((part) => part.type === "text")!;
+    const marker = "[output truncated by Orkestrator]";
+    expect(session.error).toBeUndefined();
+    expect(Buffer.byteLength(assistant.content)).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(Buffer.byteLength(textPart.content)).toBeLessThanOrEqual(2 * 1024 * 1024);
+    // The cut is announced exactly once and the announcement stays terminal.
+    // Truncation leaves the buffer a byte under the cap, and a chunk small
+    // enough to fit in it must still be discarded: appending it would render
+    // as `…[output truncated by Orkestrator]!`, which reads as corruption
+    // rather than as a response that was cut short.
+    expect(assistant.content.split(marker)).toHaveLength(2);
+    expect(textPart.content.split(marker)).toHaveLength(2);
+    expect(assistant.content.endsWith(marker)).toBe(true);
+    expect(textPart.content.endsWith(marker)).toBe(true);
+    expect(assistant.content).not.toContain("!");
+    expect(textPart.content).not.toContain("!");
+    // The backed-off code point must not have decoded into a replacement char.
+    expect(assistant.content).not.toContain("�");
+  });
+
+  test("fails an oversized structured turn rather than parsing a cut answer", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: "OVERSIZED",
+        requestId: "oversized-structured-1",
+        outputSchema: { type: "object" },
+      }),
     });
     const session = await waitFor(
       async () => nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) => response.json()) as Promise<{ status: string; error?: string; messages: Array<{ content: string }> }>,

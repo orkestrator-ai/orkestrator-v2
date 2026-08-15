@@ -83,6 +83,7 @@ import {
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
+import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
 // Stable empty array reference to prevent infinite re-renders when no default port mappings are provided
 const EMPTY_PORT_MAPPINGS: PortMapping[] = [];
@@ -242,6 +243,8 @@ export function CreateEnvironmentDialog({
   const claudeModels = useClaudeStore((state) => state.models);
   const codexModels = useCodexStore((state) => state.models);
   const openCodeModels = useOpenCodeStore((state) => state.models);
+  const cursorModels = useAgentModelCatalogStore((state) => state.cursorModels);
+  const grokModels = useAgentModelCatalogStore((state) => state.grokModels);
   const [cachedOpenCodeModels, setCachedOpenCodeModels] = useState<
     CachedOpenCodeModel[]
   >([]);
@@ -333,6 +336,8 @@ export function CreateEnvironmentDialog({
       codexModels,
       configuredOpenCodeEffort,
       configuredOpenCodeModel,
+      cursorModels,
+      grokModels,
       openCodeModels,
     ],
   );

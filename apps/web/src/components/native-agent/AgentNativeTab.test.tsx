@@ -11,6 +11,7 @@ import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as realBackend from "@/lib/backend";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
@@ -167,6 +168,7 @@ const { AgentNativeTab } = await import("./AgentNativeTab");
 const { useNativeAgentSession } = await import("@/hooks/useNativeAgentSession");
 
 beforeEach(() => {
+  useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [] });
   useEnvironmentStore.setState({
     environments: [{
       id: "env-1",
@@ -457,6 +459,8 @@ describe("AgentNativeTab", () => {
     const picker = await screen.findByTitle(/Choose model/);
     fireEvent.pointerDown(picker);
     expect(screen.getByRole("menuitemradio", { name: /Composer 2.5/ })).toBeTruthy();
+    expect(useAgentModelCatalogStore.getState().cursorModels.map((model) => model.id))
+      .toEqual(["composer-2.5"]);
   });
 
   // The catalogue is environment-scoped and already holds every platform, so a
@@ -1107,7 +1111,7 @@ describe("AgentNativeTab", () => {
       }));
     }
 
-    test("does not render a context wheel when the provider reports no maximum", async () => {
+    test("renders an unavailable context wheel when the provider reports no maximum", async () => {
       seedProjection({
         contextUsage: {
           usedTokens: 222,

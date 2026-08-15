@@ -2300,11 +2300,16 @@ function applyCursorTask(state: SessionState, params: JsonObject): void {
   const payload = isObject(params.update) ? params.update : params;
   const toolCallId = boundedString(payload.toolCallId, MAX_TOOL_ID_BYTES)?.trim();
   if (!toolCallId) return;
+  // A frame that names a state of its own and that state is not terminal is a
+  // progress report, not an ending. Settling on it would strand a live child as
+  // Finished and hand the session back as idle mid-turn.
+  const agentState = cursorTaskAgentState(payload);
+  if (!agentState) return;
   if (!state.activeSubagentToolIds.has(toolCallId)) {
     const part = findToolPart(state, toolCallId);
     if (!part || part.agentState !== "active") return;
   }
-  finishSubagentTool(state, toolCallId, cursorTaskAgentState(payload));
+  finishSubagentTool(state, toolCallId, agentState);
 }
 
 function finishSubagentTool(
@@ -2347,16 +2352,31 @@ function terminalAgentState(status: string | undefined): "finished" | "failed" |
   return undefined;
 }
 
-function cursorTaskAgentState(payload: JsonObject): "finished" | "failed" {
+/**
+ * The child state a `cursor/task` frame reports, or `undefined` when it names a
+ * state that is not terminal. Absent state is completion: the method is only
+ * sent when a child ends, so a bare frame is an ending. A *present* but
+ * non-terminal state has to be distinguishable from that, or a progress report
+ * would settle a running child — which is why this cannot default to
+ * `"finished"` the way the by-definition-terminal `subagent_finished`
+ * notification does.
+ */
+function cursorTaskAgentState(payload: JsonObject): "finished" | "failed" | undefined {
   const outcome = typeof payload.outcome === "string"
     ? payload.outcome
     : isObject(payload.outcome) && typeof payload.outcome.outcome === "string"
       ? payload.outcome.outcome
       : undefined;
   const status = typeof payload.status === "string" ? payload.status : undefined;
-  return terminalAgentState(outcome) ?? terminalAgentState(status) ?? "finished";
+  if (outcome === undefined && status === undefined) return "finished";
+  return terminalAgentState(outcome) ?? terminalAgentState(status);
 }
 
+/**
+ * Answer the request form. A non-terminal frame is still acknowledged rather
+ * than refused: the agent is blocked on this response, and declining to answer
+ * a progress report would stall the turn that owns the child.
+ */
 function cursorTaskAck(params: JsonObject): JsonObject {
   const payload = isObject(params.update) ? params.update : params;
   return {

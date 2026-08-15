@@ -1600,6 +1600,7 @@ describe("ACP bridge", () => {
     { prompt: "FINISHCURSORSUBAGENTSTATUS", agentState: "finished", toolState: "success" },
     { prompt: "FINISHCURSORTASK", agentState: "finished", toolState: "success" },
     { prompt: "FAILCURSORTASK", agentState: "failed", toolState: "success" },
+    { prompt: "REJECTCURSORTASK", agentState: "failed", toolState: "success" },
     { prompt: "FAILCURSORSUBAGENT", agentState: "failed", toolState: "failure" },
   ] as const) {
     test(`settles Cursor's in-process child via ${terminal.prompt} as ${terminal.agentState}`, async () => {
@@ -1643,60 +1644,147 @@ describe("ACP bridge", () => {
     });
   }
 
-  test("answers Cursor's cursor/task request and settles the matching child", async () => {
-    const directory = await temporaryDirectory();
-    const responseFile = resolve(directory, "cursor-task-response.log");
-    const { base, headers } = await spawnBridge({ env: {
-      FAKE_ACP_CURSOR_TASK_REQUEST_FILE: responseFile,
-    } });
-    const created = await nativeFetch(`${base}/session/create`, {
-      method: "POST",
-      headers,
-    }).then((response) => response.json()) as { id: string };
-    await nativeFetch(`${base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "BACKGROUNDSUBAGENT" }),
-    });
-    await waitFor(
-      async () => nativeFetch(`${base}/session/${created.id}/activity`, { headers })
-        .then((response) => response.json()) as Promise<{ activity: string }>,
-      (value) => value.activity === "working",
-    );
+  for (const request of [
+    { prompt: "FINISHCURSORTASKREQUEST", outcome: "completed", agentState: "finished" },
+    { prompt: "FAILCURSORTASKREQUEST", outcome: "cancelled", agentState: "failed" },
+  ] as const) {
+    test(`answers Cursor's cursor/task request with ${request.outcome} and settles the matching child`, async () => {
+      const directory = await temporaryDirectory();
+      const responseFile = resolve(directory, "cursor-task-response.log");
+      const { base, headers } = await spawnBridge({ env: {
+        FAKE_ACP_CURSOR_TASK_REQUEST_FILE: responseFile,
+      } });
+      const created = await nativeFetch(`${base}/session/create`, {
+        method: "POST",
+        headers,
+      }).then((response) => response.json()) as { id: string };
+      await nativeFetch(`${base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: "BACKGROUNDSUBAGENT" }),
+      });
+      await waitFor(
+        async () => nativeFetch(`${base}/session/${created.id}/activity`, { headers })
+          .then((response) => response.json()) as Promise<{ activity: string }>,
+        (value) => value.activity === "working",
+      );
 
-    await nativeFetch(`${base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "FINISHCURSORTASKREQUEST" }),
+      await nativeFetch(`${base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: request.prompt }),
+      });
+      const response = await waitFor(
+        () => fs.readFile(responseFile, "utf8")
+          .then((value) => JSON.parse(value.trim()))
+          .catch(() => null) as Promise<Record<string, unknown> | null>,
+        Boolean,
+      );
+      expect(response).toMatchObject({
+        id: 903,
+        result: { outcome: { outcome: request.outcome } },
+      });
+      expect(response).not.toHaveProperty("error");
+      const settled = await waitFor(
+        async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+          .then((response) => response.json()) as Promise<{
+            status: string;
+            messages: Array<{ parts: Array<Record<string, unknown>> }>;
+          }>,
+        (value) => value.status === "idle"
+          && value.messages.some((message) => message.parts.some((part) =>
+            part.toolUseId === "cursor-subagent-1" && part.agentState === request.agentState
+          )),
+      );
+      expect(settled.messages.flatMap((message) => message.parts).find((part) =>
+        part.toolUseId === "cursor-subagent-1"
+      )).toMatchObject({ toolState: "success", agentState: request.agentState });
+      expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
+        .then((response) => response.json())).toEqual({ activity: "idle" });
     });
-    const response = await waitFor(
-      () => fs.readFile(responseFile, "utf8")
-        .then((value) => JSON.parse(value.trim()))
-        .catch(() => null) as Promise<Record<string, unknown> | null>,
-      Boolean,
-    );
-    expect(response).toMatchObject({
-      id: 903,
-      result: { outcome: { outcome: "completed" } },
-    });
-    expect(response).not.toHaveProperty("error");
-    const settled = await waitFor(
-      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+  }
+
+  // Each of these turns delivers a `cursor/task` the bridge must ignore. The
+  // turn is allowed to finish before the assertion, so a still-active child is
+  // evidence the frame was processed and rejected — not that the test raced it.
+  for (const ignored of [
+    {
+      prompt: "RUNNINGCURSORTASK",
+      reason: "reports a non-terminal state",
+    },
+    {
+      prompt: "OTHERSESSIONCURSORTASK",
+      reason: "belongs to another ACP session",
+    },
+    {
+      prompt: "UNKNOWNCURSORTASK",
+      reason: "names a tool call that is not a live child",
+    },
+  ] as const) {
+    test(`ignores a cursor/task that ${ignored.reason}`, async () => {
+      const { base, headers } = await spawnBridge();
+      const created = await nativeFetch(`${base}/session/create`, {
+        method: "POST",
+        headers,
+      }).then((response) => response.json()) as { id: string };
+      const read = async () => nativeFetch(`${base}/session/${created.id}`, { headers })
         .then((response) => response.json()) as Promise<{
           status: string;
-          messages: Array<{ parts: Array<Record<string, unknown>> }>;
-        }>,
-      (value) => value.status === "idle"
-        && value.messages.some((message) => message.parts.some((part) =>
-          part.toolUseId === "cursor-subagent-1" && part.agentState === "finished"
-        )),
-    );
-    expect(settled.messages.flatMap((message) => message.parts).find((part) =>
-      part.toolUseId === "cursor-subagent-1"
-    )).toMatchObject({ toolState: "success", agentState: "finished" });
-    expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
-      .then((response) => response.json())).toEqual({ activity: "idle" });
-  });
+          messages: Array<{ content?: string; parts: Array<Record<string, unknown>> }>;
+        }>;
+      const activity = async () => nativeFetch(`${base}/session/${created.id}/activity`, { headers })
+        .then((response) => response.json()) as Promise<{ activity: string }>;
+
+      await nativeFetch(`${base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: "BACKGROUNDSUBAGENT" }),
+      });
+      await waitFor(activity, (value) => value.activity === "working");
+
+      await nativeFetch(`${base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: ignored.prompt }),
+      });
+      // The marker is written after the frame on the same stream, so its
+      // arrival is what makes "still active" below an observation, not a race.
+      const held = await waitFor(
+        read,
+        (value) => value.status === "idle"
+          && value.messages.some((message) =>
+            message.content?.includes("Cursor task frame delivered.") === true
+          ),
+      );
+      const parts = held.messages.flatMap((message) => message.parts);
+      expect(parts.find((part) => part.toolUseId === "cursor-subagent-1"))
+        .toMatchObject({ agentState: "active" });
+      expect(await activity()).toEqual({ activity: "working" });
+      // An ignored frame must not invent a launch part for the id it named.
+      expect(parts.some((part) => part.toolUseId === "cursor-never-seen-1")).toBe(false);
+      const plain = parts.find((part) => part.toolUseId === "cursor-plain-tool-1");
+      if (plain) expect(plain).not.toHaveProperty("agentState");
+
+      // The same child still settles once a frame the bridge accepts arrives,
+      // so the guard rejects the bad frame rather than the method.
+      await nativeFetch(`${base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: "FINISHCURSORTASK" }),
+      });
+      const settled = await waitFor(
+        read,
+        (value) => value.status === "idle"
+          && value.messages.some((message) => message.parts.some((part) =>
+            part.toolUseId === "cursor-subagent-1" && part.agentState === "finished"
+          )),
+      );
+      expect(settled.messages.flatMap((message) => message.parts).find((part) =>
+        part.toolUseId === "cursor-subagent-1"
+      )).toMatchObject({ toolState: "success", agentState: "finished" });
+      expect(await activity()).toEqual({ activity: "idle" });
+    });
+  }
 
   test("tracks Grok's metadata-described sub-agent until its terminal notification", async () => {
     const { base, headers } = await spawnBridge({ env: { ACP_PROVIDER: "grok" } });

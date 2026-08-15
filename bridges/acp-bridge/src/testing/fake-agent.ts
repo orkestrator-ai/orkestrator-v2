@@ -117,6 +117,29 @@ function write(value: JsonObject): void {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
+/** Text a test waits for to prove an ignored `cursor/task` was already read. */
+const IGNORED_CURSOR_TASK_MARKER = "Cursor task frame delivered.";
+
+/**
+ * Emitted after a `cursor/task` the bridge is expected to ignore. The bridge
+ * reads this stream in order, so a transcript containing the marker proves the
+ * preceding frame was processed — without it, "the child is still active" could
+ * just mean the test read before the frame arrived.
+ */
+function writeIgnoredCursorTaskMarker(): void {
+  write({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "fake-session",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: IGNORED_CURSOR_TASK_MARKER },
+      },
+    },
+  });
+}
+
 const holdTurnFile = process.env.FAKE_ACP_HOLD_TURN_FILE;
 
 /**
@@ -1309,6 +1332,22 @@ lines.on("line", (line) => {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }
+    if (prompt.startsWith("FAILCURSORTASKREQUEST")) {
+      write({
+        jsonrpc: "2.0",
+        id: 903,
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          outcome: { outcome: "cancelled" },
+          durationMs: 12,
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
     if (prompt.startsWith("FAILCURSORTASK")) {
       write({
         jsonrpc: "2.0",
@@ -1321,6 +1360,102 @@ lines.on("line", (line) => {
           durationMs: 12,
         },
       });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    // Cursor's rejected spelling. Distinct from `cancelled` so the terminal
+    // vocabulary is proven rather than assumed to be one synonym wide.
+    if (prompt.startsWith("REJECTCURSORTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          status: "rejected",
+          durationMs: 12,
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    // A `cursor/task` that names a non-terminal state is a progress report. The
+    // child is still running, so nothing may settle.
+    if (prompt.startsWith("RUNNINGCURSORTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          status: "running",
+          durationMs: 12,
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          outcome: { outcome: "in_progress" },
+        },
+      });
+      writeIgnoredCursorTaskMarker();
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    // Same terminal frame, addressed to a different ACP session. A superseded
+    // or unrelated conversation must not settle this one's child.
+    if (prompt.startsWith("OTHERSESSIONCURSORTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          sessionId: "some-other-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          durationMs: 84,
+        },
+      });
+      writeIgnoredCursorTaskMarker();
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    // Terminal frames for ids that are not live children: an ordinary finished
+    // tool call, and an id this session has never seen.
+    if (prompt.startsWith("UNKNOWNCURSORTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "cursor-plain-tool-1",
+            title: "Read file",
+            kind: "read",
+            status: "completed",
+            rawInput: { _toolName: "read", path: "notes.md" },
+          },
+        },
+      });
+      for (const toolCallId of ["cursor-plain-tool-1", "cursor-never-seen-1"]) {
+        write({
+          jsonrpc: "2.0",
+          method: "cursor/task",
+          params: {
+            sessionId: "fake-session",
+            toolCallId,
+            description: "Validate the implementation",
+            durationMs: 84,
+          },
+        });
+      }
+      writeIgnoredCursorTaskMarker();
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }

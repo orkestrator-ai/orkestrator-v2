@@ -808,18 +808,19 @@ export class NativeAgentService {
     this.assertProjectionInput(input);
     const provider = await this.provider(input);
     const slashCommandKey = `${input.environmentId}\0${input.agent}`;
+    // Discard in-flight discovery rather than waiting for it. Each refresh
+    // re-checks its validity flag immediately before writing its cache, with no
+    // await in between, so an invalidated read can no longer land. Awaiting one
+    // would only make this explicit user action inherit the latency of the very
+    // work it just discarded — up to a full bridge request timeout.
     const pendingModelCatalog = this.modelCatalogRefreshes.get(input.environmentId);
-    const pendingSlashCommands = this.slashCommandRefreshes.get(slashCommandKey);
-    if (pendingModelCatalog) pendingModelCatalog.validity.current = false;
-    if (pendingSlashCommands) pendingSlashCommands.validity.current = false;
-    await Promise.allSettled([
-      ...(pendingModelCatalog ? [pendingModelCatalog.operation] : []),
-      ...(pendingSlashCommands ? [pendingSlashCommands.operation] : []),
-    ]);
-    if (this.modelCatalogRefreshes.get(input.environmentId) === pendingModelCatalog) {
+    if (pendingModelCatalog) {
+      pendingModelCatalog.validity.current = false;
       this.modelCatalogRefreshes.delete(input.environmentId);
     }
-    if (this.slashCommandRefreshes.get(slashCommandKey) === pendingSlashCommands) {
+    const pendingSlashCommands = this.slashCommandRefreshes.get(slashCommandKey);
+    if (pendingSlashCommands) {
+      pendingSlashCommands.validity.current = false;
       this.slashCommandRefreshes.delete(slashCommandKey);
     }
     await provider.refreshCatalog?.();

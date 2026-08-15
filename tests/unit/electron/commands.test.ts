@@ -14340,13 +14340,35 @@ exit 0
         {
           checkHealth: async () => {
             checks += 1;
-            return checks === 76;
+            return checks === commandTesting.LOCAL_SERVER_HEALTH_ATTEMPTS + 1;
           },
           delay: async () => {},
         },
       )).resolves.toBeUndefined();
 
-      expect(checks).toBe(76);
+      expect(checks).toBe(commandTesting.LOCAL_SERVER_HEALTH_ATTEMPTS + 1);
+    },
+  );
+
+  test.each(["cursor", "grok"] as const)(
+    "gives %s servers the full ACP startup window before failing",
+    async (kind) => {
+      let checks = 0;
+
+      await expect(commandTesting.waitForLocalServerHealth(
+        45_678,
+        kind,
+        undefined,
+        {
+          checkHealth: async () => {
+            checks += 1;
+            return false;
+          },
+          delay: async () => {},
+        },
+      )).rejects.toThrow("Server on port 45678 did not become healthy");
+
+      expect(checks).toBe(commandTesting.ACP_LOCAL_SERVER_HEALTH_ATTEMPTS);
     },
   );
 
@@ -14368,7 +14390,7 @@ exit 0
         },
       )).rejects.toThrow("Server on port 45678 did not become healthy");
 
-      expect(checks).toBe(75);
+      expect(checks).toBe(commandTesting.LOCAL_SERVER_HEALTH_ATTEMPTS);
     },
   );
 

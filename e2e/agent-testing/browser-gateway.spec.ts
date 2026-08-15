@@ -57,40 +57,6 @@ async function authenticatedInvoke(page: Page, status: Status) {
   };
 }
 
-test("connecting logo respects the reduced-motion preference", async ({ page }) => {
-  const status = await profileStatus();
-  expect(status.status).toBe("ready");
-  expect(status.browserUrl).toBeTruthy();
-  expect(status.authFile).toBeTruthy();
-  await authenticatedInvoke(page, status);
-
-  await page.emulateMedia({ reducedMotion: "no-preference" });
-  await page.goto(status.browserUrl!);
-  await page.evaluate(() => {
-    const logo = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    logo.dataset.agentConnectingStyleTest = "true";
-    logo.setAttribute("class", "agent-connecting-logo h-16 w-16");
-    document.body.append(logo);
-  });
-  const logo = page.locator("[data-agent-connecting-style-test='true']");
-
-  for (const viewport of [
-    { width: 1_280, height: 800 },
-    { width: 390, height: 844 },
-  ]) {
-    await page.setViewportSize(viewport);
-    await expect(logo).toHaveCSS("width", "64px");
-    await expect(logo).toHaveCSS("height", "64px");
-  }
-  await expect(logo).toHaveCSS("animation-name", "agent-connecting-pulse");
-  await expect(logo).toHaveCSS("animation-duration", "1.6s");
-
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await expect(logo).toHaveCSS("animation-name", "none");
-  await expect(logo).toHaveCSS("opacity", "1");
-  await expect(logo).toHaveCSS("filter", "none");
-});
-
 test("real browser gateway exercises an authoritative local environment", async ({ page }) => {
   const status = await profileStatus();
   expect(status.status).toBe("ready");

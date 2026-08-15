@@ -14388,6 +14388,8 @@ export const __testing = {
     return localServerProcesses.get(key);
   },
   releaseLocalServerOwnership,
+  LOCAL_SERVER_HEALTH_ATTEMPTS,
+  ACP_LOCAL_SERVER_HEALTH_ATTEMPTS,
   waitForLocalServerHealth,
   waitForHttpServerExit,
   waitForUnhealthy,

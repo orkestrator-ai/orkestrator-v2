@@ -52,6 +52,8 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
 
   messages: TMessage[];
   isLoading: boolean;
+  /** Stable, non-interactive announcement for background-agent lifecycle changes. */
+  agentActivityAnnouncement?: string;
   /**
    * Replaces the thinking indicator when the turn is in a distinct phase
    * (Codex's "Stopping…" / "Reconnecting…").
@@ -131,6 +133,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   onRetry,
   messages,
   isLoading,
+  agentActivityAnnouncement,
   statusLabel,
   elapsedSeconds,
   finalElapsedSeconds,
@@ -260,6 +263,15 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
 
   return (
     <div className="@container relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
+      <span
+        role={agentActivityAnnouncement ? "status" : undefined}
+        aria-label={agentActivityAnnouncement || undefined}
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      >
+        {agentActivityAnnouncement}
+      </span>
       <div
         className={cn(
           "flex min-h-0 flex-1 flex-col transition-[opacity,transform] duration-300 ease-out motion-reduce:transition-none",

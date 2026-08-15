@@ -68,7 +68,11 @@ import {
   createOptimisticNativeMessage,
   TURN_STOPPED_BY_USER,
 } from "@/lib/chat/client-only-messages";
-import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
+import {
+  pinActiveNativeAgentParts,
+  snapshotNativeAgentActivity,
+  type NativeAgentActivitySnapshot,
+} from "@/lib/chat/native-agent-pinning";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { persistAgentModelDefault } from "@/lib/chat/agent-model-preferences";
 import { persistCodexGlobalPreferences } from "@/components/codex/codex-preferences";
@@ -112,6 +116,54 @@ import { ClaudeBackgroundTaskHoldCard } from "@/components/claude/ClaudeBackgrou
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { isSetupBlocked } from "@/lib/setup-commands";
+
+function activeAgentSummary(snapshots: NativeAgentActivitySnapshot[]): string {
+  const active = snapshots.filter((snapshot) => snapshot.status === "active");
+  if (active.length === 0) return "";
+  const noun = active.length === 1 ? "sub-agent" : "sub-agents";
+  return `${active.length} ${noun} working: ${active.map((snapshot) => snapshot.label).join(", ")}.`;
+}
+
+function useNativeAgentActivityAnnouncement(
+  messages: NativeMessage[],
+  scope: string,
+): string {
+  const snapshots = useMemo(() => snapshotNativeAgentActivity(messages), [messages]);
+  const previousRef = useRef<{
+    scope: string;
+    snapshots: Map<string, NativeAgentActivitySnapshot>;
+  } | null>(null);
+  const [announcement, setAnnouncement] = useState("");
+
+  useEffect(() => {
+    const current = new Map(snapshots.map((snapshot) => [snapshot.id, snapshot]));
+    const previousState = previousRef.current;
+    previousRef.current = { scope, snapshots: current };
+
+    if (!previousState || previousState.scope !== scope) {
+      setAnnouncement(activeAgentSummary(snapshots));
+      return;
+    }
+
+    const lifecycleUpdates: string[] = [];
+    for (const [id, previous] of previousState.snapshots) {
+      const next = current.get(id);
+      if (previous.status !== "active" || !next || next.status === "active") continue;
+      lifecycleUpdates.push(`${next.label} ${next.status === "failed" ? "failed" : "finished"}.`);
+    }
+
+    const activeChanged = snapshots.some((snapshot) => {
+      if (snapshot.status !== "active") return false;
+      const previous = previousState.snapshots.get(snapshot.id);
+      return previous?.status !== "active" || previous.label !== snapshot.label;
+    });
+    const summary = activeChanged ? activeAgentSummary(snapshots) : "";
+    const nextAnnouncement = [...lifecycleUpdates, summary].filter(Boolean).join(" ");
+    if (nextAnnouncement) setAnnouncement(nextAnnouncement);
+  }, [scope, snapshots]);
+
+  return announcement;
+}
 
 function PlatformIcon({ platform }: { platform: AgentPlatform }) {
   return <AgentPlatformIcon platform={platform} className="size-5" />;
@@ -827,6 +879,10 @@ function SharedNativeAgentController({
     transcriptEchoedOptimistic,
     turnStopMarker,
   ]);
+  const agentActivityAnnouncement = useNativeAgentActivityAnnouncement(
+    displayMessages,
+    sessionKey,
+  );
   const messages = useMemo(
     () => pinActiveNativeAgentParts(displayMessages),
     [displayMessages],
@@ -1536,6 +1592,7 @@ function SharedNativeAgentController({
       errorMessage={errorMessage}
       onRetry={() => { void connect(); }}
       messages={messages}
+      agentActivityAnnouncement={agentActivityAnnouncement}
       resolveModelLabel={resolveModelLabel}
       isLoading={isTurnActive}
       statusLabel={phaseStatusLabel}

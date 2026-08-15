@@ -8,7 +8,7 @@ import {
   test,
 } from "bun:test";
 import { createRef } from "react";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import type {
   NativeMessage,
@@ -158,6 +158,22 @@ describe("NativeChatShell", () => {
     expect(screen.getByText(/Live updates disconnected/)).toBeTruthy();
   });
 
+  test("exposes agent lifecycle announcements outside interactive transcript cards", () => {
+    render(
+      <NativeChatShell
+        {...shellProps()}
+        agentActivityAnnouncement="1 sub-agent working: Reviewer."
+      />,
+    );
+
+    const status = screen.getByRole("status", {
+      name: "1 sub-agent working: Reviewer.",
+    });
+    expect(status.getAttribute("aria-live")).toBe("polite");
+    expect(status.getAttribute("aria-atomic")).toBe("true");
+    expect(status.closest("button") === null).toBe(true);
+  });
+
   test("shows the desync warning while the composer is centered", () => {
     /**
      * `centerCompose` is true exactly when the transcript is empty, which is
@@ -244,7 +260,12 @@ describe("NativeChatShell", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /reviewer/i }));
+    const initialCard = screen.getByRole("button", { name: /reviewer/i });
+    expect(within(initialCard).getByText("Active")).toBeTruthy();
+    expect(within(initialCard).getByText("Inspect the original task details")).toBeTruthy();
+    expect(initialCard.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(initialCard);
     expect(screen.getAllByText("Inspect the original task details")).toHaveLength(2);
 
     view.rerender(

@@ -1442,7 +1442,7 @@ describe("AgentNativeTab", () => {
       }));
     }
 
-    test("shows an active Cursor Task at the end of the transcript", async () => {
+    test("announces an active Cursor Task pinned to the transcript", async () => {
       seedProjection({
         messages: [{
           id: "assistant-cursor-subagent",
@@ -1465,11 +1465,14 @@ describe("AgentNativeTab", () => {
       render(<AgentNativeTab tabId="tab-cursor-subagent" data={identity("cursor")} isActive />);
 
       await screen.findByRole("textbox");
+      expect(await screen.findByRole("status", {
+        name: "1 sub-agent working: Validate the implementation.",
+      })).toBeTruthy();
       expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true);
       expect(screen.getByTestId("transcript-bottom-spacer").className).toContain("h-32");
     });
 
-    test("shows and rehydrates an active Grok Build sub-agent in the transcript", async () => {
+    test("announces and rehydrates an active Grok Build sub-agent", async () => {
       seedProjection({
         messages: [{
           id: "assistant-grok-subagent",
@@ -1508,6 +1511,9 @@ describe("AgentNativeTab", () => {
       });
 
       await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+      expect(await screen.findByRole("status", {
+        name: "1 sub-agent working: Validate the implementation.",
+      })).toBeTruthy();
       expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true);
       expect(screen.getByTestId("transcript-bottom-spacer").className).toContain("h-32");
 
@@ -1520,6 +1526,9 @@ describe("AgentNativeTab", () => {
       render(<AgentNativeTab tabId="tab-grok-subagent" data={identity("grok")} isActive />);
 
       await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+      expect(await screen.findByRole("status", {
+        name: "1 sub-agent working: Validate the implementation.",
+      })).toBeTruthy();
       expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true);
       expect(getNativeAgentProjectionMock).toHaveBeenCalledWith(expect.objectContaining({
         agent: "grok",
@@ -1527,7 +1536,14 @@ describe("AgentNativeTab", () => {
       }));
     });
 
-    test("rehydrates a terminal Cursor Task lifecycle into the transcript", async () => {
+    test.each([
+      ["finished", "finished"],
+      ["failed", "failed"],
+    ] as const)("announces a Cursor Task lifecycle that becomes %s", async (
+      agentState,
+      announcementState,
+    ) => {
+      const tabId = `tab-cursor-subagent-${agentState}`;
       seedProjection({
         messages: [{
           id: "assistant-cursor-subagent-transition",
@@ -1548,13 +1564,16 @@ describe("AgentNativeTab", () => {
 
       const view = render(
         <AgentNativeTab
-          tabId="tab-cursor-subagent-transition"
+          tabId={tabId}
           data={identity("cursor")}
           isActive
           refreshRequestId={0}
         />,
       );
       await screen.findByRole("textbox");
+      expect(await screen.findByRole("status", {
+        name: "1 sub-agent working: Validate the implementation.",
+      })).toBeTruthy();
 
       seedProjection({
         messages: [{
@@ -1568,14 +1587,14 @@ describe("AgentNativeTab", () => {
             toolName: "task",
             toolUseId: "cursor-subagent-1",
             toolState: "success",
-            agentState: "finished",
+            agentState,
             toolArgs: { description: "Validate the implementation" },
           }],
         }],
       });
       view.rerender(
         <AgentNativeTab
-          tabId="tab-cursor-subagent-transition"
+          tabId={tabId}
           data={identity("cursor")}
           isActive
           refreshRequestId={1}
@@ -1584,11 +1603,14 @@ describe("AgentNativeTab", () => {
 
       await waitFor(() => expect(
         useNativeAgentProjectionStore.getState().projections.get(
-          createSessionKey("env-1", "tab-cursor-subagent-transition"),
+          createSessionKey("env-1", tabId),
         )?.messages[0],
       ).toMatchObject({
-        parts: [expect.objectContaining({ agentState: "finished" })],
+        parts: [expect.objectContaining({ agentState })],
       }));
+      expect(await screen.findByRole("status", {
+        name: `Validate the implementation ${announcementState}.`,
+      })).toBeTruthy();
       expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true);
     });
 

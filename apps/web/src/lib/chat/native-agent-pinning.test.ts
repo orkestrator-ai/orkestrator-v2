@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { NativeMessage } from "./native-message-types";
 import { normalizeOpenCodeNativeMessage } from "./native-message-adapters";
-import { pinActiveNativeAgentParts } from "./native-agent-pinning";
+import {
+  pinActiveNativeAgentParts,
+  snapshotNativeAgentActivity,
+} from "./native-agent-pinning";
 
 function assistantMessage(
   id: string,
@@ -511,5 +514,52 @@ describe("pinActiveNativeAgentParts", () => {
         ),
       ).toEqual(["agent-1", "task-2", "agent-3"]);
     }
+  });
+
+  test("snapshots accessible labels and keeps the newest reusable-agent lifecycle", () => {
+    const messages: NativeMessage[] = [
+      assistantMessage("assistant-1", [{
+        type: "task-group",
+        content: "Task: fallback",
+        task: {
+          type: "tool-invocation",
+          content: "Task: fallback",
+          toolUseId: "task-1",
+          toolState: "success",
+          agentState: "active",
+          toolArgs: { description: "Validate the implementation" },
+        },
+        childTools: [],
+      }]),
+      assistantMessage("assistant-2", [{
+        type: "subagent",
+        content: "generic",
+        subagentId: "agent-reusable",
+        subagentName: "Lovelace",
+        subagentRole: "correctness_review",
+        toolState: "pending",
+      }]),
+      assistantMessage("assistant-3", [{
+        type: "subagent",
+        content: "generic",
+        subagentId: "agent-reusable",
+        subagentName: "Lovelace",
+        subagentRole: "correctness_review",
+        toolState: "failure",
+      }]),
+    ];
+
+    expect(snapshotNativeAgentActivity(messages)).toEqual([
+      {
+        id: "task-group:task-1",
+        label: "Validate the implementation",
+        status: "active",
+      },
+      {
+        id: "subagent:agent-reusable",
+        label: "Lovelace",
+        status: "failed",
+      },
+    ]);
   });
 });

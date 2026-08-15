@@ -282,6 +282,7 @@ test("MultiReviewService hands the idle consolidation session to interactive add
     const addressed = await service.address(started.id);
     expect(addressed).toMatchObject({
       phase: "interactive",
+      addressPromptPending: true,
       fixSession: { status: "idle", providerSessionId: ready.fixSession?.providerSessionId },
     });
     expect(addressed.activeRequest).toBeUndefined();
@@ -314,6 +315,37 @@ test("MultiReviewService releases the controller lease when it hands off", async
     // retained lease would be renewed — and rewrite the workflow store — for the
     // life of the process, and would fence every other controller out meanwhile.
     const claimed = await storage.claimMultiReviewController(started.id, "other-owner", 15_000);
+    expect(claimed.granted).toBe(true);
+  });
+});
+
+test("MultiReviewService resumes and acknowledges an interrupted address dispatch", async () => {
+  const provider = new Provider();
+  await withService("env-address-resume", provider, async ({ service, storage, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+
+    const statusCallsBeforeAddress = provider.statusCalls;
+    const handedOff = await service.address(started.id);
+    expect(handedOff.addressPromptPending).toBe(true);
+
+    // Repeating the command after a renderer/backend interruption resumes the
+    // durable dispatch half without another provider liveness read.
+    const resumed = await service.address(started.id);
+    expect(resumed.addressPromptPending).toBe(true);
+    expect(provider.statusCalls).toBe(statusCallsBeforeAddress + 1);
+
+    const acknowledged = await service.acknowledgeAddressPrompt(started.id);
+    expect(acknowledged.addressPromptPending).toBeUndefined();
+    await expect(service.address(started.id)).rejects.toThrow("not ready to address");
+
+    // Both terminal operations release their short-lived controller claims.
+    const claimed = await storage.claimMultiReviewController(
+      started.id, "other-owner", 15_000,
+    );
     expect(claimed.granted).toBe(true);
   });
 });

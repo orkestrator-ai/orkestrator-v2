@@ -50,9 +50,12 @@ interface UseNativeAgentSessionOptions {
   tabId: string;
   initialAgentModel?: string;
   initialReasoningEffort?: string;
+  defaultAgentModel?: string;
+  defaultReasoningEffort?: string;
   initialProviderSessionId?: string;
   initialConversationMode?: "build" | "plan";
   initialFastMode?: boolean;
+  defaultFastMode?: boolean;
   isActive?: boolean;
   /** Setup-gated tabs mount presentation without starting provider I/O. */
   enabled?: boolean;
@@ -89,9 +92,12 @@ export function useNativeAgentSession<TMessage = unknown>({
   tabId,
   initialAgentModel,
   initialReasoningEffort,
+  defaultAgentModel,
+  defaultReasoningEffort,
   initialProviderSessionId,
   initialConversationMode,
   initialFastMode,
+  defaultFastMode,
   isActive = true,
   enabled = true,
 }: UseNativeAgentSessionOptions) {
@@ -102,9 +108,16 @@ export function useNativeAgentSession<TMessage = unknown>({
   const initialLaunchOptionsRef = useRef({
     model: initialAgentModel,
     reasoningEffort: initialReasoningEffort,
+    mode: initialConversationMode,
+    fastMode: initialFastMode,
   });
   const initialLaunchOptionsPendingRef = useRef(
-    Boolean(initialAgentModel || initialReasoningEffort),
+    Boolean(
+      initialAgentModel
+      || initialReasoningEffort
+      || initialConversationMode
+      || typeof initialFastMode === "boolean"
+    ),
   );
   const isInitializedRef = useRef(false);
   const lastInitTimeRef = useRef(0);
@@ -299,20 +312,20 @@ export function useNativeAgentSession<TMessage = unknown>({
           await ensureNativeAgentSession({
             ...identity,
             title: platform === "cursor" ? "Cursor Agent" : platform === "grok" ? "Grok Build" : "Agent Session",
-            model: initialAgentModel,
-            reasoningEffort: initialReasoningEffort,
+            model: initialAgentModel ?? defaultAgentModel,
+            reasoningEffort: initialReasoningEffort ?? defaultReasoningEffort,
             sessionMode: initialConversationMode,
-            fastMode: initialFastMode,
+            fastMode: initialFastMode ?? defaultFastMode,
           });
         }
       } else {
         await ensureNativeAgentSession({
           ...identity,
           title: platform === "cursor" ? "Cursor Agent" : platform === "grok" ? "Grok Build" : "Agent Session",
-          model: initialAgentModel,
-          reasoningEffort: initialReasoningEffort,
+          model: initialAgentModel ?? defaultAgentModel,
+          reasoningEffort: initialReasoningEffort ?? defaultReasoningEffort,
           sessionMode: initialConversationMode,
-          fastMode: initialFastMode,
+          fastMode: initialFastMode ?? defaultFastMode,
         });
       }
       isInitializedRef.current = true;
@@ -337,6 +350,9 @@ export function useNativeAgentSession<TMessage = unknown>({
     }
   }, [
     acknowledgeInitialLaunchOptions,
+    defaultAgentModel,
+    defaultFastMode,
+    defaultReasoningEffort,
     identity,
     initialAgentModel,
     initialConversationMode,

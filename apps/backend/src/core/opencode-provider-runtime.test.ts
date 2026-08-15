@@ -1183,6 +1183,12 @@ describe("OpenCode provider runtime", () => {
           ok: false,
           error: { code: "malformed_output", retryable: true },
         });
+
+      fake.setMessagesResponse(reply(
+        "<thinking>{ incomplete schema sketch\n{\"fromThought\":true}</thinking>\n{\"complete\":true}",
+      ));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: true } });
     } finally {
       await provider.dispose?.();
     }

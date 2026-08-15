@@ -4604,6 +4604,46 @@ describe("ACP bridge", () => {
     expect(Buffer.byteLength(JSON.stringify(session.messages))).toBeLessThan(8 * 1024 * 1024);
   });
 
+  test("recovers structured JSON after thinking or commentary in the text channel", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+    const prompt = async (text: string, requestId: string) => {
+      await nativeFetch(`${base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          prompt: text,
+          requestId,
+          outputSchema: { type: "object" },
+        }),
+      });
+      await waitFor(
+        async () => nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) => response.json()) as Promise<{ status: string }>,
+        (session) => session.status === "idle",
+      );
+    };
+    const readStructured = async (requestId: string) => nativeFetch(
+      `${base}/session/${created.id}/structured-output?requestId=${requestId}`,
+      { headers },
+    ).then((response) => response.json()) as Promise<{ structuredOutput: { ok: boolean; value?: unknown } }>;
+
+    await prompt(
+      'DIRECT:The schema requires JSON. Weighing whether to embed it in CreatePlan.\n{"ok":true}',
+      "prose-1",
+    );
+    expect((await readStructured("prose-1")).structuredOutput)
+      .toMatchObject({ ok: true, value: { ok: true } });
+
+    await prompt("THOUGHT_THEN_JSON:{\"fromText\":true}", "thought-then-1");
+    expect((await readStructured("thought-then-1")).structuredOutput)
+      .toMatchObject({ ok: true, value: { fromText: true } });
+
+    await prompt("JSON_THEN_THOUGHT:{\"fromText\":true}", "json-then-thought-1");
+    expect((await readStructured("json-then-thought-1")).structuredOutput)
+      .toMatchObject({ ok: true, value: { fromText: true } });
+  });
+
   test("uses only the current turn when parsing structured output", async () => {
     const { base, headers } = await spawnBridge();
     const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })

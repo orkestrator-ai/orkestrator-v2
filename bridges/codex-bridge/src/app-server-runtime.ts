@@ -102,6 +102,7 @@ import { AppServerRpcError, isMissingRolloutError } from "./app-server/errors.js
 import type { BridgeModel } from "./models-cache.js";
 import {
   structuredOutputFailure,
+  tryParseStructuredOutputText,
   type JsonSchema,
   type StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
@@ -468,14 +469,8 @@ function parseCodexStructuredOutput(turn: TurnAccumulator): StructuredOutputResu
       { requestId: turn.requestId },
     );
   }
-  try {
-    return {
-      ok: true,
-      provider: "codex",
-      requestId: turn.requestId,
-      value: JSON.parse(text) as unknown,
-    };
-  } catch {
+  const value = tryParseStructuredOutputText(text);
+  if (value === undefined) {
     return structuredOutputFailure(
       "codex",
       "malformed_output",
@@ -483,6 +478,12 @@ function parseCodexStructuredOutput(turn: TurnAccumulator): StructuredOutputResu
       { requestId: turn.requestId },
     );
   }
+  return {
+    ok: true,
+    provider: "codex",
+    requestId: turn.requestId,
+    value,
+  };
 }
 
 function buildRecoveredContextPrompt(

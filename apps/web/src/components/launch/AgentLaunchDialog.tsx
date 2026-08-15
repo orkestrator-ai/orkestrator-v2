@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { AlertTriangle, GitPullRequest } from "lucide-react";
+import { AlertTriangle, GitPullRequest, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -23,14 +23,17 @@ import {
 } from "@/lib/agent-launch";
 import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
 
-export interface CreatePRSelection {
+export interface AgentLaunchSelection {
   agent: LaunchAgent;
   model: string;
   reasoningEffort?: string;
 }
 
-interface CreatePRDialogProps {
-  kind?: "create-pr" | "resolve-conflicts";
+/** The workflow being launched. Every entry restyles the same picker. */
+export type AgentLaunchKind = "create-pr" | "resolve-conflicts";
+
+interface AgentLaunchDialogProps {
+  kind?: AgentLaunchKind;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Agent the toolbar would have used for a plain click. */
@@ -40,13 +43,15 @@ interface CreatePRDialogProps {
   enabledAgents: LaunchAgent[];
   preferredModels?: Partial<Record<LaunchAgent, string>>;
   preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
-  /** Base branch the pull request will target, shown so it can be verified. */
+  /** Base branch the launch targets, shown so it can be verified. */
   targetBranch: string;
   returnFocusRef?: RefObject<HTMLElement | null>;
   returnFocusFallback?: () => HTMLElement | null;
   confirmDisabled?: boolean;
+  /** Blocks confirmation and shows neutral busy text rather than an error. */
+  busy?: boolean;
   error?: string | null;
-  onConfirm: (selection: CreatePRSelection) => void;
+  onConfirm: (selection: AgentLaunchSelection) => void;
 }
 
 function agentLabel(agent: LaunchAgent): string {
@@ -54,13 +59,15 @@ function agentLabel(agent: LaunchAgent): string {
 }
 
 /**
- * Configures the agent, model and reasoning effort for a PR-creation run.
+ * Configures the agent, model and reasoning effort for a toolbar launch.
  *
- * The single unified picker is deliberate: provider, model and effort are one
- * decision, and splitting them across controls lets a user leave an effort
- * selected that the newly chosen model does not offer.
+ * Shared by every workflow that launches a configured agent — `kind` restyles
+ * the copy and the confirm label, nothing else. The single unified picker is
+ * deliberate: provider, model and effort are one decision, and splitting them
+ * across controls lets a user leave an effort selected that the newly chosen
+ * model does not offer.
  */
-export function CreatePRDialog({
+export function AgentLaunchDialog({
   kind = "create-pr",
   open,
   onOpenChange,
@@ -73,9 +80,10 @@ export function CreatePRDialog({
   returnFocusRef,
   returnFocusFallback,
   confirmDisabled = false,
+  busy = false,
   error,
   onConfirm,
-}: CreatePRDialogProps) {
+}: AgentLaunchDialogProps) {
   const { favorites, toggleFavorite } = useAgentModelFavorites();
   const initialModel = firstModelFor(defaultAgent, catalog, preferredModels);
   const [agent, setAgent] = useState<LaunchAgent>(defaultAgent);
@@ -162,6 +170,7 @@ export function CreatePRDialog({
     `${isResolve ? "against" : "into"} ${targetBranch}`,
   ].join(" · ");
   const pickerId = isResolve ? "resolve-conflicts-model" : "create-pr-model";
+  const confirmLabel = isResolve ? "Resolve conflicts" : "Create pull request";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -252,22 +261,33 @@ export function CreatePRDialog({
             <div className="mt-5 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-400">
               <span className="text-zinc-500">Launch:</span> {summary}
             </div>
-            {error && (
+            {/* A launch in flight is progress, not a fault: reporting it through
+                the destructive alert would tell the user their own successful
+                submission had failed for as long as the launch took. */}
+            {busy ? (
+              <p
+                role="status"
+                className="mt-3 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-400"
+              >
+                <Loader2 className="size-3.5 animate-spin" />
+                Launching…
+              </p>
+            ) : error ? (
               <p
                 role="alert"
                 className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
               >
                 {error}
               </p>
-            )}
+            ) : null}
           </div>
 
           <DialogFooter className="shrink-0 flex-row justify-end border-t border-zinc-800 bg-zinc-950/40 px-5 py-4 sm:px-6">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={confirmDisabled}>
-              {isResolve ? "Resolve conflicts" : "Create pull request"}
+            <Button type="submit" disabled={confirmDisabled || busy}>
+              {confirmLabel}
             </Button>
           </DialogFooter>
         </form>

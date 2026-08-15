@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useRef, useState } from "react";
-import { CreatePRDialog, type CreatePRSelection } from "./CreatePRDialog";
+import { AgentLaunchDialog, type AgentLaunchSelection } from "./AgentLaunchDialog";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
 import { useConfigStore } from "@/stores/configStore";
 
@@ -51,11 +51,11 @@ afterEach(() => {
 function Harness() {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const onConfirm = mock((_selection: CreatePRSelection) => undefined);
+  const onConfirm = mock((_selection: AgentLaunchSelection) => undefined);
   return (
     <>
       <button ref={triggerRef} type="button" onClick={() => setOpen(true)}>Open PR dialog</button>
-      <CreatePRDialog
+      <AgentLaunchDialog
         open={open}
         onOpenChange={setOpen}
         defaultAgent="claude"
@@ -76,7 +76,7 @@ function DisconnectedTriggerHarness() {
   return (
     <>
       <button ref={fallbackRef} type="button">Open tools</button>
-      <CreatePRDialog
+      <AgentLaunchDialog
         open={open}
         onOpenChange={setOpen}
         defaultAgent="claude"
@@ -104,7 +104,7 @@ function CollapsedTriggerHarness() {
     <>
       <button ref={triggerRef} type="button">Create PR</button>
       <button ref={fallbackRef} type="button">Open tools</button>
-      <CreatePRDialog
+      <AgentLaunchDialog
         open={open}
         onOpenChange={setOpen}
         defaultAgent="claude"
@@ -119,7 +119,7 @@ function CollapsedTriggerHarness() {
   );
 }
 
-describe("CreatePRDialog with real Radix primitives", () => {
+describe("AgentLaunchDialog with real Radix primitives", () => {
   test("keeps the narrow picker accessible and restores trigger focus on close", async () => {
     render(<Harness />);
     const trigger = screen.getByRole("button", { name: "Open PR dialog" });

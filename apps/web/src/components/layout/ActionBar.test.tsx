@@ -2110,8 +2110,47 @@ describe("ActionBar workflow tabs", () => {
     expect(confirm.disabled).toBe(true);
     fireEvent.click(confirm);
     expect(armRefreshAfterAgentCompletionMock).toHaveBeenCalledTimes(1);
+
+    // The launch the user just submitted is in flight. Presenting that as an
+    // eligibility error would report their own successful submission as a
+    // failure for as long as the backend arm took.
+    expect(screen.getByRole("status").textContent).toContain("Launching");
+    expect(screen.queryByRole("alert") === null).toBe(true);
+
     resolveArm("armed-after-menu-check");
     await waitFor(() => expect(createTabMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Configure conflict resolution" }) === null)
+        .toBe(true));
+  });
+
+  test("reports a refused Resolve tab in the dialog without a duplicate toast", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    armRefreshAfterAgentCompletionMock.mockResolvedValueOnce("armed-at-modal-refusal");
+    createTabMock.mockReturnValueOnce(false);
+    render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+    fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain("maximum tab count"));
+    expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy();
+    // The dialog is the reporting surface here; a toast would repeat the same
+    // failure in different words behind a modal the user is already reading.
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(disarmRefreshAfterAgentCompletionMock).toHaveBeenCalledWith("armed-at-modal-refusal");
+
+    // The dialog stays usable: a retry that succeeds clears it.
+    fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Configure conflict resolution" }) === null)
+        .toBe(true));
+    expect(createTabMock).toHaveBeenCalledTimes(2);
   });
 
   test("reports an arm failure but still launches the requested Resolve agent", async () => {
@@ -2617,6 +2656,174 @@ describe("ActionBar workflow tabs", () => {
     expect(screen.getByRole("combobox", { name: "Agent, model and reasoning" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
+
+  test("opens the Resolve modal after a mobile long press without launching a default resolve", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    render(<ActionBar presentation="grid" />);
+
+    const resolveButton = screen.getByRole("button", { name: "Resolve" });
+    fireEvent.pointerDown(resolveButton, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 24,
+      clientY: 24,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 575));
+    fireEvent.pointerUp(resolveButton, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 24,
+      clientY: 24,
+    });
+
+    expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy();
+
+    // The click mobile browsers synthesize after the gesture must be consumed,
+    // or the long press would also launch an unconfigured default-agent resolve.
+    fireEvent.click(resolveButton);
+    expect(createTabMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
+    await waitFor(() => expect(createTabMock).toHaveBeenCalledWith(
+      "codex",
+      expect.objectContaining({
+        agentLaunchMode: "native",
+        displayTitle: "Resolve",
+      }),
+    ));
+  }, 20_000);
+
+  test("resolves against the base branch pinned when the modal opened", async () => {
+    currentRepositoryConfig = { "project-1": { prBaseBranch: "release" } };
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    const view = render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+    expect(screen.getByText(/against release/)).toBeTruthy();
+
+    // Repository settings can be saved while the modal is open. The launch must
+    // merge the branch the user reviewed, not the one that replaced it.
+    currentRepositoryConfig = { "project-1": { prBaseBranch: "develop" } };
+    view.rerender(<ActionBar />);
+    expect(screen.getByText(/against release/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
+
+    await waitFor(() => expect(createTabMock).toHaveBeenCalledTimes(1));
+    const [, options] = createTabMock.mock.calls[0] as [string, { initialPrompt: string }];
+    expect(options.initialPrompt).toContain("git merge origin/release");
+    expect(options.initialPrompt).not.toContain("develop");
+  });
+
+  test("disables a pinned Resolve launch when the conflicts are already gone", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    const view = render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+    // Another agent, or a push, can clear the conflicts while the modal is open.
+    currentEnvironment = { ...currentEnvironment, hasMergeConflicts: false };
+    view.rerender(<ActionBar />);
+
+    expect(screen.getByRole("alert").textContent).toContain("no longer has merge conflicts");
+    expect((screen.getByRole("button", { name: "Resolve conflicts" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
+
+  test("disables a pinned Resolve launch when the environment stops running", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    const view = render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+    currentEnvironment = { ...currentEnvironment, status: "stopped" };
+    view.rerender(<ActionBar />);
+
+    expect(screen.getByRole("alert").textContent).toContain("no longer running");
+    expect((screen.getByRole("button", { name: "Resolve conflicts" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
+
+  test("disables a pinned Resolve launch when the tab limit is reached", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    const view = render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+    currentTabCount = 10;
+    view.rerender(<ActionBar />);
+
+    expect(screen.getByRole("alert").textContent).toContain("maximum number of tabs");
+    expect((screen.getByRole("button", { name: "Resolve conflicts" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
+
+  test("distinguishes an unready terminal from the tab limit for Resolve", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    const view = render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+    // No terminal container has registered a tab factory. Reporting the tab
+    // limit here would be false and would send the user looking for tabs to close.
+    currentCreateTabRegistered = false;
+    view.rerender(<ActionBar />);
+
+    const alert = screen.getByRole("alert").textContent ?? "";
+    expect(alert).toContain("not ready to open a new tab");
+    expect(alert).not.toContain("maximum number of tabs");
+    expect((screen.getByRole("button", { name: "Resolve conflicts" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
+
+  test("disables a pinned Resolve launch when the selected environment changes", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    const view = render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+    currentSelectedEnvironmentId = "env-2";
+    currentOtherEnvironments = [{
+      ...selectedEnvironment,
+      id: "env-2",
+      name: "other-environment",
+      prState: "open",
+      hasMergeConflicts: true,
+    }];
+    view.rerender(<ActionBar />);
+
+    expect(screen.getByRole("alert").textContent).toContain("selected environment changed");
+    expect((screen.getByRole("button", { name: "Resolve conflicts" }) as HTMLButtonElement).disabled)
+      .toBe(true);
     expect(createTabMock).not.toHaveBeenCalled();
   });
 

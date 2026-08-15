@@ -93,9 +93,9 @@ import {
   type MultiReviewLaunchSelection,
 } from "@/components/review/MultiReviewLaunchDialog";
 import {
-  CreatePRDialog,
-  type CreatePRSelection,
-} from "@/components/pr/CreatePRDialog";
+  AgentLaunchDialog,
+  type AgentLaunchSelection,
+} from "@/components/launch/AgentLaunchDialog";
 import {
   resolveDefaultReviewTabType,
 } from "@/lib/review-launch-options";
@@ -236,6 +236,17 @@ function ToolbarTooltipTrigger({
 interface ActionBarProps {
   presentation?: "bar" | "grid";
 }
+
+/**
+ * The outcome of a conflict-resolution launch.
+ *
+ * `message` is null when nothing was attempted — a busy launch or a missing
+ * prerequisite the caller's own controls already express — so the caller must
+ * not turn it into an error the user did not cause.
+ */
+type ResolveLaunchResult =
+  | { ok: true }
+  | { ok: false; message: string | null };
 
 export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const dockerAvailable = useDockerAvailability();
@@ -1222,7 +1233,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
               ? "This environment is not ready to open a new tab yet."
               : null;
 
-  const handleConfiguredCreatePR = useCallback((selection: CreatePRSelection) => {
+  const handleConfiguredCreatePR = useCallback((selection: AgentLaunchSelection) => {
     if (!prDialogTarget || prEligibilityError) return;
     const created = handleCreatePR(selection.agent, {
       agentLaunchMode: "native",
@@ -1251,15 +1262,27 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   }, [createTab, canCreateTab, defaultAgent]);
 
   // Handler for resolving merge conflicts - launches agent tab with conflict resolution prompt
-  const handleResolveConflicts = useCallback(async (
-    agentOverride?: "claude" | "opencode" | "codex" | "cursor" | "grok",
-    launchOptions?: {
+  const handleResolveConflicts = useCallback(async (options?: {
+    agent?: "claude" | "opencode" | "codex" | "cursor" | "grok";
+    launch?: {
       agentLaunchMode?: AgentLaunchModeOverride;
       initialAgentModel?: string;
       initialReasoningEffort?: string;
-    },
-    targetBranchOverride?: string,
-  ): Promise<boolean> => {
+    };
+    targetBranch?: string;
+    /**
+     * Where a failure is reported. The configured launch renders the message
+     * inside its own dialog, so a toast there would report the same failure
+     * twice, in two different wordings.
+     */
+    reportFailure?: "toast" | "return";
+  }): Promise<ResolveLaunchResult> => {
+    const {
+      agent: agentOverride,
+      launch: launchOptions,
+      targetBranch: targetBranchOverride,
+      reportFailure = "toast",
+    } = options ?? {};
     const operationEnvironmentId = selectedEnvironmentId;
     if (
       !createTab
@@ -1267,7 +1290,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       || !selectedProjectId
       || !canCreateTab
       || resolveLaunchEnvironmentIdRef.current !== null
-    ) return false;
+    ) return { ok: false, message: null };
 
     resolveLaunchEnvironmentIdRef.current = operationEnvironmentId;
     setResolveLaunchEnvironmentId(operationEnvironmentId);
@@ -1286,12 +1309,22 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       }
     };
 
+    const fail = async (message: string): Promise<ResolveLaunchResult> => {
+      await rollBackArm();
+      if (reportFailure === "toast") {
+        toast.error("Could not open conflict resolution", { description: message });
+      }
+      return { ok: false, message };
+    };
+
     try {
       // The backend stores this intent before the turn can be dispatched, so
       // inactive environments and renderer reloads cannot lose the refresh.
       armedAt = await armRefreshAfterAgentCompletion();
     } catch (error) {
       console.warn("[ActionBar] Failed to arm PR refresh after conflict resolution:", error);
+      // Always a toast: the launch still proceeds and the dialog closes behind
+      // it, so there is no surface left to carry a degraded-refresh warning.
       toast.error("Could not schedule the PR refresh", {
         description: "Conflict resolution will still open, but PR status may need a manual refresh.",
       });
@@ -1299,11 +1332,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
     try {
       if (selectedEnvironmentIdRef.current !== operationEnvironmentId) {
-        await rollBackArm();
-        toast.error("Could not open conflict resolution", {
-          description: "The selected environment changed before the agent could launch.",
-        });
-        return false;
+        return await fail("The selected environment changed before the agent could launch.");
       }
 
       const created = createTab(agentOverride || defaultAgent, {
@@ -1312,19 +1341,13 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         ...launchOptions,
       });
       if (!created) {
-        await rollBackArm();
-        toast.error("Could not open conflict resolution", {
-          description: "The environment may no longer be ready or the maximum tab count was reached.",
-        });
-        return false;
+        return await fail(
+          "The environment may no longer be ready or the maximum tab count was reached.",
+        );
       }
-      return true;
+      return { ok: true };
     } catch (error) {
-      await rollBackArm();
-      toast.error("Could not open conflict resolution", {
-        description: error instanceof Error ? error.message : String(error),
-      });
-      return false;
+      return await fail(error instanceof Error ? error.message : String(error));
     } finally {
       if (resolveLaunchEnvironmentIdRef.current === operationEnvironmentId) {
         resolveLaunchEnvironmentIdRef.current = null;
@@ -1342,6 +1365,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     defaultAgent,
   ]);
 
+  const resolveLaunchInFlight = resolveLaunchEnvironmentId !== null;
+
   const canConfigureResolve = Boolean(
     canCreateTab
     && isRunning
@@ -1350,7 +1375,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     && hasMergeConflicts
     && selectedEnvironmentId
     && selectedProjectId
-    && resolveLaunchEnvironmentId === null,
+    && !resolveLaunchInFlight,
   );
 
   const openResolveDialog = useCallback(() => {
@@ -1370,6 +1395,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
   const resolveLongPress = useLongPressAction(openResolveDialog, canConfigureResolve);
 
+  // A launch already in flight is deliberately absent: it is progress, not an
+  // eligibility fault, and is reported through the dialog's busy state instead.
   const resolveEligibilityError = !resolveDialogTarget
     ? null
     : selectedEnvironmentId !== resolveDialogTarget.environmentId
@@ -1383,26 +1410,34 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             ? "The maximum number of tabs has been reached."
             : !canCreateTab
               ? "This environment is not ready to open a new tab yet."
-              : resolveLaunchEnvironmentId !== null
-                ? "Conflict resolution is already being launched."
-                : null;
+              : null;
 
-  const handleConfiguredResolve = useCallback(async (selection: CreatePRSelection) => {
-    if (!resolveDialogTarget || resolveEligibilityError) return;
+  const handleConfiguredResolve = useCallback(async (selection: AgentLaunchSelection) => {
+    if (!resolveDialogTarget || resolveEligibilityError || resolveLaunchInFlight) return;
     setResolveLaunchError(null);
-    const created = await handleResolveConflicts(selection.agent, {
-      agentLaunchMode: "native",
-      initialAgentModel: selection.model,
-      initialReasoningEffort: selection.reasoningEffort,
-    }, resolveDialogTarget.targetBranch);
-    if (!created) {
-      setResolveLaunchError(
-        "The conflict-resolution agent tab could not be created. Check the environment and tab limit, then try again.",
-      );
+    const result = await handleResolveConflicts({
+      agent: selection.agent,
+      launch: {
+        agentLaunchMode: "native",
+        initialAgentModel: selection.model,
+        initialReasoningEffort: selection.reasoningEffort,
+      },
+      targetBranch: resolveDialogTarget.targetBranch,
+      // The dialog stays open on failure and owns the message, so the toast
+      // would be a second, less specific copy of the same report.
+      reportFailure: "return",
+    });
+    if (result.ok) {
+      setResolveDialogTarget(null);
       return;
     }
-    setResolveDialogTarget(null);
-  }, [handleResolveConflicts, resolveDialogTarget, resolveEligibilityError]);
+    if (result.message) setResolveLaunchError(result.message);
+  }, [
+    handleResolveConflicts,
+    resolveDialogTarget,
+    resolveEligibilityError,
+    resolveLaunchInFlight,
+  ]);
 
   // Handler for cleaning up (deleting) an environment after PR is merged/closed
   const handleCleanup = useCallback(async () => {
@@ -2147,7 +2182,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     }}
                     {...resolveLongPress.handlers}
                     data-toolbar-custom-context-menu="true"
-                    disabled={!isRunning || !canCreateTab || resolveLaunchEnvironmentId !== null}
+                    disabled={!isRunning || !canCreateTab || resolveLaunchInFlight}
                   >
                     <AlertTriangle className="h-4 w-4" />
                     <span className={cn(isGrid && "truncate text-xs")}>Resolve</span>
@@ -2456,7 +2491,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         busy={multiReviewLaunchPending}
         onConfirm={handleMultiReview}
       />
-      <CreatePRDialog
+      <AgentLaunchDialog
         open={prDialogOpen}
         onOpenChange={(open) => {
           if (!open) {
@@ -2491,7 +2526,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         error={prEligibilityError ?? prLaunchError}
         onConfirm={handleConfiguredCreatePR}
       />
-      <CreatePRDialog
+      <AgentLaunchDialog
         kind="resolve-conflicts"
         open={resolveDialogOpen}
         onOpenChange={(open) => {
@@ -2519,6 +2554,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             : null
         }
         confirmDisabled={Boolean(resolveEligibilityError)}
+        busy={resolveLaunchInFlight}
         error={resolveEligibilityError ?? resolveLaunchError}
         onConfirm={(selection) => void handleConfiguredResolve(selection)}
       />

@@ -18,7 +18,7 @@ mock.module("@/components/ui/dialog", () => ({
   DialogTitle: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
 }));
 
-import { CreatePRDialog, type CreatePRSelection } from "./CreatePRDialog";
+import { AgentLaunchDialog, type AgentLaunchSelection } from "./AgentLaunchDialog";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
 import { useConfigStore } from "@/stores/configStore";
 
@@ -49,8 +49,8 @@ const catalog: AgentModelCatalog = {
   opencode: [{ id: "provider/model-a", name: "OpenCode A", reasoningEfforts: ["fast"] }],
 };
 
-function renderDialog(overrides: Partial<Parameters<typeof CreatePRDialog>[0]> = {}) {
-  const onConfirm = mock((_selection: CreatePRSelection) => undefined);
+function renderDialog(overrides: Partial<Parameters<typeof AgentLaunchDialog>[0]> = {}) {
+  const onConfirm = mock((_selection: AgentLaunchSelection) => undefined);
   const props = {
     open: true,
     onOpenChange: () => undefined,
@@ -60,8 +60,8 @@ function renderDialog(overrides: Partial<Parameters<typeof CreatePRDialog>[0]> =
     targetBranch: "main",
     onConfirm,
     ...overrides,
-  } as Parameters<typeof CreatePRDialog>[0] & { onConfirm: typeof onConfirm };
-  return { onConfirm, props, ...render(<CreatePRDialog {...props} />) };
+  } as Parameters<typeof AgentLaunchDialog>[0] & { onConfirm: typeof onConfirm };
+  return { onConfirm, props, ...render(<AgentLaunchDialog {...props} />) };
 }
 
 function picker() {
@@ -92,7 +92,7 @@ function submit() {
   fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
 }
 
-describe("CreatePRDialog", () => {
+describe("AgentLaunchDialog", () => {
   test("adapts the shared model picker for conflict resolution", () => {
     const { onConfirm } = renderDialog({
       kind: "resolve-conflicts",
@@ -235,6 +235,31 @@ describe("CreatePRDialog", () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
+  test("presents a launch in flight as progress rather than a fault", () => {
+    const { onConfirm } = renderDialog({ kind: "resolve-conflicts", busy: true });
+
+    // The user submitted successfully a moment ago. A destructive alert here
+    // would tell them their own launch had failed for as long as it took.
+    expect(screen.getByRole("status").textContent).toContain("Launching");
+    expect(screen.queryByRole("alert") === null).toBe(true);
+
+    const confirm = screen.getByRole("button", { name: "Resolve conflicts" });
+    expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(confirm);
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  test("lets a retry in flight supersede the error it is retrying", () => {
+    renderDialog({
+      kind: "resolve-conflicts",
+      busy: true,
+      error: "The environment may no longer be ready or the maximum tab count was reached.",
+    });
+
+    expect(screen.getByRole("status").textContent).toContain("Launching");
+    expect(screen.queryByRole("alert") === null).toBe(true);
+  });
+
   test("reconfigures itself on every open, including the first", () => {
     const { props, rerender } = renderDialog({
       open: false,
@@ -242,7 +267,7 @@ describe("CreatePRDialog", () => {
     });
     expect(screen.queryByRole("dialog") === null).toBe(true);
 
-    rerender(<CreatePRDialog {...props} open />);
+    rerender(<AgentLaunchDialog {...props} open />);
     expect(picker().textContent).toContain("Claude Fixed");
 
     openPicker();
@@ -250,8 +275,8 @@ describe("CreatePRDialog", () => {
     closePicker();
     expect(picker().textContent).toContain("Codex A");
 
-    rerender(<CreatePRDialog {...props} open={false} />);
-    rerender(<CreatePRDialog {...props} open />);
+    rerender(<AgentLaunchDialog {...props} open={false} />);
+    rerender(<AgentLaunchDialog {...props} open />);
     expect(picker().textContent).toContain("Claude Fixed");
   });
 
@@ -263,7 +288,7 @@ describe("CreatePRDialog", () => {
     closePicker();
     expect(picker().textContent).toContain("Codex A");
 
-    rerender(<CreatePRDialog {...props} catalog={structuredClone(catalog)} />);
+    rerender(<AgentLaunchDialog {...props} catalog={structuredClone(catalog)} />);
 
     expect(picker().textContent).toContain("Codex A");
   });

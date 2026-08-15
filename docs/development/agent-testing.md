@@ -24,15 +24,31 @@ The second start is idempotent and reports the already-running launcher. Wait fo
 `testProject`, `electronTitle`, and `logDir`. The manifest names the mode-0600
 gateway auth file but never includes its token.
 
-The default is credential-free. A live nested provider must be explicitly and
-narrowly enabled:
+Agent-test profiles use the host's active Claude, Codex, and OpenCode logins by
+default so manual QA can run real agents:
+
+See [`../credentials-and-models.md`](../credentials-and-models.md) for the full
+per-platform credential, container-import, and model-cache matrix.
 
 ```bash
-bun run dev:test -- --profile codex-live --fixture --credential-source codex
+bun run dev:test -- --profile live-agents --fixture
 ```
 
-Supported credential sources are `claude`, `codex`, and `opencode`. GitHub,
-Cursor, Grok, and ambient API credentials remain disabled in agent-test mode.
+To narrow the profile to one provider, pass `--credential-source codex` (or
+`claude`/`opencode`). To test the signed-out experience, pass
+`--no-agent-credentials`. GitHub, Cursor, Grok, and unrelated ambient API
+credentials remain disabled. Live agent requests can incur external effects or
+cost, so use only the seeded fixture and do not put credentials in test output.
+
+Startup fills missing profile caches from available, bounded model metadata:
+`agent-model-catalog.json`, `opencode-model-catalog.json`, Codex
+`models_cache.json`, the Codex bridge `models-cache.json`, and Grok
+`models_cache.json`. Cursor and Grok picker entries are also carried in the
+shared `agent-model-catalog.json`; Cursor has no separate portable model-cache
+file. This makes model pickers representative even in a deliberately
+credential-free run. Existing profile caches are preserved across restarts, and
+the seeding does not copy projects, sessions, prompts, settings, or additional
+credentials.
 
 To create and start fixture environments during seeding:
 
@@ -111,11 +127,22 @@ artifacts are redacted after the run as a second defense for the short-lived
 session cookie. Do not add gateway tokens, prompts, terminal output, or fixture
 contents to reports.
 
-## Manual browser and native QA
+## Manual browser QA
 
-Open the exact `browserUrl` from status and enter the token from `authFile`, or
-target the exact native title, for example `Orkestrator AI — DEV [codex-qa]`,
-with Computer Use. Never interact with a window titled only `Orkestrator AI`.
+Use the in-app Browser, or Playwright for repeatable assertions, against the
+exact `browserUrl` from status. This is the default client for normal UI and
+agent testing. Do not use Computer Use to open or drive the desktop app unless
+the change specifically exercises Electron-only behavior such as menus,
+clipboard, preload/IPC, window identity, or shutdown. For those native checks,
+target the exact `electronTitle`; never interact with a window titled only
+`Orkestrator AI`.
+
+If the browser shows the login page, `authFile` is an owner-only JSON file and
+its `token` property is the exact code the page is requesting. It is the gateway
+token, not an OTP or a code shown elsewhere. Read the value locally, type it only
+into the gateway-token password field, and submit. Never echo it, include it in
+a shell argument or URL, paste it into chat, or capture it in screenshots,
+traces, logs, and reports.
 
 Use the fixture to create/start an environment, open a terminal, run
 `bun run dev`, open the printed preview, change the `fixture-v1` marker, and
@@ -151,7 +178,8 @@ deletes that profile's disposable state. Preserve downloaded binaries with
 - An occupied reserved port fails startup clearly; retrying allocates fresh ports.
 - If Docker is unavailable, use the local fixture flow.
 - A missing toolchain affects nested agents, not credential-free fixture/server
-  testing. Enable credentials only for the provider being tested.
+  testing. Use `--credential-source <name>` when a test should expose only one
+  provider, or `--no-agent-credentials` for signed-out behavior.
 - `dev:stop` validates launcher PID start time and reports surviving owned
   processes; it never kills by executable name or port.
 - If reset refuses the target, do not bypass the sentinel or path check. Inspect

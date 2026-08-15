@@ -360,6 +360,18 @@ lines.on("line", (line) => {
         status: "completed",
       });
     }
+    // An agent replaying its conversation can re-describe terminal state too,
+    // so the load carries usage for a turn that already ended. The numbers
+    // differ from every live scenario below so a test can tell which report the
+    // panel ended up showing.
+    if (process.env.FAKE_ACP_REPLAY_USAGE === "1") {
+      replay({
+        sessionUpdate: "state_update",
+        state: "idle",
+        stopReason: "end_turn",
+        usage: { totalTokens: 4_321, inputTokens: 4_000, outputTokens: 321 },
+      });
+    }
     if (process.env.FAKE_ACP_REPLAY_ACTIVE_SUBAGENT === "1") {
       replay({
         sessionUpdate: "tool_call",
@@ -2255,11 +2267,10 @@ lines.on("line", (line) => {
       }, 250);
       return;
     }
-    // Standard ACP carriers Cursor's CLI schema already defines but does not
-    // emit. The bridge must still consume them so occupancy appears the moment
-    // an agent starts sending `usage_update` / `PromptResponse.usage`.
     // v2 turn-complete usage rides idle `state_update.usage`; session/prompt
     // itself returns only a stop reason, the way Cursor's empty result looks.
+    // The running frame already carries the cache-write count the idle one
+    // omits, so a turn's partial reports have to merge rather than replace.
     if (prompt.startsWith("USAGE_STATE")) {
       write({
         jsonrpc: "2.0",
@@ -2274,7 +2285,11 @@ lines.on("line", (line) => {
         method: "session/update",
         params: {
           sessionId: "fake-session",
-          update: { sessionUpdate: "state_update", state: "running" },
+          update: {
+            sessionUpdate: "state_update",
+            state: "running",
+            usage: { cachedWriteTokens: 20 },
+          },
         },
       });
       write({
@@ -2292,7 +2307,6 @@ lines.on("line", (line) => {
               outputTokens: 1_000,
               thoughtTokens: 50,
               cachedReadTokens: 4_000,
-              cachedWriteTokens: 20,
             },
           },
         },
@@ -2304,6 +2318,29 @@ lines.on("line", (line) => {
       });
       return;
     }
+    // The same occupancy carrier spelled with `type` instead of
+    // `sessionUpdate`. The bridge routes an update on either discriminator, so
+    // the parser has to read either one too, or the frame reaches the usage
+    // path and is dropped there as a generic `used`/`size` pair.
+    if (prompt.startsWith("USAGE_TYPED")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: { type: "usage_update", used: 1_500, size: 30_000 },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: { stopReason: "end_turn" },
+      });
+      return;
+    }
+    // Standard ACP carriers Cursor's CLI schema already defines but does not
+    // emit. The bridge must still consume them so occupancy appears the moment
+    // an agent starts sending `usage_update` / `PromptResponse.usage`.
     if (prompt.startsWith("USAGE_ACP")) {
       write({
         jsonrpc: "2.0",

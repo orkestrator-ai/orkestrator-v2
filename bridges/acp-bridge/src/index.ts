@@ -1241,7 +1241,16 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     // (`state_update.usage`). Neither mutates the transcript. Cursor's CLI
     // adapter does not emit these yet; when it does, this is the path that
     // fills the agent info panel.
-    recordTurnUsage(state, update);
+    //
+    // A reconnect replays reports for turns this session already accounted for
+    // and restored from its own state file, so they are dropped like the
+    // replayed transcript around them. Re-latching them would stamp
+    // `updatedAt` with the reconnect and merge an older turn's breakdown into
+    // the newest one. `isTranscriptUpdateKind` cannot express this — usage
+    // never touches the transcript — so the guard is spelled out here. A
+    // hydrating load holds no snapshot of its own, and there its replay is the
+    // only record the panel will ever get for that turn.
+    if (state.historyReplay !== "ignore") recordTurnUsage(state, update);
     return;
   }
   if (kind === "config_option_update") {

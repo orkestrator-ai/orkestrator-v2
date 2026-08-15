@@ -149,6 +149,18 @@ describe("parseAcpTurnUsage", () => {
     })).toBeNull();
   });
 
+  test("reads a running state_update that already carries part of the count", () => {
+    // `state` is deliberately not a gate. A turn may report its cache split
+    // while it is still running and the rest of the breakdown when it settles,
+    // and the caller merges the two; refusing the first report would lose the
+    // fields the second one never repeats.
+    expect(parseAcpTurnUsage({
+      sessionUpdate: "state_update",
+      state: "running",
+      usage: { cachedWriteTokens: 20 },
+    })).toEqual({ cacheWriteTokens: 20 });
+  });
+
   test("ignores a usage_update cost that is not USD", () => {
     expect(parseAcpTurnUsage({
       sessionUpdate: "usage_update",

@@ -202,7 +202,16 @@ interface SessionState {
   /** Coalesces best-effort Cursor metadata replays within one live session. */
   cursorToolReplayTimer?: ReturnType<typeof setTimeout>;
   cursorToolReplayRunning?: boolean;
-  cursorToolReplayDirty?: boolean;
+  /**
+   * The pass this session still owes. `live` runs mid-turn and may only touch
+   * settled calls; `final` runs once the turn is over and supersedes a pending
+   * `live` request, because it can enrich calls the live pass had to skip.
+   */
+  cursorToolReplayPending?: "live" | "final";
+  /** `promptSequence` the run counter below belongs to. */
+  cursorToolReplayTurn?: number;
+  /** Replays actually started for `cursorToolReplayTurn`, capping live passes. */
+  cursorToolReplayRuns?: number;
   /** Messages evicted from the front, so absolute indices stay stable. */
   droppedMessages: number;
   /**
@@ -370,7 +379,25 @@ const MAX_TOOL_TITLE_BYTES = 4 * 1024;
 const MAX_TOOL_PATH_BYTES = 16 * 1024;
 const MAX_REPLAY_RECONCILE_TOOLS = 4_096;
 const MAX_CURSOR_TOOL_REPLAY_PROCESSES = 8;
-const CURSOR_TOOL_REPLAY_DELAY_MS = 150;
+/**
+ * Debounce for a live pass. Long enough to coalesce a burst of tools that
+ * settle together into one replay, short enough that a title still lands while
+ * the user is watching the turn.
+ */
+const CURSOR_TOOL_REPLAY_DELAY_MS = 500;
+/**
+ * Each replay spawns a child and streams the *whole* session back, so one pass
+ * per settled tool would make a long turn quadratic in its tool count. Live
+ * passes are capped per turn; the final pass is never capped, so a turn that
+ * exhausts its budget still ends fully enriched. `0` disables live passes and
+ * leaves only that final pass.
+ */
+const MAX_LIVE_CURSOR_TOOL_REPLAYS_PER_TURN = parseBoundedInteger(
+  process.env.ACP_MAX_LIVE_CURSOR_TOOL_REPLAYS,
+  8,
+  0,
+  64,
+);
 /** Bounds both the time and the retained memory of `diffFileLines`. */
 const MAX_DIFF_EDIT_DISTANCE = 512;
 /**
@@ -1308,7 +1335,6 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     return;
   }
   schedulePersist();
-
 }
 
 /** Every `session/update` kind that appends to or mutates the transcript. */
@@ -1453,9 +1479,12 @@ function applyToolCallUpdate(
   // settles, even while the turn keeps running. Reconcile then so a long turn
   // does not leave every completed call anonymous until the final response.
   // Hydration has the rich replay metadata already and must not recursively
-  // spawn another replay process of its own.
+  // spawn another replay process of its own, and a structured turn is excluded
+  // because the join re-bounds the transcript without failing it — see
+  // `applyReplayToolMetadata`.
   if (state.historyReplay === false
     && state.status === "running"
+    && !turnRequiresCompleteOutput(state)
     && part.toolState !== undefined
     && part.toolState !== "pending"
     && isGenericCursorToolTitle(part.toolTitle)
@@ -1599,15 +1628,32 @@ function isGenericCursorToolTitle(value: string | undefined): boolean {
  * live parts were excluded. Taking the suffix keeps both sides drawn from the
  * same window, and including the already-enriched parts inside it lets them
  * consume their own replay entries instead of leaving them as false candidates.
+ *
+ * `requireSettled` is what makes a *live* pass safe. Cursor indexes a call when
+ * it settles, so a call still in flight has no replay entry to claim — but it
+ * is also generic and argument-less, which is exactly the shape the join treats
+ * as a candidate. It would take a settled sibling's entry through the
+ * single-candidate fallback and keep it, because an enriched part no longer
+ * looks generic and every later pass skips it. Rather than guess, a live pass
+ * refuses the whole window while anything in it is unsettled; the next settle,
+ * or the final pass, sees a window that lines up again.
  */
-function cursorToolReplayTargets(state: SessionState): BridgeToolPart[] {
+function cursorToolReplayTargets(
+  state: SessionState,
+  options: { requireSettled?: boolean } = {},
+): BridgeToolPart[] {
   if (provider !== "cursor") return [];
   const parts = transcriptToolParts(state).slice(-MAX_REPLAY_RECONCILE_TOOLS);
   const firstGeneric = parts.findIndex((part) =>
     isGenericCursorToolTitle(part.toolTitle)
     && !hasToolArguments(part.toolArgs)
   );
-  return firstGeneric === -1 ? [] : parts.slice(firstGeneric);
+  if (firstGeneric === -1) return [];
+  const targets = parts.slice(firstGeneric);
+  if (options.requireSettled && targets.some(
+    (part) => part.toolState !== "success" && part.toolState !== "failure",
+  )) return [];
+  return targets;
 }
 
 function applyReplayToolMetadata(
@@ -1683,11 +1729,13 @@ function applyReplayToolMetadata(
       acpToolSourceStates.delete(part);
     }
   }
-  // Re-bound, but never fail. `turnRequiresCompleteOutput` describes whichever
-  // turn is running *now*, and by construction that is never the turn this
-  // enrichment belongs to — the settle handler clears `currentTurnOutput`
-  // before scheduling the replay. Failing here would cancel and error out an
-  // unrelated structured turn because an older turn's display metadata grew.
+  // Re-bound, but never fail. Failing here would cancel and error out a
+  // structured turn because some turn's *display* metadata grew, so both
+  // schedulers keep `turnRequiresCompleteOutput` false while this runs: the
+  // final pass because the settle handler clears `currentTurnOutput` before
+  // scheduling it, and a live pass because it is neither armed nor allowed to
+  // start inside a structured turn. A structured turn therefore keeps its
+  // guarantee that any truncation reaches `failTranscriptLimit`.
   if (changed) boundTranscript(state);
   return changed;
 }
@@ -1776,25 +1824,54 @@ async function reconcileCursorToolMetadata(
   }
 }
 
+/** True once this turn has spent its live replay budget. */
+function liveCursorReplayBudgetExhausted(state: SessionState): boolean {
+  const used = state.cursorToolReplayTurn === state.promptSequence
+    ? state.cursorToolReplayRuns ?? 0
+    : 0;
+  return used >= MAX_LIVE_CURSOR_TOOL_REPLAYS_PER_TURN;
+}
+
+/** Charges one started replay to the turn that is running now. */
+function recordCursorToolReplayRun(state: SessionState): void {
+  if (state.cursorToolReplayTurn !== state.promptSequence) {
+    state.cursorToolReplayTurn = state.promptSequence;
+    state.cursorToolReplayRuns = 0;
+  }
+  state.cursorToolReplayRuns = (state.cursorToolReplayRuns ?? 0) + 1;
+}
+
 /**
  * Coalesces live and end-of-turn Cursor metadata reconciliation per session.
  *
  * A turn can complete several parallel tools in one stdout burst. One detached
  * replay is enough to enrich all of them, so starting a child for every status
  * update would multiply processes and race several identical transcript joins.
- * A call that settles while a replay is already running marks the session dirty
- * and receives one follow-up pass after that child closes.
+ * A call that settles while a replay is already running leaves the request
+ * pending and receives one follow-up pass after that child closes.
+ *
+ * The pending request carries its own mode rather than the caller's urgency,
+ * because the two differ: a follow-up scheduled from a finishing replay runs
+ * immediately but may still be a *live* pass, and a live pass has strictly
+ * narrower targets than the final one.
  */
 function scheduleCursorToolMetadataReconcile(
   state: SessionState,
-  options: { immediate?: boolean } = {},
+  options: { final?: boolean } = {},
 ): void {
   if (provider !== "cursor" || shuttingDown || sessions.get(state.id) !== state) return;
-  state.cursorToolReplayDirty = true;
+  // Only live passes are rate-limited. The final pass is the completeness
+  // guarantee, so a turn that spent its budget still ends fully enriched.
+  if (!options.final && liveCursorReplayBudgetExhausted(state)) return;
+  // `final` supersedes a pending `live`; the reverse would narrow a request
+  // that was already promised the wider target window.
+  if (options.final || !state.cursorToolReplayPending) {
+    state.cursorToolReplayPending = options.final ? "final" : "live";
+  }
   if (state.cursorToolReplayRunning) return;
 
   if (state.cursorToolReplayTimer) {
-    if (!options.immediate) return;
+    if (!options.final) return;
     clearTimeout(state.cursorToolReplayTimer);
     state.cursorToolReplayTimer = undefined;
   }
@@ -1802,26 +1879,36 @@ function scheduleCursorToolMetadataReconcile(
   const run = () => {
     state.cursorToolReplayTimer = undefined;
     if (shuttingDown || sessions.get(state.id) !== state) return;
-    state.cursorToolReplayDirty = false;
+    const mode = state.cursorToolReplayPending;
+    state.cursorToolReplayPending = undefined;
+    if (!mode) return;
+    // A structured turn started between arming this timer and firing it. The
+    // join re-bounds the transcript without failing, which that turn forbids.
+    // Dropping the pass is safe: `cursorToolReplayTargets` walks back to the
+    // oldest still-generic call, so the next final pass picks these up.
+    if (turnRequiresCompleteOutput(state)) return;
     const child = state.child;
-    const targets = cursorToolReplayTargets(state);
+    const targets = cursorToolReplayTargets(state, { requireSettled: mode === "live" });
     if (!child || targets.length === 0) return;
 
     const promptSequence = state.promptSequence;
+    recordCursorToolReplayRun(state);
     state.cursorToolReplayRunning = true;
     void reconcileCursorToolMetadata(state, child, targets, promptSequence)
       .catch(() => undefined)
       .finally(() => {
         state.cursorToolReplayRunning = false;
-        if (state.cursorToolReplayDirty) {
-          scheduleCursorToolMetadataReconcile(state, { immediate: true });
+        if (state.cursorToolReplayPending) {
+          scheduleCursorToolMetadataReconcile(state, {
+            final: state.cursorToolReplayPending === "final",
+          });
         }
       });
   };
 
   state.cursorToolReplayTimer = setTimeout(
     run,
-    options.immediate ? 0 : CURSOR_TOOL_REPLAY_DELAY_MS,
+    options.final ? 0 : CURSOR_TOOL_REPLAY_DELAY_MS,
   );
   state.cursorToolReplayTimer.unref();
 }
@@ -1829,7 +1916,7 @@ function scheduleCursorToolMetadataReconcile(
 function cancelCursorToolMetadataReconcile(state: SessionState): void {
   if (state.cursorToolReplayTimer) clearTimeout(state.cursorToolReplayTimer);
   state.cursorToolReplayTimer = undefined;
-  state.cursorToolReplayDirty = false;
+  state.cursorToolReplayPending = undefined;
 }
 
 function applyAcpToolSourcePatch(source: AcpToolSourceState, update: JsonObject): void {
@@ -3091,18 +3178,24 @@ async function route(
       }
       state.revision += 1;
       schedulePersist();
-      // The final pass is the safety net for a title that Cursor had not yet
-      // indexed during its live completion update. It remains outside the
-      // authoritative turn lifecycle: a slow or incompatible replay cannot
-      // keep the session working, block the next prompt, or make completion
-      // ambiguous. The per-session scheduler also prevents this pass from
-      // racing an in-flight live enrichment.
-      scheduleCursorToolMetadataReconcile(state, { immediate: true });
+      // The final pass is the safety net for every title a live pass could not
+      // reach: one Cursor had not yet indexed, one skipped because a sibling
+      // was still in flight, and one dropped because the turn spent its live
+      // budget. It remains outside the authoritative turn lifecycle: a slow or
+      // incompatible replay cannot keep the session working, block the next
+      // prompt, or make completion ambiguous. The per-session scheduler also
+      // prevents this pass from racing an in-flight live enrichment.
+      scheduleCursorToolMetadataReconcile(state, { final: true });
     }, (error: unknown) => {
       state.status = "error";
       state.error = error instanceof Error ? error.message : String(error);
       state.turnStartedAt = undefined;
       state.currentTurnUsage = undefined;
+      // A turn that failed gets no final pass, so a live timer armed moments
+      // before the failure has nothing left to complete. Drop it here for the
+      // same reason `DELETE` and `shutdown` do: enrichment is display-only
+      // background work, and nothing should outlive the turn that asked for it.
+      cancelCursorToolMetadataReconcile(state);
       reconcileStaleToolParts(state, true);
       if (requestId) setPromptJournal(state, {
         requestId,

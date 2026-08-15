@@ -1959,7 +1959,7 @@ describe("ACP bridge", () => {
     expect((await fs.readFile(lifecycleFile, "utf8")).match(/^load:/gm)).toHaveLength(1);
   });
 
-  test("defers live Cursor enrichment while a same-kind call is still in flight", async () => {
+  test("enriches a settled Cursor read while a same-kind sibling is still in flight", async () => {
     const directory = await temporaryDirectory();
     const lifecycleFile = resolve(directory, "cursor-pending-sibling.log");
     const holdTurnFile = resolve(directory, "release-turn");
@@ -1990,20 +1990,27 @@ describe("ACP bridge", () => {
     const tools = (value: { messages: Array<{ parts: Array<Record<string, unknown>> }> }) =>
       value.messages[1]?.parts.filter((part) => part.type === "tool-invocation") ?? [];
 
-    await waitFor(
+    const live = await waitFor(
       readSession,
-      (value) => tools(value).some((part) => part.toolUseId === "live-read-2" && part.toolState === "success"),
+      (value) => tools(value).some(
+        (part) => part.toolUseId === "live-read-2"
+          && part.toolTitle === "Read second.json (1 - 20)",
+      ),
     );
-    // `live-read-2` settling arms a live pass, but `live-read-1` is a same-kind
-    // call the agent has not indexed yet. It has no replay entry of its own, so
-    // enriching now would let it claim its sibling's — permanently, because an
-    // enriched part no longer looks generic. The pass must stand down instead.
-    await Bun.sleep(1_200);
-    expect(await fs.readFile(lifecycleFile, "utf8").catch(() => "")).not.toContain("load:");
-    expect(await readSession().then(tools)).toEqual([
+    // `live-read-2` is in the index; `live-read-1` is not. The live pass has to
+    // enrich the settled call from a unique output match and leave the pending
+    // one generic — using the kind fallback here would stamp the wrong file
+    // onto `live-read-1` permanently.
+    expect(tools(live)).toEqual([
       expect.objectContaining({ toolUseId: "live-read-1", toolTitle: "Read File", toolState: "pending" }),
-      expect.objectContaining({ toolUseId: "live-read-2", toolTitle: "Read File", toolState: "success" }),
+      expect.objectContaining({
+        toolUseId: "live-read-2",
+        toolTitle: "Read second.json (1 - 20)",
+        toolArgs: { path: "/workspace/second.json" },
+        toolState: "success",
+      }),
     ]);
+    expect((await fs.readFile(lifecycleFile, "utf8")).match(/^load:/gm)).toHaveLength(1);
 
     await fs.writeFile(holdTurnFile, "");
     const settled = await waitFor(
@@ -2026,6 +2033,289 @@ describe("ACP bridge", () => {
         toolArgs: { path: "/workspace/second.json" },
       }),
     ]);
+  });
+
+  test("enriches a settled Cursor read while a different-kind call is still in flight", async () => {
+    const directory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "cursor-pending-other.log");
+    const holdTurnFile = resolve(directory, "release-turn");
+    const bridge = await spawnBridge({
+      env: {
+        FAKE_ACP_REPLAY_CURSOR_TOOL_METADATA: "1",
+        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+        FAKE_ACP_HOLD_TURN_FILE: holdTurnFile,
+      },
+    });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-pending-other:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "CURSOR_GENERIC_TOOLS_PENDING_OTHER" }),
+    });
+    const readSession = async () =>
+      nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>;
+    const tools = (value: { messages: Array<{ parts: Array<Record<string, unknown>> }> }) =>
+      value.messages[1]?.parts.filter((part) => part.type === "tool-invocation") ?? [];
+
+    const live = await waitFor(
+      readSession,
+      (value) => tools(value).some(
+        (part) => part.toolUseId === "live-read-1"
+          && part.toolTitle === "Read package.json (1 - 80)",
+      ),
+    );
+    expect(tools(live)).toEqual([
+      expect.objectContaining({
+        toolUseId: "live-read-1",
+        toolTitle: "Read package.json (1 - 80)",
+        toolArgs: { path: "/workspace/package.json" },
+        toolState: "success",
+      }),
+      expect.objectContaining({
+        toolUseId: "live-shell-1",
+        toolTitle: "Run safe command",
+        toolState: "pending",
+      }),
+    ]);
+    expect((await fs.readFile(lifecycleFile, "utf8")).match(/^load:/gm)).toHaveLength(1);
+
+    await fs.writeFile(holdTurnFile, "");
+    const settled = await waitFor(
+      readSession,
+      (value) => value.status === "idle"
+        && tools(value).some((part) => part.toolUseId === "live-shell-1" && part.toolState === "success"),
+    );
+    expect(tools(settled).find((part) => part.toolUseId === "live-read-1"))
+      .toMatchObject({
+        toolTitle: "Read package.json (1 - 80)",
+        toolArgs: { path: "/workspace/package.json" },
+      });
+  });
+
+  test("does not stamp a stale same-kind title on a live Cursor pass", async () => {
+    const directory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "cursor-stale-kind.log");
+    const holdTurnFile = resolve(directory, "release-turn");
+    const bridge = await spawnBridge({
+      env: {
+        FAKE_ACP_REPLAY_CURSOR_STALE_KIND: "1",
+        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+        FAKE_ACP_HOLD_TURN_FILE: holdTurnFile,
+      },
+    });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-stale-kind:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "CURSOR_GENERIC_TOOLS_STALE_KIND" }),
+    });
+    const readSession = async () =>
+      nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>;
+    const tools = (value: { messages: Array<{ parts: Array<Record<string, unknown>> }> }) =>
+      value.messages[1]?.parts.filter((part) => part.type === "tool-invocation") ?? [];
+
+    await waitFor(
+      () => fs.readFile(lifecycleFile, "utf8").catch(() => ""),
+      (value) => (value.match(/^load:/gm)?.length ?? 0) >= 1,
+    );
+    // The live window holds only the stale same-kind candidate, which has no
+    // output hash. Kind fallback would stamp that file onto this part forever.
+    await Bun.sleep(800);
+    const live = await readSession();
+    expect(live.status).toBe("running");
+    expect(tools(live)).toEqual([
+      expect.objectContaining({
+        toolUseId: "live-read-1",
+        toolTitle: "Read File",
+        toolArgs: {},
+        toolState: "success",
+      }),
+      expect.objectContaining({
+        toolUseId: "live-shell-1",
+        toolTitle: "Run safe command",
+        toolState: "pending",
+      }),
+    ]);
+    expect((await fs.readFile(lifecycleFile, "utf8")).match(/^load:/gm)).toHaveLength(1);
+
+    await fs.writeFile(holdTurnFile, "");
+    const settled = await waitFor(
+      readSession,
+      (value) => value.status === "idle"
+        && tools(value).some((part) => part.toolUseId === "live-read-1"
+          && part.toolTitle === "Read package.json (1 - 80)"),
+    );
+    expect(tools(settled).find((part) => part.toolUseId === "live-read-1"))
+      .toMatchObject({
+        toolTitle: "Read package.json (1 - 80)",
+        toolArgs: { path: "/workspace/package.json" },
+      });
+  });
+
+  test("does not spawn a second live Cursor replay after settled parts are already enriched", async () => {
+    const directory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "cursor-noop-followup.log");
+    const holdTurnFile = resolve(directory, "release-turn");
+    const secondSettleFile = resolve(directory, "second-settle");
+    const bridge = await spawnBridge({
+      env: {
+        FAKE_ACP_REPLAY_CURSOR_PARALLEL_READS: "1",
+        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+        FAKE_ACP_HOLD_TURN_FILE: holdTurnFile,
+        FAKE_ACP_SECOND_SETTLE_FILE: secondSettleFile,
+        FAKE_ACP_LOAD_DELAY_MS: "800",
+      },
+    });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-noop-followup:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "CURSOR_GENERIC_TOOLS_NOOP_FOLLOWUP" }),
+    });
+    const readSession = async () =>
+      nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>;
+    const tools = (value: { messages: Array<{ parts: Array<Record<string, unknown>> }> }) =>
+      value.messages[1]?.parts.filter((part) => part.type === "tool-invocation") ?? [];
+
+    await waitFor(
+      () => fs.readFile(lifecycleFile, "utf8").catch(() => ""),
+      (value) => value.includes("load:"),
+    );
+    await fs.writeFile(secondSettleFile, "");
+    const live = await waitFor(
+      readSession,
+      (value) => tools(value).some(
+        (part) => part.toolUseId === "live-read-2"
+          && part.toolTitle === "Read second.json (1 - 20)",
+      ),
+    );
+    expect(tools(live)).toEqual([
+      expect.objectContaining({ toolUseId: "live-read-1", toolTitle: "Read File", toolState: "pending" }),
+      expect.objectContaining({
+        toolUseId: "live-read-2",
+        toolTitle: "Read second.json (1 - 20)",
+        toolArgs: { path: "/workspace/second.json" },
+        toolState: "success",
+      }),
+    ]);
+    // The duplicate completion armed a follow-up live pass whose settled
+    // window is already enriched. That pass must not spend another child.
+    await Bun.sleep(1_200);
+    expect((await fs.readFile(lifecycleFile, "utf8")).match(/^load:/gm)).toHaveLength(1);
+
+    await fs.writeFile(holdTurnFile, "");
+    const settled = await waitFor(
+      readSession,
+      (value) => value.status === "idle"
+        && tools(value).every((part) => part.toolTitle !== "Read File"),
+    );
+    expect(tools(settled)).toEqual([
+      expect.objectContaining({
+        toolUseId: "live-read-1",
+        toolTitle: "Read first.json (1 - 40)",
+        toolArgs: { path: "/workspace/first.json" },
+      }),
+      expect.objectContaining({
+        toolUseId: "live-read-2",
+        toolTitle: "Read second.json (1 - 20)",
+        toolArgs: { path: "/workspace/second.json" },
+      }),
+    ]);
+  });
+
+  test("leaves a failed Cursor read generic on the live pass and recovers at the end", async () => {
+    const directory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "cursor-failed-no-output.log");
+    const holdTurnFile = resolve(directory, "release-turn");
+    const bridge = await spawnBridge({
+      env: {
+        FAKE_ACP_REPLAY_CURSOR_TOOL_METADATA: "1",
+        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+        FAKE_ACP_HOLD_TURN_FILE: holdTurnFile,
+      },
+    });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-failed-no-output:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "CURSOR_GENERIC_TOOLS_FAILED_NO_OUTPUT" }),
+    });
+    const readSession = async () =>
+      nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>;
+    const tools = (value: { messages: Array<{ parts: Array<Record<string, unknown>> }> }) =>
+      value.messages[1]?.parts.filter((part) => part.type === "tool-invocation") ?? [];
+
+    await waitFor(
+      () => fs.readFile(lifecycleFile, "utf8").catch(() => ""),
+      (value) => (value.match(/^load:/gm)?.length ?? 0) >= 1,
+    );
+    await Bun.sleep(800);
+    const live = await readSession();
+    expect(live.status).toBe("running");
+    expect(tools(live)).toEqual([
+      expect.objectContaining({
+        toolUseId: "live-read-1",
+        toolTitle: "Read File",
+        toolArgs: {},
+        toolState: "failure",
+      }),
+      expect.objectContaining({
+        toolUseId: "live-shell-1",
+        toolTitle: "Run safe command",
+        toolState: "pending",
+      }),
+    ]);
+    expect((await fs.readFile(lifecycleFile, "utf8")).match(/^load:/gm)).toHaveLength(1);
+
+    await fs.writeFile(holdTurnFile, "");
+    const settled = await waitFor(
+      readSession,
+      (value) => value.status === "idle"
+        && tools(value).some((part) => part.toolUseId === "live-read-1"
+          && part.toolTitle === "Read package.json (1 - 80)"),
+    );
+    expect(tools(settled).find((part) => part.toolUseId === "live-read-1"))
+      .toMatchObject({
+        toolTitle: "Read package.json (1 - 80)",
+        toolArgs: { path: "/workspace/package.json" },
+        toolState: "failure",
+      });
   });
 
   test("drops a pending live Cursor replay when the turn fails", async () => {

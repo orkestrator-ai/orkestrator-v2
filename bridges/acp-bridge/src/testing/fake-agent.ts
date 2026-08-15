@@ -129,20 +129,24 @@ const holdTurnFile = process.env.FAKE_ACP_HOLD_TURN_FILE;
  * makes slower than any timer a test would guess. The deadline is only a
  * backstop so a failing test cannot leave the process hanging.
  */
-function whenReleased(release: () => void): void {
-  if (!holdTurnFile) {
-    release();
-    return;
-  }
+function whenFileExists(file: string, release: () => void): void {
   const deadline = Date.now() + 30_000;
   const poll = (): void => {
-    if (existsSync(holdTurnFile) || Date.now() > deadline) {
+    if (existsSync(file) || Date.now() > deadline) {
       release();
       return;
     }
     setTimeout(poll, 20);
   };
   poll();
+}
+
+function whenReleased(release: () => void): void {
+  if (!holdTurnFile) {
+    release();
+    return;
+  }
+  whenFileExists(holdTurnFile, release);
 }
 
 lines.on("line", (line) => {
@@ -431,6 +435,40 @@ lines.on("line", (line) => {
           toolCallId: entry.id,
           status: "completed",
           rawOutput: { content: entry.content },
+        });
+      }
+    }
+    // A prior same-kind read with a title and path but no output hash, plus the
+    // live turn's true entry only after the hold file exists. A live pass sized
+    // to one settled target keeps that stale call as its only candidate.
+    if (process.env.FAKE_ACP_REPLAY_CURSOR_STALE_KIND === "1") {
+      replay({
+        sessionUpdate: "tool_call",
+        toolCallId: "replay-stale-read",
+        title: "Read stale.json (1 - 10)",
+        kind: "read",
+        status: "pending",
+        rawInput: { path: "/workspace/stale.json" },
+      });
+      replay({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "replay-stale-read",
+        status: "completed",
+      });
+      if (!holdTurnFile || existsSync(holdTurnFile)) {
+        replay({
+          sessionUpdate: "tool_call",
+          toolCallId: "replay-read-1",
+          title: "Read package.json (1 - 80)",
+          kind: "read",
+          status: "pending",
+          rawInput: { path: "/workspace/package.json" },
+        });
+        replay({
+          sessionUpdate: "tool_call_update",
+          toolCallId: "replay-read-1",
+          status: "completed",
+          rawOutput: { content: "package contents" },
         });
       }
     }
@@ -2297,8 +2335,9 @@ lines.on("line", (line) => {
     // Two same-kind reads launched together, only the second of which settles
     // while the turn keeps running. Cursor indexes a call when it settles, so
     // `FAKE_ACP_REPLAY_CURSOR_PARALLEL_READS` withholds the first read's
-    // metadata until this prompt is released — the state in which an
-    // unsettled, still-generic part could otherwise claim its sibling's entry.
+    // metadata until this prompt is released. A live pass must enrich the
+    // settled sibling from that partial index without letting the pending one
+    // claim it.
     if (prompt.startsWith("CURSOR_GENERIC_TOOLS_PENDING_SIBLING")) {
       for (const update of [
         {
@@ -2341,6 +2380,251 @@ lines.on("line", (line) => {
               toolCallId: "live-read-1",
               status: "completed",
               rawOutput: { content: "first contents" },
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          id: message.id as number,
+          result: { stopReason: "end_turn" },
+        });
+      });
+      return;
+    }
+    // A settled generic read followed by an in-flight execute. The execute is
+    // not a Cursor read/search label, but it used to sit in the live suffix and
+    // make the whole pass stand down. The read's replay entry is already in
+    // `FAKE_ACP_REPLAY_CURSOR_TOOL_METADATA`.
+    if (prompt.startsWith("CURSOR_GENERIC_TOOLS_PENDING_OTHER")) {
+      for (const update of [
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-read-1",
+          title: "Read File",
+          kind: "read",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "live-read-1",
+          status: "completed",
+          rawOutput: { content: "package contents" },
+        },
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-shell-1",
+          title: "Run safe command",
+          kind: "execute",
+          status: "pending",
+          rawInput: { command: "printf ok" },
+        },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: "fake-session", update },
+        });
+      }
+      whenReleased(() => {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "live-shell-1",
+              status: "completed",
+              rawOutput: { exitCode: 0, stdout: "ok" },
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          id: message.id as number,
+          result: { stopReason: "end_turn" },
+        });
+      });
+      return;
+    }
+    // Settled generic read whose true index entry is withheld, plus a pending
+    // execute that keeps the turn open. The live replay window is that one
+    // settled call, so a prior same-kind entry with no output hash is the only
+    // candidate — the live join must leave the part generic.
+    if (prompt.startsWith("CURSOR_GENERIC_TOOLS_STALE_KIND")) {
+      for (const update of [
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-read-1",
+          title: "Read File",
+          kind: "read",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "live-read-1",
+          status: "completed",
+          rawOutput: { content: "package contents" },
+        },
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-shell-1",
+          title: "Run safe command",
+          kind: "execute",
+          status: "pending",
+          rawInput: { command: "printf ok" },
+        },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: "fake-session", update },
+        });
+      }
+      whenReleased(() => {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "live-shell-1",
+              status: "completed",
+              rawOutput: { exitCode: 0, stdout: "ok" },
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          id: message.id as number,
+          result: { stopReason: "end_turn" },
+        });
+      });
+      return;
+    }
+    // Same shape as the pending-sibling case, then a second completion of the
+    // already-settled read while its live replay is still running. That arms a
+    // follow-up live pass whose settled window is already enriched, so it must
+    // not spawn another child.
+    if (prompt.startsWith("CURSOR_GENERIC_TOOLS_NOOP_FOLLOWUP")) {
+      for (const update of [
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-read-1",
+          title: "Read File",
+          kind: "read",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-read-2",
+          title: "Read File",
+          kind: "read",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "live-read-2",
+          status: "completed",
+          rawOutput: { content: "second contents" },
+        },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: "fake-session", update },
+        });
+      }
+      const secondSettleFile = process.env.FAKE_ACP_SECOND_SETTLE_FILE;
+      if (secondSettleFile) {
+        whenFileExists(secondSettleFile, () => {
+          write({
+            jsonrpc: "2.0",
+            method: "session/update",
+            params: {
+              sessionId: "fake-session",
+              update: {
+                sessionUpdate: "tool_call_update",
+                toolCallId: "live-read-2",
+                status: "completed",
+                rawOutput: { content: "second contents" },
+              },
+            },
+          });
+        });
+      }
+      whenReleased(() => {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "live-read-1",
+              status: "completed",
+              rawOutput: { content: "first contents" },
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          id: message.id as number,
+          result: { stopReason: "end_turn" },
+        });
+      });
+      return;
+    }
+    // A generic read that failed with no output, plus an in-flight execute.
+    // The live join has neither a path nor an output hash and must not use the
+    // kind fallback, so it spends a replay child and still leaves the part
+    // generic until the final pass.
+    if (prompt.startsWith("CURSOR_GENERIC_TOOLS_FAILED_NO_OUTPUT")) {
+      for (const update of [
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-read-1",
+          title: "Read File",
+          kind: "read",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "live-read-1",
+          status: "failed",
+        },
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-shell-1",
+          title: "Run safe command",
+          kind: "execute",
+          status: "pending",
+          rawInput: { command: "printf ok" },
+        },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: "fake-session", update },
+        });
+      }
+      whenReleased(() => {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "live-shell-1",
+              status: "completed",
+              rawOutput: { exitCode: 0, stdout: "ok" },
             },
           },
         });

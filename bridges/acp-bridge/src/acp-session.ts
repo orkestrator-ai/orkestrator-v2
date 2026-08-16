@@ -32,6 +32,7 @@ import {
   externalSessionToken,
   isObject,
   isCursorTaskMethod,
+  isCursorUpdateTodosMethod,
   parseExternalSessionToken,
   provider,
   rememberCatalog,
@@ -66,11 +67,14 @@ import {
   turnRequiresCompleteOutput,
   } from "./acp-transcript.js";
 import {
+  applyAcpPlanUpdate,
   applyCursorTask,
+  applyCursorUpdateTodos,
   applySubagentFinished,
   applySubagentSpawned,
   applyToolCallUpdate,
   boundedModelId,
+  restoreCursorTodosFromMessages,
   } from "./acp-tools.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import {
@@ -226,6 +230,7 @@ export async function resumeSessionReserved(
       activeSubagentDescriptors: new Map(),
       subagentLimitExceeded: false,
       subagentToolIds: new Map(),
+      cursorTodos: [],
       historyMessageIds: new Map(),
       child,
       revision: 0,
@@ -255,6 +260,7 @@ export async function resumeSessionReserved(
     // session/load is a projection of work owned by another ACP process. Its
     // historical active markers cannot describe children of this new process.
     reconcileStaleToolParts(state, true);
+    state.cursorTodos = restoreCursorTodosFromMessages(state.messages);
     if (isObject(loaded)) {
       const sessionConfig = normalizeAcpSessionConfig(provider, {
         ...loaded,
@@ -340,6 +346,7 @@ export async function createSessionReserved(
       activeSubagentDescriptors: new Map(),
       subagentLimitExceeded: false,
       subagentToolIds: new Map(),
+      cursorTodos: [],
       historyMessageIds: new Map(),
       child,
       revision: 0,
@@ -489,6 +496,7 @@ export async function spawnAndLoadSession(state: SessionState): Promise<AcpProce
     }, RPC_TIMEOUT_MS);
     state.historyReplay = false;
     if (hydratedHistory) reconcileStaleToolParts(state, true);
+    state.cursorTodos = restoreCursorTodosFromMessages(state.messages);
     if (isObject(loaded)) {
       const sessionConfig = normalizeAcpSessionConfig(provider, {
         ...loaded,
@@ -643,6 +651,10 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
   if (state.outputTruncated) return;
   if (kind === "tool_call" || kind === "tool_call_update") {
     applyToolCallUpdate(state, update, kind === "tool_call");
+    return;
+  }
+  if (kind === "plan" || kind === "plan_update") {
+    applyAcpPlanUpdate(state, update);
     return;
   }
   if (kind !== "user_message"
@@ -813,6 +825,10 @@ export async function applyComposerPatch(
 export function applyVendorUpdate(state: SessionState, method: string, params: JsonObject): void {
   if (isCursorTaskMethod(method)) {
     applyCursorTask(state, params);
+    return;
+  }
+  if (isCursorUpdateTodosMethod(method)) {
+    applyCursorUpdateTodos(state, params);
     return;
   }
   const update = isObject(params.update) ? params.update : params;

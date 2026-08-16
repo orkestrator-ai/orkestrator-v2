@@ -220,7 +220,13 @@ const TASK_TODO_TOOL_NAMES = new Set([
   "task_get",
   "task_list",
 ]);
-const TODO_TOOL_NAMES = new Set(["todowrite", "todo_list"]);
+const TODO_TOOL_NAMES = new Set([
+  "todowrite",
+  "todo_write",
+  "todo_list",
+  "updatetodos",
+  "update_todos",
+]);
 
 function normalizeToolName(toolName?: string): string | undefined {
   return typeof toolName === "string" ? toolName.trim().toLowerCase() : undefined;
@@ -247,8 +253,9 @@ export function isTodoTool(toolName?: string): boolean {
 export function getTodoToolLabel(toolName?: string): string {
   const normalized = normalizeToolName(toolName);
 
-  if (normalized === "todowrite") return "Todo Write";
+  if (normalized === "todowrite" || normalized === "todo_write") return "Todo Write";
   if (normalized === "todo_list") return "Todo List";
+  if (normalized === "updatetodos" || normalized === "update_todos") return "Update TODOs";
   if (normalized === "taskcreate" || normalized === "task_create") return "Task Create";
   if (normalized === "taskupdate" || normalized === "task_update") return "Task Update";
   if (normalized === "taskget" || normalized === "task_get") return "Task Get";

@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
+// Must precede every bridge import below: `acp-tools.js` pulls in
+// `acp-context.js`, which resolves `ACP_PROVIDER` at module scope and throws
+// without it. Keep this first.
+import "./testing/unit-test-env.js";
 import {
   MAX_WAIT_DIAGNOSTIC_BYTES,
   codedError,
@@ -8,6 +12,16 @@ import {
   unusedPort,
   waitFor,
 } from "./acp-test-harness.js";
+import {
+  mergeCursorTodos,
+  parseAcpPlanEntries,
+  parseCursorTodos,
+  restoreCursorTodosFromMessages,
+  isAcpTodosToolName,
+  preserveTaskLaunchArgs,
+  MAX_CURSOR_TODOS,
+  MAX_CURSOR_TODO_CANDIDATES,
+} from "./acp-tools.js";
 
 
 describe("waitFor", () => {
@@ -128,5 +142,213 @@ describe("waitFor", () => {
     const { message } = rejection as Error;
     expect(message).toContain("chars, truncated)");
     expect(message.length).toBeLessThan(oversized.length);
+  });
+});
+
+describe("Cursor todo list helpers", () => {
+  test("parses well-formed Cursor todos and drops malformed entries", () => {
+    expect(parseCursorTodos([
+      { id: "1", content: "Valid", status: "pending" },
+      { id: "", content: "Missing id", status: "pending" },
+      { id: "2", content: "Valid too", status: "done" },
+      { id: "3", content: "Cancelled", status: "cancelled" },
+      { content: "Plan entry", status: "in_progress", priority: "high" },
+      null,
+      "nope",
+    ])).toEqual([
+      { id: "1", content: "Valid", status: "pending" },
+      { id: "2", content: "Missing id", status: "pending" },
+      { id: "3", content: "Cancelled", status: "cancelled" },
+      { id: "4", content: "Plan entry", status: "in_progress" },
+    ]);
+  });
+
+  test("does not let a generated id overwrite an explicit neighbour", () => {
+    expect(parseCursorTodos([
+      { id: "2", content: "Explicit two", status: "pending" },
+      { content: "No id", status: "pending" },
+    ])).toEqual([
+      { id: "2", content: "Explicit two", status: "pending" },
+      { id: "1", content: "No id", status: "pending" },
+    ]);
+    expect(parseCursorTodos([
+      { content: "No id first", status: "in_progress" },
+      { id: "1", content: "Explicit one", status: "completed" },
+    ])).toEqual([
+      { id: "2", content: "No id first", status: "in_progress" },
+      { id: "1", content: "Explicit one", status: "completed" },
+    ]);
+  });
+
+  test("does not treat ACP tool kind plan as a todo tool", () => {
+    expect(isAcpTodosToolName("plan")).toBe(false);
+    expect(isAcpTodosToolName("todo_write")).toBe(true);
+    expect(isAcpTodosToolName("todo_list")).toBe(true);
+    expect(isAcpTodosToolName("updateTodos")).toBe(true);
+  });
+
+  test("parses ACP plan entries from v1 entries and v2 plan.entries", () => {
+    const entries = [
+      { content: "First", priority: "high", status: "completed" },
+      { content: "Second", priority: "low", status: "pending" },
+    ];
+    expect(parseAcpPlanEntries({ entries })).toEqual([
+      { id: "1", content: "First", status: "completed" },
+      { id: "2", content: "Second", status: "pending" },
+    ]);
+    expect(parseAcpPlanEntries({ plan: { entries } })).toEqual([
+      { id: "1", content: "First", status: "completed" },
+      { id: "2", content: "Second", status: "pending" },
+    ]);
+    expect(parseAcpPlanEntries({ entries: [] })).toEqual([]);
+    expect(parseAcpPlanEntries({ goal: "ship it" })).toBeUndefined();
+  });
+
+  test("merges by id, appends new items, and replaces when merge is false", () => {
+    const current = [
+      { id: "1", content: "First", status: "pending" as const },
+      { id: "2", content: "Second", status: "in_progress" as const },
+    ];
+    expect(mergeCursorTodos(current, [
+      { id: "2", content: "Second", status: "completed" },
+      { id: "3", content: "Third", status: "pending" },
+    ], true)).toEqual([
+      { id: "1", content: "First", status: "pending" },
+      { id: "2", content: "Second", status: "completed" },
+      { id: "3", content: "Third", status: "pending" },
+    ]);
+    expect(mergeCursorTodos(current, [
+      { id: "9", content: "Only", status: "pending" },
+    ], false)).toEqual([
+      { id: "9", content: "Only", status: "pending" },
+    ]);
+  });
+
+  test("does not inherit merge: false onto a later todo list that omits merge", () => {
+    expect(preserveTaskLaunchArgs(
+      {
+        merge: false,
+        todos: [{ id: "1", content: "Plan item", status: "pending" }],
+      },
+      { todos: [{ id: "2", content: "Write item", status: "in_progress" }] },
+    )).toEqual({
+      todos: [{ id: "2", content: "Write item", status: "in_progress" }],
+    });
+    expect(preserveTaskLaunchArgs(
+      {
+        merge: true,
+        todos: [{ id: "1", content: "Kept", status: "pending" }],
+      },
+      { _toolName: "updateTodos" },
+    )).toEqual({
+      _toolName: "updateTodos",
+      merge: true,
+      todos: [{ id: "1", content: "Kept", status: "pending" }],
+    });
+  });
+
+  test("restores the newest stamped Cursor todo list from a transcript", () => {
+    expect(restoreCursorTodosFromMessages([
+      {
+        id: "a",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-08-16T00:00:00.000Z",
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "Update TODOs",
+            sourcePartId: "tool:1",
+            sourceMessageId: "a",
+            toolUseId: "1",
+            toolName: "updateTodos",
+            toolArgs: {
+              merge: false,
+              todos: [{ id: "1", content: "Old", status: "pending" }],
+            },
+          },
+        ],
+      },
+      {
+        id: "b",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-08-16T00:00:01.000Z",
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "Update TODOs",
+            sourcePartId: "tool:2",
+            sourceMessageId: "b",
+            toolUseId: "2",
+            toolName: "updateTodos",
+            toolArgs: {
+              merge: true,
+              todos: [{ id: "1", content: "New", status: "completed" }],
+            },
+          },
+        ],
+      },
+    ])).toEqual([{ id: "1", content: "New", status: "completed" }]);
+  });
+
+  test("ignores a non-todo tool part that happens to carry a todos argument", () => {
+    expect(restoreCursorTodosFromMessages([
+      {
+        id: "a",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-08-16T00:00:00.000Z",
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "Update TODOs",
+            sourcePartId: "tool:1",
+            sourceMessageId: "a",
+            toolUseId: "1",
+            toolName: "todo_write",
+            toolArgs: {
+              merge: true,
+              todos: [{ id: "1", content: "Mine", status: "pending" }],
+            },
+          },
+          {
+            type: "tool-invocation",
+            content: "Sync tasks",
+            sourcePartId: "tool:2",
+            sourceMessageId: "a",
+            toolUseId: "2",
+            toolName: "mcp__tracker__sync",
+            toolArgs: {
+              todos: [{ id: "9", content: "Someone else's list", status: "pending" }],
+            },
+          },
+        ],
+      },
+    ])).toEqual([{ id: "1", content: "Mine", status: "pending" }]);
+  });
+
+  test("bounds both the parsed list and the candidate scan", () => {
+    const oversized: Array<Record<string, unknown>> = Array.from(
+      { length: MAX_CURSOR_TODO_CANDIDATES + 5 },
+      (_, index) => ({ content: `Item ${index + 1}`, status: "pending" }),
+    );
+    // Reusing id "1" past the scan bound must never be reached: if it were,
+    // it would reserve "1" and push every generated id along by one.
+    oversized[oversized.length - 1] = {
+      id: "1",
+      content: "Beyond the candidate bound",
+      status: "pending",
+    };
+
+    const parsed = parseCursorTodos(oversized);
+
+    expect(parsed).toHaveLength(MAX_CURSOR_TODOS);
+    expect(parsed[0]).toEqual({ id: "1", content: "Item 1", status: "pending" });
+    expect(parsed.at(-1)).toEqual({
+      id: String(MAX_CURSOR_TODOS),
+      content: `Item ${MAX_CURSOR_TODOS}`,
+      status: "pending",
+    });
   });
 });

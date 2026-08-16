@@ -66,6 +66,7 @@ import {
 import {
   indexActiveSubagentsFromTranscript,
   boundedModelId,
+  restoreCursorTodosFromMessages,
 } from "./acp-tools.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import {
@@ -252,6 +253,7 @@ export async function loadPersistedState(): Promise<void> {
       activeSubagentDescriptors: new Map(),
       subagentLimitExceeded: candidate.subagentLimitExceeded === true,
       subagentToolIds: new Map(),
+      cursorTodos: restoreCursorTodosFromMessages(messages),
       historyMessageIds: new Map(),
       child: null,
       revision: Number.isSafeInteger(candidate.revision) ? Number(candidate.revision) : 0,

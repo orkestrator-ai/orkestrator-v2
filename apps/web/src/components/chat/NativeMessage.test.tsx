@@ -1800,7 +1800,7 @@ describe("NativeMessage task list rendering", () => {
 
     const agentGroup = screen.getByRole("region", { name: "2 agents" });
     const modelLabel = screen.getByText("gpt-5.6-sol");
-    const sharedCard = agentGroup.querySelector(".rounded-2xl");
+    const sharedCard = agentGroup.querySelector(".rounded-lg");
     const reviewerTrigger = screen.getByRole("button", { name: /reviewer/i });
     const testerTrigger = screen.getByRole("button", { name: /tester/i });
 
@@ -1809,13 +1809,13 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.getByText("1 active")).toBeTruthy();
     expect(screen.getByText("Reviewer")).toBeTruthy();
     expect(screen.getByText("Tester")).toBeTruthy();
-    expect(agentGroup.querySelectorAll(".rounded-2xl")).toHaveLength(1);
+    expect(agentGroup.querySelectorAll(".rounded-lg")).toHaveLength(1);
     expect(sharedCard).toBeTruthy();
     expect(getClassTokens(sharedCard)).toContain("divide-y");
     expect(sharedCard?.contains(reviewerTrigger)).toBe(true);
     expect(sharedCard?.contains(testerTrigger)).toBe(true);
-    expect(getClassTokens(reviewerTrigger.parentElement)).not.toContain("rounded-2xl");
-    expect(getClassTokens(testerTrigger.parentElement)).not.toContain("rounded-2xl");
+    expect(getClassTokens(reviewerTrigger.parentElement)).not.toContain("rounded-lg");
+    expect(getClassTokens(testerTrigger.parentElement)).not.toContain("rounded-lg");
     expect(screen.getAllByText("gpt-5.6-sol")).toHaveLength(1);
     expect(
       agentGroup.compareDocumentPosition(modelLabel) &
@@ -1840,7 +1840,7 @@ describe("NativeMessage task list rendering", () => {
 
     const trigger = screen.getByRole("button", { name: /reviewer/i });
     expect(screen.queryByRole("region", { name: /agents/i }) === null).toBe(true);
-    expect(getClassTokens(trigger.parentElement)).toContain("rounded-2xl");
+    expect(getClassTokens(trigger.parentElement)).toContain("rounded-lg");
   });
 
   test("counts pending task children and undefined states as active but not terminal agents", () => {
@@ -4054,11 +4054,11 @@ describe("NativeMessage agent status and grouping details", () => {
     );
 
     const agentGroup = screen.getByRole("region", { name: "2 agents" });
-    const sharedCard = agentGroup.querySelector(".rounded-2xl");
+    const sharedCard = agentGroup.querySelector(".rounded-lg");
 
     expect(agentGroup).toBeTruthy();
     expect(screen.getByText("1 active")).toBeTruthy();
-    expect(agentGroup.querySelectorAll(".rounded-2xl")).toHaveLength(1);
+    expect(agentGroup.querySelectorAll(".rounded-lg")).toHaveLength(1);
     expect(sharedCard?.contains(screen.getByRole("button", { name: /subagent/i }))).toBe(true);
     expect(sharedCard?.contains(screen.getByRole("button", { name: /tester/i }))).toBe(true);
   });

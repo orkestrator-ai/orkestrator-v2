@@ -312,7 +312,7 @@ function AgentActivityIcon({ status }: { status: NativeAgentStatus }) {
 }
 
 const agentCardClassName =
-  "my-0 overflow-hidden rounded-2xl border border-border/70 bg-zinc-900/90 shadow-sm shadow-black/15";
+  "my-0 overflow-hidden rounded-lg border border-border/70 bg-zinc-900/90 shadow-sm shadow-black/15";
 
 export function SubagentPart({
   part,

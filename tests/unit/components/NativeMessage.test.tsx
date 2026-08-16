@@ -1534,6 +1534,61 @@ describe("NativeMessage", () => {
     expect(screen.queryByText("-") === null).toBe(true);
   });
 
+  test("does not render a phantom expanded line for a trailing newline", () => {
+    const message: NativeMessageType = {
+      id: "msg-edit-trailing-newline",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Edit",
+          toolState: "success",
+          toolDiff: {
+            filePath: "/workspace/src/a.ts",
+            before: "one\ntwo\n",
+            after: "three\n",
+          },
+        },
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "MultiEdit",
+          toolState: "success",
+          toolDiff: {
+            filePath: "/workspace/src/c.ts",
+            before: "alpha\nbeta\n",
+            after: "gamma\ndelta\nepsilon",
+            additions: 3,
+            deletions: 2,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TerminalContextHarness>
+        <NativeMessage message={message} />
+      </TerminalContextHarness>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /edit a\.ts \+1 -2 success/i }));
+    fireEvent.click(screen.getByRole("button", { name: /multiedit c\.ts \+3 -2 success/i }));
+
+    expect(screen.getByText("-one")).toBeTruthy();
+    expect(screen.getByText("-two")).toBeTruthy();
+    expect(screen.getByText("+three")).toBeTruthy();
+    expect(screen.getByText("-alpha")).toBeTruthy();
+    expect(screen.getByText("-beta")).toBeTruthy();
+    expect(screen.getByText("+gamma")).toBeTruthy();
+    expect(screen.getByText("+delta")).toBeTruthy();
+    expect(screen.getByText("+epsilon")).toBeTruthy();
+    expect(screen.queryByText("+") === null).toBe(true);
+    expect(screen.queryByText("-") === null).toBe(true);
+  });
+
   test("keeps provider diff metadata without change markers authoritative", () => {
     const message: NativeMessageType = {
       id: "msg-edit-metadata-fallback",

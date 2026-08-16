@@ -84,6 +84,7 @@ export interface FakeAgentState {
   flattenedResourceExhaustedScenario: boolean;
   rpcResourceExhaustedAttempts: number;
   rpcResourceExhaustedScenario: boolean;
+  backgroundRelaunches: number;
 }
 
 export const state: FakeAgentState = {
@@ -95,6 +96,7 @@ export const state: FakeAgentState = {
   flattenedResourceExhaustedScenario: false,
   rpcResourceExhaustedAttempts: 0,
   rpcResourceExhaustedScenario: false,
+  backgroundRelaunches: 0,
 };
 
 export function sessionPayload(sessionId = "fake-session"): JsonObject {

@@ -37,8 +37,11 @@ import {
   type BridgeMessage,
   type BridgeMessagePart,
   type BridgeToolPart,
+  type CursorTodoItem,
+  type CursorTodoStatus,
   type JsonObject,
   type SessionState,
+  CURSOR_TODO_STATUSES,
 } from "./acp-context.js";
 import {
   appendSaturating,
@@ -163,16 +166,32 @@ export function applyToolCallUpdate(
 
   if (!part) {
     owner = currentAssistantMessage(state);
-    part = {
-      type: "tool-invocation",
-      content: "Tool call",
-      sourcePartId: `tool:${toolCallId}`,
-      sourceMessageId: owner.id,
-      toolUseId: toolCallId,
-      toolState: "pending",
-      createdAt: new Date().toISOString(),
-    };
-    if (!pushToolPart(state, owner, part, isInitial)) return;
+    // Grok often emits ACP `plan` before the matching `todo_write` tool_call.
+    // Retarget the synthetic plan row so the turn still has one checklist.
+    if (todoToolNameFromUpdate(update)) {
+      const synthetic = owner.parts.find(
+        (messagePart): messagePart is BridgeToolPart =>
+          messagePart.type === "tool-invocation"
+          && messagePart.toolUseId === ACP_PLAN_TOOL_USE_ID,
+      );
+      if (synthetic) {
+        synthetic.toolUseId = toolCallId;
+        synthetic.sourcePartId = `tool:${toolCallId}`;
+        part = synthetic;
+      }
+    }
+    if (!part) {
+      part = {
+        type: "tool-invocation",
+        content: "Tool call",
+        sourcePartId: `tool:${toolCallId}`,
+        sourceMessageId: owner.id,
+        toolUseId: toolCallId,
+        toolState: "pending",
+        createdAt: new Date().toISOString(),
+      };
+      if (!pushToolPart(state, owner, part, isInitial)) return;
+    }
   }
 
   let source = acpToolSourceStates.get(part);
@@ -189,6 +208,7 @@ export function applyToolCallUpdate(
     acpToolSourceStates.set(part, source);
   }
   applyAcpToolSourcePatch(source, update);
+  absorbCursorTodosFromToolArgs(state, source, update);
   renderAcpToolSource(part, source);
   const parentTaskUseId = acpParentTaskUseId(update);
   if (parentTaskUseId && parentTaskUseId !== toolCallId) {
@@ -697,6 +717,12 @@ export function applyAcpToolSourcePatch(source: AcpToolSourceState, update: Json
     if (toolMeta) {
       source.metadataName = boundedString(toolMeta.name, MAX_TOOL_NAME_BYTES)?.trim();
       source.metadataKind = boundedString(toolMeta.kind, MAX_TOOL_NAME_BYTES)?.trim();
+      // Grok names tools in `_meta["x.ai/tool"]`, not `name`. Promote a todo
+      // tool so a synthetic ACP `plan` row (`todo_list`) becomes `todo_write`
+      // when the matching call arrives, instead of keeping the plan label.
+      if (isAcpTodosToolName(source.metadataName)) {
+        source.explicitName = source.metadataName;
+      }
     }
   }
   if ("rawInput" in update) {
@@ -828,8 +854,27 @@ export function acpSubagentState(
   return source.agentState;
 }
 
+/** Cursor Task `agentId`, from `cursor/task` args or the launch `rawOutput`. */
+export function toolPartAgentId(part: BridgeToolPart): string | undefined {
+  if (typeof part.toolArgs?.agentId === "string") {
+    return truncateUtf8(part.toolArgs.agentId.trim(), MAX_TOOL_ID_BYTES);
+  }
+  if (typeof part.toolArgs?.agent_id === "string") {
+    return truncateUtf8(part.toolArgs.agent_id.trim(), MAX_TOOL_ID_BYTES);
+  }
+  const lifecycle = toolCallLifecycle(part.toolOutput);
+  if (typeof lifecycle?.agentId === "string") {
+    return truncateUtf8(lifecycle.agentId.trim(), MAX_TOOL_ID_BYTES);
+  }
+  if (typeof lifecycle?.agent_id === "string") {
+    return truncateUtf8(lifecycle.agent_id.trim(), MAX_TOOL_ID_BYTES);
+  }
+  return undefined;
+}
+
 export function syncActiveSubagentTool(state: SessionState, part: BridgeToolPart): void {
   if (part.agentState === "active") {
+    const agentId = toolPartAgentId(part);
     const activated = activateSubagent(state, part.toolUseId, {
       ...(typeof part.toolArgs?.description === "string"
         ? { description: truncateUtf8(part.toolArgs.description.trim(), MAX_TOOL_TITLE_BYTES) }
@@ -838,6 +883,7 @@ export function syncActiveSubagentTool(state: SessionState, part: BridgeToolPart
         ? { subagentType: truncateUtf8(part.toolArgs.subagent_type.trim(), MAX_TOOL_NAME_BYTES) }
         : {}),
       ...(part.toolState ? { toolState: part.toolState } : {}),
+      ...(agentId ? { agentId } : {}),
     });
     if (!activated) {
       part.agentState = "failed";
@@ -874,8 +920,16 @@ export function activateSubagent(
     state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
     return false;
   }
+  const previous = state.activeSubagentDescriptors.get(toolUseId);
   state.activeSubagentToolIds.add(toolUseId);
-  state.activeSubagentDescriptors.set(toolUseId, descriptor);
+  state.activeSubagentDescriptors.set(toolUseId, {
+    ...previous,
+    ...descriptor,
+    agentId: descriptor.agentId ?? previous?.agentId,
+    description: descriptor.description ?? previous?.description,
+    subagentType: descriptor.subagentType ?? previous?.subagentType,
+    toolState: descriptor.toolState ?? previous?.toolState,
+  });
   return true;
 }
 
@@ -899,12 +953,36 @@ export const TASK_LAUNCH_ARG_KEYS = [
 ] as const;
 
 /**
- * `durationMs` is the one `cursor/task` field that decides lifecycle: any
- * present value settles the sub-agent as finished. A bare `Number()` would
- * coerce `null`, `false`, `""` and `[]` to `0`, so a vendor encoding "not
- * finished yet" as `null` would report a live background child as complete and
- * drop it out of `activeSubagentToolIds`. Only a real number — or a numeric
- * string, which the renderer also accepts — counts as a reported duration.
+ * Cursor's background Task `toolCallCompleted` echoes the spawn wall-clock as
+ * `durationMs` on the same `cursor/task` frame that carries launch metadata.
+ * That is not child completion: the child is still running, and a later
+ * `cursor/task` (or the continuation wrapper) reports the real end with a
+ * different duration. Grok never sends `cursor/task`.
+ */
+export function isCursorBackgroundSpawnDuration(
+  source: { toolArgs?: JsonObject; rawOutput?: unknown; contentOutput?: string },
+  durationMs: number,
+): boolean {
+  const lifecycle = isObject(source.rawOutput)
+    ? source.rawOutput
+    : toolCallLifecycle(source.rawOutput ?? source.contentOutput);
+  const background = source.toolArgs?.background === true
+    || source.toolArgs?.run_in_background === true
+    || lifecycle?.isBackground === true;
+  if (!background) return false;
+  const launchDuration = boundedDurationMs(lifecycle?.durationMs);
+  return launchDuration === durationMs;
+}
+
+/**
+ * `durationMs` is the one `cursor/task` field that decides lifecycle once a
+ * named state is absent: a present value settles the sub-agent as finished
+ * unless it is the background spawn echo (see `isCursorBackgroundSpawnDuration`).
+ * A bare `Number()` would coerce `null`, `false`, `""` and `[]` to `0`, so a
+ * vendor encoding "not finished yet" as `null` would report a live background
+ * child as complete and drop it out of `activeSubagentToolIds`. Only a real
+ * number — or a numeric string, which the renderer also accepts — counts as a
+ * reported duration.
  */
 export function boundedDurationMs(value: unknown): number | undefined {
   const numeric = typeof value === "number"
@@ -949,6 +1027,19 @@ export function preserveTaskLaunchArgs(
   ) {
     merged.durationMs = previous.durationMs;
   }
+  // Cursor's live `updateTodos` tool_call is typically `{ _toolName: "updateTodos" }`.
+  // The list arrives on `cursor/update_todos`; a later empty rawInput must not
+  // wipe it the way a later Task status patch must not wipe `cursor/task`.
+  const incomingHasTodos = Array.isArray(merged.todos);
+  if (!incomingHasTodos && Array.isArray(previous.todos)) {
+    merged.todos = previous.todos;
+  }
+  // Inherit merge only with that preserved list. A Grok `todo_write` that omits
+  // merge after an ACP plan stamped `merge: false` must keep Grok's default
+  // (merge) rather than replacing the plan with the write's delta.
+  if (merged.merge == null && typeof previous.merge === "boolean" && !incomingHasTodos) {
+    merged.merge = previous.merge;
+  }
   return merged;
 }
 
@@ -965,6 +1056,342 @@ export function mergeCursorTaskArgs(
   if (cursorTask.model) merged.model = cursorTask.model;
   if (cursorTask.agentId) merged.agentId = cursorTask.agentId;
   return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+export const MAX_CURSOR_TODOS = 200;
+
+/** Upper bound on entries examined per list, so parsing stays bounded too. */
+export const MAX_CURSOR_TODO_CANDIDATES = MAX_CURSOR_TODOS * 8;
+
+/** Synthetic tool call id for an ACP `plan` / `plan_update` with no matching todo tool. */
+export const ACP_PLAN_TOOL_USE_ID = "acp-plan";
+
+const CURSOR_TODO_STATUS_SET = new Set<string>(CURSOR_TODO_STATUSES);
+
+export function acpToolSourceName(
+  source: Pick<AcpToolSourceState, "explicitName" | "inputName" | "metadataName" | "kind">,
+): string | undefined {
+  return source.explicitName ?? source.inputName ?? source.metadataName ?? source.kind;
+}
+
+export function isCursorTodosToolName(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "updatetodos" || normalized === "update_todos";
+}
+
+export function isGrokTodoWriteToolName(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "todo_write" || normalized === "todowrite";
+}
+
+export function isAcpTodosToolName(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return isCursorTodosToolName(value)
+    || isGrokTodoWriteToolName(value)
+    || normalized === "todo_list";
+}
+
+function mergeFlagForTodoTool(toolName: string | undefined, merge: unknown): boolean {
+  if (isGrokTodoWriteToolName(toolName)) return merge !== false;
+  return merge === true;
+}
+
+function todoToolNameFromUpdate(update: JsonObject): string | undefined {
+  if (typeof update.name === "string" && isAcpTodosToolName(update.name)) return update.name;
+  if (isObject(update.rawInput) && typeof update.rawInput._toolName === "string"
+    && isAcpTodosToolName(update.rawInput._toolName)) {
+    return update.rawInput._toolName;
+  }
+  if (isObject(update._meta) && isObject(update._meta["x.ai/tool"])) {
+    const name = update._meta["x.ai/tool"].name;
+    if (typeof name === "string" && isAcpTodosToolName(name)) return name;
+  }
+  if (isObject(update.rawInput) && Array.isArray(update.rawInput.todos)) return "todo_write";
+  return undefined;
+}
+
+function defaultTodoToolTitle(toolName: string | undefined): string {
+  if (isGrokTodoWriteToolName(toolName)) return "Todo Write";
+  if (toolName?.trim().toLowerCase() === "todo_list") return "Todo List";
+  return "Update TODOs";
+}
+
+export function parseCursorTodos(value: unknown): CursorTodoItem[] {
+  if (!Array.isArray(value)) return [];
+  const parsed: Array<{ id?: string; content: string; status: CursorTodoStatus }> = [];
+  for (const candidate of value) {
+    // The output is capped at `MAX_CURSOR_TODOS`, but ids have to be reserved
+    // before any fallback is allocated, so the candidate pass is bounded too
+    // rather than materialising a whole 4MB frame's worth of entries. The
+    // headroom leaves room for later entries that overwrite an earlier id.
+    if (parsed.length >= MAX_CURSOR_TODO_CANDIDATES) break;
+    if (!isObject(candidate)) continue;
+    const content = boundedString(candidate.content, MAX_TOOL_TITLE_BYTES)?.trim();
+    const status = typeof candidate.status === "string" ? candidate.status : "";
+    if (!content || !CURSOR_TODO_STATUS_SET.has(status)) continue;
+    const id = boundedString(candidate.id, MAX_TOOL_ID_BYTES)?.trim();
+    parsed.push({
+      ...(id ? { id } : {}),
+      content,
+      status: status as CursorTodoStatus,
+    });
+  }
+  // Reserve explicit ids first so a missing id cannot reuse `items.length + 1`
+  // and overwrite a neighbour (ACP plan entries often have no id).
+  const taken = new Set<string>();
+  for (const item of parsed) {
+    if (item.id) taken.add(item.id);
+  }
+  const indexes = new Map<string, number>();
+  const items: CursorTodoItem[] = [];
+  let nextFallback = 1;
+  const allocateFallbackId = (): string => {
+    while (taken.has(String(nextFallback))) nextFallback += 1;
+    const id = String(nextFallback);
+    nextFallback += 1;
+    taken.add(id);
+    return id;
+  };
+  for (const candidate of parsed) {
+    const id = candidate.id ?? allocateFallbackId();
+    const item: CursorTodoItem = {
+      id,
+      content: candidate.content,
+      status: candidate.status,
+    };
+    const existing = indexes.get(id);
+    if (existing !== undefined) {
+      items[existing] = item;
+      continue;
+    }
+    if (items.length >= MAX_CURSOR_TODOS) continue;
+    indexes.set(id, items.length);
+    items.push(item);
+  }
+  return items;
+}
+
+/**
+ * ACP v1 `sessionUpdate: "plan"` carries `entries[]`. v2 `plan_update` nests
+ * them at `plan.entries`. Both are a full replace of the current plan.
+ */
+export function parseAcpPlanEntries(update: JsonObject): CursorTodoItem[] | undefined {
+  const entries = Array.isArray(update.entries)
+    ? update.entries
+    : isObject(update.plan) && Array.isArray(update.plan.entries)
+      ? update.plan.entries
+      : undefined;
+  if (entries === undefined) return undefined;
+  return parseCursorTodos(entries);
+}
+
+export function mergeCursorTodos(
+  current: readonly CursorTodoItem[],
+  incoming: readonly CursorTodoItem[],
+  merge: boolean,
+): CursorTodoItem[] {
+  if (!merge) return incoming.slice(0, MAX_CURSOR_TODOS);
+  const byId = new Map(current.map((item) => [item.id, item]));
+  const order = current.map((item) => item.id);
+  for (const item of incoming) {
+    if (!byId.has(item.id)) order.push(item.id);
+    byId.set(item.id, item);
+  }
+  return order
+    .flatMap((id) => {
+      const item = byId.get(id);
+      return item ? [item] : [];
+    })
+    .slice(0, MAX_CURSOR_TODOS);
+}
+
+export function restoreCursorTodosFromMessages(messages: readonly BridgeMessage[]): CursorTodoItem[] {
+  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+    const parts = messages[messageIndex]!.parts;
+    for (let partIndex = parts.length - 1; partIndex >= 0; partIndex -= 1) {
+      const part = parts[partIndex]!;
+      if (part.type !== "tool-invocation" || !Array.isArray(part.toolArgs?.todos)) continue;
+      // Match what the live path absorbs. `stampCursorTodos` forces a todo tool
+      // name onto every part it writes, so anything else carrying a `todos`
+      // argument is a different tool whose list must not seed this session.
+      if (!isAcpTodosToolName(part.toolName)) continue;
+      const parsed = parseCursorTodos(part.toolArgs.todos);
+      if (parsed.length > 0 || part.toolArgs.merge === false) return parsed;
+    }
+  }
+  return [];
+}
+
+export function stampCursorTodos(source: AcpToolSourceState, state: SessionState, merge: boolean): void {
+  source.toolArgs = {
+    ...(source.toolArgs ?? {}),
+    todos: state.cursorTodos,
+    merge,
+  };
+  if (!isAcpTodosToolName(acpToolSourceName(source))) {
+    source.explicitName = "updateTodos";
+  }
+  if (!source.title) source.title = defaultTodoToolTitle(acpToolSourceName(source));
+}
+
+/**
+ * Absorb only a list this update actually carried on the wire. `toolArgs` also
+ * holds the snapshot `stampCursorTodos` wrote onto this part, and a later
+ * status-only patch re-absorbing that snapshot would merge an older list back
+ * over a newer one — reverting statuses and rewriting the older row to show
+ * todos it never had.
+ */
+export function absorbCursorTodosFromToolArgs(
+  state: SessionState,
+  source: AcpToolSourceState,
+  update: JsonObject,
+): void {
+  if (!isObject(update.rawInput) || !Array.isArray(update.rawInput.todos)) return;
+  const toolName = acpToolSourceName(source);
+  if (!isAcpTodosToolName(toolName) || !Array.isArray(source.toolArgs?.todos)) return;
+  const incoming = parseCursorTodos(source.toolArgs.todos);
+  const merge = mergeFlagForTodoTool(toolName, source.toolArgs.merge);
+  if (incoming.length === 0 && merge) return;
+  state.cursorTodos = mergeCursorTodos(state.cursorTodos, incoming, merge);
+  stampCursorTodos(source, state, merge);
+}
+
+/**
+ * Cursor reports the todo list through `cursor/update_todos`, not the live
+ * `updateTodos` tool_call. That call's `rawInput` is typically just
+ * `{ _toolName: "updateTodos" }` with title `Update TODOs`, which is why the
+ * renderer used to show a generic wrench row and no tasks.
+ *
+ * Observed contract (Cursor ACP docs, `cursor/update_todos`):
+ *
+ * - Documented as a notification. Cursor's `extMethod` helper still sends
+ *   `cursor/task` as a request, so this method is acknowledged the same way
+ *   when it arrives as one.
+ * - Payload is `toolCallId`, `todos[]` (`id`, `content`, `status`), `merge`.
+ * - `merge: true` updates matching ids and appends new ones. `merge: false`
+ *   replaces the whole list, including an empty replacement.
+ */
+export function applyCursorUpdateTodos(state: SessionState, params: JsonObject): void {
+  if (state.historyReplay === "ignore") return;
+  if (params.sessionId !== undefined && params.sessionId !== state.acpSessionId) return;
+  const payload = isObject(params.update) ? params.update : params;
+  const toolCallId = boundedString(payload.toolCallId, MAX_TOOL_ID_BYTES)?.trim();
+  if (!toolCallId || !Array.isArray(payload.todos)) return;
+
+  const incoming = parseCursorTodos(payload.todos);
+  const merge = payload.merge === true;
+  if (incoming.length === 0 && merge && state.cursorTodos.length === 0) return;
+  state.cursorTodos = mergeCursorTodos(state.cursorTodos, incoming, merge);
+
+  let found = findToolPart(state, toolCallId);
+  if (!found) {
+    const owner = currentAssistantMessage(state);
+    const part: BridgeToolPart = {
+      type: "tool-invocation",
+      content: "Update TODOs",
+      sourcePartId: `tool:${toolCallId}`,
+      sourceMessageId: owner.id,
+      toolUseId: toolCallId,
+      toolName: "updateTodos",
+      toolTitle: "Update TODOs",
+      toolState: "success",
+    };
+    if (!pushToolPart(state, owner, part, false)) return;
+    found = { owner, part };
+  }
+
+  const { part } = found;
+  let source = acpToolSourceStates.get(part);
+  if (!source) {
+    source = {
+      title: part.toolTitle,
+      explicitName: part.toolName,
+      toolArgs: part.toolArgs,
+      toolState: part.toolState ?? "success",
+      agentState: part.agentState,
+      rawOutput: part.toolOutput,
+      contentDiffs: part.toolDiff ? [part.toolDiff] : [],
+    };
+    acpToolSourceStates.set(part, source);
+  }
+  stampCursorTodos(source, state, merge);
+  if (source.toolState === undefined) source.toolState = "success";
+  renderAcpToolSource(part, source);
+  commitToolPartMutation(state, part, source);
+}
+
+function isCurrentTodoToolPart(part: BridgeMessagePart): part is BridgeToolPart {
+  if (part.type !== "tool-invocation") return false;
+  if (part.toolUseId === ACP_PLAN_TOOL_USE_ID) return true;
+  if (isAcpTodosToolName(part.toolName)) return true;
+  const source = acpToolSourceStates.get(part);
+  return source !== undefined && isAcpTodosToolName(acpToolSourceName(source));
+}
+
+function findCurrentAcpTodoPart(
+  state: SessionState,
+): { owner: BridgeMessage; part: BridgeToolPart } | undefined {
+  const owner = state.messages.at(-1);
+  if (!owner || owner.role !== "assistant") return undefined;
+  for (let index = owner.parts.length - 1; index >= 0; index -= 1) {
+    const part = owner.parts[index]!;
+    if (isCurrentTodoToolPart(part)) return { owner, part };
+  }
+  return undefined;
+}
+
+/**
+ * ACP `plan` / `plan_update` is the agent's current execution plan. Unlike
+ * Cursor `cursor/update_todos`, it is always a full replace and entries often
+ * have no `id`. Stamp onto the trailing assistant message's existing todo part
+ * when one exists so a Grok `todo_write` plus plan in the same turn is one row.
+ */
+export function applyAcpPlanUpdate(state: SessionState, update: JsonObject): void {
+  if (state.historyReplay === "ignore") return;
+  const incoming = parseAcpPlanEntries(update);
+  if (incoming === undefined) return;
+  state.cursorTodos = incoming;
+
+  let found = findCurrentAcpTodoPart(state);
+  if (!found) {
+    if (incoming.length === 0) {
+      state.revision += 1;
+      schedulePersist();
+      return;
+    }
+    const owner = currentAssistantMessage(state);
+    const part: BridgeToolPart = {
+      type: "tool-invocation",
+      content: "Todo List",
+      sourcePartId: `tool:${ACP_PLAN_TOOL_USE_ID}`,
+      sourceMessageId: owner.id,
+      toolUseId: ACP_PLAN_TOOL_USE_ID,
+      toolName: "todo_list",
+      toolTitle: "Todo List",
+      toolState: "success",
+    };
+    if (!pushToolPart(state, owner, part, false)) return;
+    found = { owner, part };
+  }
+
+  const { part } = found;
+  let source = acpToolSourceStates.get(part);
+  if (!source) {
+    source = {
+      title: part.toolTitle ?? "Todo List",
+      explicitName: isAcpTodosToolName(part.toolName) ? part.toolName : "todo_list",
+      toolArgs: part.toolArgs,
+      toolState: part.toolState ?? "success",
+      agentState: part.agentState,
+      rawOutput: part.toolOutput,
+      contentDiffs: part.toolDiff ? [part.toolDiff] : [],
+    };
+    acpToolSourceStates.set(part, source);
+  }
+  stampCursorTodos(source, state, false);
+  if (source.toolState === undefined) source.toolState = "success";
+  renderAcpToolSource(part, source);
+  commitToolPartMutation(state, part, source);
 }
 
 export function findToolPart(
@@ -1003,10 +1430,11 @@ export function findToolPart(
  *   and `durationMs` is populated only when the tool result case is `success`.
  * - The one send site is `toolCallCompleted`, immediately after the
  *   `status: "completed"` tool call update. A frame with no duration and no
- *   named state is still launch metadata, not an ending: `durationMs` is the
- *   observed completion field. The launch tool itself resolves with
- *   `isBackground: true` still set, which is why that flag cannot be read as
- *   liveness.
+ *   named state is still launch metadata, not an ending. `durationMs` is the
+ *   observed completion field *except* when it equals the background launch
+ *   tool's own `durationMs` — that is spawn time, not the child's end. The
+ *   launch tool itself resolves with `isBackground: true` still set, which is
+ *   why that flag cannot be read as liveness.
  *
  * The status/outcome handling below is therefore forward-compatibility, not an
  * observed contract: it is written so that a future Cursor which does start
@@ -1039,11 +1467,21 @@ export function applyCursorTask(state: SessionState, params: JsonObject): void {
   }
 
   const isProgress = namedState === "progress";
-  const agentState: "finished" | "failed" | undefined = isProgress
+  let agentState: "finished" | "failed" | undefined = isProgress
     ? undefined
-    : namedState ?? (durationMs !== undefined ? "finished" : undefined);
+    : namedState;
 
   let found = findToolPart(state, toolCallId);
+  if (!agentState && !isProgress && durationMs !== undefined) {
+    const part = found?.part;
+    const sourcePeek = part ? acpToolSourceStates.get(part) : undefined;
+    if (!isCursorBackgroundSpawnDuration({
+      toolArgs: sourcePeek?.toolArgs ?? part?.toolArgs,
+      rawOutput: sourcePeek?.rawOutput ?? part?.toolOutput,
+    }, durationMs)) {
+      agentState = "finished";
+    }
+  }
   if (!found) {
     if (state.activeSubagentToolIds.has(toolCallId)) {
       if (agentState) finishSubagentTool(state, toolCallId, agentState);
@@ -1219,7 +1657,7 @@ export function lifecycleStatus(lifecycle: JsonObject | undefined): string | und
 
 export function terminalAgentState(status: string | undefined): "finished" | "failed" | undefined {
   if (!status) return undefined;
-  if (/^(failed|killed|cancelled|canceled|error|rejected)$/i.test(status)) return "failed";
+  if (/^(failed|killed|cancelled|canceled|error|rejected|aborted|abort)$/i.test(status)) return "failed";
   if (/^(completed|finished|done|success)$/i.test(status)) return "finished";
   return undefined;
 }
@@ -1228,10 +1666,11 @@ export function terminalAgentState(status: string | undefined): "finished" | "fa
  * Named status/outcome on a `cursor/task` frame.
  *
  * Cursor today sends neither field — `durationMs` is the observed completion
- * signal (see `applyCursorTask`). A *present* but non-terminal state is a
- * progress report and must be distinguishable from an absent one, or it would
- * settle a running child. That is why this cannot default to `"finished"` the
- * way the by-definition-terminal `subagent_finished` notification does.
+ * signal except for the background spawn echo (see `applyCursorTask`). A
+ * *present* but non-terminal state is a progress report and must be
+ * distinguishable from an absent one, or it would settle a running child.
+ * That is why this cannot default to `"finished"` the way the
+ * by-definition-terminal `subagent_finished` notification does.
  */
 export function cursorTaskNamedState(
   payload: JsonObject,

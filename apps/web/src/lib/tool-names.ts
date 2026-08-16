@@ -5,6 +5,7 @@ export const EDIT_TOOL_NAMES = new Set([
   "patch",
   "apply_patch",
   "file_edit",
+  "multiedit",
   "notebookedit",
   "str_replace_editor",
   "create_file",

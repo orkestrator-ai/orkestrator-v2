@@ -267,6 +267,43 @@ describe("todo-tool", () => {
     ).toEqual([{ content: "#7 task", status: "pending" }]);
   });
 
+  test("parses Grok todo_write args with ids into todo items", () => {
+    const todos = getTodoItems(
+      {
+        todos: [
+          { id: "1", content: "Set up project structure", status: "completed" },
+          { id: "2", content: "Add authentication", status: "in_progress" },
+        ],
+      },
+      undefined,
+      "todo_write",
+    );
+
+    expect(todos).toEqual([
+      { content: "#1 Set up project structure", status: "completed" },
+      { content: "#2 Add authentication", status: "in_progress" },
+    ]);
+  });
+
+  test("parses Cursor updateTodos args with ids into todo items", () => {
+    const todos = getTodoItems(
+      {
+        merge: true,
+        todos: [
+          { id: "1", content: "Set up project structure", status: "completed" },
+          { id: "2", content: "Add authentication", status: "in_progress" },
+        ],
+      },
+      undefined,
+      "updateTodos",
+    );
+
+    expect(todos).toEqual([
+      { content: "#1 Set up project structure", status: "completed" },
+      { content: "#2 Add authentication", status: "in_progress" },
+    ]);
+  });
+
   test("parses Claude TodoWrite newTodos output when args are unavailable", () => {
     const todos = getTodoItems(
       undefined,
@@ -360,6 +397,20 @@ describe("todo-tool", () => {
       expect(isTodoTool("todo_list")).toBe(true);
     });
 
+    test("recognizes Cursor updateTodos", () => {
+      expect(isTodoTool("updateTodos")).toBe(true);
+      expect(isTodoTool("update_todos")).toBe(true);
+    });
+
+    test("recognizes Grok todo_write", () => {
+      expect(isTodoTool("todo_write")).toBe(true);
+      expect(isTodoTool("Todo_Write")).toBe(true);
+    });
+
+    test("does not treat ACP tool kind plan as a todo tool", () => {
+      expect(isTodoTool("plan")).toBe(false);
+    });
+
     test("recognizes task create and update tools", () => {
       expect(isTodoTool("TaskCreate")).toBe(true);
       expect(isTodoTool("TaskUpdate")).toBe(true);
@@ -385,7 +436,10 @@ describe("todo-tool", () => {
     test("returns friendly labels for todo-like task tools", () => {
       expect(getTodoToolLabel("todowrite")).toBe("Todo Write");
       expect(getTodoToolLabel("TodoWrite")).toBe("Todo Write");
+      expect(getTodoToolLabel("todo_write")).toBe("Todo Write");
       expect(getTodoToolLabel("todo_list")).toBe("Todo List");
+      expect(getTodoToolLabel("updateTodos")).toBe("Update TODOs");
+      expect(getTodoToolLabel("update_todos")).toBe("Update TODOs");
       expect(getTodoToolLabel("TaskCreate")).toBe("Task Create");
       expect(getTodoToolLabel("TaskUpdate")).toBe("Task Update");
       expect(getTodoToolLabel("TaskList")).toBe("Task List");

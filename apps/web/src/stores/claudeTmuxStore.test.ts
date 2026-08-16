@@ -658,6 +658,8 @@ describe("applyTranscriptLine", () => {
     expect(tool?.toolDiff?.filePath).toBe("/work/apps/web/package.json");
     expect(tool?.toolDiff?.before).toBe("\"react\": \"18.0.0\"");
     expect(tool?.toolDiff?.after).toBe("\"react\": \"19.0.0\"");
+    expect(tool?.toolDiff?.additions).toBe(1);
+    expect(tool?.toolDiff?.deletions).toBe(1);
   });
 
   test("Write tool_use populates toolDiff with after = content", () => {
@@ -682,6 +684,8 @@ describe("applyTranscriptLine", () => {
     expect(tool?.toolDiff?.filePath).toBe("/work/foo.txt");
     expect(tool?.toolDiff?.before).toBe("");
     expect(tool?.toolDiff?.after).toBe("line1\nline2");
+    expect(tool?.toolDiff?.additions).toBe(2);
+    expect(tool?.toolDiff?.deletions).toBe(0);
   });
 
   test("MultiEdit tool_use populates synthetic before/after chunks", () => {
@@ -715,6 +719,44 @@ describe("applyTranscriptLine", () => {
     expect(tool?.toolDiff?.filePath).toBe("/work/foo.ts");
     expect(tool?.toolDiff?.before).toBe("one\nthree");
     expect(tool?.toolDiff?.after).toBe("two\nfour");
+    expect(tool?.toolDiff?.additions).toBe(2);
+    expect(tool?.toolDiff?.deletions).toBe(2);
+  });
+
+  test("MultiEdit chunks that already end in a newline gain no blank line", () => {
+    // Joining unconditionally with "\n" would render a line the file never had
+    // and count it, so two deletions would be badged as three.
+    const line: TranscriptLine = {
+      type: "assistant",
+      uuid: "multi-nl",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "tu-multi-nl",
+            name: "MultiEdit",
+            input: {
+              file_path: "/work/foo.ts",
+              edits: [
+                { old_string: "one\n", new_string: "two\n" },
+                { old_string: "three", new_string: "four" },
+              ],
+            },
+          },
+        ],
+      },
+    };
+
+    useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
+    const tool = useClaudeTmuxStore
+      .getState()
+      .getTab("e")
+      .messages[0]!.parts.find((p) => p.type === "tool-invocation");
+    expect(tool?.toolDiff?.before).toBe("one\nthree");
+    expect(tool?.toolDiff?.after).toBe("two\nfour");
+    expect(tool?.toolDiff?.additions).toBe(2);
+    expect(tool?.toolDiff?.deletions).toBe(2);
   });
 
   test("NotebookEdit tool_use captures notebook path and new source", () => {
@@ -744,6 +786,61 @@ describe("applyTranscriptLine", () => {
       .messages[0]!.parts.find((p) => p.type === "tool-invocation");
     expect(tool?.toolDiff?.filePath).toBe("/work/analysis.ipynb");
     expect(tool?.toolDiff?.after).toBe("print('done')");
+    expect(tool?.toolDiff?.additions).toBe(1);
+    expect(tool?.toolDiff?.deletions).toBe(0);
+  });
+
+  test("delete-mode NotebookEdit keeps the path but claims no line counts", () => {
+    const line: TranscriptLine = {
+      type: "assistant",
+      uuid: "notebook-del",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "tu-notebook-del",
+            name: "NotebookEdit",
+            input: {
+              notebook_path: "/work/analysis.ipynb",
+              edit_mode: "delete",
+            },
+          },
+        ],
+      },
+    };
+
+    useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
+    const tool = useClaudeTmuxStore
+      .getState()
+      .getTab("e")
+      .messages[0]!.parts.find((p) => p.type === "tool-invocation");
+    expect(tool?.toolDiff?.filePath).toBe("/work/analysis.ipynb");
+    expect(tool?.toolDiff?.additions).toBeUndefined();
+    expect(tool?.toolDiff?.deletions).toBeUndefined();
+  });
+
+  test("an unmapped tool still surfaces the file path it touched", () => {
+    useClaudeTmuxStore.getState().applyTranscriptLine("e", {
+      type: "assistant",
+      uuid: "read-1",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "tu-read",
+            name: "Read",
+            input: { file_path: "/work/foo.ts" },
+          },
+        ],
+      },
+    });
+    const tool = useClaudeTmuxStore
+      .getState()
+      .getTab("e")
+      .messages[0]!.parts.find((p) => p.type === "tool-invocation");
+    expect(tool?.toolDiff).toEqual({ filePath: "/work/foo.ts" });
   });
 
   test("failed tool_result marks invocation failure and stores error text", () => {

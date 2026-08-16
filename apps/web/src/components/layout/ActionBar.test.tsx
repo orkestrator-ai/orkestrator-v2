@@ -13,6 +13,8 @@ import * as realContexts from "@/contexts";
 import * as realBackend from "@/lib/backend";
 import * as realKanbanStore from "@/stores/kanbanStore";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
+import { promptQueueKey } from "@/lib/prompt-queue-persistence";
+import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment, PrState, Project } from "@/types";
 import type { KanbanTask } from "@/lib/backend";
 import {
@@ -73,6 +75,12 @@ const setEnvironmentPrBackendMock = mock(async (
 ) => {});
 const setEnvironmentPRStoreMock = mock(() => {});
 const createTabMock = mock((_agent: string, _options?: unknown) => true);
+// The controller reaches the pane layout store imperatively, so the real store
+// action is swapped rather than the module mocked: `@/stores/paneLayoutStore`
+// stays real for every other suite.
+const clearTabInitialPromptMock = mock((_tabId: string, _environmentId?: string) => {});
+const realClearTabInitialPrompt =
+  usePaneLayoutStore.getState().clearTabInitialPrompt;
 const enqueuePromptQueueMessageMock = mock(async (
   _queueKey: string,
   _environmentId: string,
@@ -657,6 +665,9 @@ afterAll(() => {
   mock.module("@/contexts", () => realContextsSnapshot);
   mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("@/stores/kanbanStore", () => realKanbanStoreSnapshot);
+  usePaneLayoutStore.setState({
+    clearTabInitialPrompt: realClearTabInitialPrompt,
+  });
 });
 
 beforeEach(() => {
@@ -678,6 +689,10 @@ beforeEach(() => {
   createTabMock.mockImplementation(() => true);
   enqueuePromptQueueMessageMock.mockReset();
   enqueuePromptQueueMessageMock.mockImplementation(async () => ({}));
+  clearTabInitialPromptMock.mockReset();
+  usePaneLayoutStore.setState({
+    clearTabInitialPrompt: clearTabInitialPromptMock,
+  });
   startLoopedReviewMock.mockReset();
   startLoopedReviewMock.mockImplementation(async () => startedLoopedWorkflow);
   installLoopedWorkflowMock.mockReset();
@@ -1977,6 +1992,198 @@ describe("ActionBar workflow tabs", () => {
         text: expect.stringContaining("Security and instruction hierarchy"),
       }),
     ));
+  });
+
+  test("hands a Cursor PR to the backend before an environment switch", async () => {
+    currentEnabledAgentPlatforms = ["claude", "codex", "cursor", "opencode"];
+    currentEnvironment = {
+      ...selectedEnvironment,
+      defaultAgent: "cursor",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    // Hold persistence open across the switch. Letting it resolve first would
+    // let this pass without ever leaving env-1, which is the behaviour the test
+    // exists to pin.
+    let settleEnqueue: (() => void) | undefined;
+    enqueuePromptQueueMessageMock.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        settleEnqueue = () => resolve({});
+      }),
+    );
+    const view = render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
+    const tabOptions = createTabMock.mock.calls.at(-1)?.[1] as {
+      tabId?: string;
+      initialPrompt?: string;
+    };
+    const tabId = tabOptions.tabId;
+    expect(tabId).toMatch(/^tab-/);
+    expect(tabOptions).toMatchObject({
+      displayTitle: "PR",
+      initialPrompt: expect.stringContaining("gh pr create --base main --fill"),
+    });
+    expect(settleEnqueue).toBeDefined();
+    expect(clearTabInitialPromptMock).not.toHaveBeenCalled();
+
+    currentSelectedEnvironmentId = "env-2";
+    currentOtherEnvironments = [{
+      ...selectedEnvironment,
+      id: "env-2",
+      name: "other-environment",
+    }];
+    view.rerender(<ActionBar />);
+    // Only now, with env-1 deselected and its ActionBar re-rendered against
+    // another environment, does the durable hand-off acknowledge.
+    await act(async () => {
+      settleEnqueue!();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+      `cursor\u0000env-env-1:${tabId}`,
+      "env-1",
+      expect.objectContaining({
+        id: `initial-prompt:env-1:${tabId}`,
+        requestId: `initial-prompt:env-1:${tabId}`,
+        text: expect.stringContaining("gh pr create --base main --fill"),
+        mode: "build",
+      }),
+    ));
+    // The renderer fallback is dropped against the originating environment, not
+    // whichever one happens to be selected when persistence acknowledges.
+    await waitFor(() => expect(clearTabInitialPromptMock).toHaveBeenCalledWith(
+      tabId,
+      "env-1",
+    ));
+    expect(setModeCreatePendingMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps a one-click PR renderer-owned for a non-ACP default agent", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      defaultAgent: "codex",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
+
+    const tabOptions = createTabMock.mock.calls.at(-1)?.[1] as { tabId?: string };
+    expect(tabOptions).toMatchObject({
+      displayTitle: "PR",
+      initialPrompt: expect.stringContaining("gh pr create --base main --fill"),
+    });
+    // A default-mode Codex launch may still open a CLI tab, which owns no
+    // backend session. Pre-allocating an id and queueing against it would
+    // dispatch a turn with no tab to render it.
+    expect(tabOptions.tabId).toBeUndefined();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
+    expect(clearTabInitialPromptMock).not.toHaveBeenCalled();
+  });
+
+  test("durably queues a configured Claude PR with its fast-mode default", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      defaultAgent: "claude",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentClaudeFastModeDefault = true;
+
+    render(<ActionBar />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+    chooseReviewProvider("claude");
+    fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
+
+    const tabOptions = createTabMock.mock.calls.at(-1)?.[1] as { tabId?: string };
+    expect(tabOptions).toMatchObject({
+      agentLaunchMode: "native",
+      displayTitle: "PR",
+    });
+    expect(tabOptions.tabId).toMatch(/^tab-/);
+    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+      promptQueueKey("claude", `env-env-1:${tabOptions.tabId}`),
+      "env-1",
+      expect.objectContaining({
+        id: `initial-prompt:env-1:${tabOptions.tabId}`,
+        requestId: `initial-prompt:env-1:${tabOptions.tabId}`,
+        text: expect.stringContaining("gh pr create --base main --fill"),
+        // Claude reads `planModeEnabled` for its execution mode and treats an
+        // absent field as build, so a PR launch must never arrive in plan mode.
+        mode: "build",
+        fastMode: true,
+      }),
+    ));
+    await waitFor(() => expect(clearTabInitialPromptMock).toHaveBeenCalledWith(
+      tabOptions.tabId,
+      "env-1",
+    ));
+  });
+
+  test("durably queues a configured Codex PR with its fast-mode default", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      defaultAgent: "codex",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentCodexFastModeDefault = true;
+
+    render(<ActionBar />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+    chooseReviewProvider("codex");
+    fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
+
+    const tabOptions = createTabMock.mock.calls.at(-1)?.[1] as { tabId?: string };
+    expect(tabOptions.tabId).toMatch(/^tab-/);
+    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+      promptQueueKey("codex", `env-env-1:${tabOptions.tabId}`),
+      "env-1",
+      expect.objectContaining({
+        id: `initial-prompt:env-1:${tabOptions.tabId}`,
+        mode: "build",
+        fastMode: true,
+      }),
+    ));
+  });
+
+  test("retains the launch prompt when durable PR enqueue fails", async () => {
+    currentEnabledAgentPlatforms = ["claude", "codex", "cursor", "opencode"];
+    currentEnvironment = {
+      ...selectedEnvironment,
+      defaultAgent: "cursor",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    enqueuePromptQueueMessageMock.mockRejectedValueOnce(
+      new Error("backend unavailable"),
+    );
+
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
+
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not start pull request creation",
+      expect.objectContaining({ description: "backend unavailable" }),
+    ));
+    // Persistence never became authoritative, so the tab keeps the prompt it was
+    // created with and can still launch the PR itself.
+    expect(createTabMock).toHaveBeenLastCalledWith(
+      "cursor",
+      expect.objectContaining({
+        initialPrompt: expect.stringContaining("gh pr create --base main --fill"),
+      }),
+    );
+    expect(clearTabInitialPromptMock).not.toHaveBeenCalled();
   });
 
   test("retains the launch prompt when durable review enqueue fails", async () => {

@@ -66,6 +66,7 @@ import {
 import {
   indexActiveSubagentsFromTranscript,
   boundedModelId,
+  restoreCursorTodosFromMessages,
 } from "./acp-tools.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import {
@@ -252,6 +253,7 @@ export async function loadPersistedState(): Promise<void> {
       activeSubagentDescriptors: new Map(),
       subagentLimitExceeded: candidate.subagentLimitExceeded === true,
       subagentToolIds: new Map(),
+      cursorTodos: restoreCursorTodosFromMessages(messages),
       historyMessageIds: new Map(),
       child: null,
       revision: Number.isSafeInteger(candidate.revision) ? Number(candidate.revision) : 0,
@@ -358,12 +360,14 @@ export function normalizeBridgePart(
         ? value.text
         : undefined;
     if (content === undefined) return null;
+    const parentTaskUseId = boundedString(value.parentTaskUseId, MAX_TOOL_ID_BYTES)?.trim();
     return {
       type: value.type === "reasoning" ? "thinking" : value.type,
       content: truncateUtf8(content, MAX_MESSAGE_TEXT_BYTES),
       sourcePartId,
       sourceMessageId,
       ...(createdAt ? { createdAt } : {}),
+      ...(parentTaskUseId ? { parentTaskUseId } : {}),
     };
   }
 

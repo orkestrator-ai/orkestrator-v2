@@ -32,6 +32,10 @@ import {
   normalizeBackendModelId,
 } from "@orkestrator/protocol/model-id";
 import {
+  filePathFromToolInput,
+  toolDiffFromToolInput,
+} from "@orkestrator/protocol/tool-diff";
+import {
   tmuxElicitationDraftKey,
   tmuxPlanDraftKey,
   tmuxQuestionDraftKey,
@@ -955,55 +959,13 @@ function buildToolDiff(
   toolName: string | undefined,
   input: Record<string, unknown>,
 ): ToolDiffMetadata | undefined {
-  if (!toolName) return undefined;
-  const name = toolName.toLowerCase();
+  const sides = toolDiffFromToolInput(toolName, input);
+  if (sides) return sides;
 
-  const filePath =
-    (typeof input.file_path === "string" && input.file_path) ||
-    (typeof input.notebook_path === "string" && input.notebook_path) ||
-    (typeof input.path === "string" && input.path) ||
-    undefined;
-
-  switch (name) {
-    case "edit":
-    case "file_edit":
-    case "str_replace_editor":
-    case "replace": {
-      const before =
-        typeof input.old_string === "string" ? input.old_string : undefined;
-      const after =
-        typeof input.new_string === "string" ? input.new_string : undefined;
-      return { filePath, before, after };
-    }
-    case "write":
-    case "create_file": {
-      const after = typeof input.content === "string" ? input.content : undefined;
-      return { filePath, before: "", after };
-    }
-    case "multiedit": {
-      const edits = Array.isArray(input.edits) ? input.edits : [];
-      const beforeChunks: string[] = [];
-      const afterChunks: string[] = [];
-      for (const edit of edits) {
-        if (!edit || typeof edit !== "object") continue;
-        const e = edit as Record<string, unknown>;
-        if (typeof e.old_string === "string") beforeChunks.push(e.old_string);
-        if (typeof e.new_string === "string") afterChunks.push(e.new_string);
-      }
-      return {
-        filePath,
-        before: beforeChunks.join("\n"),
-        after: afterChunks.join("\n"),
-      };
-    }
-    case "notebookedit": {
-      const after =
-        typeof input.new_source === "string" ? input.new_source : undefined;
-      return { filePath, after };
-    }
-    default:
-      return filePath ? { filePath } : undefined;
-  }
+  // Not a tool this mapping recognises. A path on its own is still worth
+  // surfacing so a read-like tool can name the file it touched.
+  const filePath = filePathFromToolInput(input);
+  return filePath ? { filePath } : undefined;
 }
 
 function toolResultText(

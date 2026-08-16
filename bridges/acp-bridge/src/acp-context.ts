@@ -13,6 +13,21 @@ export type Provider = "cursor" | "grok";
 export type JsonObject = Record<string, unknown>;
 export type SessionStatus = "idle" | "running" | "error";
 
+/** Display status of a Cursor ACP todo. Matches `cursor/update_todos`. */
+export const CURSOR_TODO_STATUSES = [
+  "pending",
+  "in_progress",
+  "completed",
+  "cancelled",
+] as const;
+export type CursorTodoStatus = (typeof CURSOR_TODO_STATUSES)[number];
+
+export interface CursorTodoItem {
+  id: string;
+  content: string;
+  status: CursorTodoStatus;
+}
+
 export interface BridgeMessage {
   id: string;
   role: "user" | "assistant";
@@ -29,6 +44,8 @@ export interface BridgeTextPart {
   sourcePartId: string;
   sourceMessageId: string;
   createdAt?: string;
+  /** Launch tool this nested text belongs to, when hydrated from a child transcript. */
+  parentTaskUseId?: string;
 }
 
 /**
@@ -147,6 +164,12 @@ export interface ActiveSubagentDescriptor {
   subagentType?: string;
   /** Distinguishes a completed background launch from an abandoned pending one. */
   toolState?: BridgeToolPart["toolState"];
+  /**
+   * Cursor Task `agentId`. Used only by the Cursor background-continuation
+   * waiter to find the child's transcript; Grok correlates through
+   * `subagent_id` instead.
+   */
+  agentId?: string;
 }
 
 export interface SessionState {
@@ -168,6 +191,13 @@ export interface SessionState {
   subagentLimitExceeded: boolean;
   /** Grok's terminal sub-agent notifications identify the child, not its tool call. */
   subagentToolIds: Map<string, string>;
+  /**
+   * Session todo/plan list (Cursor `updateTodos`, Grok `todo_write`, ACP `plan`).
+   * Each matching tool part already carries the list as of that call; this is the
+   * merge source for the next one. Restore rebuilds it from the newest stamped
+   * part rather than persisting a second copy.
+   */
+  cursorTodos: CursorTodoItem[];
   /** Provider message IDs seen during the current process, bounded with the transcript. */
   historyMessageIds: Map<string, string>;
   child: AcpProcess | null;
@@ -451,6 +481,22 @@ export const MAX_RESUMABLE_SESSIONS = 512;
 export const MAX_SESSION_LIST_PAGES = 64;
 export const RPC_TIMEOUT_MS = parseDuration(process.env.ACP_RPC_TIMEOUT_MS, 30_000);
 export const PROMPT_TIMEOUT_MS = parseDuration(process.env.ACP_PROMPT_TIMEOUT_MS, 30 * 60_000);
+/**
+ * How long a Cursor parent generation may wait for live background children
+ * before continuing without them. Grok never reads this: it settles through
+ * `subagent_finished` and does not hold `session/prompt`.
+ */
+export const CURSOR_BACKGROUND_WAIT_MS = parseDuration(
+  process.env.ACP_CURSOR_BACKGROUND_WAIT_MS,
+  30 * 60_000,
+);
+export const MAX_CURSOR_BACKGROUND_CONTINUATIONS = 4;
+export const MAX_CURSOR_CHILD_RESULT_BYTES = 64 * 1024;
+/** Recent child JSONL activity projected into the parent Task card. */
+export const MAX_CURSOR_CHILD_PARTS = 64;
+export const MAX_CURSOR_TRANSCRIPT_HYDRATE_CHILDREN = 8;
+export const CURSOR_JSONL_SOURCE_PREFIX = "cursor-jsonl:";
+export const CURSOR_BACKGROUND_CONTINUATION_PREFIX = "Background subagent finished.";
 export const RESOURCE_EXHAUSTED_MAX_RETRIES = 3;
 export const RESOURCE_EXHAUSTED_RETRY_BASE_MS = parseDuration(
   process.env.ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS,
@@ -688,15 +734,14 @@ export class AcpProcess {
         // than acknowledge a capability we do not have.
         this.onVendor(message.method, params);
         this.respond(message.id, {});
-      } else if (isCursorTaskMethod(message.method)) {
-        // `cursor/task` is the sub-agent completion signal, and refusing it
-        // with -32601 leaves the launch card Active. Answered with `{}`: the
-        // result is discarded (see `applyCursorTask`), and inventing a payload
-        // would be claiming a response schema this method does not publish.
-        // ACP's only structured client answer is the permission outcome, whose
-        // members are `selected` and `cancelled` — neither describes a child
-        // that ended, so borrowing that shape here would be a lie in both
-        // directions. The notification form is handled below.
+      } else if (isCursorAcknowledgedExtensionMethod(message.method)) {
+        // `cursor/task` and `cursor/update_todos` are documented as
+        // notifications, but Cursor's `extMethod` helper sends them as
+        // requests. Refusing either with -32601 leaves the matching tool row
+        // empty (Active for a child, no list for todos). Answered with `{}`:
+        // Cursor discards the result, and inventing a payload would claim a
+        // response schema the live agent does not validate. The notification
+        // form is handled below.
         this.onVendor(message.method, params);
         this.respond(message.id, {});
       } else {
@@ -833,6 +878,19 @@ export class HttpError extends Error {
 
 export function isCursorTaskMethod(method: string): boolean {
   return method === "cursor/task";
+}
+
+export function isCursorUpdateTodosMethod(method: string): boolean {
+  return method === "cursor/update_todos";
+}
+
+/**
+ * Cursor extension methods that arrive as JSON-RPC requests even though the
+ * published docs call them notifications. Refusing them with -32601 leaves the
+ * matching tool row empty; acknowledging with `{}` matches `cursor/task`.
+ */
+export function isCursorAcknowledgedExtensionMethod(method: string): boolean {
+  return isCursorTaskMethod(method) || isCursorUpdateTodosMethod(method);
 }
 
 export function isVendorModelUpdate(method: string, params: JsonObject): boolean {

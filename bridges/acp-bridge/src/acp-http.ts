@@ -67,7 +67,8 @@ import {
 import {
   reconcileStaleToolParts,
 } from "./acp-reconciliation.js";
-import { requestPromptWithResourceExhaustedRetries } from "./acp-prompt.js";
+import { dispatchAcpPrompt } from "./acp-prompt.js";
+import { hydrateCursorChildTranscripts } from "./acp-cursor-background.js";
 import { schedulePersist } from "./acp-persist-writer.js";
 import { structuredPromptInstruction } from "./acp-prompt.js";
 
@@ -129,10 +130,12 @@ export async function route(
   }
   const action = match[2];
   if (!action && request.method === "GET") {
+    hydrateCursorChildTranscripts(state);
     boundTranscriptForRead(state);
     return json(response, 200, publicSession(state));
   }
   if (action === "messages" && request.method === "GET") {
+    hydrateCursorChildTranscripts(state);
     boundTranscriptForRead(state);
     return json(response, 200, messageWindow(state, parseFromIndex(url.searchParams.get("fromIndex"))));
   }
@@ -339,7 +342,7 @@ export async function route(
     boundTranscript(state);
     await persistState();
     const acpPrompt = schema ? `${prompt}\n\n${structuredPromptInstruction(schema)}` : prompt;
-    const promptCompletion = requestPromptWithResourceExhaustedRetries(state, child, {
+    const promptCompletion = dispatchAcpPrompt(state, child, {
       sessionId: state.acpSessionId,
       prompt: [
         ...(acpPrompt ? [{ type: "text", text: acpPrompt }] : []),

@@ -128,6 +128,48 @@ describe("native message adapters", () => {
     });
   });
 
+  test("nests Cursor JSONL-hydrated text and tools under the parent Task card", () => {
+    const normalized = normalizeNativeMessage({
+      id: "cursor-jsonl-subagent-child",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-08-16T10:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Task: Validate the change",
+          toolName: "task",
+          toolUseId: "cursor-task-1",
+          toolState: "success",
+          agentState: "active",
+        },
+        {
+          type: "text",
+          content: "Checking the suite.",
+          parentTaskUseId: "cursor-task-1",
+        },
+        {
+          type: "tool-invocation",
+          content: "Read",
+          toolName: "Read",
+          toolUseId: "child-wait-1:0:1",
+          parentTaskUseId: "cursor-task-1",
+          toolState: "pending",
+          toolArgs: { path: "package.json" },
+        },
+      ],
+    });
+
+    expect(normalized.parts).toHaveLength(1);
+    expect(normalized.parts[0]).toMatchObject({
+      type: "task-group",
+      childTools: [
+        expect.objectContaining({ type: "text", content: "Checking the suite." }),
+        expect.objectContaining({ type: "tool-invocation", toolName: "Read" }),
+      ],
+    });
+  });
+
   test("promotes Grok's spawn_subagent tool into shared sub-agent activity", () => {
     const normalized = normalizeNativeMessage({
       id: "grok-background-subagent",

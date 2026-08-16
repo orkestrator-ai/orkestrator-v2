@@ -1062,6 +1062,74 @@ describe("NativeMessage task list rendering", () => {
     expect(await screen.findByText("+new")).toBeTruthy();
   });
 
+  test("counts the badge from before/after without charging a trailing newline", () => {
+    // The fallback used when a provider sends sides but no counts. A trailing
+    // newline terminates the last line, so this is -2/+1, not -3/+2.
+    render(
+      <TerminalProvider>
+        <NativeMessage
+          message={makeMessage([{
+            type: "tool-invocation",
+            content: "src/a.ts",
+            toolName: "Edit",
+            toolState: "success",
+            toolDiff: {
+              filePath: "/workspace/src/a.ts",
+              before: "one\ntwo\n",
+              after: "three\n",
+            },
+          }])}
+        />
+      </TerminalProvider>,
+    );
+
+    expect(screen.getByText("+1")).toBeTruthy();
+    expect(screen.getByText("-2")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /edit a\.ts \+1 -2 success/i }));
+    expect(screen.getByText("-one")).toBeTruthy();
+    expect(screen.getByText("-two")).toBeTruthy();
+    expect(screen.getByText("+three")).toBeTruthy();
+    expect(screen.queryByText("-") === null).toBe(true);
+    expect(screen.queryByText("+") === null).toBe(true);
+  });
+
+  test("expands a joined MultiEdit side without a phantom line from a trailing newline", () => {
+    // Per-chunk counts already exclude the terminator. The expanded body must
+    // use the same split or the badge would read -2 while the list showed 3.
+    render(
+      <TerminalProvider>
+        <NativeMessage
+          message={makeMessage([{
+            type: "tool-invocation",
+            content: "src/c.ts",
+            toolName: "MultiEdit",
+            toolState: "success",
+            toolDiff: {
+              filePath: "/workspace/src/c.ts",
+              before: "one\nfour\n",
+              after: "two\nthree\nfive",
+              additions: 3,
+              deletions: 2,
+            },
+          }])}
+        />
+      </TerminalProvider>,
+    );
+
+    expect(screen.getByText("+3")).toBeTruthy();
+    expect(screen.getByText("-2")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /multiedit c\.ts \+3 -2 success/i }));
+    expect(screen.getByText("-one")).toBeTruthy();
+    expect(screen.getByText("-four")).toBeTruthy();
+    expect(screen.getByText("+two")).toBeTruthy();
+    expect(screen.getByText("+three")).toBeTruthy();
+    expect(screen.getByText("+five")).toBeTruthy();
+    expect(screen.queryByText("-") === null).toBe(true);
+    expect(screen.queryByText("+") === null).toBe(true);
+  });
+
   test("routes a location-only diff hint to the generic tool row", () => {
     // The mirror of the case above: metadata with no deferred marker really is
     // just a hint, and must not be dressed up as an edit.
@@ -1144,6 +1212,8 @@ describe("NativeMessage task list rendering", () => {
   test.each([
     ["file_path", { file_path: "/repo/src/deep/example.ts" }, "example.ts"],
     ["file_path with no directory", { file_path: "example.ts" }, "example.ts"],
+    ["path", { path: "package.json" }, "package.json"],
+    ["path with directories", { path: "/repo/src/deep/example.ts" }, "example.ts"],
     ["pattern", { pattern: "**/*.tsx" }, "**/*.tsx"],
     ["regex", { regex: "function\\s+\\w+" }, "function\\s+\\w+"],
     ["url", { url: "https://example.test/a/b?c=d" }, "example.test"],
@@ -1164,6 +1234,38 @@ describe("NativeMessage task list rendering", () => {
 
     expect(container.textContent).toContain(expected);
   });
+
+  // Glob and Grep carry `path` as the search *root* next to the pattern that
+  // actually identifies the call. Reading `path` first labelled them with a
+  // directory name and hid what was being searched for.
+  test.each([
+    ["pattern", { pattern: "*.ts", path: "/workspace/src" }, "*.ts", "src"],
+    ["regex", { regex: "TODO\\b", path: "/workspace/src" }, "TODO\\b", "src"],
+    ["file_path", { file_path: "/repo/a/exact.ts", path: "/repo/b" }, "exact.ts", "b"],
+  ])(
+    "prefers %s over a sibling path in the collapsed row",
+    (_label, toolArgs, expected, notExpected) => {
+      const { container } = render(
+        <NativeMessage
+          message={makeMessage([{
+            type: "tool-invocation",
+            content: "Glob",
+            toolName: "Glob",
+            toolArgs,
+            toolState: "success",
+          }])}
+        />,
+      );
+
+      expect(container.textContent).toContain(expected);
+      expect(screen.getByRole("button", { name: new RegExp(`glob ${
+        expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      } success`, "i") })).toBeTruthy();
+      expect(screen.queryByRole("button", {
+        name: new RegExp(`glob ${notExpected} success`, "i"),
+      }) === null).toBe(true);
+    },
+  );
 
   test("prefers a command over every other collapsed-row summary", () => {
     const { container } = render(
@@ -2607,6 +2709,56 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.queryByText("No child actions yet.") === null).toBe(true);
   });
 
+  test("renders Cursor JSONL-hydrated child activity inside the expanded Task card", () => {
+    const message = makeMessage([
+      {
+        type: "task-group",
+        content: "Task: Run validation at HEAD",
+        task: {
+          type: "tool-invocation",
+          content: "Task: Run validation at HEAD",
+          toolName: "task",
+          toolTitle: "Task: Run validation at HEAD",
+          toolState: "success",
+          agentState: "active",
+          toolArgs: {
+            description: "Run validation at HEAD",
+            prompt: "Run the validation suite at HEAD.",
+            subagent_type: "generalPurpose",
+            agentId: "child-wait-1",
+          },
+        },
+        childTools: [
+          {
+            type: "text",
+            content: "Checking the suite.",
+            parentTaskUseId: "cursor-subagent-1",
+          },
+          {
+            type: "tool-invocation",
+            content: "Read",
+            toolName: "Read",
+            toolTitle: "Read",
+            toolUseId: "child-wait-1:0:1",
+            parentTaskUseId: "cursor-subagent-1",
+            toolState: "pending",
+            toolArgs: { path: "package.json" },
+          },
+        ],
+      },
+    ]);
+
+    render(<NativeMessage message={message} platform="cursor" />);
+
+    expect(screen.queryByText("Waiting for activity.") === null).toBe(true);
+    expect(screen.getByText("Read")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /run validation at head/i }));
+    expect(screen.getByText("Checking the suite.")).toBeTruthy();
+    expect(screen.getByText("package.json")).toBeTruthy();
+    expect(screen.queryByText("No child actions yet.") === null).toBe(true);
+  });
+
   test("still shows real tool counts for non-Cursor agents", () => {
     const message = makeMessage([
       {
@@ -2878,6 +3030,75 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     expect(container.textContent).toContain("Todo Write");
     expect(container.textContent).toContain("1/2 complete");
     expect(container.textContent).toContain("success");
+  });
+
+  test("routes todo_write tool-invocation to TodoToolPart", () => {
+    const message = makeMessage([
+      {
+        type: "tool-invocation",
+        content: "",
+        toolName: "todo_write",
+        toolTitle: "Todo Write",
+        toolState: "success",
+        toolArgs: {
+          todos: [
+            { id: "1", content: "Inspect renderer", status: "completed" },
+            { id: "2", content: "Stamp Grok todos", status: "in_progress" },
+          ],
+        },
+      },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(container.textContent).toContain("Todo Write");
+    expect(container.textContent).toContain("1/2 complete");
+    expect(container.textContent).toContain("success");
+    expect(container.textContent).not.toContain("Unknown tool");
+  });
+
+  test("does not route ACP tool kind plan to TodoToolPart", () => {
+    const message = makeMessage([
+      {
+        type: "tool-invocation",
+        content: "",
+        toolName: "plan",
+        toolTitle: "Plan the work",
+        toolState: "success",
+        toolArgs: { goal: "ship it" },
+      },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(container.textContent).not.toContain("complete");
+    expect(container.textContent).toContain("Plan the work");
+  });
+
+  test("routes updateTodos tool-invocation to TodoToolPart", () => {
+    const message = makeMessage([
+      {
+        type: "tool-invocation",
+        content: "",
+        toolName: "updateTodos",
+        toolTitle: "Update TODOs",
+        toolState: "success",
+        toolArgs: {
+          merge: false,
+          todos: [
+            { id: "1", content: "Inspect renderer", status: "completed" },
+            { id: "2", content: "Stamp Cursor todos", status: "in_progress" },
+          ],
+        },
+      },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(container.textContent).toContain("Update TODOs");
+    expect(container.textContent).toContain("1/2 complete");
+    expect(container.textContent).toContain("success");
+    expect(container.textContent).not.toContain("Unknown tool");
   });
 
   test("routes todo_list tool-invocation to TodoToolPart with friendly label", () => {

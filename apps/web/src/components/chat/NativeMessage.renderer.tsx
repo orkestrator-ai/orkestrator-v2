@@ -211,7 +211,7 @@ export function MessagePart({
           />
         );
       }
-      // Use specialized TodoToolPart for TodoWrite tools
+      // Use specialized TodoToolPart for TodoWrite / Cursor updateTodos / Grok todo_write tools
       if (isTodoTool(part.toolName)) {
         return (
           <TodoToolPart

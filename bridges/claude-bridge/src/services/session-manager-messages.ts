@@ -39,6 +39,7 @@ import {
   structuredOutputFailure,
   type StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
+import { toolDiffFromToolInput } from "@orkestrator/protocol/tool-diff";
 import { eventEmitter } from "./event-emitter.js";
 import {
   deleteSessionPreferences,
@@ -195,6 +196,21 @@ export function isTaskToolName(toolName: string): boolean {
 }
 
 /**
+ * Derive bounded `toolDiff` metadata from a tool's raw input.
+ *
+ * The tool-name mapping is shared with the tmux store so the same rollout is
+ * described identically whichever path produced it; only the memory budget is
+ * applied here, because only the bridge retains parts for the session's life.
+ */
+function buildClaudeToolDiff(
+  toolName: string,
+  input: Record<string, unknown>,
+): ToolDiffMetadata | undefined {
+  const sides = toolDiffFromToolInput(toolName, input);
+  return sides ? applyDiffBudget(sides) : undefined;
+}
+
+/**
  * Parse SDK message content, extracting text/thinking parts, registering tools,
  * and tracking the order of non-text parts for chronological display.
  * Also tracks parent Task relationships for proper tool grouping.
@@ -278,23 +294,12 @@ export function parseMessageContent(
       });
     } else if (block.type === "tool_use" && toolTracker) {
       const toolName = block.name || "Unknown tool";
-      const normalizedToolName = toolName.toLowerCase();
-      const isEditTool = normalizedToolName === "edit";
-      const isWriteTool = normalizedToolName === "write";
       const isTask = isTaskToolName(toolName);
 
-      let toolDiff: ToolDiffMetadata | undefined;
-      if ((isEditTool || isWriteTool) && block.input) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const input = block.input as any;
-        // `after` is the whole file for a Write, so this is bounded before it
-        // is retained for the life of the session.
-        toolDiff = applyDiffBudget({
-          filePath: input.file_path || input.filePath,
-          before: isWriteTool ? "" : input.old_string || input.oldString,
-          after: isWriteTool ? input.content : input.new_string || input.newString,
-        });
-      }
+      const toolDiff = block.input && typeof block.input === "object"
+        && !Array.isArray(block.input)
+        ? buildClaudeToolDiff(toolName, block.input as Record<string, unknown>)
+        : undefined;
 
       // Check if this is an MCP tool
       const { isMcpTool, mcpServerName } = parseMcpToolName(toolName, mcpServerNames);
@@ -1131,4 +1136,3 @@ export function normalizePersistedSessionMessages(
   }
   return { messages, taskRegistry, backgroundTasks };
 }
-

@@ -6513,4 +6513,87 @@ describe("TerminalContainer", () => {
     });
   });
 
+  /**
+   * A Multi Review workflow outlives the tab that launched it, so the launcher
+   * reattaches to an already-active one rather than failing. Asking for a
+   * workflow that is still on screen must surface that tab instead of stacking
+   * a second copy of the same workflow.
+   */
+  test("reveals an open Multi Review tab instead of duplicating its workflow", async () => {
+    const results: boolean[] = [];
+    function MultiReviewReattachHarness() {
+      const { createTab } = useTerminalContext();
+      const didRunRef = useRef(false);
+      useEffect(() => {
+        if (!createTab || didRunRef.current) return;
+        didRunRef.current = true;
+        results.push(createTab("multi-review", { multiReviewId: "workflow-1" }));
+        // The reviewer transcript is a different view of the same workflow, so
+        // it stays a tab of its own rather than folding into the overview.
+        results.push(createTab("multi-review", {
+          multiReviewId: "workflow-1", multiReviewReviewerId: "reviewer-1",
+        }));
+      }, [createTab]);
+      return null;
+    }
+
+    usePaneLayoutStore.setState((state) => ({
+      environments: new Map(state.environments).set("env-visible", {
+        root: {
+          kind: "split",
+          id: "split",
+          direction: "horizontal",
+          sizes: [50, 50],
+          depth: 1,
+          children: [
+            {
+              kind: "leaf",
+              id: "left",
+              tabs: [{
+                id: "open-multi-review",
+                type: "multi-review",
+                multiReviewTabData: { environmentId: "env-visible", workflowId: "workflow-1" },
+              }],
+              activeTabId: "open-multi-review",
+            },
+            {
+              kind: "leaf",
+              id: "right",
+              tabs: [{ id: "right-only", type: "plain" }],
+              activeTabId: "right-only",
+            },
+          ],
+        },
+        activePaneId: "right",
+        containerId: "container-visible",
+      }),
+    }));
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-visible"
+          containerId="container-visible"
+          isContainerRunning
+          isActive
+        />
+        <MultiReviewReattachHarness />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => expect(results).toEqual([true, true]));
+    const layout = usePaneLayoutStore.getState();
+    // The overview request reused the open tab and focused its pane; only the
+    // reviewer transcript was actually added.
+    expect(layout.getPane("left", "env-visible")?.tabs.map((tab) => tab.id))
+      .toEqual(["open-multi-review"]);
+    expect(layout.getPane("left", "env-visible")?.activeTabId).toBe("open-multi-review");
+    expect(layout.environments.get("env-visible")?.activePaneId).toBe("left");
+    expect(
+      layout.getPane("right", "env-visible")?.tabs
+        .filter((tab) => tab.type === "multi-review")
+        .map((tab) => tab.multiReviewTabData?.reviewerId),
+    ).toEqual(["reviewer-1"]);
+  });
+
 });

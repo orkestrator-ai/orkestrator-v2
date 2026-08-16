@@ -14,11 +14,13 @@ import * as realBackend from "@/lib/backend";
 import * as realKanbanStore from "@/stores/kanbanStore";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { promptQueueKey } from "@/lib/prompt-queue-persistence";
+import * as realMultiReviewPersistence from "@/lib/multi-review-persistence";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment, PrState, Project } from "@/types";
 import type { KanbanTask } from "@/lib/backend";
 import {
   mockToastError as toastErrorMock,
+  mockToastInfo as toastInfoMock,
   mockToastSuccess as toastSuccessMock,
 } from "../../../../../tests/mocks/sonner";
 
@@ -33,6 +35,7 @@ const realHooksSnapshot = { ...realHooks };
 const realContextsSnapshot = { ...realContexts };
 const realBackendSnapshot = { ...realBackend };
 const realKanbanStoreSnapshot = { ...realKanbanStore };
+const realMultiReviewPersistenceSnapshot = { ...realMultiReviewPersistence };
 
 type MergeOutcome = {
   outcome: "merged" | "pending" | "unknown";
@@ -103,6 +106,9 @@ const cancelMultiReviewMock = mock(async (
   id: "multi-workflow-1", phase: "cancelled",
 }));
 const deleteMultiReviewWorkflowMock = mock(async (_workflowId: string) => {});
+const findActiveMultiReviewWorkflowMock = mock(
+  async (_environmentId: string): Promise<{ id: string; phase: string } | null> => null,
+);
 const installMultiReviewWorkflowMock = mock((_workflow: unknown) => {});
 const removeMultiReviewWorkflowMock = mock((_workflowId: string) => {});
 const selectTabMock = mock((_index: number) => {});
@@ -639,6 +645,13 @@ mock.module("@/lib/backend", () => ({
   enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,
 }));
 
+// The hydrator has its own test file. Snapshot and restore per the Bun mock
+// rules in AGENTS.md so a non-isolated run does not leave it faked.
+mock.module("@/lib/multi-review-persistence", () => ({
+  ...realMultiReviewPersistenceSnapshot,
+  findActiveMultiReviewWorkflow: findActiveMultiReviewWorkflowMock,
+}));
+
 mock.module("@/stores/kanbanStore", () => ({
   useKanbanStore: {
     getState: () => ({
@@ -665,6 +678,7 @@ afterAll(() => {
   mock.module("@/contexts", () => realContextsSnapshot);
   mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("@/stores/kanbanStore", () => realKanbanStoreSnapshot);
+  mock.module("@/lib/multi-review-persistence", () => realMultiReviewPersistenceSnapshot);
   usePaneLayoutStore.setState({
     clearTabInitialPrompt: realClearTabInitialPrompt,
   });
@@ -709,12 +723,15 @@ beforeEach(() => {
   }));
   deleteMultiReviewWorkflowMock.mockReset();
   deleteMultiReviewWorkflowMock.mockImplementation(async () => {});
+  findActiveMultiReviewWorkflowMock.mockReset();
+  findActiveMultiReviewWorkflowMock.mockImplementation(async () => null);
   installMultiReviewWorkflowMock.mockReset();
   removeMultiReviewWorkflowMock.mockReset();
   selectTabMock.mockReset();
   closeActiveTabMock.mockReset();
   toastSuccessMock.mockReset();
   toastErrorMock.mockReset();
+  toastInfoMock.mockReset();
   setProjectBoardTabMock.mockReset();
   setProjectBoardNotesOpenMock.mockReset();
   toggleFilesPanelMock.mockReset();
@@ -3307,6 +3324,45 @@ describe("ActionBar workflow tabs", () => {
       displayTitle: "Multi Review",
     });
     expect(installMultiReviewWorkflowMock).toHaveBeenCalledWith(startedMultiReview);
+  });
+
+  /**
+   * Closing a Multi Review tab deliberately leaves the backend workflow
+   * running, and only one may be active per environment. Without reattaching,
+   * that workflow is unreachable — its Abandon control lives inside the tab
+   * that was closed — so the environment can never run another Multi Review.
+   */
+  test("reopens the running Multi Review instead of failing a second launch", async () => {
+    // `ready` is not a terminal phase, so it blocks a new launch while still
+    // offering Abandon once the tab is back on screen.
+    findActiveMultiReviewWorkflowMock.mockImplementation(async () => ({
+      id: "multi-workflow-open", phase: "ready",
+    }));
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentWorkspaceReady = true;
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+
+    await waitFor(() => expect(createTabMock).toHaveBeenCalledWith("multi-review", {
+      multiReviewId: "multi-workflow-open",
+      displayTitle: "Multi Review",
+    }));
+    // Reattaching must not start, cancel, or delete anything: the running
+    // review keeps its reviewers and its report.
+    expect(startMultiReviewMock).not.toHaveBeenCalled();
+    expect(cancelMultiReviewMock).not.toHaveBeenCalled();
+    expect(deleteMultiReviewWorkflowMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(toastInfoMock).toHaveBeenCalledWith("Multi Review already running", {
+      description: expect.stringContaining("Cancel or abandon it there"),
+    });
   });
 
   test("keeps a still-cancelling Multi Review recoverable when the tab cannot open", async () => {

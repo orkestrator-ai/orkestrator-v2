@@ -25,6 +25,7 @@ import { promptQueueKey } from "@/lib/prompt-queue-persistence";
 import { createSessionKey } from "@/lib/utils";
 import { createUuid } from "@/lib/uuid";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { findActiveMultiReviewWorkflow } from "@/lib/multi-review-persistence";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { toast } from "sonner";
 import type { ResolveLaunchResult } from "./ActionBar.types";
@@ -459,6 +460,30 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     let workflowId: string | undefined;
     let cancelRequested = false;
     try {
+      // An environment may hold only one active Multi Review, and closing its
+      // tab deliberately leaves the backend workflow running. Reattach to it
+      // rather than failing the launch: the running one is otherwise
+      // unreachable, and its Abandon control — the only way to free the
+      // environment for a new review — lives inside the tab being reopened.
+      const active = await findActiveMultiReviewWorkflow(selectedEnvironmentId);
+      if (active) {
+        if (!createTab("multi-review", {
+          multiReviewId: active.id,
+          displayTitle: "Multi Review",
+        })) {
+          throw new Error(
+            "A Multi Review is already running, but its tab could not be reopened."
+            + " Close a tab and try again.",
+          );
+        }
+        setMultiReviewDialogOpen(false);
+        toast.info("Multi Review already running", {
+          description:
+            "Reopened the review already running in this environment."
+            + " Cancel or abandon it there to start a new one.",
+        });
+        return;
+      }
       const workflow = await backend.startMultiReview({
         environmentId: selectedEnvironmentId,
         projectId: selectedProjectId,

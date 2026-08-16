@@ -1,4 +1,5 @@
 import {
+  isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
@@ -42,4 +43,20 @@ export async function hydrateMultiReviewWorkflowsForEnvironment(
   }
   for (const workflow of workflows) useMultiReviewStore.getState().replaceWorkflow(workflow);
   return workflows;
+}
+
+/**
+ * The single non-terminal workflow an environment is allowed to hold, if any.
+ *
+ * Read from the backend rather than the store because the store is a projection
+ * that a closed tab, a reload, or an event missed while the environment was
+ * inactive can leave behind — and this answer decides whether a launch may
+ * proceed. The backend enforces the same rule on write, so a second client
+ * racing this check is still refused there.
+ */
+export async function findActiveMultiReviewWorkflow(
+  environmentId: string,
+): Promise<MultiReviewWorkflow | null> {
+  const workflows = await hydrateMultiReviewWorkflowsForEnvironment(environmentId);
+  return workflows.find((workflow) => !isMultiReviewTerminalPhase(workflow.phase)) ?? null;
 }

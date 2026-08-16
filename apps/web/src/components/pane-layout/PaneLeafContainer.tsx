@@ -1,7 +1,12 @@
 import { lazy, memo, useCallback, useRef, useLayoutEffect, useState } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { useShallow } from "zustand/react/shallow";
-import { usePaneLayoutStore, useEnvironmentStore, useConfigStore } from "@/stores";
+import {
+  usePaneLayoutStore,
+  useEnvironmentStore,
+  useConfigStore,
+  useMultiReviewStore,
+} from "@/stores";
 import { useTerminalPortalStore } from "@/stores/terminalPortalStore";
 import type { PaneLeaf } from "@/types/paneLayout";
 import { createTabbarDroppableId, getNativeAgentData } from "@/types/paneLayout";
@@ -81,6 +86,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
     })
   );
   const repositories = useConfigStore((state) => state.config.repositories);
+  const multiReviewWorkflows = useMultiReviewStore((state) => state.workflows);
   const comparisonRef = createdFromCommit || (projectId ? (repositories[projectId]?.prBaseBranch || "main") : "main");
 
   // Set up droppable for tabbar
@@ -340,6 +346,10 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
           }
 
           if (tab.type === "multi-review" && tab.multiReviewTabData) {
+            const refreshRequestId = tabRefreshRequestIds.get(tab.id) ?? 0;
+            const workflowRevision = multiReviewWorkflows.get(
+              tab.multiReviewTabData.workflowId,
+            )?.backendRevision;
             return (
               <div
                 key={tab.id}
@@ -351,8 +361,14 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                 <LazyLoadBoundary
                   loadingFallback={renderTabFallback(isTabActive && isActive)}
                   renderError={renderTabError(isTabActive && isActive)}
+                  resetKeys={[
+                    isTabActive && isActive,
+                    refreshRequestId,
+                    workflowRevision,
+                  ]}
                 >
                   <LazyMultiReviewTab
+                    key={refreshRequestId}
                     data={tab.multiReviewTabData}
                     isActive={isTabActive && isActive}
                   />

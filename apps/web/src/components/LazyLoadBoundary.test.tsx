@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { lazy, type ReactNode } from "react";
 import {
+  createLazyLoadFailureDiagnostic,
   isModuleLoadError,
   LazyDialogLoadingFallback,
   LazyLoadBoundary,
@@ -50,6 +51,31 @@ describe("isModuleLoadError", () => {
 });
 
 describe("LazyLoadBoundary", () => {
+  test("creates bounded diagnostics without retaining error or source text", () => {
+    const diagnostic = createLazyLoadFailureDiagnostic(
+      new TypeError(
+        "secret transcript text at /Users/person/private/file.ts from https://host/assets/x.js",
+      ),
+      {
+        componentStack: [
+          "\n    at MultiReviewReviewerTab (file:///Users/person/private/view.tsx:10:2)",
+          "    at MultiReviewTab (file:///Users/person/private/view.tsx:20:2)",
+        ].join("\n"),
+      },
+    );
+
+    expect(diagnostic).toEqual({
+      kind: "render",
+      errorType: "TypeError",
+      fingerprint: expect.stringMatching(/^[a-f0-9]{8}$/),
+      componentChain: ["MultiReviewReviewerTab", "MultiReviewTab"],
+    });
+    const serialized = JSON.stringify(diagnostic);
+    expect(serialized).not.toContain("secret transcript text");
+    expect(serialized).not.toContain("/Users/");
+    expect(serialized).not.toContain("https://");
+  });
+
   test("shows the supplied fallback while a lazy component is pending", () => {
     const PendingComponent = lazy(
       () => new Promise<{ default: () => ReactNode }>(() => {}),
@@ -111,6 +137,54 @@ describe("LazyLoadBoundary", () => {
     });
   });
 
+  test("retries an ordinary render failure without reloading the application", async () => {
+    let shouldThrow = true;
+    const onReload = mock(() => undefined);
+    const TransientFailure = () => {
+      if (shouldThrow) throw new TypeError("transient transcript render failure");
+      return <div>Recovered transcript</div>;
+    };
+
+    await withSilencedReactErrors(async () => {
+      render(
+        <LazyLoadBoundary onReload={onReload}>
+          <TransientFailure />
+        </LazyLoadBoundary>,
+      );
+
+      expect(await screen.findByRole("alert")).toBeTruthy();
+      shouldThrow = false;
+      fireEvent.click(screen.getByRole("button", { name: "Retry view" }));
+      expect(await screen.findByText("Recovered transcript")).toBeTruthy();
+      expect(onReload).not.toHaveBeenCalled();
+    });
+  });
+
+  test("retries a failed view when an authoritative reset key changes", async () => {
+    let shouldThrow = true;
+    const TransientFailure = () => {
+      if (shouldThrow) throw new TypeError("transient transcript render failure");
+      return <div>Recovered at the next revision</div>;
+    };
+
+    await withSilencedReactErrors(async () => {
+      const view = render(
+        <LazyLoadBoundary resetKeys={[1]}>
+          <TransientFailure />
+        </LazyLoadBoundary>,
+      );
+
+      expect(await screen.findByRole("alert")).toBeTruthy();
+      shouldThrow = false;
+      view.rerender(
+        <LazyLoadBoundary resetKeys={[2]}>
+          <TransientFailure />
+        </LazyLoadBoundary>,
+      );
+      expect(await screen.findByText("Recovered at the next revision")).toBeTruthy();
+    });
+  });
+
   test("reloads the window by default", async () => {
     const reload = mock(() => undefined);
     const originalLocation = window.location;
@@ -169,10 +243,12 @@ describe("LazyLoadBoundary", () => {
 
   test("scopes an inline failure to its container and stays visible when active", () => {
     const onReload = mock(() => undefined);
+    const onRetry = mock(() => undefined);
     render(
       <LazyLoadInlineErrorFallback
         isModuleLoadError
         onReload={onReload}
+        onRetry={onRetry}
         isVisible
       />,
     );
@@ -182,6 +258,7 @@ describe("LazyLoadBoundary", () => {
     expect(alert.parentElement!.className).not.toContain("hidden");
     fireEvent.click(screen.getByRole("button", { name: "Reload application" }));
     expect(onReload).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Retry view" }) === null).toBe(true);
   });
 
   test("renders a blocking dialog loading status", () => {

@@ -2263,28 +2263,32 @@ describe("ACP bridge", () => {
         method: "POST",
         headers,
       }).then((response) => response.json()) as { id: string };
+      const read = async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>;
       await nativeFetch(`${base}/session/${created.id}/prompt`, {
         method: "POST",
         headers,
         body: JSON.stringify({ prompt: "BACKGROUNDSUBAGENT" }),
       });
       await waitFor(
-        async () => nativeFetch(`${base}/session/${created.id}/activity`, { headers })
-          .then((response) => response.json()) as Promise<{ activity: string }>,
-        (value) => value.activity === "working",
+        read,
+        (value) => value.status === "idle"
+          && value.messages.some((message) => message.parts.some((part) =>
+            part.toolUseId === "cursor-subagent-1" && part.agentState === "active"
+          )),
       );
 
-      await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      const terminalResponse = await nativeFetch(`${base}/session/${created.id}/prompt`, {
         method: "POST",
         headers,
         body: JSON.stringify({ prompt: terminal.prompt }),
       });
+      expect(terminalResponse.status).toBe(202);
       const settled = await waitFor(
-        async () => nativeFetch(`${base}/session/${created.id}`, { headers })
-          .then((response) => response.json()) as Promise<{
-            status: string;
-            messages: Array<{ parts: Array<Record<string, unknown>> }>;
-          }>,
+        read,
         (value) => value.status === "idle"
           && value.messages.some((message) => message.parts.some((part) =>
             part.toolUseId === "cursor-subagent-1" && part.agentState === terminal.agentState
@@ -2322,16 +2326,23 @@ describe("ACP bridge", () => {
         body: JSON.stringify({ prompt: "BACKGROUNDSUBAGENT" }),
       });
       await waitFor(
-        async () => nativeFetch(`${base}/session/${created.id}/activity`, { headers })
-          .then((response) => response.json()) as Promise<{ activity: string }>,
-        (value) => value.activity === "working",
+        async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+          .then((response) => response.json()) as Promise<{
+            status: string;
+            messages: Array<{ parts: Array<Record<string, unknown>> }>;
+          }>,
+        (value) => value.status === "idle"
+          && value.messages.some((message) => message.parts.some((part) =>
+            part.toolUseId === "cursor-subagent-1" && part.agentState === "active"
+          )),
       );
 
-      await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      const requestResponse = await nativeFetch(`${base}/session/${created.id}/prompt`, {
         method: "POST",
         headers,
         body: JSON.stringify({ prompt: request.prompt }),
       });
+      expect(requestResponse.status).toBe(202);
       const response = await waitFor(
         () => fs.readFile(responseFile, "utf8")
           .then((value) => JSON.parse(value.trim()))
@@ -2398,13 +2409,20 @@ describe("ACP bridge", () => {
         headers,
         body: JSON.stringify({ prompt: "BACKGROUNDSUBAGENT" }),
       });
-      await waitFor(activity, (value) => value.activity === "working");
+      await waitFor(
+        read,
+        (value) => value.status === "idle"
+          && value.messages.some((message) => message.parts.some((part) =>
+            part.toolUseId === "cursor-subagent-1" && part.agentState === "active"
+          )),
+      );
 
-      await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      const ignoredResponse = await nativeFetch(`${base}/session/${created.id}/prompt`, {
         method: "POST",
         headers,
         body: JSON.stringify({ prompt: ignored.prompt }),
       });
+      expect(ignoredResponse.status).toBe(202);
       // The marker is written after the frame on the same stream, so its
       // arrival is what makes "still active" below an observation, not a race.
       const held = await waitFor(
@@ -2425,11 +2443,12 @@ describe("ACP bridge", () => {
 
       // The same child still settles once a frame the bridge accepts arrives,
       // so the guard rejects the bad frame rather than the method.
-      await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      const finishResponse = await nativeFetch(`${base}/session/${created.id}/prompt`, {
         method: "POST",
         headers,
         body: JSON.stringify({ prompt: "FINISHCURSORTASK" }),
       });
+      expect(finishResponse.status).toBe(202);
       const settled = await waitFor(
         read,
         (value) => value.status === "idle"

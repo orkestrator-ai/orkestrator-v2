@@ -101,7 +101,7 @@ history rather than two partial ones.
 
 ## `ACP bridge > settles Cursor's in-process child as failed` (`bridges/acp-bridge/src/index.test.ts`)
 
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-16
 - **Original command:** `bun run test`
 - **Worker configuration:** bridges group used two workers while the workspace,
@@ -134,6 +134,28 @@ history rather than two partial ones.
   in the agent (the fake agent's own write ordering) or only the bridge's
   observation of it was late, before raising the wait deadline — a longer
   deadline would hide an ordering bug as easily as it would absorb contention.
+- **Recurrence (2026-08-16):** The same aggregate command reproduced the sibling
+  `FINISHCURSORTASK` case: 2,558 passed, 11 skipped, and 1 failed in the bridges
+  group. The diagnostic snapshot had `revision: 4`, only the initial
+  `BACKGROUNDSUBAGENT` turn, `status: "idle"`, and an active child; no second
+  user message or terminal frame had been recorded. The owning file passed in
+  38.5 s.
+- **Root cause:** The test waited for `/activity` to become `working`, but that
+  endpoint intentionally reports active background children as working even
+  after their parent turn is complete. Under aggregate scheduling the first
+  prompt was still running when the test sent the follow-up, so the bridge
+  correctly returned `409 Session is already running`; the test ignored that
+  response and later misdiagnosed the still-active child as a missed terminal
+  notification. The same race affected every sibling case in the loop.
+- **Fix:** Wait for the authoritative session snapshot to be `idle` while the
+  child part remains `active` before sending each follow-up, and assert that
+  every follow-up returns `202`. This preserves the intended cross-turn child
+  lifecycle without extending a deadline or weakening the settlement checks.
+- **Verification:** `bun run test:logged -- --name acp-index-sync-fixed -- bun test
+  ./bridges/acp-bridge/src/index.test.ts` passed the owning file in 38.5 s, and
+  the bridge group passed in 38.9 s after the synchronization fix. The final
+  `bun run test:logged -- --name full-suite-final -- bun run test` passed all
+  four concurrent groups in 99.2 s.
 
 ## Test bootstrap mock-registration cascade (`apps/web` and root renderer tests)
 
@@ -274,6 +296,33 @@ history rather than two partial ones.
 - **Suite counts:** Root and agent-support group: 3,640 total, 3,632 passed, 1 skipped, 7 failed, and 2 between-test errors.
 - **Isolated rerun:** `set -o pipefail; bun test ./tests/unit/components/NativeMessage.test.tsx 2>&1 | tee /tmp/orkestrator-native-message-isolated-acp-image-fixes.log` -> 93 passed, 0 failed, 296 assertions in 1.81 seconds; the affected case passed in 43.01 ms.
 - **Hypothesis:** The case opens one asynchronous image preview, closes it through React, then opens a second. The same transitions completed immediately in a clean process, while the aggregate run was already experiencing severe process and renderer scheduling contention. The reviewed ACP fix changes bridge URL creation only; this root-level renderer test uses fixed `/workspace/...` paths and did not execute that code.
+
+## `NativeMessage > opens local image previews and closes the overlay with Escape` (`tests/unit/components/NativeMessage.test.tsx`)
+
+- **Status:** resolved
+- **Date observed:** 2026-08-16
+- **Original command:** `bun run test:logged -- --name full-suite -- bun run test`
+- **Worker configuration:** the root and agent-support group ran with six Bun
+  workers while the workspace, bridge, and protocol-lockfile groups ran
+  concurrently.
+- **Failure:** the Escape assertion failed only in the aggregate run after the
+  image had opened; the root group reported 3,697 passed, 1 skipped, and 3
+  failed across 147 files. The owning file and the six-worker root group both
+  passed when rerun alone.
+- **Isolated rerun:** `bun run test:logged -- --name native-message-fixed -- bun
+  test ./tests/unit/components/NativeMessage.test.tsx` passed in 2.7 s; the
+  six-worker root group passed 3,701 tests in 122.7 s after the fix.
+- **Root cause:** The overlay installed its Escape listener in a passive
+  `useEffect`, leaving a scheduler-dependent window after the overlay became
+  visible in which the test's key event could arrive before the listener was
+  attached. The file-part close callback was also recreated during renders.
+- **Fix:** Install the overlay's keyboard listener in `useLayoutEffect` and use
+  a stable close callback for the overlay. Escape is now wired before the
+  visible overlay can be interacted with, including under aggregate renderer
+  load.
+- **Verification:** The focused file and the six-worker root group passed. The
+  final `bun run test:logged -- --name full-suite-final -- bun run test` passed
+  all four concurrent groups in 99.2 s.
 
 ## `Codex session titles > rejects spawn, nonzero, signal, and invalid-output failures and cleans temporary state` (`bridges/codex-bridge/src/session-titles.test.ts`)
 

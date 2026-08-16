@@ -3,7 +3,7 @@ import { Hono } from "hono";
 
 // Snapshot the real session-manager BEFORE installing the route's stub mock.
 // Otherwise this stub leaks process-wide and breaks any later test that imports
-// the real session-manager (notably services/session-manager.test.ts).
+// the real session-manager (notably services/session-manager-*.test.ts).
 import * as realSessionManager from "../services/session-manager.js";
 const realSessionManagerSnapshot = { ...realSessionManager };
 

@@ -34,7 +34,7 @@ describe("Claude Agent SDK runtime compatibility", () => {
     expect(installedManifest.version).toBe(expectedSdkVersion);
     expect(installedManifest.claudeCodeVersion).toMatch(/^\d+\.\d+\.\d+$/);
 
-    // Run in a separate process because session-manager.test.ts intentionally
+    // Run in a separate process because session-manager-*.test.ts intentionally
     // replaces this package with a module-level mock. The probe constructs and
     // closes a real Query without iterating it, so it exercises package/native
     // resolution without making an authenticated API request.

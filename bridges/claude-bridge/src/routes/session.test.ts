@@ -6,7 +6,7 @@ import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactio
 
 // Snapshot the real session-manager BEFORE installing the route's stub mock.
 // Bun's `mock.module(...)` is process-global, so without this restore step the
-// stub below leaks into `services/session-manager.test.ts` (and any other
+// stub below leaks into `services/session-manager-*.test.ts` (and any other
 // suite that imports the real module). See CLAUDE.md > "Bun `mock.module()`
 // Rules" > "Snapshot-and-restore pattern".
 import * as realSessionManager from "../services/session-manager.js";
@@ -231,7 +231,7 @@ function jsonRequest(method: string, path: string, body?: unknown) {
 }
 
 // Restore the real session-manager when this suite finishes so other test
-// files (e.g. services/session-manager.test.ts) see the real module.
+// files (e.g. services/session-manager-*.test.ts) see the real module.
 afterAll(() => {
   mock.module("../services/session-manager.js", () => realSessionManagerSnapshot);
 });

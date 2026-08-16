@@ -1080,20 +1080,18 @@ describe("AgentModelPicker", () => {
     fireEvent.change(screen.getByPlaceholderText("Search models..."), {
       target: { value: "model 1" },
     });
-    expect(
-      (document.querySelector("[data-native-model-list]")?.getAttribute("data-favorite-reorder")
-        ?? null) === null,
-    ).toBe(true);
+    const filteredModelList = document.querySelector("[data-native-model-list]");
+    expect(filteredModelList).toBeTruthy();
+    expect(filteredModelList!.getAttribute("data-favorite-reorder") === null).toBe(true);
     fireEvent.change(screen.getByPlaceholderText("Search models..."), {
       target: { value: "" },
     });
 
     showPlatformCatalog("claude");
     expect(document.querySelector("[data-favorite-sortable]") === null).toBe(true);
-    expect(
-      (document.querySelector("[data-native-model-list]")?.getAttribute("data-favorite-reorder")
-        ?? null) === null,
-    ).toBe(true);
+    const catalogModelList = document.querySelector("[data-native-model-list]");
+    expect(catalogModelList).toBeTruthy();
+    expect(catalogModelList!.getAttribute("data-favorite-reorder") === null).toBe(true);
   });
 
   test("opens on the selected platform when no favorites exist", () => {

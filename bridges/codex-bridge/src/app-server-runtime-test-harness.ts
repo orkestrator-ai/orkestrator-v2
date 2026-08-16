@@ -98,12 +98,12 @@ export const NO_RESPONSE = Symbol("no-response");
 
 
 export async function waitUntil(
-  predicate: () => boolean,
+  predicate: () => boolean | Promise<boolean>,
   message: string,
   timeoutMs = 500,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
+  while (!await predicate()) {
     if (Date.now() >= deadline) throw new Error(message);
     await new Promise((resolve) => setTimeout(resolve, 1));
   }

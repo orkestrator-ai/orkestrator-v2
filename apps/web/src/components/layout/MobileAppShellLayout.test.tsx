@@ -354,7 +354,7 @@ describe("MobileAppShellLayout", () => {
     expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(true);
     expect(screen.getByText("Workspace")).toBeTruthy();
     await waitFor(() => expect(document.activeElement).toBe(menuButton));
-  });
+  }, 20_000);
 
   test("toggles the project drawer closed with a second menu-button tap", () => {
     const { container } = renderLayout({}, { keepInitialDrawerOpen: true });
@@ -383,7 +383,7 @@ describe("MobileAppShellLayout", () => {
 
     expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(true);
     await waitFor(() => expect(document.activeElement).toBe(menuButton));
-  });
+  }, 20_000);
 
   test("closes the initial drawer with Escape and restores trigger focus", async () => {
     const { container } = renderLayout({}, { keepInitialDrawerOpen: true });

@@ -1152,7 +1152,7 @@ describe("process and platform command behavior", () => {
       args: ["--folder-uri", "vscode-remote://attached-container+636f6e7461696e65722d62/workspace"],
     });
     expect(invocations).toContainEqual({ executable: "code", args: ["/tmp/project"] });
-  });
+  }, 20_000);
 
   test("falls back to the parent directory when Linux FileManager1 fails", async () => {
     const platform = process.platform;

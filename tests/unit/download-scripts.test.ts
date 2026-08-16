@@ -15,7 +15,7 @@ import { spawnSync } from "node:child_process";
 
 const repoRoot = path.resolve(import.meta.dir, "../..");
 const temporaryDirectories: string[] = [];
-const DOWNLOADER_TEST_TIMEOUT_MS = 15_000;
+const DOWNLOADER_TEST_TIMEOUT_MS = 30_000;
 
 interface ScriptFixture {
   binariesDirectory: string;

@@ -9,6 +9,7 @@ import {
   codexHome,
   harness,
   threadPayload,
+  waitUntil,
   writeRolloutWithTurns,
 } from "./app-server-runtime-test-harness.js";
 
@@ -1108,13 +1109,27 @@ describe("titles", () => {
       threadId: "thread-1",
       mode: "build",
     });
+    await waitUntil(
+      () => typeof resolveTitle === "function",
+      "title generation did not start",
+      2_000,
+    );
     resolveTitle("Shared Generated Title");
-    await new Promise((resolve) => setTimeout(resolve, 25));
-
-    const records = await new BridgeSessionStore({
+    const store = new BridgeSessionStore({
       codexHome,
       cwd: "/tmp/ws",
-    }).load();
+    });
+    let records = await store.load();
+    await waitUntil(async () => {
+      records = await store.load();
+      return [first.sessionId, second!.sessionId].every((sessionId) =>
+        records.some((record) =>
+          record.bridgeSessionId === sessionId
+          && record.title === "Shared Generated Title"
+          && record.titleSource === "generated"
+        )
+      );
+    }, "generated title was not persisted for both tabs", 2_000);
     expect(records.find((record) => record.bridgeSessionId === first.sessionId))
       .toMatchObject({ title: "Shared Generated Title", titleSource: "generated" });
     expect(records.find((record) => record.bridgeSessionId === second!.sessionId))

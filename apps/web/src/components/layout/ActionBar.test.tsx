@@ -2986,12 +2986,14 @@ describe("ActionBar workflow tabs", () => {
       clientY: 24,
     });
     await new Promise((resolve) => setTimeout(resolve, 575));
-    expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
+    }, { timeout: 10_000 });
 
     view.unmount();
 
     expect(createTabMock).not.toHaveBeenCalled();
-  });
+  }, 20_000);
 
   test("cancels a pending mobile long press after movement or pointer cancellation", async () => {
     currentEnvironment = {

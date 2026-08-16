@@ -15,7 +15,7 @@
  * AGENTS.md mandates: each test file gets a fresh module registry, so this
  * module is evaluated once per file exactly as the duplicated preambles were.
  */
-import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, jest, mock, spyOn, test } from "bun:test";
 
 
 import { spawnSync } from "node:child_process";
@@ -95,6 +95,15 @@ import {
 
 
 export const tempDirs: string[] = [];
+
+
+// These integration fixtures launch several real shim processes. A failed
+// outer five-second budget used to interrupt fixture cleanup and cascade into
+// missing-runtime failures in later tests from the same file.
+export const TMUX_TEST_TIMEOUT_MS = 30_000;
+
+
+jest.setTimeout(TMUX_TEST_TIMEOUT_MS);
 
 
 /** mkdtemp prefix for the fake tmux runtime; also the guard for its cleanup path. */
@@ -752,7 +761,7 @@ export async function invoke(
 
 export async function waitFor(
   predicate: () => boolean | Promise<boolean>,
-  timeoutMs = 2_000,
+  timeoutMs = 10_000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {

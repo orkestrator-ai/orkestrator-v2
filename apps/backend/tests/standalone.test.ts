@@ -1,11 +1,17 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, jest, test } from "bun:test";
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { waitForStandaloneBackendReady } from "./standalone-ready";
 
 const root = path.resolve(import.meta.dir, "../../..");
 const temporaryDirectories: string[] = [];
 const processes: Bun.Subprocess[] = [];
+
+// A case can include backend startup, a real child-process tree, and graceful
+// shutdown. The helper deadlines remain narrower so failures retain a specific
+// diagnostic instead of Bun killing the fixture at its default five seconds.
+jest.setTimeout(30_000);
 
 afterAll(async () => {
   for (const process of processes) process.kill("SIGTERM");
@@ -47,35 +53,8 @@ async function startBackend(
   });
   processes.push(child);
 
-  const reader = child.stdout.getReader();
-  const decoder = new TextDecoder();
-  let pending = "";
-  const timeout = Date.now() + 10_000;
-  while (Date.now() < timeout) {
-    const { done, value } = await reader.read();
-    if (done) throw new Error(`Backend exited during startup: ${await new Response(child.stderr).text()}`);
-    pending += decoder.decode(value, { stream: true });
-    const lines = pending.split("\n");
-    pending = lines.pop() ?? "";
-    for (const line of lines) {
-      try {
-        const message = JSON.parse(line) as Record<string, unknown>;
-        if (
-          message.type === "orkestrator-backend-ready"
-          && typeof message.url === "string"
-          && typeof message.authFile === "string"
-        ) {
-          const auth = JSON.parse(await readFile(message.authFile, "utf8")) as { token?: unknown };
-          if (typeof auth.token !== "string") throw new Error("Backend auth file is missing its token");
-          return { url: message.url, token: auth.token, readyMessage: message, child, dataDir };
-        }
-      } catch {
-        // Human-readable gateway logs precede the machine-readable ready line.
-      }
-    }
-  }
-  child.kill();
-  throw new Error("Timed out waiting for standalone backend");
+  const ready = await waitForStandaloneBackendReady(child);
+  return { ...ready, child, dataDir };
 }
 
 async function invokeBackend(
@@ -359,7 +338,7 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
     expect(restarted.readyMessage.browserUrl).toBe("https://workstation.example.ts.net/");
     restarted.child.kill("SIGTERM");
     await expect(restarted.child.exited).resolves.toBe(0);
-  }, 20_000);
+  }, 60_000);
 
   test("exits without a leftover listener when environment-managed Serve setup fails", async () => {
     const testDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-tailscale-fail-"));

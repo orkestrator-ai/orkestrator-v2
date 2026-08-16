@@ -351,7 +351,7 @@ describe("StorageService prompt queues", () => {
       const deadline = Date.now() + 1_000;
       let recovered = await storage.getPromptQueue(KEY);
       while (
-        recovered?.messages.length === 0
+        (recovered?.messages.length === 0 || events.length === 0)
         && Date.now() < deadline
       ) {
         await new Promise((resolve) => setTimeout(resolve, 5));

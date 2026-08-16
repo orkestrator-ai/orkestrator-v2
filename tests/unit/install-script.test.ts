@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, jest, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +7,11 @@ const root = path.resolve(import.meta.dir, "../..");
 const INSTALL_SCRIPT = path.join(root, "apps/web-public/public/install.sh");
 const INSTALL_URL = "https://orkestrator.dev/install.sh";
 const temporaryDirectories: string[] = [];
+
+// Every case launches the real shell script through a sandbox of executable
+// shims. Aggregate process contention must not let Bun interrupt teardown and
+// turn the child exit into the misleading signal-derived code 143.
+jest.setTimeout(20_000);
 
 afterAll(async () => {
   await Promise.all(

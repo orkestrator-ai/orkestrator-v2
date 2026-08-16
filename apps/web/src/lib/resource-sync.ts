@@ -77,7 +77,7 @@ const COALESCE_MS = 50;
  * first announcement it ever sees as "the boot connect" would suppress the
  * refetch for what is, under the replay protocol, a confirmed replay miss.
  */
-const BOOT_ANNOUNCE_COALESCE_MS = 1_000;
+export const BOOT_ANNOUNCE_COALESCE_MS = 1_000;
 
 interface PendingDispatch {
   change: ResourceChange;

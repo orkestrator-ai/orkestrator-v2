@@ -10,6 +10,60 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## 2026-08-16 resolution sweep
+
+The remaining open entries were reconciled against their current owning files
+after the large test-module split and resolved in `fix-flaky-tests-3`. Historical
+observations below remain unchanged; the rows here provide the root cause, fix,
+and verification for entries whose status links back to this sweep.
+
+| Entries | Root cause | Fix | Verification |
+| --- | --- | --- | --- |
+| ACP bridge health failures, including the oversized-response and concurrent-turn cases | A fresh bridge used the same 5-second deadline as an ordinary state poll. Aggregate child-process contention could exhaust readiness before the behavior under test began. | Give startup its own 15-second readiness deadline and retain a tighter 5-second state-poll diagnostic inside a 30-second outer budget. | The ACP owner passed in the concurrent bridge-owner run and in the complete aggregate suite. |
+| All tmux lifecycle, MCP-config, hook, launch, and cleanup clusters | Real shim and tmux processes shared Bun's 5-second outer budget and a 2-second internal poll. An outer timeout interrupted fixture cleanup, causing the later missing-shim and missing-log cascade. | Set a 30-second file budget and a 10-second condition deadline in the shared post-split tmux harness, so cleanup completes and a genuine stall still names its condition. | The current `tmux-commands.test.ts` owner passed inside the 70.7-second four-worker root-owner contention run and the complete aggregate suite. |
+| Standalone backend shutdown and Tailscale Serve lifecycle entries | Tests combine real backend startup, child-tree shutdown, and sometimes a second startup. The startup loop could also remain blocked in `reader.read()` past its nominal deadline. | Race the startup read against a 20-second deadline so the named diagnostic no longer depends on the child closing stdout, escalate `SIGTERM` to `SIGKILL` after a 2-second grace, bound the stderr drain used for the message, and add a 30-second file budget plus a 60-second budget for the two-lifecycle Serve case. | The built standalone owner passed with two workers; backend typecheck and the complete aggregate suite passed. |
+| Packaged CLI backend lifecycle | The test's real readiness and graceful-exit deadlines could outlive Bun's 5-second outer budget under workspace contention. | Keep the diagnostic 20-second readiness and 10-second exit deadlines inside a 40-second file budget. | The package build/test passed in 3.8 seconds and the complete workspace aggregate passed. |
+| Command-registry Git fixture, deduplicated/admitted container starts, and process-launch coverage | The former monolithic command file performed real Git/Docker/launcher work against 3-5 second wall-clock budgets. The split reduced contention, but the shared condition deadline and individual outer budgets were still shorter than the supported process window. | Raise the shared condition deadline to 10 seconds and its outer budget to 30 seconds; give the Git and launcher cases explicit bounded budgets. Because the raised condition deadline now exceeds Bun's 5-second default, every remaining case that waits on the shared helper without its own budget was given one, so the helper's named diagnostic still wins the race. | Current split owners passed together under four-worker contention in 70.7 seconds and in the complete aggregate suite. |
+| Download and install shell-script entries | Real shell/shim processes were killed by Bun's outer timeout, producing downstream exit code 143; one install assertion also spawned `ls` only to inspect a directory. | Use 30-second downloader and 20-second installer budgets. The artifact-sanitizer directory assertion now uses `readdir` directly, removing its unrelated child process. | Root owners passed under contention; the sanitizer staging case passed 30/30 repetitions; the complete aggregate suite passed. |
+| ActionBar long-press unmount entries | The assertion queried immediately after sleeping only 25 ms beyond the production long-press timer, before React was guaranteed to commit the dialog. | Wait for the accessible dialog with a bounded 10-second UI wait before unmounting, within a 20-second test budget. | The exact case passed 10/10 repetitions, the complete owner passed, web typecheck passed, and the aggregate suite passed. |
+| Mobile drawer focus-restoration entries | Each case mounts the complete Radix mobile shell, then crosses an asynchronous dismissal/focus boundary inside Bun's 5-second outer budget. | Preserve the dismissal and focus assertions but give each close-and-restore case its own 20-second budget. | The selected mobile, queue, and resync cases passed 10/10 repetitions under concurrent stress; the owner and aggregate suite passed. |
+| Prompt-queue live lease recovery | The test stopped polling as soon as durable queue recovery was visible, even though the resource-change listener is a distinct asynchronous observation. | Poll the actual conjunction: recovered queue state and the expected listener announcement. | The exact case passed 20/20 repetitions and the backend owner and aggregate suite passed. |
+| UpdateCoalescer dynamic interval | A fixed 5 ms negative assertion could run after the configured 35 ms interval when the worker was descheduled, observing the legitimate fourth publish early. | Assert the observable cadence between the third and fourth publication instead of racing a short sleep against the timer, timestamping each publication with `performance.now()` so the bound is measured on the same monotonic clock the timer uses. | The exact case passed 30/30 repetitions and the bridge owner and aggregate suite passed. |
+| Shared-thread generated title persistence | The test used a fixed delay without waiting for title generation to start or for both persistence writes to finish. Repetition exposed that the deferred resolver itself could be called before assignment. The post-split owner also prevents unrelated runtime files from sharing its harness state. | Wait for resolver installation, then poll both persisted records for the generated title and source; the shared wait helper now accepts asynchronous predicates, covered directly by `app-server-runtime-wait-helpers.test.ts` so a helper that stops awaiting its predicate fails there rather than silently degrading every caller. | Ten fresh-process repetitions passed, as did the bridge-owner run and the aggregate suite. |
+| Authoritative collection resync after backend restart | Fixed 80 ms sleeps were treated as completion signals for initial hydration and reconnect reconciliation. | Poll the actual project/environment collections and manifest generation boundary with a bounded diagnostic, then settle once past the reconciliation window so an uncoalesced third manifest load is still counted by the exact-count assertion rather than arriving after the test passes. | The owner passed, and the selected resync case passed 10/10 concurrent repetitions; web typecheck and the aggregate suite passed. |
+| Structured Claude usage timeout | Bun schedules timers on a monotonic clock, while the lower-bound assertion measured `Date.now()`. Wall-clock adjustment made a correct 1-second timeout appear 5 ms too early. | Measure the elapsed interval with `performance.now()` while retaining both lower and upper bounds. | The exact one-second timeout case passed 5/5 concurrent repetitions and the bridge owner and aggregate suite passed. |
+| QueuedPromptsDialog action ordering | Polling around synchronous mock callbacks added scheduler windows unrelated to the move/remove behavior and left the original aggregate failure without a stable matcher. | Flush each click's async React action with `act`, then assert exact call order and identifiers directly. | The selected case passed 10/10 concurrent repetitions, the owner passed, and web typecheck and the aggregate suite passed. |
+| NativeMessage MIME previews and FilesPanel confirm/retry | Both multi-transition component cases exhausted only the generic outer budget under severe renderer contention; the NativeMessage Escape-listener race was already fixed separately. | Retain all UI assertions and give each integration-style component case an explicit 20-second budget. | Both owners passed together in the four-worker root contention run and in the complete aggregate suite. |
+| Runtime-environment refresh and Codex title-generation failure matrix | Each case deliberately launches shell subprocesses; the isolated functional paths were fast but aggregate process startup could consume the generic outer budget. | Give the runtime helper 15 seconds and the four-mode title failure matrix 15 seconds without changing their product assertions. | Both bridge owners passed concurrently and in the aggregate suite. |
+| EnvironmentSettingsDialog duplicate tabs | A document-wide role query included tabs leaked elsewhere in the shared happy-dom document. | The current test scopes the exact tab-set assertion to the dialog's labelled `Agent extensions` tablist. | The root owner contention run and aggregate suite passed. |
+| Artifact-sanitizer staging | The test used an external `ls` subprocess solely to read one directory, and interpreted empty stdout as an empty basename under aggregate process pressure. | Use `readdir` and assert the exact surviving entry without another process boundary. | The exact case passed 30/30 repetitions and the root owner run passed. |
+
+The verification commands were all run through `test:logged`. The first complete
+post-fix aggregate passed in 145.1 seconds; a second aggregate was then run after
+the title-start and artifact-directory stress findings were incorporated and
+passed in 94.7 seconds.
+
+Review follow-up, same branch. The standalone startup deadline was verified
+directly by shortening `BACKEND_READY_TIMEOUT_MS` to 150 ms against a backend
+that had not yet printed its ready line: the helper failed at 155 ms with
+`Timed out waiting for standalone backend after 150ms`, proving the diagnostic
+no longer waits for the child to close stdout. The new
+`app-server-runtime-wait-helpers.test.ts` was verified against the pre-fix
+helper body (`while (!predicate())`), where its three asynchronous cases fail and
+the two synchronous cases still pass; all five pass against the current helper.
+The three web, codex-bridge, and electron owners passed individually, the three
+typechecks passed, and a third complete aggregate passed in 162.9 seconds.
+
+Second review follow-up, same branch. The standalone ready helper now kills
+only on the timeout path, clears the deadline before reading the auth file, and
+is covered by `standalone-ready.test.ts` (named timeout without waiting for
+stdout to close, SIGTERM-to-SIGKILL escalation, bounded stderr drain,
+abandoned-read swallowing, slow auth-file success without a kill, and a missing
+token that fails immediately). The authoritative resync case fires the boot
+connect before restart work so it stays inside `BOOT_ANNOUNCE_COALESCE_MS`,
+asserts that coalesced load count, then settles for that window after the
+reconnect.
+
 ## Renamed owning files
 
 Every entry below records the file name, line number, command, and counts
@@ -45,7 +99,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `ACP bridge > bounds one oversized response without failing the session` (`bridges/acp-bridge/src/index.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-16
 - **Original command:** `bun run test:logged -- --name fixes-full-tests -- bun run test`
   at `88b56425006c8664d2c1d669af0203ef196df273`.
@@ -105,7 +159,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `ActionBar workflow tabs > clears active long-press click suppression when the action bar unmounts` (`apps/web/src/components/layout/ActionBar.test.tsx`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-16
 - **Original command:**
   `bun run test:logged -- --name web-pkg-tests -- bun --cwd=apps/web test --parallel=4 --only-failures`
@@ -243,7 +297,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `Electron tmux backend command registration` — three lifecycle tests (`tests/unit/electron/tmux-backend.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-14
 - **Affected tests:** `serializes stop behind an in-flight start so no tmux session is orphaned` (2,010.43 ms), `keeps per-environment hook state under the shared runtime root and removes it on stop` (154.62 ms), and `environment teardown kills live sessions, restores settings and removes the runtime root` (1,469.94 ms).
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-full-tests-2.log`
@@ -256,7 +310,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `Electron tmux backend command registration` aggregate launch/cleanup failures (`tests/unit/electron/tmux-backend.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-full-tests-acp-image-fixes.log`
 - **Worker configuration:** The root and agent-support group ran `bun test ./tests ./e2e/agent-testing/artifact-sanitizer.test.ts ./test-fixtures/agent-project/server.test.ts --parallel=4` while the workspace, bridge, and protocol-lockfile groups ran concurrently.
@@ -274,7 +328,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `standalone backend service` process-shutdown timeouts (`apps/backend/tests/standalone.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-14
 - **Affected tests:** `drains an active local server process tree before exiting` and `exits without a leftover listener when environment-managed Serve setup fails`.
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-fix-full-tests.log`
@@ -287,7 +341,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `Electron backend command registry > deterministically generates refs, diff, Git-object contents, hashes, and validation evidence` (`tests/unit/electron/commands.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-15
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-fix-full-tests.log`
 - **Worker configuration:** the root and agent-support group ran with four Bun workers while the workspace, bridge, and protocol-lockfile groups ran concurrently.
@@ -298,7 +352,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `Electron backend command registry > deduplicates concurrent background starts for one environment` (`tests/unit/electron/commands.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-15
 - **Original command:** `bun run test:logged -- --name full-suite-3 -- bun run test`
 - **Worker configuration:** the root and agent-support group ran at six Bun workers while the workspace, bridges, and protocol-lockfile groups ran concurrently; those three groups passed.
@@ -310,7 +364,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `download-claude.sh > downloads, extracts, probes, and cleans up on Darwin/x86_64` (`tests/unit/download-scripts.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-full-tests-acp-image-fixes.log`
 - **Worker configuration:** The root and agent-support group used four Bun workers while the workspace, bridge, and protocol-lockfile groups ran concurrently.
@@ -321,7 +375,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `NativeMessage > derives image mime types from the container attachment extension` (`tests/unit/components/NativeMessage.test.tsx`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-full-tests-acp-image-fixes.log`
 - **Worker configuration:** The root and agent-support group used four Bun workers while the workspace, bridge, and protocol-lockfile groups ran concurrently.
@@ -359,7 +413,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `Codex session titles > rejects spawn, nonzero, signal, and invalid-output failures and cleans temporary state` (`bridges/codex-bridge/src/session-titles.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-full-tests-acp-image-fixes.log`
 - **Worker configuration:** The bridge group ran `bun test bridges --parallel=2` while the workspace, root, and protocol-lockfile groups ran concurrently.
@@ -370,7 +424,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `Electron tmux backend command registration` timeout cluster (`tests/unit/electron/tmux-backend.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/fix-full-tests.log`
 - **Worker configuration:** the root and agent-support group ran concurrently with the workspace, bridges, and codex protocol-lockfile groups under `scripts/test-all.ts`'s bounded worker pools.
@@ -382,7 +436,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `Electron backend command registry > deduplicates concurrent background starts for one environment` (`tests/unit/electron/commands.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/rev-full-tests.log`, and again in `/tmp/fix-full-tests.log`
 - **Worker configuration:** the root and agent-support group ran concurrently with the workspace, bridges, and codex protocol-lockfile groups.
@@ -394,8 +448,9 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `MobileAppShellLayout > opens the project drawer on initial mobile entry and keeps workspace content mounted` (`apps/web/src/components/layout/MobileAppShellLayout.test.tsx`)
 
-- **Status:** open — recurred on 2026-08-14 after the split below, on the
-  close-button half rather than the initial-open half.
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
+- **Later recurrence:** 2026-08-14 after the split below, on the close-button
+  half rather than the initial-open half.
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-fix-c4cb555c-full-tests.log`
 - **Worker configuration:** The web workspace package ran `bun test src --parallel=2` while the other workspace, root, bridge, and protocol-lockfile groups ran concurrently.
@@ -428,7 +483,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `MobileAppShellLayout` drawer focus-restoration timeouts (`apps/web/src/components/layout/MobileAppShellLayout.test.tsx`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-14
 - **Affected tests:** `closes the project drawer from its backdrop and restores trigger focus` (5,811.44 ms in the first run, 6,830.57 ms in the second) and `closes the initial project drawer from its close button and restores trigger focus` (16,456.55 ms, second run only).
 - **Original command:** `set -o pipefail; bun test --cwd apps/web --parallel 2>&1 | tee /tmp/ork-web-tests.log`, and again into `/tmp/ork-web-tests2.log`.
@@ -457,7 +512,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `StorageService prompt queues > live lease timer restores and announces a sole claimed head` (`apps/backend/src/core/storage-prompt-queues.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-review-980919fe-full-tests.log`
 - **Worker configuration:** The backend workspace package ran `bun test src tests --parallel` while the other workspace, root, bridge, and protocol-lockfile groups ran concurrently.
@@ -496,7 +551,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `agent-test artifact sanitizer > stages the redacted trace beside the original so the swap cannot cross filesystems` (`e2e/agent-testing/artifact-sanitizer.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-fix-full-tests.log`
 - **Worker configuration:** the root and agent-support group ran as `bun test ./tests ./e2e/agent-testing ./apps/desktop/electron ./apps/desktop/scripts/dev --parallel=4` (`4x PARALLEL`).
@@ -537,7 +592,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `authoritative resync > converges renderer collections through the real command boundary after a backend restart` (`apps/web/src/lib/store-resource-sync.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-14
 - **Original command:** `bun run test` (web workspace task: `bun test src --parallel=2`).
 - **Worker configuration:** Two Bun web workers while the remaining workspace packages, root, bridge, protocol-lockfile, and iOS groups ran through the aggregate runner.
@@ -591,7 +646,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `orkestrator CLI package` packaged-backend lifecycle (`packages/cli/tests/cli.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-14
 - **Original command:** `bun run test` (workspace group, Turbo task `@orkestrator/cli#test:workspace`).
 - **Worker configuration:** Turbo's workspace group running concurrently with the root, bridge, and protocol-lockfile groups. Unlike the resolved built-artifact flake above, the CLI file was selected exactly once — the duplicate-selection root cause fixed there does not apply here.
@@ -632,7 +687,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `standalone backend service` Tailscale Serve lifecycle tests (`apps/backend/tests/standalone.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-07
 - **Original command:** `bun run test` (workspace backend group: `bun test src tests --parallel=2`)
 - **Worker configuration:** Two Bun workers in the backend package while the web, web-public, protocol, root, and bridge groups ran concurrently
@@ -664,7 +719,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `titles > a generated title is persisted for every tab sharing the thread` (`bridges/codex-bridge/src/app-server-runtime.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-picker-fixes-full-tests.log`
 - **Worker configuration:** The bridge group ran `bun test bridges --parallel` while the workspace, root, and protocol-lockfile groups ran concurrently.
@@ -782,7 +837,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `runtime environment refresh > sources configured runtime helper and applies refreshed shell environment` (`bridges/codex-bridge/src/runtime-env.test.ts:179`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-11
 - **Original command:** `bun test bridges --parallel`
 - **Worker configuration:** Bun's parallel bridge-suite worker pool
@@ -990,7 +1045,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `EnvironmentSettingsDialog > uses top agent tabs and shows MCP servers, plugins, and skills for each agent` (`tests/unit/components/EnvironmentSettingsDialog.test.tsx:304`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-13
 - **Original command:** `bun run test` on an 18-logical-core macOS host, whose root group is `bun test tests --parallel=<planWorkers rootShare>`
 - **Failure:** `expect(received).toEqual(expected)` — `screen.getAllByRole("tab")` returned `["Claude", "Codex", "OpenCode", "Rendered", "Raw"]` against the expected `["Claude", "Codex", "OpenCode"]`. Duration 20.69 ms.
@@ -1006,7 +1061,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `Electron tmux backend command registration` agent MCP config and hook tests (`tests/unit/electron/tmux-backend.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun test ./tests --parallel 2>&1 | tee /tmp/ork-fix-root-tests.log` on an 18-worker macOS host, run as validation for the unified agent picker change
 - **Failure:** three tests in this file timed out or failed in one aggregate run — `does not create an agent MCP config when Claude lacks the launch flag` (790.79 ms), `writes an owner-only agent MCP config and includes it in a local Claude launch` (5,002.17 ms), and `generated blocking hooks use an integer timeout and fail closed on expiry` (5,006.26 ms). The two 5,000 ms durations are Bun's default per-test budget.
@@ -1020,7 +1075,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `process and platform command behavior > launches browser, file manager, and editors without a shell` (`tests/unit/electron/commands-process-coverage.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun test ./tests --parallel 2>&1 | tee /tmp/ork-fix-root-tests.log` on an 18-worker macOS host
 - **Failure:** the test exceeded Bun's 5,000 ms budget (reported duration 5,002.42 ms) with no assertion message.
@@ -1177,7 +1232,7 @@ Post-fix stress verification:
 
 ## `ActionBar workflow tabs > clears active long-press click suppression when the action bar unmounts` (`apps/web/src/components/layout/ActionBar.test.tsx`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-fix-c9efefa1-full-tests.log`
 - **Worker configuration:** The web workspace package ran `bun test src --parallel=2` while the remaining workspace, root, bridge, and protocol-lockfile groups ran concurrently.
@@ -1217,7 +1272,7 @@ Post-fix stress verification:
 
 ## `UpdateCoalescer > re-reads a dynamic interval across schedules in both directions` (`bridges/codex-bridge/src/messages/coalescer.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-fix-c9efefa1-full-tests.log`
 - **Worker configuration:** The bridge group ran `bun test bridges --parallel` concurrently with the workspace, root, and protocol-lockfile groups.
@@ -1228,7 +1283,7 @@ Post-fix stress verification:
 
 ## `MobileAppShellLayout > closes the initial project drawer from its close button and restores trigger focus` (`apps/web/src/components/layout/MobileAppShellLayout.test.tsx`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-15
 - **Original command:** `bun test --cwd apps/web src --parallel 2>&1 | tee /tmp/ork-review-web-suite.log`
 - **Worker configuration:** The web package ran `bun test src --parallel` (18 workers) while two suites owned by other sessions ran concurrently in the same checkout: another full `bun test --cwd apps/web --parallel` and a root `bun test ./tests ... --parallel=4` observed at roughly 348% CPU.
@@ -1240,7 +1295,7 @@ Post-fix stress verification:
 
 ## `QueuedPromptsDialog > moves entries within bounds and removes by id` (`apps/web/src/components/chat/QueuedPromptsDialog.test.tsx`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-15
 - **Original command:** `bun test --cwd apps/web src --parallel 2>&1 | tee /tmp/ork-fix-web-suite-final.log`
 - **Worker configuration:** The web package ran `bun test src --parallel` (18 workers) while suites owned by other sessions ran concurrently in the same checkout.
@@ -1252,7 +1307,7 @@ Post-fix stress verification:
 
 ## `Files panel components > FilesPanel confirms actions and keeps failed actions open for retry` (`tests/unit/components/FilesPanel.test.tsx`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun test ./tests --parallel 2>&1 | tee /tmp/rev-root-tests.log` at `36a4d95cc7b56e8ae1c725670d932e8a2bdd8299` on an 18-worker macOS host
 - **Worker configuration:** Root-only suite, `--parallel` (18 workers), run on its own rather than inside `bun run test`.
@@ -1263,7 +1318,7 @@ Post-fix stress verification:
 
 ## `web-public install.sh > uses the installed bun when the install leaves no bunx` (`tests/unit/install-script.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun test ./tests --parallel 2>&1 | tee /tmp/rev-root-tests.log` at `36a4d95cc7b56e8ae1c725670d932e8a2bdd8299` on an 18-worker macOS host
 - **Worker configuration:** Root-only suite, `--parallel` (18 workers).
@@ -1276,7 +1331,7 @@ Post-fix stress verification:
 
 ## `standalone backend service > drains an active local server process tree before exiting` (`apps/backend/tests/standalone.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun test --cwd apps/backend src tests --parallel 2>&1 | tee /tmp/rev-backend-tests-cwd.log`, at or immediately after `c4ce823fb218e0f858115c0e0ada81203998c10a`
 - **Worker configuration:** Backend package only, `bun test src tests --parallel`, run on its own rather than inside `bun run test`.
@@ -1288,7 +1343,7 @@ Post-fix stress verification:
 
 ## `environment status and settings commands > preserves an admitted container start while its container is not yet persisted` (`tests/unit/electron/commands.test.ts:16388`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-full-tests.log`
 - **Worker configuration:** The root and agent-support group ran concurrently with the workspace, bridge, and protocol-lockfile groups under `scripts/test-all.ts`'s bounded worker pools.
@@ -1299,7 +1354,7 @@ Post-fix stress verification:
 
 ## `rate_limit_event > times out a non-settling structured request without blocking turn completion` (`bridges/claude-bridge/src/services/session-manager.test.ts:11606`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-15
 - **Original command:** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-fixes2-full-tests.log`
 - **Worker configuration:** The bridge group ran `bun test bridges --parallel` alongside the workspace, root, and protocol-lockfile groups, while two unrelated agent sessions ran their own suites against the same clone. System load average was above 10 for the whole run.
@@ -1310,7 +1365,7 @@ Post-fix stress verification:
 
 ## `ACP bridge > rejects a concurrent second turn that carries a different requestId` (`bridges/acp-bridge/src/index.test.ts:4956`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-16 resolution sweep above
 - **Date observed:** 2026-08-15
 - **Original command:** `bun run test:logged -- --name full-suite -- bun run test`, at `5f1d23c525b47c2f0ed8ffc7b8d73cb951a5fad2` on `activate-agent-tab`.
 - **Worker configuration:** The bridges group ran `bun test bridges --parallel` alongside the workspace, root, and protocol-lockfile groups under `scripts/test-all.ts`'s bounded pools.

@@ -165,6 +165,16 @@ function footerText() {
 }
 
 describe("SkillsSettings", () => {
+  test("treats a legacy empty-list response as an empty scan", async () => {
+    listOverride = async () => [];
+
+    render(<SkillsSettings />);
+
+    await waitFor(() => expect(screen.getByText("No skills found in any of this agent's skill directories.")).toBeTruthy());
+    expect(footerText()).toBe("0 skills · 0 of 0 directories present");
+    expect(screen.queryByRole("alert") === null).toBe(true);
+  });
+
   test("uses controlled environment callbacks and hides host-only controls", async () => {
     const listSkills = mock(async (provider: AgentSkillProvider): Promise<AgentSkillScan> => ({
       provider,

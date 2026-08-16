@@ -81,6 +81,24 @@ export function stripFrontmatter(content: string): string {
   return match ? content.slice(match[0].length) : content;
 }
 
+/**
+ * Keep the settings pane compatible with an older or unavailable backend. The
+ * command is typed as `AgentSkillScan`, but IPC responses are still untrusted
+ * at runtime; an old agent-test backend returned `[]` for this command.
+ */
+function normalizeSkillScan(value: unknown, provider: AgentSkillProvider): AgentSkillScan {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return { provider, roots: [], skills: [], errors: [] };
+  }
+  const candidate = value as Partial<AgentSkillScan>;
+  return {
+    provider,
+    roots: Array.isArray(candidate.roots) ? candidate.roots : [],
+    skills: Array.isArray(candidate.skills) ? candidate.skills : [],
+    errors: Array.isArray(candidate.errors) ? candidate.errors : [],
+  };
+}
+
 /** `//host/x.png` and any scheme other than `data:` reaches the network. */
 function isRemoteImageSrc(src: string | undefined): boolean {
   if (!src) return false;
@@ -189,7 +207,7 @@ export function SkillsSettings({
 
     setStates((prev) => ({ ...prev, [target]: { ...prev[target], loading: true, error: undefined } }));
     try {
-      const scan = await listSkills(target);
+      const scan = normalizeSkillScan(await listSkills(target), target);
       if (scanTokens.current[target] !== token) return;
       setStates((prev) => ({
         ...prev,

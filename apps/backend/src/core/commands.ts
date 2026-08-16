@@ -11522,8 +11522,11 @@ export function createCommandRegistry(
 
   register("list_agent_skills", async (args, context) => {
     assertOnlyKeys(args, ["provider"], "list_agent_skills argument");
-    if (context.runtimeFlavor === "agent-test") return [];
-    return scanAgentSkills(asAgentSkillProvider(args.provider));
+    const provider = asAgentSkillProvider(args.provider);
+    if (context.runtimeFlavor === "agent-test") {
+      return { provider, roots: [], skills: [], errors: [] };
+    }
+    return scanAgentSkills(provider);
   });
   register("read_agent_skill", async (args, context) => {
     assertOnlyKeys(args, ["provider", "filePath"], "read_agent_skill argument");

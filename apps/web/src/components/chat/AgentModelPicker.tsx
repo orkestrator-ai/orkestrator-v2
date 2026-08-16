@@ -24,7 +24,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ChevronDown, ChevronLeft, ChevronRight, GripVertical, RefreshCw, Star, Zap } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, RefreshCw, Star, Zap } from "lucide-react";
 import { favoriteModelKey, reorderFavoriteModels } from "@/hooks/useAgentModelFavorites";
 import {
   DropdownMenu,
@@ -149,18 +149,17 @@ function ModelRow({
           sortable && "cursor-grab active:cursor-grabbing",
         )}
       >
-        {sortable ? (
-          <GripVertical
-            aria-hidden="true"
-            className="mt-0.5 size-3.5 shrink-0 self-center text-muted-foreground/70"
-          />
-        ) : null}
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-center gap-1.5">
             <span className="min-w-0 truncate text-sm font-medium">{model.label}</span>
           </span>
-          <span className="truncate text-[10px] text-muted-foreground/80">
-            {model.providerLabel ?? PLATFORM_LABELS[model.platform]}
+          <span className="flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground/80">
+            <span data-native-model-row-platform={model.platform} className="flex shrink-0" aria-hidden="true">
+              <AgentPlatformIcon platform={model.platform} accent className="size-3" />
+            </span>
+            <span className="truncate">
+              {model.providerLabel ?? PLATFORM_LABELS[model.platform]}
+            </span>
           </span>
         </span>
       </DropdownMenuRadioItem>

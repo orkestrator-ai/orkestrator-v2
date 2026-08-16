@@ -690,7 +690,11 @@ function isBackgroundTaskLaunch(part: ClaudeMessagePart): boolean {
 const LAUNCH_TASK_ID_PATTERN =
   /\bbackground(?:ed by user)?\s*(?:with ID:|\(ID:)\s*([^\s.)]+)/i;
 
-function backgroundTaskIdFromLaunchOutput(output?: string): string | undefined {
+function backgroundTaskIdFromLaunchOutput(
+  part: Pick<ClaudeMessagePart, "backgroundTaskId" | "toolOutput">,
+): string | undefined {
+  if (part.backgroundTaskId) return part.backgroundTaskId;
+  const output = part.toolOutput;
   if (!output) return undefined;
 
   const textMatch = output.match(LAUNCH_TASK_ID_PATTERN);
@@ -751,12 +755,13 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
       if (isTaskTool(part.toolName) && part.agentState === undefined) {
         hasSubagentLaunch = true;
       }
-      const authoritative = part.toolUseId
-        ? tasksByToolUseId.get(part.toolUseId)
-        : undefined;
       const recoveredId = isBackgroundTaskLaunch(part)
-        ? backgroundTaskIdFromLaunchOutput(part.toolOutput)
+        ? backgroundTaskIdFromLaunchOutput(part)
         : undefined;
+      const authoritative = (part.toolUseId
+        ? tasksByToolUseId.get(part.toolUseId)
+        : undefined)
+        ?? (recoveredId ? tasksById.get(recoveredId) : undefined);
       const taskId = authoritative?.id ?? recoveredId;
       if (!taskId) continue;
       launchesByTaskId.set(taskId, {
@@ -787,13 +792,25 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
       if (part.type !== "tool-invocation") return part;
 
       const isAgentTool = isTaskTool(part.toolName);
-      const authoritativeLaunch = part.toolUseId
-        ? tasksByToolUseId.get(part.toolUseId)
+      const recoveredId = isBackgroundTaskLaunch(part)
+        ? backgroundTaskIdFromLaunchOutput(part)
         : undefined;
+      const authoritativeLaunch = (part.toolUseId
+        ? tasksByToolUseId.get(part.toolUseId)
+        : undefined)
+        ?? (recoveredId ? tasksById.get(recoveredId) : undefined);
 
       let agentState = part.agentState;
+      let backgroundTask = part.backgroundTask;
       if (isAgentTool && authoritativeLaunch) {
         agentState = backgroundTaskAgentState(authoritativeLaunch.status);
+        backgroundTask = {
+          id: authoritativeLaunch.id,
+          description:
+            authoritativeLaunch.description
+            ?? stringArgument(part.toolArgs, "description"),
+          status: authoritativeLaunch.status,
+        };
       } else if (isAgentTool && agentState === undefined) {
         /*
          * A foreground subagent has no background-task record, so its own tool
@@ -809,9 +826,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
             : "active";
       }
 
-      let backgroundTask = part.backgroundTask;
       if (!isAgentTool && isBackgroundTaskLaunch(part)) {
-        const recoveredId = backgroundTaskIdFromLaunchOutput(part.toolOutput);
         const launch =
           authoritativeLaunch
           ?? (recoveredId ? tasksById.get(recoveredId) : undefined)

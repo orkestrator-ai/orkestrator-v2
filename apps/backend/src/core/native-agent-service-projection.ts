@@ -120,6 +120,52 @@ export type NativeAgentServiceLayerTypes = [
 
 import { NativeAgentServiceDispatch } from "./native-agent-service-dispatch.ts";
 
+const BACKGROUND_TASK_ID_MAX_LENGTH = 512;
+const BACKGROUND_TASK_LAUNCH_SCAN_BYTES = 4_096;
+const BACKGROUND_TASK_LAUNCH_ID_PATTERN =
+  /\bbackground(?:ed by user)?\s*(?:with ID:|\(ID:)\s*([^\s.)]+)/i;
+
+function boundedBackgroundTaskId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const id = value.trim();
+  return id && id.length <= BACKGROUND_TASK_ID_MAX_LENGTH ? id : undefined;
+}
+
+/**
+ * Preserve only the opaque launch id before the full result moves behind a
+ * detail reference. The scan is deliberately bounded so projection never
+ * parses a multi-megabyte tool result merely to decorate one transcript row.
+ */
+function backgroundTaskIdFromProjectedLaunch(
+  part: Record<string, unknown>,
+): string | undefined {
+  if (part.type !== "tool-invocation" || typeof part.toolOutput !== "string") {
+    return undefined;
+  }
+  const args = part.toolArgs;
+  if (!args || typeof args !== "object" || Array.isArray(args)) return undefined;
+  if ((args as Record<string, unknown>).run_in_background !== true) return undefined;
+
+  const boundedOutput = part.toolOutput.slice(0, BACKGROUND_TASK_LAUNCH_SCAN_BYTES);
+  const textMatch = boundedOutput.match(BACKGROUND_TASK_LAUNCH_ID_PATTERN);
+  const textId = boundedBackgroundTaskId(textMatch?.[1]);
+  if (textId) return textId;
+
+  if (part.toolOutput.length > BACKGROUND_TASK_LAUNCH_SCAN_BYTES) return undefined;
+  try {
+    const parsed = JSON.parse(part.toolOutput) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const record = parsed as Record<string, unknown>;
+    return boundedBackgroundTaskId(
+      record.backgroundTaskId ?? record.task_id ?? record.taskId,
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 export abstract class NativeAgentServiceProjection extends NativeAgentServiceDispatch {
   protected cacheToolDetails(
     sessionKey: string,
@@ -177,6 +223,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
     const part = raw as Record<string, unknown>;
     const projected: Record<string, unknown> = { ...part };
+    const backgroundTaskId = backgroundTaskIdFromProjectedLaunch(part);
+    if (backgroundTaskId) projected.backgroundTaskId = backgroundTaskId;
 
     // A staged path is the durable image reference. Re-sending the same image
     // as an inline data URL on every snapshot only duplicates transport bytes.

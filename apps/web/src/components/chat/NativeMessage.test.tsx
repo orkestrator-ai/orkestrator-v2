@@ -1666,7 +1666,8 @@ describe("NativeMessage task list rendering", () => {
     ).toContain("my-0");
     expect(container.innerHTML).toContain("my-0 rounded-lg border border-zinc-700/70");
     expect(
-      screen.getByRole("button", { name: /task wrapper/i }).parentElement?.className,
+      screen.getByRole("button", { name: /task wrapper/i }).parentElement
+        ?.parentElement?.className,
     ).toContain("my-0");
   });
 
@@ -3266,6 +3267,53 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     expect(stopBackgroundTask).toHaveBeenCalledWith("bg-suite");
   });
 
+  test("keeps a backgrounded subagent as one stoppable Agent card", () => {
+    const stopBackgroundTask = mock(async () => true);
+    const message = (status: "running" | "killed") => makeMessage([
+      makeAgentTaskGroupPart({
+        task: {
+          toolUseId: "agent-launch",
+          toolState: "success",
+          agentState: status === "running" ? "active" : "failed",
+          toolArgs: {
+            description: "Review the bridge",
+            run_in_background: true,
+          },
+          backgroundTask: {
+            id: "child-task",
+            description: "Review the bridge",
+            status,
+          },
+        },
+      }),
+    ]);
+    const view = render(
+      <NativeMessage
+        message={message("running")}
+        stopBackgroundTask={stopBackgroundTask}
+      />,
+    );
+
+    expect(screen.getByRole("button", {
+      name: /Agent Review the bridge Running/,
+    })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Stop Review the bridge" }));
+    expect(stopBackgroundTask).toHaveBeenCalledWith("child-task");
+
+    view.rerender(
+      <NativeMessage
+        message={message("killed")}
+        stopBackgroundTask={stopBackgroundTask}
+      />,
+    );
+    expect(screen.getByRole("button", {
+      name: /Agent Review the bridge Stopped/,
+    })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Stop Review the bridge" }) === null,
+    ).toBe(true);
+  });
+
   test("offers no stop control when the tab cannot stop background tasks", () => {
     render(
       <NativeMessage
@@ -3280,7 +3328,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: /^Stop / })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Stop / }) === null).toBe(true);
     expect(screen.getByRole("button", { name: /Task Background task bg-suite Running/ }))
       .toBeTruthy();
   });
@@ -3457,7 +3505,9 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     // unknown and no stop may be offered against an id that may name nothing.
     const row = screen.getByRole("button", { name: /Task Run the full suite Launched/ });
     expect(row).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Stop Run the full suite" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Stop Run the full suite" }) === null,
+    ).toBe(true);
   });
 
   test("reports a refused stop on the card that asked for it", async () => {

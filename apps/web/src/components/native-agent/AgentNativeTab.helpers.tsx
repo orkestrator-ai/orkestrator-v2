@@ -65,10 +65,45 @@ import {
 } from "./adapter";
 
 function activeAgentSummary(snapshots: NativeAgentActivitySnapshot[]): string {
-  const active = snapshots.filter((snapshot) => snapshot.status === "active");
-  if (active.length === 0) return "";
-  const noun = active.length === 1 ? "sub-agent" : "sub-agents";
-  return `${active.length} ${noun} working: ${active.map((snapshot) => snapshot.label).join(", ")}.`;
+  const summaries: string[] = [];
+  const activeAgents = snapshots.filter(
+    (snapshot) => snapshot.kind === "subagent" && snapshot.status === "active",
+  );
+  if (activeAgents.length > 0) {
+    const noun = activeAgents.length === 1 ? "sub-agent" : "sub-agents";
+    summaries.push(
+      `${activeAgents.length} ${noun} working: ${activeAgents.map((snapshot) => snapshot.label).join(", ")}.`,
+    );
+  }
+
+  for (const status of ["pending", "running", "paused"] as const) {
+    const tasks = snapshots.filter(
+      (snapshot) => snapshot.kind === "background-task"
+        && snapshot.backgroundTaskStatus === status,
+    );
+    if (tasks.length === 0) continue;
+    const noun = tasks.length === 1 ? "background task" : "background tasks";
+    const verb = status === "pending" ? "starting" : status;
+    summaries.push(
+      `${tasks.length} ${noun} ${verb}: ${tasks.map((snapshot) => snapshot.label).join(", ")}.`,
+    );
+  }
+
+  return summaries.join(" ");
+}
+
+function backgroundTaskAnnouncementStatus(
+  status: NativeAgentActivitySnapshot["backgroundTaskStatus"],
+): string | undefined {
+  switch (status) {
+    case "pending": return "starting";
+    case "running": return "running";
+    case "paused": return "paused";
+    case "completed": return "completed";
+    case "failed": return "failed";
+    case "killed": return "stopped";
+    default: return undefined;
+  }
 }
 
 interface NativeAgentActivityAnnouncement {
@@ -112,6 +147,15 @@ export function useNativeAgentActivityAnnouncement(
     const lifecycleUpdates: string[] = [];
     for (const [id, previous] of previousState.snapshots) {
       const next = current.get(id);
+      if (
+        previous.kind === "background-task"
+        && next?.kind === "background-task"
+        && previous.backgroundTaskStatus !== next.backgroundTaskStatus
+      ) {
+        const status = backgroundTaskAnnouncementStatus(next.backgroundTaskStatus);
+        if (status) lifecycleUpdates.push(`${next.label} ${status}.`);
+        continue;
+      }
       if (previous.status !== "active" || !next || next.status === "active") continue;
       lifecycleUpdates.push(`${next.label} ${next.status === "failed" ? "failed" : "finished"}.`);
     }
@@ -119,6 +163,7 @@ export function useNativeAgentActivityAnnouncement(
     const activeChanged = snapshots.some((snapshot) => {
       if (snapshot.status !== "active") return false;
       const previous = previousState.snapshots.get(snapshot.id);
+      if (snapshot.kind === "background-task") return previous === undefined;
       return previous?.status !== "active" || previous.label !== snapshot.label;
     });
     const summary = activeChanged ? activeAgentSummary(snapshots) : "";
@@ -613,4 +658,3 @@ export function UnassignedNativeAgentComposer({
     </div>
   );
 }
-

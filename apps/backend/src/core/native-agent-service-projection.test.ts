@@ -1510,6 +1510,65 @@ describe("NativeAgentService", () => {
     });
   });
 
+  test("preserves a bounded background-task id when launch output is deferred", async () => {
+    const messages = [{
+      id: "assistant-background",
+      role: "assistant" as const,
+      content: "",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: { command: "bun test", run_in_background: true },
+          toolOutput:
+            "Command running in background with ID: bg-suite. Output is being written elsewhere.",
+        },
+        {
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: { command: "bun run dev", run_in_background: true },
+          toolOutput: `Command running in background with ID: ${"x".repeat(513)}.`,
+        },
+      ],
+      createdAt: "2026-08-15T10:00:00.000Z",
+    }];
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => ({ status: "idle", messages }),
+    });
+
+    await withService({
+      prefix: "orkestrator-native-background-correlation-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "env-env-1:tab-background",
+      };
+      await service.ensureSession(identity);
+      const projection = await service.getProjection(identity);
+      const parts = (projection?.messages[0] as {
+        parts: Array<{
+          backgroundTaskId?: string;
+          detailRef?: string;
+          toolOutput?: string;
+        }>;
+      }).parts;
+      const part = parts[0];
+
+      expect(part).toMatchObject({
+        backgroundTaskId: "bg-suite",
+        detailRef: expect.any(String),
+      });
+      expect(part?.toolOutput).toBeUndefined();
+      expect(parts[1]?.backgroundTaskId).toBeUndefined();
+    });
+  });
+
 
 
   test("rejects a blank or oversized tool detail reference", async () => {

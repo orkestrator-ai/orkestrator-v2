@@ -589,12 +589,48 @@ describe("pinActiveNativeAgentParts", () => {
         id: "task-group:task-1",
         label: "Validate the implementation",
         status: "active",
+        kind: "subagent",
       },
       {
         id: "subagent:agent-reusable",
         label: "Lovelace",
         status: "failed",
+        kind: "subagent",
       },
     ]);
+  });
+
+  test("snapshots a provider-owned task with its full lifecycle", () => {
+    const messages = normalizeNativeMessages(
+      applyClaudeBackgroundTaskStates([
+        assistantMessage("assistant-task", [{
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolUseId: "bash-task",
+          toolState: "success",
+          toolArgs: {
+            command: "bun test",
+            description: "Run the full suite",
+            run_in_background: true,
+          },
+        }]),
+      ], {
+        "bg-suite": {
+          id: "bg-suite",
+          toolUseId: "bash-task",
+          description: "Run the full suite",
+          status: "paused",
+        },
+      }),
+    );
+
+    expect(snapshotNativeAgentActivity(messages)).toEqual([{
+      id: "background-task:bg-suite",
+      label: "Run the full suite",
+      status: "active",
+      kind: "background-task",
+      backgroundTaskStatus: "paused",
+    }]);
   });
 });

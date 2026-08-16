@@ -72,6 +72,13 @@ function isTerminalAgentStatus(status: NativeAgentStatus): boolean {
   return status === "finished" || status === "failed";
 }
 
+function isSubagentLaunchTool(toolName?: string): boolean {
+  const normalized = toolName?.trim().toLowerCase();
+  return normalized === "task"
+    || normalized === "agent"
+    || normalized === "spawn_subagent";
+}
+
 interface SubagentPreview {
   text: string;
   /** True when the text is the spawn prompt rather than live activity. */
@@ -825,9 +832,15 @@ export function TaskGroupPart({
   embedded?: boolean;
 }) {
   const [isOpen, setIsOpen] = useAgentExpansion(part, partKey);
-  const backgroundTask = part.task.toolArgs?.run_in_background === true
-    ? part.task.backgroundTask
+  const [stopError, setStopError] = useState<string | null>(null);
+  const backgroundTask = part.task.backgroundTask;
+  const backgroundAgentTask = backgroundTask && isSubagentLaunchTool(part.task.toolName)
+    ? backgroundTask
     : undefined;
+  const standaloneBackgroundTask = backgroundTask && !backgroundAgentTask
+    ? backgroundTask
+    : undefined;
+  useEffect(() => { setStopError(null); }, [backgroundTask?.status]);
   const toolLabel =
     getToolTitleDisplayName(
       part.task.toolTitle,
@@ -855,8 +868,11 @@ export function TaskGroupPart({
     explicitName ?? description ?? (genericToolLabel ? "Subagent" : toolLabel);
   const headerDescription = explicitName ? description : undefined;
   const displayLabel = buildAgentDisplayLabel(displayName, role);
-  const status = getNativeAgentStatus(part);
-  const statusLabel = getSubagentStatusLabel(status);
+  const backgroundPresentation = backgroundAgentTask
+    ? backgroundTaskPresentation(backgroundAgentTask)
+    : undefined;
+  const status = backgroundPresentation?.status ?? getNativeAgentStatus(part);
+  const statusLabel = backgroundPresentation?.label ?? getSubagentStatusLabel(status);
   const childCount = part.childTools.length;
   const capturedToolCount = part.childTools.filter(
     (child) => child.type === "tool-invocation",
@@ -885,10 +901,10 @@ export function TaskGroupPart({
   }, [description, displayName, hideCounts, part, prompt, status]);
   const metaEntries = agentMetaEntries(part.task.toolArgs, displayName);
 
-  if (backgroundTask) {
+  if (standaloneBackgroundTask) {
     return (
       <BackgroundTaskCard
-        task={backgroundTask}
+        task={standaloneBackgroundTask}
         command={stringToolArg(part.task.toolArgs, "command") ?? prompt}
         result={result}
         open={isOpen}
@@ -904,56 +920,76 @@ export function TaskGroupPart({
       onOpenChange={setIsOpen}
       className={cn(!embedded && agentCardClassName)}
     >
-      <CollapsibleTrigger className="w-full px-3 py-2.5 text-left transition-colors hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 cursor-pointer">
-        <div className="flex items-start gap-3">
-          <AgentActivityIcon status={status} />
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 text-xs">
-              <span className="shrink-0 font-medium uppercase tracking-wide text-muted-foreground/80">
-                Agent
-              </span>
-              <span className="min-w-0 truncate text-sm font-medium text-foreground">
-                {displayLabel}
-              </span>
-              {headerDescription ? (
-                <span className="min-w-0 truncate text-sm text-muted-foreground/75">
-                  {headerDescription}
+      <div className="flex items-start gap-2 px-3 py-2.5">
+        <CollapsibleTrigger className="min-w-0 flex-1 text-left transition-colors hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 cursor-pointer">
+          <div className="flex items-start gap-3">
+            <AgentActivityIcon
+              status={status}
+              spinning={backgroundPresentation?.spinning}
+            />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 text-xs">
+                <span className="shrink-0 font-medium uppercase tracking-wide text-muted-foreground/80">
+                  Agent
                 </span>
-              ) : null}
-              <span
-                className={cn(
-                  "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium",
-                  getSubagentStatusClasses(status),
-                )}
-              >
-                {statusLabel}
-              </span>
-            </div>
-            {preview ? (
-              <div className="mt-1 flex min-w-0 items-center gap-1 text-xs text-muted-foreground/80">
-                {hideCounts && prompt && preview === prompt ? (
-                  <span className="shrink-0 font-medium text-muted-foreground">Task ·</span>
+                <span className="min-w-0 truncate text-sm font-medium text-foreground">
+                  {displayLabel}
+                </span>
+                {headerDescription ? (
+                  <span className="min-w-0 truncate text-sm text-muted-foreground/75">
+                    {headerDescription}
+                  </span>
                 ) : null}
-                <span className="truncate">{preview}</span>
+                <span
+                  className={cn(
+                    "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                    backgroundPresentation?.pillClassName
+                      ?? getSubagentStatusClasses(status),
+                  )}
+                >
+                  {statusLabel}
+                </span>
               </div>
-            ) : null}
-          </div>
-          <AgentUsageStats
-            hasExternalUsage={hasExternalUsage}
-            tokenOnlyUsage={tokenOnlyUsage}
-            tokenCountText={part.task.tokenCountText}
-            toolCount={toolCount}
-            updateCount={childCount}
-            durationMs={durationMs}
-          />
-          <ChevronRight
-            className={cn(
-              "mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
-              isOpen && "rotate-90",
+              {preview ? (
+                <div className="mt-1 flex min-w-0 items-center gap-1 text-xs text-muted-foreground/80">
+                  {hideCounts && prompt && preview === prompt ? (
+                    <span className="shrink-0 font-medium text-muted-foreground">Task ·</span>
+                  ) : null}
+                  <span className="truncate">{preview}</span>
+                </div>
+              ) : null}
+            </div>
+            {backgroundPresentation?.live ? null : (
+              <AgentUsageStats
+                hasExternalUsage={hasExternalUsage}
+                tokenOnlyUsage={tokenOnlyUsage}
+                tokenCountText={part.task.tokenCountText}
+                toolCount={toolCount}
+                updateCount={childCount}
+                durationMs={durationMs}
+              />
             )}
+            <ChevronRight
+              className={cn(
+                "mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+                isOpen && "rotate-90",
+              )}
+            />
+          </div>
+        </CollapsibleTrigger>
+        {backgroundPresentation?.live && backgroundAgentTask ? (
+          <StopBackgroundTaskButton
+            task={backgroundAgentTask}
+            onStopped={() => setStopError(null)}
+            onFailed={setStopError}
           />
+        ) : null}
+      </div>
+      {stopError ? (
+        <div role="alert" className="px-3 pb-2 text-xs text-destructive">
+          {stopError}
         </div>
-      </CollapsibleTrigger>
+      ) : null}
       <CollapsibleContent>
         <div className="border-t border-border/40 px-3 py-3">
           {prompt ? (

@@ -88,23 +88,6 @@ export const sessionManagerTestHome = mkdtempSync(
 setClaudeHomeForTesting(sessionManagerTestHome);
 
 
-import type {
-  BackgroundTaskSnapshot,
-  MessagePatchEventData,
-  NormalizedPart,
-  SessionUsageSnapshot,
-  SSEEvent,
-} from "../types/index.js";
-
-
-import {
-  MAX_DIFF_SIDE_BYTES,
-  MAX_TOOL_TEXT_BYTES,
-  TRUNCATED_NOTICE,
-} from "./part-budget.js";
-
-
-
 export const {
   createSession,
   createOrRecoverSession,

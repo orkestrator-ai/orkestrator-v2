@@ -411,6 +411,10 @@ describe("native message adapters", () => {
     expect(active[0]?.parts[0]).toMatchObject({
       toolState: "success",
       agentState: "active",
+      backgroundTask: {
+        id: "child-task",
+        status: "running",
+      },
     });
     expect(messages[0]?.parts[0]?.agentState).toBeUndefined();
 
@@ -456,6 +460,7 @@ describe("native message adapters", () => {
       });
 
       expect(updated[0]?.parts[0]?.agentState).toBe(expectedAgentState);
+      expect(updated[0]?.parts[0]?.backgroundTask).toMatchObject({ id: "task", status });
     },
   );
 
@@ -513,13 +518,14 @@ describe("native message adapters", () => {
     expect(updated[0]?.parts[2]).toBe(nonAgentTool);
   });
 
-  test("preserves message and part identity when the agent state is already current", () => {
+  test("preserves identity when agent and background-task state are already current", () => {
     const part: ClaudeMessagePart = {
       type: "tool-invocation", content: "",
       toolName: "Task",
       toolUseId: "task-launch",
       toolState: "success",
       agentState: "active",
+      backgroundTask: { id: "task", status: "running" },
     };
     const message: ClaudeMessage = {
       id: "assistant-current-state",
@@ -784,6 +790,35 @@ describe("native message adapters", () => {
     },
   );
 
+  test("recovers a launch from projection metadata after heavy output is deferred", () => {
+    const messages: ClaudeMessage[] = [{
+      id: "assistant-launch",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-06-18T12:00:00.000Z",
+      parts: [{
+        type: "tool-invocation",
+        content: "",
+        toolName: "Bash",
+        toolState: "success",
+        toolArgs: {
+          command: "bun test",
+          description: "Run the full suite",
+          run_in_background: true,
+        },
+        backgroundTaskId: "bg-suite",
+        detailRef: "deferred-output",
+      }],
+    }];
+
+    expect(applyClaudeBackgroundTaskStates(messages, {})[0]?.parts[0]?.backgroundTask)
+      .toEqual({
+        id: "bg-suite",
+        description: "Run the full suite",
+        status: undefined,
+      });
+  });
+
   test("reapplying the same lifecycle leaves every message and part identical", () => {
     const messages: ClaudeMessage[] = [
       {
@@ -987,7 +1022,16 @@ describe("native message adapters", () => {
     });
 
     expect(updated[0]?.parts[0]?.agentState).toBe("active");
-    expect(updated[0]?.parts[0]?.backgroundTask).toBeUndefined();
+    expect(updated[0]?.parts[0]?.backgroundTask).toEqual({
+      id: "child-task",
+      description: "Review the diff",
+      status: "running",
+    });
+    const [normalized] = normalizeNativeMessages(updated);
+    expect(normalized?.parts[0]?.type).toBe("task-group");
+    expect(collectRenderedBackgroundTaskIds([normalized!])).toEqual(
+      new Set(["child-task"]),
+    );
   });
 
   test("preserves model attribution through provider-neutral normalization", () => {

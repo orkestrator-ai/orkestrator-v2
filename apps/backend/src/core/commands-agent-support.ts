@@ -509,25 +509,179 @@ export async function renameLiveGitBranch(environment: Environment, oldBranch: s
   if (environment.worktreePath) {
     try {
       await runCommand("git", ["-C", environment.worktreePath, "branch", "-m", "--", oldBranch, newBranch], { timeoutMs: 30_000 });
-      return true;
     } catch (error) {
       console.warn("[ElectronBackend] Failed to rename local git branch:", error);
       return false;
     }
+
+    try {
+      await configureSameNamedOriginPush(environment.worktreePath);
+      await clearStaleLocalBranchUpstream(environment.worktreePath, newBranch);
+    } catch (error) {
+      console.warn("[ElectronBackend] Renamed local git branch but failed to configure its pushes:", error);
+      try {
+        await runCommand("git", ["-C", environment.worktreePath, "branch", "-m", "--", newBranch, oldBranch], { timeoutMs: 30_000 });
+        return false;
+      } catch (rollbackError) {
+        console.warn("[ElectronBackend] Failed to roll back local git branch rename:", rollbackError);
+        const worktreePath = environment.worktreePath;
+        return await renameLandedOnNewBranch(
+          (branch) => localBranchRefExists(worktreePath, branch),
+          oldBranch,
+          newBranch,
+        );
+      }
+    }
+    return true;
   }
   if (environment.containerId && environment.status === "running") {
+    const containerId = environment.containerId;
     try {
       await dockerExec(
-        environment.containerId,
+        containerId,
         `git -C /workspace branch -m -- ${quoteShell(oldBranch)} ${quoteShell(newBranch)}`,
       );
-      return true;
     } catch (error) {
       console.warn("[ElectronBackend] Failed to rename container git branch:", error);
       return false;
     }
+
+    try {
+      await dockerExec(containerId, containerSameNamedOriginPushCommand(newBranch));
+    } catch (error) {
+      console.warn("[ElectronBackend] Renamed container git branch but failed to configure its pushes:", error);
+      try {
+        await dockerExec(
+          containerId,
+          `git -C /workspace branch -m -- ${quoteShell(newBranch)} ${quoteShell(oldBranch)}`,
+        );
+        return false;
+      } catch (rollbackError) {
+        console.warn("[ElectronBackend] Failed to roll back container git branch rename:", rollbackError);
+        return await renameLandedOnNewBranch(
+          (branch) => containerBranchRefExists(containerId, branch),
+          oldBranch,
+          newBranch,
+        );
+      }
+    }
+    return true;
   }
   return true;
+}
+
+/**
+ * Make a plain `git push` inside an environment publish its branch as a
+ * same-named branch on origin, and let that first push record the real upstream.
+ *
+ * `push.default=current` targets `origin/<current branch>` whatever the upstream
+ * says, so an environment branch can never update the base branch it was created
+ * from, and `push.autoSetupRemote` makes the first push behave like `git push -u`.
+ * Writing `branch.<name>.merge` up front instead would point the upstream at a ref
+ * that does not exist yet, which makes every `git status` in the environment report
+ * "the upstream is gone" and every `git pull` fail until the first push.
+ *
+ * Both settings are per-repository rather than per-branch, so they are written with
+ * `--worktree`: these worktrees hang off a clone the user also drives by hand, and
+ * changing how `git push` behaves in their own checkout is not this application's
+ * decision to make. `extensions.worktreeConfig` is the one shared write, and it
+ * only enables per-worktree config - it changes no behaviour on its own. Writing
+ * the same settings repeatedly is idempotent.
+ */
+export async function configureSameNamedOriginPush(worktreePath: string): Promise<void> {
+  await runCommand(
+    "git",
+    ["-C", worktreePath, "config", "extensions.worktreeConfig", "true"],
+    { timeoutMs: 10_000 },
+  );
+  for (const [key, value] of [["push.default", "current"], ["push.autoSetupRemote", "true"]] as const) {
+    await runCommand(
+      "git",
+      ["-C", worktreePath, "config", "--worktree", key, value],
+      { timeoutMs: 10_000 },
+    );
+  }
+}
+
+/** The container-side equivalent of {@link configureSameNamedOriginPush}. */
+function containerSameNamedOriginPushCommand(branch: string): string {
+  return `git -C /workspace config --local push.default current`
+    + ` && git -C /workspace config --local push.autoSetupRemote true`
+    + ` && { git -C /workspace config --local --unset-all ${quoteShell(`branch.${branch}.merge`)} || true; }`
+    + ` && { git -C /workspace config --local --unset-all ${quoteShell(`branch.${branch}.remote`)} || true; }`;
+}
+
+/**
+ * Drop an upstream a renamed branch inherited from its previous name.
+ *
+ * `git branch -m` moves the whole `branch.<name>.*` config section, so the renamed
+ * branch would otherwise keep comparing itself against the old name's remote
+ * branch. Removing it lets the next push record the correct one. A branch that was
+ * never pushed has nothing to remove, and `git config --unset-all` reports a
+ * missing key as a failure, so this is best effort by design.
+ */
+async function clearStaleLocalBranchUpstream(worktreePath: string, branch: string): Promise<void> {
+  const refName = validateGitRefName(branch, "environment branch");
+  for (const key of [`branch.${refName}.merge`, `branch.${refName}.remote`]) {
+    await runCommand(
+      "git",
+      ["-C", worktreePath, "config", "--local", "--unset-all", key],
+      { timeoutMs: 10_000 },
+    ).catch(() => undefined);
+  }
+}
+
+export const BRANCH_REF_EXISTS_SENTINEL = "ork-branch-ref-exists";
+
+// Both probes answer a recovery question, so neither may throw: an unanswerable
+// probe has to read as "not established" rather than replacing the caller's
+// decision with an exception.
+async function localBranchRefExists(worktreePath: string, branch: string): Promise<boolean> {
+  let refName: string;
+  try {
+    refName = validateGitRefName(branch, "environment branch");
+  } catch {
+    return false;
+  }
+  return await runCommand(
+    "git",
+    ["-C", worktreePath, "rev-parse", "--verify", "--quiet", `refs/heads/${refName}`],
+    { timeoutMs: 10_000 },
+  ).then(() => true, () => false);
+}
+
+async function containerBranchRefExists(containerId: string, branch: string): Promise<boolean> {
+  // The trailing `true` keeps a missing branch from failing the exec, so "absent"
+  // arrives in band as a missing sentinel rather than as an error that could just
+  // as easily mean the container is gone.
+  const probe = await dockerExec(
+    containerId,
+    `git -C /workspace rev-parse --verify --quiet ${quoteShell(`refs/heads/${branch}`)} >/dev/null 2>&1`
+      + ` && printf '%s' ${quoteShell(BRANCH_REF_EXISTS_SENTINEL)}; true`,
+    10_000,
+  ).catch(() => null);
+  return probe !== null && probe.includes(BRANCH_REF_EXISTS_SENTINEL);
+}
+
+/**
+ * Decide what to persist when a rename's push configuration failed and rolling the
+ * rename back failed too.
+ *
+ * Only a positive "the new name exists and the old one does not" advances the
+ * stored branch, because advancing also clears the environment's PR metadata.
+ * Every ambiguous or unreadable result keeps the stored branch, which stays
+ * recoverable. `git branch --show-current` cannot answer this: it reports whatever
+ * is checked out, which is an empty string on a detached HEAD and says nothing
+ * about which of the two branch names actually exists.
+ */
+async function renameLandedOnNewBranch(
+  branchRefExists: (branch: string) => Promise<boolean>,
+  oldBranch: string,
+  newBranch: string,
+): Promise<boolean> {
+  const newExists = await branchRefExists(newBranch);
+  const oldExists = await branchRefExists(oldBranch);
+  return newExists && !oldExists;
 }
 
 export async function renameEnvironmentFromPrompt(

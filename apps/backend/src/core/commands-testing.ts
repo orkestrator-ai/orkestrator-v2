@@ -5,6 +5,7 @@ import {
 } from "./commands-dependencies.js";
 import {
   ACP_LOCAL_SERVER_HEALTH_ATTEMPTS,
+  BRANCH_REF_EXISTS_SENTINEL,
   CLAUDE_GITHUB_ENV_FINGERPRINT,
   CONTAINER_PINNED_ATTACHMENT_REMOVE,
   CONTAINER_PINNED_ATTACHMENT_WRITE,
@@ -76,6 +77,7 @@ import {
 } from "./commands-helpers.js";
 
 export const __testing = {
+  BRANCH_REF_EXISTS_SENTINEL,
   CONTAINER_PINNED_ATTACHMENT_WRITE,
   CONTAINER_PINNED_ATTACHMENT_REMOVE,
   countPrunedDockerResources,

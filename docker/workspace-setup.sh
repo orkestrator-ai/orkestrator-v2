@@ -29,7 +29,9 @@ YELLOW=$'\033[1;33m'
 RED=$'\033[0;31m'
 NC=$'\033[0m' # No Color
 
-# Load shared git branch helpers when available.
+# Load the shared git branch helpers. They are only needed when this script
+# clones a repository, so a missing helper file is reported at that point rather
+# than aborting a setup run that never touches a branch.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "/usr/local/bin/git-branch-helpers.sh" ]; then
     # shellcheck source=/dev/null
@@ -37,35 +39,6 @@ if [ -f "/usr/local/bin/git-branch-helpers.sh" ]; then
 elif [ -f "$SCRIPT_DIR/git-branch-helpers.sh" ]; then
     # shellcheck source=/dev/null
     . "$SCRIPT_DIR/git-branch-helpers.sh"
-fi
-
-if ! declare -F create_branch_from_preferred_bases >/dev/null; then
-    create_branch_from_preferred_bases() {
-        local branch="$1"
-        local configured_base="$2"
-        local remote_default="$3"
-        local candidate=""
-        local tried_branches=""
-
-        for candidate in "$configured_base" "$remote_default" "main" "master"; do
-            if [ -z "$candidate" ]; then
-                continue
-            fi
-
-            if [[ " $tried_branches " == *" $candidate "* ]]; then
-                continue
-            fi
-
-            tried_branches="$tried_branches $candidate"
-
-            if git checkout -b "$branch" "origin/$candidate" >/dev/null 2>&1; then
-                printf "%s" "$candidate"
-                return 0
-            fi
-        done
-
-        return 1
-    }
 fi
 
 # Load runtime PATH helpers. These source a post-setup PATH snapshot when one
@@ -440,31 +413,11 @@ if [ -n "$GIT_URL" ] && [ ! -d "/workspace/.git" ]; then
         CURRENT=$(git branch --show-current)
         if [ "$CURRENT" != "$BRANCH" ]; then
             echo "Checking out branch: $BRANCH"
-            if git checkout "$BRANCH" 2>/dev/null; then
-                echo -e "${GREEN}Checked out: $BRANCH${NC}"
-            elif git checkout -b "$BRANCH" "origin/$BRANCH" 2>/dev/null; then
-                echo -e "${GREEN}Checked out remote: origin/$BRANCH${NC}"
-            else
-                # Branch doesn't exist remotely - create a new branch from configured/default base
-                echo -e "${BLUE}Creating new branch: $BRANCH${NC}"
-
-                REMOTE_HEAD_REF=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)
-                REMOTE_DEFAULT_BRANCH="${REMOTE_HEAD_REF#origin/}"
-
-                CREATED_FROM=$(create_branch_from_preferred_bases "$BRANCH" "$BASE_BRANCH" "$REMOTE_DEFAULT_BRANCH" || true)
-
-                if [ -n "$CREATED_FROM" ]; then
-                    echo -e "${GREEN}Created new branch: $BRANCH (from $CREATED_FROM)${NC}"
-                else
-                    # Create from current HEAD as last resort
-                    if git checkout -b "$BRANCH" 2>/dev/null; then
-                        echo -e "${GREEN}Created new branch: $BRANCH (from HEAD)${NC}"
-                    else
-                        echo -e "${RED}Failed to create branch: $BRANCH${NC}"
-                        echo -e "${YELLOW}Staying on current branch: $CURRENT${NC}"
-                    fi
-                fi
+            if ! declare -F checkout_environment_branch >/dev/null; then
+                echo -e "${RED}Missing git-branch-helpers.sh; refusing to check out $BRANCH${NC}"
+                exit 1
             fi
+            checkout_environment_branch "$BRANCH" "$BASE_BRANCH" "$CURRENT" || exit 1
         fi
 
         # Add Orkestrator workspace artifacts to .git/info/exclude so they're ignored locally

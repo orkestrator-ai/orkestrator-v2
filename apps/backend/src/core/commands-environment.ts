@@ -19,7 +19,7 @@ import {
 import type { Environment, EnvironmentStatus, PtyProcess, StorageService, AgentToolConnection } from "./commands-dependencies.js";
 import { terminalProcesses, CONTAINER_WORKSPACE_SETUP_COMMAND, SETUP_DONE_OSC_SEQUENCE, SETUP_FAILED_OSC_SEQUENCE, SETUP_DONE_PRINTF_CMD, SETUP_FAILED_PRINTF_CMD, environmentSetupSessions, environmentSetupTasks, environmentSetupStartTasks, environmentStartTasks, environmentLifecycleOperations, environmentBaselineTasks, diffStatsService, invalidatePendingDiffStatsSync, syncDiffStatsTracking } from "./commands-runtime-state.js";
 import { prMonitorService, invalidatePendingPrMonitorSync, syncPrMonitorTracking } from "./commands-pr-monitor.js";
-import { quoteShell, validateGitRefName, envWithManagedBinaries } from "./commands-agent-support.js";
+import { quoteShell, validateGitRefName, envWithManagedBinaries, configureSameNamedOriginPush } from "./commands-agent-support.js";
 import { createLocalGhRunner, createContainerGhRunner, deletePullRequestHeadBranchViaGitHubApi, findEnvironmentByContainerId } from "./commands-review.js";
 import { toClientEnvironment, terminalOutputBufferLength, deleteRetainedTerminalOutputBuffer, emitTerminalOutput, resetTerminalOutputBuffer, logSetupTerminal, terminalEnv, resolveLocalShellPath, cleanupTerminalSession, assertEnvironmentNotDeleting, assertEnvironmentDeletionNotRequested } from "./commands-terminal.js";
 import { readLocalHeadCommit, ensureCreatedFromCommitBeforeSetup, enqueueLocalServerEnvironmentOperation, stopLocalServersForEnvironmentUnlocked } from "./commands-local-server-lifecycle.js";
@@ -1163,10 +1163,14 @@ export async function createLocalWorktree(
     suffix += 1;
   }
 
-  const args = ["-C", projectPath, "worktree", "add", "-b", finalBranch, worktreePath, startPoint];
+  // A branch created directly from origin/<base> otherwise inherits that base as
+  // its upstream (usually origin/main), which is what makes a plain `git push`
+  // target the base branch instead of publishing the environment branch.
+  const args = ["-C", projectPath, "worktree", "add", "--no-track", "-b", finalBranch, worktreePath, startPoint];
   await runCommand("git", args, { timeoutMs: 120_000 });
 
   try {
+    await configureSameNamedOriginPush(worktreePath);
     const createdFromCommit = await readLocalHeadCommit(worktreePath);
 
     await fs.mkdir(path.join(worktreePath, ".orkestrator"), { recursive: true });

@@ -1437,11 +1437,13 @@ eval "$codex_setup"
       const grokConfig = join(dir, "grok-config");
       const home = join(dir, "home");
 
+      mkdirSync(join(cursorSource, "skills"), { recursive: true });
       mkdirSync(join(cursorSource, "skills-cursor"), { recursive: true });
       mkdirSync(join(cursorSource, "projects", "host-project"), { recursive: true });
       for (const file of ["cli-config.json", "agent-cli-state.json", "mcp.json", "argv.json"]) {
         writeFileSync(join(cursorSource, file), `${file}\n`);
       }
+      writeFileSync(join(cursorSource, "skills", "personal.md"), "cursor personal skill\n");
       writeFileSync(join(cursorSource, "skills-cursor", "skill.md"), "cursor skill\n");
       writeFileSync(join(cursorSource, "projects", "host-project", "session.json"), "excluded\n");
 
@@ -1481,6 +1483,8 @@ eval "$grok_setup"
       for (const file of ["cli-config.json", "agent-cli-state.json", "mcp.json", "argv.json"]) {
         expect(readFileSync(join(home, ".cursor", file), "utf8")).toBe(`${file}\n`);
       }
+      expect(readFileSync(join(home, ".cursor", "skills", "personal.md"), "utf8"))
+        .toBe("cursor personal skill\n");
       expect(readFileSync(join(home, ".cursor", "skills-cursor", "skill.md"), "utf8"))
         .toBe("cursor skill\n");
       expect(() => statSync(join(home, ".cursor", "projects"))).toThrow();

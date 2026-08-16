@@ -26,7 +26,7 @@ const maxHeadBytes = 16 * 1024;
 const maxFileBytes = 1024 * 1024;
 const maxErrors = 100;
 
-if (!["claude", "codex", "opencode"].includes(provider)) {
+if (!["claude", "codex", "cursor", "grok", "opencode"].includes(provider)) {
   throw new Error("Unknown agent skill provider");
 }
 
@@ -236,6 +236,49 @@ async function rootPlan() {
         ...(isolatedAgentTest ? [] : [{ path: path.join(home, ".agents", "skills"), scope: "shared", recursive: true }]),
         { path: path.join(codexHome, "skills", ".system"), scope: "system", recursive: true },
         ...(await codexPluginRoots(codexHome)),
+      ].slice(0, maxRoots),
+      targetOnly: [],
+    };
+  }
+
+  if (provider === "cursor") {
+    const cursorHome = path.join(home, ".cursor");
+    const cursorCodexHome = process.env.CODEX_HOME && process.env.CODEX_HOME.trim()
+      ? path.resolve(process.env.CODEX_HOME)
+      : path.join(home, ".codex");
+    return {
+      specs: [
+        ...projects.flatMap((dir) => [
+          { path: path.join(dir, ".cursor", "skills"), scope: "project", projectBoundary: dir, recursive: true },
+          { path: path.join(dir, ".agents", "skills"), scope: "project", projectBoundary: dir, recursive: true },
+          { path: path.join(dir, ".claude", "skills"), scope: "project", projectBoundary: dir, recursive: true },
+          { path: path.join(dir, ".codex", "skills"), scope: "project", projectBoundary: dir, recursive: true },
+        ]),
+        { path: path.join(cursorHome, "skills"), scope: "user", recursive: true },
+        { path: path.join(cursorHome, "skills-cursor"), scope: "system", recursive: true },
+        ...(isolatedAgentTest ? [] : [
+          { path: path.join(home, ".agents", "skills"), scope: "shared", recursive: true },
+          { path: path.join(home, ".claude", "skills"), scope: "shared", recursive: true },
+          { path: path.join(cursorCodexHome, "skills"), scope: "shared", skip: [".system"], recursive: true },
+        ]),
+      ].slice(0, maxRoots),
+      targetOnly: [],
+    };
+  }
+
+  if (provider === "grok") {
+    return {
+      specs: [
+        ...projects.flatMap((dir) => [
+          { path: path.join(dir, ".grok", "skills"), scope: "project", projectBoundary: dir, recursive: true },
+          { path: path.join(dir, ".agents", "skills"), scope: "project", projectBoundary: dir, recursive: true },
+          { path: path.join(dir, ".claude", "skills"), scope: "project", projectBoundary: dir, recursive: true },
+        ]),
+        { path: path.join(home, ".grok", "skills"), scope: "user", recursive: true },
+        ...(isolatedAgentTest ? [] : [
+          { path: path.join(home, ".agents", "skills"), scope: "shared", recursive: true },
+          { path: path.join(home, ".claude", "skills"), scope: "shared", recursive: true },
+        ]),
       ].slice(0, maxRoots),
       targetOnly: [],
     };

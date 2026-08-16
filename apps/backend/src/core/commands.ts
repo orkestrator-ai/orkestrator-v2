@@ -1128,7 +1128,7 @@ function asOptionalAgentInteractionPolicy(
 
 function asAgentSkillProvider(value: unknown): AgentSkillProvider {
   if (!isAgentSkillProvider(value)) {
-    throw new Error("Expected provider to be claude, codex or opencode");
+    throw new Error("Expected provider to be claude, codex, cursor, grok or opencode");
   }
   return value;
 }
@@ -2063,12 +2063,31 @@ function resolveManagedAcpBinary(
     : resolveManagedBinary(context, "grok");
 }
 
+/**
+ * CLI name used for extension discovery inside a container or on PATH.
+ * Cursor's ACP binary is `cursor-agent`; `cursor` is the desktop editor.
+ */
+function extensionCliName(agent: AgentExtensionId): string {
+  return agent === "cursor" ? "cursor-agent" : agent;
+}
+
 function resolveAgentBinary(
   context: CommandContext,
   agent: AgentExtensionId,
 ): string {
   if (agent === "claude") return resolveClaudeBinary(context);
   if (agent === "codex") return resolveCodexBinary(context);
+  if (agent === "cursor" || agent === "grok") {
+    const managed = resolveManagedAcpBinary(context, agent);
+    if (!managed) {
+      throw new Error(
+        agent === "cursor"
+          ? "Cursor Agent is not installed in this backend's toolchain."
+          : "Grok Build is not installed in this backend's toolchain.",
+      );
+    }
+    return managed;
+  }
   return resolveOpenCodeBinary(context);
 }
 
@@ -2109,7 +2128,7 @@ function createExtensionCommandRunner(
           "-w",
           "/workspace",
           containerId,
-          agent,
+          extensionCliName(agent),
           ...args,
         ],
         { timeoutMs: EXTENSION_DISCOVERY_TIMEOUT_MS },
@@ -11503,8 +11522,11 @@ export function createCommandRegistry(
 
   register("list_agent_skills", async (args, context) => {
     assertOnlyKeys(args, ["provider"], "list_agent_skills argument");
-    if (context.runtimeFlavor === "agent-test") return [];
-    return scanAgentSkills(asAgentSkillProvider(args.provider));
+    const provider = asAgentSkillProvider(args.provider);
+    if (context.runtimeFlavor === "agent-test") {
+      return { provider, roots: [], skills: [], errors: [] };
+    }
+    return scanAgentSkills(provider);
   });
   register("read_agent_skill", async (args, context) => {
     assertOnlyKeys(args, ["provider", "filePath"], "read_agent_skill argument");

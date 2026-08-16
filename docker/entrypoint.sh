@@ -787,6 +787,7 @@ if [ -d /cursor-config ]; then
     # Preserve user-authored extensions without importing host sessions,
     # project state, caches, downloads, or platform-specific binaries.
     for dir in \
+        skills \
         skills-cursor
     do
         copy_agent_directory_entries /cursor-config "$HOME/.cursor" "$dir" Cursor

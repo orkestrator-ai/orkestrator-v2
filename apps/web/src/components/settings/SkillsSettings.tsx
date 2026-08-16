@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
-import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
+import { ClaudeIcon, CodexIcon, CursorAgentIcon, GrokBuildIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import * as backend from "@/lib/backend";
 import type {
   AgentSkill,
@@ -28,6 +28,8 @@ import { cn } from "@/lib/utils";
 const PROVIDERS: Array<{ id: AgentSkillProvider; label: string; icon: React.ReactNode }> = [
   { id: "claude", label: "Claude", icon: <ClaudeIcon className="h-3.5 w-3.5" /> },
   { id: "codex", label: "Codex", icon: <CodexIcon className="h-3.5 w-3.5 text-emerald-400" /> },
+  { id: "cursor", label: "Cursor", icon: <CursorAgentIcon className="h-3.5 w-3.5 text-violet-400" /> },
+  { id: "grok", label: "Grok", icon: <GrokBuildIcon className="h-3.5 w-3.5 text-sky-400" /> },
   { id: "opencode", label: "OpenCode", icon: <OpenCodeIcon className="h-3.5 w-3.5" /> },
 ];
 
@@ -77,6 +79,40 @@ export function stripFrontmatter(content: string): string {
   const match =
     /^\uFEFF?---[ \t]*\r?\n(?:[\s\S]*?\r?\n)?(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(content);
   return match ? content.slice(match[0].length) : content;
+}
+
+/**
+ * Keep the settings pane compatible with an older or unavailable backend. The
+ * command is typed as `AgentSkillScan`, but IPC responses are still untrusted
+ * at runtime; an old agent-test backend returned `[]` for this command.
+ *
+ * Only that one shape is coerced. Anything else throws so the pane shows its
+ * error state, because "0 skills · 0 of 0 directories present" is a claim about
+ * the user's disk — rendering it for a response we could not read would be a
+ * false statement, not a neutral one, and it would hide the broken backend
+ * behind a screen that looks like a successful empty scan.
+ */
+function normalizeSkillScan(value: unknown, provider: AgentSkillProvider): AgentSkillScan {
+  if (Array.isArray(value) && value.length === 0) {
+    return { provider, roots: [], skills: [], errors: [] };
+  }
+  const candidate = value as Partial<AgentSkillScan> | null;
+  if (value === null
+    || typeof value !== "object"
+    || Array.isArray(value)
+    || !Array.isArray(candidate?.roots)
+    || !Array.isArray(candidate.skills)
+    || !Array.isArray(candidate.errors)) {
+    throw new Error("The backend returned an unreadable skill catalogue");
+  }
+  // The response's own `provider` is ignored: state is keyed by the tab that
+  // was asked, and a mismatched echo must not file results under another tab.
+  return {
+    provider,
+    roots: candidate.roots,
+    skills: candidate.skills,
+    errors: candidate.errors,
+  };
 }
 
 /** `//host/x.png` and any scheme other than `data:` reaches the network. */
@@ -187,7 +223,7 @@ export function SkillsSettings({
 
     setStates((prev) => ({ ...prev, [target]: { ...prev[target], loading: true, error: undefined } }));
     try {
-      const scan = await listSkills(target);
+      const scan = normalizeSkillScan(await listSkills(target), target);
       if (scanTokens.current[target] !== token) return;
       setStates((prev) => ({
         ...prev,
@@ -346,7 +382,7 @@ export function SkillsSettings({
             value={provider}
             onValueChange={(value) => setInternalProvider(value as AgentSkillProvider)}
           >
-            <TabsList className="h-8 bg-zinc-900/80">
+            <TabsList className="h-auto min-h-8 flex-wrap bg-zinc-900/80">
               {PROVIDERS.map((entry) => (
                 <TabsTrigger key={entry.id} value={entry.id} className={TAB_TRIGGER_CLASSES}>
                   {entry.icon}

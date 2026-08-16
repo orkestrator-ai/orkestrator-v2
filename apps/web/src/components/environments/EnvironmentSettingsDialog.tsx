@@ -77,6 +77,8 @@ interface EnvironmentSettingsDialogProps {
 const AGENT_ORDER: backend.AgentExtensionId[] = [
   "claude",
   "codex",
+  "cursor",
+  "grok",
   "opencode",
 ];
 
@@ -97,6 +99,16 @@ const AGENT_EXTENSION_COPY: Record<
     label: "Codex",
     mcpConfig: "~/.codex/config.toml",
     pluginConfig: "~/.codex/config.toml",
+  },
+  cursor: {
+    label: "Cursor",
+    mcpConfig: "~/.cursor/mcp.json or .cursor/mcp.json",
+    pluginConfig: "~/.cursor/plugins",
+  },
+  grok: {
+    label: "Grok",
+    mcpConfig: "~/.grok/config.toml or .grok/config.toml",
+    pluginConfig: "~/.grok/plugins or ~/.grok/config.toml",
   },
   opencode: {
     label: "OpenCode",
@@ -1030,7 +1042,7 @@ export function EnvironmentSettingsDialog({
             >
               <TabsList
                 aria-label="Agent extensions"
-                className="h-10 w-full justify-start rounded-xl border border-border/70 bg-muted/30 p-1 sm:w-fit"
+                className="h-auto min-h-10 w-full flex-wrap justify-start rounded-xl border border-border/70 bg-muted/30 p-1 sm:w-fit"
               >
                 {AGENT_ORDER.map((agent) => (
                   <TabsTrigger
@@ -1047,7 +1059,7 @@ export function EnvironmentSettingsDialog({
             {!hasLoadedExtensions ? (
               <div className="flex items-center gap-2 rounded-xl border border-border/80 px-4 py-8 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
-                Reading Claude, Codex, and OpenCode configuration…
+                Reading each agent's configuration…
               </div>
             ) : (
               <div>

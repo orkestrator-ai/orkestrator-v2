@@ -6,6 +6,10 @@ import {
   parseClaudePlugins,
   parseCodexMcpList,
   parseCodexPlugins,
+  parseCursorMcpList,
+  parseCursorPlugins,
+  parseGrokMcpList,
+  parseGrokPlugins,
   parseOpenCodeConfig,
   parseOpenCodeMcpServers,
   parseOpenCodePlugins,
@@ -34,7 +38,29 @@ const EMPTY_CODEX = {
   "codex mcp list --json": "[]",
   "codex plugin list --json": "[]",
 };
+const EMPTY_CURSOR = {
+  "cursor mcp list --format json": "{\"mcpServers\":{}}",
+  "cursor plugin list --format json": "[]",
+};
+const EMPTY_GROK = {
+  "grok mcp list --json": "[]",
+  "grok plugin list --json": "[]",
+};
 const EMPTY_OPENCODE = { "opencode debug config": "{}" };
+const EMPTY_ALL = {
+  ...EMPTY_CLAUDE,
+  ...EMPTY_CODEX,
+  ...EMPTY_CURSOR,
+  ...EMPTY_GROK,
+  ...EMPTY_OPENCODE,
+};
+
+function catalogFor(
+  catalogs: AgentExtensionCatalog[],
+  agent: AgentExtensionId,
+): AgentExtensionCatalog | undefined {
+  return catalogs.find((catalog) => catalog.agent === agent);
+}
 
 describe("extension discovery parsers", () => {
   test("parses Claude MCP names and health without retaining command details", () => {
@@ -353,6 +379,121 @@ describe("parseOpenCodeConfig edge cases", () => {
       { name: "named", status: "configured" },
     ]);
   });
+
+  test("parses Cursor mcp.json maps and plugin arrays", () => {
+    expect(parseCursorMcpList(JSON.stringify({
+      mcpServers: {
+        github: { command: "npx", args: ["-y", "github"] },
+        linear: { url: "https://mcp.linear.app/mcp", disabled: true },
+      },
+    }))).toEqual([
+      { name: "github", status: "configured" },
+      { name: "linear", status: "disabled" },
+    ]);
+    expect(parseCursorPlugins(JSON.stringify([
+      { name: "cursor-review", enabled: true, source: "user" },
+      { id: "lint@cursor", enabled: false },
+    ]))).toEqual([
+      { name: "cursor-review", status: "configured", source: "user" },
+      { name: "lint", status: "disabled" },
+    ]);
+  });
+
+  test("parses Grok MCP and plugin JSON lists", () => {
+    expect(parseGrokMcpList(JSON.stringify([
+      { name: "filesystem", enabled: true },
+      { name: "linear", enabled: false, scope: "project" },
+    ]))).toEqual([
+      { name: "filesystem", status: "configured" },
+      { name: "linear", status: "disabled", source: "project" },
+    ]);
+    expect(parseGrokPlugins(JSON.stringify({
+      plugins: [
+        { name: "superpowers", enabled: true },
+        { name: "review", enabled: false },
+      ],
+    }))).toEqual([
+      { name: "review", status: "disabled" },
+      { name: "superpowers", status: "configured" },
+    ]);
+  });
+
+  // Neither CLI documents its output, so the map shapes are read for both
+  // agents rather than only for the one whose shape happened to be observed.
+  // A map that vanished into an empty list would be indistinguishable from
+  // "none configured" and would carry no error to show beside it.
+  for (const parse of [
+    { label: "Cursor", run: parseCursorMcpList },
+    { label: "Grok", run: parseGrokMcpList },
+  ] as const) {
+    test(`reads a ${parse.label} MCP map under any known wrapper key`, () => {
+      for (const key of ["mcpServers", "servers", "mcp"]) {
+        expect(parse.run(JSON.stringify({
+          [key]: {
+            github: { command: "npx", args: ["-y", "github"] },
+            linear: { url: "https://mcp.linear.app/mcp", disabled: true },
+          },
+        }))).toEqual([
+          { name: "github", status: "configured" },
+          { name: "linear", status: "disabled" },
+        ]);
+      }
+    });
+
+    test(`reads an unwrapped ${parse.label} MCP map`, () => {
+      expect(parse.run(JSON.stringify({
+        github: { command: "npx", args: ["-y", "github"] },
+        linear: { url: "https://mcp.linear.app/mcp", enabled: false },
+      }))).toEqual([
+        { name: "github", status: "configured" },
+        { name: "linear", status: "disabled" },
+      ]);
+    });
+
+    test(`still walks a ${parse.label} wrapper whose value is a list`, () => {
+      // `{ mcp: { servers: [...] } }` is not a name → config map, so taking the
+      // map branch on the `mcp` key would answer with nothing at all.
+      expect(parse.run(JSON.stringify({
+        mcp: { servers: [{ name: "github" }, { name: "linear", enabled: false }] },
+      }))).toEqual([
+        { name: "github", status: "configured" },
+        { name: "linear", status: "disabled" },
+      ]);
+    });
+
+    test(`answers an empty ${parse.label} map with an empty list`, () => {
+      expect(parse.run(JSON.stringify({ mcpServers: {} }))).toEqual([]);
+    });
+  }
+
+  test("does not read an unrelated object as a Cursor or Grok server map", () => {
+    // No entry resembles a server, so the unwrapped-map fallback must decline
+    // and leave the recursive walk to find the one named record present.
+    const output = JSON.stringify({
+      meta: { generatedAt: "2026-08-16" },
+      entry: { name: "github" },
+    });
+    expect(parseCursorMcpList(output)).toEqual([{ name: "github", status: "configured" }]);
+    expect(parseGrokMcpList(output)).toEqual([{ name: "github", status: "configured" }]);
+  });
+
+  // Valid JSON of a shape no branch recognises is reported as an empty list
+  // rather than an error: unlike OpenCode's named `mcp`/`plugin` sections there
+  // is no key whose presence proves the surface exists and could not be read.
+  test("answers unrecognised Cursor and Grok JSON with an empty list", () => {
+    for (const output of ["{}", "\"a string\"", "42", "null", "[[]]"]) {
+      expect(parseCursorMcpList(output)).toEqual([]);
+      expect(parseCursorPlugins(output)).toEqual([]);
+      expect(parseGrokMcpList(output)).toEqual([]);
+      expect(parseGrokPlugins(output)).toEqual([]);
+    }
+  });
+
+  test("reports invalid Cursor and Grok JSON as an error rather than an empty list", () => {
+    for (const parse of [parseCursorMcpList, parseCursorPlugins, parseGrokMcpList, parseGrokPlugins]) {
+      expect(() => parse("cursor-agent: command not found")).toThrow("The CLI returned invalid JSON");
+    }
+  });
 });
 
 describe("discoverAgentExtensions", () => {
@@ -362,6 +503,10 @@ describe("discoverAgentExtensions", () => {
       ["claude plugin list --json", "not-json"],
       ["codex mcp list --json", "[]"],
       ["codex plugin list --json", "[]"],
+      ["cursor mcp list --format json", JSON.stringify({ mcpServers: {} })],
+      ["cursor plugin list --format json", "[]"],
+      ["grok mcp list --json", "[]"],
+      ["grok plugin list --json", "[]"],
       [
         "opencode debug config",
         JSON.stringify({ mcp: { docs: { type: "local", command: ["docs"] } } }),
@@ -377,19 +522,25 @@ describe("discoverAgentExtensions", () => {
       },
     );
 
-    expect(result).toHaveLength(3);
-    expect(result[0]).toMatchObject({
+    expect(result.map((catalog) => catalog.agent)).toEqual([
+      "claude",
+      "codex",
+      "cursor",
+      "grok",
+      "opencode",
+    ]);
+    expect(catalogFor(result, "claude")).toMatchObject({
       agent: "claude",
       mcpServers: [{ name: "docs", status: "connected" }],
       plugins: [],
       pluginError: "Could not read Claude plugins.",
     });
-    expect(result[1]).toMatchObject({
+    expect(catalogFor(result, "codex")).toMatchObject({
       agent: "codex",
       mcpServers: [],
       plugins: [],
     });
-    expect(result[2]).toMatchObject({
+    expect(catalogFor(result, "opencode")).toMatchObject({
       agent: "opencode",
       mcpServers: [{ name: "docs", status: "configured" }],
       plugins: [],
@@ -404,6 +555,8 @@ describe("discoverAgentExtensions", () => {
     expect(result.map((catalog) => catalog.agent)).toEqual([
       "claude",
       "codex",
+      "cursor",
+      "grok",
       "opencode",
     ]);
     for (const catalog of result) {
@@ -427,12 +580,47 @@ describe("discoverAgentExtensions", () => {
     expect(reported).not.toContain("spawn failed");
   });
 
+  // Locally, Cursor and Grok reject outright when no managed binary exists
+  // rather than falling back to a PATH lookup. That rejection must be contained
+  // to the agent that is missing.
+  test("keeps every other agent readable when Cursor and Grok cannot be launched", async () => {
+    const { run } = fixtureRunner({
+      ...EMPTY_CLAUDE,
+      ...EMPTY_CODEX,
+      "claude mcp list": "docs: npx docs-mcp - ✔ Connected",
+      "opencode debug config": JSON.stringify({
+        mcp: { docs: { type: "local", command: ["docs"] } },
+      }),
+    });
+
+    const result = await discoverAgentExtensions(run);
+
+    for (const agent of ["cursor", "grok"] as const) {
+      expect(catalogFor(result, agent)).toEqual({
+        agent,
+        mcpServers: [],
+        plugins: [],
+        mcpError: agent === "cursor"
+          ? "Could not read Cursor MCP servers."
+          : "Could not read Grok MCP servers.",
+        pluginError: agent === "cursor"
+          ? "Could not read Cursor plugins."
+          : "Could not read Grok plugins.",
+      });
+    }
+    expect(catalogFor(result, "claude")).toMatchObject({
+      mcpServers: [{ name: "docs", status: "connected" }],
+    });
+    expect(catalogFor(result, "opencode")).toMatchObject({
+      mcpServers: [{ name: "docs", status: "configured" }],
+    });
+    expect(catalogFor(result, "codex")?.mcpError).toBeUndefined();
+  });
+
   test("marks both OpenCode collections unreadable when the config dump fails", async () => {
-    const { run } = fixtureRunner({ ...EMPTY_CLAUDE, ...EMPTY_CODEX });
+    const { run } = fixtureRunner({ ...EMPTY_CLAUDE, ...EMPTY_CODEX, ...EMPTY_CURSOR, ...EMPTY_GROK });
 
-    const [, , opencode] = await discoverAgentExtensions(run);
-
-    expect(opencode).toEqual({
+    expect(catalogFor(await discoverAgentExtensions(run), "opencode")).toEqual({
       agent: "opencode",
       mcpServers: [],
       plugins: [],
@@ -445,10 +633,12 @@ describe("discoverAgentExtensions", () => {
     const { run } = fixtureRunner({
       ...EMPTY_CLAUDE,
       ...EMPTY_CODEX,
+      ...EMPTY_CURSOR,
+      ...EMPTY_GROK,
       "opencode debug config": "opencode: command not found",
     });
 
-    const [, , opencode] = await discoverAgentExtensions(run);
+    const opencode = catalogFor(await discoverAgentExtensions(run), "opencode");
 
     expect(opencode?.mcpError).toBe("Could not read OpenCode MCP servers.");
     expect(opencode?.pluginError).toBe("Could not read OpenCode plugins.");
@@ -457,13 +647,13 @@ describe("discoverAgentExtensions", () => {
   test("keeps Codex MCP servers when only its plugin listing fails", async () => {
     const { run } = fixtureRunner({
       ...EMPTY_CLAUDE,
+      ...EMPTY_CURSOR,
+      ...EMPTY_GROK,
       ...EMPTY_OPENCODE,
       "codex mcp list --json": JSON.stringify([{ name: "github" }]),
     });
 
-    const [, codex] = await discoverAgentExtensions(run);
-
-    expect(codex).toEqual({
+    expect(catalogFor(await discoverAgentExtensions(run), "codex")).toEqual({
       agent: "codex",
       mcpServers: [{ name: "github", status: "configured" }],
       plugins: [],
@@ -474,13 +664,13 @@ describe("discoverAgentExtensions", () => {
   test("keeps Claude plugins when only its MCP listing fails", async () => {
     const { run } = fixtureRunner({
       ...EMPTY_CODEX,
+      ...EMPTY_CURSOR,
+      ...EMPTY_GROK,
       ...EMPTY_OPENCODE,
       "claude plugin list --json": JSON.stringify([{ id: "review@official" }]),
     });
 
-    const [claude] = await discoverAgentExtensions(run);
-
-    expect(claude).toEqual({
+    expect(catalogFor(await discoverAgentExtensions(run), "claude")).toEqual({
       agent: "claude",
       mcpServers: [],
       plugins: [{ name: "review", status: "configured" }],
@@ -496,15 +686,15 @@ describe("discoverAgentExtensions", () => {
     const { run } = fixtureRunner({
       ...EMPTY_CLAUDE,
       ...EMPTY_CODEX,
+      ...EMPTY_CURSOR,
+      ...EMPTY_GROK,
       "opencode debug config": JSON.stringify({
         mcp: "servers-moved-elsewhere",
         plugin: ["@team/review"],
       }),
     });
 
-    const [, , opencode] = await discoverAgentExtensions(run);
-
-    expect(opencode).toEqual({
+    expect(catalogFor(await discoverAgentExtensions(run), "opencode")).toEqual({
       agent: "opencode",
       mcpServers: [],
       plugins: [{ name: "@team/review", status: "configured" }],
@@ -516,15 +706,15 @@ describe("discoverAgentExtensions", () => {
     const { run } = fixtureRunner({
       ...EMPTY_CLAUDE,
       ...EMPTY_CODEX,
+      ...EMPTY_CURSOR,
+      ...EMPTY_GROK,
       "opencode debug config": JSON.stringify({
         mcp: { docs: { type: "local", command: ["docs"] } },
         plugin: { "@team/review": true },
       }),
     });
 
-    const [, , opencode] = await discoverAgentExtensions(run);
-
-    expect(opencode).toEqual({
+    expect(catalogFor(await discoverAgentExtensions(run), "opencode")).toEqual({
       agent: "opencode",
       mcpServers: [{ name: "docs", status: "configured" }],
       plugins: [],
@@ -533,11 +723,7 @@ describe("discoverAgentExtensions", () => {
   });
 
   test("omits error fields entirely when every CLI succeeds", async () => {
-    const { run, calls } = fixtureRunner({
-      ...EMPTY_CLAUDE,
-      ...EMPTY_CODEX,
-      ...EMPTY_OPENCODE,
-    });
+    const { run, calls } = fixtureRunner(EMPTY_ALL);
 
     const result = await discoverAgentExtensions(run);
 
@@ -550,6 +736,10 @@ describe("discoverAgentExtensions", () => {
       "claude plugin list --json",
       "codex mcp list --json",
       "codex plugin list --json",
+      "cursor mcp list --format json",
+      "cursor plugin list --format json",
+      "grok mcp list --json",
+      "grok plugin list --json",
       "opencode debug config",
     ]);
   });

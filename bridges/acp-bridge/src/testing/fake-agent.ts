@@ -1078,7 +1078,13 @@ lines.on("line", (line) => {
               toolCallId: "grok-subagent-tool-1",
               status: "completed",
               content: [{ type: "content", content: { type: "text", text: "Subagent started." } }],
-              rawOutput: { type: "Text", text: "Subagent started." },
+              // `STATUS` adds a terminal status to the *launch* result. Not
+              // observed on Grok today: it is the shape that would settle the
+              // card the moment the spawn succeeded, and the child's real end
+              // still only arrives through `subagent_finished`.
+              rawOutput: prompt.startsWith("BACKGROUNDSUBAGENTSTATUS")
+                ? { type: "Text", text: "Subagent started.", status: "completed" }
+                : { type: "Text", text: "Subagent started." },
             },
           },
         });

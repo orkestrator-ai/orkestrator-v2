@@ -2444,18 +2444,27 @@ describe("ACP bridge", () => {
     });
   }
 
-  test("tracks Grok's metadata-described sub-agent until its terminal notification", async () => {
+  // The second case adds a terminal `status` to the *launch* result. Grok is
+  // not observed sending one, but the launch tool completing is the spawn
+  // succeeding, not the child ending — only `subagent_finished` is that. A
+  // reading that settled on the launch result would strand a running child as
+  // Finished and hand the session back as idle while it was still working.
+  for (const launch of [
+    { prompt: "BACKGROUNDSUBAGENT", label: "until its terminal notification" },
+    { prompt: "BACKGROUNDSUBAGENTSTATUS", label: "past a completed launch result" },
+  ] as const) {
+  test(`tracks Grok's metadata-described sub-agent ${launch.label}`, async () => {
     const { base, headers } = await spawnBridge({ env: { ACP_PROVIDER: "grok" } });
     const created = await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ clientSessionKey: "env-grok-background-subagent:tab-1" }),
+      body: JSON.stringify({ clientSessionKey: `env-grok-${launch.prompt}:tab-1` }),
     }).then((response) => response.json()) as { id: string };
 
     expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ prompt: "BACKGROUNDSUBAGENT: validate" }),
+      body: JSON.stringify({ prompt: `${launch.prompt}: validate` }),
     })).status).toBe(202);
 
     const active = await waitFor(
@@ -2511,6 +2520,7 @@ describe("ACP bridge", () => {
       headers,
     }).then((response) => response.json())).toEqual({ activity: "idle" });
   });
+  }
 
   test("correlates concurrent Grok children without claiming mismatched spawns", async () => {
     const { base, headers } = await spawnBridge({ env: { ACP_PROVIDER: "grok" } });

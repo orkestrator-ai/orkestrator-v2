@@ -28,6 +28,8 @@ describe("agent skill helpers", () => {
   test("recognises only supported provider names", () => {
     expect(isAgentSkillProvider("claude")).toBe(true);
     expect(isAgentSkillProvider("codex")).toBe(true);
+    expect(isAgentSkillProvider("cursor")).toBe(true);
+    expect(isAgentSkillProvider("grok")).toBe(true);
     expect(isAgentSkillProvider("opencode")).toBe(true);
     expect(isAgentSkillProvider("Claude")).toBe(false);
     expect(isAgentSkillProvider(1)).toBe(false);
@@ -206,6 +208,41 @@ describe("scanAgentSkills", () => {
     const scan = await scanAgentSkills("codex");
 
     expect(scan.skills.map((skill) => skill.name)).toEqual(["built-in"]);
+  });
+
+  test("Cursor Agent reads personal, built-in, and compatibility skill roots", async () => {
+    await writeSkill(join(home, ".cursor", "skills"), "from-cursor");
+    await writeSkill(join(home, ".cursor", "skills-cursor"), "built-in");
+    await writeSkill(join(home, ".agents", "skills"), "from-agents");
+    await writeSkill(join(home, ".claude", "skills"), "from-claude");
+    await writeSkill(join(home, ".codex", "skills"), "from-codex");
+
+    const scan = await scanAgentSkills("cursor");
+
+    expect(scan.skills.map((skill) => [skill.name, skill.scope])).toEqual([
+      ["built-in", "system"],
+      ["from-agents", "shared"],
+      ["from-claude", "shared"],
+      ["from-codex", "shared"],
+      ["from-cursor", "user"],
+    ]);
+    expect(scan.roots.some((root) => root.label === "~/.cursor/skills")).toBe(true);
+    expect(scan.roots.some((root) => root.label === "~/.cursor/skills-cursor")).toBe(true);
+  });
+
+  test("Grok Build reads ~/.grok/skills plus shared Claude and agent roots", async () => {
+    await writeSkill(join(home, ".grok", "skills"), "from-grok");
+    await writeSkill(join(home, ".agents", "skills"), "from-agents");
+    await writeSkill(join(home, ".claude", "skills"), "from-claude");
+
+    const scan = await scanAgentSkills("grok");
+
+    expect(scan.skills.map((skill) => [skill.name, skill.scope])).toEqual([
+      ["from-agents", "shared"],
+      ["from-claude", "shared"],
+      ["from-grok", "user"],
+    ]);
+    expect(scan.roots.some((root) => root.label === "~/.grok/skills")).toBe(true);
   });
 
   test("collapses one file reachable through two OpenCode roots", async () => {

@@ -1166,7 +1166,7 @@ export async function checkOpencodeCli(): Promise<boolean> {
 
 // --- Agent Skills ---
 
-export const AGENT_SKILL_PROVIDERS = ["claude", "codex", "opencode"] as const;
+export const AGENT_SKILL_PROVIDERS = ["claude", "codex", "cursor", "grok", "opencode"] as const;
 export type AgentSkillProvider = (typeof AGENT_SKILL_PROVIDERS)[number];
 export type AgentSkillScope = "project" | "admin" | "user" | "shared" | "system" | "plugin";
 
@@ -1769,7 +1769,7 @@ export async function setEnvironmentInitialPrompt(
   });
 }
 
-export type AgentExtensionId = "claude" | "codex" | "opencode";
+export type AgentExtensionId = "claude" | "codex" | "cursor" | "grok" | "opencode";
 
 export interface AgentExtensionItem {
   name: string;

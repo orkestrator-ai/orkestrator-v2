@@ -2266,16 +2266,25 @@ function acpSubagentState(
     }
   }
 
-  const reportedState = lifecycleStatus(lifecycle);
-  const terminal = terminalAgentState(reportedState);
-  if (terminal) return terminal;
-  // `isBackground` is launch mode, not liveness. Cursor keeps it true on a
-  // background Task even after a later update reports `status: "completed"`.
-  if (lifecycle?.isBackground === true) return "active";
-  if (lifecycle?.isBackground === false) return "finished";
+  // A launch hint in the tool's *input* is checked before any status in its
+  // output, because the two describe different things: the input says this call
+  // detached a child, so the call completing is the launch completing, not the
+  // child ending. That is Grok's shape, and Grok reports the child's real end
+  // through `subagent_finished` — which lands as `source.agentState` and has
+  // already returned above. Reading the launch result's status as the child's
+  // would settle the card the moment the spawn succeeded.
   const backgroundLaunch = source.toolArgs?.background === true
     || source.toolArgs?.run_in_background === true;
   if (backgroundLaunch) return "active";
+  const reportedState = lifecycleStatus(lifecycle);
+  const terminal = terminalAgentState(reportedState);
+  if (terminal) return terminal;
+  // `isBackground` is launch mode, not liveness, and unlike the input hint above
+  // it sits in the same object as the status that supersedes it: Cursor keeps it
+  // true on a background Task even after a later update reports
+  // `status: "completed"`.
+  if (lifecycle?.isBackground === true) return "active";
+  if (lifecycle?.isBackground === false) return "finished";
   if (source.toolState === "pending") return "active";
   if (source.toolState === "success") return "finished";
   return source.agentState;

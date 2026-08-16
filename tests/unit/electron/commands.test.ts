@@ -1260,7 +1260,7 @@ describe("agent skill commands", () => {
     await expect(commands.get("list_agent_skills")?.(
       { provider: "other" },
       context,
-    )).rejects.toThrow("Expected provider to be claude, codex or opencode");
+    )).rejects.toThrow("Expected provider to be claude, codex, cursor, grok or opencode");
     await expect(commands.get("read_agent_skill")?.(
       { provider: "claude" },
       context,
@@ -1330,7 +1330,7 @@ describe("agent skill commands", () => {
     await expect(commands.get("list_environment_agent_skills")?.(
       { environmentId: environment.id, provider: "other" },
       context,
-    )).rejects.toThrow("Expected provider to be claude, codex or opencode");
+    )).rejects.toThrow("Expected provider to be claude, codex, cursor, grok or opencode");
     await expect(commands.get("list_environment_agent_skills")?.(
       { environmentId: environment.id, provider: "claude", unexpected: true },
       context,
@@ -18407,6 +18407,35 @@ describe("agent extension discovery commands", () => {
     expect(calls[1]!.args).toEqual(["debug", "config"]);
   });
 
+  // Cursor and Grok never fall back to a PATH lookup — `cursor` on PATH is the
+  // desktop editor — so an unmanaged toolchain makes the launch impossible.
+  // That has to surface as this one agent's failure, not as a spawn of the
+  // wrong executable and not as a failure of the whole catalog.
+  for (const agent of [
+    { id: "cursor", message: "Cursor Agent is not installed in this backend's toolchain." },
+    { id: "grok", message: "Grok Build is not installed in this backend's toolchain." },
+  ] as const) {
+    test(`fails ${agent.id} discovery locally without spawning anything when it is not installed`, async () => {
+      const environment = createEnvironment({
+        id: "env-local",
+        environmentType: "local",
+        worktreePath: "/tmp/worktree",
+        containerId: null,
+      });
+      const { context } = createContext(environment);
+      const { run, calls } = recordingRun("docs: cmd - Connected");
+
+      const runner = commandTesting.createExtensionCommandRunner(environment, context, run);
+      await expect(runner(agent.id, ["mcp", "list", "--json"])).rejects.toThrow(agent.message);
+      expect(calls).toEqual([]);
+
+      // The sibling agents share this runner, so the missing toolchain must not
+      // take them down with it.
+      await expect(runner("claude", ["mcp", "list"])).resolves.toBe("docs: cmd - Connected");
+      expect(calls).toHaveLength(1);
+    });
+  }
+
   test("runs the agent CLI in the container for a containerized environment", async () => {
     const environment = createEnvironment({
       id: "env-container",
@@ -18435,6 +18464,36 @@ describe("agent extension discovery commands", () => {
       "--json",
     ]);
     expect(calls[0]!.options).toMatchObject({ timeoutMs: 20_000 });
+  });
+
+  test("runs Cursor Agent discovery as cursor-agent inside a container", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      worktreePath: undefined,
+    });
+    const { context } = createContext(environment);
+    const { run, calls } = recordingRun("[]");
+
+    const runner = commandTesting.createExtensionCommandRunner(environment, context, run);
+    await expect(runner("cursor", ["mcp", "list", "--format", "json"])).resolves.toBe("[]");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.command).toBe("docker");
+    expect(calls[0]!.args).toEqual([
+      "exec",
+      "-e",
+      "NO_COLOR=1",
+      "-w",
+      "/workspace",
+      "container-1",
+      "cursor-agent",
+      "mcp",
+      "list",
+      "--format",
+      "json",
+    ]);
   });
 
   test("runs environment skill discovery inside the selected container", async () => {
@@ -18759,7 +18818,13 @@ describe("agent extension discovery commands", () => {
       context,
     ) as Array<Record<string, unknown>>;
 
-    expect(catalogs.map((catalog) => catalog.agent)).toEqual(["claude", "codex", "opencode"]);
+    expect(catalogs.map((catalog) => catalog.agent)).toEqual([
+      "claude",
+      "codex",
+      "cursor",
+      "grok",
+      "opencode",
+    ]);
     for (const catalog of catalogs) {
       expect(catalog.mcpServers).toEqual([]);
       expect(catalog.plugins).toEqual([]);

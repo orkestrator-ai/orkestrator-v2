@@ -80,6 +80,44 @@ describe("environment agent skills scanner", () => {
     });
   });
 
+  test("lists Cursor Agent project skills from .cursor/skills", async () => {
+    const worktree = await createWorktree();
+    const skillDirectory = path.join(worktree, ".cursor", "skills", "review");
+    const skillPath = path.join(skillDirectory, "SKILL.md");
+    await fs.mkdir(skillDirectory, { recursive: true });
+    await fs.writeFile(skillPath, "---\nname: review\n---\n\n# Review\n");
+
+    const listed = runScanner(worktree, "cursor", "list");
+    expect(listed.exitCode).toBe(0);
+    const scan = JSON.parse(listed.stdout.toString()) as {
+      skills: Array<{ name: string; filePath: string; scope: string }>;
+    };
+    expect(scan.skills).toContainEqual(expect.objectContaining({
+      name: "review",
+      filePath: skillPath,
+      scope: "project",
+    }));
+  });
+
+  test("lists Grok Build project skills from .grok/skills", async () => {
+    const worktree = await createWorktree();
+    const skillDirectory = path.join(worktree, ".grok", "skills", "review");
+    const skillPath = path.join(skillDirectory, "SKILL.md");
+    await fs.mkdir(skillDirectory, { recursive: true });
+    await fs.writeFile(skillPath, "---\nname: review\n---\n\n# Review\n");
+
+    const listed = runScanner(worktree, "grok", "list");
+    expect(listed.exitCode).toBe(0);
+    const scan = JSON.parse(listed.stdout.toString()) as {
+      skills: Array<{ name: string; filePath: string; scope: string }>;
+    };
+    expect(scan.skills).toContainEqual(expect.objectContaining({
+      name: "review",
+      filePath: skillPath,
+      scope: "project",
+    }));
+  });
+
   test("refuses reads outside the selected agent's skill roots", async () => {
     const worktree = await createWorktree();
     const outside = path.join(worktree, "outside", "SKILL.md");

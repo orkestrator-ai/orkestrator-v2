@@ -181,6 +181,7 @@ export function SharedNativeAgentController({
     runtimeProjection: projection,
     runtimeError,
     isRefreshing,
+    hasCompletedRead,
     isDispatching,
     connect,
     refresh,
@@ -1056,8 +1057,22 @@ export function SharedNativeAgentController({
   ]);
 
   const errorMessage = sendError ?? runtimeError ?? projection?.turn.error ?? null;
+  // An uninitialized inactive tab has neither a projection nor an in-flight
+  // refresh. That is still a pending connection, not a failed one: newly added
+  // tabs can render for one commit before pane selection marks them active,
+  // and `isRefreshing` reads false for a tab that was never asked to connect.
+  //
+  // A settled read is the opposite case. The backend answered, and answered
+  // with nothing, so the session really is gone — say so, because "error" is
+  // the only state carrying the retry control and the failure text.
+  //
+  // Retry and a new identity both start work with `isRefreshing`. That has to
+  // win over the previous completed-read/error, or the only recovery control
+  // stays on screen while the reconnect is already running.
   const connectionState = projection?.connection
-    ?? (isRefreshing ? "connecting" as const : "error" as const);
+    ?? (isRefreshing
+      ? "connecting" as const
+      : runtimeError || hasCompletedRead ? "error" as const : "connecting" as const);
   const contextUsage = projection?.contextUsage;
   const maximumTokens = contextUsage?.maximumTokens;
   const composeContextUsage = contextUsage === undefined

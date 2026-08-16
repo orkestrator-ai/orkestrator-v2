@@ -166,58 +166,80 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
         error instanceof Error ? error.message : error,
       );
     });
-    const result = await this.storage.runWithLiveEnvironment(
-      input.environmentId,
-      "Native agent prompt",
-      () =>
-        this.storage.dispatchNativeAgentPromptOnce(
-          session.key,
-          input.requestId,
-          async (durable) => {
-            const preparation = prepare
-              ? await prepare(durable, provider)
-              : { dispatch: true as const };
-            if (!preparation.dispatch) {
-              return {
-                dispatched: false as const,
-                ...(preparation.notice
-                  ? { openCodeIncompleteTurnNotice: preparation.notice }
-                  : {}),
-              };
-            }
-            await provider.send(durable.providerSessionId, input.prompt, {
-              requestId: input.requestId,
-              // Only a person typing into the composer can mean "run this
-              // command"; workflow-authored prompts are literal text.
-              allowProviderCommands: durable.origin === "interactive-native",
-              images: input.images,
-              attachments: input.attachments,
-              schema: input.schema,
-              mode: input.mode,
-              fastMode: input.fastMode,
-              subAgent: input.subAgent,
-              executionAgent:
-                preparation.executionAgent ?? input.executionAgent,
-              includeLocalSettings: input.includeLocalSettings,
-              promptSuggestions: input.promptSuggestions,
-              model: preparation.model ?? input.model,
-              effort: preparation.effort ?? input.reasoningEffort,
-            });
-            // Provider acceptance is the authoritative working edge. Record it
-            // before the durable dispatch bookkeeping completes so a newer
-            // idle activity snapshot cannot be overwritten by a late return
-            // from storage.
-            this.observedSessionActivity.set(durable.key, {
-              providerSessionId: durable.providerSessionId,
-              state: "working",
-            });
-          },
-          persistAmbiguousDispatch && session.origin === "interactive-native"
-            ? this.persistedPendingDispatch(input)
-            : undefined,
-        ),
+    /*
+     * Validate liveness before opening the durable dispatch window, but do not
+     * keep the global environments.json mutation lock across provider I/O.
+     * The native-agent session lock below is the at-most-once fence; holding an
+     * unrelated global lock here only stalls activity and deletion bookkeeping
+     * for every environment while a provider is slow.
+     *
+     * Deletion may begin after this check, and physical teardown — the
+     * container, the worktree — is no longer ordered behind this send at all.
+     * That is the accepted trade: a send racing a teardown fails, and the user
+     * asked for the environment to go away. What *is* still ordered is the part
+     * that matters for at-most-once: an accepted request is confirmed
+     * atomically under the native-agent lock, and deletion's session cleanup
+     * queues behind that same lock, so it cannot remove the record mid-dispatch
+     * and leave a confirmed turn unattributed.
+     */
+    await this.assertEnvironmentLive(input.environmentId);
+    this.providerDispatchCounts.set(
+      provider,
+      (this.providerDispatchCounts.get(provider) ?? 0) + 1,
     );
-    return result.session;
+    try {
+      const result = await this.storage.dispatchNativeAgentPromptOnce(
+        session.key,
+        input.requestId,
+        async (durable) => {
+          const preparation = prepare
+            ? await prepare(durable, provider)
+            : { dispatch: true as const };
+          if (!preparation.dispatch) {
+            return {
+              dispatched: false as const,
+              ...(preparation.notice
+                ? { openCodeIncompleteTurnNotice: preparation.notice }
+                : {}),
+            };
+          }
+          await provider.send(durable.providerSessionId, input.prompt, {
+            requestId: input.requestId,
+            // Only a person typing into the composer can mean "run this
+            // command"; workflow-authored prompts are literal text.
+            allowProviderCommands: durable.origin === "interactive-native",
+            images: input.images,
+            attachments: input.attachments,
+            schema: input.schema,
+            mode: input.mode,
+            fastMode: input.fastMode,
+            subAgent: input.subAgent,
+            executionAgent:
+              preparation.executionAgent ?? input.executionAgent,
+            includeLocalSettings: input.includeLocalSettings,
+            promptSuggestions: input.promptSuggestions,
+            model: preparation.model ?? input.model,
+            effort: preparation.effort ?? input.reasoningEffort,
+          });
+          // Provider acceptance is the authoritative working edge. Record it
+          // before the durable dispatch bookkeeping completes so a newer
+          // idle activity snapshot cannot be overwritten by a late return
+          // from storage.
+          this.observedSessionActivity.set(durable.key, {
+            providerSessionId: durable.providerSessionId,
+            state: "working",
+          });
+        },
+        persistAmbiguousDispatch && session.origin === "interactive-native"
+          ? this.persistedPendingDispatch(input)
+          : undefined,
+      );
+      return result.session;
+    } finally {
+      const remaining = (this.providerDispatchCounts.get(provider) ?? 1) - 1;
+      if (remaining > 0) this.providerDispatchCounts.set(provider, remaining);
+      else this.providerDispatchCounts.delete(provider);
+    }
   }
 
   protected persistedPendingDispatch(
@@ -369,6 +391,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     this.openCodeRecoveryCandidates.clear();
     this.openCodeManualPromptClaims.clear();
     this.openCodeRecoveryDispatches.clear();
+    this.providerDispatchCounts.clear();
     this.providers.clear();
     this.providerConnections.clear();
     this.modelCatalogCache.clear();

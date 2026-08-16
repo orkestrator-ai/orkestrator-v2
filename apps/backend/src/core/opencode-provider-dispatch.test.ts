@@ -1,7 +1,14 @@
 import { describe, expect, mock, test } from "bun:test";
 import { OPEN_CODE_MESSAGE_HISTORY_LIMIT, OpenCodeMessageIdCoordinator } from "@orkestrator/protocol/opencode-message-id";
 import { AmbiguousPromptDispatchError, createNativeAgentProvider, PromptRejectedError, ProviderUnavailableError } from "./native-agent-provider.js";
-import { waitUntil, deferred, openCodeFake, openCodeProvider } from "./agent-provider-test-support.js";
+import { openCodeIncompleteTurnRequestId } from "./opencode-turn-recovery.js";
+import {
+  deferred,
+  expectedOpenCodeMessageId,
+  openCodeFake,
+  openCodeProvider,
+  waitUntil,
+} from "./agent-provider-test-support.js";
 
 describe("OpenCode provider dispatch", () => {
   test("rejects a disconnected model before creating a user-only turn", async () => {
@@ -196,6 +203,148 @@ describe("OpenCode provider dispatch", () => {
       } finally {
         await provider.dispose?.();
       }
+    }
+  });
+
+  test("proves an ambiguous dispatch only from its exact transcript marker", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      fake.setMessagesResponse({
+        data: [{
+          info: {
+            id: expectedOpenCodeMessageId("request-1"),
+            role: "user",
+          },
+          parts: [],
+        }],
+      });
+
+      await expect(provider.dispatchStatus?.("owned-session", "request-1"))
+        .resolves.toBe("dispatched");
+      await expect(provider.dispatchStatus?.("owned-session", "other-request"))
+        .resolves.toBe("unknown");
+      expect(fake.messageCalls).toEqual([
+        { sessionID: "owned-session", limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
+        { sessionID: "owned-session", limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
+      ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("keeps an incomplete-turn continuation and a manual prompt from settling each other", async () => {
+    // Both reach OpenCode as ordinary user turns on the same session, so the
+    // only thing separating them is the marker. If a continuation could vouch
+    // for a manual prompt, recovery would clear a composer prompt that never
+    // ran — and the request id is burned, so nothing would show the user.
+    const continuation = openCodeIncompleteTurnRequestId("msg_stalled_assistant");
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      fake.setMessagesResponse({
+        data: [{
+          info: { id: expectedOpenCodeMessageId(continuation), role: "user" },
+          parts: [],
+        }],
+      });
+      await expect(provider.dispatchStatus?.("owned-session", continuation))
+        .resolves.toBe("dispatched");
+      await expect(provider.dispatchStatus?.("owned-session", "manual-1"))
+        .resolves.toBe("unknown");
+
+      // And the reverse, so neither direction can settle the other.
+      fake.setMessagesResponse({
+        data: [{
+          info: { id: expectedOpenCodeMessageId("manual-1"), role: "user" },
+          parts: [],
+        }],
+      });
+      await expect(provider.dispatchStatus?.("owned-session", "manual-1"))
+        .resolves.toBe("dispatched");
+      await expect(provider.dispatchStatus?.("owned-session", continuation))
+        .resolves.toBe("unknown");
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("refuses a malformed request id without consulting OpenCode", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      // The marker parser is the same validation `send` performs. Rejecting here
+      // means a caller-owned id that could never have been embedded also never
+      // gets a chance to match provider history by accident.
+      await expect(provider.dispatchStatus?.("owned-session", "   "))
+        .resolves.toBe("unknown");
+      expect(fake.messageCalls).toEqual([]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test.each([
+    ["an SDK failure", async () => { throw new Error("offline"); }],
+    ["an error envelope", async () => ({ error: { message: "unavailable" } })],
+    ["a malformed history", async () => ({ data: { messages: [] } })],
+    [
+      "an oversized history",
+      async () => ({
+        data: Array.from(
+          { length: OPEN_CODE_MESSAGE_HISTORY_LIMIT + 1 },
+          () => null,
+        ),
+      }),
+    ],
+  ] as const)("returns unknown for %s", async (_label, messages) => {
+    const fake = openCodeFake();
+    fake.setMessagesHandler(messages);
+    const provider = openCodeProvider(fake);
+    try {
+      await expect(provider.dispatchStatus?.("owned-session", "request-1"))
+        .resolves.toBe("unknown");
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("does not acquire the message-id dispatch lock while probing history", async () => {
+    const coordinator = new OpenCodeMessageIdCoordinator();
+    const sendingFake = openCodeFake();
+    const probingFake = openCodeFake();
+    const gate = deferred();
+    sendingFake.setPromptGate(gate.promise);
+    probingFake.setMessagesResponse({
+      data: [{
+        info: {
+          id: expectedOpenCodeMessageId("probe-request"),
+          role: "user",
+        },
+        parts: [],
+      }],
+    });
+    const sendingProvider = openCodeProvider(sendingFake, 1, coordinator);
+    const probingProvider = openCodeProvider(probingFake, 1, coordinator);
+    try {
+      const send = sendingProvider.send("shared-session", "First", {
+        requestId: "sending-request",
+      });
+      await waitUntil(() => sendingFake.promptCalls.length === 1);
+
+      const probe = probingProvider.dispatchStatus?.(
+        "shared-session",
+        "probe-request",
+      );
+      await waitUntil(() => probingFake.messageCalls.length === 1, 100);
+      await expect(probe).resolves.toBe("dispatched");
+
+      gate.resolve();
+      await send;
+    } finally {
+      gate.resolve();
+      await sendingProvider.dispose?.();
+      await probingProvider.dispose?.();
     }
   });
 

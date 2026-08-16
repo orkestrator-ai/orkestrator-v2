@@ -106,6 +106,15 @@ export type NativeAgentServiceLayerTypes = [
 export abstract class NativeAgentServiceBase {
   protected readonly providers = new Map<string, NativeAgentRuntimeProvider>();
   /**
+   * Provider calls inside the durable at-most-once dispatch window. Deletion
+   * may now record its intent while one is running, so the background cache
+   * pruner must not dispose the provider until the send has settled.
+   */
+  protected readonly providerDispatchCounts = new Map<
+    NativeAgentRuntimeProvider,
+    number
+  >();
+  /**
    * Identity of the live bridge generation behind each production provider.
    * Ports and bearer credentials both change when a bridge is replaced.
    */
@@ -430,22 +439,32 @@ export abstract class NativeAgentServiceBase {
         existing.providerSessionId,
       );
     }
-    const session = await this.storage.runWithLiveEnvironment(
-      input.environmentId,
-      "Native agent session",
-      () =>
-        this.storage.getOrCreateNativeAgentSession(
-          {
-            key,
-            environmentId: input.environmentId,
-            agent: input.agent,
-            logicalSessionKey: input.logicalSessionKey,
-            origin: input.origin,
-            interactionPolicy: input.interactionPolicy,
-            controls: controlsFromSessionInput(input),
-          },
-          () => this.createProviderSession(provider, input),
-        ),
+    /*
+     * Create the provider session under the native-agent lock alone.
+     *
+     * `getOrCreateNativeAgentSession` deliberately holds *that* lock across the
+     * external create, so two backend processes cannot mint two real provider
+     * sessions for one logical key. It does not need the global environments
+     * lock as well: it re-asserts the environment both before and after the
+     * create, which is a strictly stronger fence than the single up-front check
+     * `runWithLiveEnvironment` performed.
+     *
+     * Holding the environments lock here was the same contention bug the
+     * dispatch path fixed, on a slower path: a cold agent start runs up to four
+     * session-create attempts with backoff, and every second of that stalled
+     * activity, unread and deletion bookkeeping for *every* environment.
+     */
+    const session = await this.storage.getOrCreateNativeAgentSession(
+      {
+        key,
+        environmentId: input.environmentId,
+        agent: input.agent,
+        logicalSessionKey: input.logicalSessionKey,
+        origin: input.origin,
+        interactionPolicy: input.interactionPolicy,
+        controls: controlsFromSessionInput(input),
+      },
+      () => this.createProviderSession(provider, input),
     );
     void this.reconcileAgentInteractions().catch(() => undefined);
     return session;

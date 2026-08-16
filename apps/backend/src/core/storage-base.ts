@@ -708,6 +708,28 @@ export abstract class StorageBase {
     return next;
   }
 
+  /**
+   * Serializes every native-agent-sessions.json read-modify-write in this
+   * process and across backend processes sharing the same data directory.
+   *
+   * The acquire timeout is sized for the critical section rather than for a
+   * JSON write, like `withProjectCreationLock` above. This lock is deliberately
+   * held across provider I/O: a prompt dispatch keeps it until the provider has
+   * acknowledged the request id, and `getOrCreateNativeAgentSession` keeps it
+   * across the external session create so two processes cannot mint two
+   * provider sessions for one logical key. Those bound at ~90s (the bridge
+   * prompt/attach budget) and ~122s (four 30s ACP create attempts plus backoff)
+   * respectively, so the 20s default would fail a second process that is
+   * waiting on a perfectly healthy holder — and the caller most exposed to that
+   * is environment deletion, whose session cleanup is best-effort and would
+   * therefore leave the deleted environment's record, provider session id and
+   * pending prompt behind.
+   *
+   * This only extends patience with a *live* holder. A holder that dies stops
+   * heartbeating, so the unchanged 15s stale threshold still reclaims the lock.
+   */
+  protected static readonly NATIVE_AGENT_SESSION_LOCK_TIMEOUT_MS = 180_000;
+
   protected enqueueNativeAgentSessionMutation<T>(
     operation: () => Promise<T>,
   ): Promise<T> {
@@ -715,6 +737,9 @@ export abstract class StorageBase {
       const release = await this.acquireMutationLock(
         this.nativeAgentSessionsFile(),
         "native agent session storage",
+        {
+          acquireTimeoutMs: StorageBase.NATIVE_AGENT_SESSION_LOCK_TIMEOUT_MS,
+        },
       );
       try {
         return await operation();

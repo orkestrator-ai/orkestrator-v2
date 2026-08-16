@@ -40,6 +40,16 @@ import type { Environment } from "./models.js";
 
 
 import {
+expectedOpenCodeMessageId,
+openCodeFake,
+openCodeProvider
+} from "./agent-provider-test-support.js";
+
+
+import { openCodeIncompleteTurnRequestId } from "./opencode-turn-recovery.js";
+
+
+import {
 NativeAgentService,
 nativeAgentSessionStorageKey,
 type AgentInteractionObservation,
@@ -524,6 +534,109 @@ describe("NativeAgentService", () => {
       expect(session?.dispatchedRequestIds).toContain("lost-ack");
       await expect(service.getProjection(base)).resolves.not.toHaveProperty(
         "recoverableDispatch",
+      );
+    });
+  });
+
+
+
+  describe("OpenCode ambiguous dispatch", () => {
+    const base = {
+      environmentId: "env-1",
+      agent: "opencode" as const,
+      logicalSessionKey: "env-env-1:tab-1",
+      prompt: "Do the work",
+    };
+    const key = nativeAgentSessionStorageKey(
+      base.environmentId,
+      base.agent,
+      base.logicalSessionKey,
+    );
+
+    /**
+     * Drives the real `OpenCodeProvider` rather than a stub, because the
+     * question this settles is whether an answer computed from OpenCode's own
+     * transcript moves the durable record — not whether the service reacts to a
+     * hand-written `"dispatched"`.
+     */
+    async function withOpenCodeService(
+      prefix: string,
+      transcript: () => unknown[],
+      run: (context: {
+        storage: StorageService;
+        service: NativeAgentService;
+      }) => Promise<void>,
+    ): Promise<void> {
+      const fake = openCodeFake();
+      // The prompt reached OpenCode; only the acknowledgement was lost. That is
+      // exactly the shape that parks a recoverable dispatch.
+      fake.setPromptError(new Error("socket hang up"));
+      fake.setMessagesHandler(async () => ({
+        data: fake.promptCalls.length > 0 ? transcript() : [],
+      }));
+      const provider = openCodeProvider(fake);
+      try {
+        await withService({ prefix, provider: async () => provider }, run);
+      } finally {
+        await provider.dispose?.();
+      }
+    }
+
+    function userTurn(requestId: string): Record<string, unknown> {
+      return {
+        info: { id: expectedOpenCodeMessageId(requestId), role: "user" },
+        parts: [],
+      };
+    }
+
+    test("settles a parked dispatch from the transcript OpenCode kept", async () => {
+      await withOpenCodeService(
+        "orkestrator-native-opencode-settled-",
+        () => [userTurn("lost-ack")],
+        async ({ service, storage }) => {
+          await expect(service.dispatchIntent({ ...base, requestId: "lost-ack" }))
+            .resolves.toEqual({ outcome: "accepted", requestId: "lost-ack" });
+
+          const session = await storage.getNativeAgentSession(key);
+          expect(session?.pendingDispatch).toBeUndefined();
+          // Burning the id is the half that stops a retry running the turn twice.
+          expect(session?.dispatchedRequestIds).toContain("lost-ack");
+          await expect(service.getProjection(base)).resolves.not.toHaveProperty(
+            "recoverableDispatch",
+          );
+        },
+      );
+    });
+
+    test("parks a dispatch the transcript cannot vouch for", async () => {
+      await withOpenCodeService(
+        "orkestrator-native-opencode-parked-",
+        () => [],
+        async ({ service, storage }) => {
+          await expect(service.dispatchIntent({ ...base, requestId: "no-proof" }))
+            .resolves.toMatchObject({ outcome: "unknown", requestId: "no-proof" });
+          expect((await storage.getNativeAgentSession(key))?.pendingDispatch)
+            .toMatchObject({ requestId: "no-proof" });
+        },
+      );
+    });
+
+    test("does not settle a manual prompt from an incomplete-turn continuation", async () => {
+      // Recovery continues a stalled turn under an id derived from the assistant
+      // message, on the same session the composer dispatches into. Settling one
+      // from the other's marker would clear a prompt that never ran, and the
+      // burned id means the user would never be told.
+      const continuation = openCodeIncompleteTurnRequestId("msg_stalled_assistant");
+      await withOpenCodeService(
+        "orkestrator-native-opencode-crosstalk-",
+        () => [userTurn(continuation)],
+        async ({ service, storage }) => {
+          await expect(service.dispatchIntent({ ...base, requestId: "manual-1" }))
+            .resolves.toMatchObject({ outcome: "unknown", requestId: "manual-1" });
+          const session = await storage.getNativeAgentSession(key);
+          expect(session?.pendingDispatch).toMatchObject({ requestId: "manual-1" });
+          expect(session?.dispatchedRequestIds ?? []).not.toContain("manual-1");
+        },
       );
     });
   });

@@ -37,6 +37,7 @@ import {
   PromptRejectedError,
   type ProviderActivityState,
   type ProviderCreateSessionOptions,
+  type ProviderDispatchStatus,
   type ProviderInteractiveSnapshot,
   type ProviderInteractionObservationEvent,
   type ProviderSendOptions,
@@ -736,6 +737,32 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       }
       this.messageIds.markAccepted(scope, options.requestId);
     });
+  }
+
+  async dispatchStatus(
+    sessionId: string,
+    requestId: string,
+  ): Promise<ProviderDispatchStatus> {
+    try {
+      // Fail closed before asking OpenCode. The marker parser is the same
+      // validation used by send(), so a malformed caller-owned id can never
+      // accidentally match provider history.
+      openCodeRequestMarker(requestId);
+      const response = await this.client.session.messages(
+        { sessionID: sessionId, limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
+        this.requestOptions(),
+      );
+      assertSdkResponse(response, "OpenCode dispatch transcript read");
+      const history = boundedOpenCodeMessageHistory(response.data);
+      return findOpenCodeMessageId(history, requestId)
+        ? "dispatched"
+        : "unknown";
+    } catch {
+      // A failed, malformed, or oversized transcript read is not evidence that
+      // the prompt did or did not run. Only the exact durable marker above is
+      // allowed to clear a pending dispatch.
+      return "unknown";
+    }
   }
 
   async status(sessionId: string): Promise<ProviderStatus> {

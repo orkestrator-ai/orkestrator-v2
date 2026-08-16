@@ -199,7 +199,7 @@ describe("container runtime environment wiring", () => {
   });
 
   test("Cursor and Grok host state mounts do not replace their writable container homes", () => {
-    const backend = read("apps/backend/src/core/commands.ts");
+    const backend = read("apps/backend/src/core/commands-containers.ts");
 
     expect(backend).toContain('path.join(cursorHome, ".cursor"), "/cursor-config"');
     expect(backend).toContain('path.join(grokHome, ".grok"), "/grok-home"');
@@ -1722,7 +1722,12 @@ eval "$opencode_setup"
   });
 
   test("container native launch paths source the captured runtime environment", () => {
-    const backend = read("apps/backend/src/core/commands.ts");
+    const backend = [
+      read("apps/backend/src/core/commands-registry-servers.ts"),
+      read("apps/backend/src/core/commands-servers.ts"),
+      read("apps/backend/src/core/commands-runtime-state.ts"),
+      read("apps/backend/src/core/commands-containers.ts"),
+    ].join("\n");
 
     // Some launch paths inline the start script, others delegate to a shared
     // `*_START_COMMAND` constant. Resolve the constant body so the invariant is
@@ -1741,13 +1746,13 @@ eval "$opencode_setup"
     // `startContainer*Server` helper, so the script lives there rather than in
     // the register block. Fold the helper body in the same way.
     function startHelperBody(name: string): string {
-      const marker = `async function ${name}(`;
+      const marker = `function ${name}(`;
       const start = backend.indexOf(marker);
       expect(start).toBeGreaterThan(0);
       // Helpers are top-level, so the next top-level declaration ends the body.
       const nextDeclaration = backend
         .slice(start + 1)
-        .search(/\n(?:async )?function \w+\(|\nconst \w+ = /);
+        .search(/\n(?:export )?(?:async )?function \w+\(|\n(?:export )?const \w+ = /);
       return nextDeclaration === -1
         ? backend.slice(start)
         : backend.slice(start, start + 1 + nextDeclaration);

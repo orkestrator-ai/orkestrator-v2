@@ -18,7 +18,7 @@ describe("mobile responsive layout contracts", () => {
     ],
     ["apps/web/src/components/chat/VirtualizedMessageList.tsx", "min-w-0"],
     ["apps/web/src/components/chat/NativeComposeBar.tsx", "overflow-x-auto"],
-    ["apps/web/src/components/claude/ClaudeTmuxChatTab.tsx", "overflow-x-auto", "sm:w-[min(calc(100%_-_2rem),56rem)]"],
+    ["apps/web/src/components/claude/ClaudeTmuxChatTab.parts.tsx", "overflow-x-auto", "sm:w-[min(calc(100%_-_2rem),56rem)]"],
     ["apps/web/src/components/docker/DockerStatsDialog.tsx", "grid-cols-1 gap-3 sm:grid-cols-3"],
     [
       "apps/web/src/components/environments/CreateEnvironmentDialog.tsx",
@@ -30,7 +30,7 @@ describe("mobile responsive layout contracts", () => {
     ],
     ["apps/web/src/components/environments/EnvironmentSettingsDialog.tsx", "grid-cols-2 gap-2 sm:grid-cols-4"],
     ["apps/web/src/components/kanban/KanbanBoard.tsx", "snap-x snap-mandatory", "sm:w-[320px]"],
-    ["apps/web/src/components/layout/ActionBar.tsx", "data-mobile-toolbar", "grid-cols-2", "md:h-12"],
+    ["apps/web/src/components/layout/ActionBar.view.tsx", "data-mobile-toolbar", "grid-cols-2", "md:h-12"],
     ["apps/web/src/components/pane-layout/DraggableTab.tsx", "md:opacity-0", "h-7 w-7"],
     ["apps/web/src/components/pane-layout/DraggableTabBar.tsx", "overflow-x-auto", "md:min-h-[32px]"],
     ["apps/web/src/components/ui/alert-dialog.tsx", "max-h-[calc(100dvh-1rem)]", "overflow-y-auto"],

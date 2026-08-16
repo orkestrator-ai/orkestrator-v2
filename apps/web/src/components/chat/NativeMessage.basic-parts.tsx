@@ -2,6 +2,7 @@ import {
   useCallback,
   useMemo,
 } from "react";
+import { countTextLines, splitTextLines } from "@orkestrator/protocol/tool-diff";
 import {
   Brain,
   ChevronRight,
@@ -516,11 +517,10 @@ function generateDiffFromBeforeAfter(
     content: string;
   }> = [];
 
-  // An empty file has zero lines. String#split would otherwise turn it into a
-  // single empty line and render a synthetic `-` or `+` that disagrees with the
-  // zero-line statistics shown in the collapsed row.
-  const contentLines = (content: string): string[] =>
-    content.length === 0 ? [] : content.split("\n");
+  // Logical lines, not String#split: a trailing newline terminates the last
+  // line rather than creating an empty `+`/`-` row that disagrees with the
+  // collapsed badge. An empty file is zero lines, not one empty line.
+  const contentLines = (content: string): string[] => splitTextLines(content);
 
   // If we have both before and after, show the diff
   if (before !== undefined && after !== undefined) {
@@ -566,10 +566,8 @@ function countDiffStats(
 
   // Try to calculate from before/after content
   if (metadata?.before !== undefined || metadata?.after !== undefined) {
-    const beforeLines = metadata.before
-      ? metadata.before.split("\n").length
-      : 0;
-    const afterLines = metadata.after ? metadata.after.split("\n").length : 0;
+    const beforeLines = countTextLines(metadata.before);
+    const afterLines = countTextLines(metadata.after);
     return {
       additions: afterLines,
       deletions: beforeLines,
@@ -820,4 +818,3 @@ export function EditToolPart({
     </Collapsible>
   );
 }
-

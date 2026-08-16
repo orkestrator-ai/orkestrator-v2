@@ -1675,7 +1675,7 @@ describe("sendPrompt", () => {
     ]);
   });
 
-  test("builds Edit and Write diffs and ignores malformed tool identities", async () => {
+  test("builds compact stats for Claude file-edit tools and ignores malformed identities", async () => {
     const { session } = await runPromptWithMessages([
       {
         type: "assistant",
@@ -1695,6 +1695,24 @@ describe("sendPrompt", () => {
               name: "Write",
               input: { file_path: "b.ts", content: "new file" },
             },
+            {
+              type: "tool_use",
+              id: "multi-1",
+              name: "MultiEdit",
+              input: {
+                file_path: "c.ts",
+                edits: [
+                  { old_string: "one", new_string: "two\nthree" },
+                  { old_string: "four\n", new_string: "five" },
+                ],
+              },
+            },
+            {
+              type: "tool_use",
+              id: "notebook-1",
+              name: "NotebookEdit",
+              input: { notebook_path: "notes.ipynb", new_source: "a\nb\n" },
+            },
             { type: "tool_use", id: 42, name: "Bash", input: {} },
             { type: "tool_use", id: "", name: "Bash", input: {} },
           ],
@@ -1706,6 +1724,8 @@ describe("sendPrompt", () => {
           content: [
             { type: "tool_result", tool_use_id: "edit-1", content: "ok" },
             { type: "tool_result", tool_use_id: "write-1", content: [{ type: "text", text: "done" }] },
+            { type: "tool_result", tool_use_id: "multi-1", content: "ok" },
+            { type: "tool_result", tool_use_id: "notebook-1", content: "ok" },
             { type: "tool_result", tool_use_id: 42, content: "ignored" },
           ],
         },
@@ -1716,17 +1736,136 @@ describe("sendPrompt", () => {
     const tools = session.messages
       .find((message) => message.role === "assistant")
       ?.parts.filter((part) => part.type === "tool-invocation") ?? [];
-    expect(tools).toHaveLength(2);
+    expect(tools).toHaveLength(4);
     expect(tools[0]).toMatchObject({
       toolUseId: "edit-1",
       toolState: "success",
-      toolDiff: { filePath: "a.ts", before: "before", after: "after" },
+      toolDiff: {
+        filePath: "a.ts",
+        before: "before",
+        after: "after",
+        additions: 1,
+        deletions: 1,
+      },
     });
     expect(tools[1]).toMatchObject({
       toolUseId: "write-1",
       toolState: "success",
-      toolDiff: { filePath: "b.ts", before: "", after: "new file" },
+      toolDiff: {
+        filePath: "b.ts",
+        before: "",
+        after: "new file",
+        additions: 1,
+        deletions: 0,
+      },
     });
+    expect(tools[2]).toMatchObject({
+      toolUseId: "multi-1",
+      toolState: "success",
+      toolDiff: {
+        filePath: "c.ts",
+        before: "one\nfour\n",
+        after: "two\nthree\nfive",
+        additions: 3,
+        deletions: 2,
+      },
+    });
+    expect(tools[3]).toMatchObject({
+      toolUseId: "notebook-1",
+      toolState: "success",
+      toolDiff: {
+        filePath: "notes.ipynb",
+        after: "a\nb\n",
+        additions: 2,
+        deletions: 0,
+      },
+    });
+  });
+
+  test("does not invent lines for a multiedit chunk that ends in a newline", async () => {
+    /*
+     * The synthetic before/after sides are a concatenation of the individual
+     * edits. A chunk that already ends in a newline supplies its own separator;
+     * adding another puts a blank line into the rendered diff that the file
+     * never had and charges it to the badge.
+     */
+    const { session } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        uuid: "multi-newline-message",
+        message: {
+          id: "multi-newline-message",
+          content: [
+            {
+              type: "tool_use",
+              id: "multi-nl",
+              name: "MultiEdit",
+              input: {
+                file_path: "c.ts",
+                edits: [
+                  { old_string: "four\n", new_string: "x\n" },
+                  { old_string: "one", new_string: "y" },
+                ],
+              },
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          content: [{ type: "tool_result", tool_use_id: "multi-nl", content: "ok" }],
+        },
+      },
+      { type: "result", subtype: "success", result: "done" },
+    ]);
+
+    const tool = session.messages
+      .find((message) => message.role === "assistant")
+      ?.parts.find((part) => part.type === "tool-invocation");
+    expect(tool?.toolDiff).toMatchObject({
+      filePath: "c.ts",
+      before: "four\none",
+      after: "x\ny",
+      additions: 2,
+      deletions: 2,
+    });
+  });
+
+  test("leaves a delete-mode notebook edit without counts it cannot measure", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        uuid: "notebook-delete-message",
+        message: {
+          id: "notebook-delete-message",
+          content: [
+            {
+              type: "tool_use",
+              id: "notebook-del",
+              name: "NotebookEdit",
+              input: { notebook_path: "notes.ipynb", edit_mode: "delete" },
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          content: [{ type: "tool_result", tool_use_id: "notebook-del", content: "ok" }],
+        },
+      },
+      { type: "result", subtype: "success", result: "done" },
+    ]);
+
+    const tool = session.messages
+      .find((message) => message.role === "assistant")
+      ?.parts.find((part) => part.type === "tool-invocation");
+    // The path still identifies the file; reporting +0/-0 would state a count
+    // nothing measured, and the badge is hidden at zero either way.
+    expect(tool?.toolDiff?.filePath).toBe("notes.ipynb");
+    expect(tool?.toolDiff?.additions).toBeUndefined();
+    expect(tool?.toolDiff?.deletions).toBeUndefined();
   });
 
   test("stamps each task tool call with the resulting task list state", async () => {

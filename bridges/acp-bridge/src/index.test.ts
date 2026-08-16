@@ -1245,6 +1245,214 @@ describe("ACP bridge", () => {
     expect(late.contextUsage?.durationMs).toBe(settledDurationMs);
   });
 
+  test("reads ACP usage_update occupancy and PromptResponse.usage without Grok _meta", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const first = await spawnBridge({ stateDirectory });
+    const created = await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ clientSessionKey: "env-usage-acp:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    type UsageSnapshot = {
+      status: string;
+      contextUsage?: Record<string, unknown>;
+    };
+    const readSession = async (base: string, headers: Record<string, string>) =>
+      await nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as UsageSnapshot;
+
+    expect((await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ prompt: "USAGE_ACP: report occupancy over ACP" }),
+    })).status).toBe(202);
+
+    const session = await waitFor(
+      () => readSession(first.base, first.headers),
+      (value) => value.status === "idle" && value.contextUsage !== undefined,
+    );
+    expect(session.contextUsage).toMatchObject({
+      usedTokens: 15_675,
+      maximumTokens: 200_000,
+      inputTokens: 10_000,
+      outputTokens: 2_000,
+      reasoningTokens: 300,
+      cacheReadTokens: 5_000,
+      cacheWriteTokens: 45,
+      costUsd: 0.042,
+      source: "provider",
+    });
+    expect(session.contextUsage?.percentage).toBeCloseTo(7.8375);
+
+    first.child.kill("SIGTERM");
+    await Bun.sleep(200);
+    const second = await spawnBridge({ stateDirectory });
+    const restored = await readSession(second.base, second.headers);
+    expect(restored.contextUsage).toMatchObject({
+      usedTokens: 15_675,
+      maximumTokens: 200_000,
+      inputTokens: 10_000,
+      outputTokens: 2_000,
+      reasoningTokens: 300,
+      cacheReadTokens: 5_000,
+      cacheWriteTokens: 45,
+      costUsd: 0.042,
+      source: "provider",
+    });
+    expect(restored.contextUsage?.percentage).toBeCloseTo(7.8375);
+  });
+
+  test("reads ACP v2 idle state_update.usage without PromptResponse.usage", async () => {
+    const bridge = await spawnBridge({ stateDirectory: await temporaryDirectory() });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-usage-state:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    const readSession = async () =>
+      await nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as {
+          status: string;
+          contextUsage?: Record<string, unknown>;
+        };
+
+    expect((await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "USAGE_STATE: complete over idle usage" }),
+    })).status).toBe(202);
+
+    const session = await waitFor(
+      readSession,
+      (value) => value.status === "idle" && value.contextUsage !== undefined,
+    );
+    expect(session.contextUsage).toMatchObject({
+      usedTokens: 8_000,
+      inputTokens: 7_000,
+      outputTokens: 1_000,
+      reasoningTokens: 50,
+      cacheReadTokens: 4_000,
+      // Only the mid-turn `running` frame reported the cache write. The idle
+      // frame that closes the turn omits it, so this value proves the two
+      // reports merged instead of the later one replacing the earlier.
+      cacheWriteTokens: 20,
+      source: "provider",
+    });
+    expect(session.contextUsage).not.toHaveProperty("maximumTokens");
+    expect(session.contextUsage).not.toHaveProperty("percentage");
+    expect(session.contextUsage).not.toHaveProperty("costUsd");
+  });
+
+  test("reads occupancy from a usage_update that uses type instead of sessionUpdate", async () => {
+    const bridge = await spawnBridge({ stateDirectory: await temporaryDirectory() });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-usage-typed:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "USAGE_TYPED: report occupancy under type" }),
+    })).status).toBe(202);
+
+    // The bridge routes an update on `sessionUpdate` or `type`; the parser has
+    // to read the discriminator the same way, or a `type`-spelled occupancy
+    // report reaches the usage path and is then silently dropped as a generic
+    // `used`/`size` pair.
+    const session = await waitFor(
+      async () => nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          contextUsage?: Record<string, unknown>;
+        }>,
+      (value) => value.status === "idle" && value.contextUsage !== undefined,
+    );
+    expect(session.contextUsage).toMatchObject({
+      usedTokens: 1_500,
+      maximumTokens: 30_000,
+      source: "provider",
+    });
+    expect(session.contextUsage?.percentage).toBeCloseTo(5);
+  });
+
+  test("hydrates usage replayed by session/load when the bridge holds no snapshot", async () => {
+    const bridge = await spawnBridge({ env: { FAKE_ACP_REPLAY_USAGE: "1" } });
+    const listed = await nativeFetch(`${bridge.base}/session/list`, { headers: bridge.headers })
+      .then((response) => response.json()) as { sessions: Array<{ id: string; title?: string }> };
+    const external = listed.sessions.find((session) => session.title === "Previous ACP work");
+
+    const resumed = await nativeFetch(`${bridge.base}/session/resume`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ sessionId: external!.id }),
+    });
+    expect(resumed.status).toBe(201);
+    const session = await resumed.json() as {
+      id: string;
+      contextUsage?: Record<string, unknown>;
+    };
+
+    // This session has no accounting of its own: the load is the only report
+    // the panel will ever see for the turn that produced it.
+    expect(session.contextUsage).toMatchObject({
+      usedTokens: 4_321,
+      inputTokens: 4_000,
+      outputTokens: 321,
+      source: "provider",
+    });
+  });
+
+  test("does not re-latch usage replayed into a session that already counted it", async () => {
+    const directory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "reconnect-usage-replay.log");
+    const bridge = await spawnBridge({ env: {
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+      FAKE_ACP_REPLAY_USAGE: "1",
+    } });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+    }).then((response) => response.json()) as { id: string };
+    const readSession = async () =>
+      nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          contextUsage?: Record<string, unknown>;
+        }>;
+
+    await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "USAGE_STATE: count this turn once" }),
+    });
+    const before = await waitFor(
+      readSession,
+      (value) => value.status === "idle" && value.contextUsage !== undefined,
+    );
+    expect(before.contextUsage).toMatchObject({ usedTokens: 8_000 });
+
+    const firstPid = Number(/^start:(\d+)$/m.exec(await fs.readFile(lifecycleFile, "utf8"))?.[1]);
+    process.kill(firstPid, "SIGKILL");
+    await waitFor(readSession, (value) => value.status === "error");
+
+    const resumed = await nativeFetch(`${bridge.base}/session/resume`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ sessionId: created.id }),
+    });
+    expect(resumed.status).toBe(201);
+
+    // The replayed report describes the same turn this session already counted.
+    // Latching it would swap in the replay's numbers and stamp `updatedAt` with
+    // the reconnect, dating a measurement to a moment no turn ran.
+    const after = await readSession();
+    expect(after.contextUsage).toEqual(before.contextUsage);
+  });
+
   test("normalizes ACP tool calls, upserts updates, and rehydrates them after restart", async () => {
     const stateDirectory = await temporaryDirectory();
     const first = await spawnBridge({ stateDirectory });
@@ -1385,6 +1593,452 @@ describe("ACP bridge", () => {
     expect(await nativeFetch(`${restarted.base}/session/${created.id}/activity`, {
       headers: restarted.headers,
     }).then((response) => response.json())).toEqual({ activity: "idle" });
+  });
+
+  test("applies Cursor's cursor/task notification onto the matching Task launch", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASK: summarize" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.messages.some((message) =>
+        message.parts.some((part) =>
+          part.toolUseId === "cursor-task-1"
+          && (part.toolArgs as { description?: string } | undefined)?.description
+            === "Summarize two docs"
+        )
+      ),
+    );
+    expect(settled.messages.flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "cursor-task-1")).toMatchObject({
+      toolName: "task",
+      toolState: "success",
+      agentState: "finished",
+      toolArgs: {
+        description: "Summarize two docs",
+        prompt: "Read docs/upgrade-agents.md and docs/flaky-tests.md. Return one line each.",
+        subagent_type: "explore",
+        model: "composer-2.5",
+        agentId: "bc-abc123",
+        durationMs: 1_240,
+      },
+    });
+  });
+
+  test("acknowledges a cursor/task request instead of refusing it", async () => {
+    const directory = await temporaryDirectory();
+    const responseFile = resolve(directory, "cursor-task-response.log");
+    const { base, headers } = await spawnBridge({
+      env: { FAKE_ACP_CURSOR_TASK_REQUEST_FILE: responseFile },
+    });
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task-request:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASKREQUEST: summarize" }),
+    })).status).toBe(202);
+
+    const response = await waitFor(
+      () => fs.readFile(responseFile, "utf8")
+        .then((value) => JSON.parse(value.trim()))
+        .catch(() => null) as Promise<Record<string, unknown> | null>,
+      Boolean,
+    );
+    expect(response).toMatchObject({
+      id: 903,
+      result: {},
+    });
+    expect(response).not.toHaveProperty("error");
+    expect(response).not.toHaveProperty("result.outcome");
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.messages.some((message) =>
+        message.parts.some((part) =>
+          (part.toolArgs as { description?: string } | undefined)?.description
+            === "Summarize two docs"
+        )
+      ),
+    );
+    expect(settled.messages.flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "cursor-task-1")).toMatchObject({
+      agentState: "finished",
+      toolArgs: { subagent_type: "explore" },
+    });
+  });
+
+  test("keeps cursor/task launch args after a later generic Task rawInput patch", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task-wipe:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASKWIPE: summarize" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    const parts = settled.messages.flatMap((message) => message.parts)
+      .filter((part) => part.toolUseId === "cursor-task-wipe");
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({
+      toolName: "task",
+      toolState: "success",
+      toolArgs: {
+        description: "Summarize two docs",
+        prompt: "Read docs/upgrade-agents.md and docs/flaky-tests.md.",
+        subagent_type: "explore",
+        model: "composer-2.5",
+        agentId: "bc-wipe",
+        durationMs: 1_240,
+      },
+    });
+  });
+
+  test("creates a single Task part when cursor/task arrives before the tool_call", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task-first:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASKFIRST: explore" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    const parts = settled.messages.flatMap((message) => message.parts)
+      .filter((part) => part.toolUseId === "cursor-task-first");
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({
+      toolName: "task",
+      toolTitle: "Task: Subagent task",
+      agentState: "active",
+      toolArgs: {
+        description: "Explore the repo",
+        prompt: "List the files that own native chat rendering.",
+        subagent_type: "explore",
+        model: "composer-2.5",
+        agentId: "bc-first",
+      },
+    });
+  });
+
+  test("trims oldest parts when a synthetic cursor/task would exceed the per-message cap", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task-cap:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASKCAP: overflow" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    expect(settled.error).toBeUndefined();
+    expect(settled.messages[1]?.parts).toHaveLength(512);
+    expect(settled.messages[1]?.parts[0]).toMatchObject({
+      type: "text",
+      content: expect.stringContaining("Earlier steps in this response were dropped"),
+    });
+    expect(settled.messages[1]?.parts.at(-1)).toMatchObject({
+      toolUseId: "cursor-task-cap",
+      toolName: "task",
+      toolArgs: { description: "Overflow task", subagent_type: "explore" },
+    });
+    expect(settled.messages[1]?.parts.filter((part) => part.toolUseId === "cursor-task-cap"))
+      .toHaveLength(1);
+  });
+
+  test("charges a cursor/task prompt so a near-cap transcript stays inside the byte budget", async () => {
+    const maximumTranscriptBytes = 1024 * 1024;
+    const { base, headers } = await spawnBridge({
+      env: { ACP_MAX_TRANSCRIPT_BYTES: String(maximumTranscriptBytes) },
+    });
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task-charge:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASKCHARGE: fill then prompt" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    expect(settled.error).toBeUndefined();
+    expect(Buffer.byteLength(JSON.stringify(settled.messages)))
+      .toBeLessThanOrEqual(maximumTranscriptBytes);
+    const charged = settled.messages.flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "cursor-task-charge");
+    expect(charged).toMatchObject({
+      toolName: "task",
+      toolArgs: { description: "Charge the prompt", subagent_type: "explore" },
+    });
+    expect((charged?.toolArgs as { prompt?: string } | undefined)?.prompt?.length)
+      .toBe(64 * 1024);
+  });
+
+  test("only accepts a real cursor/task duration, never a coerced null or blank", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task-durations:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASKDURATIONS: coerce" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    const byId = new Map(settled.messages.flatMap((message) => message.parts)
+      .map((part) => [part.toolUseId as string, part]));
+
+    // Reportable durations settle the sub-agent and survive into the args.
+    expect(byId.get("duration-zero")).toMatchObject({
+      toolState: "success",
+      agentState: "finished",
+      toolArgs: { durationMs: 0 },
+    });
+    expect(byId.get("duration-string")).toMatchObject({
+      toolState: "success",
+      agentState: "finished",
+      toolArgs: { durationMs: 1_500 },
+    });
+    expect(byId.get("duration-float")).toMatchObject({
+      toolState: "success",
+      toolArgs: { durationMs: 12 },
+    });
+
+    // Everything else means "no duration reported". `Number()` would turn
+    // null/true/""/[] into 0 and finish a sub-agent that is still running, so
+    // each must leave the part unsettled and carry no `durationMs` at all.
+    for (const toolUseId of [
+      "duration-negative",
+      "duration-null",
+      "duration-boolean",
+      "duration-empty",
+      "duration-array",
+      "duration-text",
+    ]) {
+      const part = byId.get(toolUseId);
+      expect({ toolUseId, part: part !== undefined }).toEqual({ toolUseId, part: true });
+      expect({ toolUseId, durationMs: (part?.toolArgs as { durationMs?: unknown })?.durationMs })
+        .toEqual({ toolUseId, durationMs: undefined });
+      // Never reported complete, so the turn's own reconciliation settles it.
+      expect({ toolUseId, agentState: part?.agentState })
+        .toEqual({ toolUseId, agentState: "failed" });
+    }
+  });
+
+  test("keeps a null-duration cursor/task running and still reports it as activity", async () => {
+    const directory = await temporaryDirectory();
+    const holdTurnFile = resolve(directory, "release-turn");
+    const { base, headers } = await spawnBridge({
+      env: { FAKE_ACP_HOLD_TURN_FILE: holdTurnFile },
+    });
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task-held:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASKHELD: run" }),
+    })).status).toBe(202);
+
+    // Observed while the turn is genuinely still open, not by racing its end.
+    const running = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "running"
+        && value.messages.flatMap((message) => message.parts)
+          .some((part) => part.toolUseId === "cursor-task-held"),
+    );
+    const live = running.messages.flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "cursor-task-held");
+    expect(live).toMatchObject({
+      toolName: "task",
+      toolState: "pending",
+      agentState: "active",
+      toolArgs: { description: "Held task", subagent_type: "explore" },
+    });
+    expect((live?.toolArgs as { durationMs?: unknown }).durationMs).toBeUndefined();
+    expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
+      .then((response) => response.json())).toEqual({ activity: "working" });
+
+    await fs.writeFile(holdTurnFile, "");
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    expect(settled.messages.flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "cursor-task-held")).toMatchObject({
+      toolState: "success",
+      agentState: "finished",
+      toolArgs: { description: "Held task", durationMs: 2_400 },
+    });
+    expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
+      .then((response) => response.json())).toEqual({ activity: "idle" });
+  });
+
+  test("drops a cursor/task whose launch part was already trimmed away", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task-trimmed:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASKTRIMMED: overflow" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    expect(settled.error).toBeUndefined();
+    expect(settled.messages[1]?.parts).toHaveLength(512);
+    expect(settled.messages[1]?.parts[0]).toMatchObject({
+      type: "text",
+      content: expect.stringContaining("Earlier steps in this response were dropped"),
+    });
+    // The launch was evicted on purpose. Rebuilding it here would append the
+    // task *after* the notice saying those steps went, detached from the work
+    // it launched, so the late metadata is dropped instead.
+    expect(settled.messages.flatMap((message) => message.parts)
+      .filter((part) => part.toolUseId === "cursor-task-trimmed")).toHaveLength(0);
+    expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
+      .then((response) => response.json())).toEqual({ activity: "idle" });
+  });
+
+  test("carries launch arguments across a rawInput patch that drops them", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-preserve-non-task:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORPRESERVENONTASK: read" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    // The carry-over exists for Cursor's Task launches, whose status patches
+    // arrive as a bare `{ _toolName: "task" }`, but it is keyed on the argument
+    // names rather than the tool, so any tool reusing them keeps the earlier
+    // value when a later patch omits it. The patched key still wins.
+    expect(settled.messages.flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "plain-tool-1")).toMatchObject({
+      toolState: "success",
+      toolArgs: {
+        path: "/workspace/b.ts",
+        description: "First pass",
+        model: "m-1",
+      },
+    });
   });
 
   test("preserves ACP nested child parentToolCallId as parentTaskUseId", async () => {
@@ -1597,9 +2251,13 @@ describe("ACP bridge", () => {
 
   for (const terminal of [
     { prompt: "FINISHCURSORSUBAGENT", agentState: "finished", toolState: "success" },
+    { prompt: "FINISHCURSORSUBAGENTSTATUS", agentState: "finished", toolState: "success" },
+    { prompt: "FINISHCURSORTASK", agentState: "finished", toolState: "success" },
+    { prompt: "FAILCURSORTASK", agentState: "failed", toolState: "success" },
+    { prompt: "REJECTCURSORTASK", agentState: "failed", toolState: "success" },
     { prompt: "FAILCURSORSUBAGENT", agentState: "failed", toolState: "failure" },
   ] as const) {
-    test(`settles Cursor's in-process child as ${terminal.agentState}`, async () => {
+    test(`settles Cursor's in-process child via ${terminal.prompt} as ${terminal.agentState}`, async () => {
       const { base, headers } = await spawnBridge();
       const created = await nativeFetch(`${base}/session/create`, {
         method: "POST",
@@ -1637,6 +2295,152 @@ describe("ACP bridge", () => {
       )).toMatchObject({ toolState: terminal.toolState, agentState: terminal.agentState });
       expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
         .then((response) => response.json())).toEqual({ activity: "idle" });
+    });
+  }
+
+  // The request form is the only one the pinned `cursor-agent` sends: its
+  // `sendNonBlockingExtensionNotification` helper calls `extMethod`, which is
+  // `sendRequest`. The answer is a bare `{}` because Cursor discards the result
+  // and the method publishes no response schema to fill in.
+  for (const request of [
+    { prompt: "FINISHCURSORTASKREQUEST", label: "a completed child", agentState: "finished" },
+    { prompt: "FAILCURSORTASKREQUEST", label: "a failed child", agentState: "failed" },
+  ] as const) {
+    test(`answers Cursor's cursor/task request for ${request.label} and settles it`, async () => {
+      const directory = await temporaryDirectory();
+      const responseFile = resolve(directory, "cursor-task-response.log");
+      const { base, headers } = await spawnBridge({ env: {
+        FAKE_ACP_CURSOR_TASK_REQUEST_FILE: responseFile,
+      } });
+      const created = await nativeFetch(`${base}/session/create`, {
+        method: "POST",
+        headers,
+      }).then((response) => response.json()) as { id: string };
+      await nativeFetch(`${base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: "BACKGROUNDSUBAGENT" }),
+      });
+      await waitFor(
+        async () => nativeFetch(`${base}/session/${created.id}/activity`, { headers })
+          .then((response) => response.json()) as Promise<{ activity: string }>,
+        (value) => value.activity === "working",
+      );
+
+      await nativeFetch(`${base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: request.prompt }),
+      });
+      const response = await waitFor(
+        () => fs.readFile(responseFile, "utf8")
+          .then((value) => JSON.parse(value.trim()))
+          .catch(() => null) as Promise<Record<string, unknown> | null>,
+        Boolean,
+      );
+      expect(response).toMatchObject({ id: 903, result: {} });
+      expect(response).not.toHaveProperty("error");
+      // Not the ACP permission outcome. Its members are `selected` and
+      // `cancelled`; neither describes a child that ended.
+      expect(response).not.toHaveProperty("result.outcome");
+      const settled = await waitFor(
+        async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+          .then((response) => response.json()) as Promise<{
+            status: string;
+            messages: Array<{ parts: Array<Record<string, unknown>> }>;
+          }>,
+        (value) => value.status === "idle"
+          && value.messages.some((message) => message.parts.some((part) =>
+            part.toolUseId === "cursor-subagent-1" && part.agentState === request.agentState
+          )),
+      );
+      expect(settled.messages.flatMap((message) => message.parts).find((part) =>
+        part.toolUseId === "cursor-subagent-1"
+      )).toMatchObject({ toolState: "success", agentState: request.agentState });
+      expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
+        .then((response) => response.json())).toEqual({ activity: "idle" });
+    });
+  }
+
+  // Each of these turns delivers a `cursor/task` the bridge must ignore. The
+  // turn is allowed to finish before the assertion, so a still-active child is
+  // evidence the frame was processed and rejected — not that the test raced it.
+  for (const ignored of [
+    {
+      prompt: "RUNNINGCURSORTASK",
+      reason: "reports a non-terminal state",
+    },
+    {
+      prompt: "OTHERSESSIONCURSORTASK",
+      reason: "belongs to another ACP session",
+    },
+    {
+      prompt: "UNKNOWNCURSORTASK",
+      reason: "names a tool call that is not a live child",
+    },
+  ] as const) {
+    test(`ignores a cursor/task that ${ignored.reason}`, async () => {
+      const { base, headers } = await spawnBridge();
+      const created = await nativeFetch(`${base}/session/create`, {
+        method: "POST",
+        headers,
+      }).then((response) => response.json()) as { id: string };
+      const read = async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ content?: string; parts: Array<Record<string, unknown>> }>;
+        }>;
+      const activity = async () => nativeFetch(`${base}/session/${created.id}/activity`, { headers })
+        .then((response) => response.json()) as Promise<{ activity: string }>;
+
+      await nativeFetch(`${base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: "BACKGROUNDSUBAGENT" }),
+      });
+      await waitFor(activity, (value) => value.activity === "working");
+
+      await nativeFetch(`${base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: ignored.prompt }),
+      });
+      // The marker is written after the frame on the same stream, so its
+      // arrival is what makes "still active" below an observation, not a race.
+      const held = await waitFor(
+        read,
+        (value) => value.status === "idle"
+          && value.messages.some((message) =>
+            message.content?.includes("Cursor task frame delivered.") === true
+          ),
+      );
+      const parts = held.messages.flatMap((message) => message.parts);
+      expect(parts.find((part) => part.toolUseId === "cursor-subagent-1"))
+        .toMatchObject({ agentState: "active" });
+      expect(await activity()).toEqual({ activity: "working" });
+      // An ignored frame must not invent a launch part for the id it named.
+      expect(parts.some((part) => part.toolUseId === "cursor-never-seen-1")).toBe(false);
+      const plain = parts.find((part) => part.toolUseId === "cursor-plain-tool-1");
+      if (plain) expect(plain).not.toHaveProperty("agentState");
+
+      // The same child still settles once a frame the bridge accepts arrives,
+      // so the guard rejects the bad frame rather than the method.
+      await nativeFetch(`${base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: "FINISHCURSORTASK" }),
+      });
+      const settled = await waitFor(
+        read,
+        (value) => value.status === "idle"
+          && value.messages.some((message) => message.parts.some((part) =>
+            part.toolUseId === "cursor-subagent-1" && part.agentState === "finished"
+          )),
+      );
+      expect(settled.messages.flatMap((message) => message.parts).find((part) =>
+        part.toolUseId === "cursor-subagent-1"
+      )).toMatchObject({ toolState: "success", agentState: "finished" });
+      expect(await activity()).toEqual({ activity: "idle" });
     });
   }
 
@@ -1840,6 +2644,43 @@ describe("ACP bridge", () => {
       .then((response) => response.json())).toEqual({ activity: "idle" });
   });
 
+  test("settles an evicted Cursor child from cursor/task without rebuilding a ghost launch part", async () => {
+    const { base, headers } = await spawnBridge({ env: {
+      ACP_MAX_TRANSCRIPT_BYTES: "1048576",
+    } });
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+    }).then((response) => response.json()) as { id: string };
+    const read = async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+      .then((response) => response.json()) as Promise<{
+        status: string;
+        baseIndex: number;
+        messages: Array<{ parts: Array<Record<string, unknown>> }>;
+      }>;
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "BACKGROUNDSUBAGENT" }),
+    });
+    await waitFor(read, (value) => value.status === "idle");
+    expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
+      .then((response) => response.json())).toEqual({ activity: "working" });
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "FINISHEVICTEDCURSORTASK" }),
+    });
+    const settled = await waitFor(read, (value) => value.status === "idle");
+    expect(settled.baseIndex).toBeGreaterThan(0);
+    expect(settled.messages.flatMap((message) => message.parts).some((part) =>
+      part.toolUseId === "cursor-subagent-1"
+    )).toBe(false);
+    expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
+      .then((response) => response.json())).toEqual({ activity: "idle" });
+  });
 
   test("enriches Cursor's generic live tool calls from its post-turn ACP replay", async () => {
     const bridge = await spawnBridge({
@@ -1959,7 +2800,7 @@ describe("ACP bridge", () => {
     expect((await fs.readFile(lifecycleFile, "utf8")).match(/^load:/gm)).toHaveLength(1);
   });
 
-  test("defers live Cursor enrichment while a same-kind call is still in flight", async () => {
+  test("enriches a settled Cursor read while a same-kind sibling is still in flight", async () => {
     const directory = await temporaryDirectory();
     const lifecycleFile = resolve(directory, "cursor-pending-sibling.log");
     const holdTurnFile = resolve(directory, "release-turn");
@@ -1990,20 +2831,27 @@ describe("ACP bridge", () => {
     const tools = (value: { messages: Array<{ parts: Array<Record<string, unknown>> }> }) =>
       value.messages[1]?.parts.filter((part) => part.type === "tool-invocation") ?? [];
 
-    await waitFor(
+    const live = await waitFor(
       readSession,
-      (value) => tools(value).some((part) => part.toolUseId === "live-read-2" && part.toolState === "success"),
+      (value) => tools(value).some(
+        (part) => part.toolUseId === "live-read-2"
+          && part.toolTitle === "Read second.json (1 - 20)",
+      ),
     );
-    // `live-read-2` settling arms a live pass, but `live-read-1` is a same-kind
-    // call the agent has not indexed yet. It has no replay entry of its own, so
-    // enriching now would let it claim its sibling's — permanently, because an
-    // enriched part no longer looks generic. The pass must stand down instead.
-    await Bun.sleep(1_200);
-    expect(await fs.readFile(lifecycleFile, "utf8").catch(() => "")).not.toContain("load:");
-    expect(await readSession().then(tools)).toEqual([
+    // `live-read-2` is in the index; `live-read-1` is not. The live pass has to
+    // enrich the settled call from a unique output match and leave the pending
+    // one generic — using the kind fallback here would stamp the wrong file
+    // onto `live-read-1` permanently.
+    expect(tools(live)).toEqual([
       expect.objectContaining({ toolUseId: "live-read-1", toolTitle: "Read File", toolState: "pending" }),
-      expect.objectContaining({ toolUseId: "live-read-2", toolTitle: "Read File", toolState: "success" }),
+      expect.objectContaining({
+        toolUseId: "live-read-2",
+        toolTitle: "Read second.json (1 - 20)",
+        toolArgs: { path: "/workspace/second.json" },
+        toolState: "success",
+      }),
     ]);
+    expect((await fs.readFile(lifecycleFile, "utf8")).match(/^load:/gm)).toHaveLength(1);
 
     await fs.writeFile(holdTurnFile, "");
     const settled = await waitFor(
@@ -2026,6 +2874,289 @@ describe("ACP bridge", () => {
         toolArgs: { path: "/workspace/second.json" },
       }),
     ]);
+  });
+
+  test("enriches a settled Cursor read while a different-kind call is still in flight", async () => {
+    const directory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "cursor-pending-other.log");
+    const holdTurnFile = resolve(directory, "release-turn");
+    const bridge = await spawnBridge({
+      env: {
+        FAKE_ACP_REPLAY_CURSOR_TOOL_METADATA: "1",
+        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+        FAKE_ACP_HOLD_TURN_FILE: holdTurnFile,
+      },
+    });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-pending-other:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "CURSOR_GENERIC_TOOLS_PENDING_OTHER" }),
+    });
+    const readSession = async () =>
+      nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>;
+    const tools = (value: { messages: Array<{ parts: Array<Record<string, unknown>> }> }) =>
+      value.messages[1]?.parts.filter((part) => part.type === "tool-invocation") ?? [];
+
+    const live = await waitFor(
+      readSession,
+      (value) => tools(value).some(
+        (part) => part.toolUseId === "live-read-1"
+          && part.toolTitle === "Read package.json (1 - 80)",
+      ),
+    );
+    expect(tools(live)).toEqual([
+      expect.objectContaining({
+        toolUseId: "live-read-1",
+        toolTitle: "Read package.json (1 - 80)",
+        toolArgs: { path: "/workspace/package.json" },
+        toolState: "success",
+      }),
+      expect.objectContaining({
+        toolUseId: "live-shell-1",
+        toolTitle: "Run safe command",
+        toolState: "pending",
+      }),
+    ]);
+    expect((await fs.readFile(lifecycleFile, "utf8")).match(/^load:/gm)).toHaveLength(1);
+
+    await fs.writeFile(holdTurnFile, "");
+    const settled = await waitFor(
+      readSession,
+      (value) => value.status === "idle"
+        && tools(value).some((part) => part.toolUseId === "live-shell-1" && part.toolState === "success"),
+    );
+    expect(tools(settled).find((part) => part.toolUseId === "live-read-1"))
+      .toMatchObject({
+        toolTitle: "Read package.json (1 - 80)",
+        toolArgs: { path: "/workspace/package.json" },
+      });
+  });
+
+  test("does not stamp a stale same-kind title on a live Cursor pass", async () => {
+    const directory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "cursor-stale-kind.log");
+    const holdTurnFile = resolve(directory, "release-turn");
+    const bridge = await spawnBridge({
+      env: {
+        FAKE_ACP_REPLAY_CURSOR_STALE_KIND: "1",
+        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+        FAKE_ACP_HOLD_TURN_FILE: holdTurnFile,
+      },
+    });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-stale-kind:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "CURSOR_GENERIC_TOOLS_STALE_KIND" }),
+    });
+    const readSession = async () =>
+      nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>;
+    const tools = (value: { messages: Array<{ parts: Array<Record<string, unknown>> }> }) =>
+      value.messages[1]?.parts.filter((part) => part.type === "tool-invocation") ?? [];
+
+    await waitFor(
+      () => fs.readFile(lifecycleFile, "utf8").catch(() => ""),
+      (value) => (value.match(/^load:/gm)?.length ?? 0) >= 1,
+    );
+    // The live window holds only the stale same-kind candidate, which has no
+    // output hash. Kind fallback would stamp that file onto this part forever.
+    await Bun.sleep(800);
+    const live = await readSession();
+    expect(live.status).toBe("running");
+    expect(tools(live)).toEqual([
+      expect.objectContaining({
+        toolUseId: "live-read-1",
+        toolTitle: "Read File",
+        toolArgs: {},
+        toolState: "success",
+      }),
+      expect.objectContaining({
+        toolUseId: "live-shell-1",
+        toolTitle: "Run safe command",
+        toolState: "pending",
+      }),
+    ]);
+    expect((await fs.readFile(lifecycleFile, "utf8")).match(/^load:/gm)).toHaveLength(1);
+
+    await fs.writeFile(holdTurnFile, "");
+    const settled = await waitFor(
+      readSession,
+      (value) => value.status === "idle"
+        && tools(value).some((part) => part.toolUseId === "live-read-1"
+          && part.toolTitle === "Read package.json (1 - 80)"),
+    );
+    expect(tools(settled).find((part) => part.toolUseId === "live-read-1"))
+      .toMatchObject({
+        toolTitle: "Read package.json (1 - 80)",
+        toolArgs: { path: "/workspace/package.json" },
+      });
+  });
+
+  test("does not spawn a second live Cursor replay after settled parts are already enriched", async () => {
+    const directory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "cursor-noop-followup.log");
+    const holdTurnFile = resolve(directory, "release-turn");
+    const secondSettleFile = resolve(directory, "second-settle");
+    const bridge = await spawnBridge({
+      env: {
+        FAKE_ACP_REPLAY_CURSOR_PARALLEL_READS: "1",
+        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+        FAKE_ACP_HOLD_TURN_FILE: holdTurnFile,
+        FAKE_ACP_SECOND_SETTLE_FILE: secondSettleFile,
+        FAKE_ACP_LOAD_DELAY_MS: "800",
+      },
+    });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-noop-followup:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "CURSOR_GENERIC_TOOLS_NOOP_FOLLOWUP" }),
+    });
+    const readSession = async () =>
+      nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>;
+    const tools = (value: { messages: Array<{ parts: Array<Record<string, unknown>> }> }) =>
+      value.messages[1]?.parts.filter((part) => part.type === "tool-invocation") ?? [];
+
+    await waitFor(
+      () => fs.readFile(lifecycleFile, "utf8").catch(() => ""),
+      (value) => value.includes("load:"),
+    );
+    await fs.writeFile(secondSettleFile, "");
+    const live = await waitFor(
+      readSession,
+      (value) => tools(value).some(
+        (part) => part.toolUseId === "live-read-2"
+          && part.toolTitle === "Read second.json (1 - 20)",
+      ),
+    );
+    expect(tools(live)).toEqual([
+      expect.objectContaining({ toolUseId: "live-read-1", toolTitle: "Read File", toolState: "pending" }),
+      expect.objectContaining({
+        toolUseId: "live-read-2",
+        toolTitle: "Read second.json (1 - 20)",
+        toolArgs: { path: "/workspace/second.json" },
+        toolState: "success",
+      }),
+    ]);
+    // The duplicate completion armed a follow-up live pass whose settled
+    // window is already enriched. That pass must not spend another child.
+    await Bun.sleep(1_200);
+    expect((await fs.readFile(lifecycleFile, "utf8")).match(/^load:/gm)).toHaveLength(1);
+
+    await fs.writeFile(holdTurnFile, "");
+    const settled = await waitFor(
+      readSession,
+      (value) => value.status === "idle"
+        && tools(value).every((part) => part.toolTitle !== "Read File"),
+    );
+    expect(tools(settled)).toEqual([
+      expect.objectContaining({
+        toolUseId: "live-read-1",
+        toolTitle: "Read first.json (1 - 40)",
+        toolArgs: { path: "/workspace/first.json" },
+      }),
+      expect.objectContaining({
+        toolUseId: "live-read-2",
+        toolTitle: "Read second.json (1 - 20)",
+        toolArgs: { path: "/workspace/second.json" },
+      }),
+    ]);
+  });
+
+  test("leaves a failed Cursor read generic on the live pass and recovers at the end", async () => {
+    const directory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "cursor-failed-no-output.log");
+    const holdTurnFile = resolve(directory, "release-turn");
+    const bridge = await spawnBridge({
+      env: {
+        FAKE_ACP_REPLAY_CURSOR_TOOL_METADATA: "1",
+        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+        FAKE_ACP_HOLD_TURN_FILE: holdTurnFile,
+      },
+    });
+    const created = await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-failed-no-output:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "CURSOR_GENERIC_TOOLS_FAILED_NO_OUTPUT" }),
+    });
+    const readSession = async () =>
+      nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>;
+    const tools = (value: { messages: Array<{ parts: Array<Record<string, unknown>> }> }) =>
+      value.messages[1]?.parts.filter((part) => part.type === "tool-invocation") ?? [];
+
+    await waitFor(
+      () => fs.readFile(lifecycleFile, "utf8").catch(() => ""),
+      (value) => (value.match(/^load:/gm)?.length ?? 0) >= 1,
+    );
+    await Bun.sleep(800);
+    const live = await readSession();
+    expect(live.status).toBe("running");
+    expect(tools(live)).toEqual([
+      expect.objectContaining({
+        toolUseId: "live-read-1",
+        toolTitle: "Read File",
+        toolArgs: {},
+        toolState: "failure",
+      }),
+      expect.objectContaining({
+        toolUseId: "live-shell-1",
+        toolTitle: "Run safe command",
+        toolState: "pending",
+      }),
+    ]);
+    expect((await fs.readFile(lifecycleFile, "utf8")).match(/^load:/gm)).toHaveLength(1);
+
+    await fs.writeFile(holdTurnFile, "");
+    const settled = await waitFor(
+      readSession,
+      (value) => value.status === "idle"
+        && tools(value).some((part) => part.toolUseId === "live-read-1"
+          && part.toolTitle === "Read package.json (1 - 80)"),
+    );
+    expect(tools(settled).find((part) => part.toolUseId === "live-read-1"))
+      .toMatchObject({
+        toolTitle: "Read package.json (1 - 80)",
+        toolArgs: { path: "/workspace/package.json" },
+        toolState: "failure",
+      });
   });
 
   test("drops a pending live Cursor replay when the turn fails", async () => {

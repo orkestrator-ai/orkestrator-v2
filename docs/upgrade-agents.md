@@ -493,6 +493,37 @@ default. `--approve-mcps` is deliberately narrower, because `.cursor/mcp.json`
 is repository-controlled and would otherwise execute on the host without any
 model or user involvement. Preserve that asymmetry when adjusting flags.
 
+### Cursor's `cursor/task` extension method
+
+The sub-agent launch card depends on a Cursor extension method that no
+specification covers, so it is a second undocumented contract to re-verify on
+every Cursor bump. As of `2026.08.11-e8db854`, read out of the CLI bundle
+(`src/acp/agent-session.ts` and `src/acp/types.ts`):
+
+| Property | Observed behaviour |
+| --- | --- |
+| Transport | A **request**. Cursor's helper is named `sendNonBlockingExtensionNotification`, but it calls `extMethod`, which is `sendRequest`. `extNotification` is unused. |
+| Response | Discarded — the helper only `.catch()`es, and the SDK does not validate the result. Even `-32601` is just a debug log. |
+| Payload | `toolCallId`, `description`, `prompt`, `subagentType`, `model`, `agentId`, `durationMs`. **No status or outcome field.** `durationMs` is set only when the tool result case is `success`. |
+| Send site | `toolCallCompleted` only, immediately after the `status: "completed"` tool call update — so it is always terminal today. |
+
+The bridge answers it with `{}` for that reason: there is no response schema to
+fill in, and ACP's only structured client answer is the permission outcome
+(`selected` / `cancelled`), which does not describe a child that ended. It also
+accepts the notification form, and treats a `status`/`outcome` that names a
+non-terminal state as a progress report rather than an ending. Both are
+forward-compatibility for a Cursor that changes its mind, not observed
+behaviour — `bridges/acp-bridge/src/testing/fake-agent.ts` labels those fixtures
+as such. If a bump adds a real state field, replace that guess with the
+observed vocabulary rather than widening the regex on a hunch.
+
+Re-derive the table above after a bump by grepping the installed bundle:
+
+```bash
+# Prints the extension-method constants and the single cursor/task send site.
+rg -o '.{200}cursor/task.{200}' ~/.local/share/cursor-agent/versions/<version>/*.js
+```
+
 ### How to upgrade Cursor or Grok
 
 Neither has an SDK or a lockfile entry, so nothing resolves a version for you.

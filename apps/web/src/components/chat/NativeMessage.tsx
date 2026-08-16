@@ -1,5 +1,6 @@
 import {
   createContext,
+  Fragment,
   memo,
   useCallback,
   useContext,
@@ -82,6 +83,7 @@ import {
 import { writeText } from "@/lib/native/clipboard";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import type { NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 /** Custom link component that opens URLs in the system browser */
 function ExternalLink({
@@ -128,12 +130,19 @@ interface NativeMessageProps {
   containerId?: string;
   /** Stable transcript/environment identity used to isolate persisted disclosures. */
   agentExpansionScope?: string;
+  /**
+   * Provider that produced this transcript. Cursor does not report nested
+   * sub-agent tool activity, so its agent rows hide tool/update counts and
+   * surface launch metadata instead.
+   */
+  platform?: AgentPlatform;
   actions?: ReactNode;
   resolveModelLabel?: (modelId: string) => string;
   loadToolDetails?: (detailRef: string) => Promise<NativeAgentToolDetails>;
 }
 
 const MessageExpansionScopeContext = createContext("native-message");
+const AgentPlatformContext = createContext<AgentPlatform | undefined>(undefined);
 const ToolDetailLoaderContext = createContext<
   ((detailRef: string) => Promise<NativeAgentToolDetails>) | undefined
 >(undefined);
@@ -1469,6 +1478,51 @@ function stringToolArg(
   return undefined;
 }
 
+function numberToolArg(
+  args: Record<string, unknown> | undefined,
+  ...keys: string[]
+): number | undefined {
+  if (!args) return undefined;
+  for (const key of keys) {
+    const value = args[key];
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+      return value;
+    }
+    if (typeof value === "string" && value.trim().length > 0) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+    }
+  }
+  return undefined;
+}
+
+function formatAgentDurationMs(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const seconds = ms / 1000;
+  if (seconds < 10) return `${seconds.toFixed(1).replace(/\.0$/, "")}s`;
+  return formatElapsed(Math.round(seconds));
+}
+
+function usefulAgentOutput(output?: string): string | undefined {
+  const trimmed = output?.trim();
+  if (!trimmed) return undefined;
+  if (/^sub-?agents? launched\.?$/i.test(trimmed)) return undefined;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const keys = Object.keys(parsed);
+      if (keys.length > 0 && keys.every((key) => (
+        key === "durationMs" || key === "isBackground" || key === "status"
+      ))) {
+        return undefined;
+      }
+    }
+  } catch {
+    // Plain text from the child is worth showing.
+  }
+  return trimmed;
+}
+
 function buildAgentDisplayLabel(name: string, role?: string): string {
   if (!role || role.localeCompare(name, undefined, { sensitivity: "accent" }) === 0) {
     return name;
@@ -1478,6 +1532,126 @@ function buildAgentDisplayLabel(name: string, role?: string): string {
 
 function shouldShowTokenOnlyAgentUsage(part: NativeMessagePart): boolean {
   return part.agentUsageDisplay === "token-only" && Boolean(part.tokenCountText);
+}
+
+function agentMetaEntries(
+  toolArgs: Record<string, unknown> | undefined,
+  displayName: string,
+): Array<{ label: string; value: string }> {
+  const role = stringToolArg(toolArgs, "subagent_type", "subagentType", "role");
+  const model = stringToolArg(toolArgs, "model");
+  const durationMs = numberToolArg(toolArgs, "durationMs");
+  const agentId = stringToolArg(toolArgs, "agentId", "agent_id");
+  return [
+    ...(role && role !== displayName ? [{ label: "Type", value: role }] : []),
+    ...(model ? [{ label: "Model", value: model }] : []),
+    ...(durationMs !== undefined
+      ? [{ label: "Duration", value: formatAgentDurationMs(durationMs) }]
+      : []),
+    ...(agentId ? [{ label: "Agent ID", value: agentId }] : []),
+  ];
+}
+
+function AgentMetaRows({
+  entries,
+}: {
+  entries: Array<{ label: string; value: string }>;
+}) {
+  if (entries.length === 0) return null;
+  return (
+    <dl className="mb-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
+      {entries.map((entry) => (
+        <Fragment key={entry.label}>
+          <dt className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+            {entry.label}
+          </dt>
+          <dd className="min-w-0 truncate text-muted-foreground/90">{entry.value}</dd>
+        </Fragment>
+      ))}
+    </dl>
+  );
+}
+
+/**
+ * A sub-agent's result runs to the bridge's 512 KiB tool-output cap, so it gets
+ * the same bounded, scrollable frame every other tool output on this transcript
+ * uses rather than expanding the row to an arbitrary height.
+ */
+function AgentResultBlock({ result }: { result?: string }) {
+  if (!result) return null;
+  return (
+    <div className="mb-3 border-l border-border/30 pl-3">
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+        Result
+      </div>
+      <div className="max-h-64 overflow-auto">
+        <MessageMarkdown
+          content={result}
+          components={markdownComponents}
+          className="text-xs text-muted-foreground/90 prose-invert prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-pre:my-1 prose-pre:p-2"
+          enableBreaks={false}
+        />
+      </div>
+    </div>
+  );
+}
+
+function AgentUsageStats({
+  hasExternalUsage,
+  tokenOnlyUsage,
+  tokenCountText,
+  toolCount,
+  updateCount,
+  durationMs,
+}: {
+  hasExternalUsage: boolean;
+  tokenOnlyUsage: boolean;
+  tokenCountText?: string;
+  toolCount: number;
+  updateCount: number;
+  durationMs?: number;
+}) {
+  const hideCounts = useContext(AgentPlatformContext) === "cursor";
+  if (hideCounts) {
+    const durationLabel = durationMs === undefined
+      ? undefined
+      : formatAgentDurationMs(durationMs);
+    if (!durationLabel && !tokenCountText) return null;
+    return (
+      <div className="shrink-0 text-right text-[11px] text-muted-foreground/70">
+        {durationLabel ? <div>{durationLabel}</div> : null}
+        {tokenCountText ? <div>{tokenCountText}</div> : null}
+      </div>
+    );
+  }
+
+  if (tokenOnlyUsage && tokenCountText) {
+    return (
+      <div className="shrink-0 text-right text-[11px] text-muted-foreground/70">
+        <div>{tokenCountText}</div>
+      </div>
+    );
+  }
+
+  const showTools = hasExternalUsage || toolCount > 0;
+  const showUpdates = Boolean(tokenCountText) || updateCount > 0;
+  if (!showTools && !showUpdates) return null;
+
+  const toolCountLabel = hasExternalUsage
+    ? `${toolCount} ${toolCount === 1 ? "tool use" : "tool uses"}`
+    : `${toolCount} ${toolCount === 1 ? "tool" : "tools"}`;
+
+  return (
+    <div className="shrink-0 text-right text-[11px] text-muted-foreground/70">
+      {showTools ? <div>{toolCountLabel}</div> : null}
+      {showUpdates ? (
+        <div>
+          {tokenCountText ??
+            `${updateCount} ${updateCount === 1 ? "update" : "updates"}`}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function AgentActivityIcon({ status }: { status: NativeAgentStatus }) {
@@ -1507,10 +1681,12 @@ function SubagentPart({
   part,
   containerId,
   partKey,
+  embedded = false,
 }: {
   part: Extract<NativeMessagePart, { type: "subagent" }>;
   containerId?: string;
   partKey: string;
+  embedded?: boolean;
 }) {
   const [isOpen, setIsOpen] = useAgentExpansion(part, partKey);
   const subagentActions = part.subagentActions ?? [];
@@ -1521,13 +1697,27 @@ function SubagentPart({
   const displayLabel = buildAgentDisplayLabel(displayName, part.subagentRole);
   const status = getNativeAgentStatus(part);
   const statusLabel = getSubagentStatusLabel(status);
-  const preview = useMemo(() => getSubagentPreview(part, status), [part, status]);
-  const toolCountLabel = hasExternalUsage
-    ? `${toolCount} ${toolCount === 1 ? "tool use" : "tool uses"}`
-    : `${toolCount} ${toolCount === 1 ? "tool" : "tools"}`;
+  const hideCounts = useContext(AgentPlatformContext) === "cursor";
+  const durationMs = numberToolArg(part.toolArgs, "durationMs");
+  // Agent output runs to the bridge's 512 KiB cap and `usefulAgentOutput`
+  // parses it, so keep that off every unrelated re-render.
+  const result = useMemo(() => usefulAgentOutput(part.toolOutput), [part.toolOutput]);
+  const prompt = part.subagentPrompt?.trim() || stringToolArg(part.toolArgs, "prompt");
+  const preview = useMemo(() => {
+    const next = getSubagentPreview(part, status);
+    if (hideCounts && next.text === "No activity captured.") {
+      if (prompt) return { text: prompt, isTask: true };
+      return { text: "", isTask: false };
+    }
+    return next;
+  }, [hideCounts, part, prompt, status]);
 
   return (
-    <Collapsible open={isOpen} onOpenChange={setIsOpen} className={agentCardClassName}>
+    <Collapsible
+      open={isOpen}
+      onOpenChange={setIsOpen}
+      className={cn(!embedded && agentCardClassName)}
+    >
       <CollapsibleTrigger
         className="w-full px-3 py-2.5 text-left transition-colors hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 cursor-pointer"
       >
@@ -1550,26 +1740,23 @@ function SubagentPart({
                 {statusLabel}
               </span>
             </div>
-            <div className="mt-1 flex min-w-0 items-center gap-1 text-xs text-muted-foreground/80">
-              {preview.isTask ? (
-                <span className="shrink-0 font-medium text-muted-foreground">Task ·</span>
-              ) : null}
-              <span className="truncate">{preview.text}</span>
-            </div>
+            {preview.text ? (
+              <div className="mt-1 flex min-w-0 items-center gap-1 text-xs text-muted-foreground/80">
+                {preview.isTask ? (
+                  <span className="shrink-0 font-medium text-muted-foreground">Task ·</span>
+                ) : null}
+                <span className="truncate">{preview.text}</span>
+              </div>
+            ) : null}
           </div>
-          <div className="shrink-0 text-right text-[11px] text-muted-foreground/70">
-            {tokenOnlyUsage ? (
-              <div>{part.tokenCountText}</div>
-            ) : (
-              <>
-                <div>{toolCountLabel}</div>
-                <div>
-                  {part.tokenCountText ??
-                    `${subagentActions.length} ${subagentActions.length === 1 ? "update" : "updates"}`}
-                </div>
-              </>
-            )}
-          </div>
+          <AgentUsageStats
+            hasExternalUsage={hasExternalUsage}
+            tokenOnlyUsage={tokenOnlyUsage}
+            tokenCountText={part.tokenCountText}
+            toolCount={toolCount}
+            updateCount={subagentActions.length}
+            durationMs={durationMs}
+          />
           <ChevronRight
             className={cn(
               "mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
@@ -1581,19 +1768,21 @@ function SubagentPart({
 
       <CollapsibleContent>
         <div className="border-t border-border/40 px-3 py-3">
-          {part.subagentPrompt?.trim() ? (
+          {prompt ? (
             <div className="mb-3 border-l border-border/30 pl-3">
               <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
                 Task
               </div>
               <MessageMarkdown
-                content={part.subagentPrompt}
+                content={prompt}
                 components={markdownComponents}
                 className="text-xs text-muted-foreground/90 prose-invert prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-pre:my-1 prose-pre:p-2"
                 enableBreaks={false}
               />
             </div>
           ) : null}
+          <AgentMetaRows entries={agentMetaEntries(part.toolArgs, displayName)} />
+          <AgentResultBlock result={result} />
 
           <div className="space-y-1">
             {subagentActions.map((childPart, index) => (
@@ -1604,7 +1793,7 @@ function SubagentPart({
                 partKey={`${partKey}/subagent-${index}`}
               />
             ))}
-            {subagentActions.length === 0 ? (
+            {subagentActions.length === 0 && !hideCounts ? (
               <div className="px-3 py-2 text-xs text-muted-foreground/70">
                 No child actions yet.
               </div>
@@ -1650,13 +1839,14 @@ function AgentGroupPart({
           </span>
         ) : null}
       </div>
-      <div className="space-y-2">
+      <div className={cn(agentCardClassName, "divide-y divide-border/70")}>
         {part.parts.map((child, index) => (
           <MessagePart
             key={`agent-group-part-${index}-${child.type}`}
             part={child}
             containerId={containerId}
             partKey={`${partKey}/agent-${index}`}
+            embedded
           />
         ))}
       </div>
@@ -1696,10 +1886,12 @@ function TaskGroupPart({
   part,
   containerId,
   partKey,
+  embedded = false,
 }: {
   part: NativeTaskGroupPart;
   containerId?: string;
   partKey: string;
+  embedded?: boolean;
 }) {
   const [isOpen, setIsOpen] = useAgentExpansion(part, partKey);
   const toolLabel =
@@ -1736,19 +1928,35 @@ function TaskGroupPart({
     (child) => child.type === "tool-invocation",
   ).length;
   const toolCount = part.task.toolUseCount ?? capturedToolCount;
-  const toolCountLabel = hasExternalUsage
-    ? `${toolCount} ${toolCount === 1 ? "tool use" : "tool uses"}`
-    : `${toolCount} ${toolCount === 1 ? "tool" : "tools"}`;
+  const hideCounts = useContext(AgentPlatformContext) === "cursor";
+  const durationMs = numberToolArg(part.task.toolArgs, "durationMs");
+  // See `SubagentPart`: the parse is proportional to the 512 KiB output cap.
+  const result = useMemo(
+    () => usefulAgentOutput(part.task.toolOutput),
+    [part.task.toolOutput],
+  );
   const preview = useMemo(() => {
-    return nativeAgentLatestActivity(part) ?? description ?? (
+    const latest = nativeAgentLatestActivity(part);
+    if (latest) return latest;
+    if (hideCounts) {
+      if (prompt && prompt !== displayName && prompt !== description) return prompt;
+      if (description && description !== displayName) return description;
+      return isTerminalAgentStatus(status) ? undefined : "Waiting for activity.";
+    }
+    return description ?? (
       isTerminalAgentStatus(status)
-        ? "No activity captured."
+        ? prompt ?? "No activity captured."
         : "Waiting for activity."
     );
-  }, [description, part, status]);
+  }, [description, displayName, hideCounts, part, prompt, status]);
+  const metaEntries = agentMetaEntries(part.task.toolArgs, displayName);
 
   return (
-    <Collapsible open={isOpen} onOpenChange={setIsOpen} className={agentCardClassName}>
+    <Collapsible
+      open={isOpen}
+      onOpenChange={setIsOpen}
+      className={cn(!embedded && agentCardClassName)}
+    >
       <CollapsibleTrigger className="w-full px-3 py-2.5 text-left transition-colors hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 cursor-pointer">
         <div className="flex items-start gap-3">
           <AgentActivityIcon status={status} />
@@ -1774,23 +1982,23 @@ function TaskGroupPart({
                 {statusLabel}
               </span>
             </div>
-            <div className="mt-1 truncate text-xs text-muted-foreground/80">
-              {preview}
-            </div>
+            {preview ? (
+              <div className="mt-1 flex min-w-0 items-center gap-1 text-xs text-muted-foreground/80">
+                {hideCounts && prompt && preview === prompt ? (
+                  <span className="shrink-0 font-medium text-muted-foreground">Task ·</span>
+                ) : null}
+                <span className="truncate">{preview}</span>
+              </div>
+            ) : null}
           </div>
-          <div className="shrink-0 text-right text-[11px] text-muted-foreground/70">
-            {tokenOnlyUsage ? (
-              <div>{part.task.tokenCountText}</div>
-            ) : (
-              <>
-                <div>{toolCountLabel}</div>
-                <div>
-                  {part.task.tokenCountText ??
-                    `${childCount} ${childCount === 1 ? "update" : "updates"}`}
-                </div>
-              </>
-            )}
-          </div>
+          <AgentUsageStats
+            hasExternalUsage={hasExternalUsage}
+            tokenOnlyUsage={tokenOnlyUsage}
+            tokenCountText={part.task.tokenCountText}
+            toolCount={toolCount}
+            updateCount={childCount}
+            durationMs={durationMs}
+          />
           <ChevronRight
             className={cn(
               "mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
@@ -1814,6 +2022,8 @@ function TaskGroupPart({
               />
             </div>
           ) : null}
+          <AgentMetaRows entries={metaEntries} />
+          <AgentResultBlock result={result} />
           <div className="space-y-1">
             {part.childTools.map((child, index) => (
               <MessagePart
@@ -1823,7 +2033,7 @@ function TaskGroupPart({
                 partKey={`${partKey}/task-child-${index}`}
               />
             ))}
-            {part.childTools.length === 0 ? (
+            {part.childTools.length === 0 && !hideCounts ? (
               <div className="px-3 py-2 text-xs text-muted-foreground/70">
                 No child actions yet.
               </div>
@@ -1941,6 +2151,7 @@ function MessagePart({
   eagerImagePreview = false,
   partKey,
   deferredDetails = false,
+  embedded = false,
 }: {
   part: NativeMessagePart;
   showTextCopy?: boolean;
@@ -1956,6 +2167,8 @@ function MessagePart({
    * something to show, and a deferred row has nothing until it is expanded.
    */
   deferredDetails?: boolean;
+  /** Drop individual card chrome when this row already sits in a shared group. */
+  embedded?: boolean;
 }) {
   const loadToolDetails = useContext(ToolDetailLoaderContext);
   const expansionScope = useContext(MessageExpansionScopeContext);
@@ -2053,7 +2266,12 @@ function MessagePart({
       );
     case "subagent":
       return (
-        <SubagentPart part={part} containerId={containerId} partKey={partKey} />
+        <SubagentPart
+          part={part}
+          containerId={containerId}
+          partKey={partKey}
+          embedded={embedded}
+        />
       );
     case "agent-group":
       return (
@@ -2069,7 +2287,12 @@ function MessagePart({
       );
     case "task-group":
       return (
-        <TaskGroupPart part={part} containerId={containerId} partKey={partKey} />
+        <TaskGroupPart
+          part={part}
+          containerId={containerId}
+          partKey={partKey}
+          embedded={embedded}
+        />
       );
     default:
       return null;
@@ -2085,6 +2308,7 @@ export const NativeMessage = memo(function NativeMessage({
   actions: messageActions,
   resolveModelLabel,
   loadToolDetails,
+  platform,
 }: NativeMessageProps) {
   const normalizedMessage = useMemo(() => normalizeNativeMessage(message), [message]);
   const normalizedPreviousMessage = useMemo(
@@ -2233,7 +2457,8 @@ export const NativeMessage = memo(function NativeMessage({
 
   return (
     <ToolDetailLoaderContext.Provider value={loadToolDetails}>
-      <MessageExpansionScopeContext.Provider value={messageAgentExpansionScope}>
+      <AgentPlatformContext.Provider value={platform}>
+        <MessageExpansionScopeContext.Provider value={messageAgentExpansionScope}>
         <MessageShell
         isUser={isUser}
         authorLabel={
@@ -2272,7 +2497,8 @@ export const NativeMessage = memo(function NativeMessage({
           />
         )}
         </MessageShell>
-      </MessageExpansionScopeContext.Provider>
+        </MessageExpansionScopeContext.Provider>
+      </AgentPlatformContext.Provider>
     </ToolDetailLoaderContext.Provider>
   );
 });

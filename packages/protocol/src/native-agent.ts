@@ -345,6 +345,90 @@ export interface NativeAgentCapabilities {
   };
 }
 
+/**
+ * Every capability the richest provider offers, as a fresh object graph.
+ *
+ * Built per call rather than spread from one shared literal: a spread copies
+ * the top level only, so `attachments`, `composer` and `actions` would stay
+ * aliased across every caller and one renderer mutation would rewrite the
+ * backend's table too.
+ */
+function richNativeAgentCapabilities(): NativeAgentCapabilities {
+  return {
+    attachments: { files: true, images: true },
+    queue: true,
+    resume: true,
+    fork: true,
+    slashCommands: true,
+    backgroundTasks: false,
+    composer: {
+      provider: true,
+      model: true,
+      reasoning: true,
+      speed: true,
+      mode: true,
+      executionProfile: false,
+      localSettings: false,
+      promptSuggestions: false,
+    },
+    actions: { compact: true },
+  };
+}
+
+/**
+ * The single capability table for every native agent.
+ *
+ * The renderer decides whether the composer may enqueue, and the backend
+ * decides whether a projection carries a queue, from this one function. They
+ * used to hold private copies: a table that said `queue: true` on one side and
+ * `false` on the other would enqueue a prompt the queue list could never show,
+ * so the divergence was invisible until a user hit it.
+ */
+export function nativeAgentCapabilities(
+  agent: AgentPlatform,
+): NativeAgentCapabilities {
+  const capabilities = richNativeAgentCapabilities();
+  if (agent === "cursor" || agent === "grok") {
+    return {
+      ...capabilities,
+      // Both ACP agents read inline image content blocks; neither takes files.
+      attachments: { files: false, images: true },
+      fork: false,
+      slashCommands: false,
+      actions: {},
+    };
+  }
+  if (agent === "claude") {
+    return {
+      ...capabilities,
+      backgroundTasks: true,
+      composer: {
+        ...capabilities.composer,
+        executionProfile: true,
+        localSettings: true,
+        promptSuggestions: true,
+      },
+      actions: { compact: true, rewindFiles: true },
+    };
+  }
+  if (agent === "opencode") {
+    return {
+      ...capabilities,
+      composer: {
+        ...capabilities.composer,
+        speed: false,
+        executionProfile: true,
+      },
+      actions: { compact: true, undo: true, redo: true, share: true },
+    };
+  }
+  return {
+    ...capabilities,
+    attachments: { files: false, images: true },
+    actions: { compact: true, steer: true, review: true },
+  };
+}
+
 export type NativeAgentSessionAction =
   | { kind: "compact"; modelId?: string }
   | { kind: "rewind-files"; messageId: string; dryRun?: boolean }

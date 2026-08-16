@@ -171,6 +171,7 @@ export function MultiReviewReviewerTab({
               assistantLabel={label}
               containerId={containerId}
               agentExpansionScope={data.environmentId}
+              platform={snapshot?.agent}
             />
           )}
           emptyState={

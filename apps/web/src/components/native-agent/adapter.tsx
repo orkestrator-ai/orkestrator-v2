@@ -1,7 +1,8 @@
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type {
-  NativeAgentCapabilities,
-  NativeAgentTabData,
+import {
+  nativeAgentCapabilities,
+  type NativeAgentCapabilities,
+  type NativeAgentTabData,
 } from "@orkestrator/protocol/native-agent";
 
 export interface AgentNativeTabProps {
@@ -29,95 +30,23 @@ export interface NativeAgentAdapter {
   capabilities: NativeAgentCapabilities;
 }
 
-function acpAdapter(
-  provider: "cursor" | "grok",
-  label: string,
-): NativeAgentAdapter {
-  return {
-    platform: provider,
-    label,
-    capabilities: {
-      // Both ACP agents read inline image content blocks; neither takes files.
-      attachments: { files: false, images: true },
-      queue: false,
-      resume: true,
-      fork: false,
-      slashCommands: false,
-      backgroundTasks: false,
-      composer: {
-        provider: true,
-        model: true,
-        reasoning: true,
-        speed: true,
-        mode: true,
-      },
-      actions: {},
-    },
-  };
+/**
+ * Only the display label is renderer-owned. Capabilities come from the shared
+ * protocol table so the composer's enqueue decision cannot disagree with the
+ * backend projection that has to surface the queue it produces.
+ */
+function adapter(platform: AgentPlatform, label: string): NativeAgentAdapter {
+  return { platform, label, capabilities: nativeAgentCapabilities(platform) };
 }
-
-const richCapabilities: NativeAgentCapabilities = {
-  attachments: { files: true, images: true },
-  queue: true,
-  resume: true,
-  fork: true,
-  slashCommands: true,
-  backgroundTasks: false,
-  composer: {
-    provider: true,
-    model: true,
-    reasoning: true,
-    speed: true,
-    mode: true,
-    executionProfile: false,
-    localSettings: false,
-    promptSuggestions: false,
-  },
-  actions: { compact: true },
-};
 
 export const nativeAgentAdapters: Readonly<
   Record<AgentPlatform, NativeAgentAdapter>
 > = {
-  claude: {
-    platform: "claude",
-    label: "Claude",
-    capabilities: {
-      ...richCapabilities,
-      backgroundTasks: true,
-      composer: {
-        ...richCapabilities.composer,
-        executionProfile: true,
-        localSettings: true,
-        promptSuggestions: true,
-      },
-      actions: { compact: true, rewindFiles: true },
-    },
-  },
-  codex: {
-    platform: "codex",
-    label: "Codex",
-    capabilities: {
-      ...richCapabilities,
-      attachments: { files: false, images: true },
-      actions: { compact: true, steer: true, review: true },
-    },
-  },
-  opencode: {
-    platform: "opencode",
-    label: "OpenCode",
-    capabilities: {
-      ...richCapabilities,
-      composer: {
-        ...richCapabilities.composer,
-        speed: false,
-        executionProfile: true,
-      },
-      actions: { compact: true, undo: true, redo: true, share: true },
-    },
-  },
-  cursor: acpAdapter("cursor", "Cursor Agent"),
-  grok: acpAdapter("grok", "Grok Build"),
+  claude: adapter("claude", "Claude"),
+  codex: adapter("codex", "Codex"),
+  opencode: adapter("opencode", "OpenCode"),
+  cursor: adapter("cursor", "Cursor Agent"),
+  grok: adapter("grok", "Grok Build"),
 };
 
 export function getNativeAgentAdapter(platform: AgentPlatform): NativeAgentAdapter {

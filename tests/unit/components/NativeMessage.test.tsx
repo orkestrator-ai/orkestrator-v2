@@ -2209,8 +2209,8 @@ describe("NativeMessage", () => {
 
     const trigger = screen.getByRole("button", { name: /Subagent Active/i });
     expect(screen.getByText("Waiting for activity.")).toBeTruthy();
-    expect(screen.getByText("0 tools")).toBeTruthy();
-    expect(screen.getByText("0 updates")).toBeTruthy();
+    expect(screen.queryByText("0 tools") === null).toBe(true);
+    expect(screen.queryByText("0 updates") === null).toBe(true);
 
     fireEvent.click(trigger);
     expect(screen.getByText("No child actions yet.")).toBeTruthy();

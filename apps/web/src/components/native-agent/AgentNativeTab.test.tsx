@@ -2054,6 +2054,41 @@ describe("AgentNativeTab", () => {
       expect(performNativeAgentSessionActionMock).not.toHaveBeenCalled();
     });
 
+    test.each(["cursor", "grok"] as const)(
+      "queues a follow-up for a running %s turn with its composer settings",
+      async (platform) => {
+        seedProjection({
+          phase: "running",
+          composer: {
+            selectedModelId: "model-a",
+            selectedReasoningId: "high",
+            selectedModeId: "plan",
+            fastModeAvailable: true,
+            fastModeEnabled: true,
+          },
+        });
+        const tabId = `tab-${platform}-queue`;
+        render(<AgentNativeTab tabId={tabId} data={identity(platform)} isActive />);
+
+        const input = await screen.findByRole("textbox");
+        fireEvent.input(input, { target: { textContent: "Follow up after this turn" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+
+        await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+          `${platform}\u0000${createSessionKey("env-1", tabId)}`,
+          "env-1",
+          expect.objectContaining({
+            text: "Follow up after this turn",
+            model: "model-a",
+            reasoningEffort: "high",
+            mode: "plan",
+            fastMode: true,
+          }),
+        ));
+        expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+      },
+    );
+
     test("offers both attach and mention for a provider that accepts files", async () => {
       seedProjection();
       render(<AgentNativeTab tabId="tab-attach" data={identity("claude")} isActive />);

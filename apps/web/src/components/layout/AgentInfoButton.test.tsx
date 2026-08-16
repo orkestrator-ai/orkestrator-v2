@@ -4149,6 +4149,42 @@ describe("AgentInfoButton ACP agents", () => {
     expect(popover().textContent).toContain("Grok Build 1.0.3");
   });
 
+  test("renders Cursor usage when the bridge reported a snapshot", () => {
+    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor", {
+      composer: {
+        models: [],
+        fastModeEnabled: null,
+        fastModeAvailable: false,
+        modes: [],
+        selectedModelId: "grok-4.6",
+      },
+      contextUsage: {
+        usedTokens: 15_675,
+        maximumTokens: 200_000,
+        percentage: 7.8375,
+        inputTokens: 10_000,
+        outputTokens: 2_000,
+        reasoningTokens: 300,
+        costUsd: 0.042,
+        source: "provider",
+      },
+      runtime: { commands: 7, state: "idle" },
+    }));
+
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+
+    expect(screen.getByRole("heading", { name: "Cursor Agent" })).toBeTruthy();
+    expect(screen.getByText("Context")).toBeTruthy();
+    expect(screen.getByText("7.8%")).toBeTruthy();
+    expect(metricValue("Input")).toBe("10k");
+    expect(metricValue("Output")).toBe("2.0k");
+    expect(metricValue("Reasoning")).toBe("300");
+    expect(metricValue("Cost")).toBe("$0.04");
+    expect(metricValue("Commands")).toBe("7");
+    expect(screen.queryByText(/first token snapshot/) === null).toBe(true);
+  });
+
   test("shows Cursor's runtime and says nothing about tokens it never reports", () => {
     useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor", {
       runtime: { commands: 7, state: "idle" },

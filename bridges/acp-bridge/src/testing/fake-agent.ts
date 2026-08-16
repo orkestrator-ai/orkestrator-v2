@@ -950,6 +950,54 @@ lines.on("line", (line) => {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }
+    if (prompt.startsWith("JSON_THEN_THOUGHT:")) {
+      const text = prompt.slice("JSON_THEN_THOUGHT:".length).split("\n\nReturn only")[0];
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            content: { type: "text", text: '{"fromThought":true}' },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("THOUGHT_THEN_JSON:")) {
+      const text = prompt.slice("THOUGHT_THEN_JSON:".length).split("\n\nReturn only")[0];
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            content: { type: "text", text: "The schema requires JSON. Example {\"fromThought\":true}." },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
     if (prompt.startsWith("OVERSIZED")) {
       write({
         jsonrpc: "2.0",

@@ -10,6 +10,7 @@ import {
   parseParentPid,
   startParentWatchdog,
 } from "@orkestrator/protocol/parent-watchdog";
+import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
 import { boundTranscriptResponse } from "@orkestrator/protocol/transcript-window";
 import type {
   NativeAgentComposerState,
@@ -3883,15 +3884,22 @@ async function route(
             requestId,
             error: { code: "output_too_large", message: `${provider} returned too much structured output`, provider, retryable: true },
           });
-        } else try {
-          setStructuredResult(state, requestId, { ok: true, value: JSON.parse(output), provider, requestId });
-        } catch {
-          setStructuredResult(state, requestId, {
-            ok: false,
-            provider,
-            requestId,
-            error: { code: "malformed_output", message: `${provider} returned malformed JSON`, provider, retryable: true },
-          });
+        } else {
+          // Cursor/Grok dump thinking into the text channel. A raw JSON.parse of
+          // the concatenated turn would reject a valid report that follows that
+          // prefix, a Markdown fence, or a short wrapper. Recover the last
+          // well-formed document; schema validation still happens above this.
+          const value = tryParseStructuredOutputText(output);
+          if (value === undefined) {
+            setStructuredResult(state, requestId, {
+              ok: false,
+              provider,
+              requestId,
+              error: { code: "malformed_output", message: `${provider} returned malformed JSON`, provider, retryable: true },
+            });
+          } else {
+            setStructuredResult(state, requestId, { ok: true, value, provider, requestId });
+          }
         }
       }
       if (requestId) setPromptJournal(state, {

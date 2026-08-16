@@ -5,6 +5,7 @@ import {
   isStructuredOutputReadUnavailableError,
   isStructuredOutputResult,
   structuredOutputFailure,
+  tryParseStructuredOutputText,
 } from "../../../packages/protocol/src/structured-output";
 
 describe("structured-output protocol", () => {
@@ -141,5 +142,12 @@ describe("structured-output protocol", () => {
       retryable: true,
       cause,
     });
+  });
+
+  test("recovers JSON from thinking-prefixed structured output text", () => {
+    expect(tryParseStructuredOutputText(
+      "The extractor likely scans the entire assistant message.\n{\"ready\":\"yes\"}",
+    )).toEqual({ ready: "yes" });
+    expect(tryParseStructuredOutputText("I could not verify the build.")).toBeUndefined();
   });
 });

@@ -1183,6 +1183,25 @@ describe("OpenCode provider runtime", () => {
           ok: false,
           error: { code: "malformed_output", retryable: true },
         });
+
+      fake.setMessagesResponse(reply(
+        "<thinking>{ incomplete schema sketch\n{\"fromThought\":true}</thinking>\n{\"complete\":true}",
+      ));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: true } });
+
+      fake.setMessagesResponse(reply(
+        "{\"complete\":true}\n<thinking>{\"fromThought\":true}</thinking>",
+      ));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: true } });
+
+      // An annotated opening tag still marks the trace.
+      fake.setMessagesResponse(reply(
+        "{\"complete\":true}\n<thinking type=\"reflection\">{\"fromThought\":true}</thinking>",
+      ));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: true } });
     } finally {
       await provider.dispose?.();
     }

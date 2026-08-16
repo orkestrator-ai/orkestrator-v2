@@ -1,6 +1,6 @@
 import { existsSync, fs, os, path, pathToFileURL, randomUUID, CODEX_BACKGROUND_TASK_MODEL, CODEX_BACKGROUND_TASK_REASONING_EFFORT, sanitizeBranchName, sanitizeEnvironmentName, commandExists, runCommand, ENVIRONMENT_AGENT_SKILLS_SCRIPT } from "./commands-dependencies.js";
 import type { Environment, AgentSkillProvider, AgentExtensionId, ExtensionCommandRunner } from "./commands-dependencies.js";
-import { dockerExec } from "./commands-environment.js";
+import { dockerExec } from "./commands-container-exec.js";
 import type { AcpLocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 

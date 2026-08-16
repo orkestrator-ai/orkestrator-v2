@@ -3,8 +3,10 @@ import type { Environment, ClaudeEffortLevel, ClaudeModelCatalogEntry, ClaudeMod
 import { BRIDGE_TOKEN_PATTERN, retryableBridgeStartupError, CLAUDE_MODEL_CATALOG_TTL_MS, CLAUDE_MODEL_CATALOG_REQUEST_TIMEOUT_MS, CONTAINER_GITHUB_CREDENTIAL_FILE, CLAUDE_GITHUB_CREDENTIAL_FILE_ENV, CLAUDE_GITHUB_ENV_FINGERPRINT_FILE, CLAUDE_GITHUB_ENV_FINGERPRINT, OPENCODE_GITHUB_ENV_PLUGIN_PATH, OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT_FILE, OPENCODE_GITHUB_ENV_PLUGIN_SOURCE, OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT } from "./commands-runtime-state.js";
 import { resolveAnthropicApiKey, resolveCursorApiKey } from "./commands-validation.js";
 import { quoteShell } from "./commands-agent-support.js";
-import { invalidateDockerContainerStateCache, isContainerRunning, getHostPort, normalizeConfiguredProjectFiles, stageConfiguredProjectFilesForContainer, dockerExec, shouldAddDockerHostGatewayAlias } from "./commands-environment.js";
-import { dockerExecDetached, checkHttpHealth, isHttpServerReachable, waitForHealth, waitForLocalServerHealth, waitForHttpServerExit, waitForUnhealthy, openCodeHealthHeaders, claudeBridgeAuthHeaders, agentToolConnectionFingerprint } from "./commands-servers.js";
+import { invalidateDockerContainerStateCache, isContainerRunning, getHostPort, shouldAddDockerHostGatewayAlias } from "./commands-container-exec.js";
+import { normalizeConfiguredProjectFiles, stageConfiguredProjectFilesForContainer } from "./commands-project-files.js";
+import { dockerExec } from "./commands-container-exec.js";
+import { dockerExecDetached, checkHttpHealth, isHttpServerReachable, waitForHealth, waitForLocalServerHealth, waitForHttpServerExit, waitForUnhealthy, openCodeHealthHeaders, claudeBridgeAuthHeaders, agentToolConnectionFingerprint } from "./commands-server-health.js";
 import type { LocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 

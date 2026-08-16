@@ -2,7 +2,6 @@ import { existsSync, path, createHash } from "./commands-dependencies.js";
 import type { ClientEnvironment, Environment, PersistedLoopedReviewWorkflow } from "./commands-dependencies.js";
 import { terminalProcesses, terminalSessionConfigs, terminalOutputBuffers, terminalOutputRevisions, terminalOutputGenerations, terminalOutputDeltas, terminalOutputDeltaBytes, terminalOutputTruncated, terminalOutputRetentionTimers, terminalSessionIdsByStableKey, terminalStableKeysBySessionId, orphanedTerminalMissingSince, terminalActivityTimers, terminalActivityArmed, terminalActivityGenerations, terminalActivityCompletions, terminalActivityCompletionStates, deletingLocalServerEnvironments, MAX_TERMINAL_OUTPUT_BUFFER_CHARS, getTerminalOutputRetentionMs, resetTerminalOutputRetentionMs, nextTerminalActivityGenerationValue, MAX_RETAINED_TERMINAL_OUTPUT_BUFFERS, TERMINAL_ACTIVITY_SETTLE_MS } from "./commands-runtime-state.js";
 import { containerIdMatches } from "./commands-review.js";
-import { isSetupTerminalSessionId } from "./commands-environment.js";
 import type { TerminalSessionConfig, TerminalOutputBuffer, EnvironmentSetupStartResult, ClientEnvironmentSetupStartResult } from "./commands-runtime-state.js";
 import type { CommandContext, BackendEmit } from "./commands-context.js";
 
@@ -725,4 +724,12 @@ export function assertEnvironmentDeletionNotRequested(
   if (environment?.deletionRequestedAt) {
     throw new Error(`Environment is being deleted: ${environmentId}`);
   }
+}
+
+export function setupTerminalSessionId(environmentId: string): string {
+  return `${environmentId}:setup`;
+}
+
+export function isSetupTerminalSessionId(sessionId: string): boolean {
+  return sessionId.endsWith(":setup");
 }

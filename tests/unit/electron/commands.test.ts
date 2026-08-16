@@ -7135,6 +7135,22 @@ exit 1
           ) as Array<{ path: string }>;
           expect(afterRevert).toEqual([]);
 
+          // `revert_container_file` only *requests* its scan, so the reverted
+          // counts are not published yet. Restoring the modified fixture before
+          // that scan lands makes it read the pre-revert counts again, and the
+          // service correctly suppresses an unchanged reading - leaving `last`
+          // pinned to the pre-revert value, which then suppresses every later
+          // scan too. Waiting for the reverted counts is the barrier that keeps
+          // the rewrite below a genuine change rather than a no-op the service
+          // is right to swallow. This mirrors the local-revert test above.
+          await waitForCondition(
+            () => emitted.some((entry) =>
+              entry.event === "environment-diff-stats-changed"
+              && (entry.payload as { stats?: { filesChanged?: number } }).stats?.filesChanged === 0
+            ),
+            "the container revert to be announced",
+          );
+
           await fs.writeFile(
             responsePath,
             framedContainerGitStatus("M\0tracked.txt\0", "1\t0\ttracked.txt\0"),
@@ -7167,7 +7183,7 @@ exit 1
         if (previousResponse === undefined) delete process.env.FAKE_CONTAINER_MUTATION_RESPONSE;
         else process.env.FAKE_CONTAINER_MUTATION_RESPONSE = previousResponse;
       }
-    });
+    }, ASYNC_TEST_BUDGET_MS);
 
     test("refreshes a tracked environment on explicit request", async () => {
       const { worktree } = await createGitWorktreeWithOrigin();

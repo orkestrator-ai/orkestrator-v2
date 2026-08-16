@@ -1,5 +1,8 @@
 import * as shared from "./storage-shared-core.js";
-const { createHash, isRecord } = shared;
+import {
+  createHash,
+  isRecord,
+} from "./storage-shared-core.js";
 type OpenCodeModelCatalogEntry = shared.OpenCodeModelCatalogEntry;
 type OpenCodeModelCatalogSnapshot = shared.OpenCodeModelCatalogSnapshot;
 type ResourceChange = shared.ResourceChange;

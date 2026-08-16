@@ -1,3 +1,7 @@
+export * from "./commands-server-health.js";
+export * from "./commands-project-files.js";
+export * from "./commands-error-text.js";
+export * from "./commands-container-exec.js";
 export * from "./commands-runtime-state.js";
 export * from "./commands-pr-monitor.js";
 export * from "./commands-validation.js";

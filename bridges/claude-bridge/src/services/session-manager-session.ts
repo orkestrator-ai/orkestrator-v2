@@ -63,8 +63,14 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import * as core from "./session-manager-core.js";
 import * as persistence from "./session-manager-persistence.js";
-const { sessions, sessionIdForClientKey, createSession, ensurePersistedSession } = Object.assign({}, core, persistence);
-void [sessions, sessionIdForClientKey, createSession, ensurePersistedSession];
+import {
+  createSession,
+  sessionIdForClientKey,
+  sessions,
+} from "./session-manager-core.js";
+import {
+  ensurePersistedSession,
+} from "./session-manager-persistence.js";
 /**
  * Idempotent create used by the HTTP route.
  *

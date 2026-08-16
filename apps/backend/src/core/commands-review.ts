@@ -3,7 +3,7 @@ import type { Environment, PrState, JsonRecord } from "./commands-dependencies.j
 import { deletingLocalServerEnvironments, mergingEnvironments, withContainerRuntimeCredential } from "./commands-runtime-state.js";
 import { asString, asRecord, assertOnlyKeys } from "./commands-validation.js";
 import { quoteShell, validateGitRefName } from "./commands-agent-support.js";
-import { dockerExec } from "./commands-environment.js";
+import { dockerExec } from "./commands-container-exec.js";
 import { validateWorkspaceMutationPath } from "./commands-files.js";
 import type { CommandContext } from "./commands-context.js";
 

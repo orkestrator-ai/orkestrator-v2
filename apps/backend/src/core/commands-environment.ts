@@ -1,6 +1,23 @@
-import { fs, os, isIP, path, spawnPty, APP_SLUG, DOCKER_LABEL_APP, DOCKER_LABEL_APP_VALUE, DOCKER_LABEL_OWNER, ORKESTRATOR_PROJECT_CONFIG, dockerOwnerNamespace, sanitizeBranchName, sanitizeEnvironmentName, pathExists, runCommand, validateRelativeFilePath, shutdownClaudeStatePolling } from "./commands-dependencies.js";
+import { fs, os, isIP, path, spawnPty, APP_SLUG, DOCKER_LABEL_APP, DOCKER_LABEL_APP_VALUE, DOCKER_LABEL_OWNER, ORKESTRATOR_PROJECT_CONFIG, dockerOwnerNamespace, sanitizeBranchName, sanitizeEnvironmentName, pathExists, runCommand, shutdownClaudeStatePolling } from "./commands-dependencies.js";
+import { addLocalWorkspaceArtifactsToGitExclude } from "./commands-files.js";
+import { setupTerminalSessionId, isSetupTerminalSessionId } from "./commands-terminal.js";
+import {
+  CONTAINER_AGENT_TOOLS_HOST,
+  DOCKER_CONTAINER_STATE_CACHE_MS,
+  DOCKER_DESKTOP_GATEWAY_HOST,
+  dockerContainerStateCache,
+  dockerExec,
+  getDockerStatus,
+  getHostPort,
+  isContainerRunning,
+  parseDockerStatus,
+  setDockerContainerStateCache,
+} from "./commands-container-exec.js";
+import {
+  copyConfiguredProjectFilesToDirectory,
+} from "./commands-project-files.js";
 import type { Environment, EnvironmentStatus, PtyProcess, StorageService, AgentToolConnection } from "./commands-dependencies.js";
-import { terminalProcesses, CONTAINER_WORKSPACE_SETUP_COMMAND, SETUP_DONE_OSC_SEQUENCE, SETUP_FAILED_OSC_SEQUENCE, SETUP_DONE_PRINTF_CMD, SETUP_FAILED_PRINTF_CMD, environmentSetupSessions, environmentSetupTasks, environmentSetupStartTasks, environmentStartTasks, environmentLifecycleOperations, environmentBaselineTasks, WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS, diffStatsService, invalidatePendingDiffStatsSync, syncDiffStatsTracking } from "./commands-runtime-state.js";
+import { terminalProcesses, CONTAINER_WORKSPACE_SETUP_COMMAND, SETUP_DONE_OSC_SEQUENCE, SETUP_FAILED_OSC_SEQUENCE, SETUP_DONE_PRINTF_CMD, SETUP_FAILED_PRINTF_CMD, environmentSetupSessions, environmentSetupTasks, environmentSetupStartTasks, environmentStartTasks, environmentLifecycleOperations, environmentBaselineTasks, diffStatsService, invalidatePendingDiffStatsSync, syncDiffStatsTracking } from "./commands-runtime-state.js";
 import { prMonitorService, invalidatePendingPrMonitorSync, syncPrMonitorTracking } from "./commands-pr-monitor.js";
 import { quoteShell, validateGitRefName, envWithManagedBinaries } from "./commands-agent-support.js";
 import { createLocalGhRunner, createContainerGhRunner, deletePullRequestHeadBranchViaGitHubApi, findEnvironmentByContainerId } from "./commands-review.js";
@@ -8,7 +25,7 @@ import { toClientEnvironment, terminalOutputBufferLength, deleteRetainedTerminal
 import { readLocalHeadCommit, ensureCreatedFromCommitBeforeSetup, enqueueLocalServerEnvironmentOperation, stopLocalServersForEnvironmentUnlocked } from "./commands-servers.js";
 import { resolveRemoteWorktreeStartPoint, enableGitScanCaches, resolveContainerGitHubToken, syncContainerGitHubCredential, syncContainerClaudeCredentialBestEffort, ensureContainerProjectFilesAccess } from "./commands-files.js";
 import { createDockerContainer } from "./commands-containers.js";
-import { environmentLifecycleErrorMessage, logEnvironmentLifecycleFailure } from "./commands-projects.js";
+import { environmentLifecycleErrorMessage, logEnvironmentLifecycleFailure } from "./commands-error-text.js";
 import type { EnvironmentSetupStartResult } from "./commands-runtime-state.js";
 import type { CommandContext, BackendEmit } from "./commands-context.js";
 
@@ -75,27 +92,6 @@ export function spawnTerminalProcess(
   return terminalProcess;
 }
 
-export function parseDockerStatus(status: string): EnvironmentStatus {
-  switch (status.trim().toLowerCase()) {
-    case "running":
-      return "running";
-    case "created":
-    case "restarting":
-      return "creating";
-    case "exited":
-    case "dead":
-    case "paused":
-      return "stopped";
-    default:
-      return "error";
-  }
-}
-
-export async function getDockerStatus(containerId: string): Promise<EnvironmentStatus> {
-  const { stdout } = await runCommand("docker", ["inspect", "-f", "{{.State.Status}}", containerId], { timeoutMs: 10_000 });
-  return parseDockerStatus(stdout);
-}
-
 export async function inspectDockerContainerIdentity(containerId: string): Promise<{
   owner: string;
   status: EnvironmentStatus;
@@ -151,23 +147,6 @@ export async function assertDockerContainerOwned(
 }
 
 /**
- * How long one `docker ps` snapshot may serve status reads. A multi-project
- * refresh fans out one `get_environments` per project almost simultaneously;
- * without this, each of them would run its own `docker ps`.
- */
-export const DOCKER_CONTAINER_STATE_CACHE_MS = 3_000;
-
-export let dockerContainerStateCache: {
-  fetchedAt: number;
-  ownershipKey: string;
-  states: Promise<Map<string, EnvironmentStatus> | null>;
-} | null = null;
-
-export function invalidateDockerContainerStateCache(): void {
-  dockerContainerStateCache = null;
-}
-
-/**
  * One `docker ps -a` over the orkestrator label instead of one `docker
  * inspect` per environment. Returns null when Docker is unreachable so
  * callers fall back to their existing per-container handling.
@@ -216,29 +195,8 @@ export function getOrkestratorContainerStates(
     return dockerContainerStateCache.states;
   }
   const states = listOrkestratorContainerStates(context);
-  dockerContainerStateCache = { fetchedAt: now, ownershipKey, states };
+  setDockerContainerStateCache({ fetchedAt: now, ownershipKey, states });
   return states;
-}
-
-export async function isContainerRunning(containerId: string): Promise<boolean> {
-  try {
-    return await getDockerStatus(containerId) === "running";
-  } catch {
-    return false;
-  }
-}
-
-export async function getHostPort(containerId: string, containerPort: number, protocol = "tcp"): Promise<number | null> {
-  try {
-    const { stdout } = await runCommand("docker", ["port", containerId, `${containerPort}/${protocol}`], { timeoutMs: 10_000 });
-    const line = stdout.split("\n").find(Boolean);
-    if (!line) return null;
-    const rawPort = line.split(":").at(-1);
-    const port = rawPort ? Number.parseInt(rawPort, 10) : Number.NaN;
-    return Number.isFinite(port) ? port : null;
-  } catch {
-    return null;
-  }
 }
 
 export async function syncStoredEnvironmentStatus(
@@ -330,79 +288,6 @@ export function getWorktreeBaseDir(context?: Pick<CommandContext, "worktreeDir">
   return context?.worktreeDir ?? path.join(os.homedir(), APP_SLUG, "workspaces");
 }
 
-export function normalizeConfiguredProjectFiles(filesToCopy: string[] | undefined): string[] {
-  const normalized: string[] = [];
-  const seen = new Set<string>();
-
-  for (const filePath of filesToCopy ?? []) {
-    const trimmed = filePath.trim();
-    if (!trimmed) continue;
-    const safePath = validateRelativeFilePath(trimmed, "file to copy");
-    const key = safePath.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    normalized.push(safePath);
-  }
-
-  return normalized;
-}
-
-export function isPathInsideRoot(filePath: string, rootPath: string): boolean {
-  const relative = path.relative(rootPath, filePath);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-export async function copyConfiguredProjectFilesToDirectory(
-  projectPath: string,
-  destinationRoot: string,
-  filesToCopy: string[] | undefined,
-): Promise<void> {
-  const configuredFiles = normalizeConfiguredProjectFiles(filesToCopy);
-  if (configuredFiles.length === 0) return;
-
-  const projectRoot = await fs.realpath(projectPath);
-
-  for (const relativePath of configuredFiles) {
-    const sourcePath = path.join(projectRoot, relativePath);
-    let realSourcePath: string;
-    try {
-      realSourcePath = await fs.realpath(sourcePath);
-    } catch {
-      throw new Error(`Configured file to copy not found: ${relativePath}`);
-    }
-
-    if (!isPathInsideRoot(realSourcePath, projectRoot)) {
-      throw new Error(`Configured file to copy must stay inside the project: ${relativePath}`);
-    }
-
-    const stats = await fs.stat(realSourcePath);
-    if (!stats.isFile()) {
-      throw new Error(`Configured path to copy is not a file: ${relativePath}`);
-    }
-
-    const destinationPath = path.join(destinationRoot, relativePath);
-    await fs.mkdir(path.dirname(destinationPath), { recursive: true });
-    await fs.copyFile(realSourcePath, destinationPath);
-  }
-}
-
-export async function stageConfiguredProjectFilesForContainer(
-  containerId: string,
-  projectPath: string,
-  filesToCopy: string[] | undefined,
-): Promise<void> {
-  const configuredFiles = normalizeConfiguredProjectFiles(filesToCopy);
-  if (configuredFiles.length === 0) return;
-
-  const stagingDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestrator-project-files-"));
-  try {
-    await copyConfiguredProjectFilesToDirectory(projectPath, stagingDir, configuredFiles);
-    await runCommand("docker", ["cp", `${stagingDir}${path.sep}.`, `${containerId}:/project-files`], { timeoutMs: 120_000 });
-  } finally {
-    await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
-  }
-}
-
 export async function readSetupLocalCommands(worktreePath: string): Promise<string[]> {
   const configPath = path.join(worktreePath, ORKESTRATOR_PROJECT_CONFIG);
   if (!await pathExists(configPath)) return [];
@@ -419,14 +304,6 @@ export async function readEnvironmentSetupCommands(environment: Environment): Pr
     return environment.worktreePath ? readSetupLocalCommands(environment.worktreePath) : [];
   }
   return [CONTAINER_WORKSPACE_SETUP_COMMAND];
-}
-
-export function setupTerminalSessionId(environmentId: string): string {
-  return `${environmentId}:setup`;
-}
-
-export function isSetupTerminalSessionId(sessionId: string): boolean {
-  return sessionId.endsWith(":setup");
 }
 
 /**
@@ -1358,54 +1235,6 @@ export async function cleanupFailedLocalWorktree(projectPath: string, worktreePa
 
   const refName = validateGitRefName(branch, "environment branch");
   await runCommand("git", ["-C", projectPath, "branch", "-D", refName], { timeoutMs: 30_000 }).catch(() => undefined);
-}
-
-export async function resolveLocalGitExcludeFile(worktreePath: string): Promise<string> {
-  const { stdout } = await runCommand("git", ["-C", worktreePath, "rev-parse", "--git-path", "info/exclude"], { timeoutMs: 10_000 });
-  const excludeFile = stdout.trim();
-  if (!excludeFile) throw new Error(`Could not resolve git exclude file for ${worktreePath}`);
-  return path.isAbsolute(excludeFile) ? excludeFile : path.resolve(worktreePath, excludeFile);
-}
-
-export async function addLocalWorkspaceArtifactsToGitExclude(worktreePath: string): Promise<void> {
-  const excludeFile = await resolveLocalGitExcludeFile(worktreePath);
-  await fs.mkdir(path.dirname(excludeFile), { recursive: true });
-
-  const existing = await fs.readFile(excludeFile, "utf8").catch(() => "");
-  const existingPatterns = new Set(existing.split(/\r?\n/));
-  let next = existing;
-  if (next.length > 0 && !next.endsWith("\n")) next += "\n";
-
-  for (const pattern of WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS) {
-    if (existingPatterns.has(pattern)) continue;
-    next += `${pattern}\n`;
-  }
-
-  if (next !== existing) {
-    await fs.writeFile(excludeFile, next);
-  }
-}
-
-export async function dockerExec(
-  containerId: string,
-  command: string,
-  timeoutMs = 120_000,
-  redactValues?: ReadonlyArray<string | null | undefined>,
-): Promise<string> {
-  const { stdout } = await runCommand("docker", ["exec", containerId, "bash", "-lc", command], { timeoutMs, redactValues });
-  return stdout;
-}
-
-export const CONTAINER_AGENT_TOOLS_HOST = "host.docker.internal";
-export const DOCKER_DESKTOP_GATEWAY_HOST = "gateway.docker.internal";
-
-export function shouldAddDockerHostGatewayAlias(
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  // Docker Desktop publishes host.docker.internal through its own DNS. An
-  // explicit host-gateway entry shadows that working address with the Linux VM
-  // bridge gateway on macOS/Windows, which cannot reach host-only listeners.
-  return platform === "linux";
 }
 
 export function parseIpTokens(output: string): string[] {

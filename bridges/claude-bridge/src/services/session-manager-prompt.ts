@@ -63,16 +63,73 @@ import * as core from "./session-manager-core.js";
 import * as lifecycle from "./session-manager-lifecycle.js";
 import * as messageParts from "./session-manager-messages.js";
 import * as persistence from "./session-manager-persistence.js";
-import * as background from "./session-manager-background-tasks.js";
-import * as interactions from "./session-manager-interactions.js";
 import { createPromptStreamState } from "./session-manager-prompt-stream.js";
 import { nextTurnGeneration } from "./session-manager-core.js";
-const { sessions, turnGenerationCounter, claimedPromptDispatches, pendingPromptDispatchClaims, IDLE_TRANSCRIPT_EVICTION_MS, IDLE_TRANSCRIPT_SWEEP_INTERVAL_MS, STRUCTURED_USAGE_REQUEST_TIMEOUT_MS, StructuredUsageRequestTimeoutError, touchSession, claudeExecutableOptions, pendingQuestions, questionResolvers, pendingPlanApprovals, planApprovalResolvers, QUESTION_TIMEOUT_MS, PLAN_APPROVAL_TIMEOUT_MS, SessionOperationError, sessionOperationError, TRANSCRIPT_UUID_PATTERN, ClaudeStructuredOutputError, recordStructuredOutput, generateSessionId, CLIENT_SESSION_ID_PATTERN, sessionIdForClientKey, sdkSessionIdFromBridgeId, bridgeSessionIdFromSdkId, persistedBridgeSessionId, generateMessageId, parseTokenValue, MAX_DATE_MS, EPOCH_MILLISECONDS_THRESHOLD, rateLimitResetToIso, extractContextUsageFromUnknown, STRUCTURED_RATE_LIMIT_WINDOWS, structuredRateLimitReset, structuredRateLimitWindow, rateLimitsFromStructuredUsage, getStructuredUsageWithTimeout, refreshStructuredRateLimits, createStructuredUsageRefreshCoordinator, buildClaudeUsageSnapshot, TITLE_MAX_SOURCE_PROMPT_LENGTH, TITLE_MAX_LENGTH, TITLE_MAX_OUTPUT_BYTES, TITLE_MAX_STDERR_LENGTH, TITLE_COMMAND_TIMEOUT_MS, TITLE_TERMINATION_GRACE_MS, SESSION_TITLE_SYSTEM_PROMPT, execFileText, findClaudeCliExecutable, sanitizeSessionTitle, buildSessionTitlePrompt, runClaudeTitleCommand, generateTitleViaCli, generateAndSetSessionTitle, createSession, persistSessionMetadata, ensureClientSessionAlias, applySessionPlanMode, setSessionPreferences, clearPromptSuggestion, getSession, PERSISTED_EXISTENCE_MEMO_MS, PERSISTED_EXISTENCE_MEMO_MAX, persistedSessionExistence, persistedSessionExistsOnDisk, resetSessionActivityProbeCacheForTesting, claudeSdk, currentWorkingDirectory, persistSessionTitle, getSessionActivity, PROMPT_DISPATCH_RETENTION_MS, promptDispatchRecords, promptDispatchKey, collectPromptDispatchGarbage, recordPromptDispatch, getPromptDispatchRecord, forgetPromptDispatch, forgetPromptDispatchesForSession, getPromptDispatchRecordCountForTesting, seedSettledPromptDispatchForTesting, getPromptDispatchState, claimPromptDispatch, waitForPendingPromptDispatchClaim, listSessions, cleanupPendingPlanApprovals, cleanupPendingQuestions, cleanupPendingInteractions, isPendingInteractionFor, sessionHasPendingInteractions, deleteSession, getSessionMessages, abortSession, ToolTracker, parseMcpToolName, isTaskToolName, parseMessageContent, buildMessageParts, MAX_PERSISTED_BACKGROUND_TASK_ID_LENGTH, MAX_PERSISTED_BACKGROUND_TASK_TEXT_LENGTH, MAX_PERSISTED_TIMESTAMP_FUTURE_SKEW_MS, persistedTaskIdentifier, persistedTaskText, PROVISIONAL_BACKGROUND_TASK_PREFIX, MAX_BACKGROUND_TASK_CANDIDATES, provisionalBackgroundTaskId, BACKGROUND_TASK_LABEL_BODY, LINE_LEADING_BACKGROUND_TASK_LABEL, EXCLUSIVE_BACKGROUND_TASK_LABEL, backgroundTaskResultText, backgroundTaskIdFromToolResultContent, exclusiveBackgroundTaskLabelId, correlatedBashToolResults, exclusiveBashToolResultId, bashToolResultOutcomes, provisionalBackgroundTaskLaunchesFromAssistantMessage, bashToolUseIdsFromAssistantMessage, persistedTaskStatus, persistedNotificationStatus, persistedTimestamp, persistedBackgroundTaskMessage, persistedRecordTime, reducePersistedBackgroundTaskMessage, normalizePersistedSessionMessages, sessionDeletionTick, DELETE_TOMBSTONE_LIMIT, deletedSdkSessionTicks, recordDeletedSdkSession, deletedSinceTick, isDefaultSessionTitle, reconcilePersistedSessions, persistedMaterializations, materializePersistedSessionState, ensurePersistedSession, readPersistedSessionMessages, readPersistedSessionMessagesOnce, hydratePersistedSessionMessages, lastIdleTranscriptSweep, getLastIdleTranscriptSweep, evictIdleHydratedTranscripts, startIdleTranscriptSweep, deleteSessionDurably, renameSessionDurably, forkPersistedSession, resolvePersistedMessageId, REWIND_OPEN_TIMEOUT_MS, rewindViaTransientQuery, rewindSessionFiles, isSamePublishedPart, getMessageTextFromParts, getImageMediaType, SUPPORTED_IMAGE_MEDIA_TYPES, MAX_IMAGE_ATTACHMENT_BYTES, ClaudeAttachmentError, decodedBase64ByteLength, parseBase64ImageData, isPathWithin, attachmentErrorForFsFailure, assertNoSymlinkComponents, assertOpenedWorkspaceFile, readWorkspaceImageAttachment, escapeXmlAttribute, attachmentTag, buildSdkPrompt, holdSdkPromptOpen, LIVE_BACKGROUND_TASK_STATUSES, registerBackgroundTaskCandidate, takeBackgroundTaskCandidate, removeBackgroundTaskCandidatesOwnedBy, takeProvisionalBackgroundTask, recordBackgroundTaskLaunch, MAX_TERMINAL_BACKGROUND_TASKS, boundBackgroundTaskHistory, MAX_SETTLING_BACKGROUND_TASKS, parkSettlingBackgroundTask, takeSettlingBackgroundTask, forgetSettlingBackgroundTasksOwnedBy, NO_CONTROL_CHANNEL, settleBackgroundTask, settleTasksOwnedByClosedControl, stopBackgroundTask, emitBackgroundTaskSnapshot, releaseQueryControl, closeQueryControl, releaseQueryControls, retainQueryControl, forgetRetainedQueryControl, closeQueryControlIfUnused, answerQuestion, dismissQuestion, getPendingQuestions, respondToPlanApproval, getPendingPlanApprovals, getSessionInitData, getAvailableModelCatalog, getAvailableModels, getClaudeRuntimeVersions } = Object.assign({}, core, lifecycle, messageParts, persistence, background, interactions);
-void [sessions, turnGenerationCounter, claimedPromptDispatches, pendingPromptDispatchClaims, IDLE_TRANSCRIPT_EVICTION_MS, IDLE_TRANSCRIPT_SWEEP_INTERVAL_MS, STRUCTURED_USAGE_REQUEST_TIMEOUT_MS, StructuredUsageRequestTimeoutError, touchSession, claudeExecutableOptions, pendingQuestions, questionResolvers, pendingPlanApprovals, planApprovalResolvers, QUESTION_TIMEOUT_MS, PLAN_APPROVAL_TIMEOUT_MS, SessionOperationError, sessionOperationError, TRANSCRIPT_UUID_PATTERN, ClaudeStructuredOutputError, recordStructuredOutput, generateSessionId, CLIENT_SESSION_ID_PATTERN, sessionIdForClientKey, sdkSessionIdFromBridgeId, bridgeSessionIdFromSdkId, persistedBridgeSessionId, generateMessageId, parseTokenValue, MAX_DATE_MS, EPOCH_MILLISECONDS_THRESHOLD, rateLimitResetToIso, extractContextUsageFromUnknown, STRUCTURED_RATE_LIMIT_WINDOWS, structuredRateLimitReset, structuredRateLimitWindow, rateLimitsFromStructuredUsage, getStructuredUsageWithTimeout, refreshStructuredRateLimits, createStructuredUsageRefreshCoordinator, buildClaudeUsageSnapshot, TITLE_MAX_SOURCE_PROMPT_LENGTH, TITLE_MAX_LENGTH, TITLE_MAX_OUTPUT_BYTES, TITLE_MAX_STDERR_LENGTH, TITLE_COMMAND_TIMEOUT_MS, TITLE_TERMINATION_GRACE_MS, SESSION_TITLE_SYSTEM_PROMPT, execFileText, findClaudeCliExecutable, sanitizeSessionTitle, buildSessionTitlePrompt, runClaudeTitleCommand, generateTitleViaCli, generateAndSetSessionTitle, createSession, persistSessionMetadata, ensureClientSessionAlias, applySessionPlanMode, setSessionPreferences, clearPromptSuggestion, getSession, PERSISTED_EXISTENCE_MEMO_MS, PERSISTED_EXISTENCE_MEMO_MAX, persistedSessionExistence, persistedSessionExistsOnDisk, resetSessionActivityProbeCacheForTesting, claudeSdk, currentWorkingDirectory, persistSessionTitle, getSessionActivity, PROMPT_DISPATCH_RETENTION_MS, promptDispatchRecords, promptDispatchKey, collectPromptDispatchGarbage, recordPromptDispatch, getPromptDispatchRecord, forgetPromptDispatch, forgetPromptDispatchesForSession, getPromptDispatchRecordCountForTesting, seedSettledPromptDispatchForTesting, getPromptDispatchState, claimPromptDispatch, waitForPendingPromptDispatchClaim, listSessions, cleanupPendingPlanApprovals, cleanupPendingQuestions, cleanupPendingInteractions, isPendingInteractionFor, sessionHasPendingInteractions, deleteSession, getSessionMessages, abortSession, ToolTracker, parseMcpToolName, isTaskToolName, parseMessageContent, buildMessageParts, MAX_PERSISTED_BACKGROUND_TASK_ID_LENGTH, MAX_PERSISTED_BACKGROUND_TASK_TEXT_LENGTH, MAX_PERSISTED_TIMESTAMP_FUTURE_SKEW_MS, persistedTaskIdentifier, persistedTaskText, PROVISIONAL_BACKGROUND_TASK_PREFIX, MAX_BACKGROUND_TASK_CANDIDATES, provisionalBackgroundTaskId, BACKGROUND_TASK_LABEL_BODY, LINE_LEADING_BACKGROUND_TASK_LABEL, EXCLUSIVE_BACKGROUND_TASK_LABEL, backgroundTaskResultText, backgroundTaskIdFromToolResultContent, exclusiveBackgroundTaskLabelId, correlatedBashToolResults, exclusiveBashToolResultId, bashToolResultOutcomes, provisionalBackgroundTaskLaunchesFromAssistantMessage, bashToolUseIdsFromAssistantMessage, persistedTaskStatus, persistedNotificationStatus, persistedTimestamp, persistedBackgroundTaskMessage, persistedRecordTime, reducePersistedBackgroundTaskMessage, normalizePersistedSessionMessages, sessionDeletionTick, DELETE_TOMBSTONE_LIMIT, deletedSdkSessionTicks, recordDeletedSdkSession, deletedSinceTick, isDefaultSessionTitle, reconcilePersistedSessions, persistedMaterializations, materializePersistedSessionState, ensurePersistedSession, readPersistedSessionMessages, readPersistedSessionMessagesOnce, hydratePersistedSessionMessages, lastIdleTranscriptSweep, getLastIdleTranscriptSweep, evictIdleHydratedTranscripts, startIdleTranscriptSweep, deleteSessionDurably, renameSessionDurably, forkPersistedSession, resolvePersistedMessageId, REWIND_OPEN_TIMEOUT_MS, rewindViaTransientQuery, rewindSessionFiles, isSamePublishedPart, getMessageTextFromParts, getImageMediaType, SUPPORTED_IMAGE_MEDIA_TYPES, MAX_IMAGE_ATTACHMENT_BYTES, ClaudeAttachmentError, decodedBase64ByteLength, parseBase64ImageData, isPathWithin, attachmentErrorForFsFailure, assertNoSymlinkComponents, assertOpenedWorkspaceFile, readWorkspaceImageAttachment, escapeXmlAttribute, attachmentTag, buildSdkPrompt, holdSdkPromptOpen, LIVE_BACKGROUND_TASK_STATUSES, registerBackgroundTaskCandidate, takeBackgroundTaskCandidate, removeBackgroundTaskCandidatesOwnedBy, takeProvisionalBackgroundTask, recordBackgroundTaskLaunch, MAX_TERMINAL_BACKGROUND_TASKS, boundBackgroundTaskHistory, MAX_SETTLING_BACKGROUND_TASKS, parkSettlingBackgroundTask, takeSettlingBackgroundTask, forgetSettlingBackgroundTasksOwnedBy, NO_CONTROL_CHANNEL, settleBackgroundTask, settleTasksOwnedByClosedControl, stopBackgroundTask, emitBackgroundTaskSnapshot, releaseQueryControl, closeQueryControl, releaseQueryControls, retainQueryControl, forgetRetainedQueryControl, closeQueryControlIfUnused, answerQuestion, dismissQuestion, getPendingQuestions, respondToPlanApproval, getPendingPlanApprovals, getSessionInitData, getAvailableModelCatalog, getAvailableModels, getClaudeRuntimeVersions];
+import {
+  ClaudeStructuredOutputError,
+  PLAN_APPROVAL_TIMEOUT_MS,
+  QUESTION_TIMEOUT_MS,
+  applySessionPlanMode,
+  buildClaudeUsageSnapshot,
+  claimedPromptDispatches,
+  claudeExecutableOptions,
+  createStructuredUsageRefreshCoordinator,
+  generateAndSetSessionTitle,
+  generateMessageId,
+  pendingPlanApprovals,
+  pendingQuestions,
+  persistSessionMetadata,
+  planApprovalResolvers,
+  questionResolvers,
+  rateLimitResetToIso,
+  recordStructuredOutput,
+  sdkSessionIdFromBridgeId,
+  sessionOperationError,
+  sessions,
+} from "./session-manager-core.js";
+import {
+  cleanupPendingInteractions,
+  forgetPromptDispatch,
+  getPromptDispatchRecord,
+  recordPromptDispatch,
+} from "./session-manager-lifecycle.js";
+import {
+  bashToolResultOutcomes,
+  bashToolUseIdsFromAssistantMessage,
+  buildMessageParts,
+  parseMessageContent,
+  provisionalBackgroundTaskId,
+  provisionalBackgroundTaskLaunchesFromAssistantMessage,
+} from "./session-manager-messages.js";
+import {
+  ClaudeAttachmentError,
+  attachmentTag,
+  buildSdkPrompt,
+  getMessageTextFromParts,
+  holdSdkPromptOpen,
+  readPersistedSessionMessagesOnce,
+} from "./session-manager-persistence.js";
+import {
+  LIVE_BACKGROUND_TASK_STATUSES,
+  boundBackgroundTaskHistory,
+  closeQueryControlIfUnused,
+  emitBackgroundTaskSnapshot,
+  forgetRetainedQueryControl,
+  forgetSettlingBackgroundTasksOwnedBy,
+  parkSettlingBackgroundTask,
+  recordBackgroundTaskLaunch,
+  registerBackgroundTaskCandidate,
+  removeBackgroundTaskCandidatesOwnedBy,
+  retainQueryControl,
+  settleBackgroundTask,
+  settleTasksOwnedByClosedControl,
+  takeBackgroundTaskCandidate,
+  takeProvisionalBackgroundTask,
+  takeSettlingBackgroundTask,
+} from "./session-manager-background-tasks.js";
 type StructuredUsageRefreshCoordinator = core.StructuredUsageRefreshCoordinator;
 type PlanApprovalResponse = core.PlanApprovalResponse;
 type OrderedPartEntry = messageParts.OrderedPartEntry;
-type ClaudeAttachmentError = persistence.ClaudeAttachmentError;
 export const STREAM_EVENT_COALESCE_MS = 100;
 /**
  * How long a released turn waits in silence for the continuation that a

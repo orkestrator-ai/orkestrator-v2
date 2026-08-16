@@ -1,184 +1,64 @@
 import * as shared from "./tmux-shared.js";
-import * as backend from "./tmux-backend.js";
 import * as hooks from "./tmux-hooks.js";
-import * as sessionManager from "./tmux-session-manager.js";
 import * as interactive from "./tmux-interactive.js";
 import * as poll from "./tmux-poll.js";
-const {
-  existsSync,
-  fs,
-  path,
-  os,
-  createHash,
-  randomUUID,
-  spawn,
-  delay,
-  ORKESTRATOR_AGENT_MCP_SERVER_NAME,
-  runCommand,
+import {
   TranscriptTaskTracker,
-  AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
-  parseTmuxAgentObservation,
-  parseTmuxSelectionPrompt,
-  tmuxSelectionPromptFingerprint,
-  CLAUDE_TMUX_EVENT,
-  POLL_INTERVAL_MS,
-  TMUX_OBSERVATION_INTERVAL_MS,
-  TMUX_BUSY_OBSERVATION_INTERVAL_MS,
-  LIVENESS_CHECK_EVERY_TICKS,
-  HOOK_TIMEOUT_SECS,
-  COMMAND_IDLE_TIMEOUT_MS,
-  COMMAND_NO_HOOK_SETTLE_MS,
-  COMMAND_AFTER_IDLE_SETTLE_MS,
-  PERMISSION_MODE_SWITCH_TIMEOUT_MS,
-  PERMISSION_MODE_POLL_MS,
-  FAST_MODE_SWITCH_TIMEOUT_MS,
-  FAST_MODE_POLL_MS,
-  FAST_MODE_TMUX_OPTION,
-  BACKUP_SENTINEL_NO_ORIGINAL,
-  CLAUDE_SETTINGS_LOCAL_GIT_EXCLUDE_PATTERN,
-  RUNTIME_ROOT_PREFIX,
-  claudeTmuxRuntimeRootPrefix,
-  agentMcpConfigJson,
-  agentToolConnectionTarget,
-  runtimeRootPrefixForContext,
-  isMissingTmuxSessionError,
-  THINKING_MODE_ARGS,
-  THINKING_DISPLAY_FLAG,
-  THINKING_DISPLAY_VALUE,
-  THINKING_DISPLAY_PROBE_VALUE,
-  THINKING_DISPLAY_PROBE_TIMEOUT_MS,
-  HOOK_EVENT_KINDS,
-  containerExecArgs,
-  asString,
-  asOptionalString,
   asBoolean,
-  asPositiveInt,
   asNonNegativeInt,
+  asOptionalString,
+  asPositiveInt,
+  asString,
   asStringArray,
-  shellArg,
-  shellDq,
-  readableIdPrefix,
-  tmuxSessionName,
-  tmuxSessionNamePrefix,
+  isMissingTmuxSessionError,
   parseTmuxSessionNames,
+  path,
+  runtimeRootPrefixForContext,
   selectReapableTmuxSessions,
-  isBlockingHook,
-  parseEventFilename,
-  responseFilename,
-  pathDirname,
-  bytesPayload,
-  countNewlines,
-  execWithOutput,
-  execWithRawOutput,
-  POLL_SNAPSHOT_PENDING_MARKER,
-  POLL_SNAPSHOT_TIMEOUT_MARKER,
-  POLL_SNAPSHOT_SIZE_MARKER,
-  pollSnapshotScript,
-  parsePollSnapshotOutput,
-  parsePollSnapshotExecOutput,
-  tailFromOffsetCommand,
-  TRANSCRIPT_HEAD_MARKER,
-  transcriptHeadCommand,
-  parseTranscriptHeadOutput,
-  MAX_PREVIOUS_SESSIONS,
-  PREVIOUS_SESSION_STAT_CONCURRENCY,
-  jsonlByMtimeFindCommand,
-  isDirectJsonlChild,
-  listLocalJsonlByMtime,
-  parseFreshJsonlFindOutput,
-  INTERACTIVE_KEY_SEQUENCES,
-  sendInteractiveData,
+  tmuxSessionName,
+} from "./tmux-shared.js";
+import {
   TmuxBackend,
-  TMUX_HOOK_PAYLOAD_MAX_BYTES,
-  TMUX_HOOK_TIMING_MAX_BYTES,
-  blockingHookTiming,
-  parseBlockingHookTiming,
-  readBlockingHookTiming,
-  workspaceHookPaths,
-  sessionHookPaths,
-  hookScript,
-  hooksBlock,
-  mergeSettingsJson,
-  gitExcludeSetupScript,
-  ensureClaudeSettingsGitIgnored,
-  installWorkspaceHooks,
-  uninstallWorkspaceHooks,
-  restoreWorkspaceHooks,
-  ensureSessionDirs,
-  drainTimeouts,
-  drainPending,
-  listPendingBlocking,
-  replyToHook,
-  preToolUseResponse,
-  failClosedHookResponse,
-  encodeCwd,
-  localClaudeHome,
-  findTranscriptPath,
-  newestJsonlFindCommand,
-  newestJsonlInDir,
-  transcriptContainsSessionId,
-  jsonContainsSessionId,
-  TRANSCRIPT_HEAD_BYTES,
-  listPreviousSessions,
-  titleFromTranscriptHead,
-  extractTextContent,
-  truncateTitle,
+} from "./tmux-backend.js";
+import {
   TranscriptTail,
-  TMUX_INFO_EVENT_LIMIT,
-  TMUX_INFO_EVENT_MESSAGE_MAX_UNITS,
-  boundedInfoEventMessage,
-  permissionModeFromTranscriptLine,
-  permissionModeFromPane,
-  thinkingDisplayProbeArgs,
-  thinkingDisplayProbeIndicatesSupport,
-  probeThinkingDisplaySupport,
-  TmuxSession,
-  stripAnsi,
-  paneOutputAfterCommand,
-  fastModeFromPane,
-  fastModeRejectionFromPane,
-  paneHasSelectionPrompt,
-  paneHasClaudeExited,
+  installWorkspaceHooks,
+  listPreviousSessions,
+  restoreWorkspaceHooks,
+  uninstallWorkspaceHooks,
+  workspaceHookPaths,
+} from "./tmux-hooks.js";
+import {
   AsyncMutex,
+  TmuxSession,
   TmuxSessionManager,
-  tmuxManager,
-  tmuxActivityWrites,
-  orphanedTmuxMissingSince,
-  lastTmuxOrphanSweepAt,
-  persistTmuxEnvironmentActivity,
-  workspaceAndClaudeHome,
-  resolveBackend,
-  resolveBundledClaudePath,
-  resolvePinnedClaudeCommand,
-  getOrCreateSession,
-  killOrphanSession,
-  killEnvironmentTmuxSessions,
   getLastTmuxOrphanSweepAt,
+  getOrCreateSession,
+  killEnvironmentTmuxSessions,
+  killOrphanSession,
+  orphanedTmuxMissingSince,
+  persistTmuxEnvironmentActivity,
+  resolveBackend,
   setLastTmuxOrphanSweepAt,
-  INTERACTIVE_SNAPSHOT_MIN_MS,
-  INTERACTIVE_SNAPSHOT_MAX_MS,
-  paneRows,
-  buildTmuxPaneUpdate,
+  tmuxManager,
+  workspaceAndClaudeHome,
+} from "./tmux-session-manager.js";
+import {
   InteractiveTmuxTerminalManager,
-  interactiveTerminals,
   detachInteractiveTerminalsForEnvironment,
-  CLAUDE_STATE_READ_TIMEOUT_MS,
-  CLAUDE_STATE_POLL_INTERVAL_MS,
-  CLAUDE_STATE_RETIREMENT_CHECK_MS,
-  claudeStateReadCommand,
+  interactiveTerminals,
+} from "./tmux-interactive.js";
+import {
   ClaudeStatePollManager,
   defaultClaudeStatePolls,
-  shutdownClaudeStatePolling,
   environmentContainerId,
-} = Object.assign({}, shared, backend, hooks, sessionManager, interactive, poll);
-void [existsSync, fs, path, os, createHash, randomUUID, spawn, delay, ORKESTRATOR_AGENT_MCP_SERVER_NAME, runCommand, TranscriptTaskTracker, AGENT_INTERACTION_DEFAULT_TIMEOUT_MS, parseTmuxAgentObservation, parseTmuxSelectionPrompt, tmuxSelectionPromptFingerprint, CLAUDE_TMUX_EVENT, POLL_INTERVAL_MS, TMUX_OBSERVATION_INTERVAL_MS, TMUX_BUSY_OBSERVATION_INTERVAL_MS, LIVENESS_CHECK_EVERY_TICKS, HOOK_TIMEOUT_SECS, COMMAND_IDLE_TIMEOUT_MS, COMMAND_NO_HOOK_SETTLE_MS, COMMAND_AFTER_IDLE_SETTLE_MS, PERMISSION_MODE_SWITCH_TIMEOUT_MS, PERMISSION_MODE_POLL_MS, FAST_MODE_SWITCH_TIMEOUT_MS, FAST_MODE_POLL_MS, FAST_MODE_TMUX_OPTION, BACKUP_SENTINEL_NO_ORIGINAL, CLAUDE_SETTINGS_LOCAL_GIT_EXCLUDE_PATTERN, RUNTIME_ROOT_PREFIX, claudeTmuxRuntimeRootPrefix, agentMcpConfigJson, agentToolConnectionTarget, runtimeRootPrefixForContext, isMissingTmuxSessionError, THINKING_MODE_ARGS, THINKING_DISPLAY_FLAG, THINKING_DISPLAY_VALUE, THINKING_DISPLAY_PROBE_VALUE, THINKING_DISPLAY_PROBE_TIMEOUT_MS, HOOK_EVENT_KINDS, containerExecArgs, asString, asOptionalString, asBoolean, asPositiveInt, asNonNegativeInt, asStringArray, shellArg, shellDq, readableIdPrefix, tmuxSessionName, tmuxSessionNamePrefix, parseTmuxSessionNames, selectReapableTmuxSessions, isBlockingHook, parseEventFilename, responseFilename, pathDirname, bytesPayload, countNewlines, execWithOutput, execWithRawOutput, POLL_SNAPSHOT_PENDING_MARKER, POLL_SNAPSHOT_TIMEOUT_MARKER, POLL_SNAPSHOT_SIZE_MARKER, pollSnapshotScript, parsePollSnapshotOutput, parsePollSnapshotExecOutput, tailFromOffsetCommand, TRANSCRIPT_HEAD_MARKER, transcriptHeadCommand, parseTranscriptHeadOutput, MAX_PREVIOUS_SESSIONS, PREVIOUS_SESSION_STAT_CONCURRENCY, jsonlByMtimeFindCommand, isDirectJsonlChild, listLocalJsonlByMtime, parseFreshJsonlFindOutput, INTERACTIVE_KEY_SEQUENCES, sendInteractiveData, TmuxBackend, TMUX_HOOK_PAYLOAD_MAX_BYTES, TMUX_HOOK_TIMING_MAX_BYTES, blockingHookTiming, parseBlockingHookTiming, readBlockingHookTiming, workspaceHookPaths, sessionHookPaths, hookScript, hooksBlock, mergeSettingsJson, gitExcludeSetupScript, ensureClaudeSettingsGitIgnored, installWorkspaceHooks, uninstallWorkspaceHooks, restoreWorkspaceHooks, ensureSessionDirs, drainTimeouts, drainPending, listPendingBlocking, replyToHook, preToolUseResponse, failClosedHookResponse, encodeCwd, localClaudeHome, findTranscriptPath, newestJsonlFindCommand, newestJsonlInDir, transcriptContainsSessionId, jsonContainsSessionId, TRANSCRIPT_HEAD_BYTES, listPreviousSessions, titleFromTranscriptHead, extractTextContent, truncateTitle, TranscriptTail, TMUX_INFO_EVENT_LIMIT, TMUX_INFO_EVENT_MESSAGE_MAX_UNITS, boundedInfoEventMessage, permissionModeFromTranscriptLine, permissionModeFromPane, thinkingDisplayProbeArgs, thinkingDisplayProbeIndicatesSupport, probeThinkingDisplaySupport, TmuxSession, stripAnsi, paneOutputAfterCommand, fastModeFromPane, fastModeRejectionFromPane, paneHasSelectionPrompt, paneHasClaudeExited, AsyncMutex, TmuxSessionManager, tmuxManager, tmuxActivityWrites, orphanedTmuxMissingSince, lastTmuxOrphanSweepAt, persistTmuxEnvironmentActivity, workspaceAndClaudeHome, resolveBackend, resolveBundledClaudePath, resolvePinnedClaudeCommand, getOrCreateSession, killOrphanSession, killEnvironmentTmuxSessions, getLastTmuxOrphanSweepAt, setLastTmuxOrphanSweepAt, INTERACTIVE_SNAPSHOT_MIN_MS, INTERACTIVE_SNAPSHOT_MAX_MS, paneRows, buildTmuxPaneUpdate, InteractiveTmuxTerminalManager, interactiveTerminals, detachInteractiveTerminalsForEnvironment, CLAUDE_STATE_READ_TIMEOUT_MS, CLAUDE_STATE_POLL_INTERVAL_MS, CLAUDE_STATE_RETIREMENT_CHECK_MS, claudeStateReadCommand, ClaudeStatePollManager, defaultClaudeStatePolls, shutdownClaudeStatePolling, environmentContainerId];
+} from "./tmux-poll.js";
 type CommandContext = shared.CommandContext;
 type AgentToolConnection = shared.AgentToolConnection;
 type Environment = shared.Environment;
 type JsonRecord = shared.JsonRecord;
 type TaskListSnapshot = shared.TaskListSnapshot;
 type TmuxAgentObservation = shared.TmuxAgentObservation;
-type TranscriptTaskTracker = shared.TranscriptTaskTracker;
 type CommandHandler = shared.CommandHandler;
 type RegisterCommand = shared.RegisterCommand;
 type ExecOutput = shared.ExecOutput;
@@ -186,22 +66,15 @@ type BackendKind = shared.BackendKind;
 type RawExecOutput = shared.RawExecOutput;
 type TmuxPollSnapshot = shared.TmuxPollSnapshot;
 type SessionHookPaths = shared.SessionHookPaths;
-type TmuxBackend = backend.TmuxBackend;
 type WorkspaceHookPaths = hooks.WorkspaceHookPaths;
 type PendingHookEvent = hooks.PendingHookEvent;
 type TmuxStatus = hooks.TmuxStatus;
 type ProbeExec = hooks.ProbeExec;
-type TranscriptTail = hooks.TranscriptTail;
-type TmuxSession = sessionManager.TmuxSession;
-type TmuxSessionManager = sessionManager.TmuxSessionManager;
-type AsyncMutex = sessionManager.AsyncMutex;
 type TmuxPaneUpdate = interactive.TmuxPaneUpdate;
 type InteractiveTerminalSession = interactive.InteractiveTerminalSession;
 type InteractiveTmuxTerminalManagerOptions = interactive.InteractiveTmuxTerminalManagerOptions;
 type ClaudeStatePoll = poll.ClaudeStatePoll;
-type InteractiveTmuxTerminalManager = interactive.InteractiveTmuxTerminalManager;
 type ClaudeStatePollManagerOptions = poll.ClaudeStatePollManagerOptions;
-type ClaudeStatePollManager = poll.ClaudeStatePollManager;
 export type CommandsTmuxLayerTypes = [
   CommandContext,
   AgentToolConnection,

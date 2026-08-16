@@ -1,121 +1,20 @@
 import * as shared from "./tmux-shared.js";
-import * as sessionManager from "./tmux-session-manager.js";
-const {
-  existsSync,
-  fs,
-  path,
-  os,
-  createHash,
-  randomUUID,
-  spawn,
-  delay,
-  ORKESTRATOR_AGENT_MCP_SERVER_NAME,
-  runCommand,
+import {
   TranscriptTaskTracker,
-  AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
-  parseTmuxAgentObservation,
-  parseTmuxSelectionPrompt,
-  tmuxSelectionPromptFingerprint,
-  CLAUDE_TMUX_EVENT,
-  POLL_INTERVAL_MS,
-  TMUX_OBSERVATION_INTERVAL_MS,
-  TMUX_BUSY_OBSERVATION_INTERVAL_MS,
-  LIVENESS_CHECK_EVERY_TICKS,
-  HOOK_TIMEOUT_SECS,
-  COMMAND_IDLE_TIMEOUT_MS,
-  COMMAND_NO_HOOK_SETTLE_MS,
-  COMMAND_AFTER_IDLE_SETTLE_MS,
-  PERMISSION_MODE_SWITCH_TIMEOUT_MS,
-  PERMISSION_MODE_POLL_MS,
-  FAST_MODE_SWITCH_TIMEOUT_MS,
-  FAST_MODE_POLL_MS,
-  FAST_MODE_TMUX_OPTION,
-  BACKUP_SENTINEL_NO_ORIGINAL,
-  CLAUDE_SETTINGS_LOCAL_GIT_EXCLUDE_PATTERN,
-  RUNTIME_ROOT_PREFIX,
-  claudeTmuxRuntimeRootPrefix,
-  agentMcpConfigJson,
-  agentToolConnectionTarget,
-  runtimeRootPrefixForContext,
-  isMissingTmuxSessionError,
-  THINKING_MODE_ARGS,
-  THINKING_DISPLAY_FLAG,
-  THINKING_DISPLAY_VALUE,
-  THINKING_DISPLAY_PROBE_VALUE,
-  THINKING_DISPLAY_PROBE_TIMEOUT_MS,
-  HOOK_EVENT_KINDS,
-  containerExecArgs,
-  asString,
-  asOptionalString,
-  asBoolean,
-  asPositiveInt,
-  asNonNegativeInt,
-  asStringArray,
-  shellArg,
-  shellDq,
-  readableIdPrefix,
-  tmuxSessionName,
-  tmuxSessionNamePrefix,
-  parseTmuxSessionNames,
-  selectReapableTmuxSessions,
-  isBlockingHook,
-  parseEventFilename,
-  responseFilename,
-  pathDirname,
   bytesPayload,
-  countNewlines,
-  execWithOutput,
-  execWithRawOutput,
-  POLL_SNAPSHOT_PENDING_MARKER,
-  POLL_SNAPSHOT_TIMEOUT_MARKER,
-  POLL_SNAPSHOT_SIZE_MARKER,
-  pollSnapshotScript,
-  parsePollSnapshotOutput,
-  parsePollSnapshotExecOutput,
-  tailFromOffsetCommand,
-  TRANSCRIPT_HEAD_MARKER,
-  transcriptHeadCommand,
-  parseTranscriptHeadOutput,
-  MAX_PREVIOUS_SESSIONS,
-  PREVIOUS_SESSION_STAT_CONCURRENCY,
-  jsonlByMtimeFindCommand,
-  isDirectJsonlChild,
-  listLocalJsonlByMtime,
-  parseFreshJsonlFindOutput,
-  INTERACTIVE_KEY_SEQUENCES,
-  sendInteractiveData,
-  TmuxSession,
-  stripAnsi,
-  paneOutputAfterCommand,
-  fastModeFromPane,
-  fastModeRejectionFromPane,
-  paneHasSelectionPrompt,
-  paneHasClaudeExited,
+  randomUUID,
+} from "./tmux-shared.js";
+import {
   AsyncMutex,
+  TmuxSession,
   TmuxSessionManager,
-  tmuxManager,
-  tmuxActivityWrites,
-  orphanedTmuxMissingSince,
-  lastTmuxOrphanSweepAt,
-  persistTmuxEnvironmentActivity,
-  workspaceAndClaudeHome,
-  resolveBackend,
-  resolveBundledClaudePath,
-  resolvePinnedClaudeCommand,
-  getOrCreateSession,
-  killOrphanSession,
-  killEnvironmentTmuxSessions,
-  getLastTmuxOrphanSweepAt,
-  setLastTmuxOrphanSweepAt,
-} = Object.assign({}, shared, sessionManager);
-void [existsSync, fs, path, os, createHash, randomUUID, spawn, delay, ORKESTRATOR_AGENT_MCP_SERVER_NAME, runCommand, TranscriptTaskTracker, AGENT_INTERACTION_DEFAULT_TIMEOUT_MS, parseTmuxAgentObservation, parseTmuxSelectionPrompt, tmuxSelectionPromptFingerprint, CLAUDE_TMUX_EVENT, POLL_INTERVAL_MS, TMUX_OBSERVATION_INTERVAL_MS, TMUX_BUSY_OBSERVATION_INTERVAL_MS, LIVENESS_CHECK_EVERY_TICKS, HOOK_TIMEOUT_SECS, COMMAND_IDLE_TIMEOUT_MS, COMMAND_NO_HOOK_SETTLE_MS, COMMAND_AFTER_IDLE_SETTLE_MS, PERMISSION_MODE_SWITCH_TIMEOUT_MS, PERMISSION_MODE_POLL_MS, FAST_MODE_SWITCH_TIMEOUT_MS, FAST_MODE_POLL_MS, FAST_MODE_TMUX_OPTION, BACKUP_SENTINEL_NO_ORIGINAL, CLAUDE_SETTINGS_LOCAL_GIT_EXCLUDE_PATTERN, RUNTIME_ROOT_PREFIX, claudeTmuxRuntimeRootPrefix, agentMcpConfigJson, agentToolConnectionTarget, runtimeRootPrefixForContext, isMissingTmuxSessionError, THINKING_MODE_ARGS, THINKING_DISPLAY_FLAG, THINKING_DISPLAY_VALUE, THINKING_DISPLAY_PROBE_VALUE, THINKING_DISPLAY_PROBE_TIMEOUT_MS, HOOK_EVENT_KINDS, containerExecArgs, asString, asOptionalString, asBoolean, asPositiveInt, asNonNegativeInt, asStringArray, shellArg, shellDq, readableIdPrefix, tmuxSessionName, tmuxSessionNamePrefix, parseTmuxSessionNames, selectReapableTmuxSessions, isBlockingHook, parseEventFilename, responseFilename, pathDirname, bytesPayload, countNewlines, execWithOutput, execWithRawOutput, POLL_SNAPSHOT_PENDING_MARKER, POLL_SNAPSHOT_TIMEOUT_MARKER, POLL_SNAPSHOT_SIZE_MARKER, pollSnapshotScript, parsePollSnapshotOutput, parsePollSnapshotExecOutput, tailFromOffsetCommand, TRANSCRIPT_HEAD_MARKER, transcriptHeadCommand, parseTranscriptHeadOutput, MAX_PREVIOUS_SESSIONS, PREVIOUS_SESSION_STAT_CONCURRENCY, jsonlByMtimeFindCommand, isDirectJsonlChild, listLocalJsonlByMtime, parseFreshJsonlFindOutput, INTERACTIVE_KEY_SEQUENCES, sendInteractiveData, TmuxSession, stripAnsi, paneOutputAfterCommand, fastModeFromPane, fastModeRejectionFromPane, paneHasSelectionPrompt, paneHasClaudeExited, AsyncMutex, TmuxSessionManager, tmuxManager, tmuxActivityWrites, orphanedTmuxMissingSince, lastTmuxOrphanSweepAt, persistTmuxEnvironmentActivity, workspaceAndClaudeHome, resolveBackend, resolveBundledClaudePath, resolvePinnedClaudeCommand, getOrCreateSession, killOrphanSession, killEnvironmentTmuxSessions, getLastTmuxOrphanSweepAt, setLastTmuxOrphanSweepAt];
+} from "./tmux-session-manager.js";
 type CommandContext = shared.CommandContext;
 type AgentToolConnection = shared.AgentToolConnection;
 type Environment = shared.Environment;
 type JsonRecord = shared.JsonRecord;
 type TaskListSnapshot = shared.TaskListSnapshot;
 type TmuxAgentObservation = shared.TmuxAgentObservation;
-type TranscriptTaskTracker = shared.TranscriptTaskTracker;
 type CommandHandler = shared.CommandHandler;
 type RegisterCommand = shared.RegisterCommand;
 type ExecOutput = shared.ExecOutput;
@@ -123,9 +22,6 @@ type BackendKind = shared.BackendKind;
 type RawExecOutput = shared.RawExecOutput;
 type TmuxPollSnapshot = shared.TmuxPollSnapshot;
 type SessionHookPaths = shared.SessionHookPaths;
-type TmuxSession = sessionManager.TmuxSession;
-type TmuxSessionManager = sessionManager.TmuxSessionManager;
-type AsyncMutex = sessionManager.AsyncMutex;
 export type InteractiveTmuxLayerTypes = [
   CommandContext,
   AgentToolConnection,

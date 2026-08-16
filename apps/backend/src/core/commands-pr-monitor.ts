@@ -3,7 +3,7 @@ import type { Environment, PrDetection, PrMonitorKanbanTask, PrMonitorTarget, St
 import { withContainerRuntimeCredential } from "./commands-runtime-state.js";
 import { quoteShell } from "./commands-agent-support.js";
 import { parsePrDetectionOutput, parseKnownPrDetectionOutput, validatePrDetectionBranch } from "./commands-review.js";
-import { dockerExec } from "./commands-environment.js";
+import { dockerExec } from "./commands-container-exec.js";
 import { scheduleMergeCleanupRecovery } from "./commands-servers.js";
 import type { PrDetectionResult } from "./commands-review.js";
 import type { CommandContext, BackendEmit } from "./commands-context.js";

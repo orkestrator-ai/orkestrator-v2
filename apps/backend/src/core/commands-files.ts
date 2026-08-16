@@ -1,9 +1,10 @@
 import { fsConstants, fs, os, path, inferLanguage, runCommand, MAX_BINARY_FILE_BYTES, validateRelativeFilePath, writeConfinedFile, INITIAL_PROMPT_STAGING_DIRECTORY } from "./commands-dependencies.js";
+import { WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS } from "./commands-runtime-state.js";
 import type { Environment, AppConfig, StorageService } from "./commands-dependencies.js";
 import { CONTAINER_GITHUB_CREDENTIAL_FILE, CONTAINER_CLAUDE_CREDENTIAL_FILE, CONTAINER_CURSOR_API_KEY_FILE, CONTAINER_CURSOR_CREDENTIAL_DIR, HOST_CLAUDE_KEYCHAIN_SERVICE, CONTAINER_UNTRACKED_STATS_SCANNER, gitFetchScheduler } from "./commands-runtime-state.js";
 import { UNTRACKED_SCAN_CONCURRENCY, UNTRACKED_SCAN_MAX_FILES, FILE_LINE_COUNT_CHUNK_BYTES } from "./commands-validation.js";
 import { quoteShell, validateGitRefName } from "./commands-agent-support.js";
-import { addLocalWorkspaceArtifactsToGitExclude, dockerExec } from "./commands-environment.js";
+import { dockerExec } from "./commands-container-exec.js";
 
 export const MAX_LOCAL_FILE_TREE_NODES = 5_000;
 
@@ -1324,3 +1325,28 @@ export async function ensureContainerProjectFilesAccess(containerId: string): Pr
   );
 }
 
+export async function addLocalWorkspaceArtifactsToGitExclude(worktreePath: string): Promise<void> {
+  const excludeFile = await resolveLocalGitExcludeFile(worktreePath);
+  await fs.mkdir(path.dirname(excludeFile), { recursive: true });
+
+  const existing = await fs.readFile(excludeFile, "utf8").catch(() => "");
+  const existingPatterns = new Set(existing.split(/\r?\n/));
+  let next = existing;
+  if (next.length > 0 && !next.endsWith("\n")) next += "\n";
+
+  for (const pattern of WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS) {
+    if (existingPatterns.has(pattern)) continue;
+    next += `${pattern}\n`;
+  }
+
+  if (next !== existing) {
+    await fs.writeFile(excludeFile, next);
+  }
+}
+
+export async function resolveLocalGitExcludeFile(worktreePath: string): Promise<string> {
+  const { stdout } = await runCommand("git", ["-C", worktreePath, "rev-parse", "--git-path", "info/exclude"], { timeoutMs: 10_000 });
+  const excludeFile = stdout.trim();
+  if (!excludeFile) throw new Error(`Could not resolve git exclude file for ${worktreePath}`);
+  return path.isAbsolute(excludeFile) ? excludeFile : path.resolve(worktreePath, excludeFile);
+}

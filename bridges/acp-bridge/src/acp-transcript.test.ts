@@ -867,6 +867,62 @@ describe("ACP bridge", () => {
     });
   });
 
+  test("keeps each todo_write row on its own list when completions arrive late", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-grok-todo-interleaved:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "GROKTODOINTERLEAVED: continue" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle"
+        && value.messages.some((message) =>
+          message.parts.some((part) =>
+            part.toolUseId === "grok-todo-write-2"
+            && part.toolState === "success"
+          )
+        ),
+    );
+    const parts = settled.messages.flatMap((message) => message.parts);
+    // The status-only update carries no arguments, so it must not merge the
+    // first row's older snapshot back over the list the second row advanced.
+    expect(parts.find((part) => part.toolUseId === "grok-todo-write-1")).toMatchObject({
+      toolState: "success",
+      toolArgs: {
+        merge: true,
+        todos: [
+          { id: "1", content: "Set up project structure", status: "completed" },
+          { id: "2", content: "Add authentication", status: "in_progress" },
+          { id: "3", content: "Write unit tests", status: "pending" },
+        ],
+      },
+    });
+    expect(parts.find((part) => part.toolUseId === "grok-todo-write-2")).toMatchObject({
+      toolState: "success",
+      toolArgs: {
+        merge: true,
+        todos: [
+          { id: "1", content: "Set up project structure", status: "completed" },
+          { id: "2", content: "Add authentication", status: "completed" },
+          { id: "3", content: "Write unit tests", status: "pending" },
+          { id: "4", content: "Ship the feature", status: "in_progress" },
+        ],
+      },
+    });
+  });
+
   test("merges a later Grok todo_write when merge is omitted", async () => {
     const { base, headers } = await spawnBridge();
     const created = await nativeFetch(`${base}/session/create`, {

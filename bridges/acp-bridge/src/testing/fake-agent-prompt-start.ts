@@ -972,6 +972,39 @@ export function handlePromptStart(message: JsonObject): boolean {
           },
         });
       };
+      // A real agent opens a tool call `pending` and settles it with a
+      // status-only `tool_call_update` that repeats no arguments.
+      const writeGrokTodoWritePending = (toolCallId: string, todos: unknown[]): void => {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId,
+              title: "Todo Write",
+              status: "pending",
+              rawInput: { todos },
+              _meta: { "x.ai/tool": grokTodoMeta },
+            },
+          },
+        });
+      };
+      const writeGrokToolCompleted = (toolCallId: string): void => {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId,
+              status: "completed",
+            },
+          },
+        });
+      };
       const writeGrokPlan = (
         sessionUpdate: "plan" | "plan_update",
         entries: unknown[],
@@ -987,6 +1020,17 @@ export function handlePromptStart(message: JsonObject): boolean {
           },
         });
       };
+      if (prompt.startsWith("GROKTODOINTERLEAVED")) {
+        writeGrokTodoWritePending("grok-todo-write-1", grokTodos);
+        writeGrokTodoWritePending("grok-todo-write-2", [
+          { id: "2", content: "Add authentication", status: "completed" },
+          { id: "4", content: "Ship the feature", status: "in_progress" },
+        ]);
+        writeGrokToolCompleted("grok-todo-write-1");
+        writeGrokToolCompleted("grok-todo-write-2");
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+        return true;
+      }
       if (prompt.startsWith("GROKTODOWRITEMERGE")) {
         writeGrokTodoWrite("grok-todo-write-1", grokTodos);
         writeGrokTodoWrite("grok-todo-write-2", [

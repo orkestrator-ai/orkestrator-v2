@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
+// Must precede every bridge import below: `acp-tools.js` pulls in
+// `acp-context.js`, which resolves `ACP_PROVIDER` at module scope and throws
+// without it. Keep this first.
+import "./testing/unit-test-env.js";
 import {
   MAX_WAIT_DIAGNOSTIC_BYTES,
   codedError,
@@ -15,6 +19,8 @@ import {
   restoreCursorTodosFromMessages,
   isAcpTodosToolName,
   preserveTaskLaunchArgs,
+  MAX_CURSOR_TODOS,
+  MAX_CURSOR_TODO_CANDIDATES,
 } from "./acp-tools.js";
 
 
@@ -255,6 +261,7 @@ describe("Cursor todo list helpers", () => {
             sourcePartId: "tool:1",
             sourceMessageId: "a",
             toolUseId: "1",
+            toolName: "updateTodos",
             toolArgs: {
               merge: false,
               todos: [{ id: "1", content: "Old", status: "pending" }],
@@ -274,6 +281,7 @@ describe("Cursor todo list helpers", () => {
             sourcePartId: "tool:2",
             sourceMessageId: "b",
             toolUseId: "2",
+            toolName: "updateTodos",
             toolArgs: {
               merge: true,
               todos: [{ id: "1", content: "New", status: "completed" }],
@@ -282,5 +290,65 @@ describe("Cursor todo list helpers", () => {
         ],
       },
     ])).toEqual([{ id: "1", content: "New", status: "completed" }]);
+  });
+
+  test("ignores a non-todo tool part that happens to carry a todos argument", () => {
+    expect(restoreCursorTodosFromMessages([
+      {
+        id: "a",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-08-16T00:00:00.000Z",
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "Update TODOs",
+            sourcePartId: "tool:1",
+            sourceMessageId: "a",
+            toolUseId: "1",
+            toolName: "todo_write",
+            toolArgs: {
+              merge: true,
+              todos: [{ id: "1", content: "Mine", status: "pending" }],
+            },
+          },
+          {
+            type: "tool-invocation",
+            content: "Sync tasks",
+            sourcePartId: "tool:2",
+            sourceMessageId: "a",
+            toolUseId: "2",
+            toolName: "mcp__tracker__sync",
+            toolArgs: {
+              todos: [{ id: "9", content: "Someone else's list", status: "pending" }],
+            },
+          },
+        ],
+      },
+    ])).toEqual([{ id: "1", content: "Mine", status: "pending" }]);
+  });
+
+  test("bounds both the parsed list and the candidate scan", () => {
+    const oversized: Array<Record<string, unknown>> = Array.from(
+      { length: MAX_CURSOR_TODO_CANDIDATES + 5 },
+      (_, index) => ({ content: `Item ${index + 1}`, status: "pending" }),
+    );
+    // Reusing id "1" past the scan bound must never be reached: if it were,
+    // it would reserve "1" and push every generated id along by one.
+    oversized[oversized.length - 1] = {
+      id: "1",
+      content: "Beyond the candidate bound",
+      status: "pending",
+    };
+
+    const parsed = parseCursorTodos(oversized);
+
+    expect(parsed).toHaveLength(MAX_CURSOR_TODOS);
+    expect(parsed[0]).toEqual({ id: "1", content: "Item 1", status: "pending" });
+    expect(parsed.at(-1)).toEqual({
+      id: String(MAX_CURSOR_TODOS),
+      content: `Item ${MAX_CURSOR_TODOS}`,
+      status: "pending",
+    });
   });
 });

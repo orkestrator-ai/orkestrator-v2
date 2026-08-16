@@ -1408,3 +1408,16 @@ Post-fix stress verification:
   3-second waits can exceed Bun's 5-second default and report a generic timeout
   instead of naming the condition that never became true.
 - **Verification:** `bun test tests/unit/electron/commands.test.ts --test-name-pattern 'invalidates the shared file-list cache after container revert and delete' --rerun-each 25` -> 25 passed, 0 failed in 3.79 s.
+
+## `ACP bridge > keeps a completed turn idle when Cursor replay is failed` (`bridges/acp-bridge/src/acp-transcript.test.ts:1410`)
+
+- **Status:** open
+- **Date observed:** 2026-08-16
+- **Original command:** `bun run test:logged -- --name bridge-tests -- bun test bridges --parallel=2 --only-failures`, at `8f15f6c3f15dbe854c38b2f5b013b88d047f9d01` on `fix-todo-rendering`.
+- **Worker configuration:** The bridges group ran on its own with `--parallel=2`, not under `scripts/test-all.ts`. No other suite was running against this clone.
+- **Failure:** `error: Timed out waiting for ACP state: false` (duration 15,023.19 ms), thrown from the shared `waitFor` helper (`acp-test-harness.ts:179`) as called by `spawnBridge` (`acp-test-harness.ts:228`). The wait that expired is `GET /global/health` against the freshly spawned bridge child, so the child never reported healthy; nothing about the completed-turn/failed-replay behaviour under test was reached.
+- **Suite counts:** Bridges group: 2,607 total, 2,594 passed, 11 skipped, 2 failed, 1 error across 90 files in 62.25 seconds. The other failure and the error were not this flake: `acp-tools.test.ts` aborted at import because it was the first ACP test to load bridge source in-process and `ACP_PROVIDER` is only set for spawned children. That is deterministic, not flaky, and is fixed in the same change by `src/testing/unit-test-env.ts`.
+- **Isolated rerun:** `bun test bridges/acp-bridge/src/acp-transcript.test.ts` -> 68 passed, 0 failed in 17.86 seconds; the target passed.
+- **Frequency:** failed on two consecutive runs of the same command at `8f15f6c3`, then passed on a third run of the same command at the follow-up commit (47.3 seconds, exit 0). So it is intermittent rather than reliably reproducible, but more frequent than the single-shot spawn timeouts recorded above.
+- **Related:** `ACP bridge > rejects a concurrent second turn that carries a different requestId`, the same `spawnBridge` health-wait family in `index.test.ts`. That entry was recorded when `BRIDGE_STARTUP_TIMEOUT_MS` was 5 s; the constant is now 15 s, so this occurrence means a bridge child took longer than fifteen seconds to bind and answer `/global/health`.
+- **Hypothesis:** Spawn contention again, but the 15 s budget makes plain contention a weaker explanation than it was at 5 s — this file alone spawns a bridge child per test and several tests spawn twice (create, stop, respawn against the same state directory). A recurrence should record how long the child actually took to become healthy, and whether a previous test's child was still shutting down and holding its state directory or port, before the startup budget is raised again. Raising the budget without that measurement would hide a genuine startup regression.

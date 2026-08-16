@@ -207,7 +207,7 @@ export function applyToolCallUpdate(
     acpToolSourceStates.set(part, source);
   }
   applyAcpToolSourcePatch(source, update);
-  absorbCursorTodosFromToolArgs(state, source);
+  absorbCursorTodosFromToolArgs(state, source, update);
   renderAcpToolSource(part, source);
   const parentTaskUseId = acpParentTaskUseId(update);
   if (parentTaskUseId && parentTaskUseId !== toolCallId) {
@@ -1007,6 +1007,9 @@ export function mergeCursorTaskArgs(
 
 export const MAX_CURSOR_TODOS = 200;
 
+/** Upper bound on entries examined per list, so parsing stays bounded too. */
+export const MAX_CURSOR_TODO_CANDIDATES = MAX_CURSOR_TODOS * 8;
+
 /** Synthetic tool call id for an ACP `plan` / `plan_update` with no matching todo tool. */
 export const ACP_PLAN_TOOL_USE_ID = "acp-plan";
 
@@ -1064,6 +1067,11 @@ export function parseCursorTodos(value: unknown): CursorTodoItem[] {
   if (!Array.isArray(value)) return [];
   const parsed: Array<{ id?: string; content: string; status: CursorTodoStatus }> = [];
   for (const candidate of value) {
+    // The output is capped at `MAX_CURSOR_TODOS`, but ids have to be reserved
+    // before any fallback is allocated, so the candidate pass is bounded too
+    // rather than materialising a whole 4MB frame's worth of entries. The
+    // headroom leaves room for later entries that overwrite an earlier id.
+    if (parsed.length >= MAX_CURSOR_TODO_CANDIDATES) break;
     if (!isObject(candidate)) continue;
     const content = boundedString(candidate.content, MAX_TOOL_TITLE_BYTES)?.trim();
     const status = typeof candidate.status === "string" ? candidate.status : "";
@@ -1150,6 +1158,10 @@ export function restoreCursorTodosFromMessages(messages: readonly BridgeMessage[
     for (let partIndex = parts.length - 1; partIndex >= 0; partIndex -= 1) {
       const part = parts[partIndex]!;
       if (part.type !== "tool-invocation" || !Array.isArray(part.toolArgs?.todos)) continue;
+      // Match what the live path absorbs. `stampCursorTodos` forces a todo tool
+      // name onto every part it writes, so anything else carrying a `todos`
+      // argument is a different tool whose list must not seed this session.
+      if (!isAcpTodosToolName(part.toolName)) continue;
       const parsed = parseCursorTodos(part.toolArgs.todos);
       if (parsed.length > 0 || part.toolArgs.merge === false) return parsed;
     }
@@ -1169,7 +1181,19 @@ export function stampCursorTodos(source: AcpToolSourceState, state: SessionState
   if (!source.title) source.title = defaultTodoToolTitle(acpToolSourceName(source));
 }
 
-export function absorbCursorTodosFromToolArgs(state: SessionState, source: AcpToolSourceState): void {
+/**
+ * Absorb only a list this update actually carried on the wire. `toolArgs` also
+ * holds the snapshot `stampCursorTodos` wrote onto this part, and a later
+ * status-only patch re-absorbing that snapshot would merge an older list back
+ * over a newer one — reverting statuses and rewriting the older row to show
+ * todos it never had.
+ */
+export function absorbCursorTodosFromToolArgs(
+  state: SessionState,
+  source: AcpToolSourceState,
+  update: JsonObject,
+): void {
+  if (!isObject(update.rawInput) || !Array.isArray(update.rawInput.todos)) return;
   const toolName = acpToolSourceName(source);
   if (!isAcpTodosToolName(toolName) || !Array.isArray(source.toolArgs?.todos)) return;
   const incoming = parseCursorTodos(source.toolArgs.todos);

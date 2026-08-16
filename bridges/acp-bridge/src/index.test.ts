@@ -4656,6 +4656,15 @@ describe("ACP bridge", () => {
     );
     expect((await readStructured("json-then-tagged-1")).structuredOutput)
       .toMatchObject({ ok: true, value: { ok: true } });
+
+    // An annotated or run-on opening tag still marks the trace, so the report
+    // outside it wins instead of the reasoning inside it.
+    await prompt(
+      'DIRECT:{"ok":true}\nReasoning:<thinking type="reflection">{"fromThought":true}</thinking>',
+      "tagged-attributes-1",
+    );
+    expect((await readStructured("tagged-attributes-1")).structuredOutput)
+      .toMatchObject({ ok: true, value: { ok: true } });
   });
 
   test("uses only the current turn when parsing structured output", async () => {

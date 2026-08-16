@@ -1195,6 +1195,13 @@ describe("OpenCode provider runtime", () => {
       ));
       await expect(provider.structured("owned-session", "request-1")).resolves
         .toMatchObject({ ok: true, value: { complete: true } });
+
+      // An annotated opening tag still marks the trace.
+      fake.setMessagesResponse(reply(
+        "{\"complete\":true}\n<thinking type=\"reflection\">{\"fromThought\":true}</thinking>",
+      ));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: true } });
     } finally {
       await provider.dispose?.();
     }

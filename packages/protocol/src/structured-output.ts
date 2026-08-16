@@ -130,6 +130,7 @@ export function isStructuredOutputResult(
 export {
   STRUCTURED_OUTPUT_RECOVERY_CANDIDATES,
   STRUCTURED_OUTPUT_RECOVERY_CHARS,
+  STRUCTURED_OUTPUT_RECOVERY_TAGS,
   tryParseStructuredOutputText,
 } from "./structured-output-text.js";
 

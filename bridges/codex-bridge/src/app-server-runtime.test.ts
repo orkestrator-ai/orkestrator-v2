@@ -2085,6 +2085,44 @@ describe("session lifecycle", () => {
     });
   });
 
+  test("recovers the report after a thinking trace that opened outside the text channel", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "review",
+      requestId: "structured-unopened-thinking",
+      attachments: [],
+      outputSchema: { type: "object" },
+    });
+    // Only the closing tag reaches the text channel. Its schema sketches would
+    // otherwise spend the recovery budget before the report at the end.
+    const sketches = Array.from(
+      { length: 264 },
+      (_, index) => `{ incomplete schema sketch ${index}`,
+    ).join(" ");
+    h.child().notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "answer-1",
+        type: "agentMessage",
+        text: `The schema requires JSON.\n${sketches}\n</thinking>\n{"summary":"Looks good"}`,
+      },
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    expect(h.runtime.getStructuredOutput(sessionId)).toMatchObject({
+      structuredOutput: {
+        ok: true,
+        value: { summary: "Looks good" },
+      },
+    });
+  });
+
   test("does not treat a plaintext final message as structured success", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });

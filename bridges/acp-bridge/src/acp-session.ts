@@ -8,7 +8,7 @@ import {
   normalizeAcpSessionConfig,
   planComposerApply,
   type AcpComposerPatch,
-} from "./session-config.js";
+  } from "./session-config.js";
 import { parseAcpTurnUsage } from "./usage.js";
 import {
   AcpProcess,
@@ -50,7 +50,7 @@ import {
   type BridgeTextPart,
   type JsonObject,
   type SessionState,
-} from "./acp-context.js";
+  } from "./acp-context.js";
 import {
   appendBounded,
   appendSaturating,
@@ -64,20 +64,22 @@ import {
   rememberHistoryMessage,
   trimPartsTo,
   turnRequiresCompleteOutput,
-} from "./acp-transcript.js";
+  } from "./acp-transcript.js";
 import {
   applyCursorTask,
   applySubagentFinished,
   applySubagentSpawned,
   applyToolCallUpdate,
   boundedModelId,
-} from "./acp-tools.js";
+  } from "./acp-tools.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import {
   emptySessionConfig,
+} from "./acp-persistence.js";
+import {
   persistState,
   schedulePersist,
-} from "./acp-persistence.js";
+} from "./acp-persist-writer.js";
 
 export async function listResumableSessions(): Promise<JsonObject[]> {
   if (sessionListProbe) return sessionListProbe;

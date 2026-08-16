@@ -61,7 +61,7 @@ import {
   stringifyToolPayload,
   truncateUtf8,
 } from "./acp-transcript.js";
-import { schedulePersist } from "./acp-persistence.js";
+import { schedulePersist } from "./acp-persist-writer.js";
 
 export function pushToolPart(
   state: SessionState,

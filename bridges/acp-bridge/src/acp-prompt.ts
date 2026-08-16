@@ -12,7 +12,7 @@ import {
   type SessionState,
 } from "./acp-context.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
-import { schedulePersist } from "./acp-persistence.js";
+import { schedulePersist } from "./acp-persist-writer.js";
 
 export const RESOURCE_EXHAUSTED_ERROR = /\[resource_exhausted\]\s+Error/i;
 // The class name is whatever the provider's own error carried — `RetriableError`

@@ -18,78 +18,23 @@ const SCANNED_ROOTS = [
 ];
 
 /**
- * Runtime import cycles that are known and deliberately still here.
+ * The backend and the bridges are acyclic, and this test exists to keep them
+ * that way.
  *
  * A cycle is not cosmetic: every module in one is evaluated with some of its
  * imports still in the temporal dead zone, so a single new top-level read of an
  * imported binding turns into a `ReferenceError` whose reproduction depends on
  * which module the process happens to import first. That already happened once
- * in this codebase - `commands-runtime-state` has to load the git-status
- * scanners through `await import(...)` for exactly this reason.
+ * here - `commands-runtime-state` still loads the git-status scanners through
+ * `await import(...)` for exactly this reason, pinned by
+ * `commands-runtime-state-load-order.test.ts`.
  *
- * Each entry records why it is still here. Removing a cycle should delete its
- * entry; adding one to this list needs the same justification.
+ * If this list is ever non-empty again, each entry needs a reason. Prefer
+ * moving the shared symbol into a leaf both sides can depend on; where the
+ * back-edge is a notification rather than a dependency (see
+ * `setMergeCleanupScheduler`), invert it so the owner registers itself.
  */
-const KNOWN_CYCLES: ReadonlyArray<{ cycle: readonly string[]; reason: string }> = [
-  {
-    cycle: [
-      "apps/backend/src/core/commands-pr-monitor.ts",
-      "apps/backend/src/core/commands-servers.ts",
-    ],
-    reason:
-      "`commands-pr-monitor` calls `scheduleMergeCleanupRecovery` from inside the "
-      + "`prMonitorService` `persistPr` effect, and `commands-servers` needs the service "
-      + "itself. Breaking this needs a real injection seam with a guaranteed install "
-      + "point, because a hook that is never registered would silently skip merge "
-      + "cleanup rather than fail loudly.",
-  },
-  {
-    cycle: [
-      "apps/backend/src/core/commands-environment.ts",
-      "apps/backend/src/core/commands-pr-monitor.ts",
-      "apps/backend/src/core/commands-servers.ts",
-    ],
-    reason: "Same back-edge as above, reached through `commands-environment`.",
-  },
-  {
-    cycle: [
-      "apps/backend/src/core/commands-environment.ts",
-      "apps/backend/src/core/commands-servers.ts",
-    ],
-    reason:
-      "`commands-environment` needs the local-server lifecycle "
-      + "(`stopLocalServersForEnvironmentUnlocked`, `enqueueLocalServerEnvironmentOperation`, "
-      + "`readLocalHeadCommit`, `ensureCreatedFromCommitBeforeSetup`) and `commands-servers` "
-      + "needs environment ownership and teardown. Splitting it means moving the process "
-      + "termination path, which is not a mechanical extraction.",
-  },
-  {
-    cycle: [
-      "bridges/acp-bridge/src/acp-persistence.ts",
-      "bridges/acp-bridge/src/acp-tools.ts",
-    ],
-    reason:
-      "`acp-tools` calls `schedulePersist`; `acp-persistence` needs "
-      + "`indexActiveSubagentsFromTranscript` to build its snapshot. Inverting the "
-      + "persist notification risks dropping session persistence when the writer is "
-      + "not registered, so it needs a snapshot-provider redesign rather than a hook.",
-  },
-  {
-    cycle: [
-      "bridges/acp-bridge/src/acp-persistence.ts",
-      "bridges/acp-bridge/src/acp-transcript.ts",
-    ],
-    reason: "Same `schedulePersist` back-edge, from the transcript module.",
-  },
-  {
-    cycle: [
-      "bridges/acp-bridge/src/acp-persistence.ts",
-      "bridges/acp-bridge/src/acp-tools.ts",
-      "bridges/acp-bridge/src/acp-transcript.ts",
-    ],
-    reason: "Same `schedulePersist` back-edge, across all three modules.",
-  },
-];
+const KNOWN_CYCLES: ReadonlyArray<{ cycle: readonly string[]; reason: string }> = [];
 
 function sourceFiles(root: string): string[] {
   const out: string[] = [];
@@ -168,6 +113,12 @@ function findCycles(): string[][] {
 }
 
 describe("backend and bridge module import cycles", () => {
+  test("the backend and bridge module graphs are acyclic", () => {
+    // Stated separately from the allow-list check so the guarantee does not
+    // quietly become vacuous if an entry is ever added to KNOWN_CYCLES.
+    expect(findCycles()).toEqual([]);
+  });
+
   test("no runtime import cycle exists outside the recorded set", () => {
     const found = findCycles().map((cycle) => cycle.join(" <-> "));
     const allowed = new Set(

@@ -11,7 +11,7 @@ import {
   type SessionState,
 } from "./acp-context.js";
 import { boundTranscript } from "./acp-transcript.js";
-import { schedulePersist } from "./acp-persistence.js";
+import { schedulePersist } from "./acp-persist-writer.js";
 
 export function publicSession(state: SessionState): JsonObject {
   const contextUsage = publicContextUsage(state);

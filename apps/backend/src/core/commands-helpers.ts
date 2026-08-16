@@ -1,3 +1,4 @@
+export * from "./commands-local-server-lifecycle.js";
 export * from "./commands-server-health.js";
 export * from "./commands-project-files.js";
 export * from "./commands-error-text.js";

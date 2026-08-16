@@ -4,9 +4,64 @@ import { withContainerRuntimeCredential } from "./commands-runtime-state.js";
 import { quoteShell } from "./commands-agent-support.js";
 import { parsePrDetectionOutput, parseKnownPrDetectionOutput, validatePrDetectionBranch } from "./commands-review.js";
 import { dockerExec } from "./commands-container-exec.js";
-import { scheduleMergeCleanupRecovery } from "./commands-servers.js";
 import type { PrDetectionResult } from "./commands-review.js";
 import type { CommandContext, BackendEmit } from "./commands-context.js";
+
+/**
+ * Merge cleanup is owned by `commands-servers` (it ends in
+ * `deleteEnvironmentTask`), but it is triggered here, when the monitor first
+ * observes a merged PR. Importing it directly made this module a back-edge into
+ * `commands-servers`, which imports the monitor service in turn.
+ *
+ * `commands-servers` registers the scheduler at its own module scope, so the
+ * only window in which one can arrive unregistered is before that module has
+ * finished evaluating. Requests in that window are held and replayed on
+ * registration rather than dropped - `scheduleMergeCleanupRecovery` already
+ * de-duplicates per environment, so a replay is a no-op if it also ran later.
+ */
+type MergeCleanupScheduler = (environmentId: string, context: CommandContext) => void;
+
+let mergeCleanupScheduler: MergeCleanupScheduler | undefined;
+/** Keyed by environment id, so a repeated observation cannot grow this. */
+const deferredMergeCleanups = new Map<string, CommandContext>();
+const MAX_DEFERRED_MERGE_CLEANUPS = 256;
+
+export function setMergeCleanupScheduler(scheduler: MergeCleanupScheduler): void {
+  mergeCleanupScheduler = scheduler;
+  const deferred = [...deferredMergeCleanups];
+  deferredMergeCleanups.clear();
+  for (const [environmentId, context] of deferred) scheduler(environmentId, context);
+}
+
+export function requestMergeCleanupRecovery(
+  environmentId: string,
+  context: CommandContext,
+): void {
+  if (mergeCleanupScheduler) {
+    mergeCleanupScheduler(environmentId, context);
+    return;
+  }
+  if (
+    deferredMergeCleanups.size >= MAX_DEFERRED_MERGE_CLEANUPS
+    && !deferredMergeCleanups.has(environmentId)
+  ) {
+    console.warn(
+      "[pr-monitor] Dropping merge cleanup request: no scheduler registered and the deferred set is full",
+    );
+    return;
+  }
+  deferredMergeCleanups.set(environmentId, context);
+}
+
+/** Test seam: forget the registration so a suite can observe the deferred path. */
+export function resetMergeCleanupSchedulerForTesting(): void {
+  mergeCleanupScheduler = undefined;
+  deferredMergeCleanups.clear();
+}
+
+export function deferredMergeCleanupCountForTesting(): number {
+  return deferredMergeCleanups.size;
+}
 
 export let prMonitorEmit: BackendEmit | undefined;
 export let prMonitorStorage: StorageService | undefined;
@@ -176,7 +231,7 @@ export const prMonitorService = new PrMonitorService({
         ),
       });
       if (detection.state === "merged" && prMonitorContext) {
-        scheduleMergeCleanupRecovery(environmentId, prMonitorContext);
+        requestMergeCleanupRecovery(environmentId, prMonitorContext);
       }
     },
     clearPr: async (environmentId) => {

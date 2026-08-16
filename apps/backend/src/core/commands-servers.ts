@@ -1,123 +1,18 @@
-import { existsSync, path, createHash, randomBytes, APP_VERSION, CLAUDE_BRIDGE_PORT, CODEX_BRIDGE_PORT, CURSOR_ACP_BRIDGE_PORT, CODEX_MAX_CONCURRENT_THREADS_ENV, DOCKER_IMAGE, GROK_ACP_BRIDGE_PORT, OPENCODE_SERVER_PORT, resolveCodexMaxConcurrentThreads, ORKESTRATOR_AGENT_MCP_SERVER_NAME, ORKESTRATOR_AGENT_MCP_TOKEN_ENV, ORKESTRATOR_AGENT_MCP_URL_ENV, runCommand, cleanupEnvironmentTmux, shutdownClaudeStatePolling, AGENT_PLATFORM_LABELS } from "./commands-dependencies.js";
+import { existsSync, path, createHash, randomBytes, APP_VERSION, CLAUDE_BRIDGE_PORT, CODEX_BRIDGE_PORT, CURSOR_ACP_BRIDGE_PORT, CODEX_MAX_CONCURRENT_THREADS_ENV, GROK_ACP_BRIDGE_PORT, OPENCODE_SERVER_PORT, resolveCodexMaxConcurrentThreads, ORKESTRATOR_AGENT_MCP_SERVER_NAME, ORKESTRATOR_AGENT_MCP_TOKEN_ENV, ORKESTRATOR_AGENT_MCP_URL_ENV, runCommand, cleanupEnvironmentTmux, shutdownClaudeStatePolling, AGENT_PLATFORM_LABELS } from "./commands-dependencies.js";
+import { enqueueLocalServerEnvironmentOperation, localServerFields, releaseLocalServerOwnership, terminateLocalServerChild, cancelOpenCodeAgentToolsConfiguration, aggregateRejectedResults, stopLocalServerUnlocked, stopLocalServersForEnvironmentUnlocked } from "./commands-local-server-lifecycle.js";
 import { checkHttpHealth, waitForLocalServerHealth, openCodeHealthHeaders, bearerBridgeHeaders, agentToolConnectionFingerprint } from "./commands-server-health.js";
 import type { ChildProcessWithoutNullStreams, Environment, AgentToolConnection, AgentModel, AgentReasoningOption } from "./commands-dependencies.js";
-import { localServerProcesses, localCodexBridgeTokens, localClaudeBridgeTokens, localOpenCodeServerPasswords, localCursorBridgeTokens, localGrokBridgeTokens, localCursorCredentialFingerprints, openCodeAgentToolsConfigurations, configuredOpenCodeAgentTools, BRIDGE_TOKEN_PATTERN, localServerEnvironmentOperations, containerBridgeOperations, deletingLocalServerEnvironments, mergingEnvironments, mergeCleanupRecoveryTasks, retryableBridgeStartupError, LOCAL_SERVER_KINDS, LOCAL_SERVER_SHUTDOWN_GRACE_MS, LOCAL_SERVER_KILL_WAIT_MS, isLocalServerShutdownRequested, requestLocalServerShutdown, getLocalServerShutdownPromise, setLocalServerShutdownPromise, terminateProcessTreeImpl, spawnLocalServerCommandImpl, CONTAINER_WORKSPACE_PREPARE_COMMAND, CONTAINER_WORKSPACE_PREPARE_SUPPORTED_SENTINEL, CONTAINER_WORKSPACE_PREPARE_OK_SENTINEL, CONTAINER_WORKSPACE_PREPARE_SUPPORT_COMMAND, environmentBaselineTasks, gitFetchScheduler, diffStatsService, invalidatePendingDiffStatsSync } from "./commands-runtime-state.js";
-import { prMonitorService, invalidatePendingPrMonitorSync } from "./commands-pr-monitor.js";
+import { localServerProcesses, localCodexBridgeTokens, localClaudeBridgeTokens, localOpenCodeServerPasswords, localCursorBridgeTokens, localGrokBridgeTokens, localCursorCredentialFingerprints, openCodeAgentToolsConfigurations, configuredOpenCodeAgentTools, BRIDGE_TOKEN_PATTERN, localServerEnvironmentOperations, containerBridgeOperations, deletingLocalServerEnvironments, mergingEnvironments, mergeCleanupRecoveryTasks, retryableBridgeStartupError, LOCAL_SERVER_KINDS, isLocalServerShutdownRequested, requestLocalServerShutdown, getLocalServerShutdownPromise, setLocalServerShutdownPromise, spawnLocalServerCommandImpl, gitFetchScheduler, diffStatsService, invalidatePendingDiffStatsSync } from "./commands-runtime-state.js";
+import { prMonitorService, invalidatePendingPrMonitorSync, setMergeCleanupScheduler } from "./commands-pr-monitor.js";
 import { resolveCursorApiKey, cursorApiKeyFingerprint } from "./commands-validation.js";
 import { resolveCodexBinary, resolveOpenCodeBinary, resolveClaudeBinary, resolveManagedAcpBinary, resolveBunBinary } from "./commands-agent-support.js";
 import { cleanupTerminalSessionsForEnvironment } from "./commands-terminal.js";
 import { assertDockerContainerOwned, cleanupEnvironmentSetupState, enqueueEnvironmentLifecycleOperation, invalidateEnvironmentStartDedupe, removeLocalWorktree, deleteMergedEnvironmentRemoteBranch } from "./commands-environment.js";
-import { isContainerRunning, getHostPort } from "./commands-container-exec.js";
+import { getHostPort } from "./commands-container-exec.js";
 import { dockerExec } from "./commands-container-exec.js";
 import { conciseError, cleanupErrorMessage } from "./commands-error-text.js";
 import type { OpenCodeAgentToolsOutcome, LocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
-
-export function parseHeadCommit(stdout: string): string | undefined {
-  const trimmed = stdout.trim();
-  return /^[0-9a-f]{40}$/i.test(trimmed) ? trimmed : undefined;
-}
-
-export async function readLocalHeadCommit(worktreePath: string): Promise<string> {
-  const { stdout } = await runCommand(
-    "git",
-    ["-C", worktreePath, "rev-parse", "--verify", "HEAD^{commit}"],
-    { timeoutMs: 30_000 },
-  );
-  const commit = parseHeadCommit(stdout);
-  if (!commit) {
-    throw new Error(`Git returned an invalid HEAD commit for ${worktreePath}`);
-  }
-  return commit;
-}
-
-export async function readContainerHeadCommit(containerId: string): Promise<string | undefined> {
-  const commit = await dockerExec(
-    containerId,
-    "git -C /workspace rev-parse --verify 'HEAD^{commit}'",
-    30_000,
-  );
-  return parseHeadCommit(commit);
-}
-
-export async function prepareContainerWorkspace(
-  containerId: string,
-  onOutput?: (chunk: string) => void,
-): Promise<void> {
-  const support = await dockerExec(containerId, CONTAINER_WORKSPACE_PREPARE_SUPPORT_COMMAND, 60_000);
-  if (!support.includes(CONTAINER_WORKSPACE_PREPARE_SUPPORTED_SENTINEL)) {
-    throw new Error(
-      `Container base image is out of date and cannot prepare the workspace safely. `
-      + `Rebuild it with \`bun run docker:build\` (${DOCKER_IMAGE}), then recreate this environment's container.`,
-    );
-  }
-
-  const output = await dockerExec(containerId, CONTAINER_WORKSPACE_PREPARE_COMMAND, 10 * 60_000);
-  onOutput?.(output);
-  if (!output.includes(CONTAINER_WORKSPACE_PREPARE_OK_SENTINEL)) {
-    throw new Error(`Workspace preparation did not report completion for container ${containerId}`);
-  }
-}
-
-/**
- * Resolves and durably stores the commit an environment branched from.
- *
- * `onPrepareOutput` only fires for the caller that actually starts the work; a
- * caller that joins an in-flight capture gets the result but not the output,
- * because the output already belongs to the first caller's setup terminal.
- */
-export async function establishCreatedFromCommit(
-  environment: Environment,
-  context: CommandContext,
-  onPrepareOutput?: (chunk: string) => void,
-): Promise<Environment> {
-  if (environment.createdFromCommit) return environment;
-
-  const existing = environmentBaselineTasks.get(environment.id);
-  if (existing) return existing;
-
-  const task = (async () => {
-    const current = await context.storage.getEnvironment(environment.id) ?? environment;
-    if (current.createdFromCommit) return current;
-
-    let commit: string | undefined;
-    if (current.environmentType === "local") {
-      if (!current.worktreePath) {
-        throw new Error(`Local environment worktree is not available: ${current.id}`);
-      }
-      commit = await readLocalHeadCommit(current.worktreePath);
-    } else {
-      if (!current.containerId) {
-        throw new Error(`Environment has no container: ${current.id}`);
-      }
-      if (!await isContainerRunning(current.containerId)) {
-        throw new Error(`Container is not running: ${current.containerId}`);
-      }
-      await prepareContainerWorkspace(current.containerId, onPrepareOutput);
-      commit = await readContainerHeadCommit(current.containerId);
-    }
-
-    if (!commit) {
-      throw new Error(`Could not resolve environment creation commit: ${current.id}`);
-    }
-    return context.storage.updateEnvironment(current.id, { createdFromCommit: commit });
-  })().finally(() => {
-    if (environmentBaselineTasks.get(environment.id) === task) {
-      environmentBaselineTasks.delete(environment.id);
-    }
-  });
-  environmentBaselineTasks.set(environment.id, task);
-  return task;
-}
-
-export async function ensureCreatedFromCommitBeforeSetup(
-  environment: Environment,
-  context: CommandContext,
-  onPrepareOutput?: (chunk: string) => void,
-): Promise<Environment> {
-  if (environment.setupScriptsComplete || environment.createdFromCommit) return environment;
-  return establishCreatedFromCommit(environment, context, onPrepareOutput);
-}
 
 export async function waitForLocalServerStartup(
   child: ChildProcessWithoutNullStreams,
@@ -156,22 +51,6 @@ export function getBridgePath(context: CommandContext, bridgeName: "claude-bridg
   const devPath = path.join(context.appRoot, "bridges", bridgeName);
   if (process.env.NODE_ENV !== "production" && existsSync(devPath)) return devPath;
   return path.join(context.resourceRoot, bridgeName);
-}
-
-export function enqueueLocalServerEnvironmentOperation<T>(
-  environmentId: string,
-  operation: () => Promise<T>,
-): Promise<T> {
-  const previous = localServerEnvironmentOperations.get(environmentId) ?? Promise.resolve();
-  const result = previous.then(operation, operation);
-  const tail = result.then(() => undefined, () => undefined);
-  localServerEnvironmentOperations.set(environmentId, tail);
-  void tail.finally(() => {
-    if (localServerEnvironmentOperations.get(environmentId) === tail) {
-      localServerEnvironmentOperations.delete(environmentId);
-    }
-  });
-  return result;
 }
 
 export function enqueueContainerBridgeOperation<T>(
@@ -216,14 +95,6 @@ export function localServerPort(environment: Environment | null | undefined, kin
   if (kind === "codex") return environment?.localCodexPort;
   if (kind === "cursor") return environment?.localCursorPort;
   return environment?.localGrokPort;
-}
-
-export function localServerFields(kind: LocalServerKind): { port: keyof Environment; pid: keyof Environment } {
-  if (kind === "opencode") return { port: "localOpencodePort", pid: "opencodePid" };
-  if (kind === "claude") return { port: "localClaudePort", pid: "claudeBridgePid" };
-  if (kind === "codex") return { port: "localCodexPort", pid: "codexBridgePid" };
-  if (kind === "cursor") return { port: "localCursorPort", pid: "cursorBridgePid" };
-  return { port: "localGrokPort", pid: "grokBridgePid" };
 }
 
 export function asLocalServerKind(value: unknown, field: string): LocalServerKind {
@@ -677,12 +548,6 @@ export function scheduleOpenCodeAgentToolsConfiguration(
   });
 }
 
-export function cancelOpenCodeAgentToolsConfiguration(key: string): void {
-  openCodeAgentToolsConfigurations.get(key)?.controller.abort();
-  openCodeAgentToolsConfigurations.delete(key);
-  configuredOpenCodeAgentTools.delete(key);
-}
-
 export function resetOpenCodeAgentToolsTuning(): void {
   openCodeAgentToolsRetryDelaysMs = OPENCODE_AGENT_TOOLS_RETRY_DELAYS_MS;
   openCodeAgentToolsConnectedTtlMs = OPENCODE_AGENT_TOOLS_CONNECTED_TTL_MS;
@@ -708,29 +573,6 @@ export function cancelAllOpenCodeAgentToolsConfigurations(): void {
   }
   openCodeAgentToolsConfigurations.clear();
   configuredOpenCodeAgentTools.clear();
-}
-
-export function releaseLocalServerOwnership(
-  key: string,
-  child: ChildProcessWithoutNullStreams,
-): void {
-  if (localServerProcesses.get(key) !== child) return;
-  localServerProcesses.delete(key);
-  if (key.startsWith("codex:")) {
-    localCodexBridgeTokens.delete(key.slice("codex:".length));
-  } else if (key.startsWith("claude:")) {
-    localClaudeBridgeTokens.delete(key.slice("claude:".length));
-  } else if (key.startsWith("opencode:")) {
-    const environmentId = key.slice("opencode:".length);
-    localOpenCodeServerPasswords.delete(environmentId);
-    cancelOpenCodeAgentToolsConfiguration(`local:${environmentId}`);
-  } else if (key.startsWith("cursor:")) {
-    const environmentId = key.slice("cursor:".length);
-    localCursorBridgeTokens.delete(environmentId);
-    localCursorCredentialFingerprints.delete(environmentId);
-  } else if (key.startsWith("grok:")) {
-    localGrokBridgeTokens.delete(key.slice("grok:".length));
-  }
 }
 
 export async function startLocalServerUnlocked(
@@ -996,38 +838,6 @@ export function startLocalServer(
   });
 }
 
-export async function terminateLocalServerChild(
-  key: string,
-  child: ChildProcessWithoutNullStreams,
-): Promise<void> {
-  const exited = await terminateProcessTreeImpl(child, {
-    graceMs: LOCAL_SERVER_SHUTDOWN_GRACE_MS,
-    killWaitMs: LOCAL_SERVER_KILL_WAIT_MS,
-  });
-  if (!exited) {
-    // Keep the ownership entry so shutdown or a retry can target it again.
-    // Forgetting a process that is still alive recreates the orphan leak.
-    throw new Error(`Local server process tree did not exit: ${key}`);
-  }
-  releaseLocalServerOwnership(key, child);
-}
-
-export async function stopLocalServerUnlocked(
-  environmentId: string,
-  context: CommandContext,
-  kind: LocalServerKind,
-): Promise<void> {
-  const key = `${kind}:${environmentId}`;
-  if (kind === "opencode") {
-    cancelOpenCodeAgentToolsConfiguration(`local:${environmentId}`);
-  }
-  const child = localServerProcesses.get(key);
-  if (child) await terminateLocalServerChild(key, child);
-  const { port, pid } = localServerFields(kind);
-  const fields = { [port]: null, [pid]: null };
-  await context.storage.updateEnvironment(environmentId, fields);
-}
-
 export function stopLocalServer(
   environmentId: string,
   context: CommandContext,
@@ -1036,31 +846,6 @@ export function stopLocalServer(
   return enqueueLocalServerEnvironmentOperation(
     environmentId,
     () => stopLocalServerUnlocked(environmentId, context, kind),
-  );
-}
-
-export function aggregateRejectedResults(
-  results: PromiseSettledResult<unknown>[],
-  message: string,
-): void {
-  const errors = results.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : []
-  );
-  if (errors.length > 0) throw new AggregateError(errors, message);
-}
-
-export async function stopLocalServersForEnvironmentUnlocked(
-  environmentId: string,
-  context: CommandContext,
-): Promise<void> {
-  const results = await Promise.allSettled(
-    LOCAL_SERVER_KINDS.map((kind) =>
-      stopLocalServerUnlocked(environmentId, context, kind)
-    ),
-  );
-  aggregateRejectedResults(
-    results,
-    `Failed to stop all local servers for environment: ${environmentId}`,
   );
 }
 
@@ -1208,6 +993,12 @@ export function deleteEnvironmentTask(
  * exact-URL PR monitoring first establishes `prState: "merged"`, then this
  * continuation can safely retry deletion.
  */
+// Registered at module scope: the PR monitor observes merges and hands them
+// back here, without importing this module.
+setMergeCleanupScheduler((environmentId, context) =>
+  scheduleMergeCleanupRecovery(environmentId, context)
+);
+
 export function scheduleMergeCleanupRecovery(
   environmentId: string,
   context: CommandContext,

@@ -28,7 +28,7 @@ import {
   type JsonObject,
   type SessionState,
 } from "./acp-context.js";
-import { schedulePersist } from "./acp-persistence.js";
+import { schedulePersist } from "./acp-persist-writer.js";
 
 /** Every `session/update` kind that appends to or mutates the transcript. */
 export const TRANSCRIPT_UPDATE_KINDS = new Set([

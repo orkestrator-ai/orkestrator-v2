@@ -4,13 +4,13 @@ import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
 import {
   tryParseStructuredOutputText,
-} from "@orkestrator/protocol/structured-output";
+  } from "@orkestrator/protocol/structured-output";
 import {
   parsePromptAttachments,
   PromptAttachmentError,
   readPromptImages,
   type AcpPromptImage,
-} from "./prompt-attachments.js";
+  } from "./prompt-attachments.js";
 import {
   applyComposerPatch,
   createSession,
@@ -19,7 +19,7 @@ import {
   parseComposerPatch,
   recordTurnUsage,
   resumeSession,
-} from "./acp-session.js";
+  } from "./acp-session.js";
 import {
   AcpProcess,
   ACP_TOKEN_HEADER,
@@ -40,10 +40,10 @@ import {
   type BridgeFilePart,
   type JsonObject,
   type SessionState,
-} from "./acp-context.js";
+  } from "./acp-context.js";
 import {
   boundTranscript,
-} from "./acp-transcript.js";
+  } from "./acp-transcript.js";
 import {
   boundTranscriptForRead,
   messageWindow,
@@ -53,11 +53,13 @@ import {
   publicSession,
   setPromptJournal,
   setStructuredResult,
-} from "./acp-public.js";
+  } from "./acp-public.js";
 import {
   listNormalizedModels,
-  persistState,
 } from "./acp-persistence.js";
+import {
+  persistState,
+} from "./acp-persist-writer.js";
 import {
   cancelCursorToolMetadataReconcile,
   scheduleCursorToolMetadataReconcile,
@@ -66,7 +68,7 @@ import {
   reconcileStaleToolParts,
 } from "./acp-reconciliation.js";
 import { requestPromptWithResourceExhaustedRetries } from "./acp-prompt.js";
-import { schedulePersist } from "./acp-persistence.js";
+import { schedulePersist } from "./acp-persist-writer.js";
 import { structuredPromptInstruction } from "./acp-prompt.js";
 
 export async function route(

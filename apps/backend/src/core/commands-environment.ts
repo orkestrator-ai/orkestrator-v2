@@ -22,7 +22,7 @@ import { prMonitorService, invalidatePendingPrMonitorSync, syncPrMonitorTracking
 import { quoteShell, validateGitRefName, envWithManagedBinaries } from "./commands-agent-support.js";
 import { createLocalGhRunner, createContainerGhRunner, deletePullRequestHeadBranchViaGitHubApi, findEnvironmentByContainerId } from "./commands-review.js";
 import { toClientEnvironment, terminalOutputBufferLength, deleteRetainedTerminalOutputBuffer, emitTerminalOutput, resetTerminalOutputBuffer, logSetupTerminal, terminalEnv, resolveLocalShellPath, cleanupTerminalSession, assertEnvironmentNotDeleting, assertEnvironmentDeletionNotRequested } from "./commands-terminal.js";
-import { readLocalHeadCommit, ensureCreatedFromCommitBeforeSetup, enqueueLocalServerEnvironmentOperation, stopLocalServersForEnvironmentUnlocked } from "./commands-servers.js";
+import { readLocalHeadCommit, ensureCreatedFromCommitBeforeSetup, enqueueLocalServerEnvironmentOperation, stopLocalServersForEnvironmentUnlocked } from "./commands-local-server-lifecycle.js";
 import { resolveRemoteWorktreeStartPoint, enableGitScanCaches, resolveContainerGitHubToken, syncContainerGitHubCredential, syncContainerClaudeCredentialBestEffort, ensureContainerProjectFilesAccess } from "./commands-files.js";
 import { createDockerContainer } from "./commands-containers.js";
 import { environmentLifecycleErrorMessage, logEnvironmentLifecycleFailure } from "./commands-error-text.js";

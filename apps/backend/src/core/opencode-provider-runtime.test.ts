@@ -1189,6 +1189,12 @@ describe("OpenCode provider runtime", () => {
       ));
       await expect(provider.structured("owned-session", "request-1")).resolves
         .toMatchObject({ ok: true, value: { complete: true } });
+
+      fake.setMessagesResponse(reply(
+        "{\"complete\":true}\n<thinking>{\"fromThought\":true}</thinking>",
+      ));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: true } });
     } finally {
       await provider.dispose?.();
     }

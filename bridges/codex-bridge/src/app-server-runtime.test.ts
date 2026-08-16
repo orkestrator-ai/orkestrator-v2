@@ -2021,6 +2021,70 @@ describe("session lifecycle", () => {
     });
   });
 
+  test("recovers the last well-formed object when commentary contains another JSON document", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "review",
+      requestId: "structured-last-document",
+      attachments: [],
+      outputSchema: { type: "object" },
+    });
+    h.child().notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "answer-1",
+        type: "agentMessage",
+        text: 'Example {"summary":"nope"}. Answer {"summary":"Looks good"}.',
+      },
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    expect(h.runtime.getStructuredOutput(sessionId)).toMatchObject({
+      structuredOutput: {
+        ok: true,
+        value: { summary: "Looks good" },
+      },
+    });
+  });
+
+  test("prefers schema JSON outside a tagged thinking block in the final message", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "review",
+      requestId: "structured-tagged-thinking",
+      attachments: [],
+      outputSchema: { type: "object" },
+    });
+    h.child().notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "answer-1",
+        type: "agentMessage",
+        text: '{"summary":"Looks good"}\n<thinking>{"summary":"from thought"}</thinking>',
+      },
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    expect(h.runtime.getStructuredOutput(sessionId)).toMatchObject({
+      structuredOutput: {
+        ok: true,
+        value: { summary: "Looks good" },
+      },
+    });
+  });
+
   test("does not treat a plaintext final message as structured success", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });

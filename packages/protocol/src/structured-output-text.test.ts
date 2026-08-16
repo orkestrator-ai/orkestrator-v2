@@ -54,6 +54,40 @@ describe("tryParseStructuredOutputText", () => {
     ]);
   });
 
+  test("prefers JSON outside a tagged thinking block over JSON inside it", () => {
+    expect(tryParseStructuredOutputText(
+      '{"complete":true}\n<thinking>\n{"fromThought":true}\n</thinking>',
+    )).toEqual({ complete: true });
+
+    expect(tryParseStructuredOutputText(
+      '<thinking>\n{"fromThought":true}\n</thinking>\n{"complete":true}',
+    )).toEqual({ complete: true });
+
+    expect(tryParseStructuredOutputText(
+      '{"complete":true}\n<think>{"fromThought":true}</think>',
+    )).toEqual({ complete: true });
+  });
+
+  test("still recovers JSON that exists only inside a tagged thinking block", () => {
+    expect(tryParseStructuredOutputText(
+      '<thinking>\n{"complete":true}\n</thinking>',
+    )).toEqual({ complete: true });
+  });
+
+  test("does not treat a stray thinking close tag as a scan boundary", () => {
+    expect(tryParseStructuredOutputText(
+      '{"complete":true}\nI used </thinking> as an example.\n',
+    )).toEqual({ complete: true });
+
+    expect(tryParseStructuredOutputText(
+      'Here is the result:\n{"note":"see </thinking> inside","complete":true}',
+    )).toEqual({ note: "see </thinking> inside", complete: true });
+
+    expect(tryParseStructuredOutputText(
+      'Result:\n{"note":"</thinking>","payload":{"complete":true}}',
+    )).toEqual({ note: "</thinking>", payload: { complete: true } });
+  });
+
   test("skips a tagged thinking prefix so schema sketches do not starve recovery", () => {
     const sketches = Array.from(
       { length: STRUCTURED_OUTPUT_RECOVERY_CANDIDATES + 8 },

@@ -23,7 +23,12 @@ export const STRUCTURED_OUTPUT_RECOVERY_CHARS = 1024 * 1024;
 export const STRUCTURED_OUTPUT_RECOVERY_CANDIDATES = 256;
 
 const WHOLE_JSON_FENCE = /^```(?:json[5c]?)?[ \t]*\r?\n([\s\S]*?)\r?\n?```$/i;
-const THINKING_CLOSE = /<\/(?:thinking|thought|reasoning|think)>/gi;
+const THINKING_OPEN = /<(thinking|thought|reasoning|think)>/gi;
+
+interface IndexRange {
+  start: number;
+  end: number;
+}
 
 /**
  * Try to parse `candidate` as a JSON value. `undefined` is the sentinel for
@@ -78,38 +83,51 @@ function parseJsonDocumentAt(
   return undefined;
 }
 
-/**
- * Index to begin the last-document scan. A thinking block that the model dumped
- * into the text channel (instead of `agent_thought_chunk`) often closes with
- * `</thinking>` before the contract JSON. Scanning after that close avoids
- * spending the candidate budget on schema sketches inside the trace. If the
- * close tag is the end of the message, the JSON was inside the block and the
- * scan starts at 0.
- */
-function recoveryScanStart(text: string): number {
-  let start = 0;
-  THINKING_CLOSE.lastIndex = 0;
-  for (const match of text.matchAll(THINKING_CLOSE)) {
-    start = (match.index ?? 0) + match[0].length;
-  }
-  return text.slice(start).trim().length > 0 ? start : 0;
+/** True when `index` falls inside a thinking wrapper that should not start a JSON candidate. */
+function indexInRange(index: number, ranges: readonly IndexRange[]): boolean {
+  return ranges.some((range) => index >= range.start && index < range.end);
 }
 
 /**
- * Last-resort recovery for a model that wrapped the required JSON document in
- * prose (a thinking prefix, a lead-in sentence, or a trailing summary).
- * Successful outer documents are skipped as whole spans so their nested objects
- * and arrays cannot replace them. The last well-formed outer document wins, and
- * arbitrary prose is never interpreted as JSON.
+ * Locate thinking wrappers dumped into the text channel. An opening tag counts
+ * only at the start of the text or after whitespace so `</thinking>` inside a
+ * JSON string or trailing commentary cannot become a scan boundary.
  */
-function lastWellFormedJson(text: string): unknown {
-  const scanned = text.slice(0, STRUCTURED_OUTPUT_RECOVERY_CHARS);
+function findThinkingWrappers(text: string): IndexRange[] {
+  const wrappers: IndexRange[] = [];
+  THINKING_OPEN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = THINKING_OPEN.exec(text)) !== null) {
+    const atBoundary = match.index === 0 || /\s/.test(text[match.index - 1] ?? "");
+    if (!atBoundary) {
+      continue;
+    }
+    const close = new RegExp(`</${match[1]}>`, "i");
+    const closeMatch = close.exec(text.slice(match.index + match[0].length));
+    if (closeMatch === null) {
+      continue;
+    }
+    const end = match.index + match[0].length + closeMatch.index + closeMatch[0].length;
+    wrappers.push({ start: match.index, end });
+    THINKING_OPEN.lastIndex = end;
+  }
+  return wrappers;
+}
+
+/**
+ * Last well-formed outer document in `text`. `{` / `[` inside `skip` do not
+ * start a candidate, so a tagged thinking block cannot replace JSON that
+ * already appeared outside it. Successful outer documents are skipped as whole
+ * spans so nested objects and arrays cannot replace them.
+ */
+function lastWellFormedJsonIn(text: string, skip: readonly IndexRange[]): unknown {
   let failedCandidates = 0;
   let recovered: unknown;
-  for (let i = recoveryScanStart(scanned); i < scanned.length; i++) {
-    const ch = scanned[i];
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
     if (ch !== "{" && ch !== "[") continue;
-    const parsed = parseJsonDocumentAt(scanned, i);
+    if (indexInRange(i, skip)) continue;
+    const parsed = parseJsonDocumentAt(text, i);
     if (parsed !== undefined) {
       recovered = parsed.value;
       i = parsed.end;
@@ -119,6 +137,21 @@ function lastWellFormedJson(text: string): unknown {
     if (failedCandidates >= STRUCTURED_OUTPUT_RECOVERY_CANDIDATES) break;
   }
   return recovered;
+}
+
+/**
+ * Last-resort recovery for a model that wrapped the required JSON document in
+ * prose (a thinking prefix, a lead-in sentence, or a trailing summary).
+ * Documents outside tagged thinking blocks win; the block interior is scanned
+ * only when nothing else is recoverable. Arbitrary prose is never interpreted
+ * as JSON.
+ */
+function lastWellFormedJson(text: string): unknown {
+  const scanned = text.slice(0, STRUCTURED_OUTPUT_RECOVERY_CHARS);
+  const wrappers = findThinkingWrappers(scanned);
+  const outside = lastWellFormedJsonIn(scanned, wrappers);
+  if (outside !== undefined) return outside;
+  return lastWellFormedJsonIn(scanned, []);
 }
 
 /**

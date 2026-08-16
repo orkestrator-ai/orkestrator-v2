@@ -4642,6 +4642,20 @@ describe("ACP bridge", () => {
     await prompt("JSON_THEN_THOUGHT:{\"fromText\":true}", "json-then-thought-1");
     expect((await readStructured("json-then-thought-1")).structuredOutput)
       .toMatchObject({ ok: true, value: { fromText: true } });
+
+    await prompt(
+      'DIRECT:<thinking>{"fromThought":true}</thinking>\n{"ok":true}',
+      "tagged-thinking-1",
+    );
+    expect((await readStructured("tagged-thinking-1")).structuredOutput)
+      .toMatchObject({ ok: true, value: { ok: true } });
+
+    await prompt(
+      'DIRECT:{"ok":true}\n<thinking>{"fromThought":true}</thinking>',
+      "json-then-tagged-1",
+    );
+    expect((await readStructured("json-then-tagged-1")).structuredOutput)
+      .toMatchObject({ ok: true, value: { ok: true } });
   });
 
   test("uses only the current turn when parsing structured output", async () => {

@@ -260,8 +260,15 @@ export function ToolPart({
       };
     }
 
-    // For Read tool - show filename
-    const filePath = toolArgs.file_path as string | undefined;
+    // For Read tool - show filename. Cursor child JSONL uses `path`;
+    // Claude-style tools use `file_path`.
+    const filePath = (
+      typeof toolArgs.file_path === "string"
+        ? toolArgs.file_path
+        : typeof toolArgs.path === "string"
+          ? toolArgs.path
+          : undefined
+    );
     if (filePath) {
       const name = filePath.split("/").pop();
       return name ? { text: name, generic: false, monospace: true } : null;

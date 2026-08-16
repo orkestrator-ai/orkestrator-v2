@@ -13,6 +13,7 @@ import { dirname, join } from "node:path";
 import {
   CURSOR_BACKGROUND_CONTINUATION_PREFIX,
   MAX_CURSOR_CHILD_RESULT_BYTES,
+  MAX_CURSOR_TRANSCRIPT_HYDRATE_CHILDREN,
   MAX_MESSAGE_TEXT_BYTES,
   isObject,
   provider,
@@ -21,7 +22,8 @@ import {
 } from "./acp-context.js";
 import { schedulePersist } from "./acp-persist-writer.js";
 import { boundTranscript, truncateUtf8 } from "./acp-transcript.js";
-import { terminalAgentState } from "./acp-tools.js";
+import { terminalAgentState, toolPartAgentId } from "./acp-tools.js";
+import { syncCursorChildTranscriptParts } from "./acp-cursor-transcript-parts.js";
 
 const TRANSCRIPT_TAIL_BYTES = 256 * 1024;
 const TRANSCRIPT_POLL_MS = 250;
@@ -85,6 +87,54 @@ export function listWatchableCursorChildren(state: SessionState): WatchableCurso
   return children;
 }
 
+/**
+ * Project Cursor child JSONL activity onto Task cards when the UI reads a
+ * snapshot. `/activity` must not call this: it is a liveness probe.
+ */
+export function hydrateCursorChildTranscripts(state: SessionState): void {
+  if (provider !== "cursor") return;
+  const children: WatchableCursorChild[] = [];
+  const seen = new Set<string>();
+  for (const child of listWatchableCursorChildren(state)) {
+    seen.add(child.toolUseId);
+    children.push(child);
+    if (children.length >= MAX_CURSOR_TRANSCRIPT_HYDRATE_CHILDREN) break;
+  }
+  if (children.length < MAX_CURSOR_TRANSCRIPT_HYDRATE_CHILDREN) {
+    for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+      const message = state.messages[index];
+      if (!message) continue;
+      for (const part of message.parts) {
+        if (part.type !== "tool-invocation" || seen.has(part.toolUseId) || part.parentTaskUseId) {
+          continue;
+        }
+        const agentId = toolPartAgentId(part);
+        if (!agentId) continue;
+        seen.add(part.toolUseId);
+        children.push({
+          toolUseId: part.toolUseId,
+          agentId,
+          transcriptPath: cursorChildTranscriptPath(agentId),
+        });
+        if (children.length >= MAX_CURSOR_TRANSCRIPT_HYDRATE_CHILDREN) break;
+      }
+      if (children.length >= MAX_CURSOR_TRANSCRIPT_HYDRATE_CHILDREN) break;
+    }
+  }
+
+  for (const child of children) {
+    if (!existsSync(child.transcriptPath)) continue;
+    try {
+      const contents = readTranscriptTail(child.transcriptPath);
+      const ended = !state.activeSubagentToolIds.has(child.toolUseId)
+        || cursorTranscriptTerminalState(contents) !== undefined;
+      syncCursorChildTranscriptParts(state, child, contents, ended);
+    } catch {
+      // A missing or unreadable child file leaves the card empty.
+    }
+  }
+}
+
 export function cursorTranscriptTerminalState(
   contents: string,
 ): "finished" | "failed" | undefined {
@@ -101,8 +151,14 @@ export function cursorTranscriptTerminalState(
         : typeof parsed.subtype === "string"
           ? parsed.subtype
           : undefined;
-      if (parsed.is_error === true) return "failed";
-      return terminalAgentState(status) ?? "finished";
+      if (parsed.is_error === true || cursorTranscriptErrorPresent(parsed.error)) {
+        return "failed";
+      }
+      const named = terminalAgentState(status);
+      if (named) return named;
+      // Unknown non-empty statuses fail closed. A terminal record with no
+      // status still means the child ended, which is the historical default.
+      return status ? "failed" : "finished";
     } catch {
       // A tail read can start mid-line; skip anything that is not a record.
     }
@@ -131,11 +187,15 @@ export async function waitForCursorChildTranscript(
   transcriptPath: string,
   timeoutMs: number,
   signal: AbortSignal,
+  onContents?: (contents: string, terminal: "finished" | "failed" | undefined) => void,
 ): Promise<"finished" | "failed" | "timeout" | "cancelled"> {
   const inspect = (): "finished" | "failed" | undefined => {
     if (!existsSync(transcriptPath)) return undefined;
     try {
-      return cursorTranscriptTerminalState(readTranscriptTail(transcriptPath));
+      const contents = readTranscriptTail(transcriptPath);
+      const terminal = cursorTranscriptTerminalState(contents);
+      onContents?.(contents, terminal);
+      return terminal;
     } catch {
       return undefined;
     }
@@ -188,6 +248,7 @@ export async function waitForCursorChildTranscript(
 }
 
 export async function waitForWatchableCursorChildren(
+  state: SessionState,
   children: WatchableCursorChild[],
   timeoutMs: number,
   signal: AbortSignal,
@@ -195,7 +256,14 @@ export async function waitForWatchableCursorChildren(
   const started = Date.now();
   return Promise.all(children.map(async (child) => {
     const remaining = Math.max(0, timeoutMs - (Date.now() - started));
-    const waited = await waitForCursorChildTranscript(child.transcriptPath, remaining, signal);
+    const waited = await waitForCursorChildTranscript(
+      child.transcriptPath,
+      remaining,
+      signal,
+      (contents, terminal) => {
+        syncCursorChildTranscriptParts(state, child, contents, terminal !== undefined);
+      },
+    );
     const contents = existsSync(child.transcriptPath)
       ? readTranscriptTail(child.transcriptPath)
       : "";
@@ -263,6 +331,12 @@ export function pushContinuationUserMessage(state: SessionState, text: string): 
   state.revision += 1;
   boundTranscript(state);
   schedulePersist();
+}
+
+function cursorTranscriptErrorPresent(error: unknown): boolean {
+  if (error == null || error === false) return false;
+  if (typeof error === "string") return error.trim().length > 0;
+  return true;
 }
 
 function assistantRecordText(parsed: Record<string, unknown>): string | undefined {

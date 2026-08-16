@@ -201,6 +201,7 @@ export async function dispatchAcpPrompt(
     let outcomes;
     try {
       outcomes = await waitForWatchableCursorChildren(
+        state,
         watchable,
         CURSOR_BACKGROUND_WAIT_MS,
         wait.signal,

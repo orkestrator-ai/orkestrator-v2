@@ -27,6 +27,16 @@ export function handlePromptStart(message: JsonObject): boolean {
       );
     }
     if (prompt.startsWith("Background subagent finished.")) {
+      if (process.env.FAKE_ACP_BACKGROUND_RELAUNCH === "1") {
+        state.backgroundRelaunches += 1;
+        const index = state.backgroundRelaunches + 1;
+        writeCursorBackgroundChild({
+          toolCallId: `cursor-subagent-${index}`,
+          agentId: `child-wait-${index}`,
+        });
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+        return true;
+      }
       write({
         jsonrpc: "2.0",
         method: "session/update",
@@ -472,56 +482,15 @@ export function handlePromptStart(message: JsonObject): boolean {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return true;
     }
+    if (prompt.startsWith("CURSORBACKGROUNDNOID")) {
+      writeCursorBackgroundChild({ toolCallId: "cursor-subagent-1" });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return true;
+    }
     if (prompt.startsWith("CURSORBACKGROUNDCHILD")) {
-      write({
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: {
-          sessionId: "fake-session",
-          update: {
-            sessionUpdate: "tool_call",
-            toolCallId: "cursor-subagent-1",
-            title: "Task: Run validation at HEAD",
-            kind: "other",
-            status: "in_progress",
-            rawInput: {
-              _toolName: "task",
-              run_in_background: true,
-              description: "Run validation at HEAD",
-            },
-          },
-        },
-      });
-      write({
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: {
-          sessionId: "fake-session",
-          update: {
-            sessionUpdate: "tool_call_update",
-            toolCallId: "cursor-subagent-1",
-            status: "completed",
-            content: [{ type: "content", content: { type: "text", text: "Sub-agent launched." } }],
-            rawOutput: {
-              durationMs: 31,
-              isBackground: true,
-              agentId: "child-wait-1",
-            },
-          },
-        },
-      });
-      write({
-        jsonrpc: "2.0",
-        method: "cursor/task",
-        params: {
-          sessionId: "fake-session",
-          toolCallId: "cursor-subagent-1",
-          description: "Run validation at HEAD",
-          prompt: "Run the validation suite at HEAD.",
-          subagentType: "generalPurpose",
-          agentId: "child-wait-1",
-          durationMs: 31,
-        },
+      writeCursorBackgroundChild({
+        toolCallId: "cursor-subagent-1",
+        agentId: "child-wait-1",
       });
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return true;
@@ -885,3 +854,61 @@ export function handlePromptStart(message: JsonObject): boolean {
   }
   return false;
 }
+
+function writeCursorBackgroundChild(options: {
+  toolCallId: string;
+  agentId?: string;
+}): void {
+  const description = "Run validation at HEAD";
+  write({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "fake-session",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: options.toolCallId,
+        title: `Task: ${description}`,
+        kind: "other",
+        status: "in_progress",
+        rawInput: {
+          _toolName: "task",
+          run_in_background: true,
+          description,
+        },
+      },
+    },
+  });
+  write({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "fake-session",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: options.toolCallId,
+        status: "completed",
+        content: [{ type: "content", content: { type: "text", text: "Sub-agent launched." } }],
+        rawOutput: {
+          durationMs: 31,
+          isBackground: true,
+          ...(options.agentId ? { agentId: options.agentId } : {}),
+        },
+      },
+    },
+  });
+  write({
+    jsonrpc: "2.0",
+    method: "cursor/task",
+    params: {
+      sessionId: "fake-session",
+      toolCallId: options.toolCallId,
+      description,
+      prompt: "Run the validation suite at HEAD.",
+      subagentType: "generalPurpose",
+      durationMs: 31,
+      ...(options.agentId ? { agentId: options.agentId } : {}),
+    },
+  });
+}
+

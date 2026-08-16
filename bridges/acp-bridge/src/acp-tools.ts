@@ -1280,7 +1280,7 @@ export function lifecycleStatus(lifecycle: JsonObject | undefined): string | und
 
 export function terminalAgentState(status: string | undefined): "finished" | "failed" | undefined {
   if (!status) return undefined;
-  if (/^(failed|killed|cancelled|canceled|error|rejected)$/i.test(status)) return "failed";
+  if (/^(failed|killed|cancelled|canceled|error|rejected|aborted|abort)$/i.test(status)) return "failed";
   if (/^(completed|finished|done|success)$/i.test(status)) return "finished";
   return undefined;
 }

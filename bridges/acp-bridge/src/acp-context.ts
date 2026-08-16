@@ -28,6 +28,8 @@ export interface BridgeTextPart {
   content: string;
   sourcePartId: string;
   sourceMessageId: string;
+  /** Launch tool this nested text belongs to, when hydrated from a child transcript. */
+  parentTaskUseId?: string;
 }
 
 /**
@@ -465,6 +467,10 @@ export const CURSOR_BACKGROUND_WAIT_MS = parseDuration(
 );
 export const MAX_CURSOR_BACKGROUND_CONTINUATIONS = 4;
 export const MAX_CURSOR_CHILD_RESULT_BYTES = 64 * 1024;
+/** Recent child JSONL activity projected into the parent Task card. */
+export const MAX_CURSOR_CHILD_PARTS = 64;
+export const MAX_CURSOR_TRANSCRIPT_HYDRATE_CHILDREN = 8;
+export const CURSOR_JSONL_SOURCE_PREFIX = "cursor-jsonl:";
 export const CURSOR_BACKGROUND_CONTINUATION_PREFIX = "Background subagent finished.";
 export const RESOURCE_EXHAUSTED_MAX_RETRIES = 3;
 export const RESOURCE_EXHAUSTED_RETRY_BASE_MS = parseDuration(

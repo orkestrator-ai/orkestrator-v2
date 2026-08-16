@@ -1113,6 +1113,7 @@ describe("NativeMessage task list rendering", () => {
   test.each([
     ["file_path", { file_path: "/repo/src/deep/example.ts" }, "example.ts"],
     ["file_path with no directory", { file_path: "example.ts" }, "example.ts"],
+    ["path", { path: "package.json" }, "package.json"],
     ["pattern", { pattern: "**/*.tsx" }, "**/*.tsx"],
     ["regex", { regex: "function\\s+\\w+" }, "function\\s+\\w+"],
     ["url", { url: "https://example.test/a/b?c=d" }, "example.test"],
@@ -2573,6 +2574,56 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.getByText("Duration")).toBeTruthy();
     expect(screen.getByText("Agent ID")).toBeTruthy();
     expect(screen.getByText("bc-abc123")).toBeTruthy();
+    expect(screen.queryByText("No child actions yet.") === null).toBe(true);
+  });
+
+  test("renders Cursor JSONL-hydrated child activity inside the expanded Task card", () => {
+    const message = makeMessage([
+      {
+        type: "task-group",
+        content: "Task: Run validation at HEAD",
+        task: {
+          type: "tool-invocation",
+          content: "Task: Run validation at HEAD",
+          toolName: "task",
+          toolTitle: "Task: Run validation at HEAD",
+          toolState: "success",
+          agentState: "active",
+          toolArgs: {
+            description: "Run validation at HEAD",
+            prompt: "Run the validation suite at HEAD.",
+            subagent_type: "generalPurpose",
+            agentId: "child-wait-1",
+          },
+        },
+        childTools: [
+          {
+            type: "text",
+            content: "Checking the suite.",
+            parentTaskUseId: "cursor-subagent-1",
+          },
+          {
+            type: "tool-invocation",
+            content: "Read",
+            toolName: "Read",
+            toolTitle: "Read",
+            toolUseId: "child-wait-1:0:1",
+            parentTaskUseId: "cursor-subagent-1",
+            toolState: "pending",
+            toolArgs: { path: "package.json" },
+          },
+        ],
+      },
+    ]);
+
+    render(<NativeMessage message={message} platform="cursor" />);
+
+    expect(screen.queryByText("Waiting for activity.") === null).toBe(true);
+    expect(screen.getByText("Read")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /run validation at head/i }));
+    expect(screen.getByText("Checking the suite.")).toBeTruthy();
+    expect(screen.getByText("package.json")).toBeTruthy();
     expect(screen.queryByText("No child actions yet.") === null).toBe(true);
   });
 

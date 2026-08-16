@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, jest, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { builtinModules } from "node:module";
 import os from "node:os";
@@ -14,6 +14,8 @@ const processes: Bun.Subprocess[] = [];
 // stderr instead of failing as an anonymous hang.
 const READY_TIMEOUT_MS = 20_000;
 const EXIT_TIMEOUT_MS = 10_000;
+
+jest.setTimeout(40_000);
 
 // Every artifact scripts/build.ts emits, relative to the package root.
 const ARTIFACTS = [

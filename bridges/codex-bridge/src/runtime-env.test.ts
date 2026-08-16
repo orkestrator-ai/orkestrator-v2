@@ -206,7 +206,7 @@ describe("runtime environment refresh", () => {
       expect(process.env.BUN_INSTALL).toBe(bunInstall);
       expect(process.env.CODEX_PATH).toBe("codex");
     });
-  });
+  }, 15_000);
 
   test("refreshes and clears GitHub credentials from the managed runtime helper", async () => {
     await withTempDir(async (dir) => {

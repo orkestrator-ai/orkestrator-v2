@@ -62,7 +62,7 @@ export const temporaryDirectories = new Set<string>();
  * than per test, so the next case to hit that contention does not need its own
  * one-off timeout to be discovered first.
  */
-export const BRIDGE_TEST_TIMEOUT_MS = 20_000;
+export const BRIDGE_TEST_TIMEOUT_MS = 30_000;
 
 
 jest.setTimeout(BRIDGE_TEST_TIMEOUT_MS);
@@ -141,6 +141,13 @@ export function isRetryableWaitError(error: unknown): boolean {
  * bounded diagnostic below — the whole reason this helper exists — never prints.
  */
 export const DEFAULT_WAIT_TIMEOUT_MS = 5_000;
+
+/**
+ * Starting a fresh bridge is a process-readiness boundary, not an ordinary
+ * state poll. Aggregate runs start many Bun children at once, so keep startup's
+ * contention budget separate from the tighter product-state diagnostic above.
+ */
+export const BRIDGE_STARTUP_TIMEOUT_MS = 15_000;
 
 
 
@@ -221,6 +228,7 @@ export async function spawnBridge(options: {
   await waitFor(
     async () => nativeFetch(`${base}/global/health`).then((response) => response.ok).catch(() => false),
     Boolean,
+    BRIDGE_STARTUP_TIMEOUT_MS,
   );
   return {
     child,

@@ -86,9 +86,9 @@ describe("UpdateCoalescer", () => {
     // consulted again and defer the next publication.
     intervalMs = 35;
     coalescer.schedule();
-    await tick();
-    expect(publishedAt).toHaveLength(3);
     await waitFor(() => publishedAt.length === 4);
+
+    expect(publishedAt[3]! - publishedAt[2]!).toBeGreaterThanOrEqual(33);
 
     expect(intervalReads).toEqual([35, 0, 35]);
     coalescer.stop();

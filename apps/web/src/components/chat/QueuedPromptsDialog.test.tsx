@@ -76,20 +76,20 @@ describe("QueuedPromptsDialog", () => {
     expect(moveUp[0]?.hasAttribute("disabled")).toBe(true);
     expect(moveDown[1]?.hasAttribute("disabled")).toBe(true);
 
-    fireEvent.click(moveDown[0]!);
-    await waitFor(() => {
-      expect(onMove).toHaveBeenNthCalledWith(1, 0, 1);
-      expect(moveUp[1]?.hasAttribute("disabled")).toBe(false);
+    await act(async () => {
+      fireEvent.click(moveDown[0]!);
     });
-    fireEvent.click(moveUp[1]!);
-    await waitFor(() => {
-      expect(onMove).toHaveBeenNthCalledWith(2, 1, 0);
+    expect(onMove).toHaveBeenNthCalledWith(1, 0, 1);
+    expect(moveUp[1]?.hasAttribute("disabled")).toBe(false);
+    await act(async () => {
+      fireEvent.click(moveUp[1]!);
     });
+    expect(onMove).toHaveBeenNthCalledWith(2, 1, 0);
 
-    fireEvent.click(screen.getAllByTitle("Remove queued prompt")[1]!);
-    await waitFor(() => {
-      expect(onRemove).toHaveBeenCalledWith("two");
+    await act(async () => {
+      fireEvent.click(screen.getAllByTitle("Remove queued prompt")[1]!);
     });
+    expect(onRemove).toHaveBeenCalledWith("two");
   });
 
   test("reports an unresolvable failure with retry guidance", async () => {

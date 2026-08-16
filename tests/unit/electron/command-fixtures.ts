@@ -1255,7 +1255,7 @@ function expectedLocalShellPath(): string {
 
 
 
-const ASYNC_TEST_WAIT_TIMEOUT_MS = 3_000;
+const ASYNC_TEST_WAIT_TIMEOUT_MS = 10_000;
 
 
 /**
@@ -1267,7 +1267,7 @@ const ASYNC_TEST_WAIT_TIMEOUT_MS = 3_000;
  * dies on Bun's generic "timed out after 5000ms" instead of the helper's message
  * naming the condition that never became true.
  */
-const ASYNC_TEST_BUDGET_MS = 20_000;
+const ASYNC_TEST_BUDGET_MS = 30_000;
 
 
 

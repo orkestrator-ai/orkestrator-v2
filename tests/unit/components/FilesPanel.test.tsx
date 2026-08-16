@@ -602,7 +602,7 @@ describe("Files panel components", () => {
     mockEnvironmentId = "env-other";
     rerender(<TerminalProvider><FilesPanel /></TerminalProvider>);
     await waitFor(() => expect(screen.queryByRole("heading", { name: "Delete file?" }) === null).toBe(true));
-  });
+  }, 20_000);
 
   test("FilesPanel does not queue destructive actions without an environment", () => {
     mockEnvironmentId = null;

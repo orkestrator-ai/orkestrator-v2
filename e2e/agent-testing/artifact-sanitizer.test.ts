@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, stat, truncate, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, truncate, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { MAX_SANITIZABLE_FILE_BYTES, sanitizeAgentTestingArtifacts } from "./artifact-sanitizer";
@@ -64,7 +64,7 @@ describe("agent-test artifact sanitizer", () => {
     expect(await readFile(path.join(unpacked, "trace.network"), "utf8"))
       .toContain("orkestrator_gateway_auth=[REDACTED]");
     // No staging directory survives next to the archive it redacted.
-    expect(spawnSync("ls", [root], { encoding: "utf8" }).stdout.trim()).toBe("trace.zip");
+    expect(await readdir(root)).toEqual(["trace.zip"]);
   });
 
   test("destroys an archive it could not redact rather than leaving the original", async () => {

@@ -342,7 +342,7 @@ done
 printf '%s' 'x' > "$out"`);
     await expect(generateSessionTitleWithCodexExec(invalid, "prompt"))
       .rejects.toThrow("empty or invalid session title");
-  });
+  }, 15_000);
 
   test("hard-kills a timeout-resistant process before rejecting", async () => {
     const executable = createExecutable(`

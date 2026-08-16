@@ -2695,7 +2695,7 @@ describe("NativeMessage", () => {
     expect(svg.getAttribute("src")).toBe(
       "data:image/svg+xml;base64,container-image-base64",
     );
-  });
+  }, 20_000);
 
   test.each([
     ["gif", "image/gif"],

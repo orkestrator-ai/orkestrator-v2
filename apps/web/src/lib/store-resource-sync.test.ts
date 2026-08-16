@@ -99,6 +99,18 @@ const startTestStoreResourceSync = (
 
 const tick = (ms = 80) => new Promise((resolve) => setTimeout(resolve, ms));
 
+async function waitForState(
+  predicate: () => boolean,
+  description: string,
+  timeoutMs = 5_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${description}`);
+    await tick(5);
+  }
+}
+
 let detach: (() => void) | null = null;
 
 function environment(id: string): Environment {
@@ -1715,7 +1727,11 @@ describe("authoritative resync", () => {
         },
       });
 
-      await tick();
+      await waitForState(
+        () => useProjectStore.getState().projects.some(({ id }) => id === project.id)
+          && useEnvironmentStore.getState().environments.some(({ id }) => id === environmentSnapshot.id),
+        "initial project and environment hydration",
+      );
       expect(useProjectStore.getState().projects).toEqual([project]);
       expect(useEnvironmentStore.getState().environments).toEqual([
         expect.objectContaining({
@@ -1743,7 +1759,12 @@ describe("authoritative resync", () => {
       // the backend process reconnect that must retain the first generation.
       connected({ payload: undefined });
       connected({ payload: undefined });
-      await tick();
+      await waitForState(
+        () => manifestCalls.length === 2
+          && useProjectStore.getState().projects.some(({ name }) => name === "After restart")
+          && useEnvironmentStore.getState().environments.some(({ name }) => name === "After restart"),
+        "post-restart authoritative collection hydration",
+      );
 
       expect(manifestCalls).toHaveLength(2);
       expect(manifestCalls[1]?.knownGeneration).toEqual(expect.any(String));

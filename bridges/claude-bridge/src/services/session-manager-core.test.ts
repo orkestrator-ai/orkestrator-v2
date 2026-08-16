@@ -874,16 +874,16 @@ describe("rate_limit_event", () => {
     queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
       getStructuredUsage;
 
-    const startedAt = Date.now();
+    const startedAt = performance.now();
     const { session } = await runPromptWithMessages([
       sparseFiveHourEvent,
       successfulUsageResult,
     ]);
 
-    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(
+    expect(performance.now() - startedAt).toBeGreaterThanOrEqual(
       STRUCTURED_USAGE_REQUEST_TIMEOUT_MS - 50,
     );
-    expect(Date.now() - startedAt).toBeLessThan(
+    expect(performance.now() - startedAt).toBeLessThan(
       STRUCTURED_USAGE_REQUEST_TIMEOUT_MS + 1_000,
     );
     expect(session.status).toBe("idle");

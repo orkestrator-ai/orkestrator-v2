@@ -31,6 +31,7 @@ import {
   isRootAssistantRecord,
   normalizeBackendModelId,
 } from "@orkestrator/protocol/model-id";
+import { lineChangeStatsFromSides } from "@orkestrator/protocol/tool-diff";
 import {
   tmuxElicitationDraftKey,
   tmuxPlanDraftKey,
@@ -973,12 +974,17 @@ function buildToolDiff(
         typeof input.old_string === "string" ? input.old_string : undefined;
       const after =
         typeof input.new_string === "string" ? input.new_string : undefined;
-      return { filePath, before, after };
+      return { filePath, before, after, ...lineChangeStatsFromSides(before, after) };
     }
     case "write":
     case "create_file": {
       const after = typeof input.content === "string" ? input.content : undefined;
-      return { filePath, before: "", after };
+      return {
+        filePath,
+        before: "",
+        after,
+        ...lineChangeStatsFromSides("", after),
+      };
     }
     case "multiedit": {
       const edits = Array.isArray(input.edits) ? input.edits : [];
@@ -990,16 +996,19 @@ function buildToolDiff(
         if (typeof e.old_string === "string") beforeChunks.push(e.old_string);
         if (typeof e.new_string === "string") afterChunks.push(e.new_string);
       }
+      const before = beforeChunks.join("\n");
+      const after = afterChunks.join("\n");
       return {
         filePath,
-        before: beforeChunks.join("\n"),
-        after: afterChunks.join("\n"),
+        before,
+        after,
+        ...lineChangeStatsFromSides(before, after),
       };
     }
     case "notebookedit": {
       const after =
         typeof input.new_source === "string" ? input.new_source : undefined;
-      return { filePath, after };
+      return { filePath, after, ...lineChangeStatsFromSides(undefined, after) };
     }
     default:
       return filePath ? { filePath } : undefined;

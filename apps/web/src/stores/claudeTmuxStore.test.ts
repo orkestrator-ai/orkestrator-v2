@@ -658,6 +658,8 @@ describe("applyTranscriptLine", () => {
     expect(tool?.toolDiff?.filePath).toBe("/work/apps/web/package.json");
     expect(tool?.toolDiff?.before).toBe("\"react\": \"18.0.0\"");
     expect(tool?.toolDiff?.after).toBe("\"react\": \"19.0.0\"");
+    expect(tool?.toolDiff?.additions).toBe(1);
+    expect(tool?.toolDiff?.deletions).toBe(1);
   });
 
   test("Write tool_use populates toolDiff with after = content", () => {
@@ -682,6 +684,8 @@ describe("applyTranscriptLine", () => {
     expect(tool?.toolDiff?.filePath).toBe("/work/foo.txt");
     expect(tool?.toolDiff?.before).toBe("");
     expect(tool?.toolDiff?.after).toBe("line1\nline2");
+    expect(tool?.toolDiff?.additions).toBe(2);
+    expect(tool?.toolDiff?.deletions).toBe(0);
   });
 
   test("MultiEdit tool_use populates synthetic before/after chunks", () => {
@@ -715,6 +719,8 @@ describe("applyTranscriptLine", () => {
     expect(tool?.toolDiff?.filePath).toBe("/work/foo.ts");
     expect(tool?.toolDiff?.before).toBe("one\nthree");
     expect(tool?.toolDiff?.after).toBe("two\nfour");
+    expect(tool?.toolDiff?.additions).toBe(2);
+    expect(tool?.toolDiff?.deletions).toBe(2);
   });
 
   test("NotebookEdit tool_use captures notebook path and new source", () => {
@@ -744,6 +750,8 @@ describe("applyTranscriptLine", () => {
       .messages[0]!.parts.find((p) => p.type === "tool-invocation");
     expect(tool?.toolDiff?.filePath).toBe("/work/analysis.ipynb");
     expect(tool?.toolDiff?.after).toBe("print('done')");
+    expect(tool?.toolDiff?.additions).toBe(1);
+    expect(tool?.toolDiff?.deletions).toBe(0);
   });
 
   test("failed tool_result marks invocation failure and stores error text", () => {

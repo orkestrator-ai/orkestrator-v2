@@ -2,6 +2,7 @@ import {
   useCallback,
   useMemo,
 } from "react";
+import { countTextLines } from "@orkestrator/protocol/tool-diff";
 import {
   Brain,
   ChevronRight,
@@ -566,10 +567,8 @@ function countDiffStats(
 
   // Try to calculate from before/after content
   if (metadata?.before !== undefined || metadata?.after !== undefined) {
-    const beforeLines = metadata.before
-      ? metadata.before.split("\n").length
-      : 0;
-    const afterLines = metadata.after ? metadata.after.split("\n").length : 0;
+    const beforeLines = countTextLines(metadata.before);
+    const afterLines = countTextLines(metadata.after);
     return {
       additions: afterLines,
       deletions: beforeLines,
@@ -820,4 +819,3 @@ export function EditToolPart({
     </Collapsible>
   );
 }
-

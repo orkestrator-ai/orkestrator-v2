@@ -17,6 +17,7 @@
  * (Bash output, Read line counts), so anything hitting these limits is a
  * payload nobody was going to read in full anyway. Normal turns are untouched.
  */
+import { lineChangeStatsFromSides } from "@orkestrator/protocol/tool-diff";
 import type { ToolDiffMetadata } from "../types/index.js";
 
 /** Per-field cap for tool output and error text. */
@@ -51,17 +52,28 @@ function capText(value: string | undefined, maxBytes: number): string | undefine
   return `${trimmed}${TRUNCATED_NOTICE}`;
 }
 
-/** Bound the before/after sides of an edit, leaving the file path intact. */
+/**
+ * Capture compact stats before bounding the before/after sides of an edit.
+ * The backend can then defer those heavy strings without hiding the counts.
+ */
 export function applyDiffBudget(
   metadata: ToolDiffMetadata | undefined,
 ): ToolDiffMetadata | undefined {
   if (!metadata) return metadata;
 
+  const derivedStats = lineChangeStatsFromSides(metadata.before, metadata.after);
   const before = capText(metadata.before, MAX_DIFF_SIDE_BYTES);
   const after = capText(metadata.after, MAX_DIFF_SIDE_BYTES);
-  if (before === metadata.before && after === metadata.after) return metadata;
+  const additions = metadata.additions ?? derivedStats?.additions;
+  const deletions = metadata.deletions ?? derivedStats?.deletions;
+  if (
+    before === metadata.before
+    && after === metadata.after
+    && additions === metadata.additions
+    && deletions === metadata.deletions
+  ) return metadata;
 
-  return { ...metadata, before, after };
+  return { ...metadata, before, after, additions, deletions };
 }
 
 /** Bound the text a completed tool result contributes to the transcript. */

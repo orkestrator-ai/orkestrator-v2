@@ -11,6 +11,7 @@ describe("tool name helpers", () => {
   test("detects edit tools case-insensitively", () => {
     expect(isEditTool("edit")).toBe(true);
     expect(isEditTool("Write")).toBe(true);
+    expect(isEditTool("MultiEdit")).toBe(true);
     expect(isEditTool("STR_REPLACE_EDITOR")).toBe(true);
     expect(isEditTool("bash")).toBe(false);
     expect(isEditTool()).toBe(false);

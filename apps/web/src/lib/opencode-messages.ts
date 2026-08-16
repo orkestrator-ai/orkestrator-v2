@@ -1,3 +1,4 @@
+import { countTextLines } from "@orkestrator/protocol/tool-diff";
 import { isEditTool } from "./tool-names";
 import { createUuid } from "./uuid";
 
@@ -490,8 +491,8 @@ export function normalizeOpenCodePart(part: unknown): OpenCodeMessagePart | null
           deletions = delCount;
         }
       } else if (beforeValue !== undefined || afterValue !== undefined) {
-        const oldLines = beforeValue ? beforeValue.split("\n").length : 0;
-        const newLines = afterValue ? afterValue.split("\n").length : 0;
+        const oldLines = countTextLines(beforeValue);
+        const newLines = countTextLines(afterValue);
         if (beforeValue && afterValue) {
           deletions = oldLines;
           additions = newLines;
@@ -708,4 +709,3 @@ export function buildOpenCodeMessageFromPart(
 /**
  * Create an OpenCode SDK client connected to a server
  */
-

@@ -194,6 +194,66 @@ export function isTaskToolName(toolName: string): boolean {
   return normalized === "task" || normalized === "agent";
 }
 
+function buildClaudeToolDiff(
+  toolName: string,
+  input: Record<string, unknown>,
+): ToolDiffMetadata | undefined {
+  const normalized = toolName.toLowerCase();
+  const filePath = typeof input.file_path === "string"
+    ? input.file_path
+    : typeof input.filePath === "string"
+      ? input.filePath
+      : typeof input.notebook_path === "string"
+        ? input.notebook_path
+        : undefined;
+
+  if (normalized === "edit") {
+    return applyDiffBudget({
+      filePath,
+      before: typeof input.old_string === "string"
+        ? input.old_string
+        : typeof input.oldString === "string" ? input.oldString : undefined,
+      after: typeof input.new_string === "string"
+        ? input.new_string
+        : typeof input.newString === "string" ? input.newString : undefined,
+    });
+  }
+
+  if (normalized === "write") {
+    return applyDiffBudget({
+      filePath,
+      before: "",
+      after: typeof input.content === "string" ? input.content : undefined,
+    });
+  }
+
+  if (normalized === "multiedit") {
+    const edits = Array.isArray(input.edits) ? input.edits : [];
+    const before: string[] = [];
+    const after: string[] = [];
+    for (const edit of edits) {
+      if (!edit || typeof edit !== "object" || Array.isArray(edit)) continue;
+      const fields = edit as Record<string, unknown>;
+      if (typeof fields.old_string === "string") before.push(fields.old_string);
+      if (typeof fields.new_string === "string") after.push(fields.new_string);
+    }
+    return applyDiffBudget({
+      filePath,
+      before: before.join("\n"),
+      after: after.join("\n"),
+    });
+  }
+
+  if (normalized === "notebookedit") {
+    return applyDiffBudget({
+      filePath,
+      after: typeof input.new_source === "string" ? input.new_source : undefined,
+    });
+  }
+
+  return undefined;
+}
+
 /**
  * Parse SDK message content, extracting text/thinking parts, registering tools,
  * and tracking the order of non-text parts for chronological display.
@@ -272,23 +332,12 @@ export function parseMessageContent(
       });
     } else if (block.type === "tool_use" && toolTracker) {
       const toolName = block.name || "Unknown tool";
-      const normalizedToolName = toolName.toLowerCase();
-      const isEditTool = normalizedToolName === "edit";
-      const isWriteTool = normalizedToolName === "write";
       const isTask = isTaskToolName(toolName);
 
-      let toolDiff: ToolDiffMetadata | undefined;
-      if ((isEditTool || isWriteTool) && block.input) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const input = block.input as any;
-        // `after` is the whole file for a Write, so this is bounded before it
-        // is retained for the life of the session.
-        toolDiff = applyDiffBudget({
-          filePath: input.file_path || input.filePath,
-          before: isWriteTool ? "" : input.old_string || input.oldString,
-          after: isWriteTool ? input.content : input.new_string || input.newString,
-        });
-      }
+      const toolDiff = block.input && typeof block.input === "object"
+        && !Array.isArray(block.input)
+        ? buildClaudeToolDiff(toolName, block.input as Record<string, unknown>)
+        : undefined;
 
       // Check if this is an MCP tool
       const { isMcpTool, mcpServerName } = parseMcpToolName(toolName, mcpServerNames);
@@ -1120,4 +1169,3 @@ export function normalizePersistedSessionMessages(
   }
   return { messages, taskRegistry, backgroundTasks };
 }
-

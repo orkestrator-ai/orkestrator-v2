@@ -35,6 +35,7 @@
     "./task-list": "./src/task-list.ts",
     "./tab-teardown": "./src/tab-teardown.ts",
     "./terminal-websocket": "./src/terminal-websocket.ts",
+    "./tool-diff": "./src/tool-diff.ts",
     "./tmux-prompt": "./src/tmux-prompt.ts",
     "./tmux-observation": "./src/tmux-observation.ts",
     "./transcript-window": "./src/transcript-window.ts",

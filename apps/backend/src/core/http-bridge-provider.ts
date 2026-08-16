@@ -5,6 +5,7 @@ import type {
   NativeAgentRuntimeProvider,
   ProviderActivityState,
   ProviderCreateSessionOptions,
+  ProviderDispatchStatus,
   ProviderExecutionMode,
   ProviderInteractiveSnapshot,
   ProviderSendOptions,
@@ -16,6 +17,7 @@ import {
   PromptRejectedError,
   ProviderSessionFailedError,
   ProviderUnavailableError,
+  ProviderUnreachableError,
 } from "./agent-provider-contract.js";
 import type {
   NativeAgentComposerState,
@@ -218,6 +220,57 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     return body.sessionId;
   }
 
+  /**
+   * Attach the bridge's agent process before the dispatch window opens.
+   *
+   * Only the ACP bridges expose this: they are the ones whose prompt route
+   * performs a full spawn plus `initialize` plus `session/load` when no child
+   * is attached, which is the work that used to run inside the at-most-once
+   * window and abort the caller mid-flight. A bridge that predates the route
+   * answers 404 and the prompt request does the work itself, exactly as before.
+   */
+  async prepareDispatch(sessionId: string): Promise<void> {
+    if (this.agent !== "cursor" && this.agent !== "grok") return;
+    const response = await bridgeFetch(
+      this.connection,
+      `/session/${encodeURIComponent(sessionId)}/attach`,
+      { method: "POST", body: "{}" },
+      this.fetchImpl,
+      "attach",
+    );
+    // 404 is an older bridge or a session this bridge no longer holds. Neither
+    // is worth failing on: the prompt request answers both authoritatively.
+    if (response.status === 404) return;
+    await assertOkWithErrorDetail(response, `${this.agent} session attach`);
+  }
+
+  /**
+   * Ask the bridge whether it already holds this request id.
+   *
+   * Answers `dispatched` only on an explicit positive from the bridge's own
+   * dispatch journal. A missing route, an unknown session, an unparseable body
+   * and a record lost to a bridge restart all read as `unknown`, because none
+   * of them is evidence that the prompt did not run.
+   */
+  async dispatchStatus(
+    sessionId: string,
+    requestId: string,
+  ): Promise<ProviderDispatchStatus> {
+    const response = await bridgeFetch(
+      this.connection,
+      `/session/${encodeURIComponent(sessionId)}/dispatch`
+        + `?requestId=${encodeURIComponent(requestId)}`,
+      {},
+      this.fetchImpl,
+    );
+    if (!response.ok) return "unknown";
+    const body = asRecord(
+      await boundedJson(response, `${this.agent} dispatch status`)
+        .catch(() => null),
+    );
+    return body?.dispatch === "dispatched" ? "dispatched" : "unknown";
+  }
+
   async send(
     sessionId: string,
     prompt: string,
@@ -269,8 +322,13 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           }),
         },
         this.fetchImpl,
+        "prompt",
       );
     } catch (error) {
+      // A bridge that was never reached cannot have run the turn, so this is a
+      // plain retryable rejection. Parking it as ambiguous would ask the user
+      // to resolve a dispatch that provably never happened.
+      if (error instanceof ProviderUnreachableError) throw error;
       if (error instanceof ProviderUnavailableError) {
         throw new AmbiguousPromptDispatchError(
           `${this.agent} prompt dispatch outcome is unknown`,

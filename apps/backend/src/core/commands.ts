@@ -11849,6 +11849,21 @@ export function createCommandRegistry(
     });
   });
 
+  register("discard_native_agent_dispatch", async (args, context) => {
+    if (!context.nativeAgents) {
+      throw new Error("Native agent service is unavailable");
+    }
+    return context.nativeAgents.discardRecoverableDispatch({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(
+        args.logicalSessionKey,
+        "logicalSessionKey",
+      ),
+      requestId: asNonBlankString(args.requestId, "requestId"),
+    });
+  });
+
   register("get_native_agent_session", async (args, context) => {
     const environmentId = asNonBlankString(args.environmentId, "environmentId");
     const agent = asString(args.agent, "agent") as import("./models.js").NativeAgentProvider;

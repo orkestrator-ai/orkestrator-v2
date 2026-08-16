@@ -279,6 +279,26 @@ When touching the app-server engine:
   gone" it would delete a live session mapping against an older bridge. For the
   same reason the claude bridge answers a failed existence probe `idle`, never
   `missing` — an error is not evidence of deletion.
+- `GET /session/:id/dispatch?requestId=` answers `dispatched` **only** on an
+  explicit positive from that bridge's own dispatch journal. No record, a record
+  that predates a bridge restart (the ACP journal's `ambiguous`, the codex
+  journal's `prepared`), an unreadable journal and a missing route are all
+  `unknown`. The backend clears a parked dispatch on `dispatched` alone, so
+  reporting a *lost* record as "never sent" would have it run the same turn
+  twice. Like `/activity`, it must never touch liveness, hydrate or re-attach.
+- Prompt dispatch and `POST /session/:id/attach` share the same client timeout,
+  because they do the same work. A bridge with no attached agent process pays a
+  full spawn plus `initialize` plus `session/load` on whichever request arrives
+  first; budgeting the prompt at the 30s default aborted cold dispatches
+  mid-flight and reported them to the user as unresolvable. Attach exists to
+  move that cost *outside* the at-most-once window, where a failure is
+  unambiguous — nothing journaled, no prompt written. It must never dispatch a
+  turn, and callers must treat it as best-effort: the prompt request performs
+  the same work and is the one that answers authoritatively.
+- A parked dispatch blocks its whole session, not just the prompt that created
+  it: storage refuses every other request id until it is settled. Surface both
+  ways out — retry under the same idempotency key, or discard — rather than the
+  storage-level refusal, which names an invariant the user cannot act on.
 - Agent version bumps follow [`docs/upgrade-agents.md`](docs/upgrade-agents.md);
   the generated protocol under `app-server/generated/` is a lockfile.
 - Never resolve an approval to "approved" by default. Every timeout, disconnect,

@@ -10,7 +10,7 @@ import {
   INTERACTIVE_AGENT_INTERACTION_POLICY,
   UNATTENDED_AGENT_INTERACTION_POLICY,
 } from "@orkestrator/protocol/agent-interactions";
-import { StorageService } from "./storage.js";
+import { PendingNativeAgentDispatchError, StorageService } from "./storage.js";
 
 async function withStorage(
   run: (first: StorageService, second: StorageService) => Promise<void>,
@@ -770,6 +770,71 @@ describe("StorageService native agent sessions", () => {
       expect(competingDispatch).not.toHaveBeenCalled();
       expect((await first.getNativeAgentSession(input.key))?.pendingDispatch)
         .toEqual(pendingA);
+    });
+  });
+
+  test("names the parked request when it refuses a competing dispatch", async () => {
+    await withStorage(async (first) => {
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
+      await expect(first.dispatchNativeAgentPromptOnce(
+        input.key,
+        "request-a",
+        async () => { throw new Error("acknowledgement lost"); },
+        {
+          requestId: "request-a",
+          prompt: "first prompt",
+          createdAt: new Date(1).toISOString(),
+        },
+      )).rejects.toThrow("acknowledgement lost");
+
+      // Callers have to be able to settle the *blocking* request, not just
+      // learn that something blocked them.
+      const refusal = await first.dispatchNativeAgentPromptOnce(
+        input.key,
+        "request-b",
+        async () => undefined,
+      ).catch((error: unknown) => error);
+      expect(refusal).toBeInstanceOf(PendingNativeAgentDispatchError);
+      expect((refusal as PendingNativeAgentDispatchError).pendingRequestId)
+        .toBe("request-a");
+    });
+  });
+
+  test("confirms a parked dispatch as spent instead of merely clearing it", async () => {
+    await withStorage(async (first) => {
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
+      await expect(first.dispatchNativeAgentPromptOnce(
+        input.key,
+        "request-a",
+        async () => { throw new Error("acknowledgement lost"); },
+        {
+          requestId: "request-a",
+          prompt: "first prompt",
+          createdAt: new Date(1).toISOString(),
+        },
+      )).rejects.toThrow("acknowledgement lost");
+
+      // Only the exact parked id may be confirmed, so a stale caller cannot
+      // settle a dispatch it never saw.
+      expect(await first.confirmNativeAgentDispatch(input.key, "request-b")).toBe(false);
+      expect(await first.confirmNativeAgentDispatch(input.key, "request-a")).toBe(true);
+
+      const session = await first.getNativeAgentSession(input.key);
+      expect(session?.pendingDispatch).toBeUndefined();
+      // Recording the id is what stops a later retry from running it twice.
+      expect(session?.dispatchedRequestIds).toEqual(["request-a"]);
+
+      const replay = mock(async () => undefined);
+      const outcome = await first.dispatchNativeAgentPromptOnce(
+        input.key,
+        "request-a",
+        replay,
+      );
+      expect(replay).not.toHaveBeenCalled();
+      expect(outcome.dispatched).toBe(false);
+
+      // Nothing left to confirm once it is settled.
+      expect(await first.confirmNativeAgentDispatch(input.key, "request-a")).toBe(false);
     });
   });
 

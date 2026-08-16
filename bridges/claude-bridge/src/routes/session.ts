@@ -785,6 +785,29 @@ session.get("/:id/activity", async (c) => {
   return c.json({ activity });
 });
 
+/**
+ * Did this bridge ever take this request id?
+ *
+ * The backend asks after a prompt request whose acknowledgement was lost, so it
+ * can settle the dispatch from this process's own dispatch state instead of
+ * parking it for the user to resolve by hand.
+ *
+ * `dispatched` is only ever an explicit positive: a turn this process is
+ * running, or one it has finished. `new` and `not-found` both answer `unknown`,
+ * because neither distinguishes "never sent" from "sent to a bridge process
+ * that has since restarted" — and reporting the second as never-sent would have
+ * the caller dispatch the same turn twice.
+ *
+ * Registered before `/:id/...` catch-alls for the same reason as `/activity`.
+ */
+session.get("/:id/dispatch", (c) => {
+  const requestId = c.req.query("requestId")?.trim();
+  if (!requestId) return c.json({ dispatch: "unknown" });
+  const state = getPromptDispatchState(c.req.param("id"), requestId);
+  const dispatched = state === "processing" || state === "already-processed";
+  return c.json({ dispatch: dispatched ? "dispatched" : "unknown" });
+});
+
 // Get pending questions for a session
 session.get("/:id/questions", (c) => {
   const id = c.req.param("id");

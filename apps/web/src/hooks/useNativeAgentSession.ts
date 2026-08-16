@@ -22,6 +22,7 @@ import {
   getNativeAgentToolDetails,
   forkNativeAgentSession,
   listNativeAgentResumableSessions,
+  discardNativeAgentDispatch,
   movePromptQueueMessage,
   performNativeAgentSessionAction,
   refreshNativeAgentModels,
@@ -582,6 +583,26 @@ export function useNativeAgentSession<TMessage = unknown>({
       setIsDispatching(false);
     }
   }, [beginProjectionMutation, identity, refresh]);
+  /**
+   * Stop a parked dispatch from blocking the session without re-sending it.
+   *
+   * The prompt may still have run at the provider, which is exactly why it was
+   * parked; discarding says the user accepts that and wants the composer back.
+   */
+  const discardRecoverableDispatch = useCallback(async () => {
+    const requestId = projectionRef.current?.recoverableDispatch?.requestId;
+    if (!requestId) return { discarded: false };
+    beginProjectionMutation();
+    setIsDispatching(true);
+    try {
+      const outcome = await discardNativeAgentDispatch({ ...identity, requestId });
+      pendingDispatchRef.current = null;
+      await refresh();
+      return outcome;
+    } finally {
+      setIsDispatching(false);
+    }
+  }, [beginProjectionMutation, identity, refresh]);
   const listResumable = useCallback(
     () => listNativeAgentResumableSessions(identity),
     [identity],
@@ -669,6 +690,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     moveQueued,
     retryQueue,
     retryRecoverableDispatch,
+    discardRecoverableDispatch,
     listResumable,
     resume,
     fork,

@@ -55,6 +55,7 @@ import type {
   PersistedNativeAgentPendingDispatch,
 } from "./models.js";
 import type { StorageService } from "./storage.js";
+import { PendingNativeAgentDispatchError } from "./storage.js";
 import {
   AmbiguousPromptDispatchError,
   createNativeAgentProvider,
@@ -272,6 +273,16 @@ const ACTIVITY_RETRY_BASE_MS = 2_000;
 const ACTIVITY_RETRY_CEILING_MS = 60_000;
 const OPENCODE_RECOVERY_RETRY_BASE_MS = 2_000;
 const OPENCODE_RECOVERY_RETRY_CEILING_MS = 60_000;
+/**
+ * Shown when a new prompt collides with a dispatch that is still parked.
+ *
+ * Names both ways out, because the storage-level refusal it replaces described
+ * an internal invariant rather than anything the user could act on.
+ */
+const PARKED_DISPATCH_CONFLICT_MESSAGE =
+  "An earlier message is still awaiting confirmation."
+  + " Retry or discard it before sending another.";
+
 const OPENCODE_RECOVERY_MAX_CANDIDATES = 1_024;
 const OPENCODE_MANUAL_PROMPT_CLAIM_MS = 2 * 60_000;
 const OPENCODE_INCOMPLETE_TURN_HISTORY_LIMIT = 64;
@@ -538,6 +549,12 @@ export class NativeAgentService {
   >();
   /** Final no-await handoff from recovery validation into provider dispatch. */
   private readonly openCodeRecoveryDispatches = new Set<string>();
+  /**
+   * Parked dispatches currently being settled against their provider, keyed by
+   * session and request id. Projection reads are frequent and the settle is a
+   * network round trip, so this keeps one refresh from queueing another.
+   */
+  private readonly settlingDispatches = new Set<string>();
   /**
    * Environments whose exact completion edge has not yet reached the PR
    * monitor. Delivery is retried by later sweeps, while the set coalesces
@@ -865,6 +882,13 @@ export class NativeAgentService {
   async dispatchIntent(
     input: DispatchNativeAgentPromptInput,
   ): Promise<NativeAgentDispatchOutcome> {
+    return this.dispatchIntentInternal(input, false);
+  }
+
+  private async dispatchIntentInternal(
+    input: DispatchNativeAgentPromptInput,
+    preserveExistingPending: boolean,
+  ): Promise<NativeAgentDispatchOutcome> {
     let manualOpenCodeSession: PersistedNativeAgentSession | null = null;
     try {
       const isManualOpenCode = input.agent === "opencode"
@@ -879,27 +903,21 @@ export class NativeAgentService {
           requestId: input.requestId,
         });
       }
-      await this.dispatchPromptInternal(input, undefined, true);
-      void this.refreshProjection(input, true).catch(() => undefined);
-      return { outcome: "accepted", requestId: input.requestId };
+      return await this.attemptDispatch(input, true, preserveExistingPending);
     } catch (error) {
-      if (error instanceof AmbiguousPromptDispatchError) {
-        void this.refreshProjection(input, true).catch(() => undefined);
-        return {
-          outcome: "unknown",
-          requestId: input.requestId,
-          error: error.message,
-        };
+      // Everything before the first dispatch attempt: session creation, the
+      // OpenCode manual claim. A normal send has no earlier record to preserve;
+      // an explicit recovery retry does, and must leave it parked on failure.
+      if (!preserveExistingPending) {
+        await this.storage.clearPendingNativeAgentDispatch(
+          nativeAgentSessionStorageKey(
+            input.environmentId,
+            input.agent,
+            input.logicalSessionKey,
+          ),
+          input.requestId,
+        ).catch(() => false);
       }
-      const key = nativeAgentSessionStorageKey(
-        input.environmentId,
-        input.agent,
-        input.logicalSessionKey,
-      );
-      await this.storage.clearPendingNativeAgentDispatch(
-        key,
-        input.requestId,
-      ).catch(() => false);
       return {
         outcome: "rejected",
         error: error instanceof Error ? error.message : "Prompt dispatch failed",
@@ -914,6 +932,175 @@ export class NativeAgentService {
         });
       }
     }
+  }
+
+  /**
+   * One dispatch attempt, plus a single bounded retry once a stale block has
+   * been cleared.
+   *
+   * `allowRecoveryRetry` is what bounds it. A prompt refused because an earlier
+   * dispatch is still parked can legitimately proceed the moment that parked
+   * record is settled against the provider — but only once, so a session that
+   * keeps re-parking cannot drive an unbounded dispatch loop.
+   */
+  private async attemptDispatch(
+    input: DispatchNativeAgentPromptInput,
+    allowRecoveryRetry: boolean,
+    preserveExistingPending: boolean,
+  ): Promise<NativeAgentDispatchOutcome> {
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    try {
+      await this.dispatchPromptInternal(input, undefined, true);
+      void this.refreshProjection(input, true).catch(() => undefined);
+      return { outcome: "accepted", requestId: input.requestId };
+    } catch (error) {
+      if (error instanceof PendingNativeAgentDispatchError) {
+        // The only thing refusing this prompt is an older dispatch nobody has
+        // resolved. If the provider can prove that one landed, the block was
+        // stale and this prompt was never in conflict with anything.
+        if (
+          allowRecoveryRetry
+          && await this.settleAmbiguousDispatch(
+            input,
+            key,
+            error.pendingRequestId,
+          )
+        ) {
+          return this.attemptDispatch(input, false, preserveExistingPending);
+        }
+        void this.refreshProjection(input, true).catch(() => undefined);
+        return { outcome: "rejected", error: PARKED_DISPATCH_CONFLICT_MESSAGE };
+      }
+      if (error instanceof AmbiguousPromptDispatchError) {
+        // Ask the provider before handing the ambiguity to the user. A lost
+        // acknowledgement is not the same fact as a lost prompt, and the
+        // provider's own dispatch journal can usually tell the two apart.
+        if (await this.settleAmbiguousDispatch(input, key, input.requestId)) {
+          void this.refreshProjection(input, true).catch(() => undefined);
+          return { outcome: "accepted", requestId: input.requestId };
+        }
+        void this.refreshProjection(input, true).catch(() => undefined);
+        return {
+          outcome: "unknown",
+          requestId: input.requestId,
+          error: error.message,
+        };
+      }
+      if (!preserveExistingPending) {
+        await this.storage.clearPendingNativeAgentDispatch(
+          key,
+          input.requestId,
+        ).catch(() => false);
+      }
+      return {
+        outcome: "rejected",
+        error: error instanceof Error ? error.message : "Prompt dispatch failed",
+      };
+    }
+  }
+
+  /**
+   * Discard a parked dispatch without sending it.
+   *
+   * The other half of the recovery choice: retrying re-offers the prompt under
+   * the same idempotency key, discarding accepts that it may have run and stops
+   * blocking the session. Deliberately requires the exact request id the caller
+   * was shown, so a stale tab cannot drop a newer parked dispatch it never saw.
+   */
+  async discardRecoverableDispatch(
+    input: NativeAgentProjectionInput & { requestId: string },
+  ): Promise<{ discarded: boolean }> {
+    this.assertProjectionInput(input);
+    if (!nonBlank(input.requestId)) {
+      throw new Error("Recoverable native agent request ID must not be blank");
+    }
+    const discarded = await this.storage.clearPendingNativeAgentDispatch(
+      nativeAgentSessionStorageKey(
+        input.environmentId,
+        input.agent,
+        input.logicalSessionKey,
+      ),
+      input.requestId,
+    );
+    if (discarded) {
+      void this.refreshProjection(input, true).catch(() => undefined);
+    }
+    return { discarded };
+  }
+
+  /**
+   * Settle a parked dispatch against the provider's own journal.
+   *
+   * A dispatch becomes recoverable because Orkestrator lost the answer, not
+   * because the provider lost the prompt — and every bridge keeps a durable
+   * record keyed by the same request id. Asking it turns the common case (the
+   * turn is running; only the acknowledgement went missing) back into a plain
+   * accepted dispatch, instead of a banner the user has to act on.
+   *
+   * Read-only and strictly one-directional: it can only ever *clear* a pending
+   * record, and only on an explicit `dispatched`. Providers with no journal to
+   * ask, an unreachable bridge, and any failure at all leave the record exactly
+   * where it was, because "I could not find out" must never read as "it ran".
+   */
+  private async settleAmbiguousDispatch(
+    input: NativeAgentProjectionInput,
+    key: string,
+    requestId: string,
+    resolved?: NativeAgentRuntimeProvider,
+  ): Promise<boolean> {
+    try {
+      // Cheapest question first. Projection reads drive this on every refresh,
+      // and a provider with no journal to ask must not cost a storage read each
+      // time to establish that it still has nothing to say.
+      const provider = resolved ?? await this.provider(input);
+      if (!provider.dispatchStatus) return false;
+      // Re-read rather than trusting the caller's snapshot: a real
+      // acknowledgement may have landed since, and confirming against a stale
+      // record would resurrect a request id that is no longer parked.
+      const session = await this.storage.getNativeAgentSession(key);
+      if (session?.pendingDispatch?.requestId !== requestId) return false;
+      const status = await provider.dispatchStatus(
+        session.providerSessionId,
+        requestId,
+      );
+      if (status !== "dispatched") return false;
+      return await this.storage.confirmNativeAgentDispatch(key, requestId);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Settle a parked dispatch in the background, at most once at a time per
+   * session.
+   *
+   * Driven from projection reads so a record that outlived the dispatch that
+   * created it — a backend restart mid-flight, a bridge that came back after
+   * the tab was closed — is resolved by the next refresh rather than waiting
+   * for the user. Never awaited by the projection: an authoritative snapshot
+   * must not be delayed by, or fail because of, an optional reconciliation.
+   */
+  private scheduleAmbiguousDispatchSettle(
+    input: NativeAgentProjectionInput,
+    key: string,
+    requestId: string,
+    resolved: NativeAgentRuntimeProvider,
+  ): void {
+    const inFlight = `${key}\0${requestId}`;
+    if (this.settlingDispatches.has(inFlight)) return;
+    this.settlingDispatches.add(inFlight);
+    void this.trackScan(
+      this.settleAmbiguousDispatch(input, key, requestId, resolved)
+        .then((settled) => {
+          if (settled) void this.refreshProjection(input, true).catch(() => undefined);
+        })
+        .catch(() => undefined)
+        .finally(() => this.settlingDispatches.delete(inFlight)),
+    ).catch(() => undefined);
   }
 
   async retryRecoverableDispatch(
@@ -942,7 +1129,7 @@ export class NativeAgentService {
         error: "The recoverable dispatch changed; refresh before retrying",
       };
     }
-    return this.dispatchIntent({
+    return this.dispatchIntentInternal({
       environmentId: session.environmentId,
       agent: session.agent,
       logicalSessionKey: session.logicalSessionKey,
@@ -961,7 +1148,7 @@ export class NativeAgentService {
       promptSuggestions: pending.promptSuggestions,
       model: pending.model,
       reasoningEffort: pending.reasoningEffort,
-    });
+    }, true);
   }
 
   async stopProjectionSession(
@@ -1889,6 +2076,18 @@ export class NativeAgentService {
           createdAt: "1970-01-01T00:00:00.000Z",
         })),
       ];
+      // Reading the projection is the only moment a parked dispatch is
+      // reliably revisited, so it is where the provider gets asked whether the
+      // prompt landed after all. A record that outlived the backend generation
+      // that created it is settled here instead of waiting for the user.
+      if (resolved.session.pendingDispatch) {
+        this.scheduleAmbiguousDispatchSettle(
+          input,
+          key,
+          resolved.session.pendingDispatch.requestId,
+          resolved.provider,
+        );
+      }
       const projection: NativeAgentSessionProjection = {
         platform: input.agent,
         environmentId: input.environmentId,
@@ -2111,6 +2310,27 @@ export class NativeAgentService {
       origin: session.origin,
       interactionPolicy: session.interactionPolicy,
       phase: input.phase,
+    });
+    /*
+     * Attach the provider before the at-most-once window opens.
+     *
+     * A cold agent process is the single most expensive thing the dispatch
+     * request can be waiting on, and it used to run entirely inside the window
+     * where a lost acknowledgement becomes an ambiguous dispatch the user has
+     * to resolve by hand. Out here it is just a slow request that either works
+     * or fails cleanly, and it is also outside the native-agent session
+     * mutation queue, so one cold start no longer serializes every other
+     * session's dispatch behind it.
+     *
+     * Best-effort by contract: the prompt request performs the same work, so a
+     * failure here is left for it to report authoritatively rather than
+     * pre-empting it with a second, less specific error.
+     */
+    await provider.prepareDispatch?.(session.providerSessionId).catch((error) => {
+      console.warn(
+        `[native-agent] Attaching ${input.agent} before dispatch failed:`,
+        error instanceof Error ? error.message : error,
+      );
     });
     const result = await this.storage.runWithLiveEnvironment(
       input.environmentId,

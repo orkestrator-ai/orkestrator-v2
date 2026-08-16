@@ -804,8 +804,9 @@ describe("CreateEnvironmentFlowDialog", () => {
     expect(picker.textContent).toContain("High");
     fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
     expect(screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"))
+      .toBe("false");
+    expect(screen.getByRole("button", { name: "codex models" }).getAttribute("aria-pressed"))
       .toBe("true");
-    expect(screen.getByRole("button", { name: "codex models" })).toBeTruthy();
   });
 
   test("does not let a late catalog refresh replace a user-touched agent selection", async () => {

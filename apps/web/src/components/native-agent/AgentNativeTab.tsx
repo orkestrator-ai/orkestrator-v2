@@ -756,6 +756,7 @@ function SharedNativeAgentController({
     moveQueued,
     retryQueue,
     retryRecoverableDispatch,
+    discardRecoverableDispatch,
     listResumable,
     resume,
     fork,
@@ -996,12 +997,21 @@ function SharedNativeAgentController({
     projection?.turn.startedAt,
   );
   const canQueue = isRunning && adapter.capabilities.queue;
+  /*
+   * A parked dispatch blocks the session, not just the prompt that created it:
+   * the backend refuses any other request id until it is resolved, because the
+   * parked one may be executing at the provider right now. Reflecting that in
+   * the composer turns a failed send into a visible choice — the banner above
+   * offers both ways out — instead of an error the user cannot act on.
+   */
+  const recoverableDispatch = projection?.recoverableDispatch;
   const sendLocked = !projection
     || !handoff.ready
     || (isRunning && !canQueue)
     || phase === "cancelling"
     || phase === "recovering"
     || phase === "blocked"
+    || Boolean(recoverableDispatch)
     || isSubmitting;
   const queuedMessages = useMemo(
     () => (projection?.queue?.items ?? []).flatMap((candidate) => {
@@ -1123,6 +1133,14 @@ function SharedNativeAgentController({
       return false;
     }
     const prompt = prependAgentHandoffHistory(handoff.pendingHistory, userPrompt);
+    // `sendLocked` covers this too, but silently swallowing the keystroke would
+    // leave the user pressing Enter at a composer that never responds.
+    if (recoverableDispatch) {
+      setSendError(
+        "Resolve the unconfirmed message above — retry or discard it — before sending another.",
+      );
+      return false;
+    }
     if (!prompt || sendLocked || isDispatching) return false;
     submitInFlightRef.current = true;
     setIsSubmitting(true);
@@ -1246,6 +1264,7 @@ function SharedNativeAgentController({
     performAction,
     projection?.capabilities,
     projection?.messages.length,
+    recoverableDispatch,
     send,
     sendLocked,
     serializeForLLM,
@@ -1673,33 +1692,58 @@ function SharedNativeAgentController({
         {notice.message}
       </div>
     )),
-    projection?.recoverableDispatch ? (
+    recoverableDispatch ? (
       <div
         key="recoverable-dispatch"
         role="alert"
-        className="flex items-center justify-between gap-3 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-100"
+        className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-100"
       >
-        <span>The previous dispatch could not be confirmed. Retrying is idempotent.</span>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={isDispatching}
-          onClick={() => {
-            void retryRecoverableDispatch().then((outcome) => {
-              if (outcome.outcome === "accepted") {
+        <span>
+          {label} did not confirm your last message, so it may or may not have
+          been received. Retrying sends it under the same request id, so it
+          cannot run twice. Until you choose, this session will not accept a new
+          message.
+        </span>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={isDispatching}
+            onClick={() => {
+              void retryRecoverableDispatch().then((outcome) => {
+                if (outcome.outcome === "accepted") {
+                  setSendError(null);
+                  setOptimisticPrompt(null);
+                } else if (outcome.outcome === "rejected") {
+                  setSendError(outcome.error);
+                } else {
+                  setSendError(outcome.error ?? "The dispatch is still being reconciled.");
+                }
+              });
+            }}
+          >
+            Retry send
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={isDispatching}
+            onClick={() => {
+              void discardRecoverableDispatch().then(() => {
                 setSendError(null);
                 setOptimisticPrompt(null);
-              } else if (outcome.outcome === "rejected") {
-                setSendError(outcome.error);
-              } else {
-                setSendError(outcome.error ?? "The dispatch is still being reconciled.");
-              }
-            });
-          }}
-        >
-          Retry send
-        </Button>
+              }).catch((error: unknown) => {
+                setSendError(
+                  error instanceof Error ? error.message : String(error),
+                );
+              });
+            }}
+          >
+            Discard
+          </Button>
+        </div>
       </div>
     ) : null,
     sendError ? (

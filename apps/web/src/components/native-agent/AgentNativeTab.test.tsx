@@ -81,6 +81,7 @@ const retryNativeAgentDispatchMock = mock(async () => ({
   outcome: "accepted" as const,
   requestId: "recoverable-1",
 }));
+const discardNativeAgentDispatchMock = mock(async () => ({ discarded: true }));
 const renameEnvironmentFromPromptMock = mock(async () => {});
 const resumeNativeAgentSessionMock = mock(async (input: {
   agent: NativeAgentTabData["platform"];
@@ -148,6 +149,7 @@ mock.module("@/lib/backend", () => ({
   getAgentHandoff: getAgentHandoffMock,
   dispatchNativeAgentIntent: dispatchNativeAgentIntentMock,
   retryNativeAgentDispatch: retryNativeAgentDispatchMock,
+  discardNativeAgentDispatch: discardNativeAgentDispatchMock,
   renameEnvironmentFromPrompt: renameEnvironmentFromPromptMock,
   resumeNativeAgentSession: resumeNativeAgentSessionMock,
   stopNativeAgentSession: stopNativeAgentSessionMock,
@@ -206,6 +208,7 @@ afterEach(() => {
   getAgentHandoffMock.mockClear();
   dispatchNativeAgentIntentMock.mockClear();
   retryNativeAgentDispatchMock.mockClear();
+  discardNativeAgentDispatchMock.mockClear();
   renameEnvironmentFromPromptMock.mockReset();
   renameEnvironmentFromPromptMock.mockImplementation(async () => {});
   resumeNativeAgentSessionMock.mockClear();
@@ -2285,6 +2288,78 @@ describe("AgentNativeTab", () => {
         logicalSessionKey: createSessionKey("env-1", "tab-recoverable"),
         requestId: "recoverable-1",
       }));
+    });
+
+    test("rehydrates a parked dispatch after the environment unmounts and the renderer cache resets", async () => {
+      seedProjection({
+        recoverableDispatch: {
+          requestId: "recoverable-remount-1",
+          createdAt: "2026-08-14T10:00:00.000Z",
+        },
+      });
+      const first = render(
+        <AgentNativeTab tabId="tab-recoverable-remount" data={identity("codex")} isActive />,
+      );
+      expect(await screen.findByRole("button", { name: "Retry send" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Discard" })).toBeTruthy();
+
+      // Switching environments unmounts this tree. Resetting the shared store
+      // additionally models a renderer reload, so the second banner can only
+      // come from the backend-owned projection returned during reconnect.
+      first.unmount();
+      useNativeAgentProjectionStore.getState().reset();
+      getNativeAgentProjectionMock.mockClear();
+      render(
+        <AgentNativeTab tabId="tab-recoverable-remount" data={identity("codex")} isActive />,
+      );
+
+      expect(await screen.findByRole("button", { name: "Retry send" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Discard" })).toBeTruthy();
+      // Drafting remains available, but there is no action that can submit a
+      // second request id while the recovered one is parked.
+      expect(screen.queryByTitle("Send") === null).toBe(true);
+      expect(getNativeAgentProjectionMock).toHaveBeenCalled();
+    });
+
+    test("discards an ambiguous dispatch without re-sending it", async () => {
+      seedProjection({
+        recoverableDispatch: {
+          requestId: "recoverable-1",
+          createdAt: "2026-08-14T10:00:00.000Z",
+        },
+      });
+      render(<AgentNativeTab tabId="tab-discard" data={identity("codex")} isActive />);
+
+      fireEvent.click(await screen.findByRole("button", { name: "Discard" }));
+      await waitFor(() => expect(discardNativeAgentDispatchMock).toHaveBeenCalledWith({
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: createSessionKey("env-1", "tab-discard"),
+        requestId: "recoverable-1",
+      }));
+      expect(retryNativeAgentDispatchMock).not.toHaveBeenCalled();
+    });
+
+    test("refuses a new prompt while a dispatch is still parked", async () => {
+      seedProjection({
+        recoverableDispatch: {
+          requestId: "recoverable-1",
+          createdAt: "2026-08-14T10:00:00.000Z",
+        },
+      });
+      render(<AgentNativeTab tabId="tab-parked" data={identity("codex")} isActive />);
+
+      const composer = await screen.findByRole("textbox");
+      fireEvent.input(composer, { target: { textContent: "Something else" } });
+      fireEvent.keyDown(composer, { key: "Enter" });
+
+      // The backend refuses a second request id while one is parked, so sending
+      // anyway would surface an internal message the user cannot act on. Say
+      // which two controls clear it instead.
+      expect(await screen.findByText(
+        /Resolve the unconfirmed message above/,
+      )).toBeTruthy();
+      expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
     });
   });
 });

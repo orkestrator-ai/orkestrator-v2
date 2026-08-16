@@ -20,6 +20,7 @@ import {
   PromptRejectedError,
   ProviderSessionFailedError,
   ProviderUnavailableError,
+  ProviderUnreachableError,
   type BridgeConnection,
   type AgentSessionProvider,
   type NativeAgentRuntimeProvider,
@@ -93,6 +94,8 @@ function createProviderStub(
     updateInteractiveControls?: NativeAgentRuntimeProvider["updateInteractiveControls"];
     slashCommands?: NativeAgentRuntimeProvider["slashCommands"];
     refreshCatalog?: NativeAgentRuntimeProvider["refreshCatalog"];
+    prepareDispatch?: NativeAgentRuntimeProvider["prepareDispatch"];
+    dispatchStatus?: NativeAgentRuntimeProvider["dispatchStatus"];
   } = {},
 ) {
   const createSession = mock(
@@ -131,6 +134,12 @@ function createProviderStub(
   const refreshCatalog = behaviour.refreshCatalog
     ? mock(behaviour.refreshCatalog)
     : undefined;
+  const prepareDispatch = behaviour.prepareDispatch
+    ? mock(behaviour.prepareDispatch)
+    : undefined;
+  const dispatchStatus = behaviour.dispatchStatus
+    ? mock(behaviour.dispatchStatus)
+    : undefined;
   const provider = {
     agent,
     createSession,
@@ -151,10 +160,14 @@ function createProviderStub(
     abort,
     stopBackgroundTask,
     dismissSuggestedPrompt,
+    prepareDispatch,
+    dispatchStatus,
     dispose,
   } as unknown as NativeAgentRuntimeProvider;
   return {
     provider,
+    prepareDispatch,
+    dispatchStatus,
     createSession,
     registerSession,
     send,
@@ -2473,6 +2486,299 @@ describe("NativeAgentService", () => {
         requestId: "unknown-1",
       });
       expect((await storage.getNativeAgentSession(key))?.pendingDispatch).toBeUndefined();
+    });
+  });
+
+  test("settles an ambiguous dispatch the provider can prove landed", async () => {
+    const stub = createProviderStub("cursor", {
+      send: async () => {
+        throw new AmbiguousPromptDispatchError("Response was lost");
+      },
+      dispatchStatus: async () => "dispatched" as const,
+    });
+    await withService({
+      prefix: "orkestrator-native-dispatch-settled-",
+      provider: async () => stub.provider,
+    }, async ({ service, storage }) => {
+      const base = {
+        environmentId: "env-1",
+        agent: "cursor" as const,
+        logicalSessionKey: "env-env-1:tab-1",
+        prompt: "Do the work",
+      };
+      // The acknowledgement was lost, not the prompt. Asking the provider turns
+      // that back into an ordinary accepted dispatch instead of a banner.
+      await expect(service.dispatchIntent({ ...base, requestId: "lost-ack" }))
+        .resolves.toEqual({ outcome: "accepted", requestId: "lost-ack" });
+      expect(stub.dispatchStatus).toHaveBeenCalledWith("provider-session", "lost-ack");
+
+      const key = nativeAgentSessionStorageKey(
+        base.environmentId,
+        base.agent,
+        base.logicalSessionKey,
+      );
+      const session = await storage.getNativeAgentSession(key);
+      expect(session?.pendingDispatch).toBeUndefined();
+      // Recording the id is the half that stops a later retry running it twice.
+      expect(session?.dispatchedRequestIds).toContain("lost-ack");
+      await expect(service.getProjection(base)).resolves.not.toHaveProperty(
+        "recoverableDispatch",
+      );
+    });
+  });
+
+  test("parks an ambiguous dispatch the provider cannot vouch for", async () => {
+    const stub = createProviderStub("cursor", {
+      send: async () => {
+        throw new AmbiguousPromptDispatchError("Response was lost");
+      },
+      // "I have no record" is not evidence the prompt never ran: the record may
+      // have died with a previous bridge process.
+      dispatchStatus: async () => "unknown" as const,
+    });
+    await withService({
+      prefix: "orkestrator-native-dispatch-unsettled-",
+      provider: async () => stub.provider,
+    }, async ({ service, storage }) => {
+      const base = {
+        environmentId: "env-1",
+        agent: "cursor" as const,
+        logicalSessionKey: "env-env-1:tab-1",
+        prompt: "Do the work",
+      };
+      await expect(service.dispatchIntent({ ...base, requestId: "unknown-1" }))
+        .resolves.toMatchObject({ outcome: "unknown", requestId: "unknown-1" });
+      const key = nativeAgentSessionStorageKey(
+        base.environmentId,
+        base.agent,
+        base.logicalSessionKey,
+      );
+      expect((await storage.getNativeAgentSession(key))?.pendingDispatch)
+        .toMatchObject({ requestId: "unknown-1" });
+    });
+  });
+
+  test("offers retry and discard as the only ways past a parked dispatch", async () => {
+    let sendOutcome: "ambiguous" | "accepted" = "ambiguous";
+    const stub = createProviderStub("cursor", {
+      send: async () => {
+        if (sendOutcome === "ambiguous") {
+          throw new AmbiguousPromptDispatchError("Response was lost");
+        }
+      },
+      dispatchStatus: async () => "unknown" as const,
+    });
+    await withService({
+      prefix: "orkestrator-native-dispatch-wedge-",
+      provider: async () => stub.provider,
+    }, async ({ service, storage }) => {
+      const base = {
+        environmentId: "env-1",
+        agent: "cursor" as const,
+        logicalSessionKey: "env-env-1:tab-1",
+        prompt: "Do the work",
+      };
+      const key = nativeAgentSessionStorageKey(
+        base.environmentId,
+        base.agent,
+        base.logicalSessionKey,
+      );
+      await expect(service.dispatchIntent({ ...base, requestId: "parked" }))
+        .resolves.toMatchObject({ outcome: "unknown" });
+
+      // The refusal is the at-most-once guard working, but it has to name the
+      // two choices rather than describe a storage invariant.
+      sendOutcome = "accepted";
+      await expect(service.dispatchIntent({
+        ...base,
+        prompt: "Something else",
+        requestId: "second",
+      })).resolves.toEqual({
+        outcome: "rejected",
+        error: "An earlier message is still awaiting confirmation."
+          + " Retry or discard it before sending another.",
+      });
+      expect((await storage.getNativeAgentSession(key))?.pendingDispatch)
+        .toMatchObject({ requestId: "parked" });
+
+      await expect(service.discardRecoverableDispatch({
+        ...base,
+        requestId: "wrong-id",
+      })).resolves.toEqual({ discarded: false });
+      await expect(service.discardRecoverableDispatch({
+        ...base,
+        requestId: "parked",
+      })).resolves.toEqual({ discarded: true });
+      expect((await storage.getNativeAgentSession(key))?.pendingDispatch)
+        .toBeUndefined();
+
+      await expect(service.dispatchIntent({
+        ...base,
+        prompt: "Something else",
+        requestId: "second",
+      })).resolves.toEqual({ outcome: "accepted", requestId: "second" });
+    });
+  });
+
+  test("keeps a parked dispatch recoverable when its retry cannot reach the provider", async () => {
+    let sendOutcome: "ambiguous" | "unreachable" | "accepted" = "ambiguous";
+    const stub = createProviderStub("cursor", {
+      send: async () => {
+        if (sendOutcome === "ambiguous") {
+          throw new AmbiguousPromptDispatchError("Response was lost");
+        }
+        if (sendOutcome === "unreachable") {
+          throw new ProviderUnreachableError("Bridge is offline");
+        }
+      },
+      dispatchStatus: async () => "unknown" as const,
+    });
+    await withService({
+      prefix: "orkestrator-native-dispatch-retry-unreachable-",
+      provider: async () => stub.provider,
+    }, async ({ service, storage }) => {
+      const base = {
+        environmentId: "env-1",
+        agent: "cursor" as const,
+        logicalSessionKey: "env-env-1:tab-1",
+        prompt: "Do the work",
+      };
+      const key = nativeAgentSessionStorageKey(
+        base.environmentId,
+        base.agent,
+        base.logicalSessionKey,
+      );
+      await expect(service.dispatchIntent({ ...base, requestId: "parked" }))
+        .resolves.toMatchObject({ outcome: "unknown" });
+
+      sendOutcome = "unreachable";
+      await expect(service.retryRecoverableDispatch({
+        ...base,
+        requestId: "parked",
+      })).resolves.toEqual({ outcome: "rejected", error: "Bridge is offline" });
+      expect((await storage.getNativeAgentSession(key))?.pendingDispatch)
+        .toMatchObject({ requestId: "parked", prompt: "Do the work" });
+
+      await expect(service.dispatchIntent({
+        ...base,
+        prompt: "A different turn",
+        requestId: "second",
+      })).resolves.toMatchObject({ outcome: "rejected" });
+      expect((await storage.getNativeAgentSession(key))?.pendingDispatch)
+        .toMatchObject({ requestId: "parked" });
+
+      sendOutcome = "accepted";
+      await expect(service.retryRecoverableDispatch({
+        ...base,
+        requestId: "parked",
+      })).resolves.toEqual({ outcome: "accepted", requestId: "parked" });
+      expect((await storage.getNativeAgentSession(key))?.pendingDispatch).toBeUndefined();
+    });
+  });
+
+  test("retries once past a parked dispatch the provider can now vouch for", async () => {
+    let sendOutcome: "ambiguous" | "accepted" = "ambiguous";
+    let dispatched = false;
+    const stub = createProviderStub("cursor", {
+      send: async () => {
+        if (sendOutcome === "ambiguous") {
+          throw new AmbiguousPromptDispatchError("Response was lost");
+        }
+      },
+      dispatchStatus: async () => dispatched ? "dispatched" as const : "unknown" as const,
+    });
+    await withService({
+      prefix: "orkestrator-native-dispatch-unblock-",
+      provider: async () => stub.provider,
+    }, async ({ service, storage }) => {
+      const base = {
+        environmentId: "env-1",
+        agent: "cursor" as const,
+        logicalSessionKey: "env-env-1:tab-1",
+        prompt: "Do the work",
+      };
+      await expect(service.dispatchIntent({ ...base, requestId: "parked" }))
+        .resolves.toMatchObject({ outcome: "unknown" });
+
+      // The parked turn turns out to have run after all, so the block on the
+      // next prompt was stale and that prompt should just go through.
+      sendOutcome = "accepted";
+      dispatched = true;
+      await expect(service.dispatchIntent({
+        ...base,
+        prompt: "Something else",
+        requestId: "second",
+      })).resolves.toEqual({ outcome: "accepted", requestId: "second" });
+
+      const key = nativeAgentSessionStorageKey(
+        base.environmentId,
+        base.agent,
+        base.logicalSessionKey,
+      );
+      const session = await storage.getNativeAgentSession(key);
+      expect(session?.pendingDispatch).toBeUndefined();
+      expect(session?.dispatchedRequestIds).toEqual(
+        expect.arrayContaining(["parked", "second"]),
+      );
+    });
+  });
+
+  test("attaches the provider before the pending dispatch record is written", async () => {
+    const order: string[] = [];
+    const stub = createProviderStub("cursor", {
+      prepareDispatch: async () => {
+        order.push("prepare");
+      },
+      send: async () => {
+        order.push("send");
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-dispatch-attach-",
+      provider: async () => stub.provider,
+    }, async ({ service, storage }) => {
+      const base = {
+        environmentId: "env-1",
+        agent: "cursor" as const,
+        logicalSessionKey: "env-env-1:tab-1",
+        prompt: "Do the work",
+      };
+      await expect(service.dispatchIntent({ ...base, requestId: "warm-1" }))
+        .resolves.toEqual({ outcome: "accepted", requestId: "warm-1" });
+      // The cold start has to happen before the at-most-once window opens, or
+      // it is spent inside the window it was moved out of.
+      expect(order).toEqual(["prepare", "send"]);
+      expect(stub.prepareDispatch).toHaveBeenCalledWith("provider-session");
+      const key = nativeAgentSessionStorageKey(
+        base.environmentId,
+        base.agent,
+        base.logicalSessionKey,
+      );
+      expect((await storage.getNativeAgentSession(key))?.pendingDispatch)
+        .toBeUndefined();
+    });
+  });
+
+  test("dispatches anyway when attaching the provider fails", async () => {
+    const stub = createProviderStub("cursor", {
+      // Best-effort by contract: the prompt request does the same work and is
+      // the one that gets to report authoritatively.
+      prepareDispatch: async () => {
+        throw new Error("attach failed");
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-dispatch-attach-failed-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      await expect(service.dispatchIntent({
+        environmentId: "env-1",
+        agent: "cursor",
+        logicalSessionKey: "env-env-1:tab-1",
+        prompt: "Do the work",
+        requestId: "warm-2",
+      })).resolves.toEqual({ outcome: "accepted", requestId: "warm-2" });
+      expect(stub.send).toHaveBeenCalledTimes(1);
     });
   });
 

@@ -2325,6 +2325,18 @@ export async function retryNativeAgentDispatch(input: {
   );
 }
 
+export async function discardNativeAgentDispatch(input: {
+  environmentId: string;
+  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  logicalSessionKey: string;
+  requestId: string;
+}): Promise<{ discarded: boolean }> {
+  return invoke<{ discarded: boolean }>(
+    "discard_native_agent_dispatch",
+    input,
+  );
+}
+
 // --- Build Pipeline Persistence ---
 
 export async function startBuildPipeline(

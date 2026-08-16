@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AmbiguousPromptDispatchError, PromptRejectedError, ProviderUnavailableError, readProviderStatus } from "./native-agent-provider.js";
+import { AmbiguousPromptDispatchError, PromptRejectedError, ProviderUnavailableError, ProviderUnreachableError, readProviderStatus } from "./native-agent-provider.js";
 import { claudeConnection, codexConnection, cursorConnection, grokConnection, httpProvider } from "./agent-provider-test-support.js";
 
 describe("HTTP bridge provider", () => {
@@ -197,6 +197,95 @@ describe("HTTP bridge provider", () => {
     });
     await expect(ambiguous.provider.send("s", "prompt", { requestId: "r" }))
       .rejects.toBeInstanceOf(AmbiguousPromptDispatchError);
+  });
+
+  test("keeps a bridge that was never reached out of the ambiguous bucket", async () => {
+    // Bun reports both a refused connection and a failed DNS lookup this way;
+    // Node/undici wraps a POSIX code on `cause`. Neither wrote a byte, so the
+    // turn provably did not run and parking it for the user would be wrong.
+    for (const failure of [
+      Object.assign(new Error("Unable to connect."), { code: "ConnectionRefused" }),
+      Object.assign(new TypeError("fetch failed"), {
+        cause: Object.assign(new Error("connect ECONNREFUSED"), {
+          code: "ECONNREFUSED",
+        }),
+      }),
+    ]) {
+      const unreachable = httpProvider(() => {
+        throw failure;
+      });
+      const send = unreachable.provider.send("s", "prompt", { requestId: "r" });
+      await expect(send).rejects.toBeInstanceOf(ProviderUnreachableError);
+      await expect(send).rejects.not.toBeInstanceOf(AmbiguousPromptDispatchError);
+    }
+  });
+
+  test("keeps an aborted in-flight dispatch ambiguous", async () => {
+    // The opposite case, and the reason the split has to be conservative: the
+    // request was written, so the bridge may well have accepted it.
+    const timedOut = httpProvider(() => {
+      throw Object.assign(new Error("The operation timed out."), {
+        name: "TimeoutError",
+      });
+    });
+    await expect(timedOut.provider.send("s", "prompt", { requestId: "r" }))
+      .rejects.toBeInstanceOf(AmbiguousPromptDispatchError);
+  });
+
+  test.each([
+    ["cursor" as const, cursorConnection],
+    ["grok" as const, grokConnection],
+  ])("attaches a %s session before dispatch and tolerates older bridges", async (
+    _agent,
+    connection,
+  ) => {
+    const attached = httpProvider(
+      () => Response.json({ attached: true }),
+      connection,
+    );
+    await attached.provider.prepareDispatch?.("session-1");
+    expect(attached.requests.map((request) => [
+      request.url,
+      request.init.method,
+    ])).toEqual([[`${connection.baseUrl}/session/session-1/attach`, "POST"]]);
+
+    // A bridge that predates the route must not fail the dispatch that follows:
+    // the prompt request performs the same work and answers authoritatively.
+    const older = httpProvider(() => new Response(null, { status: 404 }), connection);
+    await expect(older.provider.prepareDispatch?.("session-1")).resolves.toBeUndefined();
+
+    const broken = httpProvider(() => new Response(null, { status: 500 }), connection);
+    await expect(broken.provider.prepareDispatch?.("session-1")).rejects.toThrow();
+  });
+
+  test("does not attach agents whose prompt route has no cold start", async () => {
+    for (const connection of [claudeConnection, codexConnection]) {
+      const { provider, requests } = httpProvider(() => Response.json({}), connection);
+      await provider.prepareDispatch?.("session-1");
+      expect(requests).toEqual([]);
+    }
+  });
+
+  test("reads dispatch status and treats every non-positive answer as unknown", async () => {
+    const dispatched = httpProvider(() => Response.json({ dispatch: "dispatched" }));
+    await expect(dispatched.provider.dispatchStatus?.("s/1", "r/1"))
+      .resolves.toBe("dispatched");
+    expect(dispatched.requests[0]!.url).toBe(
+      "http://claude.test/session/s%2F1/dispatch?requestId=r%2F1",
+    );
+
+    // A bridge with no such route, an unknown session, an unparseable body and
+    // an explicit `unknown` are all the same fact: no evidence it ran.
+    const unknown = [
+      () => Response.json({ dispatch: "unknown" }),
+      () => new Response(null, { status: 404 }),
+      () => new Response("not json", { status: 200 }),
+      () => Response.json({}),
+    ];
+    for (const handler of unknown) {
+      const { provider } = httpProvider(handler);
+      await expect(provider.dispatchStatus?.("s", "r")).resolves.toBe("unknown");
+    }
   });
 
   test("reads status and messages, dispatches prompts, and aborts sessions", async () => {

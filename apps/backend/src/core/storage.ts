@@ -2044,6 +2044,24 @@ export class FeaturePlanningFenceError extends Error {
   }
 }
 
+/**
+ * A new prompt collided with a dispatch whose outcome is still unknown.
+ *
+ * The refusal is the at-most-once guarantee doing its job: the parked request
+ * may be executing at the provider right now, so accepting a second prompt
+ * could run two turns for one intent. Distinguished from a generic failure so
+ * callers can tell the user which of the two choices — retry or discard — will
+ * clear it, rather than surfacing an internal message they cannot act on.
+ */
+export class PendingNativeAgentDispatchError extends Error {
+  constructor(readonly pendingRequestId: string) {
+    super(
+      `Native agent dispatch ${pendingRequestId} is still awaiting recovery`,
+    );
+    this.name = "PendingNativeAgentDispatchError";
+  }
+}
+
 export class StorageService {
   private readonly dataDir: string;
   /** Process identity: client revision knowledge never crosses this boundary. */
@@ -5805,8 +5823,8 @@ export class StorageService {
         session.pendingDispatch
         && session.pendingDispatch.requestId !== requestId
       ) {
-        throw new Error(
-          `Native agent dispatch ${session.pendingDispatch.requestId} is still awaiting recovery`,
+        throw new PendingNativeAgentDispatchError(
+          session.pendingDispatch.requestId,
         );
       }
       if (session.dispatchedRequestIds?.includes(requestId)) {
@@ -5878,6 +5896,50 @@ export class StorageService {
       await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
       this.announce("native-agent-session", session.environmentId);
       return { session: updated, dispatched: true };
+    });
+  }
+
+  /**
+   * Record that a parked dispatch is known to have reached the provider.
+   *
+   * This is the settled end of the ambiguity the pending record exists to
+   * describe: the provider has since confirmed it holds this request id, so the
+   * record is cleared *and* the id joins `dispatchedRequestIds`. Both halves
+   * matter — clearing alone would let a later retry of the same id dispatch the
+   * turn a second time, which is the exact outcome the journal exists to
+   * prevent.
+   *
+   * Returns false when this key has no pending record for `requestId`, so a
+   * caller racing a real acknowledgement cannot resurrect one.
+   */
+  async confirmNativeAgentDispatch(
+    key: string,
+    requestId: string,
+  ): Promise<boolean> {
+    if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
+      throw new Error("Native agent dispatch identity must not be blank");
+    }
+    return this.enqueueNativeAgentSessionMutation(async () => {
+      const loaded = await this.loadNativeAgentSessions();
+      const { sessions, opaque, migrated } = loaded;
+      this.assertReadableNativeAgentSession(loaded, key);
+      const session = sessions[key];
+      if (!session || session.pendingDispatch?.requestId !== requestId) {
+        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
+        return false;
+      }
+      sessions[key] = {
+        ...session,
+        pendingDispatch: undefined,
+        dispatchedRequestIds: session.dispatchedRequestIds?.includes(requestId)
+          ? session.dispatchedRequestIds
+          : [...(session.dispatchedRequestIds ?? []).slice(-999), requestId],
+        updatedAt: nowIso(),
+      };
+      await this.saveNativeAgentSessions(sessions, opaque);
+      await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
+      this.announce("native-agent-session", session.environmentId);
+      return true;
     });
   }
 

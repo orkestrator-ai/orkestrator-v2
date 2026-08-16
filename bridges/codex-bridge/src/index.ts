@@ -1197,6 +1197,31 @@ app.get("/session/:id/activity", (c) => {
   return c.json({ activity: appServerRuntime.getActivity(c.req.param("id")) });
 });
 
+/**
+ * Did this bridge ever take this request id?
+ *
+ * The backend asks after a prompt request whose acknowledgement was lost, so it
+ * can settle the dispatch from the journal instead of parking it for the user.
+ * Read-only: no thread is attached, resumed or touched, which also keeps it
+ * usable from the reconciler that must not act as a liveness touch.
+ *
+ * `dispatched` is only ever an explicit positive. `prepared` means the journal
+ * recorded intent and never learned the outcome — that is exactly the question
+ * being asked, so it answers `unknown`, as does a request id this process has
+ * no record of at all.
+ */
+app.get("/session/:id/dispatch", (c) => {
+  const requestId = c.req.query("requestId")?.trim();
+  if (!requestId) return c.json({ dispatch: "unknown" });
+  const record = appServerRuntime.getJournal().get(requestId);
+  // Unlike the other two bridges this journal is process-global, so the record
+  // has to be checked against the session that is asking. Answering across
+  // sessions would let one session's history settle another's parked dispatch.
+  const dispatched = record?.bridgeSessionId === c.req.param("id")
+    && (record.state === "accepted" || record.state === "terminal");
+  return c.json({ dispatch: dispatched ? "dispatched" : "unknown" });
+});
+
 app.get("/session/:id/structured-output", (c) => {
   const result = appServerRuntime.getStructuredOutput(
     c.req.param("id"),

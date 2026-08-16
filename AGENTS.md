@@ -595,14 +595,14 @@ that a missed event can be recovered.
 
 #### 7. Minimum verification by change type
 
-| Change scope | Minimum required verification |
-| --- | --- |
-| CSS, layout, or visual component | Web typecheck; owning tests; real browser at desktop and narrow viewport; screenshot of non-sensitive UI if useful |
-| Frontend interaction or Zustand/Context state | Web typecheck; owning tests; browser smoke; primary path; reload; inactive-tab path when background state is involved |
-| Browser gateway or backend command | Backend and web typechecks; focused gateway/command tests; browser smoke; authenticated real-browser path |
-| Electron main, preload, IPC, or window behavior | Desktop typecheck; focused Electron tests; `test:agent:electron`; native-window check when visual behavior changed |
-| Docker lifecycle or container UI | Backend typecheck; exact-owner focused tests; local browser smoke; opt-in Docker fixture/suite when Docker is available |
-| Cross-cutting or release-sensitive change | All relevant checks above, then `bun run test`; use `bun run test:all` for release validation including iOS |
+| Change scope                                    | Minimum required verification                                                                                           |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| CSS, layout, or visual component                | Web typecheck; owning tests; real browser at desktop and narrow viewport; screenshot of non-sensitive UI if useful      |
+| Frontend interaction or Zustand/Context state   | Web typecheck; owning tests; browser smoke; primary path; reload; inactive-tab path when background state is involved   |
+| Browser gateway or backend command              | Backend and web typechecks; focused gateway/command tests; browser smoke; authenticated real-browser path               |
+| Electron main, preload, IPC, or window behavior | Desktop typecheck; focused Electron tests; `test:agent:electron`; native-window check when visual behavior changed      |
+| Docker lifecycle or container UI                | Backend typecheck; exact-owner focused tests; local browser smoke; opt-in Docker fixture/suite when Docker is available |
+| Cross-cutting or release-sensitive change       | All relevant checks above, then `bun run test`; use `bun run test:all` for release validation including iOS             |
 
 #### 8. Evidence and failure reporting
 
@@ -781,3 +781,7 @@ This project uses **shadcn/ui** components. When adding new UI:
 # Code review
 
 - When asked to code review, do not make changes to files until the user has specifically asked you to address issues or coverage gaps. A request for review is a request to just identify issues. It should not involve changes until approved.
+
+# General guidance
+
+- Avoid files larger than 2000 lines of code. Where files get this big, split them into smaller files, groups around a logical boundary. Also split the tests so that they line up with the split on the file they are testing.

@@ -1192,10 +1192,12 @@ describe("AgentNativeTab", () => {
   });
 
   test("does not read or touch a provider projection while its tab is inactive", async () => {
-    render(<AgentNativeTab tabId="tab-inactive" data={identity("codex")} isActive={false} />);
+    render(<AgentNativeTab tabId="tab-inactive" data={identity("cursor")} isActive={false} />);
     await new Promise((resolve) => setTimeout(resolve, 25));
     expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
     expect(adoptNativeAgentSessionMock).not.toHaveBeenCalled();
+    expect(screen.getByText("Connecting to Cursor Agent...")).toBeTruthy();
+    expect(screen.queryByText("Connection Failed") === null).toBe(true);
   });
 
   test("does not let a stale projection refresh undo a resumed session", async () => {

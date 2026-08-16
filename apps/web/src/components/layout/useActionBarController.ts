@@ -957,13 +957,63 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     // as "", and an empty base would reach the agent as `gh pr create --base `.
     const targetBranch = targetBranchOverride || repoConfig?.prBaseBranch || "main";
     const prPrompt = createPRPrompt(targetBranch);
+    const agent = agentOverride || defaultAgent;
+    // ACP tabs are always native unless explicitly opened as a CLI. The
+    // configured workflow likewise forces every provider through its native
+    // surface. Give those launches a stable identity before the tab mounts so
+    // the backend queue can own the turn immediately.
+    const backendOwnsPrompt = launchOptions?.agentLaunchMode === "native"
+      || ((agent === "cursor" || agent === "grok")
+        && launchOptions?.agentLaunchMode !== "cli");
+    const tabId = backendOwnsPrompt ? `tab-${createUuid()}` : undefined;
 
-    const created = createTab(agentOverride || defaultAgent, {
+    const created = createTab(agent, {
+      ...(tabId ? { tabId } : {}),
       initialPrompt: prPrompt,
       displayTitle: "PR",
       ...launchOptions,
     });
     if (!created) return false;
+
+    if (tabId) {
+      const requestId = `initial-prompt:${selectedEnvironmentId}:${tabId}`;
+      const requestedModel = launchOptions?.initialAgentModel;
+      const model = requestedModel === "default" ? undefined : requestedModel;
+      const reasoningEffort = launchOptions?.initialReasoningEffort;
+      const queuedPrompt = {
+        id: requestId,
+        requestId,
+        text: prPrompt,
+        attachments: [],
+        ...(model ? { model } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+        mode: "build" as const,
+        ...(agent === "claude"
+          ? { fastMode: config.global.claudeNativeFastModeDefault ?? false }
+          : agent === "codex"
+            ? { fastMode: config.global.codexNativeFastModeDefault ?? false }
+            : {}),
+      };
+      const logicalSessionKey = createSessionKey(selectedEnvironmentId, tabId);
+
+      // The durable queue wakes the backend dispatcher independently of the
+      // active environment. Keep the tab's initial prompt as an idempotent
+      // renderer fallback until persistence succeeds.
+      void backend.enqueuePromptQueueMessage(
+        promptQueueKey(agent, logicalSessionKey),
+        selectedEnvironmentId,
+        queuedPrompt,
+      ).then(() => {
+        usePaneLayoutStore.getState().clearTabInitialPrompt(
+          tabId,
+          selectedEnvironmentId,
+        );
+      }).catch((error) => {
+        toast.error("Could not start pull request creation", {
+          description: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
 
     // Set monitoring mode only after the tab exists. Otherwise a rejected
     // launch leaves the backend polling for a PR no agent is creating.
@@ -971,6 +1021,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     return true;
   }, [
     canCreateTab,
+    config.global.claudeNativeFastModeDefault,
+    config.global.codexNativeFastModeDefault,
     config.repositories,
     createTab,
     defaultAgent,

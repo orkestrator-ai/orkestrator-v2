@@ -1979,6 +1979,50 @@ describe("ActionBar workflow tabs", () => {
     ));
   });
 
+  test("hands a Cursor PR to the backend before an environment switch", async () => {
+    currentEnabledAgentPlatforms = ["claude", "codex", "cursor", "opencode"];
+    currentEnvironment = {
+      ...selectedEnvironment,
+      defaultAgent: "cursor",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    const view = render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
+    const tabOptions = createTabMock.mock.calls.at(-1)?.[1] as {
+      tabId?: string;
+      initialPrompt?: string;
+    };
+    const tabId = tabOptions.tabId;
+    expect(tabId).toMatch(/^tab-/);
+    expect(tabOptions).toMatchObject({
+      displayTitle: "PR",
+      initialPrompt: expect.stringContaining("gh pr create --base main --fill"),
+    });
+
+    currentSelectedEnvironmentId = "env-2";
+    currentOtherEnvironments = [{
+      ...selectedEnvironment,
+      id: "env-2",
+      name: "other-environment",
+    }];
+    view.rerender(<ActionBar />);
+
+    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+      `cursor\u0000env-env-1:${tabId}`,
+      "env-1",
+      expect.objectContaining({
+        id: `initial-prompt:env-1:${tabId}`,
+        requestId: `initial-prompt:env-1:${tabId}`,
+        text: expect.stringContaining("gh pr create --base main --fill"),
+        mode: "build",
+      }),
+    ));
+    expect(setModeCreatePendingMock).toHaveBeenCalledTimes(1);
+  });
+
   test("retains the launch prompt when durable review enqueue fails", async () => {
     currentEnvironment = {
       ...selectedEnvironment,

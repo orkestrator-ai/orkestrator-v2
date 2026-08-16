@@ -868,7 +868,9 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         const turn = context.activeTurn;
         if (!turn || !turn.accepts(event)) return;
         if (event.kind === "item.completed") turn.onItemCompleted(event.item);
-        else if (event.kind === "item.started") turn.onItemStarted(event.item);
+        else if (event.kind === "item.started") {
+          turn.onItemStarted(event.item, event.startedAtMs);
+        }
         else turn.onItemUpdated(event.item);
         // `item/completed` is authoritative; show it without waiting a tick.
         if (event.kind === "item.completed") void this.stateFor(threadId).coalescer.flushNow();
@@ -881,7 +883,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         // This is a recovery candidate, not the authoritative app-server item.
         // Keep it off the live transcript unless its output fails, a structured
         // fileChange replaces it, or turn completion renders it as a fallback.
-        turn.onDynamicToolStarted(event.item);
+        turn.onDynamicToolStarted(event.item, event.startedAtMs);
         return;
       }
       case "item.text.delta": {

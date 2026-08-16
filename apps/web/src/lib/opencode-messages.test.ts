@@ -75,6 +75,22 @@ describe("opencode-client streaming part normalization", () => {
     });
   });
 
+  test("ignores an out-of-range OpenCode part start time", () => {
+    const part = normalizeOpenCodePart({
+      id: "part-invalid-time",
+      messageID: "message-1",
+      type: "text",
+      text: "Still visible",
+      time: { start: 8_640_000_000_000_001 },
+    });
+
+    expect(part).toMatchObject({
+      type: "text",
+      content: "Still visible",
+    });
+    expect(part?.createdAt).toBeUndefined();
+  });
+
   test("normalizes reasoning parts into thinking parts", () => {
     const part = normalizeOpenCodePart({
       id: "part-r",

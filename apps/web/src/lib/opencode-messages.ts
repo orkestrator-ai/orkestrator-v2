@@ -37,7 +37,8 @@ function parseOpenCodePartCreatedAt(part: Record<string, unknown>): string | und
   if (typeof start !== "number" || !Number.isFinite(start) || start < 0) {
     return undefined;
   }
-  return new Date(start).toISOString();
+  const date = new Date(start);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
 }
 
 function withOpenCodePartCreatedAt<T extends { createdAt?: string }>(
@@ -729,4 +730,3 @@ export function buildOpenCodeMessageFromPart(
 /**
  * Create an OpenCode SDK client connected to a server
  */
-

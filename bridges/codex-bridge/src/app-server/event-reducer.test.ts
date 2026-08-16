@@ -887,6 +887,41 @@ describe("item adaptation", () => {
     }]);
   });
 
+  test("preserves the backend item start clock", () => {
+    const events = reduce("item/started", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      startedAtMs: 1_750_000_000_000,
+      item: {
+        id: "message-1",
+        type: "agentMessage",
+        text: "Answer",
+      },
+    });
+
+    expect(events[0]).toMatchObject({
+      kind: "item.started",
+      startedAtMs: 1_750_000_000_000,
+    });
+  });
+
+  test("drops an out-of-range backend item start clock", () => {
+    const events = reduce("item/started", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      startedAtMs: 8_640_000_000_000_001,
+      item: {
+        id: "message-1",
+        type: "agentMessage",
+        text: "Answer",
+      },
+    });
+
+    expect(events[0]).toMatchObject({ kind: "item.started" });
+    expect((events[0] as Extract<EngineEvent, { kind: "item.started" }>).startedAtMs)
+      .toBeUndefined();
+  });
+
   test("collabAgentToolCall converts to the existing snake_case collab shape", () => {
     // Matching the shape the rollout-based subagent reconciler already consumes
     // is what lets native and rollout sources be compared during rollout.

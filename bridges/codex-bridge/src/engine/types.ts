@@ -313,7 +313,15 @@ export type EngineEvent = EngineEventMeta &
     | { kind: "turn.model.updated"; threadId: string; turnId: string; model: string }
     | { kind: "turn.started"; threadId: string | null; turnId: string }
     | {
-        kind: "item.started" | "item.updated" | "item.completed";
+        kind: "item.started";
+        threadId: string | null;
+        turnId: string;
+        item: EngineItem;
+        /** App-server's backend clock for the item's lifecycle start. */
+        startedAtMs?: number;
+      }
+    | {
+        kind: "item.updated" | "item.completed";
         threadId: string | null;
         turnId: string;
         item: EngineItem;
@@ -329,6 +337,8 @@ export type EngineEvent = EngineEventMeta &
         threadId: string | null;
         turnId: string;
         item: EngineItem;
+        /** Present when the upstream event carries an item start clock. */
+        startedAtMs?: number;
       }
     | { kind: "item.text.delta"; threadId: string | null; turnId: string; itemId: string; delta: string }
     | {

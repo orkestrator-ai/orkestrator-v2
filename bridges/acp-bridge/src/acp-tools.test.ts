@@ -14,6 +14,7 @@ import {
   parseCursorTodos,
   restoreCursorTodosFromMessages,
   isAcpTodosToolName,
+  preserveTaskLaunchArgs,
 } from "./acp-tools.js";
 
 
@@ -156,6 +157,23 @@ describe("Cursor todo list helpers", () => {
     ]);
   });
 
+  test("does not let a generated id overwrite an explicit neighbour", () => {
+    expect(parseCursorTodos([
+      { id: "2", content: "Explicit two", status: "pending" },
+      { content: "No id", status: "pending" },
+    ])).toEqual([
+      { id: "2", content: "Explicit two", status: "pending" },
+      { id: "1", content: "No id", status: "pending" },
+    ]);
+    expect(parseCursorTodos([
+      { content: "No id first", status: "in_progress" },
+      { id: "1", content: "Explicit one", status: "completed" },
+    ])).toEqual([
+      { id: "2", content: "No id first", status: "in_progress" },
+      { id: "1", content: "Explicit one", status: "completed" },
+    ]);
+  });
+
   test("does not treat ACP tool kind plan as a todo tool", () => {
     expect(isAcpTodosToolName("plan")).toBe(false);
     expect(isAcpTodosToolName("todo_write")).toBe(true);
@@ -198,6 +216,29 @@ describe("Cursor todo list helpers", () => {
     ], false)).toEqual([
       { id: "9", content: "Only", status: "pending" },
     ]);
+  });
+
+  test("does not inherit merge: false onto a later todo list that omits merge", () => {
+    expect(preserveTaskLaunchArgs(
+      {
+        merge: false,
+        todos: [{ id: "1", content: "Plan item", status: "pending" }],
+      },
+      { todos: [{ id: "2", content: "Write item", status: "in_progress" }] },
+    )).toEqual({
+      todos: [{ id: "2", content: "Write item", status: "in_progress" }],
+    });
+    expect(preserveTaskLaunchArgs(
+      {
+        merge: true,
+        todos: [{ id: "1", content: "Kept", status: "pending" }],
+      },
+      { _toolName: "updateTodos" },
+    )).toEqual({
+      _toolName: "updateTodos",
+      merge: true,
+      todos: [{ id: "1", content: "Kept", status: "pending" }],
+    });
   });
 
   test("restores the newest stamped Cursor todo list from a transcript", () => {

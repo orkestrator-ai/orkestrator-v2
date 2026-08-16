@@ -837,6 +837,37 @@ export function handlePromptStart(message: JsonObject): boolean {
         write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
         return true;
       }
+      if (prompt.startsWith("CURSORTODOSRELOADMERGE")) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: "cursor-todos-reload-merge",
+              title: "Update TODOs",
+              kind: "other",
+              status: "completed",
+              rawInput: { _toolName: "updateTodos" },
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          method: "cursor/update_todos",
+          params: {
+            toolCallId: "cursor-todos-reload-merge",
+            todos: [
+              { id: "2", content: "Add authentication", status: "completed" },
+              { id: "4", content: "Ship the feature", status: "in_progress" },
+            ],
+            merge: true,
+          },
+        });
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+        return true;
+      }
       if (prompt.startsWith("CURSORTODOSREPLACE")) {
         write({
           jsonrpc: "2.0",
@@ -976,6 +1007,15 @@ export function handlePromptStart(message: JsonObject): boolean {
       }
       if (prompt.startsWith("GROKTODOWRITE")) {
         writeGrokTodoWrite("grok-todo-write-1", grokTodos);
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+        return true;
+      }
+      if (prompt.startsWith("GROKPLANTHENMERGE")) {
+        writeGrokPlan("plan", grokPlanEntries);
+        writeGrokTodoWrite("grok-todo-write-1", [
+          { id: "2", content: "Add authentication", status: "completed" },
+          { id: "4", content: "Ship the feature", status: "in_progress" },
+        ]);
         write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
         return true;
       }

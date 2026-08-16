@@ -977,10 +977,14 @@ export function preserveTaskLaunchArgs(
   // Cursor's live `updateTodos` tool_call is typically `{ _toolName: "updateTodos" }`.
   // The list arrives on `cursor/update_todos`; a later empty rawInput must not
   // wipe it the way a later Task status patch must not wipe `cursor/task`.
-  if (!Array.isArray(merged.todos) && Array.isArray(previous.todos)) {
+  const incomingHasTodos = Array.isArray(merged.todos);
+  if (!incomingHasTodos && Array.isArray(previous.todos)) {
     merged.todos = previous.todos;
   }
-  if (merged.merge == null && typeof previous.merge === "boolean") {
+  // Inherit merge only with that preserved list. A Grok `todo_write` that omits
+  // merge after an ACP plan stamped `merge: false` must keep Grok's default
+  // (merge) rather than replacing the plan with the write's delta.
+  if (merged.merge == null && typeof previous.merge === "boolean" && !incomingHasTodos) {
     merged.merge = previous.merge;
   }
   return merged;
@@ -1058,19 +1062,41 @@ function defaultTodoToolTitle(toolName: string | undefined): string {
 
 export function parseCursorTodos(value: unknown): CursorTodoItem[] {
   if (!Array.isArray(value)) return [];
-  const items: CursorTodoItem[] = [];
-  const indexes = new Map<string, number>();
+  const parsed: Array<{ id?: string; content: string; status: CursorTodoStatus }> = [];
   for (const candidate of value) {
     if (!isObject(candidate)) continue;
     const content = boundedString(candidate.content, MAX_TOOL_TITLE_BYTES)?.trim();
     const status = typeof candidate.status === "string" ? candidate.status : "";
     if (!content || !CURSOR_TODO_STATUS_SET.has(status)) continue;
-    const id = boundedString(candidate.id, MAX_TOOL_ID_BYTES)?.trim()
-      || String(items.length + 1);
-    const item: CursorTodoItem = {
-      id,
+    const id = boundedString(candidate.id, MAX_TOOL_ID_BYTES)?.trim();
+    parsed.push({
+      ...(id ? { id } : {}),
       content,
       status: status as CursorTodoStatus,
+    });
+  }
+  // Reserve explicit ids first so a missing id cannot reuse `items.length + 1`
+  // and overwrite a neighbour (ACP plan entries often have no id).
+  const taken = new Set<string>();
+  for (const item of parsed) {
+    if (item.id) taken.add(item.id);
+  }
+  const indexes = new Map<string, number>();
+  const items: CursorTodoItem[] = [];
+  let nextFallback = 1;
+  const allocateFallbackId = (): string => {
+    while (taken.has(String(nextFallback))) nextFallback += 1;
+    const id = String(nextFallback);
+    nextFallback += 1;
+    taken.add(id);
+    return id;
+  };
+  for (const candidate of parsed) {
+    const id = candidate.id ?? allocateFallbackId();
+    const item: CursorTodoItem = {
+      id,
+      content: candidate.content,
+      status: candidate.status,
     };
     const existing = indexes.get(id);
     if (existing !== undefined) {

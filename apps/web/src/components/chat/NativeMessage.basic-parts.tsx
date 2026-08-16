@@ -288,6 +288,17 @@ export function ToolPart({
       };
     }
 
+    // Cursor child JSONL names its read argument `path` where Claude-style
+    // tools use `file_path`. It ranks below `pattern`/`regex` on purpose:
+    // Glob and Grep carry `path` as the *search root* alongside the pattern
+    // that actually identifies the call, so reading it first would label them
+    // with a directory instead.
+    const genericPath = toolArgs.path;
+    if (typeof genericPath === "string" && genericPath) {
+      const name = genericPath.split("/").pop();
+      return name ? { text: name, generic: false, monospace: true } : null;
+    }
+
     // For WebFetch tool - show hostname from URL
     const url = toolArgs.url as string | undefined;
     if (url) {

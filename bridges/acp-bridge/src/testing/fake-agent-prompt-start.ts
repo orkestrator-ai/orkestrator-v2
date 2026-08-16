@@ -26,6 +26,34 @@ export function handlePromptStart(message: JsonObject): boolean {
         `${JSON.stringify(params?.prompt ?? [])}\n`,
       );
     }
+    if (prompt.startsWith("Background subagent finished.")) {
+      if (process.env.FAKE_ACP_BACKGROUND_RELAUNCH === "1") {
+        state.backgroundRelaunches += 1;
+        const index = state.backgroundRelaunches + 1;
+        writeCursorBackgroundChild({
+          toolCallId: `cursor-subagent-${index}`,
+          agentId: `child-wait-${index}`,
+        });
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+        return true;
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: {
+              type: "text",
+              text: "Validation passed. The child reported success.",
+            },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return true;
+    }
     const resumesResourceExhaustedScenario = prompt.startsWith(
       "Continue from where the interrupted turn stopped.",
     );
@@ -454,6 +482,19 @@ export function handlePromptStart(message: JsonObject): boolean {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return true;
     }
+    if (prompt.startsWith("CURSORBACKGROUNDNOID")) {
+      writeCursorBackgroundChild({ toolCallId: "cursor-subagent-1" });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return true;
+    }
+    if (prompt.startsWith("CURSORBACKGROUNDCHILD")) {
+      writeCursorBackgroundChild({
+        toolCallId: "cursor-subagent-1",
+        agentId: "child-wait-1",
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return true;
+    }
     if (prompt.startsWith("CURSORTASKWIPE")) {
       write({
         jsonrpc: "2.0",
@@ -813,3 +854,61 @@ export function handlePromptStart(message: JsonObject): boolean {
   }
   return false;
 }
+
+function writeCursorBackgroundChild(options: {
+  toolCallId: string;
+  agentId?: string;
+}): void {
+  const description = "Run validation at HEAD";
+  write({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "fake-session",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: options.toolCallId,
+        title: `Task: ${description}`,
+        kind: "other",
+        status: "in_progress",
+        rawInput: {
+          _toolName: "task",
+          run_in_background: true,
+          description,
+        },
+      },
+    },
+  });
+  write({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "fake-session",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: options.toolCallId,
+        status: "completed",
+        content: [{ type: "content", content: { type: "text", text: "Sub-agent launched." } }],
+        rawOutput: {
+          durationMs: 31,
+          isBackground: true,
+          ...(options.agentId ? { agentId: options.agentId } : {}),
+        },
+      },
+    },
+  });
+  write({
+    jsonrpc: "2.0",
+    method: "cursor/task",
+    params: {
+      sessionId: "fake-session",
+      toolCallId: options.toolCallId,
+      description,
+      prompt: "Run the validation suite at HEAD.",
+      subagentType: "generalPurpose",
+      durationMs: 31,
+      ...(options.agentId ? { agentId: options.agentId } : {}),
+    },
+  });
+}
+

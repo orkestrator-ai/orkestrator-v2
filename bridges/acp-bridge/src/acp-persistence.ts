@@ -355,11 +355,13 @@ export function normalizeBridgePart(
         ? value.text
         : undefined;
     if (content === undefined) return null;
+    const parentTaskUseId = boundedString(value.parentTaskUseId, MAX_TOOL_ID_BYTES)?.trim();
     return {
       type: value.type === "reasoning" ? "thinking" : value.type,
       content: truncateUtf8(content, MAX_MESSAGE_TEXT_BYTES),
       sourcePartId,
       sourceMessageId,
+      ...(parentTaskUseId ? { parentTaskUseId } : {}),
     };
   }
 

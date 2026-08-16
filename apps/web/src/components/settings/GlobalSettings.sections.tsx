@@ -59,6 +59,8 @@ import {
   DEFAULT_OPENCODE_MODEL_PROVIDERS,
   MAX_OPENCODE_MODEL_PROVIDERS,
 } from "@orkestrator/protocol/native-agent";
+import type { ActionDefaults } from "@orkestrator/protocol/action-defaults";
+import { DefaultsSettings } from "./DefaultsSettings";
 
 // OpenCode provider ids are slug-like (`opencode`, `opencode-go`, `openrouter`).
 // A model id pasted whole would silently match nothing, so `/` is rejected.
@@ -76,6 +78,8 @@ const MAX_CODEX_CONCURRENT_THREADS = Number.MAX_SAFE_INTEGER - 1;
 export type GlobalSettingsSectionSettings = Record<string, any> & {
   enabledAgentPlatforms: AgentPlatform[];
   setEnabledAgentPlatforms: Dispatch<SetStateAction<AgentPlatform[]>>;
+  actionDefaults: ActionDefaults;
+  setActionDefaults: Dispatch<SetStateAction<ActionDefaults>>;
   openCodeModelProviders: string[];
   setOpenCodeModelProviders: Dispatch<SetStateAction<string[]>>;
   domainErrors: string[];
@@ -158,6 +162,8 @@ export function GlobalSettingsSections({
     setWebClientEnabled,
     reviewInstruction,
     setReviewInstruction,
+    actionDefaults,
+    setActionDefaults,
     webClientStatus,
     setWebClientStatus,
     setWebClientApplyError,
@@ -300,6 +306,14 @@ export function GlobalSettingsSections({
         Only this review preference is editable. It cannot remove or override the fixed safety rules, review workflow, or JSON schema. Changes apply to newly started review sessions.
       </p>
     </div>
+  );
+
+  const renderDefaults = () => (
+    <DefaultsSettings
+      actionDefaults={actionDefaults}
+      setActionDefaults={setActionDefaults}
+      isSaving={isSaving}
+    />
   );
 
   const renderGeneral = () => (
@@ -1687,6 +1701,7 @@ export function GlobalSettingsSections({
 
   const sectionContent: Record<string, () => React.ReactNode> = {
     general: renderGeneral,
+    defaults: renderDefaults,
     platforms: renderPlatforms,
     review: renderReview,
     claude: renderClaude,

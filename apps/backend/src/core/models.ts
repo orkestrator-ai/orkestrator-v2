@@ -682,6 +682,11 @@ export interface AppConfig {
     webClientEnabled?: boolean;
     /** Editable preference embedded inside Orkestrator's fixed review contract. */
     reviewInstruction?: string;
+    /**
+     * Agent, model and reasoning level applied when a toolbar action is
+     * launched with a plain click rather than through its launch dialog.
+     */
+    actionDefaults?: import("@orkestrator/protocol/action-defaults").ActionDefaults;
   };
   repositories: Record<string, RepositoryConfig>;
 }

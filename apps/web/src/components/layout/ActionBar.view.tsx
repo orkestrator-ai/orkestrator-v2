@@ -293,6 +293,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     enabledAgentList,
     enabledAgents,
     defaultAgent,
+    launchDialogDefaultsFor,
     handleReview,
     openReviewDialog,
     reviewLongPress,
@@ -328,6 +329,12 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     targetBranch,
     sourceBranch,
   } = useActionBarController({ presentation });
+
+  // Each launch dialog opens on the same agent, model and reasoning level its
+  // button would use for a plain click.
+  const reviewLaunchDefaults = launchDialogDefaultsFor("review");
+  const prLaunchDefaults = launchDialogDefaultsFor("pr");
+  const resolveLaunchDefaults = launchDialogDefaultsFor("resolve");
 
   return (
     <>
@@ -1218,7 +1225,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         open={reviewDialogOpen}
         onOpenChange={setReviewDialogOpen}
         defaultTabType={resolveDefaultReviewTabType({
-          defaultAgent,
+          defaultAgent: reviewLaunchDefaults.defaultAgent,
           environment: selectedEnvironment ?? undefined,
           global: config.global,
           repositoryConfig: selectedProjectId
@@ -1226,14 +1233,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             : undefined,
         })}
         catalog={reviewModelCatalog}
-        preferredModels={{
-          claude: config.global.claudeModel,
-          codex: config.global.codexModel,
-          opencode: config.global.opencodeModel,
-        }}
-        preferredReasoningEfforts={{
-          codex: config.global.codexReasoningEffort,
-        }}
+        preferredModels={reviewLaunchDefaults.preferredModels}
+        preferredReasoningEfforts={reviewLaunchDefaults.preferredReasoningEfforts}
         onConfirm={handleConfiguredReview}
       />
       <ReviewLaunchDialog
@@ -1288,17 +1289,11 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             setPrLaunchError(null);
           }
         }}
-        defaultAgent={defaultAgent}
+        defaultAgent={prLaunchDefaults.defaultAgent}
         catalog={reviewModelCatalog}
         enabledAgents={enabledAgentList}
-        preferredModels={{
-          claude: config.global.claudeModel,
-          codex: config.global.codexModel,
-          opencode: config.global.opencodeModel,
-        }}
-        preferredReasoningEfforts={{
-          codex: config.global.codexReasoningEffort,
-        }}
+        preferredModels={prLaunchDefaults.preferredModels}
+        preferredReasoningEfforts={prLaunchDefaults.preferredReasoningEfforts}
         targetBranch={prDialogTarget?.targetBranch ?? targetBranch}
         returnFocusRef={createPrButtonRef}
         // Below the mobile breakpoint this toolbar lives inside the tools
@@ -1327,17 +1322,11 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             setResolveLaunchError(null);
           }
         }}
-        defaultAgent={defaultAgent}
+        defaultAgent={resolveLaunchDefaults.defaultAgent}
         catalog={reviewModelCatalog}
         enabledAgents={enabledAgentList}
-        preferredModels={{
-          claude: config.global.claudeModel,
-          codex: config.global.codexModel,
-          opencode: config.global.opencodeModel,
-        }}
-        preferredReasoningEfforts={{
-          codex: config.global.codexReasoningEffort,
-        }}
+        preferredModels={resolveLaunchDefaults.preferredModels}
+        preferredReasoningEfforts={resolveLaunchDefaults.preferredReasoningEfforts}
         targetBranch={resolveDialogTarget?.targetBranch ?? targetBranch}
         returnFocusRef={resolveButtonRef}
         returnFocusFallback={() =>

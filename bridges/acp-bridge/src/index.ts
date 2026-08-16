@@ -705,9 +705,17 @@ class AcpProcess {
         // than acknowledge a capability we do not have.
         this.onVendor(message.method, params);
         this.respond(message.id, {});
-      } else if (message.method === "cursor/task") {
+      } else if (isCursorTaskMethod(message.method)) {
+        // `cursor/task` is the sub-agent completion signal, and refusing it
+        // with -32601 leaves the launch card Active. Answered with `{}`: the
+        // result is discarded (see `applyCursorTask`), and inventing a payload
+        // would be claiming a response schema this method does not publish.
+        // ACP's only structured client answer is the permission outcome, whose
+        // members are `selected` and `cancelled` — neither describes a child
+        // that ended, so borrowing that shape here would be a lie in both
+        // directions. The notification form is handled below.
         this.onVendor(message.method, params);
-        this.respond(message.id, { outcome: { outcome: "completed" } });
+        this.respond(message.id, {});
       } else {
         this.#write({
           jsonrpc: "2.0",
@@ -1251,6 +1259,23 @@ function applySessionUpdate(state: SessionState, params: JsonObject): void {
     : typeof update.type === "string"
       ? update.type
       : "";
+  if (kind === "usage_update" || kind === "state_update") {
+    // Standard ACP occupancy (`usage_update`) and v2 turn-complete usage
+    // (`state_update.usage`). Neither mutates the transcript. Cursor's CLI
+    // adapter does not emit these yet; when it does, this is the path that
+    // fills the agent info panel.
+    //
+    // A reconnect replays reports for turns this session already accounted for
+    // and restored from its own state file, so they are dropped like the
+    // replayed transcript around them. Re-latching them would stamp
+    // `updatedAt` with the reconnect and merge an older turn's breakdown into
+    // the newest one. `isTranscriptUpdateKind` cannot express this — usage
+    // never touches the transcript — so the guard is spelled out here. A
+    // hydrating load holds no snapshot of its own, and there its replay is the
+    // only record the panel will ever get for that turn.
+    if (state.historyReplay !== "ignore") recordTurnUsage(state, update);
+    return;
+  }
   if (kind === "config_option_update") {
     state.sessionConfig = applyConfigOptionUpdate(provider, state.sessionConfig, update);
     rememberCatalog(state.sessionConfig.composer);
@@ -1582,10 +1607,8 @@ function applyToolCallUpdate(
   if (state.historyReplay === false
     && state.status === "running"
     && !turnRequiresCompleteOutput(state)
-    && part.toolState !== undefined
-    && part.toolState !== "pending"
-    && isGenericCursorToolTitle(part.toolTitle)
-    && !hasToolArguments(part.toolArgs)) {
+    && isSettledToolPart(part)
+    && isGenericCursorToolPart(part)) {
     scheduleCursorToolMetadataReconcile(state);
   }
 }
@@ -1713,6 +1736,14 @@ function isGenericCursorToolTitle(value: string | undefined): boolean {
     || normalized === "find";
 }
 
+function isSettledToolPart(part: BridgeToolPart): boolean {
+  return part.toolState === "success" || part.toolState === "failure";
+}
+
+function isGenericCursorToolPart(part: BridgeToolPart): boolean {
+  return isGenericCursorToolTitle(part.toolTitle) && !hasToolArguments(part.toolArgs);
+}
+
 /**
  * The tool parts a replay may still improve, as a *contiguous suffix* of the
  * transcript's tool calls starting at the oldest one that is still generic.
@@ -1726,14 +1757,13 @@ function isGenericCursorToolTitle(value: string | undefined): boolean {
  * same window, and including the already-enriched parts inside it lets them
  * consume their own replay entries instead of leaving them as false candidates.
  *
- * `requireSettled` is what makes a *live* pass safe. Cursor indexes a call when
- * it settles, so a call still in flight has no replay entry to claim — but it
- * is also generic and argument-less, which is exactly the shape the join treats
- * as a candidate. It would take a settled sibling's entry through the
- * single-candidate fallback and keep it, because an enriched part no longer
- * looks generic and every later pass skips it. Rather than guess, a live pass
- * refuses the whole window while anything in it is unsettled; the next settle,
- * or the final pass, sees a window that lines up again.
+ * A live pass (`requireSettled`) drops parts that are still in flight rather
+ * than refusing the whole suffix. Cursor indexes a call when it settles, so a
+ * pending generic sibling has no replay entry — and used to claim a settled
+ * neighbour's through the single-candidate kind fallback. Omitting it, and
+ * disabling that fallback on the live join, lets completed reads keep their
+ * titles while the agent still has a tool in flight. The final pass keeps the
+ * unsettled parts and the fallback so the turn still ends fully enriched.
  */
 function cursorToolReplayTargets(
   state: SessionState,
@@ -1741,34 +1771,38 @@ function cursorToolReplayTargets(
 ): BridgeToolPart[] {
   if (provider !== "cursor") return [];
   const parts = transcriptToolParts(state).slice(-MAX_REPLAY_RECONCILE_TOOLS);
-  const firstGeneric = parts.findIndex((part) =>
-    isGenericCursorToolTitle(part.toolTitle)
-    && !hasToolArguments(part.toolArgs)
-  );
+  const firstGeneric = parts.findIndex((part) => isGenericCursorToolPart(part));
   if (firstGeneric === -1) return [];
   const targets = parts.slice(firstGeneric);
-  if (options.requireSettled && targets.some(
-    (part) => part.toolState !== "success" && part.toolState !== "failure",
-  )) return [];
-  return targets;
+  if (!options.requireSettled) return targets;
+  const settled = targets.filter((part) => isSettledToolPart(part));
+  // A window of only already-enriched parts would spawn a child that cannot
+  // apply anything, which is how the per-turn live budget burns on no-ops.
+  if (!settled.some((part) => isGenericCursorToolPart(part))) return [];
+  return settled;
 }
 
 function applyReplayToolMetadata(
   state: SessionState,
   capturedTargets: readonly BridgeToolPart[],
   collector: AcpToolReplayCollector,
+  options: { allowKindFallback?: boolean } = {},
 ): boolean {
   const liveToolParts = new Set(transcriptToolParts(state));
   const targets = capturedTargets.filter((part) => liveToolParts.has(part));
   const replayed = orderedReplayTools(collector);
   if (targets.length === 0 || replayed.length === 0) return false;
   const unused = new Set(replayed.keys());
+  const allowKindFallback = options.allowKindFallback !== false;
 
   let changed = false;
   // Cursor replays concurrent calls in completion order, while the live stream
   // starts them in launch order. Join on a unique path or normalized output,
-  // with a unique tool kind as the final safe fallback; ambiguous calls stay
-  // generic rather than borrowing a neighbour's filename or search pattern.
+  // with a unique tool kind as the final safe fallback on the *final* pass;
+  // ambiguous calls stay generic rather than borrowing a neighbour's filename
+  // or search pattern. A live pass disables that fallback: a same-kind sibling
+  // still in flight has no replay entry yet, so the settled call would look
+  // like the only candidate and keep the wrong file permanently.
   for (const part of targets) {
     const targetKind = normalizedToolKind(part.toolName);
     const targetOutputHash = replayOutputHash(part.toolOutput);
@@ -1799,7 +1833,7 @@ function applyReplayToolMetadata(
     const candidateIndexes = pathMatches.length > 0 ? pathMatches : outputMatches;
     const replayIndex = candidateIndexes.length === 1
       ? candidateIndexes[0]
-      : sameKind.length === 1
+      : allowKindFallback && sameKind.length === 1
         ? sameKind[0]
         : undefined;
     if (replayIndex === undefined) continue;
@@ -1842,6 +1876,7 @@ async function reconcileCursorToolMetadata(
   child: AcpProcess,
   targets: readonly BridgeToolPart[],
   promptSequence: number,
+  options: { allowKindFallback?: boolean } = {},
 ): Promise<void> {
   if (provider !== "cursor"
     || shuttingDown
@@ -1904,7 +1939,7 @@ async function reconcileCursorToolMetadata(
       && sessions.get(state.id) === state
       && state.child === child
       && state.promptSequence === promptSequence
-      && applyReplayToolMetadata(state, targets, collector)) {
+      && applyReplayToolMetadata(state, targets, collector, options)) {
       state.revision += 1;
       schedulePersist();
     }
@@ -1949,8 +1984,8 @@ function recordCursorToolReplayRun(state: SessionState): void {
  *
  * The pending request carries its own mode rather than the caller's urgency,
  * because the two differ: a follow-up scheduled from a finishing replay runs
- * immediately but may still be a *live* pass, and a live pass has strictly
- * narrower targets than the final one.
+ * immediately but may still be a *live* pass, and a live pass omits in-flight
+ * parts and the kind fallback that the final pass still uses.
  */
 function scheduleCursorToolMetadataReconcile(
   state: SessionState,
@@ -1991,7 +2026,9 @@ function scheduleCursorToolMetadataReconcile(
     const promptSequence = state.promptSequence;
     recordCursorToolReplayRun(state);
     state.cursorToolReplayRunning = true;
-    void reconcileCursorToolMetadata(state, child, targets, promptSequence)
+    void reconcileCursorToolMetadata(state, child, targets, promptSequence, {
+      allowKindFallback: mode === "final",
+    })
       .catch(() => undefined)
       .finally(() => {
         state.cursorToolReplayRunning = false;
@@ -2108,8 +2145,10 @@ function renderAcpToolSource(part: BridgeToolPart, source: AcpToolSourceState): 
   const output = source.contentOutput ?? source.rawOutput;
   setOptionalPartField(part, "toolOutput", output);
   // Cursor puts `isBackground` in rawOutput even when it also supplies a
-  // human-readable content block. Grok carries the equivalent signal in the
-  // Task input and later sends separate subagent lifecycle notifications.
+  // human-readable content block. That flag is launch mode, not liveness —
+  // a later `status: "completed"` in the same object is the child's end.
+  // Grok carries the equivalent signal in the Task input and later sends
+  // separate subagent lifecycle notifications.
   source.agentState = acpSubagentState(source, source.rawOutput ?? output);
   setOptionalPartField(part, "agentState", source.agentState);
   setOptionalPartField(
@@ -2162,22 +2201,16 @@ function acpSubagentState(
     }
   }
 
+  const reportedState = lifecycleStatus(lifecycle);
+  const terminal = terminalAgentState(reportedState);
+  if (terminal) return terminal;
+  // `isBackground` is launch mode, not liveness. Cursor keeps it true on a
+  // background Task even after a later update reports `status: "completed"`.
   if (lifecycle?.isBackground === true) return "active";
   if (lifecycle?.isBackground === false) return "finished";
   const backgroundLaunch = source.toolArgs?.background === true
     || source.toolArgs?.run_in_background === true;
   if (backgroundLaunch) return "active";
-  const reportedState = typeof lifecycle?.status === "string"
-    ? lifecycle.status
-    : typeof lifecycle?.state === "string"
-      ? lifecycle.state
-      : undefined;
-  if (reportedState && /^(failed|killed|cancelled|canceled|error)$/i.test(reportedState)) {
-    return "failed";
-  }
-  if (reportedState && /^(completed|finished|done|success)$/i.test(reportedState)) {
-    return "finished";
-  }
   if (source.toolState === "pending") return "active";
   if (source.toolState === "success") return "finished";
   return source.agentState;
@@ -2342,17 +2375,45 @@ function findToolPart(
  * tool_calls. The live Task tool is typically titled "Task: Subagent task"
  * with empty input; this notification is what carries description, prompt,
  * type, and duration.
+ *
+ * Observed in `cursor-agent` 2026.08.11-e8db854 (`src/acp/agent-session.ts`,
+ * `src/acp/types.ts`):
+ *
+ * - It is sent through `extMethod`, which is `sendRequest` — so on the wire it
+ *   is a **request**, despite Cursor naming its own helper
+ *   `sendNonBlockingExtensionNotification`. `extNotification` sits beside it
+ *   unused. The notification form is still accepted here because that naming
+ *   says which way Cursor intends to move, and a notification costs nothing.
+ * - Cursor discards the response: the helper only `.catch()`es, and the SDK
+ *   does not validate the result. Even a `-32601` is just a debug log there.
+ * - The payload is `toolCallId`, `description`, `prompt`, `subagentType`,
+ *   `model`, `agentId`, `durationMs`. There is **no status or outcome field**,
+ *   and `durationMs` is populated only when the tool result case is `success`.
+ * - The one send site is `toolCallCompleted`, immediately after the
+ *   `status: "completed"` tool call update. A frame with no duration and no
+ *   named state is still launch metadata, not an ending: `durationMs` is the
+ *   observed completion field. The launch tool itself resolves with
+ *   `isBackground: true` still set, which is why that flag cannot be read as
+ *   liveness.
+ *
+ * The status/outcome handling below is therefore forward-compatibility, not an
+ * observed contract: it is written so that a future Cursor which does start
+ * reporting a state cannot be read as an ending unless it says so. A named
+ * non-terminal state is a progress report and must not settle a live child.
  */
 function applyCursorTask(state: SessionState, params: JsonObject): void {
-  const toolCallId = boundedString(params.toolCallId, MAX_TOOL_ID_BYTES)?.trim();
+  if (params.sessionId !== undefined && params.sessionId !== state.acpSessionId) return;
+  const payload = isObject(params.update) ? params.update : params;
+  const toolCallId = boundedString(payload.toolCallId, MAX_TOOL_ID_BYTES)?.trim();
   if (!toolCallId) return;
 
-  const description = boundedString(params.description, MAX_TOOL_TITLE_BYTES)?.trim();
-  const prompt = boundedString(params.prompt, MAX_CURSOR_TASK_PROMPT_BYTES)?.trim();
-  const subagentType = cursorSubagentTypeLabel(params.subagentType ?? params.subagent_type);
-  const model = boundedString(params.model, MAX_TOOL_NAME_BYTES)?.trim();
-  const agentId = boundedString(params.agentId ?? params.agent_id, MAX_TOOL_ID_BYTES)?.trim();
-  const durationMs = boundedDurationMs(params.durationMs);
+  const description = boundedString(payload.description, MAX_TOOL_TITLE_BYTES)?.trim();
+  const prompt = boundedString(payload.prompt, MAX_CURSOR_TASK_PROMPT_BYTES)?.trim();
+  const subagentType = cursorSubagentTypeLabel(payload.subagentType ?? payload.subagent_type);
+  const model = boundedString(payload.model, MAX_TOOL_NAME_BYTES)?.trim();
+  const agentId = boundedString(payload.agentId ?? payload.agent_id, MAX_TOOL_ID_BYTES)?.trim();
+  const durationMs = boundedDurationMs(payload.durationMs);
+  const namedState = cursorTaskNamedState(payload);
   if (
     !description
     && !prompt
@@ -2360,12 +2421,26 @@ function applyCursorTask(state: SessionState, params: JsonObject): void {
     && !model
     && !agentId
     && durationMs === undefined
+    && namedState === undefined
   ) {
     return;
   }
 
+  const isProgress = namedState === "progress";
+  const agentState: "finished" | "failed" | undefined = isProgress
+    ? undefined
+    : namedState ?? (durationMs !== undefined ? "finished" : undefined);
+
   let found = findToolPart(state, toolCallId);
   if (!found) {
+    if (state.activeSubagentToolIds.has(toolCallId)) {
+      if (agentState) finishSubagentTool(state, toolCallId, agentState);
+      return;
+    }
+    // A terminal or progress frame for an id that is not a live child must not
+    // invent a launch part while other children are running.
+    if ((agentState || isProgress) && state.activeSubagentToolIds.size > 0) return;
+
     const owner = currentAssistantMessage(state);
     const part: BridgeToolPart = {
       type: "tool-invocation",
@@ -2374,13 +2449,22 @@ function applyCursorTask(state: SessionState, params: JsonObject): void {
       sourceMessageId: owner.id,
       toolUseId: toolCallId,
       toolName: "task",
-      toolState: durationMs === undefined ? "pending" : "success",
-      agentState: durationMs === undefined ? "active" : "finished",
+      toolState: agentState === "finished" ? "success" : "pending",
+      agentState: agentState ?? "active",
     };
     // Not an initial `tool_call`: a late `cursor/task` for a trimmed id must
     // not rebuild the evicted launch as a context-free ghost part.
-    if (!pushToolPart(state, owner, part, false)) return;
+    if (!pushToolPart(state, owner, part, false)) {
+      if (agentState) finishSubagentTool(state, toolCallId, agentState);
+      return;
+    }
     found = { owner, part };
+  } else if (
+    !state.activeSubagentToolIds.has(toolCallId)
+    && found.part.agentState !== "active"
+    && (agentState || isProgress)
+  ) {
+    return;
   }
 
   const { part } = found;
@@ -2406,9 +2490,9 @@ function applyCursorTask(state: SessionState, params: JsonObject): void {
     ...(model ? { model } : {}),
     ...(agentId ? { agentId } : {}),
   };
-  if (durationMs !== undefined && source.agentState !== "failed") {
-    source.agentState = "finished";
-    if (source.toolState === "pending" || source.toolState === undefined) {
+  if (agentState && source.agentState !== "finished" && source.agentState !== "failed") {
+    source.agentState = agentState;
+    if (agentState === "finished" && (source.toolState === "pending" || source.toolState === undefined)) {
       source.toolState = "success";
     }
   }
@@ -2445,14 +2529,11 @@ function settleEvictedSubagentFromToolUpdate(
   const lifecycle = isObject(update.rawOutput)
     ? update.rawOutput
     : toolCallLifecycle(update.rawOutput ?? update.content);
-  if (lifecycle?.isBackground === true) return false;
-  const reportedState = typeof lifecycle?.status === "string"
-    ? lifecycle.status
-    : typeof lifecycle?.state === "string"
-      ? lifecycle.state
-      : undefined;
-  if (lifecycle?.isBackground === false
-    || (reportedState && /^(completed|finished|done|success|failed|killed|cancelled|canceled|error)$/i.test(reportedState))) {
+  const reportedState = lifecycleStatus(lifecycle);
+  if (lifecycle?.isBackground === true && terminalAgentState(reportedState) === undefined) {
+    return false;
+  }
+  if (lifecycle?.isBackground === false || terminalAgentState(reportedState) !== undefined) {
     settleActiveSubagent(state, toolUseId);
     return true;
   }
@@ -2498,18 +2579,16 @@ function applySubagentFinished(state: SessionState, update: JsonObject): void {
   if (!subagentId) return;
   const toolUseId = state.subagentToolIds.get(subagentId);
   if (!toolUseId) return;
+  finishSubagentTool(state, toolUseId, terminalAgentState(typeof update.status === "string" ? update.status : undefined) ?? "finished");
+}
 
-  const part = state.messages
-    .flatMap((message) => message.parts)
-    .find((candidate): candidate is BridgeToolPart =>
-      candidate.type === "tool-invocation" && candidate.toolUseId === toolUseId
-    );
-  state.subagentToolIds.delete(subagentId);
-  const status = typeof update.status === "string" ? update.status : "completed";
-  const agentState = /^(failed|killed|cancelled|canceled|error)$/i.test(status)
-    ? "failed"
-    : "finished";
-  if (part) {
+function finishSubagentTool(
+  state: SessionState,
+  toolUseId: string,
+  agentState: "finished" | "failed",
+): void {
+  const part = findToolPart(state, toolUseId)?.part;
+  if (part && part.agentState !== "finished" && part.agentState !== "failed") {
     part.agentState = agentState;
     const source = acpToolSourceStates.get(part);
     if (source) source.agentState = agentState;
@@ -2517,6 +2596,41 @@ function applySubagentFinished(state: SessionState, update: JsonObject): void {
   settleActiveSubagent(state, toolUseId);
   state.revision += 1;
   schedulePersist();
+}
+
+function lifecycleStatus(lifecycle: JsonObject | undefined): string | undefined {
+  if (typeof lifecycle?.status === "string") return lifecycle.status;
+  if (typeof lifecycle?.state === "string") return lifecycle.state;
+  return undefined;
+}
+
+function terminalAgentState(status: string | undefined): "finished" | "failed" | undefined {
+  if (!status) return undefined;
+  if (/^(failed|killed|cancelled|canceled|error|rejected)$/i.test(status)) return "failed";
+  if (/^(completed|finished|done|success)$/i.test(status)) return "finished";
+  return undefined;
+}
+
+/**
+ * Named status/outcome on a `cursor/task` frame.
+ *
+ * Cursor today sends neither field — `durationMs` is the observed completion
+ * signal (see `applyCursorTask`). A *present* but non-terminal state is a
+ * progress report and must be distinguishable from an absent one, or it would
+ * settle a running child. That is why this cannot default to `"finished"` the
+ * way the by-definition-terminal `subagent_finished` notification does.
+ */
+function cursorTaskNamedState(
+  payload: JsonObject,
+): "finished" | "failed" | "progress" | undefined {
+  const outcome = typeof payload.outcome === "string"
+    ? payload.outcome
+    : isObject(payload.outcome) && typeof payload.outcome.outcome === "string"
+      ? payload.outcome.outcome
+      : undefined;
+  const status = typeof payload.status === "string" ? payload.status : undefined;
+  if (outcome === undefined && status === undefined) return undefined;
+  return terminalAgentState(outcome) ?? terminalAgentState(status) ?? "progress";
 }
 
 function setOptionalPartField<TKey extends keyof BridgeToolPart>(
@@ -3167,9 +3281,10 @@ function boundTranscriptForRead(state: SessionState): void {
 }
 
 /**
- * The neutral usage snapshot, or nothing at all. Cursor reports no token counts
- * whatsoever, and an empty meter reading "0 tokens" would claim a measurement
- * the agent never made; the panel's own "no snapshot yet" copy is the truth.
+ * The neutral usage snapshot, or nothing at all. Cursor's current ACP adapter
+ * still omits every usage carrier, and an empty meter reading "0 tokens"
+ * would claim a measurement the agent never made; the panel's own "no
+ * snapshot yet" copy is the truth until a carrier arrives.
  */
 function publicContextUsage(state: SessionState) {
   return state.usage
@@ -3633,9 +3748,10 @@ async function route(
         })),
       ],
     }, promptSequence, schema).then((result) => {
-      // The result `_meta` is the last and most complete usage carrier, so it is
-      // read before `turnStartedAt` is cleared and the elapsed time is lost.
-      recordTurnUsage(state, isObject(result) ? result._meta : undefined);
+      // PromptResponse.usage is the ACP carrier; Grok still nests the same
+      // numbers under `_meta`. Parse the whole result so either spelling lands
+      // before `turnStartedAt` is cleared and the elapsed time is lost.
+      recordTurnUsage(state, result);
       state.turnStartedAt = undefined;
       state.currentTurnUsage = undefined;
       if (schema && requestId) {
@@ -3940,6 +4056,10 @@ class HttpError extends Error {
   }
 }
 
+function isCursorTaskMethod(method: string): boolean {
+  return method === "cursor/task";
+}
+
 function isVendorModelUpdate(method: string, params: JsonObject): boolean {
   if (method === "x.ai/models/update" || method === "_x.ai/models/update" || method === "cursor/models/update") {
     return true;
@@ -4019,7 +4139,7 @@ async function applyComposerPatch(
 }
 
 function applyVendorUpdate(state: SessionState, method: string, params: JsonObject): void {
-  if (method === "cursor/task") {
+  if (isCursorTaskMethod(method)) {
     applyCursorTask(state, params);
     return;
   }
@@ -4053,7 +4173,8 @@ function applyVendorUpdate(state: SessionState, method: string, params: JsonObje
  * `turn_completed`, and the prompt result), each with a different subset of the
  * fields, so later reports merge into earlier ones instead of replacing them —
  * otherwise the panel would lose the reasoning or cache breakdown the moment a
- * sparser carrier arrived for the same turn.
+ * sparser carrier arrived for the same turn. ACP `usage_update` occupancy is
+ * merged the same way so a later PromptResponse.usage cannot drop the window.
  */
 function recordTurnUsage(state: SessionState, payload: unknown): void {
   const turn = parseAcpTurnUsage(payload);

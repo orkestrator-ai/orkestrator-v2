@@ -13,8 +13,70 @@ import {
   normalizeOpenCodeModelProviders,
   openCodeModelProviderId,
   openCodeModelProvidersKey,
+  nativeAgentCapabilities,
   resolveReasoningId,
 } from "./native-agent";
+
+describe("native agent capability table", () => {
+  test("answers every platform with an independent object", () => {
+    for (const platform of AGENT_PLATFORMS) {
+      const first = nativeAgentCapabilities(platform);
+      const second = nativeAgentCapabilities(platform);
+      expect(first).toEqual(second);
+      // A shared table handed to two callers must not let one of them mutate
+      // the other's view — the renderer and the backend both hold these.
+      expect(first).not.toBe(second);
+      expect(first.composer).not.toBe(second.composer);
+      expect(first.attachments).not.toBe(second.attachments);
+      first.queue = !first.queue;
+      expect(nativeAgentCapabilities(platform).queue).toBe(second.queue);
+    }
+  });
+
+  test("advertises queueing for every platform, including both ACP agents", () => {
+    for (const platform of AGENT_PLATFORMS) {
+      expect(nativeAgentCapabilities(platform).queue).toBe(true);
+    }
+  });
+
+  test("publishes the provider differences the shared controller branches on", () => {
+    expect(nativeAgentCapabilities("claude").backgroundTasks).toBe(true);
+    expect(nativeAgentCapabilities("claude").composer.localSettings).toBe(true);
+    expect(nativeAgentCapabilities("claude").composer.promptSuggestions).toBe(true);
+    expect(nativeAgentCapabilities("claude").actions).toEqual({
+      compact: true,
+      rewindFiles: true,
+    });
+
+    expect(nativeAgentCapabilities("codex").attachments).toEqual({
+      files: false,
+      images: true,
+    });
+    expect(nativeAgentCapabilities("codex").actions).toEqual({
+      compact: true,
+      steer: true,
+      review: true,
+    });
+
+    expect(nativeAgentCapabilities("opencode").composer.speed).toBe(false);
+    expect(nativeAgentCapabilities("opencode").composer.executionProfile).toBe(true);
+
+    for (const platform of ["cursor", "grok"] as const) {
+      // Both ACP agents read inline image content blocks; neither takes files.
+      expect(nativeAgentCapabilities(platform).attachments).toEqual({
+        files: false,
+        images: true,
+      });
+      expect(nativeAgentCapabilities(platform).resume).toBe(true);
+      expect(nativeAgentCapabilities(platform).fork).toBe(false);
+      expect(nativeAgentCapabilities(platform).slashCommands).toBe(false);
+      expect(nativeAgentCapabilities(platform).backgroundTasks).toBe(false);
+      expect(nativeAgentCapabilities(platform).composer.speed).toBe(true);
+      expect(nativeAgentCapabilities(platform).composer.mode).toBe(true);
+      expect(nativeAgentCapabilities(platform).actions).toEqual({});
+    }
+  });
+});
 
 describe("opencode model provider allowlist", () => {
   test("defaults to the two managed catalogues", () => {

@@ -117,6 +117,29 @@ function write(value: JsonObject): void {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
+/** Text a test waits for to prove an ignored `cursor/task` was already read. */
+const IGNORED_CURSOR_TASK_MARKER = "Cursor task frame delivered.";
+
+/**
+ * Emitted after a `cursor/task` the bridge is expected to ignore. The bridge
+ * reads this stream in order, so a transcript containing the marker proves the
+ * preceding frame was processed — without it, "the child is still active" could
+ * just mean the test read before the frame arrived.
+ */
+function writeIgnoredCursorTaskMarker(): void {
+  write({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "fake-session",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: IGNORED_CURSOR_TASK_MARKER },
+      },
+    },
+  });
+}
+
 const holdTurnFile = process.env.FAKE_ACP_HOLD_TURN_FILE;
 
 /**
@@ -129,20 +152,24 @@ const holdTurnFile = process.env.FAKE_ACP_HOLD_TURN_FILE;
  * makes slower than any timer a test would guess. The deadline is only a
  * backstop so a failing test cannot leave the process hanging.
  */
-function whenReleased(release: () => void): void {
-  if (!holdTurnFile) {
-    release();
-    return;
-  }
+function whenFileExists(file: string, release: () => void): void {
   const deadline = Date.now() + 30_000;
   const poll = (): void => {
-    if (existsSync(holdTurnFile) || Date.now() > deadline) {
+    if (existsSync(file) || Date.now() > deadline) {
       release();
       return;
     }
     setTimeout(poll, 20);
   };
   poll();
+}
+
+function whenReleased(release: () => void): void {
+  if (!holdTurnFile) {
+    release();
+    return;
+  }
+  whenFileExists(holdTurnFile, release);
 }
 
 lines.on("line", (line) => {
@@ -356,6 +383,18 @@ lines.on("line", (line) => {
         status: "completed",
       });
     }
+    // An agent replaying its conversation can re-describe terminal state too,
+    // so the load carries usage for a turn that already ended. The numbers
+    // differ from every live scenario below so a test can tell which report the
+    // panel ended up showing.
+    if (process.env.FAKE_ACP_REPLAY_USAGE === "1") {
+      replay({
+        sessionUpdate: "state_update",
+        state: "idle",
+        stopReason: "end_turn",
+        usage: { totalTokens: 4_321, inputTokens: 4_000, outputTokens: 321 },
+      });
+    }
     if (process.env.FAKE_ACP_REPLAY_ACTIVE_SUBAGENT === "1") {
       replay({
         sessionUpdate: "tool_call",
@@ -431,6 +470,40 @@ lines.on("line", (line) => {
           toolCallId: entry.id,
           status: "completed",
           rawOutput: { content: entry.content },
+        });
+      }
+    }
+    // A prior same-kind read with a title and path but no output hash, plus the
+    // live turn's true entry only after the hold file exists. A live pass sized
+    // to one settled target keeps that stale call as its only candidate.
+    if (process.env.FAKE_ACP_REPLAY_CURSOR_STALE_KIND === "1") {
+      replay({
+        sessionUpdate: "tool_call",
+        toolCallId: "replay-stale-read",
+        title: "Read stale.json (1 - 10)",
+        kind: "read",
+        status: "pending",
+        rawInput: { path: "/workspace/stale.json" },
+      });
+      replay({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "replay-stale-read",
+        status: "completed",
+      });
+      if (!holdTurnFile || existsSync(holdTurnFile)) {
+        replay({
+          sessionUpdate: "tool_call",
+          toolCallId: "replay-read-1",
+          title: "Read package.json (1 - 80)",
+          kind: "read",
+          status: "pending",
+          rawInput: { path: "/workspace/package.json" },
+        });
+        replay({
+          sessionUpdate: "tool_call_update",
+          toolCallId: "replay-read-1",
+          status: "completed",
+          rawOutput: { content: "package contents" },
         });
       }
     }
@@ -1556,6 +1629,25 @@ lines.on("line", (line) => {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }
+    if (prompt.startsWith("FINISHCURSORSUBAGENTSTATUS")) {
+      // Real Cursor keeps `isBackground: true` on the launch result and reports
+      // completion through a later status field rather than flipping the flag.
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "cursor-subagent-1",
+            status: "completed",
+            rawOutput: { durationMs: 84, isBackground: true, status: "completed" },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
     if (prompt.startsWith("FINISHCURSORSUBAGENT")) {
       write({
         jsonrpc: "2.0",
@@ -1568,6 +1660,198 @@ lines.on("line", (line) => {
             status: "completed",
             rawOutput: { durationMs: 84, isBackground: false, status: "completed" },
           },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FINISHCURSORTASKREQUEST")) {
+      write({
+        jsonrpc: "2.0",
+        id: 903,
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          prompt: "Validate the implementation",
+          subagentType: "explore",
+          durationMs: 84,
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FINISHCURSORTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          prompt: "Validate the implementation",
+          subagentType: "explore",
+          durationMs: 84,
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FAILCURSORTASKREQUEST")) {
+      write({
+        jsonrpc: "2.0",
+        id: 903,
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          outcome: { outcome: "cancelled" },
+          durationMs: 12,
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FAILCURSORTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          outcome: { outcome: "cancelled" },
+          durationMs: 12,
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    // The `cursor/task` frames below carry a `status`/`outcome` field. Real
+    // Cursor (2026.08.11-e8db854) sends neither — its payload is toolCallId,
+    // description, prompt, subagentType, model, agentId, durationMs — so these
+    // model the version that starts reporting a state, not today's contract.
+    // They exist to pin which values settle a child and which must not.
+    if (prompt.startsWith("REJECTCURSORTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          status: "rejected",
+          durationMs: 12,
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    // Forward-compat, as above: a `cursor/task` that names a non-terminal state
+    // is a progress report, so nothing may settle.
+    if (prompt.startsWith("RUNNINGCURSORTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          status: "running",
+          durationMs: 12,
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          outcome: { outcome: "in_progress" },
+        },
+      });
+      writeIgnoredCursorTaskMarker();
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    // Same terminal frame, addressed to a different ACP session. A superseded
+    // or unrelated conversation must not settle this one's child.
+    if (prompt.startsWith("OTHERSESSIONCURSORTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          sessionId: "some-other-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Validate the implementation",
+          durationMs: 84,
+        },
+      });
+      writeIgnoredCursorTaskMarker();
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    // Terminal frames for ids that are not live children: an ordinary finished
+    // tool call, and an id this session has never seen.
+    if (prompt.startsWith("UNKNOWNCURSORTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "cursor-plain-tool-1",
+            title: "Read file",
+            kind: "read",
+            status: "completed",
+            rawInput: { _toolName: "read", path: "notes.md" },
+          },
+        },
+      });
+      for (const toolCallId of ["cursor-plain-tool-1", "cursor-never-seen-1"]) {
+        write({
+          jsonrpc: "2.0",
+          method: "cursor/task",
+          params: {
+            sessionId: "fake-session",
+            toolCallId,
+            description: "Validate the implementation",
+            durationMs: 84,
+          },
+        });
+      }
+      writeIgnoredCursorTaskMarker();
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("FINISHEVICTEDCURSORTASK")) {
+      for (const index of [0, 1]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `cursor-task-late-filler-${index}`,
+              title: `Late retained output ${index}`,
+              status: "completed",
+              rawOutput: `${index}:`.padEnd(600 * 1024, "z"),
+            },
+          },
+        });
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          durationMs: 84,
         },
       });
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
@@ -2571,6 +2855,119 @@ lines.on("line", (line) => {
       }, 250);
       return;
     }
+    // v2 turn-complete usage rides idle `state_update.usage`; session/prompt
+    // itself returns only a stop reason, the way Cursor's empty result looks.
+    // The running frame already carries the cache-write count the idle one
+    // omits, so a turn's partial reports have to merge rather than replace.
+    if (prompt.startsWith("USAGE_STATE")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Counted over state_update." } },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "state_update",
+            state: "running",
+            usage: { cachedWriteTokens: 20 },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "state_update",
+            state: "idle",
+            stopReason: "end_turn",
+            usage: {
+              totalTokens: 8_000,
+              inputTokens: 7_000,
+              outputTokens: 1_000,
+              thoughtTokens: 50,
+              cachedReadTokens: 4_000,
+            },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: { stopReason: "end_turn" },
+      });
+      return;
+    }
+    // The same occupancy carrier spelled with `type` instead of
+    // `sessionUpdate`. The bridge routes an update on either discriminator, so
+    // the parser has to read either one too, or the frame reaches the usage
+    // path and is dropped there as a generic `used`/`size` pair.
+    if (prompt.startsWith("USAGE_TYPED")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: { type: "usage_update", used: 1_500, size: 30_000 },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: { stopReason: "end_turn" },
+      });
+      return;
+    }
+    // Standard ACP carriers Cursor's CLI schema already defines but does not
+    // emit. The bridge must still consume them so occupancy appears the moment
+    // an agent starts sending `usage_update` / `PromptResponse.usage`.
+    if (prompt.startsWith("USAGE_ACP")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Counted over ACP." } },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "usage_update",
+            used: 15_675,
+            size: 200_000,
+            cost: { amount: 0.042, currency: "USD" },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          stopReason: "end_turn",
+          usage: {
+            totalTokens: 12_345,
+            inputTokens: 10_000,
+            outputTokens: 2_000,
+            thoughtTokens: 300,
+            cachedReadTokens: 5_000,
+            cachedWriteTokens: 45,
+          },
+        },
+      });
+      return;
+    }
     // A turn that reports everything the agent info panel can show: the MCP
     // inventory and command list as notifications, then the same token counts
     // Grok repeats across a session notification and the prompt result.
@@ -2651,8 +3048,9 @@ lines.on("line", (line) => {
     // Two same-kind reads launched together, only the second of which settles
     // while the turn keeps running. Cursor indexes a call when it settles, so
     // `FAKE_ACP_REPLAY_CURSOR_PARALLEL_READS` withholds the first read's
-    // metadata until this prompt is released — the state in which an
-    // unsettled, still-generic part could otherwise claim its sibling's entry.
+    // metadata until this prompt is released. A live pass must enrich the
+    // settled sibling from that partial index without letting the pending one
+    // claim it.
     if (prompt.startsWith("CURSOR_GENERIC_TOOLS_PENDING_SIBLING")) {
       for (const update of [
         {
@@ -2695,6 +3093,251 @@ lines.on("line", (line) => {
               toolCallId: "live-read-1",
               status: "completed",
               rawOutput: { content: "first contents" },
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          id: message.id as number,
+          result: { stopReason: "end_turn" },
+        });
+      });
+      return;
+    }
+    // A settled generic read followed by an in-flight execute. The execute is
+    // not a Cursor read/search label, but it used to sit in the live suffix and
+    // make the whole pass stand down. The read's replay entry is already in
+    // `FAKE_ACP_REPLAY_CURSOR_TOOL_METADATA`.
+    if (prompt.startsWith("CURSOR_GENERIC_TOOLS_PENDING_OTHER")) {
+      for (const update of [
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-read-1",
+          title: "Read File",
+          kind: "read",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "live-read-1",
+          status: "completed",
+          rawOutput: { content: "package contents" },
+        },
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-shell-1",
+          title: "Run safe command",
+          kind: "execute",
+          status: "pending",
+          rawInput: { command: "printf ok" },
+        },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: "fake-session", update },
+        });
+      }
+      whenReleased(() => {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "live-shell-1",
+              status: "completed",
+              rawOutput: { exitCode: 0, stdout: "ok" },
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          id: message.id as number,
+          result: { stopReason: "end_turn" },
+        });
+      });
+      return;
+    }
+    // Settled generic read whose true index entry is withheld, plus a pending
+    // execute that keeps the turn open. The live replay window is that one
+    // settled call, so a prior same-kind entry with no output hash is the only
+    // candidate — the live join must leave the part generic.
+    if (prompt.startsWith("CURSOR_GENERIC_TOOLS_STALE_KIND")) {
+      for (const update of [
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-read-1",
+          title: "Read File",
+          kind: "read",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "live-read-1",
+          status: "completed",
+          rawOutput: { content: "package contents" },
+        },
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-shell-1",
+          title: "Run safe command",
+          kind: "execute",
+          status: "pending",
+          rawInput: { command: "printf ok" },
+        },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: "fake-session", update },
+        });
+      }
+      whenReleased(() => {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "live-shell-1",
+              status: "completed",
+              rawOutput: { exitCode: 0, stdout: "ok" },
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          id: message.id as number,
+          result: { stopReason: "end_turn" },
+        });
+      });
+      return;
+    }
+    // Same shape as the pending-sibling case, then a second completion of the
+    // already-settled read while its live replay is still running. That arms a
+    // follow-up live pass whose settled window is already enriched, so it must
+    // not spawn another child.
+    if (prompt.startsWith("CURSOR_GENERIC_TOOLS_NOOP_FOLLOWUP")) {
+      for (const update of [
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-read-1",
+          title: "Read File",
+          kind: "read",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-read-2",
+          title: "Read File",
+          kind: "read",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "live-read-2",
+          status: "completed",
+          rawOutput: { content: "second contents" },
+        },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: "fake-session", update },
+        });
+      }
+      const secondSettleFile = process.env.FAKE_ACP_SECOND_SETTLE_FILE;
+      if (secondSettleFile) {
+        whenFileExists(secondSettleFile, () => {
+          write({
+            jsonrpc: "2.0",
+            method: "session/update",
+            params: {
+              sessionId: "fake-session",
+              update: {
+                sessionUpdate: "tool_call_update",
+                toolCallId: "live-read-2",
+                status: "completed",
+                rawOutput: { content: "second contents" },
+              },
+            },
+          });
+        });
+      }
+      whenReleased(() => {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "live-read-1",
+              status: "completed",
+              rawOutput: { content: "first contents" },
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          id: message.id as number,
+          result: { stopReason: "end_turn" },
+        });
+      });
+      return;
+    }
+    // A generic read that failed with no output, plus an in-flight execute.
+    // The live join has neither a path nor an output hash and must not use the
+    // kind fallback, so it spends a replay child and still leaves the part
+    // generic until the final pass.
+    if (prompt.startsWith("CURSOR_GENERIC_TOOLS_FAILED_NO_OUTPUT")) {
+      for (const update of [
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-read-1",
+          title: "Read File",
+          kind: "read",
+          status: "pending",
+          rawInput: {},
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "live-read-1",
+          status: "failed",
+        },
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-shell-1",
+          title: "Run safe command",
+          kind: "execute",
+          status: "pending",
+          rawInput: { command: "printf ok" },
+        },
+      ]) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: "fake-session", update },
+        });
+      }
+      whenReleased(() => {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "live-shell-1",
+              status: "completed",
+              rawOutput: { exitCode: 0, stdout: "ok" },
             },
           },
         });
@@ -3118,5 +3761,11 @@ lines.on("line", (line) => {
       `${JSON.stringify(message)}\n`,
     );
     return;
+  }
+  if (message.id === 903 && process.env.FAKE_ACP_CURSOR_TASK_REQUEST_FILE) {
+    appendFileSync(
+      process.env.FAKE_ACP_CURSOR_TASK_REQUEST_FILE,
+      `${JSON.stringify(message)}\n`,
+    );
   }
 });

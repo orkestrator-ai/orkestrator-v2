@@ -2,10 +2,12 @@ import { describe, expect, mock, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type {
-  BuildPipeline,
-  BuildPipelineAgent,
+import {
+  BUILD_PIPELINE_AGENTS,
+  type BuildPipeline,
+  type BuildPipelineAgent,
 } from "@orkestrator/protocol/build-pipeline";
+import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
   INTERACTIVE_AGENT_INTERACTION_POLICY,
@@ -1684,23 +1686,122 @@ describe("NativeAgentService", () => {
     });
   });
 
+  /*
+   * The renderer gates the composer's enqueue on its own adapter capabilities
+   * and the backend gates the projection's queue on the protocol table. Those
+   * used to be separate copies, so a one-sided edit produced a prompt that
+   * dispatched but never showed up in the queue list. Assert the projection
+   * really publishes the shared table rather than anything of its own.
+   */
+  test.each([...BUILD_PIPELINE_AGENTS])(
+    "publishes the shared %s capability table through the projection",
+    async (agent) => {
+      const stub = createProviderStub(agent, {
+        interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+      });
+      await withService({
+        prefix: `orkestrator-native-${agent}-capability-table-`,
+        provider: async () => stub.provider,
+      }, async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent,
+          logicalSessionKey: `env-env-1:tab-${agent}-capabilities`,
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        expect(projection?.capabilities).toEqual(nativeAgentCapabilities(agent));
+      });
+    },
+  );
+
   for (const agent of ["cursor", "grok"] as const) {
-    test(`advertises ${agent} session resume through the native projection`, async () => {
+    test(`advertises ${agent} session resume and queued prompts through the native projection`, async () => {
       const stub = createProviderStub(agent, {
         interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
       });
       await withService({
         prefix: `orkestrator-native-${agent}-resume-capability-`,
         provider: async () => stub.provider,
-      }, async ({ service }) => {
+      }, async ({ storage, service }) => {
         const identity = {
           environmentId: "env-1",
           agent,
           logicalSessionKey: `env-env-1:tab-${agent}-resume`,
         };
         await service.ensureSession(identity);
+        await storage.savePromptQueue(
+          `${agent}\u0000${identity.logicalSessionKey}`,
+          identity.environmentId,
+          [{ id: `queued-${agent}`, text: `Queued for ${agent}` }],
+        );
         const projection = await service.getProjection(identity);
         expect(projection?.capabilities.resume).toBe(true);
+        expect(projection?.capabilities.queue).toBe(true);
+        expect(projection?.queue?.items).toEqual([
+          { id: `queued-${agent}`, text: `Queued for ${agent}` },
+        ]);
+      });
+    });
+
+    /*
+     * The whole point of enabling the queue for the ACP agents is that a
+     * follow-up typed mid-turn survives the tab being closed. Nothing here
+     * mounts a component or holds a subscription: the queue is persisted while
+     * the provider reports `running`, the turn ends out of band, and the drain
+     * plus a fresh projection read have to do the rest. A dispatch that only
+     * happened because someone was watching would fail this.
+     */
+    test(`drains a queued ${agent} prompt after the turn ends with no tab attached`, async () => {
+      let running = true;
+      const stub = createProviderStub(agent, {
+        status: async () => (running ? "running" : "idle"),
+        interactiveSnapshot: async () => ({
+          status: running ? "running" : "idle",
+          messages: [],
+        }),
+      });
+      await withService({
+        prefix: `orkestrator-native-${agent}-inactive-queue-`,
+        provider: async () => stub.provider,
+      }, async ({ storage, service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent,
+          logicalSessionKey: `env-env-1:tab-${agent}-inactive`,
+        };
+        await service.ensureSession(identity);
+        const queueKey = `${agent}\u0000${identity.logicalSessionKey}`;
+        await storage.savePromptQueue(queueKey, identity.environmentId, [
+          { id: "queued-follow-up", text: "Follow up after this turn", mode: "plan" },
+        ]);
+
+        const drain = async () => {
+          await (
+            service as unknown as { drainPromptQueues(): Promise<void> }
+          ).drainPromptQueues();
+        };
+
+        // Still running: the prompt must stay queued rather than race the turn.
+        await drain();
+        expect(stub.send).not.toHaveBeenCalled();
+        expect((await storage.getPromptQueue(queueKey))?.messages).toHaveLength(1);
+
+        running = false;
+        await drain();
+        expect(stub.send).toHaveBeenCalledWith(
+          "provider-session",
+          "Follow up after this turn",
+          expect.objectContaining({ mode: "plan" }),
+        );
+        expect((await storage.getPromptQueue(queueKey))?.messages ?? []).toHaveLength(0);
+
+        // A tab returning later rebuilds from the authoritative snapshot, not
+        // from the event that drained the queue while it was unmounted.
+        const projection = await service.getProjection(identity);
+        expect(projection?.queue?.items ?? []).toEqual([]);
+        expect(projection?.queue?.blocked).toBeUndefined();
+        expect(projection?.queue?.inFlightRequestId).toBeUndefined();
       });
     });
   }
@@ -6689,6 +6790,8 @@ describe("NativeAgentService", () => {
   test.each([
     ["claude", { planModeEnabled: true }],
     ["opencode", { mode: "plan" }],
+    ["cursor", { mode: "plan" }],
+    ["grok", { mode: "plan" }],
   ] as const)("preserves queued %s plan mode through dispatch", async (agent, mode) => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-native-plan-"));
     const storage = await createStorage(dataDir);
@@ -6729,6 +6832,8 @@ describe("NativeAgentService", () => {
   test.each([
     ["claude", { fastModeEnabled: true }, true],
     ["codex", { fastMode: false }, false],
+    ["cursor", { fastMode: true }, true],
+    ["grok", { fastMode: false }, false],
   ] as const)("preserves queued %s fast mode through dispatch", async (
     agent,
     fastModeField,
@@ -6769,6 +6874,68 @@ describe("NativeAgentService", () => {
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });
+
+  // The renderer persists the shared `fastMode` key for every provider, while
+  // ActionBar's review launch still writes Claude's legacy `fastModeEnabled`.
+  // Both shapes reach the same queue, so pin which one wins — including when a
+  // malformed legacy value must not shadow a perfectly good shared field.
+  test.each([
+    ["the shared field alone, enabled", { fastMode: true }, true],
+    ["the shared field alone, disabled", { fastMode: false }, false],
+    [
+      "the legacy field ahead of a conflicting shared field",
+      { fastModeEnabled: true, fastMode: false },
+      true,
+    ],
+    [
+      "the shared field when the legacy field is malformed",
+      { fastModeEnabled: "yes", fastMode: true },
+      true,
+    ],
+    [
+      "no selection when neither field is a boolean",
+      { fastModeEnabled: "yes", fastMode: 1 },
+      undefined,
+    ],
+  ] as const)(
+    "honours queued claude %s",
+    async (_label, fastModeFields, expectedFastMode) => {
+      const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-native-claude-fast-"));
+      const storage = await createStorage(dataDir);
+      await addEnvironment(storage);
+      const queueKey = "claude\u0000env-env-1:tab-1";
+      await storage.savePromptQueue(queueKey, "env-1", [
+        { id: "row-1", text: "Use the selected speed", ...fastModeFields },
+      ]);
+      const send = mock(async () => undefined);
+      const provider = {
+        agent: "claude",
+        createSession: async () => "provider-session",
+        registerSession: () => undefined,
+        send,
+        status: async () => "idle",
+        messages: async () => [],
+        structured: async () => null,
+        abort: async () => undefined,
+      } as AgentSessionProvider;
+      const service = new NativeAgentService(storage, async <T>(): Promise<T> => {
+        throw new Error("unused");
+      }, { provider: async () => provider });
+      try {
+        await (
+          service as unknown as { drainPromptQueues(): Promise<void> }
+        ).drainPromptQueues();
+        expect(send).toHaveBeenCalledWith(
+          "provider-session",
+          "Use the selected speed",
+          expect.objectContaining({ fastMode: expectedFastMode }),
+        );
+      } finally {
+        await service.shutdown();
+        await fs.rm(dataDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("parks permanent rejection visibly but retains transient in-flight work", async () => {
     const run = async (
@@ -7442,6 +7609,46 @@ describe("NativeAgentService", () => {
               },
             },
           ],
+        });
+      });
+    });
+
+    test("hands focus from the setup terminal to the startup agent once setup is ready", async () => {
+      const { provider, createSession } = createProviderStub("cursor");
+      await withService({
+        prefix: "orkestrator-native-cursor-startup-setup-handoff-",
+        environment: {
+          pendingAgentLaunch: true,
+          defaultAgent: "cursor",
+          opencodeMode: "native",
+          setupPhase: "running",
+          setupScriptsComplete: false,
+        },
+        provider: async () => provider,
+      }, async ({ storage, service }) => {
+        await internals(service).reconcilePendingLaunches();
+        expect(createSession).not.toHaveBeenCalled();
+
+        const duringSetup = await storage.getPaneLayout("env-1");
+        if (!duringSetup || !duringSetup.root || typeof duringSetup.root !== "object") {
+          throw new Error("expected a pane layout");
+        }
+        await storage.savePaneLayout("env-1", {
+          version: duringSetup.version,
+          containerId: duringSetup.containerId,
+          activePaneId: duringSetup.activePaneId,
+          root: { ...(duringSetup.root as Record<string, unknown>), activeTabId: "default" },
+        }, duringSetup.revision);
+
+        await storage.updateEnvironment("env-1", {
+          setupPhase: "ready",
+          setupScriptsComplete: true,
+        });
+        await service.reconcileInitialLaunch("env-1");
+
+        expect(createSession).toHaveBeenCalled();
+        expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
+          activeTabId: "startup-agent",
         });
       });
     });

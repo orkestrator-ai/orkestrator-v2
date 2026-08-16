@@ -3753,12 +3753,13 @@ Running 1 Explore agent...
     );
 
     const renderedMessages = lastVirtuosoProps?.data ?? [];
-    expect(renderedMessages).toHaveLength(2);
-    expect(renderedMessages[1]!.id).toBe("a1");
-    expect(renderedMessages[0]!.id).toBe("u1");
+    expect(renderedMessages.map((message: { id: string }) => message.id)).toEqual([
+      "u1",
+      "a1",
+      "a1:text-block:1",
+    ]);
     expect(renderedMessages[1]!.parts.map((part: ClaudeMessageType["parts"][number]) => part.type)).toEqual([
       "tool-group",
-      "text",
     ]);
     expect(renderedMessages[1]!.parts[0]?.type).toBe("tool-group");
     if (renderedMessages[1]!.parts[0]?.type === "tool-group") {
@@ -3767,6 +3768,9 @@ Running 1 Explore agent...
         "Grep",
       ]);
     }
+    expect(renderedMessages[2]!.parts.map((part: ClaudeMessageType["parts"][number]) => part.type)).toEqual([
+      "text",
+    ]);
     expect(screen.getAllByText("Read").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Grep").length).toBeGreaterThan(0);
     expect(screen.getByText("done")).toBeTruthy();
@@ -3818,7 +3822,8 @@ Running 1 Explore agent...
 
     expect((lastVirtuosoProps?.data ?? []).map((message: any) => message.id)).toEqual([
       "assistant-agent",
-      "assistant-agent:active-agents",
+      "assistant-agent:text-block:2",
+      "assistant-agent:text-block:1:active-agents",
     ]);
 
     act(() => {
@@ -3844,12 +3849,13 @@ Running 1 Explore agent...
       const renderedMessages = lastVirtuosoProps?.data ?? [];
       expect(renderedMessages.map((message: any) => message.id)).toEqual([
         "assistant-agent",
+        "assistant-agent:text-block:1",
+        "assistant-agent:text-block:2",
       ]);
-      expect(renderedMessages[0]?.parts.map((part: any) => part.type)).toEqual([
-        "text",
-        "task-group",
-        "text",
-        "text",
+      expect(renderedMessages.map((message: any) => message.parts.map((part: any) => part.type))).toEqual([
+        ["text"],
+        ["task-group"],
+        ["text", "text"],
       ]);
     });
   });

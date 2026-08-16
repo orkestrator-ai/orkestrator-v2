@@ -54,7 +54,7 @@ import {
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
 import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
-import { normalizeNativeMessages, getNativeSourceMessageId } from "@/lib/chat/native-message-adapters";
+import { normalizeNativeMessages } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import {
   createOptimisticNativeMessage,
@@ -69,11 +69,13 @@ import { persistAgentModelDefault } from "@/lib/chat/agent-model-preferences";
 import { persistCodexGlobalPreferences } from "@/components/codex/codex-preferences";
 import {
   buildMessageForkPlan,
-  findNextForkMessage,
-  findPreviousForkMessage,
   forkAttachmentNotice,
   type MessageForkKind,
 } from "@/components/chat/message-fork";
+import {
+  resolveNativeAgentPromptBoundary,
+  resolveNativeAgentResponseBoundary,
+} from "./native-agent-fork";
 import { composeDraftKey, discardComposeDraft } from "@/lib/compose-draft-persistence";
 import { composerOccupiedError } from "@/lib/prompt-queue-errors";
 import {
@@ -859,55 +861,10 @@ export function SharedNativeAgentController({
   const forkPlan = useMemo(
     () => buildMessageForkPlan(handoff.displayMessages, {
       responseInProgress: isTurnActive,
-      resolvePromptBoundary: (message, allMessages) => {
-        if (platform === "opencode") {
-          return { type: "message", messageId: getNativeSourceMessageId(message.id) };
-        }
-        if (platform === "codex") {
-          const previousTurn = findPreviousForkMessage(
-            allMessages,
-            message.id,
-            (candidate) => Boolean(candidate.turnId)
-              && candidate.turnId !== message.turnId,
-          );
-          if (previousTurn) {
-            return { type: "message", messageId: previousTurn.id };
-          }
-          return findPreviousForkMessage(allMessages, message.id)
-            ? null
-            : { type: "session-start" };
-        }
-        const previous = findPreviousForkMessage(allMessages, message.id);
-        if (!previous) return { type: "session-start" };
-        return {
-          type: "message",
-          messageId: previous.parts.find((part) => part.sourceMessageId)?.sourceMessageId
-            ?? getNativeSourceMessageId(previous.id),
-        };
-      },
-      resolveResponseBoundary: (message, allMessages) => {
-        if (platform === "opencode") {
-          const sourceId = getNativeSourceMessageId(message.id);
-          const next = findNextForkMessage(
-            allMessages,
-            message.id,
-            (candidate) => getNativeSourceMessageId(candidate.id) !== sourceId,
-          );
-          return next
-            ? { type: "message", messageId: getNativeSourceMessageId(next.id) }
-            : { type: "whole-session" };
-        }
-        if (platform === "codex") {
-          return message.turnId
-            ? { type: "message", messageId: message.id }
-            : null;
-        }
-        return {
-          type: "message",
-          messageId: message.parts.find((part) => part.sourceMessageId)?.sourceMessageId
-            ?? getNativeSourceMessageId(message.id),
-        };
-      },
+      resolvePromptBoundary: (message, allMessages) =>
+        resolveNativeAgentPromptBoundary(platform, message, allMessages),
+      resolveResponseBoundary: (message, allMessages) =>
+        resolveNativeAgentResponseBoundary(platform, message, allMessages),
     }),
     [handoff.displayMessages, isTurnActive, platform],
   );

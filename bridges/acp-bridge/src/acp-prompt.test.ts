@@ -143,6 +143,7 @@ describe("ACP bridge", () => {
         content: "Checking permission. ",
         sourcePartId: expect.any(String),
         sourceMessageId: expect.any(String),
+        createdAt: expect.any(String),
       },
       {
         type: "tool-invocation",
@@ -155,12 +156,14 @@ describe("ACP bridge", () => {
         toolState: "success",
         toolTitle: "Run safe command",
         toolOutput: JSON.stringify({ exitCode: 0, stdout: "ok" }, null, 2),
+        createdAt: expect.any(String),
       },
       {
         type: "text",
         content: "approved:once",
         sourcePartId: expect.any(String),
         sourceMessageId: expect.any(String),
+        createdAt: expect.any(String),
       },
     ]);
   });

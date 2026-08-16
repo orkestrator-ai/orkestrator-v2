@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   CURSOR_CHILD_DISCOVERY_SKEW_MS,
+  CURSOR_JSONL_SOURCE_PREFIX,
   MAX_CURSOR_DISCOVERY_ENTRIES,
   provider,
   sessions,
@@ -10,7 +11,7 @@ import {
   type BridgeToolPart,
   type SessionState,
 } from "./acp-context.js";
-import { findToolPart } from "./acp-tools.js";
+import { findToolPart, toolPartAgentId } from "./acp-tools.js";
 
 /**
  * Cursor ids are short slugs. The cap is a sanity bound on an agent-supplied
@@ -136,8 +137,8 @@ interface UnboundCursorLaunch {
  *
  * - a directory older than its card (minus timestamp skew) is never that card's
  *   child, and
- * - a directory already bound to a live child of any session in this process is
- *   never taken from it.
+ * - a directory already attributed to a card in this process — live or
+ *   settled — is never taken from it.
  *
  * It is still an inference. If a card's child never writes a transcript, the
  * next card's directory is bound to it instead; the authoritative `agentId`
@@ -203,12 +204,17 @@ function launchStartedAtMs(part: BridgeToolPart): number | undefined {
 }
 
 /**
- * Ids that belong to a live child somewhere in this process. Sessions share one
- * transcript root — a bridge serves one working directory — so a second tab's
- * children are exactly what this must not steal. Settled children are omitted
- * deliberately: their directories predate any running card and are already
- * excluded by the time floor, and scanning every transcript for them would cost
- * a full pass per poll.
+ * Ids already attributed to a card somewhere in this process. Sessions share
+ * one transcript root, so a second tab's children are exactly what this must
+ * not steal.
+ *
+ * Live descriptors are not enough: a foreground Task is named only as it
+ * settles, and settling deletes the descriptor. The 5s creation-time floor
+ * does not exclude that directory from the *next* unnamed launch — sequential
+ * short Tasks are newer than the floor. This scan therefore also reads
+ * `agentId` off launch parts and off JSONL projections still attached to a
+ * card. It runs only while an unnamed launch is waiting to bind, not on the
+ * `/activity` poll.
  */
 function claimedCursorAgentIds(state: SessionState): Set<string> {
   const claimed = new Set<string>();
@@ -218,8 +224,24 @@ function claimedCursorAgentIds(state: SessionState): Set<string> {
     for (const descriptor of candidate.activeSubagentDescriptors.values()) {
       if (descriptor.agentId) claimed.add(descriptor.agentId);
     }
+    for (const message of candidate.messages) {
+      for (const part of message.parts) {
+        const projectedId = cursorJsonlPartAgentId(part.sourcePartId);
+        if (projectedId) claimed.add(projectedId);
+        if (part.type !== "tool-invocation" || part.parentTaskUseId) continue;
+        const agentId = toolPartAgentId(part);
+        if (agentId) claimed.add(agentId);
+      }
+    }
   }
   return claimed;
+}
+
+/** Agent id encoded in a projected `cursor-jsonl:<agentId>:…` part. */
+function cursorJsonlPartAgentId(sourcePartId: string): string | undefined {
+  if (!sourcePartId.startsWith(CURSOR_JSONL_SOURCE_PREFIX)) return undefined;
+  const agentId = sourcePartId.slice(CURSOR_JSONL_SOURCE_PREFIX.length).split(":")[0];
+  return agentId && isSafeCursorAgentId(agentId) ? agentId : undefined;
 }
 
 /** Test-only: drops the directory scan cache so a rewritten root is re-read. */

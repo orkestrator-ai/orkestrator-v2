@@ -66,6 +66,42 @@ function makeState(launches: Array<{ toolUseId: string; createdAt?: string; agen
   return state;
 }
 
+function settleNamedLaunch(
+  state: ReturnType<typeof makeState>,
+  toolUseId: string,
+  agentId: string,
+): void {
+  const part = state.messages[0]!.parts.find((candidate) => candidate.toolUseId === toolUseId);
+  if (!part) throw new Error(`missing launch ${toolUseId}`);
+  part.toolArgs = { ...part.toolArgs, agentId };
+  part.agentState = "finished";
+  part.toolState = "success";
+  state.activeSubagentToolIds.delete(toolUseId);
+  state.activeSubagentDescriptors.delete(toolUseId);
+}
+
+function addUnnamedLaunch(
+  state: ReturnType<typeof makeState>,
+  toolUseId: string,
+  createdAt: string = LAUNCHED_AT,
+): void {
+  state.messages[0]!.parts.push({
+    type: "tool-invocation",
+    content: "Task: Subagent task",
+    sourcePartId: toolUseId,
+    sourceMessageId: "message-1",
+    toolUseId,
+    toolName: "task",
+    toolTitle: "Task: Subagent task",
+    toolArgs: {},
+    toolState: "pending",
+    agentState: "active",
+    createdAt,
+  });
+  state.activeSubagentToolIds.add(toolUseId);
+  state.activeSubagentDescriptors.set(toolUseId, {});
+}
+
 async function writeChildTranscript(
   root: string,
   agentId: string,
@@ -203,6 +239,84 @@ describe("Cursor child transcript discovery", () => {
     });
   });
 
+  // A foreground Task is named only as it settles, and settling deletes the
+  // live descriptor. The time floor still admits that directory for the next
+  // unnamed launch, so the claimed set must keep reading `agentId` off the card.
+  test("never reuses a settled child's directory for a later unnamed launch", async () => {
+    await withTranscriptRoot(async (root) => {
+      await writeChildTranscript(root, "child-a", toolRecord("Read"));
+      const state = makeState([{ toolUseId: "task-1", agentId: "child-a" }]);
+      settleNamedLaunch(state, "task-1", "child-a");
+      addUnnamedLaunch(state, "task-2");
+
+      expect(bindDiscoveredCursorChildren(state as unknown as SessionState)).toBe(false);
+      expect(state.activeSubagentDescriptors.get("task-2")).toEqual({});
+    });
+  });
+
+  test("binds a later unnamed launch to the next directory after a settled sibling", async () => {
+    await withTranscriptRoot(async (root) => {
+      await writeChildTranscript(root, "child-a", toolRecord("Read"));
+      await writeChildTranscript(root, "child-b", toolRecord("Grep"));
+      const state = makeState([{ toolUseId: "task-1", agentId: "child-a" }]);
+      settleNamedLaunch(state, "task-1", "child-a");
+      addUnnamedLaunch(state, "task-2");
+
+      expect(bindDiscoveredCursorChildren(state as unknown as SessionState)).toBe(true);
+      expect(state.activeSubagentDescriptors.get("task-2")).toEqual({
+        agentId: "child-b",
+        agentIdDiscovered: true,
+      });
+    });
+  });
+
+  test("keeps a settled child from another session out of discovery", async () => {
+    await withTranscriptRoot(async (root) => {
+      await writeChildTranscript(root, "child-a", toolRecord("Read"));
+      const owner = makeState([{ toolUseId: "owner-task", agentId: "child-a" }]);
+      settleNamedLaunch(owner, "owner-task", "child-a");
+      const contender = makeState([{ toolUseId: "contender-task" }]);
+      const sessionKey = `cursor-discovery-test:${root}`;
+      const previous = sessions.get(sessionKey);
+      sessions.set(sessionKey, owner as unknown as SessionState);
+      try {
+        expect(bindDiscoveredCursorChildren(contender as unknown as SessionState)).toBe(false);
+        expect(contender.activeSubagentDescriptors.get("contender-task")).toEqual({});
+      } finally {
+        if (previous) sessions.set(sessionKey, previous);
+        else sessions.delete(sessionKey);
+      }
+    });
+  });
+
+  // Discovery can bind a card before `cursor/task` names it. Settling then
+  // drops the descriptor; the JSONL projection still names the child, and that
+  // must keep the directory claimed.
+  test("does not rebind a directory already projected onto a settled card", async () => {
+    await withTranscriptRoot(async (root) => {
+      await writeChildTranscript(root, "child-a", toolRecord("Read"));
+      const state = makeState([{ toolUseId: "task-1" }]);
+      hydrateCursorChildTranscripts(state as unknown as SessionState);
+      expect(state.activeSubagentDescriptors.get("task-1")).toMatchObject({
+        agentId: "child-a",
+        agentIdDiscovered: true,
+      });
+
+      const launch = state.messages[0]!.parts[0] as {
+        agentState: string;
+        toolState: string;
+      };
+      launch.agentState = "finished";
+      launch.toolState = "success";
+      state.activeSubagentToolIds.clear();
+      state.activeSubagentDescriptors.clear();
+      addUnnamedLaunch(state, "task-2");
+
+      expect(bindDiscoveredCursorChildren(state as unknown as SessionState)).toBe(false);
+      expect(state.activeSubagentDescriptors.get("task-2")).toEqual({});
+    });
+  });
+
   test("skips a launch with no recorded start time", async () => {
     await withTranscriptRoot(async (root) => {
       await writeChildTranscript(root, "child-a", toolRecord("Read"));
@@ -245,6 +359,21 @@ describe("Cursor child transcript discovery", () => {
       expect(parts[0]).toMatchObject({
         toolArgs: { prompt: "Audit the OpenCode surface." },
       });
+    });
+  });
+
+  test("excludes a discovered-only child from the continuation waiter", async () => {
+    await withTranscriptRoot(async (root) => {
+      await writeChildTranscript(root, "child-a", toolRecord("Read"));
+      const state = makeState([{ toolUseId: "task-1" }]);
+
+      expect(bindDiscoveredCursorChildren(state as unknown as SessionState)).toBe(true);
+      expect(listWatchableCursorChildren(
+        state as unknown as SessionState,
+        { includeDiscovered: false },
+      )).toEqual([]);
+      expect(listWatchableCursorChildren(state as unknown as SessionState)
+        .map((child) => child.agentId)).toEqual(["child-a"]);
     });
   });
 
@@ -294,6 +423,14 @@ describe("Cursor child transcript discovery", () => {
         agentId: "child-discovered",
         agentIdDiscovered: true,
       });
+      // A guessed id is good enough to project activity, not to hold the parent
+      // turn open. The continuation waiter must not see this child yet.
+      expect(listWatchableCursorChildren(
+        state as unknown as SessionState,
+        { includeDiscovered: false },
+      )).toEqual([]);
+      expect(listWatchableCursorChildren(state as unknown as SessionState)
+        .map((child) => child.agentId)).toEqual(["child-discovered"]);
 
       const launch = state.messages[0]!.parts[0]!;
       launch.toolArgs = { ...launch.toolArgs, agentId: "child-reported" };

@@ -16,6 +16,17 @@ import { schedulePersist } from "./acp-persist-writer.js";
 import { boundTranscript, boundedToolArguments, truncateUtf8 } from "./acp-transcript.js";
 import { findToolPart } from "./acp-tools.js";
 
+/**
+ * How the child stands at the moment of a projection:
+ * - `live` — still running, so its trailing tools are still in flight.
+ * - `ended` — the transcript carried a terminal record, so everything it
+ *   started also finished.
+ * - `abandoned` — no terminal record, but the child is gone (the bridge
+ *   restarted, or the parent stopped tracking it). Whatever it was inside when
+ *   it died never produced a result and must not be shown as successful.
+ */
+export type CursorChildTranscriptState = "live" | "ended" | "abandoned";
+
 export function cursorJsonlSourcePrefix(agentId: string): string {
   return `${CURSOR_JSONL_SOURCE_PREFIX}${agentId}:`;
 }
@@ -36,7 +47,7 @@ export function parseCursorChildTranscriptParts(
   parentToolUseId: string,
   agentId: string,
   sourceMessageId: string,
-  childEnded: boolean,
+  childState: CursorChildTranscriptState,
 ): Array<BridgeTextPart | BridgeToolPart> {
   const prefix = cursorJsonlSourcePrefix(agentId);
   const records: Array<{ parts: Array<BridgeTextPart | BridgeToolPart> }> = [];
@@ -100,11 +111,18 @@ export function parseCursorChildTranscriptParts(
     }
   }
 
-  if (!childEnded) {
+  // Everything before the trailing record provably completed: the child moved
+  // on. Only the trailing record's tools are open, so only they can still be
+  // in flight or lost with the child.
+  if (childState !== "ended") {
     const last = records.at(-1);
     if (last) {
       for (const part of last.parts) {
-        if (part.type === "tool-invocation") part.toolState = "pending";
+        if (part.type !== "tool-invocation") continue;
+        part.toolState = childState === "live" ? "pending" : "failure";
+        if (childState === "abandoned") {
+          part.toolError = "The sub-agent ended before this tool reported a result";
+        }
       }
     }
   }
@@ -119,7 +137,7 @@ export function syncCursorChildTranscriptParts(
   state: SessionState,
   child: { toolUseId: string; agentId: string },
   contents: string,
-  childEnded: boolean,
+  childState: CursorChildTranscriptState,
 ): boolean {
   const found = findToolPart(state, child.toolUseId);
   if (!found) return false;
@@ -131,7 +149,7 @@ export function syncCursorChildTranscriptParts(
     child.toolUseId,
     child.agentId,
     owner.id,
-    childEnded,
+    childState,
   );
   const existing = owner.parts.filter((part) => isCursorJsonlPart(part, child.agentId));
   if (cursorJsonlPartsEqual(existing, next)) return false;
@@ -174,7 +192,9 @@ function cursorJsonlPartsEqual(
       return false;
     }
     if (part.type === "tool-invocation" && other.type === "tool-invocation") {
-      return part.toolState === other.toolState && part.toolName === other.toolName;
+      return part.toolState === other.toolState
+        && part.toolName === other.toolName
+        && part.toolError === other.toolError;
     }
     return true;
   });

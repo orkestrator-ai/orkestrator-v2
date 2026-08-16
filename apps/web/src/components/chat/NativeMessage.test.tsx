@@ -1114,6 +1114,7 @@ describe("NativeMessage task list rendering", () => {
     ["file_path", { file_path: "/repo/src/deep/example.ts" }, "example.ts"],
     ["file_path with no directory", { file_path: "example.ts" }, "example.ts"],
     ["path", { path: "package.json" }, "package.json"],
+    ["path with directories", { path: "/repo/src/deep/example.ts" }, "example.ts"],
     ["pattern", { pattern: "**/*.tsx" }, "**/*.tsx"],
     ["regex", { regex: "function\\s+\\w+" }, "function\\s+\\w+"],
     ["url", { url: "https://example.test/a/b?c=d" }, "example.test"],
@@ -1134,6 +1135,38 @@ describe("NativeMessage task list rendering", () => {
 
     expect(container.textContent).toContain(expected);
   });
+
+  // Glob and Grep carry `path` as the search *root* next to the pattern that
+  // actually identifies the call. Reading `path` first labelled them with a
+  // directory name and hid what was being searched for.
+  test.each([
+    ["pattern", { pattern: "*.ts", path: "/workspace/src" }, "*.ts", "src"],
+    ["regex", { regex: "TODO\\b", path: "/workspace/src" }, "TODO\\b", "src"],
+    ["file_path", { file_path: "/repo/a/exact.ts", path: "/repo/b" }, "exact.ts", "b"],
+  ])(
+    "prefers %s over a sibling path in the collapsed row",
+    (_label, toolArgs, expected, notExpected) => {
+      const { container } = render(
+        <NativeMessage
+          message={makeMessage([{
+            type: "tool-invocation",
+            content: "Glob",
+            toolName: "Glob",
+            toolArgs,
+            toolState: "success",
+          }])}
+        />,
+      );
+
+      expect(container.textContent).toContain(expected);
+      expect(screen.getByRole("button", { name: new RegExp(`glob ${
+        expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      } success`, "i") })).toBeTruthy();
+      expect(screen.queryByRole("button", {
+        name: new RegExp(`glob ${notExpected} success`, "i"),
+      }) === null).toBe(true);
+    },
+  );
 
   test("prefers a command over every other collapsed-row summary", () => {
     const { container } = render(

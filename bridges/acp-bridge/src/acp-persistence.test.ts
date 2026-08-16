@@ -157,6 +157,63 @@ describe("ACP bridge", () => {
       .toMatchObject({ toolName: "task" });
   });
 
+  // Child JSONL projects assistant *text* under the Task card too, so the
+  // parent link has to survive the round trip on text parts and not only on
+  // tool parts, or a restored card would show the child's tools with its
+  // narration orphaned back into the top-level message.
+  test("round-trips parentTaskUseId on text parts", async () => {
+    // This is the one test here that loads the module in-process rather than
+    // through `spawnBridge`, so it has to supply the provider the composition
+    // root requires. `spawnBridge` pins `ACP_PROVIDER` itself, so the other
+    // tests are unaffected.
+    process.env.ACP_PROVIDER ??= "cursor";
+    const { normalizeBridgePart } = await import("./acp-persistence.js");
+
+    expect(normalizeBridgePart(
+      {
+        type: "text",
+        content: "Checking the suite.",
+        sourcePartId: "cursor-jsonl:child-wait-1:0:0",
+        sourceMessageId: "message-1",
+        parentTaskUseId: "cursor-subagent-1",
+      },
+      0,
+      "message-1",
+    )).toMatchObject({
+      type: "text",
+      content: "Checking the suite.",
+      parentTaskUseId: "cursor-subagent-1",
+    });
+
+    // Absent, blank and non-string parent ids must all drop the key rather
+    // than persist an empty parent that matches no Task card.
+    for (const parentTaskUseId of [undefined, "", "   ", 7, null]) {
+      expect(normalizeBridgePart(
+        {
+          type: "text",
+          content: "Top-level narration.",
+          sourcePartId: "message-1:0",
+          sourceMessageId: "message-1",
+          ...(parentTaskUseId === undefined ? {} : { parentTaskUseId }),
+        },
+        0,
+        "message-1",
+      )).not.toHaveProperty("parentTaskUseId");
+    }
+
+    expect(normalizeBridgePart(
+      {
+        type: "thinking",
+        content: "Considering.",
+        sourcePartId: "message-1:1",
+        sourceMessageId: "message-1",
+        parentTaskUseId: "cursor-subagent-1",
+      },
+      1,
+      "message-1",
+    )).toMatchObject({ type: "thinking", parentTaskUseId: "cursor-subagent-1" });
+  });
+
 
 
   test("bounds replay metadata before publishing and persists the trimmed transcript", async () => {

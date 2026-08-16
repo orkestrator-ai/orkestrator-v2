@@ -5,6 +5,7 @@ import {
   fstatSync,
   openSync,
   readSync,
+  statSync,
   watch,
   type FSWatcher,
 } from "node:fs";
@@ -23,10 +24,29 @@ import {
 import { schedulePersist } from "./acp-persist-writer.js";
 import { boundTranscript, truncateUtf8 } from "./acp-transcript.js";
 import { terminalAgentState, toolPartAgentId } from "./acp-tools.js";
-import { syncCursorChildTranscriptParts } from "./acp-cursor-transcript-parts.js";
+import {
+  syncCursorChildTranscriptParts,
+  type CursorChildTranscriptState,
+} from "./acp-cursor-transcript-parts.js";
 
 const TRANSCRIPT_TAIL_BYTES = 256 * 1024;
 const TRANSCRIPT_POLL_MS = 250;
+/** One entry per watched child path; a session cannot exceed the hydrate cap. */
+const MAX_TRANSCRIPT_READ_CACHE_ENTRIES = 64;
+/**
+ * Cursor ids are short slugs. The cap is a sanity bound on an agent-supplied
+ * value before it reaches the filesystem, well under any real path limit.
+ */
+const MAX_CURSOR_AGENT_ID_LENGTH = 128;
+
+interface TranscriptReadCacheEntry {
+  size: number;
+  mtimeMs: number;
+  terminalPresent: boolean;
+  appliedState: CursorChildTranscriptState;
+}
+
+const transcriptReadCache = new Map<string, TranscriptReadCacheEntry>();
 
 export interface WatchableCursorChild {
   toolUseId: string;
@@ -64,10 +84,23 @@ export function cursorTranscriptRoot(cwd: string = workingDirectory): string {
   return join(homedir(), ".cursor", "projects", slug, "agent-transcripts");
 }
 
+/**
+ * The transcript path is built from an id the *agent* supplies, so it is
+ * untrusted input crossing into the filesystem. Only a single safe path
+ * segment may be used: anything containing a separator, a drive prefix or a
+ * `..` traversal would read outside the transcript root and project the
+ * result into the user's transcript.
+ */
+export function isSafeCursorAgentId(agentId: string): boolean {
+  if (!agentId || agentId.length > MAX_CURSOR_AGENT_ID_LENGTH) return false;
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(agentId) && !agentId.includes("..");
+}
+
 export function cursorChildTranscriptPath(
   agentId: string,
   cwd: string = workingDirectory,
-): string {
+): string | undefined {
+  if (!isSafeCursorAgentId(agentId)) return undefined;
   return join(cursorTranscriptRoot(cwd), agentId, `${agentId}.jsonl`);
 }
 
@@ -77,11 +110,15 @@ export function listWatchableCursorChildren(state: SessionState): WatchableCurso
     const descriptor = state.activeSubagentDescriptors.get(toolUseId);
     const agentId = descriptor?.agentId?.trim();
     if (!descriptor || !agentId) continue;
+    // An unusable id is treated exactly like a missing one: no watch, no
+    // hydration, and the parent turn does not block on a child it cannot find.
+    const transcriptPath = cursorChildTranscriptPath(agentId);
+    if (!transcriptPath) continue;
     children.push({
       toolUseId,
       agentId,
       ...(descriptor.description ? { description: descriptor.description } : {}),
-      transcriptPath: cursorChildTranscriptPath(agentId),
+      transcriptPath,
     });
   }
   return children;
@@ -110,12 +147,10 @@ export function hydrateCursorChildTranscripts(state: SessionState): void {
         }
         const agentId = toolPartAgentId(part);
         if (!agentId) continue;
+        const transcriptPath = cursorChildTranscriptPath(agentId);
+        if (!transcriptPath) continue;
         seen.add(part.toolUseId);
-        children.push({
-          toolUseId: part.toolUseId,
-          agentId,
-          transcriptPath: cursorChildTranscriptPath(agentId),
-        });
+        children.push({ toolUseId: part.toolUseId, agentId, transcriptPath });
         if (children.length >= MAX_CURSOR_TRANSCRIPT_HYDRATE_CHILDREN) break;
       }
       if (children.length >= MAX_CURSOR_TRANSCRIPT_HYDRATE_CHILDREN) break;
@@ -123,16 +158,74 @@ export function hydrateCursorChildTranscripts(state: SessionState): void {
   }
 
   for (const child of children) {
-    if (!existsSync(child.transcriptPath)) continue;
     try {
-      const contents = readTranscriptTail(child.transcriptPath);
-      const ended = !state.activeSubagentToolIds.has(child.toolUseId)
-        || cursorTranscriptTerminalState(contents) !== undefined;
-      syncCursorChildTranscriptParts(state, child, contents, ended);
+      hydrateOneCursorChild(state, child);
     } catch {
       // A missing or unreadable child file leaves the card empty.
     }
   }
+}
+
+/**
+ * `/session/:id/messages` is polled twice a second per visible tab, and the
+ * neighbouring `boundTranscriptForRead` exists precisely because a poll must
+ * not pay a whole extra pass over the transcript. Re-reading and re-parsing up
+ * to `MAX_CURSOR_TRANSCRIPT_HYDRATE_CHILDREN` × 256 KiB on every poll would do
+ * exactly that, so a `stat` gates the read: an unchanged file whose derived
+ * state is also unchanged costs one syscall and nothing else.
+ *
+ * The derived state has to be part of that check. A child leaving the active
+ * registry moves it from `live` to `abandoned` without touching the file, and
+ * a file-only cache would strand its trailing tools as `pending` forever.
+ */
+function hydrateOneCursorChild(state: SessionState, child: WatchableCursorChild): void {
+  let stats;
+  try {
+    stats = statSync(child.transcriptPath);
+  } catch {
+    // A path that disappears must drop its entry, or a later file at the same
+    // path could be mistaken for an unchanged read.
+    transcriptReadCache.delete(child.transcriptPath);
+    return;
+  }
+  const active = state.activeSubagentToolIds.has(child.toolUseId);
+  const cached = transcriptReadCache.get(child.transcriptPath);
+  if (cached && cached.size === stats.size && cached.mtimeMs === stats.mtimeMs) {
+    // Terminal-ness cannot change while the bytes do not, so the cached flag
+    // is enough to re-derive the state without re-reading or re-parsing.
+    const unread = cursorChildStateFrom(cached.terminalPresent, active);
+    if (unread === cached.appliedState) return;
+  }
+
+  const contents = readTranscriptTail(child.transcriptPath);
+  const terminalPresent = cursorTranscriptTerminalState(contents) !== undefined;
+  const childState = cursorChildStateFrom(terminalPresent, active);
+  syncCursorChildTranscriptParts(state, child, contents, childState);
+  if (transcriptReadCache.size >= MAX_TRANSCRIPT_READ_CACHE_ENTRIES
+    && !transcriptReadCache.has(child.transcriptPath)) {
+    const oldest = transcriptReadCache.keys().next();
+    if (!oldest.done) transcriptReadCache.delete(oldest.value);
+  }
+  transcriptReadCache.set(child.transcriptPath, {
+    size: stats.size,
+    mtimeMs: stats.mtimeMs,
+    terminalPresent,
+    appliedState: childState,
+  });
+}
+
+/**
+ * Only the transcript can say a child *completed*. The registry distinguishes
+ * the two remaining cases, and it must not be consulted first: it is rebuilt
+ * empty on load, so a registry-first test would report every restored child as
+ * finished and mark whatever tool it died inside as successful.
+ */
+function cursorChildStateFrom(
+  terminalPresent: boolean,
+  active: boolean,
+): CursorChildTranscriptState {
+  if (terminalPresent) return "ended";
+  return active ? "live" : "abandoned";
 }
 
 export function cursorTranscriptTerminalState(
@@ -261,7 +354,14 @@ export async function waitForWatchableCursorChildren(
       remaining,
       signal,
       (contents, terminal) => {
-        syncCursorChildTranscriptParts(state, child, contents, terminal !== undefined);
+        // The wait itself is the proof the child is live, so the only two
+        // states reachable here are `ended` and `live` — never `abandoned`.
+        syncCursorChildTranscriptParts(
+          state,
+          child,
+          contents,
+          terminal !== undefined ? "ended" : "live",
+        );
       },
     );
     const contents = existsSync(child.transcriptPath)
@@ -371,4 +471,9 @@ function readTranscriptTail(path: string): string {
   } finally {
     closeSync(fd);
   }
+}
+
+/** Test-only: drops the stat cache so a rewritten fixture is re-read. */
+export function resetCursorTranscriptReadCache(): void {
+  transcriptReadCache.clear();
 }

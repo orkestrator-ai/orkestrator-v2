@@ -3365,6 +3365,34 @@ describe("ActionBar workflow tabs", () => {
     });
   });
 
+  test("keeps an active Multi Review intact when its tab cannot be reopened", async () => {
+    findActiveMultiReviewWorkflowMock.mockImplementation(async () => ({
+      id: "multi-workflow-open", phase: "failed",
+    }));
+    createTabMock.mockImplementation((type: string) => type !== "multi-review");
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentWorkspaceReady = true;
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not open Multi Review",
+      { description: expect.stringContaining("Close a tab and try again") },
+    ));
+    expect(startMultiReviewMock).not.toHaveBeenCalled();
+    expect(cancelMultiReviewMock).not.toHaveBeenCalled();
+    expect(deleteMultiReviewWorkflowMock).not.toHaveBeenCalled();
+    expect(removeMultiReviewWorkflowMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Start 2-model review" })).toBeTruthy();
+  });
+
   test("keeps a still-cancelling Multi Review recoverable when the tab cannot open", async () => {
     // Cancellation is asynchronous, so the backend answers `cancelling`, not
     // `cancelled`. Deleting there is rejected, which would replace the real

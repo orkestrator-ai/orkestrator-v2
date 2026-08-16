@@ -68,6 +68,7 @@ describe("MultiReviewLaunchDialog", () => {
       onOpenChange={() => undefined}
       defaultAgent="claude"
       catalog={catalog}
+      preferredReasoningEfforts={{ codex: "high", cursor: "high" }}
       onConfirm={onConfirm}
     />);
 
@@ -82,9 +83,9 @@ describe("MultiReviewLaunchDialog", () => {
     chooseFavorite("Reviewer 2", /Grok 4\.6/);
 
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
-    expect(onConfirm.mock.calls[0]?.[0]).toMatchObject({
+    expect(onConfirm.mock.calls[0]?.[0]).toEqual({
       reviewers: [
-        { agent: "codex", model: "gpt-5.6" },
+        { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
         { agent: "cursor", model: "grok-4.6" },
       ],
       fixModel: { agent: "claude", model: "opus" },

@@ -68,7 +68,7 @@ export const pluginConfigSnapshot = { ...realPluginConfig };
 export const childProcessSnapshot = { ...realChildProcess };
 
 
-export const fsSnapshot = { ...realFs };
+export const fsSnapshot: typeof realFs = { ...realFs };
 
 
 export const fsPromisesSnapshot = { ...realFsPromises };

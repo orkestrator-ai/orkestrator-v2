@@ -43,8 +43,6 @@ import {
   queryWaiters,
   resetSdkSessionStoreMocks,
 } from "./session-manager-test-mocks.js";
-import type { BackgroundTaskSnapshot, MessagePatchEventData, NormalizedPart, SSEEvent, SessionUsageSnapshot } from "../types/index.js";
-import { MAX_DIFF_SIDE_BYTES, MAX_TOOL_TEXT_BYTES, TRUNCATED_NOTICE } from "./part-budget.js";
 import { afterAll, afterEach, mock, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { mkdtempSync } from "node:fs";

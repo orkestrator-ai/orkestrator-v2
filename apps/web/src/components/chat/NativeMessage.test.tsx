@@ -2849,6 +2849,75 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     expect(container.textContent).toContain("success");
   });
 
+  test("routes todo_write tool-invocation to TodoToolPart", () => {
+    const message = makeMessage([
+      {
+        type: "tool-invocation",
+        content: "",
+        toolName: "todo_write",
+        toolTitle: "Todo Write",
+        toolState: "success",
+        toolArgs: {
+          todos: [
+            { id: "1", content: "Inspect renderer", status: "completed" },
+            { id: "2", content: "Stamp Grok todos", status: "in_progress" },
+          ],
+        },
+      },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(container.textContent).toContain("Todo Write");
+    expect(container.textContent).toContain("1/2 complete");
+    expect(container.textContent).toContain("success");
+    expect(container.textContent).not.toContain("Unknown tool");
+  });
+
+  test("does not route ACP tool kind plan to TodoToolPart", () => {
+    const message = makeMessage([
+      {
+        type: "tool-invocation",
+        content: "",
+        toolName: "plan",
+        toolTitle: "Plan the work",
+        toolState: "success",
+        toolArgs: { goal: "ship it" },
+      },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(container.textContent).not.toContain("complete");
+    expect(container.textContent).toContain("Plan the work");
+  });
+
+  test("routes updateTodos tool-invocation to TodoToolPart", () => {
+    const message = makeMessage([
+      {
+        type: "tool-invocation",
+        content: "",
+        toolName: "updateTodos",
+        toolTitle: "Update TODOs",
+        toolState: "success",
+        toolArgs: {
+          merge: false,
+          todos: [
+            { id: "1", content: "Inspect renderer", status: "completed" },
+            { id: "2", content: "Stamp Cursor todos", status: "in_progress" },
+          ],
+        },
+      },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(container.textContent).toContain("Update TODOs");
+    expect(container.textContent).toContain("1/2 complete");
+    expect(container.textContent).toContain("success");
+    expect(container.textContent).not.toContain("Unknown tool");
+  });
+
   test("routes todo_list tool-invocation to TodoToolPart with friendly label", () => {
     const message = makeMessage([
       {

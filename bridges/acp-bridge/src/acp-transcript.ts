@@ -39,6 +39,8 @@ export const TRANSCRIPT_UPDATE_KINDS = new Set([
   "agent_thought_chunk",
   "tool_call",
   "tool_call_update",
+  "plan",
+  "plan_update",
   "subagent_spawned",
   "subagent_finished",
 ]);

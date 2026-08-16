@@ -8,6 +8,13 @@ import {
   unusedPort,
   waitFor,
 } from "./acp-test-harness.js";
+import {
+  mergeCursorTodos,
+  parseAcpPlanEntries,
+  parseCursorTodos,
+  restoreCursorTodosFromMessages,
+  isAcpTodosToolName,
+} from "./acp-tools.js";
 
 
 describe("waitFor", () => {
@@ -128,5 +135,111 @@ describe("waitFor", () => {
     const { message } = rejection as Error;
     expect(message).toContain("chars, truncated)");
     expect(message.length).toBeLessThan(oversized.length);
+  });
+});
+
+describe("Cursor todo list helpers", () => {
+  test("parses well-formed Cursor todos and drops malformed entries", () => {
+    expect(parseCursorTodos([
+      { id: "1", content: "Valid", status: "pending" },
+      { id: "", content: "Missing id", status: "pending" },
+      { id: "2", content: "Valid too", status: "done" },
+      { id: "3", content: "Cancelled", status: "cancelled" },
+      { content: "Plan entry", status: "in_progress", priority: "high" },
+      null,
+      "nope",
+    ])).toEqual([
+      { id: "1", content: "Valid", status: "pending" },
+      { id: "2", content: "Missing id", status: "pending" },
+      { id: "3", content: "Cancelled", status: "cancelled" },
+      { id: "4", content: "Plan entry", status: "in_progress" },
+    ]);
+  });
+
+  test("does not treat ACP tool kind plan as a todo tool", () => {
+    expect(isAcpTodosToolName("plan")).toBe(false);
+    expect(isAcpTodosToolName("todo_write")).toBe(true);
+    expect(isAcpTodosToolName("todo_list")).toBe(true);
+    expect(isAcpTodosToolName("updateTodos")).toBe(true);
+  });
+
+  test("parses ACP plan entries from v1 entries and v2 plan.entries", () => {
+    const entries = [
+      { content: "First", priority: "high", status: "completed" },
+      { content: "Second", priority: "low", status: "pending" },
+    ];
+    expect(parseAcpPlanEntries({ entries })).toEqual([
+      { id: "1", content: "First", status: "completed" },
+      { id: "2", content: "Second", status: "pending" },
+    ]);
+    expect(parseAcpPlanEntries({ plan: { entries } })).toEqual([
+      { id: "1", content: "First", status: "completed" },
+      { id: "2", content: "Second", status: "pending" },
+    ]);
+    expect(parseAcpPlanEntries({ entries: [] })).toEqual([]);
+    expect(parseAcpPlanEntries({ goal: "ship it" })).toBeUndefined();
+  });
+
+  test("merges by id, appends new items, and replaces when merge is false", () => {
+    const current = [
+      { id: "1", content: "First", status: "pending" as const },
+      { id: "2", content: "Second", status: "in_progress" as const },
+    ];
+    expect(mergeCursorTodos(current, [
+      { id: "2", content: "Second", status: "completed" },
+      { id: "3", content: "Third", status: "pending" },
+    ], true)).toEqual([
+      { id: "1", content: "First", status: "pending" },
+      { id: "2", content: "Second", status: "completed" },
+      { id: "3", content: "Third", status: "pending" },
+    ]);
+    expect(mergeCursorTodos(current, [
+      { id: "9", content: "Only", status: "pending" },
+    ], false)).toEqual([
+      { id: "9", content: "Only", status: "pending" },
+    ]);
+  });
+
+  test("restores the newest stamped Cursor todo list from a transcript", () => {
+    expect(restoreCursorTodosFromMessages([
+      {
+        id: "a",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-08-16T00:00:00.000Z",
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "Update TODOs",
+            sourcePartId: "tool:1",
+            sourceMessageId: "a",
+            toolUseId: "1",
+            toolArgs: {
+              merge: false,
+              todos: [{ id: "1", content: "Old", status: "pending" }],
+            },
+          },
+        ],
+      },
+      {
+        id: "b",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-08-16T00:00:01.000Z",
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "Update TODOs",
+            sourcePartId: "tool:2",
+            sourceMessageId: "b",
+            toolUseId: "2",
+            toolArgs: {
+              merge: true,
+              todos: [{ id: "1", content: "New", status: "completed" }],
+            },
+          },
+        ],
+      },
+    ])).toEqual([{ id: "1", content: "New", status: "completed" }]);
   });
 });

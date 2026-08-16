@@ -69,5 +69,12 @@ export function handleFinalMessage(message: JsonObject): boolean {
     );
     return true;
   }
+  if (message.id === 904 && process.env.FAKE_ACP_CURSOR_TODOS_REQUEST_FILE) {
+    appendFileSync(
+      process.env.FAKE_ACP_CURSOR_TODOS_REQUEST_FILE,
+      `${JSON.stringify(message)}\n`,
+    );
+    return true;
+  }
   return false;
 }

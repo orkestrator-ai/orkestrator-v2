@@ -531,7 +531,516 @@ describe("ACP bridge", () => {
     });
   });
 
+  test("stamps Cursor updateTodos from cursor/update_todos onto the matching tool call", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-todos:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
 
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTODOS: track work" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle"
+        && value.messages.some((message) =>
+          message.parts.some((part) =>
+            part.toolUseId === "cursor-todos-1"
+            && Array.isArray((part.toolArgs as { todos?: unknown } | undefined)?.todos)
+          )
+        ),
+    );
+    const part = settled.messages.flatMap((message) => message.parts)
+      .find((item) => item.toolUseId === "cursor-todos-1");
+    expect(part).toMatchObject({
+      toolName: "updateTodos",
+      toolTitle: "Update TODOs",
+      toolState: "success",
+      toolArgs: {
+        merge: false,
+        todos: [
+          { id: "1", content: "Set up project structure", status: "completed" },
+          { id: "2", content: "Add authentication", status: "in_progress" },
+          { id: "3", content: "Write unit tests", status: "pending" },
+        ],
+      },
+    });
+  });
+
+  test("acknowledges a cursor/update_todos request instead of refusing it", async () => {
+    const directory = await temporaryDirectory();
+    const responseFile = resolve(directory, "cursor-todos-response.log");
+    const { base, headers } = await spawnBridge({
+      env: { FAKE_ACP_CURSOR_TODOS_REQUEST_FILE: responseFile },
+    });
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-todos-request:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTODOSREQUEST: track work" }),
+    })).status).toBe(202);
+
+    const response = await waitFor(
+      () => fs.readFile(responseFile, "utf8")
+        .then((value) => JSON.parse(value.trim()))
+        .catch(() => null) as Promise<Record<string, unknown> | null>,
+      Boolean,
+    );
+    expect(response).toMatchObject({
+      id: 904,
+      result: {},
+    });
+    expect(response).not.toHaveProperty("error");
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.messages.some((message) =>
+        message.parts.some((part) =>
+          part.toolUseId === "cursor-todos-1"
+          && Array.isArray((part.toolArgs as { todos?: unknown } | undefined)?.todos)
+        )
+      ),
+    );
+    expect(settled.messages.flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "cursor-todos-1")?.toolArgs).toMatchObject({
+      merge: false,
+      todos: [
+        { id: "1", content: "Set up project structure", status: "completed" },
+        { id: "2", content: "Add authentication", status: "in_progress" },
+        { id: "3", content: "Write unit tests", status: "pending" },
+      ],
+    });
+  });
+
+  test("merges a later cursor/update_todos into the existing list", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-todos-merge:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTODOSMERGE: continue" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle"
+        && value.messages.some((message) =>
+          message.parts.some((part) =>
+            part.toolUseId === "cursor-todos-merge-2"
+            && ((part.toolArgs as { todos?: unknown[] } | undefined)?.todos?.length === 4)
+          )
+        ),
+    );
+    expect(settled.messages.flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "cursor-todos-merge-2")).toMatchObject({
+      toolArgs: {
+        merge: true,
+        todos: [
+          { id: "1", content: "Set up project structure", status: "completed" },
+          { id: "2", content: "Add authentication", status: "completed" },
+          { id: "3", content: "Write unit tests", status: "pending" },
+          { id: "4", content: "Ship the feature", status: "in_progress" },
+        ],
+      },
+    });
+  });
+
+  test("replaces the Cursor todo list when merge is false", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-todos-replace:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTODOSREPLACE: reset" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle"
+        && value.messages.some((message) =>
+          message.parts.some((part) =>
+            part.toolUseId === "cursor-todos-replace-2"
+            && ((part.toolArgs as { todos?: unknown[] } | undefined)?.todos?.length === 1)
+          )
+        ),
+    );
+    expect(settled.messages.flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "cursor-todos-replace-2")?.toolArgs).toEqual({
+      merge: false,
+      todos: [{ id: "9", content: "Only this remains", status: "pending" }],
+    });
+  });
+
+  test("creates a single updateTodos part when cursor/update_todos arrives before the tool_call", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-todos-first:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTODOSFIRST: track work" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    const parts = settled.messages.flatMap((message) => message.parts)
+      .filter((part) => part.toolUseId === "cursor-todos-first");
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({
+      toolName: "updateTodos",
+      toolTitle: "Update TODOs",
+      toolArgs: {
+        merge: false,
+        todos: [
+          { id: "1", content: "Set up project structure", status: "completed" },
+          { id: "2", content: "Add authentication", status: "in_progress" },
+          { id: "3", content: "Write unit tests", status: "pending" },
+        ],
+      },
+    });
+  });
+
+  test("stamps Grok todo_write rawInput onto a Todo Write part", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-grok-todo-write:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "GROKTODOWRITE: track work" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle"
+        && value.messages.some((message) =>
+          message.parts.some((part) =>
+            part.toolUseId === "grok-todo-write-1"
+            && Array.isArray((part.toolArgs as { todos?: unknown } | undefined)?.todos)
+          )
+        ),
+    );
+    const part = settled.messages.flatMap((message) => message.parts)
+      .find((item) => item.toolUseId === "grok-todo-write-1");
+    expect(part).toMatchObject({
+      toolName: "todo_write",
+      toolTitle: "Todo Write",
+      toolState: "success",
+      toolArgs: {
+        merge: true,
+        todos: [
+          { id: "1", content: "Set up project structure", status: "completed" },
+          { id: "2", content: "Add authentication", status: "in_progress" },
+          { id: "3", content: "Write unit tests", status: "pending" },
+        ],
+      },
+    });
+  });
+
+  test("merges a later Grok todo_write when merge is omitted", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-grok-todo-merge:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "GROKTODOWRITEMERGE: continue" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle"
+        && value.messages.some((message) =>
+          message.parts.some((part) =>
+            part.toolUseId === "grok-todo-write-2"
+            && ((part.toolArgs as { todos?: unknown[] } | undefined)?.todos?.length === 4)
+          )
+        ),
+    );
+    expect(settled.messages.flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "grok-todo-write-2")).toMatchObject({
+      toolName: "todo_write",
+      toolArgs: {
+        merge: true,
+        todos: [
+          { id: "1", content: "Set up project structure", status: "completed" },
+          { id: "2", content: "Add authentication", status: "completed" },
+          { id: "3", content: "Write unit tests", status: "pending" },
+          { id: "4", content: "Ship the feature", status: "in_progress" },
+        ],
+      },
+    });
+  });
+
+  test("renders an ACP plan update as a single todo_list part", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-grok-plan:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "GROKPLAN: track work" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle"
+        && value.messages.some((message) =>
+          message.parts.some((part) =>
+            part.toolUseId === "acp-plan"
+            && Array.isArray((part.toolArgs as { todos?: unknown } | undefined)?.todos)
+          )
+        ),
+    );
+    const parts = settled.messages.flatMap((message) => message.parts)
+      .filter((part) => part.type === "tool-invocation");
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({
+      toolName: "todo_list",
+      toolTitle: "Todo List",
+      toolState: "success",
+      toolArgs: {
+        merge: false,
+        todos: [
+          { id: "1", content: "Set up project structure", status: "completed" },
+          { id: "2", content: "Add authentication", status: "in_progress" },
+          { id: "3", content: "Write unit tests", status: "pending" },
+        ],
+      },
+    });
+  });
+
+  test("renders a v2 plan_update as a single todo_list part", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-grok-plan-update:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "GROKPLANUPDATE: track work" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle"
+        && value.messages.some((message) =>
+          message.parts.some((part) => part.toolUseId === "acp-plan")
+        ),
+    );
+    expect(settled.messages.flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "acp-plan")).toMatchObject({
+      toolName: "todo_list",
+      toolArgs: {
+        merge: false,
+        todos: [
+          { id: "1", content: "Set up project structure", status: "completed" },
+          { id: "2", content: "Add authentication", status: "in_progress" },
+          { id: "3", content: "Write unit tests", status: "pending" },
+        ],
+      },
+    });
+  });
+
+  test("folds a later ACP plan into the same Grok todo_write part", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-grok-todo-and-plan:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "GROKTODOANDPLAN: track work" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle"
+        && value.messages.some((message) =>
+          message.parts.some((part) =>
+            part.toolUseId === "grok-todo-write-1"
+            && ((part.toolArgs as { todos?: unknown[] } | undefined)?.todos?.length === 2)
+          )
+        ),
+    );
+    const parts = settled.messages.flatMap((message) => message.parts)
+      .filter((part) => part.type === "tool-invocation");
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({
+      toolUseId: "grok-todo-write-1",
+      toolName: "todo_write",
+      toolTitle: "Todo Write",
+      toolArgs: {
+        merge: false,
+        todos: [
+          { id: "1", content: "Ship the feature", status: "in_progress" },
+          { id: "2", content: "Write the docs", status: "pending" },
+        ],
+      },
+    });
+  });
+
+  test("retargets a synthetic ACP plan part when todo_write arrives later", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-grok-plan-then-todo:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "GROKPLANTHENTODO: track work" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle"
+        && value.messages.some((message) =>
+          message.parts.some((part) => part.toolUseId === "grok-todo-write-1")
+        ),
+    );
+    const parts = settled.messages.flatMap((message) => message.parts)
+      .filter((part) => part.type === "tool-invocation");
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({
+      toolUseId: "grok-todo-write-1",
+      toolName: "todo_write",
+      toolTitle: "Todo Write",
+      toolArgs: {
+        merge: false,
+        todos: [
+          { id: "1", content: "Set up project structure", status: "completed" },
+          { id: "2", content: "Add authentication", status: "in_progress" },
+          { id: "3", content: "Write unit tests", status: "pending" },
+        ],
+      },
+    });
+  });
+
+  test("replaces the ACP plan with an empty list", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-grok-plan-empty:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "GROKPLANEMPTY: reset" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle"
+        && value.messages.some((message) =>
+          message.parts.some((part) =>
+            part.toolUseId === "acp-plan"
+            && Array.isArray((part.toolArgs as { todos?: unknown[] } | undefined)?.todos)
+            && (part.toolArgs as { todos: unknown[] }).todos.length === 0
+          )
+        ),
+    );
+    expect(settled.messages.flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "acp-plan")?.toolArgs).toEqual({
+      merge: false,
+      todos: [],
+    });
+  });
 
   test("creates a single Task part when cursor/task arrives before the tool_call", async () => {
     const { base, headers } = await spawnBridge();

@@ -50,6 +50,44 @@ describe("TodoToolPart", () => {
     expect(container.textContent).toContain("1/2 complete");
   });
 
+  test("displays 'Todo Write' label for Grok todo_write tool", () => {
+    const { container } = render(
+      <TodoToolPart
+        toolName="todo_write"
+        toolState="success"
+        toolArgs={{
+          todos: [
+            { id: "1", content: "Inspect renderer", status: "completed" },
+            { id: "2", content: "Stamp Grok todos", status: "pending" },
+          ],
+        }}
+      />,
+    );
+
+    expect(container.textContent).toContain("Todo Write");
+    expect(container.textContent).not.toContain("todo_write");
+    expect(container.textContent).toContain("1/2 complete");
+  });
+
+  test("displays 'Update TODOs' label for Cursor updateTodos tool", () => {
+    const { container } = render(
+      <TodoToolPart
+        toolName="updateTodos"
+        toolState="success"
+        toolArgs={{
+          todos: [
+            { id: "1", content: "Inspect renderer", status: "completed" },
+            { id: "2", content: "Stamp Cursor todos", status: "pending" },
+          ],
+        }}
+      />,
+    );
+
+    expect(container.textContent).toContain("Update TODOs");
+    expect(container.textContent).not.toContain("updateTodos");
+    expect(container.textContent).toContain("1/2 complete");
+  });
+
   test("renders TaskCreate tasks with friendly label", () => {
     const { container } = render(
       <TodoToolPart

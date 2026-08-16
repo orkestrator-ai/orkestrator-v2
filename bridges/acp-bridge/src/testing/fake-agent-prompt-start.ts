@@ -752,6 +752,254 @@ export function handlePromptStart(message: JsonObject): boolean {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return true;
     }
+    if (prompt.startsWith("CURSORTODOS")) {
+      const todos = [
+        { id: "1", content: "Set up project structure", status: "completed" },
+        { id: "2", content: "Add authentication", status: "in_progress" },
+        { id: "3", content: "Write unit tests", status: "pending" },
+      ];
+      if (prompt.startsWith("CURSORTODOSFIRST")) {
+        write({
+          jsonrpc: "2.0",
+          method: "cursor/update_todos",
+          params: {
+            toolCallId: "cursor-todos-first",
+            todos,
+            merge: false,
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: "cursor-todos-first",
+              title: "Update TODOs",
+              kind: "other",
+              status: "completed",
+              rawInput: { _toolName: "updateTodos" },
+            },
+          },
+        });
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+        return true;
+      }
+      if (prompt.startsWith("CURSORTODOSMERGE")) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: "cursor-todos-merge-1",
+              title: "Update TODOs",
+              kind: "other",
+              status: "completed",
+              rawInput: { _toolName: "updateTodos" },
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          method: "cursor/update_todos",
+          params: { toolCallId: "cursor-todos-merge-1", todos, merge: false },
+        });
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: "cursor-todos-merge-2",
+              title: "Update TODOs",
+              kind: "other",
+              status: "completed",
+              rawInput: { _toolName: "updateTodos" },
+            },
+          },
+        });
+        write({
+          jsonrpc: "2.0",
+          method: "cursor/update_todos",
+          params: {
+            toolCallId: "cursor-todos-merge-2",
+            todos: [
+              { id: "2", content: "Add authentication", status: "completed" },
+              { id: "4", content: "Ship the feature", status: "in_progress" },
+            ],
+            merge: true,
+          },
+        });
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+        return true;
+      }
+      if (prompt.startsWith("CURSORTODOSREPLACE")) {
+        write({
+          jsonrpc: "2.0",
+          method: "cursor/update_todos",
+          params: { toolCallId: "cursor-todos-replace-1", todos, merge: false },
+        });
+        write({
+          jsonrpc: "2.0",
+          method: "cursor/update_todos",
+          params: {
+            toolCallId: "cursor-todos-replace-2",
+            todos: [{ id: "9", content: "Only this remains", status: "pending" }],
+            merge: false,
+          },
+        });
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+        return true;
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "cursor-todos-1",
+            title: "Update TODOs",
+            kind: "other",
+            status: "in_progress",
+            rawInput: { _toolName: "updateTodos" },
+          },
+        },
+      });
+      const todoParams = {
+        toolCallId: "cursor-todos-1",
+        todos,
+        merge: false,
+      };
+      if (prompt.startsWith("CURSORTODOSREQUEST")) {
+        write({
+          jsonrpc: "2.0",
+          id: 904,
+          method: "cursor/update_todos",
+          params: todoParams,
+        });
+      } else {
+        write({
+          jsonrpc: "2.0",
+          method: "cursor/update_todos",
+          params: todoParams,
+        });
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "cursor-todos-1",
+            status: "completed",
+            rawInput: { _toolName: "updateTodos" },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return true;
+    }
+    if (prompt.startsWith("GROKTODO") || prompt.startsWith("GROKPLAN")) {
+      const grokTodos = [
+        { id: "1", content: "Set up project structure", status: "completed" },
+        { id: "2", content: "Add authentication", status: "in_progress" },
+        { id: "3", content: "Write unit tests", status: "pending" },
+      ];
+      const grokPlanEntries = [
+        { content: "Set up project structure", priority: "high", status: "completed" },
+        { content: "Add authentication", priority: "medium", status: "in_progress" },
+        { content: "Write unit tests", priority: "low", status: "pending" },
+      ];
+      const grokTodoMeta = {
+        version: 1,
+        name: "todo_write",
+        kind: "other",
+        namespace: "grok_build",
+        label: "Todo Write",
+        read_only: false,
+      };
+      const writeGrokTodoWrite = (toolCallId: string, todos: unknown[], merge?: boolean): void => {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId,
+              title: "Todo Write",
+              status: "completed",
+              rawInput: merge === undefined ? { todos } : { todos, merge },
+              _meta: { "x.ai/tool": grokTodoMeta },
+            },
+          },
+        });
+      };
+      const writeGrokPlan = (
+        sessionUpdate: "plan" | "plan_update",
+        entries: unknown[],
+      ): void => {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: sessionUpdate === "plan_update"
+              ? { sessionUpdate, plan: { entries } }
+              : { sessionUpdate, entries },
+          },
+        });
+      };
+      if (prompt.startsWith("GROKTODOWRITEMERGE")) {
+        writeGrokTodoWrite("grok-todo-write-1", grokTodos);
+        writeGrokTodoWrite("grok-todo-write-2", [
+          { id: "2", content: "Add authentication", status: "completed" },
+          { id: "4", content: "Ship the feature", status: "in_progress" },
+        ]);
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+        return true;
+      }
+      if (prompt.startsWith("GROKTODOANDPLAN")) {
+        writeGrokTodoWrite("grok-todo-write-1", grokTodos);
+        writeGrokPlan("plan", [
+          { content: "Ship the feature", priority: "high", status: "in_progress" },
+          { content: "Write the docs", priority: "low", status: "pending" },
+        ]);
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+        return true;
+      }
+      if (prompt.startsWith("GROKTODOWRITE")) {
+        writeGrokTodoWrite("grok-todo-write-1", grokTodos);
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+        return true;
+      }
+      if (prompt.startsWith("GROKPLANTHENTODO")) {
+        writeGrokPlan("plan", grokPlanEntries);
+        writeGrokTodoWrite("grok-todo-write-1", grokTodos, false);
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+        return true;
+      }
+      if (prompt.startsWith("GROKPLANUPDATE")) {
+        writeGrokPlan("plan_update", grokPlanEntries);
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+        return true;
+      }
+      if (prompt.startsWith("GROKPLANEMPTY")) {
+        writeGrokPlan("plan", grokPlanEntries);
+        writeGrokPlan("plan", []);
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+        return true;
+      }
+      writeGrokPlan("plan", grokPlanEntries);
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return true;
+    }
     if (prompt.startsWith("CURSORTASK")) {
       write({
         jsonrpc: "2.0",

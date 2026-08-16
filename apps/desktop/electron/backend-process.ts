@@ -1,6 +1,6 @@
 import { createInterface } from "node:readline";
 import { spawn, type ChildProcess } from "node:child_process";
-import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, readFile, readlink, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -65,6 +65,66 @@ function retainSafeAgentTestEnvironment(env: NodeJS.ProcessEnv): void {
 /** Isolated replacement for `~/.docker`, pointed at by `DOCKER_CONFIG`. */
 export function agentTestDockerConfigDir(isolatedCredentialRoot: string): string {
   return path.join(isolatedCredentialRoot, "docker-disabled");
+}
+
+/** Providers whose host login lives in the macOS login Keychain, not on disk. */
+const KEYCHAIN_BACKED_CREDENTIAL_SOURCES = ["claude", "cursor"] as const;
+
+export function agentTestKeychainDir(isolatedCredentialRoot: string): string {
+  return path.join(isolatedCredentialRoot, "home", "Library", "Keychains");
+}
+
+/**
+ * Make the host's login Keychain reachable from the isolated HOME.
+ *
+ * macOS resolves the login Keychain through `$HOME/Library/Keychains`, so
+ * rewriting HOME hides it: `security find-generic-password` reports "item could
+ * not be found" and every Keychain-backed login — Claude Code's OAuth token and
+ * Cursor's — reads as signed out. Neither `CLAUDE_CONFIG_DIR` nor any other
+ * provider variable can substitute, because on macOS the credential is not on
+ * disk at all.
+ *
+ * Only the Keychain directory is linked, and only when the profile was
+ * explicitly authorized to inherit a Keychain-backed provider. Everything else
+ * under HOME stays isolated.
+ *
+ * Best-effort: a profile that cannot link still starts, it just reports those
+ * providers as signed out the way it did before.
+ *
+ * `dev:reset` deletes the profile tree that contains this link, so profile
+ * teardown must keep using a deletion that unlinks symlinks rather than
+ * descending through them — following it would destroy the host login Keychain.
+ * `resetProfile`'s `fs.rm({ recursive: true })` has that behaviour and
+ * `backend-process.test.ts` pins it.
+ */
+export async function linkAgentTestHostKeychains(options: {
+  isolatedCredentialRoot: string;
+  hostHome: string | undefined;
+  credentialSources?: readonly string[];
+  platform?: NodeJS.Platform;
+}): Promise<boolean> {
+  const platform = options.platform ?? process.platform;
+  if (platform !== "darwin") return false;
+  const hostHome = options.hostHome?.trim();
+  if (!hostHome) return false;
+  const allowed = new Set(options.credentialSources ?? []);
+  if (!KEYCHAIN_BACKED_CREDENTIAL_SOURCES.some((source) => allowed.has(source))) return false;
+
+  const source = path.join(hostHome, "Library", "Keychains");
+  if (!(await stat(source).then((info) => info.isDirectory()).catch(() => false))) return false;
+  const target = agentTestKeychainDir(options.isolatedCredentialRoot);
+  const existing = await lstat(target).catch(() => null);
+  if (existing?.isSymbolicLink()) {
+    if (await readlink(target).catch(() => null) === source) return true;
+    await rm(target, { force: true });
+  } else if (existing) {
+    // Something real is already there. Replacing it could destroy Keychain
+    // state, so leave it alone and let the provider report signed out.
+    return false;
+  }
+  await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+  await symlink(source, target);
+  return true;
 }
 
 export function hostDockerConfigDir(
@@ -187,6 +247,16 @@ export function createBackendProcessEnvironment(
       const claudeConfigDir = inherited.CLAUDE_CONFIG_DIR?.trim()
         || (inheritedHome ? path.join(inheritedHome, ".claude") : undefined);
       if (claudeConfigDir) env.CLAUDE_CONFIG_DIR = claudeConfigDir;
+      // Claude Code namespaces its Keychain service by config directory as soon
+      // as CLAUDE_CONFIG_DIR is set at all — the service becomes
+      // `Claude Code-credentials-<sha256(dir)[0:8]>`, which the host login has
+      // never been written under. Setting CLAUDE_SECURESTORAGE_CONFIG_DIR
+      // empty takes precedence and pins the unsuffixed service, so pointing at
+      // the host configuration actually yields the host login instead of
+      // silently signing the profile out. Verified against Claude Code 2.1.233;
+      // if a future release drops this variable the profile degrades to the
+      // signed-out behaviour it had before, not to a wrong credential.
+      env.CLAUDE_SECURESTORAGE_CONFIG_DIR = "";
     } else if (runtime.isolatedCredentialRoot) {
       env.CLAUDE_CONFIG_DIR = path.join(runtime.isolatedCredentialRoot, "claude");
     }
@@ -441,6 +511,13 @@ export class BackendProcess {
         sourceDir: hostDockerConfigDir(process.env),
       }).catch((error: unknown) => {
         console.warn("[Desktop] Could not seed the isolated Docker context; falling back to the default context:", error);
+      });
+      await linkAgentTestHostKeychains({
+        isolatedCredentialRoot,
+        hostHome: process.env.HOME,
+        credentialSources: options.credentialSources,
+      }).catch((error: unknown) => {
+        console.warn("[Desktop] Could not reach the host login Keychain; Keychain-backed agents will report signed out:", error);
       });
     }
     const child = spawn(bun, args, { env, stdio: ["ignore", "pipe", "pipe"] });

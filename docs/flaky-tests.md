@@ -10,6 +10,19 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `Electron backend process supervisor > reports backend readiness before slow managed Serve initialization finishes` (`tests/unit/electron/backend-process.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-17
+- **Direction:** the inverse of this file's usual pattern — it failed *in isolation* and passed in the aggregate suite, so it is recorded here rather than dismissed.
+- **Original command:** `bun run test:logged -- --name cred-focused2 -- bun test tests/unit/electron/backend-process.test.ts tests/unit/claude-credential-injection.test.ts --parallel=2 --only-failures`
+- **Worker configuration:** two Bun workers over two files, while an isolated `dev:test` profile (`agent-cred-inject`) was live on the same machine.
+- **Failure:** `Unable to inspect Tailscale Serve configuration: Command failed: <tmp>/tailscale serve status --json` from `apps/backend/src/tailscale-serve.ts:176` via `managed-web-client.ts:170` (duration: 7,977.82 ms).
+- **Suite counts:** 54 passed, 1 failed; 55 tests across 2 files.
+- **Isolated rerun:** `bun test tests/unit/electron/backend-process.test.ts -t "reports backend readiness before slow managed Serve initialization finishes"` → also failed (7,439.62 ms), and failed identically on a stashed clean tree (8,964.33 ms), confirming it is not caused by the credential-injection change on this branch.
+- **Follow-up:** after the live `dev:test` profile finished starting, the owning file passed alone (32 passed, 14.18 s) and the complete aggregate `bun run test` passed in 104.9 s.
+- **Hypothesis:** the case drives real backend startup against a fake `tailscale` shim in a temp directory. Concurrent process pressure from a starting `dev:test` profile appears to make the shim invocation fail rather than merely run slowly, so the failure is contention-shaped like the existing "Standalone backend shutdown and Tailscale Serve lifecycle" family. A recurrence should capture whether the shim was ever created and whether the failure is a spawn error or a non-zero exit before changing the Serve assertions.
+
 ## `ACP bridge > quarantines an unusable state file instead of refusing to start` (`bridges/acp-bridge/src/acp-persistence.test.ts:448`)
 
 - **Status:** open

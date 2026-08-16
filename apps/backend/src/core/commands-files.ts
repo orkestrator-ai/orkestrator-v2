@@ -1166,6 +1166,7 @@ export const SYNC_CONTAINER_CLAUDE_CREDENTIAL_COMMAND =
 export async function getHostClaudeCredentials(
   platform: NodeJS.Platform = process.platform,
   homeDir: string = os.homedir(),
+  configDir?: string,
 ): Promise<string | undefined> {
   const isUsable = (value: string | undefined): string | undefined => {
     const trimmed = value?.trim();
@@ -1198,13 +1199,20 @@ export async function getHostClaudeCredentials(
     }
   }
 
-  try {
-    return isUsable(
-      await fs.readFile(path.join(homeDir, ".claude", ".credentials.json"), "utf-8"),
-    );
-  } catch {
-    return undefined;
+  // `CLAUDE_CONFIG_DIR` first, because that is where Claude Code itself keeps
+  // the on-disk credential when it is set. An agent-test profile runs with an
+  // isolated HOME but is pointed at the host configuration, so reading only
+  // `homeDir` would look inside the empty isolated home and report no login.
+  for (const directory of [configDir, path.join(homeDir, ".claude")]) {
+    if (!directory) continue;
+    try {
+      const found = isUsable(await fs.readFile(path.join(directory, ".credentials.json"), "utf-8"));
+      if (found) return found;
+    } catch {
+      // Try the next location; a missing file is not an error here.
+    }
   }
+  return undefined;
 }
 
 export async function syncContainerClaudeCredential(
@@ -1273,7 +1281,11 @@ export async function resolveContainerClaudeCredentials(
   globalConfig: AppConfig["global"],
 ): Promise<string | undefined> {
   if (globalConfig.useHostClaudeCredentials === false) return undefined;
-  return getHostClaudeCredentials();
+  return getHostClaudeCredentials(
+    process.platform,
+    os.homedir(),
+    process.env.CLAUDE_CONFIG_DIR?.trim() || undefined,
+  );
 }
 
 /**

@@ -65,7 +65,10 @@ Agent-test profiles may inherit the host login for explicitly supported agent
 providers. `--credential-source <provider>` narrows this and
 `--no-agent-credentials` disables it. Credential material is referenced through
 owner-only files; it is never placed in the status manifest, URL, logs, traces,
-or reports. Bounded model-catalog caches are seeded only when missing so signed-
+or reports. On macOS, a profile authorized for a Keychain-backed provider also
+links the host login Keychain into its isolated `HOME`, because that is the only
+place those credentials exist — see
+[`credentials-and-models.md`](credentials-and-models.md). Bounded model-catalog caches are seeded only when missing so signed-
 out picker testing remains representative without copying user state.
 
 ## Safety invariants

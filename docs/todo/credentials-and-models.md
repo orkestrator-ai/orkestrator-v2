@@ -279,7 +279,7 @@ from the rest of `HOME`:
 
 | Platform | Agent-test host state exposed |
 | --- | --- |
-| Claude | Host `CLAUDE_CONFIG_DIR`/`~/.claude` and `ANTHROPIC_API_KEY` when inherited |
+| Claude | Host `CLAUDE_CONFIG_DIR`/`~/.claude`, the host login Keychain, and `ANTHROPIC_API_KEY` when inherited |
 | Codex | Host `CODEX_HOME`/`~/.codex` and `OPENAI_API_KEY` when inherited |
 | Cursor | `CURSOR_API_KEY` when inherited; host Cursor configuration is mounted read-only for containers |
 | Grok | Owner-only snapshot of host `~/.grok/auth.json` for local runs; bounded read-only host imports for containers |
@@ -310,6 +310,38 @@ provider-home override, so pointing its process at the host `HOME` would also
 expose unrelated credentials. Startup instead copies only `auth.json` through a
 bounded, no-final-symlink, stable-descriptor path into the isolated home. It is
 refreshed from the host on each profile start and installed mode `0600`.
+
+### macOS Keychain reachability
+
+Claude's and Cursor's host logins normally live in the macOS login Keychain, not
+on disk, and macOS resolves that Keychain through `$HOME/Library/Keychains`. An
+isolated `HOME` therefore hides it: `security find-generic-password` reports the
+item as missing and both providers read as signed out, which no provider-specific
+variable can repair because there is no on-disk credential to point at.
+
+When a profile is authorized for Claude or Cursor, startup symlinks
+`<isolated HOME>/Library/Keychains` at the host directory. Nothing else under
+`HOME` is shared, the link is skipped entirely on other platforms and for
+profiles that authorized neither provider, and real state already present at that
+path is left alone rather than replaced. Because the link is writable, a provider
+that refreshes its token updates the host Keychain — the same thing the host CLI
+does, and the reason a refreshed login stays valid in both places.
+
+Claude needs one further variable. Claude Code namespaces its Keychain service by
+configuration directory as soon as `CLAUDE_CONFIG_DIR` is set at all, using
+`Claude Code-credentials-<sha256(dir)[0:8]>`; the host login was never written
+under that name, so merely pointing at the host configuration signs the profile
+out. An authorized profile therefore also exports an empty
+`CLAUDE_SECURESTORAGE_CONFIG_DIR`, which takes precedence and pins the
+unsuffixed service. A profile that was denied Claude keeps its own namespace and
+must not inherit that override. This was verified against Claude Code 2.1.233;
+if a release removes the variable the profile degrades to the signed-out
+behaviour it had before, never to a different account's credential.
+
+The same link is what lets the backend read the Keychain for the container
+credential sync described above. On hosts that keep the credential on disk, the
+lookup prefers `CLAUDE_CONFIG_DIR` over the home directory, because an
+agent-test profile's home is isolated and empty.
 
 ## Agent-test model-cache seeding
 

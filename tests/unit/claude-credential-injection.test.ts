@@ -156,6 +156,26 @@ describe("host Claude credential resolution", () => {
       expect(await getHostClaudeCredentials("linux", dir)).toBeUndefined();
     });
   });
+
+  test("reads an explicit configuration directory before the home directory", async () => {
+    // An agent-test profile runs with an isolated HOME but is pointed at the
+    // host Claude configuration, so its home directory holds nothing at all.
+    await withTempDirAsync(async (dir) => {
+      const configDir = join(dir, "host-config");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(join(configDir, ".credentials.json"), CREDENTIAL);
+      expect(await getHostClaudeCredentials("linux", join(dir, "isolated-home"), configDir))
+        .toBe(CREDENTIAL);
+    });
+  });
+
+  test("falls back to the home directory when the configuration directory has none", async () => {
+    await withTempDirAsync(async (dir) => {
+      await write(dir, CREDENTIAL);
+      expect(await getHostClaudeCredentials("linux", dir, join(dir, "empty-config")))
+        .toBe(CREDENTIAL);
+    });
+  });
 });
 
 describe("host Claude credential resolution on macOS", () => {

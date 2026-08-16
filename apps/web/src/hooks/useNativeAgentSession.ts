@@ -133,6 +133,16 @@ export function useNativeAgentSession<TMessage = unknown>({
   ) as NativeAgentSessionProjection<TMessage> | undefined;
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(enabled);
+  /**
+   * Whether an authoritative read has finished for the current identity.
+   *
+   * A projection-less session is ambiguous on its own: an inactive tab has
+   * simply never asked, while an active tab whose read came back empty has been
+   * told there is nothing there. Only the second is a failure the user can act
+   * on, so the connection surface needs to tell them apart rather than treating
+   * every absent projection the same way.
+   */
+  const [hasCompletedRead, setHasCompletedRead] = useState(false);
   const [isDispatching, setIsDispatching] = useState(false);
   /**
    * How much transcript this tab has asked for. Undefined keeps the backend
@@ -256,7 +266,12 @@ export function useNativeAgentSession<TMessage = unknown>({
       if (
         sequence === refreshSequenceRef.current
         && operationEpoch === projectionOperationEpochRef.current
-      ) setIsRefreshing(false);
+      ) {
+        setIsRefreshing(false);
+        // Settled, whatever it returned. A read that resolves to null is an
+        // authoritative "no session", not a pending one.
+        setHasCompletedRead(true);
+      }
       if (refreshesInFlightRef.current === 0 && reconcileAfterInFlightRef.current) {
         reconcileAfterInFlightRef.current = false;
         if (backgroundRefreshEnabledRef.current) {
@@ -349,6 +364,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     } catch (error) {
       setRuntimeError(error instanceof Error ? error.message : String(error));
       setIsRefreshing(false);
+      setHasCompletedRead(true);
       return null;
     }
   }, [
@@ -366,6 +382,14 @@ export function useNativeAgentSession<TMessage = unknown>({
     platform,
     refresh,
   ]);
+
+  // A new identity, or a session this hook is no longer allowed to read, has
+  // nothing settled about it yet. Without this reset a completed read would
+  // keep vouching for a platform or environment it never covered — a deferred
+  // tab resolves its platform after mount, which is exactly that case.
+  useEffect(() => {
+    setHasCompletedRead(false);
+  }, [enabled, identity]);
 
   useEffect(() => {
     if (!enabled || !isActive) {
@@ -676,6 +700,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     runtimeProjection: effectiveProjection,
     runtimeError,
     isRefreshing,
+    hasCompletedRead,
     isDispatching,
     refresh,
     connect,

@@ -34,7 +34,7 @@ const awaitBridgeReadyMock = mock(async () => ({
   port: 4099,
   authToken: "token",
 }));
-const adoptNativeAgentSessionMock = mock(async (input: {
+const defaultAdoptNativeAgentSession = async (input: {
   agent: string;
   providerSessionId: string;
   logicalSessionKey: string;
@@ -44,7 +44,8 @@ const adoptNativeAgentSessionMock = mock(async (input: {
   logicalSessionKey: input.logicalSessionKey,
   environmentId: input.environmentId,
   agent: input.agent,
-}));
+});
+const adoptNativeAgentSessionMock = mock(defaultAdoptNativeAgentSession);
 const ensureNativeAgentSessionMock = mock(async (input: {
   agent: string;
   logicalSessionKey: string;
@@ -203,6 +204,10 @@ afterEach(() => {
     authToken: "token",
   }));
   adoptNativeAgentSessionMock.mockClear();
+  // Restored, not just cleared: a test that installs a failing adoption would
+  // otherwise leave every later file-order-dependent test connecting to a
+  // provider that refuses.
+  adoptNativeAgentSessionMock.mockImplementation(defaultAdoptNativeAgentSession);
   ensureNativeAgentSessionMock.mockClear();
   listNativeAgentResumableSessionsMock.mockClear();
   getAgentHandoffMock.mockClear();
@@ -1192,12 +1197,55 @@ describe("AgentNativeTab", () => {
   });
 
   test("does not read or touch a provider projection while its tab is inactive", async () => {
-    render(<AgentNativeTab tabId="tab-inactive" data={identity("cursor")} isActive={false} />);
+    render(<AgentNativeTab tabId="tab-inactive" data={identity("codex")} isActive={false} />);
     await new Promise((resolve) => setTimeout(resolve, 25));
     expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
     expect(adoptNativeAgentSessionMock).not.toHaveBeenCalled();
-    expect(screen.getByText("Connecting to Cursor Agent...")).toBeTruthy();
-    expect(screen.queryByText("Connection Failed") === null).toBe(true);
+  });
+
+  test.each(["codex", "cursor"] as const)(
+    "shows an inactive %s tab as connecting rather than failed",
+    async (platform) => {
+      render(
+        <AgentNativeTab
+          tabId={`tab-inactive-${platform}`}
+          data={identity(platform)}
+          isActive={false}
+        />,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      // Never asked, so never refused. A tab that has not been allowed to read
+      // has no failure to report, and the destructive state would be a lie the
+      // user cannot act on.
+      const label = platform === "cursor" ? "Cursor Agent" : "Codex";
+      expect(screen.getByText(`Connecting to ${label}...`)).toBeTruthy();
+      expect(screen.queryByText("Connection Failed") === null).toBe(true);
+      expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
+    },
+  );
+
+  test("reports a settled read that found no session as a failed connection", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+
+    render(<AgentNativeTab tabId="tab-empty-read" data={identity("cursor")} isActive />);
+
+    // The backend answered, and answered with nothing. That is recoverable
+    // state the user has to be able to see and retry, not a pending connection.
+    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByText("Connecting to Cursor Agent...") === null).toBe(true);
+  });
+
+  test("reports a failed connect attempt as a failed connection", async () => {
+    adoptNativeAgentSessionMock.mockImplementation(async () => {
+      throw new Error("bridge refused the session");
+    });
+
+    render(<AgentNativeTab tabId="tab-connect-error" data={identity("codex")} isActive />);
+
+    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
+    expect(screen.getByText("bridge refused the session")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
   test("does not let a stale projection refresh undo a resumed session", async () => {

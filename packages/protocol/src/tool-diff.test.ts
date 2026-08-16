@@ -3,6 +3,7 @@ import {
   countTextLines,
   filePathFromToolInput,
   lineChangeStatsFromSides,
+  splitTextLines,
   toolDiffFromToolInput,
 } from "./tool-diff";
 
@@ -14,6 +15,20 @@ describe("tool diff line stats", () => {
     expect(countTextLines("one\ntwo")).toBe(2);
     expect(countTextLines("one\ntwo\n")).toBe(2);
     expect(countTextLines("\n\n")).toBe(2);
+  });
+
+  test("splits the same logical lines the counter would count", () => {
+    expect(splitTextLines(undefined)).toEqual([]);
+    expect(splitTextLines("")).toEqual([]);
+    expect(splitTextLines("one")).toEqual(["one"]);
+    expect(splitTextLines("one\ntwo")).toEqual(["one", "two"]);
+    expect(splitTextLines("one\ntwo\n")).toEqual(["one", "two"]);
+    expect(splitTextLines("\n")).toEqual([""]);
+    expect(splitTextLines("\n\n")).toEqual(["", ""]);
+    expect(splitTextLines("one\nfour\n")).toEqual(["one", "four"]);
+    for (const value of [undefined, "", "one", "one\ntwo", "one\ntwo\n", "\n", "\n\n", "one\r\ntwo\r\n"]) {
+      expect(splitTextLines(value)).toHaveLength(countTextLines(value));
+    }
   });
 
   test("counts a CRLF payload by its line terminators, not its carriage returns", () => {

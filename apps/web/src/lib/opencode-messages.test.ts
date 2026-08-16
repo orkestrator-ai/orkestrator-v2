@@ -370,6 +370,71 @@ describe("opencode-client streaming part normalization", () => {
         },
         expected: { filePath: "nl-new.ts", additions: 2, deletions: 0 },
       },
+      {
+        // Claude-shaped MultiEdit input still has to produce joined sides and
+        // per-chunk counts. Recounting the joined string would charge "four\n"
+        // as two deletions.
+        part: {
+          type: "tool", tool: "MultiEdit", state: {
+            status: "completed",
+            input: {
+              filePath: "c.ts",
+              edits: [
+                { old_string: "one", new_string: "two\nthree" },
+                { old_string: "four\n", new_string: "five" },
+              ],
+            },
+          },
+        },
+        expected: {
+          filePath: "c.ts",
+          before: "one\nfour\n",
+          after: "two\nthree\nfive",
+          additions: 3,
+          deletions: 2,
+        },
+      },
+      {
+        part: {
+          type: "tool", tool: "multiedit", state: {
+            status: "completed",
+            input: {
+              file_path: "sep.ts",
+              edits: [
+                { old_string: "four\n", new_string: "x\n" },
+                { old_string: "one", new_string: "y" },
+              ],
+            },
+          },
+        },
+        expected: {
+          filePath: "sep.ts",
+          before: "four\none",
+          after: "x\ny",
+          additions: 2,
+          deletions: 2,
+        },
+      },
+      {
+        // Provider-authored counts remain authoritative over the mapped sides.
+        part: {
+          type: "tool", tool: "MultiEdit", state: {
+            status: "completed",
+            input: {
+              filePath: "meta.ts",
+              edits: [{ old_string: "a", new_string: "b" }],
+            },
+            metadata: { additions: 9, deletions: 4 },
+          },
+        },
+        expected: {
+          filePath: "meta.ts",
+          before: "a",
+          after: "b",
+          additions: 9,
+          deletions: 4,
+        },
+      },
     ];
 
     for (const { part, expected } of cases) {

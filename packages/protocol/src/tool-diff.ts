@@ -33,6 +33,19 @@ export function countTextLines(value: string | undefined): number {
 }
 
 /**
+ * Split into the same logical lines {@link countTextLines} would count.
+ *
+ * The expanded edit view has to render those lines, so it cannot use
+ * `String#split("\n")`: a terminating newline would become an extra empty
+ * row and disagree with the collapsed +/- badge.
+ */
+export function splitTextLines(value: string | undefined): string[] {
+  if (!value) return [];
+  if (!value.endsWith("\n")) return value.split("\n");
+  return value.slice(0, -1).split("\n");
+}
+
+/**
  * Derive the small metadata shown on a collapsed edit row from replacement
  * sides before those potentially large strings are deferred or discarded.
  */

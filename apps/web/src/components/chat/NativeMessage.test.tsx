@@ -1054,6 +1054,49 @@ describe("NativeMessage task list rendering", () => {
 
     expect(screen.getByText("+1")).toBeTruthy();
     expect(screen.getByText("-2")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /edit a\.ts \+1 -2 success/i }));
+    expect(screen.getByText("-one")).toBeTruthy();
+    expect(screen.getByText("-two")).toBeTruthy();
+    expect(screen.getByText("+three")).toBeTruthy();
+    expect(screen.queryByText("-") === null).toBe(true);
+    expect(screen.queryByText("+") === null).toBe(true);
+  });
+
+  test("expands a joined MultiEdit side without a phantom line from a trailing newline", () => {
+    // Per-chunk counts already exclude the terminator. The expanded body must
+    // use the same split or the badge would read -2 while the list showed 3.
+    render(
+      <TerminalProvider>
+        <NativeMessage
+          message={makeMessage([{
+            type: "tool-invocation",
+            content: "src/c.ts",
+            toolName: "MultiEdit",
+            toolState: "success",
+            toolDiff: {
+              filePath: "/workspace/src/c.ts",
+              before: "one\nfour\n",
+              after: "two\nthree\nfive",
+              additions: 3,
+              deletions: 2,
+            },
+          }])}
+        />
+      </TerminalProvider>,
+    );
+
+    expect(screen.getByText("+3")).toBeTruthy();
+    expect(screen.getByText("-2")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /multiedit c\.ts \+3 -2 success/i }));
+    expect(screen.getByText("-one")).toBeTruthy();
+    expect(screen.getByText("-four")).toBeTruthy();
+    expect(screen.getByText("+two")).toBeTruthy();
+    expect(screen.getByText("+three")).toBeTruthy();
+    expect(screen.getByText("+five")).toBeTruthy();
+    expect(screen.queryByText("-") === null).toBe(true);
+    expect(screen.queryByText("+") === null).toBe(true);
   });
 
   test("routes a location-only diff hint to the generic tool row", () => {

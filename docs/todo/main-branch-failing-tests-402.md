@@ -4,14 +4,30 @@ Status: resolved as of 2026-08-16. Both failures were reproducible,
 deterministic, and unrelated to each other in mechanism but shared one origin
 commit.
 
-The stale dialog assertion was corrected by `74a8a37f`, and the two scanner
-offenders were rewritten by `384ca153`. A follow-up detector fix now recognizes
-known scalar DOM projections such as `getAttribute()` and `textContent`, while
-regression coverage confirms that node-producing expressions such as
-`querySelectorAll(...)[0]` remain rejected. Focused reruns of both formerly
-failing files pass on `a8882c3b` before the detector follow-up, and the updated
-scanner test passes ten consecutive reruns. The remainder of this document is
-the historical incident analysis.
+The stale dialog assertion was corrected by `74a8a37f` (#412), and the two
+scanner offenders were rewritten by `e94a16d7` (#415) — the unsquashed commit
+was `384ca153`, which is only reachable from `origin/fix-test-failures`, so
+`e94a16d7` is the one to look for on `main`.
+
+A follow-up detector fix then closed the false positive itself. It classifies
+the received expression by what its **outermost** operation produces, exempting
+only allowlisted scalar projections such as `getAttribute()` and `id`.
+
+That allowlist deliberately departs from Option B's sketch below: `innerHTML`,
+`outerHTML` and `textContent` stay flagged. They are scalars in type only —
+their length is the element's whole descendant subtree — and Bun prints a
+received string in a failing `toBeNull()` diagnostic in full, with no cap
+(measured: a 432,000-byte string produces 432,458 bytes of output, against a
+64 KiB canary budget). Exempting them would have reopened the same unbounded
+output in string form.
+
+Regression coverage confirms that node-producing expressions such as
+`querySelectorAll(...)[0]` remain rejected, that parentheses/`!`/`as`/angle
+bracket/`satisfies` wrappers cannot launder a node into an exemption, and that
+every allowlist entry stays under 512 bytes for a 400-child element. Focused
+reruns of both formerly failing files pass on `a8882c3b` before the detector
+follow-up, and the updated scanner test passes ten consecutive reruns. The
+remainder of this document is the historical incident analysis.
 
 `bun run test` was red on `main`. Two cases failed every time, in both aggregate
 and isolated runs, so neither belonged in

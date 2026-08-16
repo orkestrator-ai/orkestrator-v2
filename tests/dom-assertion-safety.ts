@@ -20,7 +20,11 @@ function isDomProducingQuery(expression: ts.LeftHandSideExpression): boolean {
     || /^getElements?By[A-Z]/.test(name);
 }
 
-const DOM_SCALAR_METHODS = new Set([
+/**
+ * Method calls whose result is a single attribute value or a boolean, never a
+ * node and never proportional to the element's descendants.
+ */
+export const DOM_SCALAR_METHODS: ReadonlySet<string> = new Set([
   "getAttribute",
   "getAttributeNS",
   "hasAttribute",
@@ -28,20 +32,28 @@ const DOM_SCALAR_METHODS = new Set([
   "matches",
 ]);
 
-const DOM_SCALAR_PROPERTIES = new Set([
+/**
+ * Property reads whose value is a single scalar — an attribute, a flag, a count
+ * or a name.
+ *
+ * `innerHTML`, `outerHTML` and `textContent` are deliberately absent. They are
+ * scalars in type only: their length is the element's entire descendant
+ * subtree, and Bun prints a received string in a failing `toBeNull()`
+ * diagnostic in full, with no cap. Exempting them would reopen the unbounded
+ * output this scanner exists to close, just in string form rather than node
+ * form. Write those as `expect(x === null).toBe(true)`, which prints `false`.
+ */
+export const DOM_SCALAR_PROPERTIES: ReadonlySet<string> = new Set([
   "checked",
   "className",
   "disabled",
   "id",
-  "innerHTML",
   "length",
   "nodeName",
   "nodeType",
   "nodeValue",
-  "outerHTML",
   "selected",
   "tagName",
-  "textContent",
   "value",
 ]);
 
@@ -73,18 +85,32 @@ function unwrapExpression(expression: ts.Expression): ts.Expression {
   return expression;
 }
 
+/** The member being read, whether written `a.b` or `a["b"]`. */
+function projectedName(expression: ts.Expression): string | undefined {
+  if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
+  if (
+    ts.isElementAccessExpression(expression)
+    && ts.isStringLiteralLike(expression.argumentExpression)
+  ) return expression.argumentExpression.text;
+  return undefined;
+}
+
+/**
+ * Whether the outermost operation yields a scalar rather than a node.
+ *
+ * The caller has already established that a DOM-producing query appears
+ * somewhere inside, so this only has to classify the final projection — the
+ * return type of `el.getAttribute(...)` does not depend on where the query
+ * sits, so this must not re-inspect the receiver.
+ */
 function isKnownScalarDomProjection(expression: ts.Expression): boolean {
   const unwrapped = unwrapExpression(expression);
-  if (
-    ts.isCallExpression(unwrapped)
-    && ts.isPropertyAccessExpression(unwrapped.expression)
-    && DOM_SCALAR_METHODS.has(unwrapped.expression.name.text)
-  ) {
-    return containsDomQuery(unwrapped.expression.expression);
+  if (ts.isCallExpression(unwrapped)) {
+    const method = projectedName(unwrapExpression(unwrapped.expression));
+    return method !== undefined && DOM_SCALAR_METHODS.has(method);
   }
-  return ts.isPropertyAccessExpression(unwrapped)
-    && DOM_SCALAR_PROPERTIES.has(unwrapped.name.text)
-    && containsDomQuery(unwrapped.expression);
+  const property = projectedName(unwrapped);
+  return property !== undefined && DOM_SCALAR_PROPERTIES.has(property);
 }
 
 export function findUnsafeDomAbsenceAssertions(fileName: string, source: string): UnsafeDomAssertion[] {

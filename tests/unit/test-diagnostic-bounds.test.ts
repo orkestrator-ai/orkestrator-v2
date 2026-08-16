@@ -6,12 +6,40 @@ import {
   truncateUtf8,
 } from "../bounded-test-diagnostics";
 import {
+  DOM_SCALAR_METHODS,
+  DOM_SCALAR_PROPERTIES,
   findUnsafeDomAbsenceAssertions,
   rewriteUnsafeDomAbsenceAssertions,
 } from "../dom-assertion-safety";
 
 const root = path.resolve(import.meta.dir, "../..");
 const MAX_CANARY_OUTPUT_BYTES = 64 * 1024;
+
+/**
+ * A projection may only be exempted from the `toBeNull` scanner if its value
+ * stays this small even for an element with a large subtree. Well under the
+ * 64 KiB canary budget, because a single assertion is only part of a failure.
+ */
+const MAX_EXEMPT_PROJECTION_BYTES = 512;
+
+/** Names excluded from the allowlist precisely because they carry the subtree. */
+const SUBTREE_SIZED_PROJECTIONS = ["innerHTML", "outerHTML", "textContent"];
+
+function buildFixtureElement(rows: number): HTMLElement {
+  const container = document.createElement("div");
+  container.id = "fixture";
+  container.className = "panel";
+  container.setAttribute("data-state", "ready");
+  container.innerHTML = Array.from(
+    { length: rows },
+    (_, index) => `<span class="row" data-index="${index}">row ${index} content</span>`,
+  ).join("");
+  return container;
+}
+
+function projectionByteLength(value: unknown): number {
+  return Buffer.byteLength(typeof value === "string" ? value : String(value), "utf8");
+}
 
 async function testFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -46,7 +74,6 @@ describe("bounded test diagnostics", () => {
       "expect(await screen.findByRole('status')).toBeNull();",
       "expect(container.querySelectorAll('.item')[0]).toBeNull();",
       "expect(container.querySelector('.spinner')?.getAttribute('data-state')).toBeNull();",
-      "expect(container.querySelector('.spinner')!.textContent).toBeNull();",
       "expect(container.querySelector('.ready')).not.toBeNull();",
     ].join("\n");
 
@@ -57,9 +84,128 @@ describe("bounded test diagnostics", () => {
       "expect(await screen.findByRole('status') === null).toBe(true);",
       "expect(container.querySelectorAll('.item')[0] === null).toBe(true);",
       "expect(container.querySelector('.spinner')?.getAttribute('data-state')).toBeNull();",
-      "expect(container.querySelector('.spinner')!.textContent).toBeNull();",
       "expect(container.querySelector('.ready')).not.toBeNull();",
     ].join("\n"));
+  });
+
+  test("exempts every allowlisted scalar projection", () => {
+    const source = [
+      "expect(container.querySelector('.spinner')?.getAttribute('data-state')).toBeNull();",
+      "expect(container.querySelector('.spinner')?.getAttributeNS(null, 'x')).toBeNull();",
+      "expect(container.querySelector('.spinner')!.hasAttribute('data-state')).toBeNull();",
+      "expect(container.querySelector('.spinner')!.hasAttributeNS(null, 'x')).toBeNull();",
+      "expect(container.querySelector('.spinner')!.matches('.spinner')).toBeNull();",
+      "expect(container.querySelector('input')!.checked).toBeNull();",
+      "expect(container.querySelector('.spinner')!.className).toBeNull();",
+      "expect(container.querySelector('input')!.disabled).toBeNull();",
+      "expect(container.querySelector('.spinner')!.id).toBeNull();",
+      "expect(container.querySelectorAll('.item').length).toBeNull();",
+      "expect(container.querySelector('.spinner')!.nodeName).toBeNull();",
+      "expect(container.querySelector('.spinner')!.nodeType).toBeNull();",
+      "expect(container.querySelector('.spinner')!.nodeValue).toBeNull();",
+      "expect(container.querySelector('option')!.selected).toBeNull();",
+      "expect(container.querySelector('.spinner')!.tagName).toBeNull();",
+      "expect(container.querySelector('input')!.value).toBeNull();",
+      // Bracket form of the same reads.
+      "expect(container.querySelector('.spinner')['id']).toBeNull();",
+      "expect(container.querySelector('.spinner')['getAttribute']('data-state')).toBeNull();",
+      // The scalar-ness of getAttribute does not depend on where the query sits.
+      "expect(element.getAttribute(container.querySelector('.spinner')!.id)).toBeNull();",
+    ].join("\n");
+
+    expect(findUnsafeDomAbsenceAssertions("fixture.test.ts", source)).toEqual([]);
+    expect(rewriteUnsafeDomAbsenceAssertions("fixture.test.ts", source)).toBe(source);
+  });
+
+  test("looks through parentheses, non-null, as, angle-bracket, and satisfies", () => {
+    const wrapped = [
+      "expect((container.querySelector('.spinner')!.id)).toBeNull();",
+      "expect(container.querySelector('.spinner')!.getAttribute('x')!).toBeNull();",
+      "expect(container.querySelector('.spinner')!.id as string).toBeNull();",
+      "expect(<string>container.querySelector('.spinner')!.id).toBeNull();",
+      "expect(container.querySelector('.spinner')!.id satisfies string).toBeNull();",
+    ];
+    for (const assertion of wrapped) {
+      expect({ assertion, hits: findUnsafeDomAbsenceAssertions("f.test.ts", assertion).length })
+        .toEqual({ assertion, hits: 0 });
+    }
+
+    // The same wrappers must not launder a node into an exemption.
+    const laundered = [
+      "expect((container.querySelector('.spinner'))).toBeNull();",
+      "expect(container.querySelector('.spinner')!).toBeNull();",
+      "expect(container.querySelector('.spinner') as HTMLElement).toBeNull();",
+      "expect(<HTMLElement>container.querySelector('.spinner')).toBeNull();",
+      "expect(container.querySelector('.spinner') satisfies Element | null).toBeNull();",
+    ];
+    for (const assertion of laundered) {
+      expect({ assertion, hits: findUnsafeDomAbsenceAssertions("f.test.ts", assertion).length })
+        .toEqual({ assertion, hits: 1 });
+    }
+  });
+
+  test("still flags node projections and subtree-sized strings", () => {
+    const flagged = [
+      "expect(container.querySelector('.spinner')!.innerHTML).toBeNull();",
+      "expect(container.querySelector('.spinner')!.outerHTML).toBeNull();",
+      "expect(container.querySelector('.spinner')!.textContent).toBeNull();",
+      "expect(container.querySelector('.spinner')['textContent']).toBeNull();",
+      "expect(container.querySelector('.spinner')?.parentElement).toBeNull();",
+      "expect(container.querySelector('.spinner')!.closest('.panel')).toBeNull();",
+      "expect(container.querySelectorAll('.item').item(0)).toBeNull();",
+      "expect((container.querySelector('.spinner') as HTMLElement).firstElementChild).toBeNull();",
+    ];
+
+    for (const assertion of flagged) {
+      expect({ assertion, hits: findUnsafeDomAbsenceAssertions("f.test.ts", assertion).length })
+        .toEqual({ assertion, hits: 1 });
+    }
+  });
+
+  test("exempts only projections that stay small for a large subtree", () => {
+    const container = buildFixtureElement(400);
+    const input = document.createElement("input");
+    input.value = "typed";
+    const probes: Record<string, () => unknown> = {
+      getAttribute: () => container.getAttribute("data-state"),
+      getAttributeNS: () => container.getAttributeNS(null, "data-state"),
+      hasAttribute: () => container.hasAttribute("data-state"),
+      hasAttributeNS: () => container.hasAttributeNS(null, "data-state"),
+      matches: () => container.matches(".panel"),
+      checked: () => input.checked,
+      className: () => container.className,
+      disabled: () => input.disabled,
+      id: () => container.id,
+      length: () => container.querySelectorAll(".row").length,
+      nodeName: () => container.nodeName,
+      nodeType: () => container.nodeType,
+      nodeValue: () => container.firstChild?.firstChild?.nodeValue,
+      selected: () => document.createElement("option").selected,
+      tagName: () => container.tagName,
+      value: () => input.value,
+    };
+
+    // Every allowlist entry must have a probe, so widening the allowlist cannot
+    // land without evidence that the new projection is bounded.
+    expect(Object.keys(probes).sort()).toEqual(
+      [...DOM_SCALAR_METHODS, ...DOM_SCALAR_PROPERTIES].sort(),
+    );
+
+    const oversized = Object.entries(probes)
+      .filter(([, probe]) => projectionByteLength(probe()) > MAX_EXEMPT_PROJECTION_BYTES)
+      .map(([name]) => name);
+    expect(oversized).toEqual([]);
+
+    // Guard against a fixture too small to distinguish the two classes, then
+    // pin the reason the subtree-sized projections are excluded.
+    expect(projectionByteLength(container.innerHTML))
+      .toBeGreaterThan(MAX_EXEMPT_PROJECTION_BYTES * 8);
+    for (const projection of SUBTREE_SIZED_PROJECTIONS) {
+      expect({ projection, exempt: DOM_SCALAR_PROPERTIES.has(projection) })
+        .toEqual({ projection, exempt: false });
+      expect(projectionByteLength((container as unknown as Record<string, unknown>)[projection]))
+        .toBeGreaterThan(MAX_EXEMPT_PROJECTION_BYTES);
+    }
   });
 
   test("distinguishes shared references from genuine cycles", () => {

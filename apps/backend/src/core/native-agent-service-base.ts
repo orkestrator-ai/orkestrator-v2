@@ -106,6 +106,15 @@ export type NativeAgentServiceLayerTypes = [
 export abstract class NativeAgentServiceBase {
   protected readonly providers = new Map<string, NativeAgentRuntimeProvider>();
   /**
+   * Provider calls inside the durable at-most-once dispatch window. Deletion
+   * may now record its intent while one is running, so the background cache
+   * pruner must not dispose the provider until the send has settled.
+   */
+  protected readonly providerDispatchCounts = new Map<
+    NativeAgentRuntimeProvider,
+    number
+  >();
+  /**
    * Identity of the live bridge generation behind each production provider.
    * Ports and bearer credentials both change when a bridge is replaced.
    */

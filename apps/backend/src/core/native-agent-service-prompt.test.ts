@@ -588,10 +588,16 @@ describe("NativeAgentService", () => {
 
 
 
-  test("orders environment deletion intent after an outbound prompt already holds the lock", async () => {
+  test("does not hold the environment mutation lock across a slow provider send", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-native-send-delete-"));
     const storage = await createStorage(dataDir);
+    const otherProcess = await createStorage(dataDir);
     await addEnvironment(storage);
+    await addEnvironment(storage, {
+      id: "env-2",
+      name: "Unrelated environment",
+      worktreePath: "/tmp/env-2",
+    });
     let signalSendEntered: (() => void) | undefined;
     const sendEntered = new Promise<void>((resolve) => {
       signalSendEntered = resolve;
@@ -604,6 +610,7 @@ describe("NativeAgentService", () => {
       signalSendEntered?.();
       await sendBarrier;
     });
+    const dispose = mock(async () => undefined);
     const provider = {
       agent: "codex",
       createSession: async () => "provider-session",
@@ -613,6 +620,7 @@ describe("NativeAgentService", () => {
       messages: async () => [],
       structured: async () => null,
       abort: async () => undefined,
+      dispose,
     } as AgentSessionProvider;
     const service = new NativeAgentService(storage, async <T>(): Promise<T> => {
       throw new Error("unused");
@@ -631,18 +639,43 @@ describe("NativeAgentService", () => {
       });
       await sendEntered;
 
-      let deletionSettled = false;
-      const deletion = storage.updateEnvironment("env-1", {
+      const activityAt = new Date(1_000).toISOString();
+      const activity = otherProcess.recordEnvironmentActivity(
+        "env-2",
+        activityAt,
+      );
+      let activityTimeout: ReturnType<typeof setTimeout> | undefined;
+      const activityOutcome = await Promise.race([
+        activity.then(() => "settled" as const),
+        new Promise<"timed-out">((resolve) => {
+          activityTimeout = setTimeout(() => resolve("timed-out"), 500);
+        }),
+      ]);
+      clearTimeout(activityTimeout);
+
+      if (activityOutcome === "timed-out") releaseSend?.();
+      await activity;
+      expect(activityOutcome).toBe("settled");
+      expect((await storage.getEnvironment("env-2"))?.lastActivityAt)
+        .toBe(activityAt);
+
+      // The liveness check is a start fence, not a global lock held across the
+      // network call. Deletion may begin once the accepted operation is in the
+      // native-agent session's own at-most-once critical section.
+      await otherProcess.updateEnvironment("env-1", {
         deletionRequestedAt: new Date().toISOString(),
-      }).then(() => {
-        deletionSettled = true;
       });
-      await Promise.resolve();
-      expect(deletionSettled).toBe(false);
+      const reconcilePendingLaunches = () => (
+        service as unknown as { reconcilePendingLaunches(): Promise<void> }
+      ).reconcilePendingLaunches();
+      await reconcilePendingLaunches();
+      expect(dispose).not.toHaveBeenCalled();
 
       releaseSend?.();
-      await Promise.all([dispatch, deletion]);
+      await dispatch;
+      await reconcilePendingLaunches();
       expect(send).toHaveBeenCalledTimes(1);
+      expect(dispose).toHaveBeenCalledTimes(1);
       expect((await storage.getEnvironment("env-1"))?.deletionRequestedAt)
         .toBeDefined();
     } finally {

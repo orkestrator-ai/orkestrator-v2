@@ -304,12 +304,18 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     const stale: Array<[string, NativeAgentRuntimeProvider]> = [];
     for (const [cacheKey, provider] of this.providers) {
       const environmentId = cacheKey.slice(0, cacheKey.indexOf("\0"));
-      if (!liveEnvironmentIds.has(environmentId)) stale.push([cacheKey, provider]);
+      if (
+        !liveEnvironmentIds.has(environmentId)
+        && !this.providerDispatchCounts.has(provider)
+      ) {
+        stale.push([cacheKey, provider]);
+      }
     }
     if (stale.length === 0) return;
     for (const [cacheKey] of stale) this.forgetProviderState(cacheKey);
-    // Safe to dispose here, unlike the observer's eviction path: the
-    // environment is gone, so nothing can still be dispatching through it.
+    // Unlike observer eviction, an absent environment is safe to dispose only
+    // after any provider call that passed the pre-dispatch liveness fence has
+    // settled. Active providers remain cached for the next sweep to prune.
     await Promise.allSettled(stale.map(([, provider]) => provider.dispose?.()));
   }
 

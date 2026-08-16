@@ -140,7 +140,8 @@ lines.on("line", (line) => {
     // This fixture proves the SDK keeps streaming input open across a result,
     // so it emits the edge before the level. The real CLI usually emits them
     // the other way round (the SDK documents the level as preceding the edge),
-    // which the bridge reducer covers directly in `session-manager.test.ts`
+    // which the bridge reducer covers directly in
+    // `session-manager-background-tasks.test.ts`
     // under "an empty level signal before the edge keeps the CLI alive".
     write({
       type: "system",

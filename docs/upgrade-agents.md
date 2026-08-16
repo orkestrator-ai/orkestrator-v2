@@ -421,7 +421,7 @@ contract.
    ```bash
    bun run --cwd apps/web typecheck
    bun run --cwd apps/backend typecheck
-   bun test --cwd apps/web src/lib/opencode-client.test.ts --parallel
+   bun test --cwd apps/web 'src/lib/opencode-*.test.ts' --parallel
    bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
      src/core/opencode-provider-dispatch.test.ts \
      src/core/opencode-provider-lifecycle.test.ts \
@@ -462,7 +462,7 @@ drives both of them.
 | Cursor | `--force [--approve-mcps] acp` | `--approve-mcps` only when `ACP_APPROVE_PROJECT_MCPS=1` |
 | Grok | `--always-approve agent stdio` | always |
 
-`bridges/acp-bridge/src/index.test.ts` asserts these vectors against
+`bridges/acp-bridge/src/acp-server.test.ts` asserts these vectors against
 `bridges/acp-bridge/src/testing/fake-agent.ts`, which records its own argv and
 accepts anything. A
 renamed or removed upstream flag therefore leaves the suite green and breaks

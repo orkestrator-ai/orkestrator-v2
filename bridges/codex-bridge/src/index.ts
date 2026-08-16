@@ -834,7 +834,7 @@ async function startSelectedEngine(
  * Test seams for engine-neutral helpers that live in this module.
  *
  * Everything specific to a turn now lives in `AppServerRuntime` and is tested
- * directly in `app-server-runtime.test.ts`; this is only the surrounding shell
+ * directly in `app-server-runtime-*.test.ts`; this is only the surrounding shell
  * (SSE fan-out, raw logging, model cache, shutdown, rollout reads).
  */
 export const __testing = {

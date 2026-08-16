@@ -39,7 +39,7 @@ Playwright suite:
 bun run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
 
 bun run test:logged -- --name terminal-container -- \
-  bun --cwd=apps/web test src/components/terminal/TerminalContainer.test.tsx \
+  bun --cwd=apps/web test 'src/components/terminal/TerminalContainer*.test.tsx' \
   --parallel=2 --only-failures
 
 bun run test:logged -- --name agent-browser -- \

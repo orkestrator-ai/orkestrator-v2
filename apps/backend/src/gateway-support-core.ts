@@ -196,7 +196,7 @@ export const GATEWAY_METRIC_TOTAL_LABEL_BYTES = 8 * 1024;
  * whole registry — a limit below it silently folds legitimate commands into
  * `__overflow__` in invocation order, which makes the per-command byte and
  * timing breakdown both incomplete and different on every run.
- * `tests/unit/electron/gateway.test.ts` pins these against the real registry.
+ * `tests/unit/electron/gateway-support-extra.test.ts` pins these against the real registry.
  */
 export const GATEWAY_COMMAND_METRIC_MAP_LIMIT = 512;
 export const GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES = 32 * 1024;

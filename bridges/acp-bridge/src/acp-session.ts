@@ -717,6 +717,7 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
       content: nextPartText.value,
       sourcePartId: `${message.id}:${message.parts.length}`,
       sourceMessageId: message.id,
+      createdAt: new Date().toISOString(),
     };
     message.parts.push(created);
     // A single chunk can exceed the cap on its own, so the freshly pushed part

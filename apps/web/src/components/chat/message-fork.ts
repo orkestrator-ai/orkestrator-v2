@@ -1,4 +1,5 @@
 import { isClientOnlyNativeMessage } from "@/lib/chat/client-only-messages";
+import { messageHasVisibleContent } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 
 export type MessageForkKind = "prompt" | "response";
@@ -53,11 +54,13 @@ function isPersistedConversationMessage(message: NativeMessage): boolean {
 }
 
 /**
- * Places one fork action at the end of every prompt and completed response.
+ * Places one fork action at the end of every prompt and every completed
+ * transcript section.
  *
- * A provider may render a response as several adjacent assistant rows. Only
- * the last row receives the action, so "fork response" means the whole
- * exchange rather than an arbitrary streaming update in the middle of it.
+ * A provider may render a response as several adjacent assistant rows — text,
+ * then tools, then more text. Each completed section receives its own action so
+ * the reader can copy or fork from that block rather than only from the last
+ * row of the whole exchange.
  */
 export function buildMessageForkActionKinds(
   messages: NativeMessage[],
@@ -74,6 +77,10 @@ export function buildMessageForkActionKinds(
       continue;
     }
 
+    if (message.role !== "assistant" || !messageHasVisibleContent(message)) {
+      continue;
+    }
+
     let nextIndex = index + 1;
     while (
       nextIndex < messages.length
@@ -82,7 +89,6 @@ export function buildMessageForkActionKinds(
       nextIndex += 1;
     }
     const nextMessage = messages[nextIndex];
-    if (nextMessage?.role === "assistant") continue;
     if (!nextMessage && responseInProgress) continue;
 
     kinds.set(message.id, "response");
@@ -186,13 +192,14 @@ export function findPreviousForkMessage(
 export function findNextForkMessage(
   messages: NativeMessage[],
   messageId: string,
+  predicate: (message: NativeMessage) => boolean = () => true,
 ): NativeMessage | undefined {
   const selectedIndex = messages.findIndex((message) => message.id === messageId);
   if (selectedIndex < 0) return undefined;
 
   for (let index = selectedIndex + 1; index < messages.length; index += 1) {
     const candidate = messages[index]!;
-    if (isPersistedConversationMessage(candidate)) {
+    if (isPersistedConversationMessage(candidate) && predicate(candidate)) {
       return candidate;
     }
   }

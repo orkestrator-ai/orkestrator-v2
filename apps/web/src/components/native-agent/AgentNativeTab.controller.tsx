@@ -54,10 +54,11 @@ import {
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
 import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
-import { normalizeNativeMessages } from "@/lib/chat/native-message-adapters";
+import { normalizeNativeMessages, getNativeSourceMessageId } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import {
   createOptimisticNativeMessage,
+  isClientOnlyNativeMessage,
   TURN_STOPPED_BY_USER,
 } from "@/lib/chat/client-only-messages";
 import {
@@ -103,6 +104,7 @@ import { NativeAgentInteractionCard } from "./NativeAgentInteractionCard";
 import { CodexPlanModeCard } from "@/components/codex/CodexPlanModeCard";
 import { ClaudeBackgroundTaskHoldCard } from "@/components/claude/ClaudeBackgroundTaskHoldCard";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
+import { findLatestBackendUserTurnStartedAt } from "@/lib/session-timer";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { isSetupBlocked } from "@/lib/setup-commands";
 
@@ -430,10 +432,17 @@ export function SharedNativeAgentController({
     : phase === "recovering"
       ? <span role="status" className="text-xs">Reconnecting to {label}…</span>
       : undefined;
+  const turnStartedAt = projection?.turn.startedAt
+    ?? (isTurnActive
+      ? findLatestBackendUserTurnStartedAt(
+          normalizedMessages,
+          (message) => !isClientOnlyNativeMessage(message),
+        )
+      : undefined);
   const { elapsedSeconds, finalElapsedSeconds } = useElapsedTimer(
     isTurnActive,
     projection?.sessionId,
-    projection?.turn.startedAt,
+    turnStartedAt,
   );
   const canQueue = isRunning && adapter.capabilities.queue;
   /*
@@ -852,7 +861,7 @@ export function SharedNativeAgentController({
       responseInProgress: isTurnActive,
       resolvePromptBoundary: (message, allMessages) => {
         if (platform === "opencode") {
-          return { type: "message", messageId: message.id };
+          return { type: "message", messageId: getNativeSourceMessageId(message.id) };
         }
         if (platform === "codex") {
           const previousTurn = findPreviousForkMessage(
@@ -873,14 +882,19 @@ export function SharedNativeAgentController({
         return {
           type: "message",
           messageId: previous.parts.find((part) => part.sourceMessageId)?.sourceMessageId
-            ?? previous.id.split(":text-block:")[0]!,
+            ?? getNativeSourceMessageId(previous.id),
         };
       },
       resolveResponseBoundary: (message, allMessages) => {
         if (platform === "opencode") {
-          const next = findNextForkMessage(allMessages, message.id);
+          const sourceId = getNativeSourceMessageId(message.id);
+          const next = findNextForkMessage(
+            allMessages,
+            message.id,
+            (candidate) => getNativeSourceMessageId(candidate.id) !== sourceId,
+          );
           return next
-            ? { type: "message", messageId: next.id }
+            ? { type: "message", messageId: getNativeSourceMessageId(next.id) }
             : { type: "whole-session" };
         }
         if (platform === "codex") {
@@ -891,7 +905,7 @@ export function SharedNativeAgentController({
         return {
           type: "message",
           messageId: message.parts.find((part) => part.sourceMessageId)?.sourceMessageId
-            ?? message.id.split(":text-block:")[0]!,
+            ?? getNativeSourceMessageId(message.id),
         };
       },
     }),

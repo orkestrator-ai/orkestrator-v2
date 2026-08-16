@@ -59,6 +59,22 @@ describe("opencode-client streaming part normalization", () => {
     });
   });
 
+  test("copies OpenCode part start time onto createdAt", () => {
+    const part = normalizeOpenCodePart({
+      id: "part-timed",
+      messageID: "message-1",
+      type: "text",
+      text: "Later",
+      time: { start: Date.parse("2026-06-18T12:04:00.000Z") },
+    });
+
+    expect(part).toMatchObject({
+      type: "text",
+      content: "Later",
+      createdAt: "2026-06-18T12:04:00.000Z",
+    });
+  });
+
   test("normalizes reasoning parts into thinking parts", () => {
     const part = normalizeOpenCodePart({
       id: "part-r",

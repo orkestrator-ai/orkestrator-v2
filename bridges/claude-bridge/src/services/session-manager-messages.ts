@@ -231,6 +231,10 @@ export function parseMessageContent(
   let textContent = "";
 
   const messageUuid = typeof message.uuid === "string" ? message.uuid : undefined;
+  const recordTimestamp =
+    typeof message.timestamp === "string" && Number.isFinite(Date.parse(message.timestamp))
+      ? message.timestamp
+      : undefined;
   const explicitParentTaskUseId =
     typeof message.parent_tool_use_id === "string" && message.parent_tool_use_id.length > 0
       ? message.parent_tool_use_id
@@ -251,6 +255,7 @@ export function parseMessageContent(
       orderedParts.push({
         type: "text",
         value: block.text || "",
+        ...(recordTimestamp ? { timestamp: recordTimestamp } : {}),
         messageUuid,
         parentTaskUseId: explicitParentTaskUseId,
         blockOffset,
@@ -266,6 +271,7 @@ export function parseMessageContent(
       orderedParts.push({
         type: "thinking",
         value: thinkingContent,
+        ...(recordTimestamp ? { timestamp: recordTimestamp } : {}),
         messageUuid,
         parentTaskUseId: explicitParentTaskUseId,
         blockOffset,
@@ -332,6 +338,7 @@ export function parseMessageContent(
         orderedParts.push({
           type: "tool-ref",
           value: block.id,
+          ...(recordTimestamp ? { timestamp: recordTimestamp } : {}),
           messageUuid,
           parentTaskUseId,
           blockOffset,
@@ -411,7 +418,11 @@ export function buildMessageParts(
     } else if (entry.type === "tool-ref") {
       const tool = toolTracker.getTool(entry.value);
       if (tool) {
-        result.push(tool);
+        result.push(
+          entry.timestamp && !tool.createdAt
+            ? { ...tool, createdAt: entry.timestamp }
+            : tool,
+        );
       }
     } else if (entry.type === "text") {
       result.push({

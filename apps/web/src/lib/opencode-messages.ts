@@ -30,6 +30,24 @@ function stringifyToolPayload(value: unknown): string | undefined {
   }
 }
 
+function parseOpenCodePartCreatedAt(part: Record<string, unknown>): string | undefined {
+  const time = part.time;
+  if (!time || typeof time !== "object") return undefined;
+  const start = (time as Record<string, unknown>).start;
+  if (typeof start !== "number" || !Number.isFinite(start) || start < 0) {
+    return undefined;
+  }
+  return new Date(start).toISOString();
+}
+
+function withOpenCodePartCreatedAt<T extends { createdAt?: string }>(
+  part: T,
+  raw: Record<string, unknown>,
+): T {
+  const createdAt = parseOpenCodePartCreatedAt(raw);
+  return createdAt ? { ...part, createdAt } : part;
+}
+
 function parseOpenCodeCreatedAt(value: unknown): string {
   if (typeof value === "number") {
     return new Date(value).toISOString();
@@ -357,6 +375,9 @@ export function normalizeOpenCodePart(part: unknown): OpenCodeMessagePart | null
   const p = part as any;
   if (!p || typeof p !== "object") return null;
 
+  const stamp = <T extends OpenCodeMessagePart>(normalized: T): T =>
+    withOpenCodePartCreatedAt(normalized, p);
+
   const sourcePartId = typeof p.id === "string" ? p.id : undefined;
   const sourceMessageId = typeof p.messageID === "string" ? p.messageID : undefined;
   const partType = p.type;
@@ -369,21 +390,21 @@ export function normalizeOpenCodePart(part: unknown): OpenCodeMessagePart | null
       isOpenCodeReasoningInProgress(p),
     );
     if (!normalizedContent.trim()) return null;
-    return {
+    return stamp({
       type: "thinking",
       content: normalizedContent,
       sourcePartId,
       sourceMessageId,
-    };
+    });
   }
 
   if (partType === "text" && typeof p.text === "string") {
-    return {
+    return stamp({
       type: "text",
       content: p.text,
       sourcePartId,
       sourceMessageId,
-    };
+    });
   }
 
   if (partType === "tool") {
@@ -415,7 +436,7 @@ export function normalizeOpenCodePart(part: unknown): OpenCodeMessagePart | null
       else if (taskEnvelope.state === "completed") mappedState = "success";
       else if (taskEnvelope.state === "error") mappedState = "failure";
 
-      return {
+      return stamp({
         type: "subagent",
         content: description,
         sourcePartId,
@@ -432,7 +453,7 @@ export function normalizeOpenCodePart(part: unknown): OpenCodeMessagePart | null
         subagentPrompt: prompt,
         subagentActions: [],
         subagentActionCount: 0,
-      };
+      });
     }
 
     let toolDiff: ToolDiffMetadata | undefined;
@@ -514,7 +535,7 @@ export function normalizeOpenCodePart(part: unknown): OpenCodeMessagePart | null
       };
     }
 
-    return {
+    return stamp({
       type: "tool-invocation",
       content: toolName,
       sourcePartId,
@@ -526,18 +547,18 @@ export function normalizeOpenCodePart(part: unknown): OpenCodeMessagePart | null
       toolTitle,
       toolOutput,
       toolError,
-    };
+    });
   }
 
   if (partType === "file") {
     const filePath = p.filename || p.url || "";
-    return {
+    return stamp({
       type: "file",
       content: filePath,
       sourcePartId,
       sourceMessageId,
       fileUrl: typeof p.url === "string" ? p.url : undefined,
-    };
+    });
   }
 
   return null;

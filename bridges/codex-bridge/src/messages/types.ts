@@ -29,6 +29,11 @@ export interface NormalizedPart {
    * is not what the user picked. The renderer titles the row with this.
    */
   filename?: string;
+  /**
+   * When this item first appeared in the turn. Used by the renderer to timestamp
+   * transcript sections independently of the prompt that started the turn.
+   */
+  createdAt?: string;
   fileUrl?: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;

@@ -39,7 +39,7 @@ describe("useElapsedTimer", () => {
       expect(result.current.finalElapsedSeconds).toBeNull();
     });
 
-    test("falls back to a hook-local timer when loadingStartedAt is missing", () => {
+    test("shows no elapsed time when loadingStartedAt is missing", () => {
       const startTime = 1000000;
       dateNowSpy = spyOn(Date, "now").mockReturnValue(startTime);
 
@@ -51,7 +51,7 @@ describe("useElapsedTimer", () => {
 
       rerender({ isLoading: true, sessionId: "session-1", loadingStartedAt: undefined });
 
-      expect(result.current.elapsedSeconds).toBe(0);
+      expect(result.current.elapsedSeconds).toBeNull();
       expect(result.current.finalElapsedSeconds).toBeNull();
     });
 
@@ -85,7 +85,7 @@ describe("useElapsedTimer", () => {
       expect(result.current.finalElapsedSeconds).toBe(5);
     });
 
-    test("computes finalElapsedSeconds locally when loadingStartedAt is missing", () => {
+    test("does not invent finalElapsedSeconds when loadingStartedAt is missing", () => {
       const startTime = 1000000;
       dateNowSpy = spyOn(Date, "now").mockReturnValue(startTime);
 
@@ -111,7 +111,7 @@ describe("useElapsedTimer", () => {
       });
 
       expect(result.current.elapsedSeconds).toBeNull();
-      expect(result.current.finalElapsedSeconds).toBe(5);
+      expect(result.current.finalElapsedSeconds).toBeNull();
     });
 
     test("clears stored finalElapsedSeconds when loading starts again", () => {
@@ -143,7 +143,68 @@ describe("useElapsedTimer", () => {
   });
 
   describe("session changes", () => {
-    test("resets elapsed timer state when sessionId changes", () => {
+    test("keeps elapsed time when sessionId changes but the backend clock is unchanged", () => {
+      const startTime = 1000000;
+      dateNowSpy = spyOn(Date, "now").mockReturnValue(startTime + 8000);
+
+      const { result, rerender } = renderHook(
+        ({ isLoading, sessionId, loadingStartedAt }) =>
+          useElapsedTimer(isLoading, sessionId, loadingStartedAt),
+        {
+          initialProps: {
+            isLoading: true,
+            sessionId: "session-1",
+            loadingStartedAt: startTime,
+          },
+        },
+      );
+
+      expect(result.current.elapsedSeconds).toBe(8);
+
+      rerender({
+        isLoading: true,
+        sessionId: "session-2",
+        loadingStartedAt: startTime,
+      });
+      expect(result.current.elapsedSeconds).toBe(8);
+    });
+
+    test("shows elapsed time immediately on remount from the backend clock", () => {
+      const startTime = 1000000;
+      dateNowSpy = spyOn(Date, "now").mockReturnValue(startTime + 12000);
+
+      const { result, unmount } = renderHook(
+        ({ isLoading, sessionId, loadingStartedAt }) =>
+          useElapsedTimer(isLoading, sessionId, loadingStartedAt),
+        {
+          initialProps: {
+            isLoading: true,
+            sessionId: "session-1",
+            loadingStartedAt: startTime,
+          },
+        },
+      );
+
+      expect(result.current.elapsedSeconds).toBe(12);
+      unmount();
+
+      const remounted = renderHook(
+        ({ isLoading, sessionId, loadingStartedAt }) =>
+          useElapsedTimer(isLoading, sessionId, loadingStartedAt),
+        {
+          initialProps: {
+            isLoading: true,
+            sessionId: "session-1",
+            loadingStartedAt: startTime,
+          },
+        },
+      );
+
+      expect(remounted.result.current.elapsedSeconds).toBe(12);
+      remounted.unmount();
+    });
+
+    test("clears elapsed timer state when the backend clock is gone", () => {
       const startTime = 1000000;
       dateNowSpy = spyOn(Date, "now").mockReturnValue(startTime);
 

@@ -256,10 +256,12 @@ export function groupNativeToolActivity(parts: NativeMessagePart[]): NativeMessa
 
   const flushToolGroup = () => {
     if (toolGroup.length === 0) return;
+    const createdAt = latestPartCreatedAt(toolGroup);
     const group: NativeToolGroupPart = {
       type: "tool-group",
       content: "",
       parts: toolGroup,
+      ...(createdAt ? { createdAt } : {}),
     };
     rendered.push(group);
     toolGroup = [];
@@ -297,10 +299,12 @@ export function groupNativeAgentActivity(parts: NativeMessagePart[]): NativeMess
     if (agentGroup.length === 1) {
       rendered.push(agentGroup[0]!);
     } else if (agentGroup.length > 1) {
+      const createdAt = latestPartCreatedAt(agentGroup);
       const group: NativeAgentGroupPart = {
         type: "agent-group",
         content: "",
         parts: agentGroup,
+        ...(createdAt ? { createdAt } : {}),
       };
       rendered.push(group);
     }
@@ -519,7 +523,9 @@ export function normalizeNativeMessage(message: NativeMessage): NativeMessage {
 }
 
 export function normalizeNativeMessages(messages: readonly NativeMessage[]): NativeMessage[] {
-  return messages.map(normalizeNativeMessage);
+  return messages.flatMap((message) =>
+    splitAssistantTranscriptBlocks(normalizeNativeMessage(message)),
+  );
 }
 
 export function normalizeOpenCodeNativeMessage(message: NativeMessage): NativeMessage {
@@ -814,12 +820,8 @@ export function applyClaudeBackgroundTaskStates(
   return messagesChanged ? nextMessages : messages;
 }
 
-const CLAUDE_TEXT_BLOCK_GROUP_WINDOW_MS = 2 * 60 * 1000;
-
-interface ClaudeTextBlockSegment {
+interface TranscriptBlockSegment {
   parts: NativeMessagePart[];
-  firstTextAt?: string;
-  firstTextAtMs?: number;
   firstPartIndex: number;
 }
 
@@ -829,86 +831,95 @@ function parseTimestamp(value?: string): number | undefined {
   return Number.isFinite(timestamp) ? timestamp : undefined;
 }
 
-/**
- * Split a long-running Claude assistant turn into separately timestamped
- * transcript rows. A text block can start a new row only after intervening
- * tool/reasoning activity and only when it arrives more than two minutes after
- * the first text block in the current row.
- */
+function latestPartCreatedAt(parts: readonly NativeMessagePart[]): string | undefined {
+  let latest: string | undefined;
+  let latestMs = Number.NEGATIVE_INFINITY;
+  const consider = (value?: string) => {
+    const timestamp = parseTimestamp(value);
+    if (timestamp !== undefined && timestamp >= latestMs) {
+      latestMs = timestamp;
+      latest = value;
+    }
+  };
+  for (const part of parts) {
+    consider(part.createdAt);
+    if (part.type === "tool-group" || part.type === "agent-group") {
+      for (const child of part.parts) consider(child.createdAt);
+    }
+    if (part.type === "task-group") {
+      consider(part.task.createdAt);
+      for (const child of part.childTools) consider(child.createdAt);
+    }
+  }
+  return latest;
+}
+
+function isTextSectionPart(part: NativeMessagePart): boolean {
+  return part.type === "text" || part.type === "file";
+}
+
 /**
  * Identity cache for split display rows. Without it a long assistant turn that
  * splits into several rows would mint new row objects every render, undoing
  * the normalization cache for exactly the transcripts big enough to care.
  */
-const splitClaudeTextBlocksCache = new WeakMap<NativeMessage, NativeMessage[]>();
+const splitAssistantTranscriptBlocksCache = new WeakMap<NativeMessage, NativeMessage[]>();
 
-export function splitClaudeAssistantTextBlocks(
+/**
+ * Split an assistant turn into separately timestamped transcript rows.
+ *
+ * A run of text (or files) is one section. Tool, reasoning, and agent activity
+ * is another. Crossing that boundary ends the current section so each block
+ * can show when it was sent, plus its own copy/fork actions.
+ */
+export function splitAssistantTranscriptBlocks(
   message: NativeMessage,
 ): NativeMessage[] {
-  const cached = splitClaudeTextBlocksCache.get(message);
+  const cached = splitAssistantTranscriptBlocksCache.get(message);
   if (cached) return cached;
-  const rows = splitClaudeAssistantTextBlocksUncached(message);
-  splitClaudeTextBlocksCache.set(message, rows);
+  const rows = splitAssistantTranscriptBlocksUncached(message);
+  splitAssistantTranscriptBlocksCache.set(message, rows);
   return rows;
 }
 
-function splitClaudeAssistantTextBlocksUncached(
+/** @deprecated Use {@link splitAssistantTranscriptBlocks}. */
+export function splitClaudeAssistantTextBlocks(
+  message: NativeMessage,
+): NativeMessage[] {
+  return splitAssistantTranscriptBlocks(message);
+}
+
+function splitAssistantTranscriptBlocksUncached(
   message: NativeMessage,
 ): NativeMessage[] {
   if (message.role !== "assistant") return [message];
 
-  const segments: ClaudeTextBlockSegment[] = [];
-  let current: ClaudeTextBlockSegment = {
-    parts: [],
-    firstPartIndex: 0,
-  };
-  let hasText = false;
-  let hasBoundarySinceText = false;
+  const segments: TranscriptBlockSegment[] = [];
+  let current: TranscriptBlockSegment | null = null;
+  let currentIsText: boolean | null = null;
 
   const finishCurrentSegment = () => {
-    if (current.parts.length > 0) segments.push(current);
+    if (current && current.parts.length > 0) segments.push(current);
+    current = null;
+    currentIsText = null;
   };
 
   for (let index = 0; index < message.parts.length; index += 1) {
     const part = message.parts[index]!;
-
-    if (part.type !== "text") {
-      current.parts.push(part);
-      if (hasText) hasBoundarySinceText = true;
-      continue;
+    const isText = isTextSectionPart(part);
+    if (current && currentIsText !== isText) finishCurrentSegment();
+    if (!current) {
+      current = { parts: [], firstPartIndex: index };
+      currentIsText = isText;
     }
-
-    const partTimestamp = parseTimestamp(part.createdAt);
-    const shouldStartNewSegment =
-      hasText &&
-      hasBoundarySinceText &&
-      current.firstTextAtMs !== undefined &&
-      partTimestamp !== undefined &&
-      partTimestamp - current.firstTextAtMs >
-        CLAUDE_TEXT_BLOCK_GROUP_WINDOW_MS;
-
-    if (shouldStartNewSegment) {
-      finishCurrentSegment();
-      current = {
-        parts: [],
-        firstTextAt: part.createdAt,
-        firstTextAtMs: partTimestamp,
-        firstPartIndex: index,
-      };
-      hasText = false;
-    }
-
     current.parts.push(part);
-    if (!hasText) {
-      current.firstTextAt = part.createdAt;
-      current.firstTextAtMs = partTimestamp;
-    }
-    hasText = true;
-    hasBoundarySinceText = false;
   }
-
   finishCurrentSegment();
-  if (segments.length <= 1) return [message];
+  if (segments.length <= 1) {
+    const createdAt = latestPartCreatedAt(message.parts) ?? message.createdAt;
+    if (createdAt === message.createdAt) return [message];
+    return [{ ...message, createdAt }];
+  }
 
   return segments.map((segment, index) => ({
     ...message,
@@ -921,28 +932,30 @@ function splitClaudeAssistantTextBlocksUncached(
       .map((part) => part.content)
       .join(""),
     parts: segment.parts,
-    createdAt:
-      index === 0
-        ? message.createdAt
-        : segment.firstTextAt ?? message.createdAt,
+    createdAt: latestPartCreatedAt(segment.parts) ?? message.createdAt,
   }));
 }
 
 /**
  * Claude-specific display normalization. Unlike the provider-neutral
  * normalizer, this may expand one long assistant turn into multiple transcript
- * rows so each delayed text block receives its own timestamp and copy action.
+ * rows so each text and tool section receives its own timestamp and copy action.
  */
 export function normalizeClaudeMessagesForDisplay(
   messages: ClaudeMessage[],
 ): NativeMessage[] {
   return messages.flatMap((message) =>
-    splitClaudeAssistantTextBlocks(normalizeClaudeMessage(message)),
+    splitAssistantTranscriptBlocks(normalizeClaudeMessage(message)),
   );
 }
 
-/** Resolve a timestamp-split display row back to its persisted Claude message. */
-export function getClaudeSourceMessageId(messageId: string): string {
+/** Resolve a timestamp-split display row back to its persisted message. */
+export function getNativeSourceMessageId(messageId: string): string {
   const splitMarker = messageId.indexOf(":text-block:");
   return splitMarker < 0 ? messageId : messageId.slice(0, splitMarker);
+}
+
+/** @deprecated Use {@link getNativeSourceMessageId}. */
+export function getClaudeSourceMessageId(messageId: string): string {
+  return getNativeSourceMessageId(messageId);
 }

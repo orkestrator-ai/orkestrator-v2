@@ -16,6 +16,7 @@ import {
   normalizeClaudePart,
   normalizeCodexNativeMessage,
   normalizeNativeMessage,
+  normalizeNativeMessages,
   normalizeOpenCodeNativeMessage,
   parseNativeAttachmentsFromContent,
   splitClaudeAssistantTextBlocks,
@@ -808,7 +809,7 @@ describe("native message adapters", () => {
 
     expect(normalized.modelId).toBe("claude-opus-5");
     expect(splitClaudeAssistantTextBlocks(normalized).map((row) => row.modelId))
-      .toEqual(["claude-opus-5", "claude-opus-5"]);
+      .toEqual(["claude-opus-5", "claude-opus-5", "claude-opus-5"]);
   });
 
   test("groups consecutive native tool activity into a tool group", () => {
@@ -1744,7 +1745,7 @@ describe("native message adapters", () => {
     ]);
   });
 
-  test("keeps tool-bounded Claude text blocks in one row within two minutes", () => {
+  test("splits tool-bounded Claude text into timestamped copy rows", () => {
     const messages: ClaudeMessage[] = [
       {
         id: "assistant-fast",
@@ -1760,6 +1761,7 @@ describe("native message adapters", () => {
           {
             type: "tool-invocation", content: "Read",
             toolName: "Read",
+            createdAt: "2026-06-18T12:00:20.000Z",
           },
           {
             type: "text",
@@ -1769,6 +1771,7 @@ describe("native message adapters", () => {
           {
             type: "tool-invocation", content: "Bash",
             toolName: "Bash",
+            createdAt: "2026-06-18T12:01:10.000Z",
           },
           {
             type: "text",
@@ -1781,55 +1784,6 @@ describe("native message adapters", () => {
 
     const displayMessages = normalizeClaudeMessagesForDisplay(messages);
 
-    expect(displayMessages).toHaveLength(1);
-    expect(displayMessages[0]?.id).toBe("assistant-fast");
-    expect(displayMessages[0]?.parts.map((part) => part.type)).toEqual([
-      "text",
-      "tool-group",
-      "text",
-      "tool-group",
-      "text",
-    ]);
-  });
-
-  test("splits delayed tool-bounded Claude text into timestamped copy rows", () => {
-    const messages: ClaudeMessage[] = [
-      {
-        id: "assistant-slow",
-        role: "assistant",
-        content: "FirstSecondThird",
-        createdAt: "2026-06-18T12:00:00.000Z",
-        parts: [
-          {
-            type: "text",
-            content: "First",
-            createdAt: "2026-06-18T12:00:00.000Z",
-          },
-          {
-            type: "tool-invocation", content: "Read",
-            toolName: "Read",
-          },
-          {
-            type: "text",
-            content: "Second",
-            createdAt: "2026-06-18T12:01:30.000Z",
-          },
-          {
-            type: "tool-invocation", content: "Bash",
-            toolName: "Bash",
-          },
-          {
-            type: "text",
-            content: "Third",
-            createdAt: "2026-06-18T12:02:01.000Z",
-          },
-        ],
-      },
-    ];
-
-    const displayMessages = normalizeClaudeMessagesForDisplay(messages);
-
-    expect(displayMessages).toHaveLength(2);
     expect(displayMessages.map((message) => ({
       id: message.id,
       content: message.content,
@@ -1837,23 +1791,42 @@ describe("native message adapters", () => {
       partTypes: message.parts.map((part) => part.type),
     }))).toEqual([
       {
-        id: "assistant-slow",
-        content: "FirstSecond",
+        id: "assistant-fast",
+        content: "First",
         createdAt: "2026-06-18T12:00:00.000Z",
-        partTypes: ["text", "tool-group", "text", "tool-group"],
+        partTypes: ["text"],
       },
       {
-        id: "assistant-slow:text-block:4",
+        id: "assistant-fast:text-block:1",
+        content: "",
+        createdAt: "2026-06-18T12:00:20.000Z",
+        partTypes: ["tool-group"],
+      },
+      {
+        id: "assistant-fast:text-block:2",
+        content: "Second",
+        createdAt: "2026-06-18T12:01:00.000Z",
+        partTypes: ["text"],
+      },
+      {
+        id: "assistant-fast:text-block:3",
+        content: "",
+        createdAt: "2026-06-18T12:01:10.000Z",
+        partTypes: ["tool-group"],
+      },
+      {
+        id: "assistant-fast:text-block:4",
         content: "Third",
-        createdAt: "2026-06-18T12:02:01.000Z",
+        createdAt: "2026-06-18T12:02:00.000Z",
         partTypes: ["text"],
       },
     ]);
   });
 
-  test("preserves the first row timestamp when a delayed block causes a split", () => {
+  test("timestamps each split row from its backend parts, not the prompt", () => {
     const messageTimestamp = "2026-06-18T12:00:00.000Z";
     const firstTextTimestamp = "2026-06-18T12:03:00.000Z";
+    const toolTimestamp = "2026-06-18T12:04:00.000Z";
     const delayedTextTimestamp = "2026-06-18T12:05:01.000Z";
     const baseMessage: ClaudeMessage = {
       id: "assistant-stable-timestamp",
@@ -1879,6 +1852,7 @@ describe("native message adapters", () => {
           {
             type: "tool-invocation", content: "Read",
             toolName: "Read",
+            createdAt: toolTimestamp,
           },
           {
             type: "text",
@@ -1889,14 +1863,15 @@ describe("native message adapters", () => {
       },
     ]);
 
-    expect(beforeSplit[0]?.createdAt).toBe(messageTimestamp);
-    expect(afterSplit).toHaveLength(2);
+    expect(beforeSplit[0]?.createdAt).toBe(firstTextTimestamp);
+    expect(afterSplit).toHaveLength(3);
     expect(afterSplit[0]?.id).toBe(baseMessage.id);
-    expect(afterSplit[0]?.createdAt).toBe(messageTimestamp);
-    expect(afterSplit[1]?.createdAt).toBe(delayedTextTimestamp);
+    expect(afterSplit[0]?.createdAt).toBe(firstTextTimestamp);
+    expect(afterSplit[1]?.createdAt).toBe(toolTimestamp);
+    expect(afterSplit[2]?.createdAt).toBe(delayedTextTimestamp);
   });
 
-  test("splits delayed Claude text across a reasoning boundary", () => {
+  test("splits Claude text across a reasoning boundary", () => {
     const displayMessages = normalizeClaudeMessagesForDisplay([
       {
         id: "assistant-reasoning-boundary",
@@ -1923,14 +1898,18 @@ describe("native message adapters", () => {
       },
     ]);
 
-    expect(displayMessages).toHaveLength(2);
+    expect(displayMessages).toHaveLength(3);
     expect(displayMessages.map((message) => ({
       content: message.content,
       partTypes: message.parts.map((part) => part.type),
     }))).toEqual([
       {
         content: "First",
-        partTypes: ["text", "tool-group"],
+        partTypes: ["text"],
+      },
+      {
+        content: "",
+        partTypes: ["tool-group"],
       },
       {
         content: "Second",
@@ -1939,36 +1918,7 @@ describe("native message adapters", () => {
     ]);
   });
 
-  test.each([
-    {
-      name: "an absent first timestamp",
-      firstTimestamp: undefined,
-      secondTimestamp: "2026-06-18T12:05:00.000Z",
-    },
-    {
-      name: "an absent delayed timestamp",
-      firstTimestamp: "2026-06-18T12:00:00.000Z",
-      secondTimestamp: undefined,
-    },
-    {
-      name: "an invalid first timestamp",
-      firstTimestamp: "not-a-timestamp",
-      secondTimestamp: "2026-06-18T12:05:00.000Z",
-    },
-    {
-      name: "an invalid delayed timestamp",
-      firstTimestamp: "2026-06-18T12:00:00.000Z",
-      secondTimestamp: "not-a-timestamp",
-    },
-    {
-      name: "an out-of-order delayed timestamp",
-      firstTimestamp: "2026-06-18T12:05:00.000Z",
-      secondTimestamp: "2026-06-18T12:00:00.000Z",
-    },
-  ])("does not split Claude text with $name", ({
-    firstTimestamp,
-    secondTimestamp,
-  }) => {
+  test("splits Claude text even when part timestamps are missing or unusable", () => {
     const displayMessages = normalizeClaudeMessagesForDisplay([
       {
         id: "assistant-unusable-timestamp",
@@ -1979,7 +1929,6 @@ describe("native message adapters", () => {
           {
             type: "text",
             content: "First",
-            createdAt: firstTimestamp,
           },
           {
             type: "tool-invocation", content: "Read",
@@ -1988,17 +1937,35 @@ describe("native message adapters", () => {
           {
             type: "text",
             content: "Second",
-            createdAt: secondTimestamp,
           },
         ],
       },
     ]);
 
-    expect(displayMessages).toHaveLength(1);
-    expect(displayMessages[0]?.content).toBe("FirstSecond");
+    expect(displayMessages.map((message) => ({
+      id: message.id,
+      content: message.content,
+      partTypes: message.parts.map((part) => part.type),
+    }))).toEqual([
+      {
+        id: "assistant-unusable-timestamp",
+        content: "First",
+        partTypes: ["text"],
+      },
+      {
+        id: "assistant-unusable-timestamp:text-block:1",
+        content: "",
+        partTypes: ["tool-group"],
+      },
+      {
+        id: "assistant-unusable-timestamp:text-block:2",
+        content: "Second",
+        partTypes: ["text"],
+      },
+    ]);
   });
 
-  test("creates a new row for each successive delayed text block", () => {
+  test("creates a new row for each text and tool section", () => {
     const displayMessages = normalizeClaudeMessagesForDisplay([
       {
         id: "assistant-three-rows",
@@ -2014,6 +1981,7 @@ describe("native message adapters", () => {
           {
             type: "tool-invocation", content: "Read",
             toolName: "Read",
+            createdAt: "2026-06-18T12:01:00.000Z",
           },
           {
             type: "text",
@@ -2023,6 +1991,7 @@ describe("native message adapters", () => {
           {
             type: "tool-invocation", content: "Bash",
             toolName: "Bash",
+            createdAt: "2026-06-18T12:03:00.000Z",
           },
           {
             type: "text",
@@ -2044,9 +2013,19 @@ describe("native message adapters", () => {
         createdAt: "2026-06-18T12:00:00.000Z",
       },
       {
+        id: "assistant-three-rows:text-block:1",
+        content: "",
+        createdAt: "2026-06-18T12:01:00.000Z",
+      },
+      {
         id: "assistant-three-rows:text-block:2",
         content: "Second",
         createdAt: "2026-06-18T12:02:01.000Z",
+      },
+      {
+        id: "assistant-three-rows:text-block:3",
+        content: "",
+        createdAt: "2026-06-18T12:03:00.000Z",
       },
       {
         id: "assistant-three-rows:text-block:4",
@@ -2106,6 +2085,60 @@ describe("native message adapters", () => {
     ];
 
     expect(normalizeClaudeMessagesForDisplay(messages)).toHaveLength(1);
+  });
+
+  test("splits Codex and OpenCode assistant turns at the same text/tool boundary", () => {
+    const message: NativeMessage = {
+      id: "codex-1",
+      role: "assistant",
+      content: "BeforeAfter",
+      createdAt: "2026-06-18T12:00:00.000Z",
+      parts: [
+        {
+          type: "text",
+          content: "Before",
+          createdAt: "2026-06-18T12:00:05.000Z",
+        },
+        {
+          type: "tool-invocation",
+          content: "Read",
+          toolName: "Read",
+          createdAt: "2026-06-18T12:00:20.000Z",
+        },
+        {
+          type: "text",
+          content: "After",
+          createdAt: "2026-06-18T12:00:40.000Z",
+        },
+      ],
+    };
+
+    const rows = normalizeNativeMessages([message]);
+    expect(rows.map((row) => ({
+      id: row.id,
+      content: row.content,
+      createdAt: row.createdAt,
+      partTypes: row.parts.map((part) => part.type),
+    }))).toEqual([
+      {
+        id: "codex-1",
+        content: "Before",
+        createdAt: "2026-06-18T12:00:05.000Z",
+        partTypes: ["text"],
+      },
+      {
+        id: "codex-1:text-block:1",
+        content: "",
+        createdAt: "2026-06-18T12:00:20.000Z",
+        partTypes: ["tool-group"],
+      },
+      {
+        id: "codex-1:text-block:2",
+        content: "After",
+        createdAt: "2026-06-18T12:00:40.000Z",
+        partTypes: ["text"],
+      },
+    ]);
   });
 });
 

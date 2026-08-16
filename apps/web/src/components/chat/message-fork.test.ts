@@ -52,7 +52,7 @@ const acceptAll = {
 };
 
 describe("message fork placement", () => {
-  test("adds actions to every prompt and only the bottom of each response", () => {
+  test("adds actions to every prompt and every completed transcript section", () => {
     const messages = [
       message("user-1", "user"),
       message("assistant-1a", "assistant"),
@@ -65,6 +65,7 @@ describe("message fork placement", () => {
       Array.from(buildMessageForkActionKinds(messages, false)),
     ).toEqual([
       ["user-1", "prompt"],
+      ["assistant-1a", "response"],
       ["assistant-1b", "response"],
       ["user-2", "prompt"],
       ["assistant-2", "response"],
@@ -112,7 +113,22 @@ describe("message fork placement", () => {
     ).toEqual([]);
   });
 
-  test("a system row between two assistant rows does not split one response", () => {
+  test("keeps fork actions on completed sections while the trailing row is still streaming", () => {
+    const messages = [
+      message("user-1", "user"),
+      message("assistant-1a", "assistant"),
+      message("assistant-1b", "assistant"),
+    ];
+
+    expect(
+      Array.from(buildMessageForkActionKinds(messages, true)),
+    ).toEqual([
+      ["user-1", "prompt"],
+      ["assistant-1a", "response"],
+    ]);
+  });
+
+  test("places fork actions on each assistant section even when a system row sits between them", () => {
     const messages = [
       message("user-1", "user"),
       message("assistant-1a", "assistant"),
@@ -124,6 +140,7 @@ describe("message fork placement", () => {
       Array.from(buildMessageForkActionKinds(messages, false)),
     ).toEqual([
       ["user-1", "prompt"],
+      ["assistant-1a", "response"],
       ["assistant-1b", "response"],
     ]);
   });

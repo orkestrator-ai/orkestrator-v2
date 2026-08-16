@@ -127,10 +127,9 @@ export const NativeMessage = memo(function NativeMessage({
       )
     : "";
   // Whether the assistant footer still has a reason to exist once attribution
-  // is suppressed. `buildMessageForkActionKinds` places a block's only
-  // "fork response" action on its *last* assistant row without checking for
-  // content, so a content-empty trailing row can be the sole host of that
-  // affordance — hiding the row there would strand the whole exchange.
+  // is suppressed. Fork actions sit on every completed transcript section,
+  // including a content-empty trailing row that is the only host of that
+  // affordance — hiding the row there would strand the exchange.
   const hasAssistantFooterContent =
     !isUser && (Boolean(messageActions) || Boolean(assistantCopyContent));
   const handleUserLongPress = useCallback(async () => {

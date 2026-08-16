@@ -422,15 +422,22 @@ export async function renderTurn(
             options.cwd,
             options.state.fileChange,
           );
+          const createdAt = typeof accumulator?.startedAt === "number"
+            && Number.isFinite(accumulator.startedAt)
+            ? new Date(accumulator.startedAt).toISOString()
+            : undefined;
+          const stampedParts = createdAt
+            ? itemParts.map((part) => (part.createdAt ? part : { ...part, createdAt }))
+            : itemParts;
           if (accumulator?.completed) {
             options.state.completedItemParts.set(itemId, {
               source: accumulator.item,
-              parts: itemParts,
+              parts: stampedParts,
             });
           } else {
             options.state.completedItemParts.delete(itemId);
           }
-          parts.push(...itemParts);
+          parts.push(...stampedParts);
         }
       }
       continue;

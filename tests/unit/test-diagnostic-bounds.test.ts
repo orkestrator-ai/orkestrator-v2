@@ -44,14 +44,20 @@ describe("bounded test diagnostics", () => {
       "expect(screen.queryByRole('button')).toBeNull();",
       "expect(container.querySelector('.spinner')).toBeNull();",
       "expect(await screen.findByRole('status')).toBeNull();",
+      "expect(container.querySelectorAll('.item')[0]).toBeNull();",
+      "expect(container.querySelector('.spinner')?.getAttribute('data-state')).toBeNull();",
+      "expect(container.querySelector('.spinner')!.textContent).toBeNull();",
       "expect(container.querySelector('.ready')).not.toBeNull();",
     ].join("\n");
 
-    expect(findUnsafeDomAbsenceAssertions("fixture.test.ts", source)).toHaveLength(3);
+    expect(findUnsafeDomAbsenceAssertions("fixture.test.ts", source)).toHaveLength(4);
     expect(rewriteUnsafeDomAbsenceAssertions("fixture.test.ts", source)).toBe([
       "expect(screen.queryByRole('button') === null).toBe(true);",
       "expect(container.querySelector('.spinner') === null).toBe(true);",
       "expect(await screen.findByRole('status') === null).toBe(true);",
+      "expect(container.querySelectorAll('.item')[0] === null).toBe(true);",
+      "expect(container.querySelector('.spinner')?.getAttribute('data-state')).toBeNull();",
+      "expect(container.querySelector('.spinner')!.textContent).toBeNull();",
       "expect(container.querySelector('.ready')).not.toBeNull();",
     ].join("\n"));
   });

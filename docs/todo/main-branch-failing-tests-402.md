@@ -1,17 +1,28 @@
 # Two deterministic test failures on `main` from PR #402
 
-Status: open as of 2026-08-16. Both failures are reproducible, deterministic,
-and unrelated to each other in mechanism but share one origin commit.
+Status: resolved as of 2026-08-16. Both failures were reproducible,
+deterministic, and unrelated to each other in mechanism but shared one origin
+commit.
 
-`bun run test` is red on `main`. Two cases fail every time, in both aggregate
-and isolated runs, so neither belongs in
+The stale dialog assertion was corrected by `74a8a37f`, and the two scanner
+offenders were rewritten by `384ca153`. A follow-up detector fix now recognizes
+known scalar DOM projections such as `getAttribute()` and `textContent`, while
+regression coverage confirms that node-producing expressions such as
+`querySelectorAll(...)[0]` remain rejected. Focused reruns of both formerly
+failing files pass on `a8882c3b` before the detector follow-up, and the updated
+scanner test passes ten consecutive reruns. The remainder of this document is
+the historical incident analysis.
+
+`bun run test` was red on `main`. Two cases failed every time, in both aggregate
+and isolated runs, so neither belonged in
 [`docs/flaky-tests.md`](../flaky-tests.md) — that document is for tests whose
-result varies between runs. These do not vary.
+result varies between runs. These did not vary.
 
 Both were introduced by `724f6326` — `feat(model-picker): support ordered
-favorite models (#402)`, merged 2026-08-15 21:19 +0100. Six commits have landed
-on `main` since; none of them touches the affected files, so the failures have
-been on `main` continuously since #402 merged.
+favorite models (#402)`, merged 2026-08-15 21:19 +0100. At the time of the
+original investigation, six later commits had landed on `main`; none touched
+the affected files, so the failures had remained continuously since #402
+merged.
 
 | # | Test | File | Mechanism |
 | --- | --- | --- | --- |

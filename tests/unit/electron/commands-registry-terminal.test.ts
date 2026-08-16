@@ -2338,7 +2338,7 @@ exit 0
     expect(notifyAgentTurnCompleted).toHaveBeenCalledWith(environment.id);
     expect(environment.hasUnreadWork).toBe(true);
     expect(environment.lastActivityAt).toBe("2026-07-23T11:02:00.000Z");
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
 
 

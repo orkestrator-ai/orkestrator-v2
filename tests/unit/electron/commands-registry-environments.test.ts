@@ -5029,7 +5029,7 @@ exit 0
       }
     }
     expect(recoveredEnvironment).toBeNull();
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
 
 

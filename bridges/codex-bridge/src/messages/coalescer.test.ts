@@ -39,7 +39,10 @@ describe("UpdateCoalescer", () => {
     const coalescer = new UpdateCoalescer({
       intervalMs: () => selectedIntervalMs,
       publish: () => {
-        publishedAt.push(Date.now());
+        // Bun schedules the coalescer's timer on a monotonic clock. Measuring
+        // the elapsed interval with Date.now() lets a wall-clock adjustment
+        // make a correct publication look early and fail the lower bound.
+        publishedAt.push(performance.now());
       },
     });
 
@@ -67,7 +70,8 @@ describe("UpdateCoalescer", () => {
         return intervalMs;
       },
       publish: () => {
-        publishedAt.push(Date.now());
+        // Monotonic for the same reason as the cadence assertion above.
+        publishedAt.push(performance.now());
       },
     });
 

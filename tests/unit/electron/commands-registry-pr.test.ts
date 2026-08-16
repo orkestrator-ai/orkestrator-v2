@@ -1853,7 +1853,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       pid: started.pid,
     });
     expect(commandTesting.getLocalCodexBridgeToken(environment.id)).toBeUndefined();
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
 
 

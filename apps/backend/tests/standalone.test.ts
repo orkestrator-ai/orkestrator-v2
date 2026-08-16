@@ -7,6 +7,12 @@ const root = path.resolve(import.meta.dir, "../../..");
 const temporaryDirectories: string[] = [];
 const processes: Bun.Subprocess[] = [];
 const BACKEND_READY_TIMEOUT_MS = 20_000;
+// A backend wedged in startup need not act on SIGTERM, and the stdout reader
+// only settles once the child closes stdout. Escalate rather than wait forever.
+const BACKEND_KILL_GRACE_MS = 2_000;
+// stderr is diagnostic only. Draining it unbounded would hang in exactly the
+// case the diagnostic exists for, so a partial message beats no message.
+const STDERR_DIAGNOSTIC_TIMEOUT_MS = 1_000;
 
 // A case can include backend startup, a real child-process tree, and graceful
 // shutdown. The helper deadlines remain narrower so failures retain a specific
@@ -56,20 +62,42 @@ async function startBackend(
   const reader = child.stdout.getReader();
   const decoder = new TextDecoder();
   let pending = "";
-  let startupExpired = false;
+  // stderr may still be open when the deadline fires, so bound the drain.
+  const readStderr = async (): Promise<string> =>
+    await Promise.race([
+      new Response(child.stderr).text().catch(() => ""),
+      Bun.sleep(STDERR_DIAGNOSTIC_TIMEOUT_MS).then(() => "<stderr not drained in time>"),
+    ]);
+  const EXPIRED = Symbol("startup-expired");
+  let expire!: () => void;
+  const expired = new Promise<typeof EXPIRED>((resolve) => {
+    expire = () => resolve(EXPIRED);
+  });
   const expiry = setTimeout(() => {
-    startupExpired = true;
     child.kill("SIGTERM");
+    // Deliberately not cleared by the finally below: this helper throws as soon
+    // as the deadline resolves, so clearing it would drop the escalation and
+    // leave a child that ignores SIGTERM running past the suite.
+    setTimeout(() => child.kill("SIGKILL"), BACKEND_KILL_GRACE_MS);
+    // Resolve the deadline directly rather than relying on the child closing
+    // stdout: a child that ignores SIGTERM would otherwise leave the read
+    // pending until Bun's generic per-test timeout replaced this diagnostic.
+    expire();
   }, BACKEND_READY_TIMEOUT_MS);
   try {
     while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        const stderr = await new Response(child.stderr).text();
-        throw new Error(startupExpired
-          ? `Timed out waiting for standalone backend: ${stderr}`
-          : `Backend exited during startup: ${stderr}`);
+      const pendingRead = reader.read();
+      const next = await Promise.race([pendingRead, expired]);
+      if (next === EXPIRED) {
+        // Releasing the lock below rejects this abandoned read. Swallow it so
+        // it cannot surface as an unhandled rejection in another test.
+        void pendingRead.catch(() => undefined);
+        throw new Error(
+          `Timed out waiting for standalone backend after ${BACKEND_READY_TIMEOUT_MS}ms: ${await readStderr()}`,
+        );
       }
+      const { done, value } = next;
+      if (done) throw new Error(`Backend exited during startup: ${await readStderr()}`);
       pending += decoder.decode(value, { stream: true });
       const lines = pending.split("\n");
       pending = lines.pop() ?? "";
@@ -92,7 +120,12 @@ async function startBackend(
     }
   } finally {
     clearTimeout(expiry);
-    reader.releaseLock();
+    try {
+      reader.releaseLock();
+    } catch {
+      // A read is still outstanding on the timeout path. The child has already
+      // been signalled, so the abandoned stream dies with the process.
+    }
   }
 }
 

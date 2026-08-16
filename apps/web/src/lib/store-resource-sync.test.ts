@@ -1760,11 +1760,16 @@ describe("authoritative resync", () => {
       connected({ payload: undefined });
       connected({ payload: undefined });
       await waitForState(
-        () => manifestCalls.length === 2
+        () => manifestCalls.length >= 2
           && useProjectStore.getState().projects.some(({ name }) => name === "After restart")
           && useEnvironmentStore.getState().environments.some(({ name }) => name === "After restart"),
         "post-restart authoritative collection hydration",
       );
+      // Polling stops at the first satisfying observation, which on its own
+      // cannot prove the second announcement was coalesced rather than merely
+      // slower. Settle past the reconciliation window so an uncoalesced third
+      // load is counted here instead of after the test has already passed.
+      await tick();
 
       expect(manifestCalls).toHaveLength(2);
       expect(manifestCalls[1]?.knownGeneration).toEqual(expect.any(String));

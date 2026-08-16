@@ -69,6 +69,10 @@ function getTriggerPlatformIcon(platform: string) {
     .querySelector(`[data-native-model-platform='${platform}']`);
 }
 
+function getModelRowPlatformIcon(platform: string, root: ParentNode = document) {
+  return root.querySelector(`[data-native-model-row-platform='${platform}']`);
+}
+
 function getMobileTrigger(kind: "reasoning" | "speed") {
   return document.querySelector<HTMLElement>(`[data-native-mobile-${kind}-trigger]`)!;
 }
@@ -306,6 +310,93 @@ describe("AgentModelPicker", () => {
     expect(
       screen.getByRole("button", { name: "A model name that can become very long (High ⚡)" }),
     ).toBeTruthy();
+  });
+
+  test("shows each favorite row's own platform icon before its provider label", () => {
+    setMobileViewport(false);
+    renderPicker({
+      models: [
+        { platform: "codex", id: "gpt", label: "GPT" },
+        { platform: "claude", id: "opus", label: "Opus" },
+      ],
+      enabledPlatforms: ["claude", "codex"],
+      selectedPlatform: "codex",
+      selectedModelId: "gpt",
+      selectedModelLabel: "GPT",
+      favorites: [
+        { platform: "codex", modelId: "gpt" },
+        { platform: "claude", modelId: "opus" },
+      ],
+    });
+    openPicker();
+
+    const gpt = screen.getByRole("menuitemradio", { name: /GPT/ });
+    const opus = screen.getByRole("menuitemradio", { name: /Opus/ });
+    const gptIcon = getModelRowPlatformIcon("codex", gpt);
+    const opusIcon = getModelRowPlatformIcon("claude", opus);
+
+    expect(gptIcon?.querySelector("svg")).toBeTruthy();
+    expect(opusIcon?.querySelector("svg")).toBeTruthy();
+    expect(getModelRowPlatformIcon("claude", gpt) === null).toBe(true);
+    expect(getModelRowPlatformIcon("codex", opus) === null).toBe(true);
+    expect(gptIcon?.nextElementSibling?.textContent).toBe("Codex");
+    expect(opusIcon?.nextElementSibling?.textContent).toBe("Claude");
+  });
+
+  test("pairs the platform icon with a distinct provider label", () => {
+    setMobileViewport(false);
+    renderPicker({
+      models: [{
+        platform: "opencode",
+        id: "sonnet",
+        label: "Sonnet",
+        providerLabel: "Anthropic",
+      }],
+      enabledPlatforms: ["opencode"],
+      selectedPlatform: "opencode",
+      selectedModelId: "sonnet",
+      selectedModelLabel: "Sonnet",
+    });
+    openPicker();
+    showPlatformCatalog("opencode");
+
+    const row = screen.getByRole("menuitemradio", { name: /Sonnet/ });
+    expect(getModelRowPlatformIcon("opencode", row)?.querySelector("svg")).toBeTruthy();
+    expect(row.textContent).toContain("Anthropic");
+    expect(row.textContent?.includes("OpenCode")).toBe(false);
+  });
+
+  test.each([
+    ["claude", "text-orange-400"],
+    ["codex", "text-emerald-400"],
+    ["opencode", "text-green-500"],
+    ["cursor", "text-violet-400"],
+    ["grok", "text-sky-400"],
+  ] as const)("renders the %s model-row platform icon in its accent colour", (platform, accentClass) => {
+    setMobileViewport(false);
+    renderPicker({
+      models: [{ platform, id: "model-1", label: "Model 1" }],
+      selectedPlatform: platform,
+      selectedModelId: "model-1",
+      selectedModelLabel: "Model 1",
+    });
+    openPicker();
+    showPlatformCatalog(platform);
+
+    const icon = getModelRowPlatformIcon(platform);
+    expect(icon).toBeTruthy();
+    expect(icon?.querySelector("svg")?.getAttribute("class")).toContain(accentClass);
+  });
+
+  test("keeps the model-row platform icon out of the accessibility tree", () => {
+    setMobileViewport(false);
+    renderPicker({ selectedPlatform: "codex" });
+    openPicker();
+    showPlatformCatalog("codex");
+
+    const row = screen.getByRole("menuitemradio", { name: /Model 1/ });
+    expect(getModelRowPlatformIcon("codex", row)?.getAttribute("aria-hidden")).toBe("true");
+    expect(screen.getByRole("menuitemradio", { name: /Model 1/ })).toBeTruthy();
   });
 
   test("routes mobile model, reasoning, and speed selections", async () => {
@@ -1092,6 +1183,28 @@ describe("AgentModelPicker", () => {
     const catalogModelList = document.querySelector("[data-native-model-list]");
     expect(catalogModelList).toBeTruthy();
     expect(catalogModelList!.getAttribute("data-favorite-reorder") === null).toBe(true);
+  });
+
+  test("does not render a drag-handle icon on sortable favorite rows", () => {
+    setMobileViewport(false);
+    renderPicker({
+      models: models.slice(0, 2),
+      enabledPlatforms: ["codex"],
+      selectedPlatform: "codex",
+      favorites: [
+        { platform: "codex", modelId: "model-1" },
+        { platform: "codex", modelId: "model-2" },
+      ],
+      onReorderFavorites: () => {},
+    });
+    openPicker();
+
+    expect(document.querySelector("[data-favorite-sortable]")).toBeTruthy();
+    expect(document.querySelector(".lucide-grip-vertical") === null).toBe(true);
+    expect(
+      [...document.querySelectorAll("[data-native-model-list] svg")]
+        .some((svg) => (svg.getAttribute("class") ?? "").includes("grip")),
+    ).toBe(false);
   });
 
   test("opens on the selected platform when no favorites exist", () => {

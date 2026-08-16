@@ -462,7 +462,7 @@ drives both of them.
 | Cursor | `--force [--approve-mcps] acp` | `--approve-mcps` only when `ACP_APPROVE_PROJECT_MCPS=1` |
 | Grok | `--always-approve agent stdio` | always |
 
-`bridges/acp-bridge/src/index.test.ts` asserts these vectors against
+`bridges/acp-bridge/src/acp-server.test.ts` asserts these vectors against
 `bridges/acp-bridge/src/testing/fake-agent.ts`, which records its own argv and
 accepts anything. A
 renamed or removed upstream flag therefore leaves the suite green and breaks

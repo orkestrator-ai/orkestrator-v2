@@ -1,7 +1,8 @@
 # Large file split — analysis and follow-up
 
-Status: source split complete on 2026-08-16. **Test files were deliberately not
-split** and are the outstanding work this document exists to brief.
+Status: source and corresponding test splits complete on 2026-08-16. The
+remainder of this document preserves the analysis and constraints used for the
+test split.
 
 Branch: `split-large-modules`. Four commits against `bd78829`:
 

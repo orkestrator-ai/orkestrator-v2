@@ -3,6 +3,7 @@ import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
 import type { NativeMessage } from "./native-message-types";
 import {
   applyClaudeBackgroundTaskStates,
+  collectRenderedBackgroundTaskIds,
   dedupeStreamedNativeParts,
   dropEmptyThinkingParts,
   findPreviousNativeMessage,
@@ -21,6 +22,169 @@ import {
   parseNativeAttachmentsFromContent,
   splitClaudeAssistantTextBlocks,
 } from "./native-message-adapters";
+
+describe("Claude activity in the shared native transcript", () => {
+  /*
+   * The Claude bridge reports subagents and background tasks as ordinary tool
+   * rows. These cover the join that lets the shared transcript render them as
+   * the same agent card every other provider gets, rather than as flat tool
+   * rows plus a Claude-only list beside the transcript.
+   */
+  const agentLaunch = (
+    toolState: NativeMessage["parts"][number]["toolState"],
+  ): NativeMessage => ({
+    id: "assistant-agent",
+    role: "assistant",
+    content: "",
+    createdAt: "2026-08-16T10:00:00.000Z",
+    parts: [
+      {
+        type: "tool-invocation",
+        content: "Agent",
+        toolName: "Agent",
+        toolUseId: "agent-1",
+        toolState,
+        toolArgs: { description: "Review the bridge" },
+      },
+      {
+        type: "tool-invocation",
+        content: "Read",
+        toolName: "Read",
+        toolUseId: "child-1",
+        toolState: "success",
+        parentTaskUseId: "agent-1",
+        toolArgs: { file_path: "/w/bridge.ts" },
+      },
+    ],
+  });
+
+  test.each([
+    ["pending", "active"],
+    ["success", "finished"],
+    ["failure", "failed"],
+  ] as const)(
+    "promotes a %s foreground subagent launch into an agent card",
+    (toolState, expectedAgentState) => {
+      const [decorated] = applyClaudeBackgroundTaskStates([agentLaunch(toolState)], {});
+      expect(decorated?.parts[0]?.agentState).toBe(expectedAgentState);
+
+      const [normalized] = normalizeNativeMessages([decorated!]);
+      const group = normalized?.parts[0];
+      expect(group?.type).toBe("task-group");
+      // The child tool nests inside the card rather than sitting beside it.
+      expect(group?.type === "task-group" && group.childTools).toHaveLength(1);
+    },
+  );
+
+  test("leaves a subagent launch a plain tool row without the Claude join", () => {
+    // The shared normalizer refuses to read a child lifecycle out of a
+    // task-shaped tool name: other providers use those names for foreground work.
+    const [normalized] = normalizeNativeMessages([agentLaunch("pending")]);
+    expect(normalized?.parts[0]?.type).toBe("tool-group");
+  });
+
+  const backgroundLaunch = (): NativeMessage => ({
+    id: "assistant-background",
+    role: "assistant",
+    content: "",
+    createdAt: "2026-08-16T10:00:00.000Z",
+    parts: [{
+      type: "tool-invocation",
+      content: "Bash",
+      toolName: "Bash",
+      toolUseId: "bash-1",
+      toolState: "success",
+      toolArgs: {
+        command: "bun run dev",
+        description: "Run the dev server",
+        run_in_background: true,
+      },
+    }],
+  });
+
+  test("promotes a running background task into a stoppable task card", () => {
+    const [decorated] = applyClaudeBackgroundTaskStates([backgroundLaunch()], {
+      "bg-dev": {
+        id: "bg-dev",
+        toolUseId: "bash-1",
+        description: "Run the dev server",
+        status: "running",
+      },
+    });
+
+    expect(decorated?.parts[0]?.backgroundTask).toEqual({
+      id: "bg-dev",
+      description: "Run the dev server",
+      status: "running",
+    });
+    // The launch tool succeeded; the task it launched has not.
+    expect(decorated?.parts[0]?.toolState).toBe("success");
+    expect(decorated?.parts[0]?.agentState).toBe("active");
+
+    const [normalized] = normalizeNativeMessages([decorated!]);
+    expect(normalized?.parts[0]?.type).toBe("task-group");
+    expect(collectRenderedBackgroundTaskIds([normalized!])).toEqual(
+      new Set(["bg-dev"]),
+    );
+  });
+
+  test("keeps an unresolved background launch a plain tool row", () => {
+    // Nothing behind the id: no snapshot, and no id in the launch output. A
+    // card here would promise a stop control with no target.
+    const [normalized] = normalizeNativeMessages(
+      applyClaudeBackgroundTaskStates([backgroundLaunch()], {}),
+    );
+    expect(normalized?.parts[0]?.type).toBe("tool-group");
+    expect(collectRenderedBackgroundTaskIds([normalized!]).size).toBe(0);
+  });
+
+  test("does not let a background task adopt the tools that follow it", () => {
+    const message = backgroundLaunch();
+    message.parts.push({
+      type: "tool-invocation",
+      content: "Read",
+      toolName: "Read",
+      toolUseId: "after-1",
+      toolState: "success",
+      toolArgs: { file_path: "/w/a.ts" },
+    });
+
+    const [normalized] = normalizeNativeMessages(
+      applyClaudeBackgroundTaskStates([message], {
+        "bg-dev": { id: "bg-dev", toolUseId: "bash-1", status: "running" },
+      }),
+    );
+
+    const group = normalized?.parts[0];
+    expect(group?.type).toBe("task-group");
+    expect(group?.type === "task-group" && group.childTools).toHaveLength(0);
+    expect(normalized?.parts[1]?.type).toBe("tool-group");
+  });
+
+  test("reports no rendered task for an action row that only names one", () => {
+    const [normalized] = normalizeNativeMessages(
+      applyClaudeBackgroundTaskStates([{
+        id: "assistant-stop",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-08-16T10:00:00.000Z",
+        parts: [{
+          type: "tool-invocation",
+          content: "TaskStop",
+          toolName: "TaskStop",
+          toolState: "success",
+          toolArgs: { task_id: "bg-dev" },
+        }],
+      }], {
+        "bg-dev": { id: "bg-dev", description: "Run the dev server", status: "killed" },
+      }),
+    );
+
+    // A stop row is not a card and offers nothing to act on, so the tab must
+    // not treat it as evidence that the task is already on screen.
+    expect(collectRenderedBackgroundTaskIds([normalized!]).size).toBe(0);
+  });
+});
 
 describe("native message adapters", () => {
   test("promotes an ACP background Task launch into shared sub-agent activity", () => {
@@ -319,7 +483,7 @@ describe("native message adapters", () => {
       parts: [nonToolPart, missingToolUseId, nonAgentTool],
     }];
 
-    expect(applyClaudeBackgroundTaskStates(messages, {
+    const updated = applyClaudeBackgroundTaskStates(messages, {
       missingToolUseId: {
         id: "missingToolUseId",
         status: "running",
@@ -334,7 +498,19 @@ describe("native message adapters", () => {
         toolUseId: "read-tool",
         status: "failed",
       },
-    })).toBe(messages);
+    });
+
+    // No task is joined onto any of these rows. The agent row still reports a
+    // lifecycle, but it is read from its own tool result rather than borrowed
+    // from a task that does not name it.
+    expect(updated[0]?.parts.map((part) => part.backgroundTask)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    expect(updated[0]?.parts[0]).toBe(nonToolPart);
+    expect(updated[0]?.parts[1]?.agentState).toBe("finished");
+    expect(updated[0]?.parts[2]).toBe(nonAgentTool);
   });
 
   test("preserves message and part identity when the agent state is already current", () => {
@@ -382,14 +558,19 @@ describe("native message adapters", () => {
       }],
     }];
 
-    expect(applyClaudeBackgroundTaskStates(messages, {
+    const updated = applyClaudeBackgroundTaskStates(messages, {
       task: {
         id: "task",
         toolUseId: "actual-tool-use",
         description: "Same description",
         status: "running",
       },
-    })).toBe(messages);
+    });
+
+    // The running task would have made this agent "active"; its own successful
+    // result makes it "finished". The matching description buys it nothing.
+    expect(updated[0]?.parts[0]?.backgroundTask).toBeUndefined();
+    expect(updated[0]?.parts[0]?.agentState).toBe("finished");
   });
 
   test("recovers background task names for launch, output, and stop rows from transcript results", () => {

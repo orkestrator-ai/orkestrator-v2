@@ -1,14 +1,19 @@
 import {
   Fragment,
+  useCallback,
   useContext,
+  useEffect,
   useMemo,
+  useState,
 } from "react";
 import {
   ChevronRight,
   Layers,
   Loader2,
+  Square,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import {
   Collapsible,
   CollapsibleContent,
@@ -27,12 +32,15 @@ import {
 import { nativeAgentLatestActivity } from "@/lib/chat/native-agent-preview";
 import {
   type NativeAgentGroupPart,
+  type NativeBackgroundTask,
+  type NativeBackgroundTaskStatus,
   type NativeMessagePart,
   type NativeTaskGroupPart,
   type NativeToolGroupPart,
 } from "@/lib/chat/native-message-types";
 import {
   AgentPlatformContext,
+  BackgroundTaskStopContext,
   NativeMessagePartRenderer,
   markdownComponents,
   useAgentExpansion,
@@ -291,7 +299,14 @@ function AgentUsageStats({
   );
 }
 
-function AgentActivityIcon({ status }: { status: NativeAgentStatus }) {
+function AgentActivityIcon({
+  status,
+  spinning = status === "active",
+}: {
+  status: NativeAgentStatus;
+  /** Paused work is live but not progressing, so it must not appear to be. */
+  spinning?: boolean;
+}) {
   return (
     <span
       className={cn(
@@ -302,7 +317,7 @@ function AgentActivityIcon({ status }: { status: NativeAgentStatus }) {
       )}
       aria-hidden="true"
     >
-      {status === "active" ? (
+      {spinning ? (
         <Loader2 className="size-4 animate-spin motion-reduce:animate-none" />
       ) : (
         <Layers className="size-4" />
@@ -313,6 +328,285 @@ function AgentActivityIcon({ status }: { status: NativeAgentStatus }) {
 
 const agentCardClassName =
   "my-0 overflow-hidden rounded-lg border border-border/70 bg-zinc-900/90 shadow-sm shadow-black/15";
+
+interface BackgroundTaskPresentation {
+  label: string;
+  /** Whether the provider will still accept a stop request for this task. */
+  live: boolean;
+  spinning: boolean;
+  status: NativeAgentStatus;
+  pillClassName: string;
+}
+
+const NEUTRAL_STATUS_PILL =
+  "border-border/60 bg-muted/40 text-muted-foreground";
+
+const BACKGROUND_TASK_PRESENTATION: Record<
+  NativeBackgroundTaskStatus,
+  BackgroundTaskPresentation
+> = {
+  pending: {
+    label: "Starting",
+    live: true,
+    spinning: true,
+    status: "active",
+    pillClassName: getSubagentStatusClasses("active"),
+  },
+  running: {
+    label: "Running",
+    live: true,
+    spinning: true,
+    status: "active",
+    pillClassName: getSubagentStatusClasses("active"),
+  },
+  paused: {
+    label: "Paused",
+    live: true,
+    spinning: false,
+    status: "active",
+    pillClassName: getSubagentStatusClasses("active"),
+  },
+  completed: {
+    label: "Completed",
+    live: false,
+    spinning: false,
+    status: "finished",
+    pillClassName: getSubagentStatusClasses("finished"),
+  },
+  failed: {
+    label: "Failed",
+    live: false,
+    spinning: false,
+    status: "failed",
+    pillClassName: getSubagentStatusClasses("failed"),
+  },
+  /*
+   * A task the user stopped did what they asked, so it is not painted as a
+   * failure. It is still terminal, which is what removes the stop control.
+   */
+  killed: {
+    label: "Stopped",
+    live: false,
+    spinning: false,
+    status: "finished",
+    pillClassName: NEUTRAL_STATUS_PILL,
+  },
+};
+
+/**
+ * A launch this transcript recovered without a live snapshot behind it.
+ *
+ * The provider's bounded task history has forgotten it, so its outcome is
+ * genuinely unknown and no stop control may be offered: the id may name work
+ * that ended long ago, or nothing at all.
+ */
+const UNKNOWN_BACKGROUND_TASK: BackgroundTaskPresentation = {
+  label: "Launched",
+  live: false,
+  spinning: false,
+  status: "finished",
+  pillClassName: NEUTRAL_STATUS_PILL,
+};
+
+function backgroundTaskPresentation(
+  task: NativeBackgroundTask,
+): BackgroundTaskPresentation {
+  return task.status
+    ? BACKGROUND_TASK_PRESENTATION[task.status]
+    : UNKNOWN_BACKGROUND_TASK;
+}
+
+function backgroundTaskLabel(task: NativeBackgroundTask): string {
+  return task.description?.trim() || `Background task ${task.id}`;
+}
+
+function StopBackgroundTaskButton({
+  task,
+  onStop,
+  onStopped,
+  onFailed,
+}: {
+  task: NativeBackgroundTask;
+  onStop?: (taskId: string) => Promise<boolean>;
+  onStopped: () => void;
+  onFailed: (message: string) => void;
+}) {
+  const contextStop = useContext(BackgroundTaskStopContext);
+  const stopBackgroundTask = onStop ?? contextStop;
+  const [stopping, setStopping] = useState(false);
+  const taskId = task.id;
+
+  // A stop that succeeded leaves the button disabled until the authoritative
+  // snapshot reports a terminal status, which is what unmounts this control.
+  // A tab remounted mid-stop starts from the snapshot, never from this flag.
+  useEffect(() => { setStopping(false); }, [taskId]);
+
+  const label = backgroundTaskLabel(task);
+  const stop = useCallback(async () => {
+    if (!stopBackgroundTask || stopping) return;
+    setStopping(true);
+    let stopped = false;
+    try {
+      stopped = await stopBackgroundTask(taskId);
+    } catch {
+      stopped = false;
+    }
+    if (stopped) {
+      onStopped();
+      return;
+    }
+    setStopping(false);
+    onFailed(
+      `Could not stop “${label}”. Try again or use the main Stop control.`,
+    );
+  }, [label, onFailed, onStopped, stopBackgroundTask, stopping, taskId]);
+
+  if (!stopBackgroundTask) return null;
+
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="h-7 shrink-0 px-2 text-xs"
+      disabled={stopping}
+      aria-label={`Stop ${label}`}
+      onClick={() => void stop()}
+    >
+      {stopping ? (
+        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+      ) : (
+        <Square className="h-3 w-3 fill-current" aria-hidden />
+      )}
+      {stopping ? "Stopping" : "Stop"}
+    </Button>
+  );
+}
+
+/**
+ * A provider-owned background task, rendered as the agent card every other
+ * long-running child uses.
+ *
+ * It says "Task" rather than "Agent" and carries a stop control where an agent
+ * carries its tool and update counts: a background shell command reports
+ * neither, so those slots would always read zero.
+ */
+export function BackgroundTaskCard({
+  task,
+  command,
+  result,
+  open,
+  onOpenChange,
+  onStop,
+  embedded = false,
+}: {
+  task: NativeBackgroundTask;
+  /** The command or prompt that launched the task, shown collapsed. */
+  command?: string;
+  /** Launch output, shown in the expanded body. */
+  result?: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Overrides `BackgroundTaskStopContext` for cards rendered outside a message. */
+  onStop?: (taskId: string) => Promise<boolean>;
+  embedded?: boolean;
+}) {
+  const [stopError, setStopError] = useState<string | null>(null);
+  const presentation = backgroundTaskPresentation(task);
+  const description = task.description?.trim();
+  // The header already carries the description, so the collapsed second line is
+  // for what it does not say: the command actually running.
+  const preview = command && command !== description ? command : undefined;
+  const hasBody = Boolean(command || result);
+
+  // The failure belongs to the attempt, not the task: a later status change
+  // means the question the message answered is no longer being asked.
+  useEffect(() => { setStopError(null); }, [task.status]);
+
+  return (
+    <Collapsible
+      open={open && hasBody}
+      onOpenChange={onOpenChange}
+      className={cn(!embedded && agentCardClassName)}
+    >
+      <div className="flex items-start gap-2 px-3 py-2.5">
+        <CollapsibleTrigger
+          className={cn(
+            "flex min-w-0 flex-1 items-start gap-3 rounded-md text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+            hasBody ? "cursor-pointer hover:bg-white/[0.025]" : "cursor-default",
+          )}
+          disabled={!hasBody}
+        >
+          <AgentActivityIcon
+            status={presentation.status}
+            spinning={presentation.spinning}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 text-xs">
+              <span className="shrink-0 font-medium uppercase tracking-wide text-muted-foreground/80">
+                Task
+              </span>
+              <span className="min-w-0 truncate text-sm font-medium text-foreground">
+                {backgroundTaskLabel(task)}
+              </span>
+              <span
+                className={cn(
+                  "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                  presentation.pillClassName,
+                )}
+              >
+                {presentation.label}
+              </span>
+            </div>
+            {preview ? (
+              <div className="mt-1 truncate font-mono text-xs text-muted-foreground/80">
+                {preview}
+              </div>
+            ) : null}
+          </div>
+          <ChevronRight
+            className={cn(
+              "mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+              open && hasBody && "rotate-90",
+              !hasBody && "opacity-0",
+            )}
+          />
+        </CollapsibleTrigger>
+        {presentation.live ? (
+          <StopBackgroundTaskButton
+            task={task}
+            onStop={onStop}
+            onStopped={() => setStopError(null)}
+            onFailed={setStopError}
+          />
+        ) : null}
+      </div>
+
+      {stopError ? (
+        <div role="alert" className="px-3 pb-2 text-xs text-destructive">
+          {stopError}
+        </div>
+      ) : null}
+
+      <CollapsibleContent>
+        <div className="border-t border-border/40 px-3 py-3">
+          {command ? (
+            <div className="mb-3 border-l border-border/30 pl-3">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                Command
+              </div>
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-muted-foreground/90">
+                {command}
+              </pre>
+            </div>
+          ) : null}
+          <AgentMetaRows entries={[{ label: "Task ID", value: task.id }]} />
+          <AgentResultBlock result={result} />
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
 
 export function SubagentPart({
   part,
@@ -531,6 +825,9 @@ export function TaskGroupPart({
   embedded?: boolean;
 }) {
   const [isOpen, setIsOpen] = useAgentExpansion(part, partKey);
+  const backgroundTask = part.task.toolArgs?.run_in_background === true
+    ? part.task.backgroundTask
+    : undefined;
   const toolLabel =
     getToolTitleDisplayName(
       part.task.toolTitle,
@@ -587,6 +884,19 @@ export function TaskGroupPart({
     );
   }, [description, displayName, hideCounts, part, prompt, status]);
   const metaEntries = agentMetaEntries(part.task.toolArgs, displayName);
+
+  if (backgroundTask) {
+    return (
+      <BackgroundTaskCard
+        task={backgroundTask}
+        command={stringToolArg(part.task.toolArgs, "command") ?? prompt}
+        result={result}
+        open={isOpen}
+        onOpenChange={setIsOpen}
+        embedded={embedded}
+      />
+    );
+  }
 
   return (
     <Collapsible

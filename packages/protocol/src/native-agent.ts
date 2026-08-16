@@ -526,6 +526,15 @@ export interface NativeAgentBackgroundTaskSummary {
   id: string;
   status: "pending" | "running" | "completed" | "failed" | "killed" | "paused";
   description?: string;
+  /**
+   * The tool call that launched this task, when the provider reported one.
+   *
+   * This is what lets the renderer join a live task onto its transcript row and
+   * present one card per task, rather than a separate provider-specific list
+   * beside the transcript. The id recovered from launch output is only a
+   * fallback: it exists solely in the tool result's prose.
+   */
+  toolUseId?: string;
 }
 
 export interface NativeAgentTurnBoundary {

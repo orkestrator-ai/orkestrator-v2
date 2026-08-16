@@ -1433,3 +1433,35 @@ Post-fix stress verification:
 - **Frequency:** failed on two consecutive runs of the same command at `8f15f6c3`, then passed on a third run of the same command at the follow-up commit (47.3 seconds, exit 0). So it is intermittent rather than reliably reproducible, but more frequent than the single-shot spawn timeouts recorded above.
 - **Related:** `ACP bridge > rejects a concurrent second turn that carries a different requestId`, the same `spawnBridge` health-wait family in `index.test.ts`. That entry was recorded when `BRIDGE_STARTUP_TIMEOUT_MS` was 5 s; the constant is now 15 s, so this occurrence means a bridge child took longer than fifteen seconds to bind and answer `/global/health`.
 - **Hypothesis:** Spawn contention again, but the 15 s budget makes plain contention a weaker explanation than it was at 5 s — this file alone spawns a bridge child per test and several tests spawn twice (create, stop, respawn against the same state directory). A recurrence should record how long the child actually took to become healthy, and whether a previous test's child was still shutting down and holding its state directory or port, before the startup budget is raised again. Raising the budget without that measurement would hide a genuine startup regression.
+
+## `ActionBar workflow tabs > opens the Resolve modal after a mobile long press without launching a default resolve` (`apps/web/src/components/layout/ActionBar.test.tsx:2910`)
+
+- **Status:** open
+- **Date observed:** 2026-08-16
+- **Original command:**
+  `bun run test:logged -- --name web-all -- bun --cwd=apps/web test --parallel=4 --only-failures`,
+  at `a9107f112ffe2642388c0279aada5c8430019e7c` on `unify-agent-components`.
+- **Worker configuration:** four Bun workers on the web package alone, not under
+  `scripts/test-all.ts`. An isolated `dev:test` profile (Electron, Vite, backend,
+  bridges) had been running on this host earlier in the same session, so host
+  load was above a quiet single-suite run.
+- **Failure:** `getElementError` from `tests/bounded-test-diagnostics.ts:28`,
+  raised at `ActionBar.test.tsx:2933` — the
+  `screen.getByRole("dialog", { name: "Configure conflict resolution" })`
+  assertion found no dialog. Duration 736.72 ms.
+- **Suite counts:** `5095 pass, 1 fail. Ran 5096 tests across 221 files. [53.17s]`
+- **Isolated rerun:** `bun --cwd=apps/web test src/components/layout/ActionBar --parallel=2`
+  → exit 0, no failures. The aggregate command had also passed twice earlier in
+  the same session at the same commit.
+- **Hypothesis:** the same wall-clock race already documented and fixed for
+  `clears active long-press click suppression when the action bar unmounts`
+  above. The case fires a touch `pointerDown`, sleeps a bare
+  `setTimeout(575)` — the entire margin over the component's long-press
+  threshold — then asserts synchronously. Under contention the timer fires late
+  or React commits the dialog after the sleep resolves, and the immediate
+  `getByRole` misses it. The documented fix for the sibling case (wait for the
+  accessible dialog with a bounded UI wait instead of sleeping past the
+  threshold) applies unchanged here; this occurrence is a second instance of the
+  same pattern in a case the earlier sweep did not convert. Nothing in the
+  failing path touches the transcript, agent cards, or background tasks, which
+  are the only areas the change that observed this touched.

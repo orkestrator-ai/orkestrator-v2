@@ -69,10 +69,27 @@ export interface NativeMessageProps {
   actions?: ReactNode;
   resolveModelLabel?: (modelId: string) => string;
   loadToolDetails?: (detailRef: string) => Promise<NativeAgentToolDetails>;
+  /**
+   * Stops a provider-owned background task. Must be referentially stable, or
+   * `memo(NativeMessage)` stops holding for the whole transcript.
+   */
+  stopBackgroundTask?: (taskId: string) => Promise<boolean>;
 }
 
 export const MessageExpansionScopeContext = createContext("native-message");
 export const AgentPlatformContext = createContext<AgentPlatform | undefined>(undefined);
+/**
+ * Stops a provider-owned background task, resolving `true` once the backend
+ * accepted the request.
+ *
+ * Supplied through context rather than threaded down as a prop because the card
+ * that offers the control is an ordinary transcript part, nested arbitrarily
+ * deep inside grouped activity. Absent means the tab cannot stop tasks, and the
+ * card must then not offer a control it cannot honour.
+ */
+export const BackgroundTaskStopContext = createContext<
+  ((taskId: string) => Promise<boolean>) | undefined
+>(undefined);
 export const ToolDetailLoaderContext = createContext<
   ((detailRef: string) => Promise<NativeAgentToolDetails>) | undefined
 >(undefined);

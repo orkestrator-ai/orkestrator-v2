@@ -2140,6 +2140,91 @@ describe("native message adapters", () => {
       },
     ]);
   });
+
+  test("stamps a section from the newest timestamp nested in a task group", () => {
+    // A task group's own clock is the launch; its child tools carry the work.
+    // Reading only the top-level part would date the section at the launch and
+    // report a long agent run as instantaneous.
+    const rows = normalizeNativeMessages([{
+      id: "codex-2",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-06-18T12:00:00.000Z",
+      parts: [{
+        type: "task-group",
+        content: "",
+        task: {
+          type: "tool-invocation",
+          content: "Explore",
+          toolName: "Task",
+          createdAt: "2026-06-18T12:00:10.000Z",
+        },
+        childTools: [
+          {
+            type: "tool-invocation",
+            content: "Read",
+            toolName: "Read",
+            createdAt: "2026-06-18T12:02:00.000Z",
+          },
+          {
+            type: "tool-invocation",
+            content: "Grep",
+            toolName: "Grep",
+            createdAt: "2026-06-18T12:05:30.000Z",
+          },
+        ],
+      }],
+    }]);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.createdAt).toBe("2026-06-18T12:05:30.000Z");
+  });
+
+  test("stamps a section from the newest timestamp nested in a tool group", () => {
+    const rows = normalizeNativeMessages([{
+      id: "codex-3",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-06-18T12:00:00.000Z",
+      parts: [{
+        type: "tool-group",
+        content: "",
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "Read",
+            toolName: "Read",
+            createdAt: "2026-06-18T12:01:00.000Z",
+          },
+          {
+            type: "tool-invocation",
+            content: "Grep",
+            toolName: "Grep",
+            createdAt: "2026-06-18T12:03:00.000Z",
+          },
+        ],
+      }],
+    }]);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.createdAt).toBe("2026-06-18T12:03:00.000Z");
+  });
+
+  test("keeps the message clock when no part carries a usable timestamp", () => {
+    const rows = normalizeNativeMessages([{
+      id: "codex-4",
+      role: "assistant",
+      content: "no clocks",
+      createdAt: "2026-06-18T12:00:00.000Z",
+      parts: [
+        { type: "text", content: "no clocks" },
+        { type: "tool-invocation", content: "Read", toolName: "Read", createdAt: "not-a-date" },
+      ],
+    }]);
+
+    expect(rows.map((row) => row.createdAt))
+      .toEqual(["2026-06-18T12:00:00.000Z", "2026-06-18T12:00:00.000Z"]);
+  });
 });
 
 describe("getClaudeSourceMessageId", () => {

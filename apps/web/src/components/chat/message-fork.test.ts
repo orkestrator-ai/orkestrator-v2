@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import type {
   NativeMessage,
   NativeMessagePart,
@@ -142,6 +143,89 @@ describe("message fork placement", () => {
       ["user-1", "prompt"],
       ["assistant-1a", "response"],
       ["assistant-1b", "response"],
+    ]);
+  });
+
+  test("skips a section the renderer draws nothing for", () => {
+    // An info-only assistant row and a results-only row both render as nothing,
+    // so hanging a fork action on either would offer a button against a blank
+    // block. The neighbouring sections keep theirs.
+    const messages = [
+      message("user-1", "user"),
+      withParts("assistant-empty-parts", "assistant", []),
+      withParts("assistant-blank-text", "assistant", [
+        { type: "text", content: "   " },
+      ]),
+      withParts("assistant-results-only", "assistant", [
+        { type: "tool-result", content: "exit 0" },
+      ]),
+      withParts("assistant-empty-group", "assistant", [
+        { type: "tool-group", content: "", parts: [] },
+      ]),
+      withParts("assistant-tools", "assistant", [
+        {
+          type: "tool-group",
+          content: "",
+          parts: [{ type: "tool-invocation", content: "Read", toolName: "Read" }],
+        },
+      ]),
+    ];
+
+    expect(
+      Array.from(buildMessageForkActionKinds(messages, false)),
+    ).toEqual([
+      ["user-1", "prompt"],
+      ["assistant-tools", "response"],
+    ]);
+  });
+
+  test("keeps a section's action after pinning moves its only part to the bottom", () => {
+    /*
+     * The plan is keyed by pre-pin display rows, and pinning can leave a row
+     * that still renders — its `content` survives — holding no parts at all.
+     * That row is the only host of the exchange's fork action, which is why
+     * `NativeMessage` keeps an assistant footer with no visible part content.
+     */
+    const rows = [
+      message("user-1", "user"),
+      withParts(
+        "assistant-1",
+        "assistant",
+        [{
+          type: "subagent",
+          content: "Explore",
+          agentState: "active",
+          subagentActions: [],
+          subagentActionCount: 0,
+        }],
+        "Delegating to Explore",
+      ),
+    ];
+
+    const kinds = buildMessageForkActionKinds(rows, false);
+    expect(kinds.get("assistant-1")).toBe("response");
+
+    const pinned = pinActiveNativeAgentParts(rows);
+    const retained = pinned.find((row) => row.id === "assistant-1");
+    expect(retained?.parts).toEqual([]);
+    expect(kinds.get(retained!.id)).toBe("response");
+  });
+
+  test("keeps the action on the last section with content when the trailing rows are blank", () => {
+    // The trailing row is the one a reader reaches last, but it has nothing to
+    // fork from. The action stays on the section that does, so the exchange is
+    // never left without one.
+    const messages = [
+      message("user-1", "user"),
+      message("assistant-answer", "assistant"),
+      withParts("assistant-trailing-empty", "assistant", []),
+    ];
+
+    expect(
+      Array.from(buildMessageForkActionKinds(messages, false)),
+    ).toEqual([
+      ["user-1", "prompt"],
+      ["assistant-answer", "response"],
     ]);
   });
 });

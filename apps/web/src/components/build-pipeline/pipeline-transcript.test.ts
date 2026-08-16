@@ -694,6 +694,123 @@ quoted context
     expect(transcript.map((message) => message.id)).toEqual(["m2"]);
   });
 
+  test("splits a bridge turn into timestamped sections and groups its tool activity", () => {
+    // The generic branch shares the chat adapter, so one provider turn becomes
+    // one row per text/activity section, each stamped from its own backend
+    // parts rather than from the prompt that started the turn.
+    const transcript = toPipelineTranscript(
+      [{
+        id: "m1",
+        role: "assistant",
+        content: "PlanningDone",
+        createdAt: "2026-07-29T00:00:00.000Z",
+        parts: [
+          { type: "text", content: "Planning", createdAt: "2026-07-29T00:00:05.000Z" },
+          {
+            type: "tool-invocation", content: "Read", toolName: "Read",
+            createdAt: "2026-07-29T00:00:20.000Z",
+          },
+          {
+            type: "tool-invocation", content: "Grep", toolName: "Grep",
+            createdAt: "2026-07-29T00:00:30.000Z",
+          },
+          { type: "text", content: "Done", createdAt: "2026-07-29T00:00:45.000Z" },
+        ],
+      }],
+      "codex",
+      FALLBACK,
+    );
+
+    expect(transcript.map((message) => ({
+      id: message.id,
+      content: message.content,
+      createdAt: message.createdAt,
+      partTypes: message.parts.map((part) => part.type),
+    }))).toEqual([
+      {
+        id: "m1",
+        content: "Planning",
+        createdAt: "2026-07-29T00:00:05.000Z",
+        partTypes: ["text"],
+      },
+      {
+        id: "m1:text-block:1",
+        content: "",
+        createdAt: "2026-07-29T00:00:30.000Z",
+        partTypes: ["tool-group"],
+      },
+      {
+        id: "m1:text-block:2",
+        content: "Done",
+        createdAt: "2026-07-29T00:00:45.000Z",
+        partTypes: ["text"],
+      },
+    ]);
+    expect(flattenedParts(transcript).map((part) => part.content))
+      .toEqual(["Planning", "Read", "Grep", "Done"]);
+  });
+
+  test("splits an OpenCode turn on its own part clocks", () => {
+    const transcript = toPipelineTranscript(
+      [{
+        info: { id: "m1", role: "assistant", time: { created: 1_800_000_000_000 } },
+        parts: [
+          { id: "p1", type: "text", text: "Looking", time: { start: 1_800_000_005_000 } },
+          {
+            id: "p2", type: "tool", tool: "bash", state: { status: "completed" },
+            time: { start: 1_800_000_020_000 },
+          },
+          { id: "p3", type: "text", text: "Finished", time: { start: 1_800_000_040_000 } },
+        ],
+      }],
+      "opencode",
+      FALLBACK,
+    );
+
+    expect(transcript.map((message) => ({
+      id: message.id,
+      createdAt: message.createdAt,
+      partTypes: message.parts.map((part) => part.type),
+    }))).toEqual([
+      {
+        id: "m1",
+        createdAt: "2027-01-15T08:00:05.000Z",
+        partTypes: ["text"],
+      },
+      {
+        id: "m1:text-block:1",
+        createdAt: "2027-01-15T08:00:20.000Z",
+        partTypes: ["tool-group"],
+      },
+      {
+        id: "m1:text-block:2",
+        createdAt: "2027-01-15T08:00:40.000Z",
+        partTypes: ["text"],
+      },
+    ]);
+  });
+
+  test("keeps a section that splitting leaves without renderable content out of the transcript", () => {
+    // Splitting can isolate a part the renderer draws nothing for. The filter
+    // runs after the split so an empty section never reaches the list.
+    const transcript = toPipelineTranscript(
+      [{
+        id: "m1",
+        role: "assistant",
+        content: "",
+        parts: [
+          { type: "text", content: "narration" },
+          { type: "tool-result", content: "" },
+        ],
+      }],
+      "codex",
+      FALLBACK,
+    );
+
+    expect(transcript.map((message) => message.id)).toEqual(["m1"]);
+    expect(transcript[0]!.parts.map((part) => part.type)).toEqual(["text"]);
+  });
+
   test("routes on the envelope, not the pipeline's recorded agent", () => {
     // A pipeline whose agent was recorded as codex can still hold an OpenCode
     // snapshot, and vice versa, so each entry is detected on its own shape.

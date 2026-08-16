@@ -116,6 +116,59 @@ describe("native agent fork boundaries", () => {
     });
   });
 
+  test("Claude prompt forks branch at the previous turn's persisted source id", () => {
+    // Every part carries the persisted id, so the boundary comes from the part
+    // rather than from the split display row that happens to hold it.
+    const rows = normalizeNativeMessages([
+      message("claude-1", "assistant", {
+        content: "BeforeAfter",
+        parts: [
+          { type: "text", content: "Before", sourceMessageId: "persisted-1" },
+          {
+            type: "tool-invocation",
+            content: "Read",
+            toolName: "Read",
+            sourceMessageId: "persisted-1",
+          },
+          { type: "text", content: "After", sourceMessageId: "persisted-1" },
+        ],
+      }),
+    ]);
+    expect(rows.map((row) => row.id)).toEqual([
+      "claude-1",
+      "claude-1:text-block:1",
+      "claude-1:text-block:2",
+    ]);
+
+    const messages = [
+      message("user-1", "user"),
+      ...rows,
+      message("user-2", "user"),
+    ];
+    const boundaryFor = (id: string) =>
+      resolveNativeAgentPromptBoundary(
+        "claude",
+        messages.find((candidate) => candidate.id === id)!,
+        messages,
+      );
+
+    expect(boundaryFor("user-2")).toEqual({
+      type: "message",
+      messageId: "persisted-1",
+    });
+    expect(boundaryFor("user-1")).toEqual({ type: "session-start" });
+  });
+
+  test("Claude prompt forks fall back to the split row's stripped id", () => {
+    // A transcript whose parts predate `sourceMessageId` must still resolve to
+    // an id the bridge stored, never to a `:text-block:` display row.
+    const rows = splitCodexTurn("claude-1", "turn-1");
+    const messages = [...rows, message("user-2", "user")];
+
+    expect(resolveNativeAgentPromptBoundary("claude", messages.at(-1)!, messages))
+      .toEqual({ type: "message", messageId: "claude-1" });
+  });
+
   test("Claude response forks map a split display row back to the source message", () => {
     const rows = splitCodexTurn("claude-1", "turn-1");
     const plan = buildMessageForkPlan(rows, {

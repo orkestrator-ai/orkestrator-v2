@@ -106,7 +106,10 @@ import { NativeAgentInteractionCard } from "./NativeAgentInteractionCard";
 import { CodexPlanModeCard } from "@/components/codex/CodexPlanModeCard";
 import { ClaudeBackgroundTaskHoldCard } from "@/components/claude/ClaudeBackgroundTaskHoldCard";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
-import { findLatestBackendUserTurnStartedAt } from "@/lib/session-timer";
+import {
+  findLatestBackendTurnElapsedSeconds,
+  findLatestBackendUserTurnStartedAt,
+} from "@/lib/session-timer";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { isSetupBlocked } from "@/lib/setup-commands";
 
@@ -441,10 +444,26 @@ export function SharedNativeAgentController({
           (message) => !isClientOnlyNativeMessage(message),
         )
       : undefined);
+  /*
+   * `useElapsedTimer` no longer keeps a renderer-local start, so the completed
+   * duration has to come from the transcript too. Deriving it from the backend
+   * clocks — rather than from the moment this tab happened to observe the turn
+   * end — is also what makes it survive a switch away and back.
+   */
+  const completedElapsedSeconds = useMemo(
+    () => (isTurnActive
+      ? null
+      : findLatestBackendTurnElapsedSeconds(
+          normalizedMessages,
+          (message) => !isClientOnlyNativeMessage(message),
+        ) ?? null),
+    [isTurnActive, normalizedMessages],
+  );
   const { elapsedSeconds, finalElapsedSeconds } = useElapsedTimer(
     isTurnActive,
     projection?.sessionId,
     turnStartedAt,
+    completedElapsedSeconds,
   );
   const canQueue = isRunning && adapter.capabilities.queue;
   /*

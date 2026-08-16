@@ -4,6 +4,7 @@ export * from "./acp-tools.js";
 export * from "./acp-transcript.js";
 export * from "./acp-public.js";
 export * from "./acp-prompt.js";
+export * from "./acp-cursor-background.js";
 export * from "./acp-reconciliation.js";
 export * from "./acp-persist-writer.js";
 export * from "./acp-persistence.js";

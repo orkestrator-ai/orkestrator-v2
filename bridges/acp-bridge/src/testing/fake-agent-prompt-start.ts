@@ -26,6 +26,24 @@ export function handlePromptStart(message: JsonObject): boolean {
         `${JSON.stringify(params?.prompt ?? [])}\n`,
       );
     }
+    if (prompt.startsWith("Background subagent finished.")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: {
+              type: "text",
+              text: "Validation passed. The child reported success.",
+            },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return true;
+    }
     const resumesResourceExhaustedScenario = prompt.startsWith(
       "Continue from where the interrupted turn stopped.",
     );
@@ -449,6 +467,60 @@ export function handlePromptStart(message: JsonObject): boolean {
             content: [{ type: "content", content: { type: "text", text: "Sub-agent launched." } }],
             rawOutput: { durationMs: 42, isBackground: true },
           },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return true;
+    }
+    if (prompt.startsWith("CURSORBACKGROUNDCHILD")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "cursor-subagent-1",
+            title: "Task: Run validation at HEAD",
+            kind: "other",
+            status: "in_progress",
+            rawInput: {
+              _toolName: "task",
+              run_in_background: true,
+              description: "Run validation at HEAD",
+            },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "cursor-subagent-1",
+            status: "completed",
+            content: [{ type: "content", content: { type: "text", text: "Sub-agent launched." } }],
+            rawOutput: {
+              durationMs: 31,
+              isBackground: true,
+              agentId: "child-wait-1",
+            },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          sessionId: "fake-session",
+          toolCallId: "cursor-subagent-1",
+          description: "Run validation at HEAD",
+          prompt: "Run the validation suite at HEAD.",
+          subagentType: "generalPurpose",
+          agentId: "child-wait-1",
+          durationMs: 31,
         },
       });
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });

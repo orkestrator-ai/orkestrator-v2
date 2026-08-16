@@ -67,7 +67,7 @@ import {
 import {
   reconcileStaleToolParts,
 } from "./acp-reconciliation.js";
-import { requestPromptWithResourceExhaustedRetries } from "./acp-prompt.js";
+import { dispatchAcpPrompt } from "./acp-prompt.js";
 import { schedulePersist } from "./acp-persist-writer.js";
 import { structuredPromptInstruction } from "./acp-prompt.js";
 
@@ -339,7 +339,7 @@ export async function route(
     boundTranscript(state);
     await persistState();
     const acpPrompt = schema ? `${prompt}\n\n${structuredPromptInstruction(schema)}` : prompt;
-    const promptCompletion = requestPromptWithResourceExhaustedRetries(state, child, {
+    const promptCompletion = dispatchAcpPrompt(state, child, {
       sessionId: state.acpSessionId,
       prompt: [
         ...(acpPrompt ? [{ type: "text", text: acpPrompt }] : []),

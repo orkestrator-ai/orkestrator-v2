@@ -144,6 +144,12 @@ export interface ActiveSubagentDescriptor {
   subagentType?: string;
   /** Distinguishes a completed background launch from an abandoned pending one. */
   toolState?: BridgeToolPart["toolState"];
+  /**
+   * Cursor Task `agentId`. Used only by the Cursor background-continuation
+   * waiter to find the child's transcript; Grok correlates through
+   * `subagent_id` instead.
+   */
+  agentId?: string;
 }
 
 export interface SessionState {
@@ -448,6 +454,18 @@ export const MAX_RESUMABLE_SESSIONS = 512;
 export const MAX_SESSION_LIST_PAGES = 64;
 export const RPC_TIMEOUT_MS = parseDuration(process.env.ACP_RPC_TIMEOUT_MS, 30_000);
 export const PROMPT_TIMEOUT_MS = parseDuration(process.env.ACP_PROMPT_TIMEOUT_MS, 30 * 60_000);
+/**
+ * How long a Cursor parent generation may wait for live background children
+ * before continuing without them. Grok never reads this: it settles through
+ * `subagent_finished` and does not hold `session/prompt`.
+ */
+export const CURSOR_BACKGROUND_WAIT_MS = parseDuration(
+  process.env.ACP_CURSOR_BACKGROUND_WAIT_MS,
+  30 * 60_000,
+);
+export const MAX_CURSOR_BACKGROUND_CONTINUATIONS = 4;
+export const MAX_CURSOR_CHILD_RESULT_BYTES = 64 * 1024;
+export const CURSOR_BACKGROUND_CONTINUATION_PREFIX = "Background subagent finished.";
 export const RESOURCE_EXHAUSTED_MAX_RETRIES = 3;
 export const RESOURCE_EXHAUSTED_RETRY_BASE_MS = parseDuration(
   process.env.ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS,

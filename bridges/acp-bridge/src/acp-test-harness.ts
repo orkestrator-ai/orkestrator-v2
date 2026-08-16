@@ -201,6 +201,7 @@ export async function spawnBridge(options: {
     PORT: String(port),
     HOSTNAME: "127.0.0.1",
     ACP_STATE_DIR: stateDirectory,
+    ACP_CURSOR_BACKGROUND_CONTINUE: "0",
   };
   delete env.ACP_MAX_SESSIONS;
   Object.assign(env, options.env);

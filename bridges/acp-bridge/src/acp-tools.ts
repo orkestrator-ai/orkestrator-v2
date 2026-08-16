@@ -827,8 +827,27 @@ export function acpSubagentState(
   return source.agentState;
 }
 
+/** Cursor Task `agentId`, from `cursor/task` args or the launch `rawOutput`. */
+export function toolPartAgentId(part: BridgeToolPart): string | undefined {
+  if (typeof part.toolArgs?.agentId === "string") {
+    return truncateUtf8(part.toolArgs.agentId.trim(), MAX_TOOL_ID_BYTES);
+  }
+  if (typeof part.toolArgs?.agent_id === "string") {
+    return truncateUtf8(part.toolArgs.agent_id.trim(), MAX_TOOL_ID_BYTES);
+  }
+  const lifecycle = toolCallLifecycle(part.toolOutput);
+  if (typeof lifecycle?.agentId === "string") {
+    return truncateUtf8(lifecycle.agentId.trim(), MAX_TOOL_ID_BYTES);
+  }
+  if (typeof lifecycle?.agent_id === "string") {
+    return truncateUtf8(lifecycle.agent_id.trim(), MAX_TOOL_ID_BYTES);
+  }
+  return undefined;
+}
+
 export function syncActiveSubagentTool(state: SessionState, part: BridgeToolPart): void {
   if (part.agentState === "active") {
+    const agentId = toolPartAgentId(part);
     const activated = activateSubagent(state, part.toolUseId, {
       ...(typeof part.toolArgs?.description === "string"
         ? { description: truncateUtf8(part.toolArgs.description.trim(), MAX_TOOL_TITLE_BYTES) }
@@ -837,6 +856,7 @@ export function syncActiveSubagentTool(state: SessionState, part: BridgeToolPart
         ? { subagentType: truncateUtf8(part.toolArgs.subagent_type.trim(), MAX_TOOL_NAME_BYTES) }
         : {}),
       ...(part.toolState ? { toolState: part.toolState } : {}),
+      ...(agentId ? { agentId } : {}),
     });
     if (!activated) {
       part.agentState = "failed";
@@ -873,8 +893,16 @@ export function activateSubagent(
     state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
     return false;
   }
+  const previous = state.activeSubagentDescriptors.get(toolUseId);
   state.activeSubagentToolIds.add(toolUseId);
-  state.activeSubagentDescriptors.set(toolUseId, descriptor);
+  state.activeSubagentDescriptors.set(toolUseId, {
+    ...previous,
+    ...descriptor,
+    agentId: descriptor.agentId ?? previous?.agentId,
+    description: descriptor.description ?? previous?.description,
+    subagentType: descriptor.subagentType ?? previous?.subagentType,
+    toolState: descriptor.toolState ?? previous?.toolState,
+  });
   return true;
 }
 
@@ -898,12 +926,36 @@ export const TASK_LAUNCH_ARG_KEYS = [
 ] as const;
 
 /**
- * `durationMs` is the one `cursor/task` field that decides lifecycle: any
- * present value settles the sub-agent as finished. A bare `Number()` would
- * coerce `null`, `false`, `""` and `[]` to `0`, so a vendor encoding "not
- * finished yet" as `null` would report a live background child as complete and
- * drop it out of `activeSubagentToolIds`. Only a real number — or a numeric
- * string, which the renderer also accepts — counts as a reported duration.
+ * Cursor's background Task `toolCallCompleted` echoes the spawn wall-clock as
+ * `durationMs` on the same `cursor/task` frame that carries launch metadata.
+ * That is not child completion: the child is still running, and a later
+ * `cursor/task` (or the continuation wrapper) reports the real end with a
+ * different duration. Grok never sends `cursor/task`.
+ */
+export function isCursorBackgroundSpawnDuration(
+  source: { toolArgs?: JsonObject; rawOutput?: unknown; contentOutput?: string },
+  durationMs: number,
+): boolean {
+  const lifecycle = isObject(source.rawOutput)
+    ? source.rawOutput
+    : toolCallLifecycle(source.rawOutput ?? source.contentOutput);
+  const background = source.toolArgs?.background === true
+    || source.toolArgs?.run_in_background === true
+    || lifecycle?.isBackground === true;
+  if (!background) return false;
+  const launchDuration = boundedDurationMs(lifecycle?.durationMs);
+  return launchDuration === durationMs;
+}
+
+/**
+ * `durationMs` is the one `cursor/task` field that decides lifecycle once a
+ * named state is absent: a present value settles the sub-agent as finished
+ * unless it is the background spawn echo (see `isCursorBackgroundSpawnDuration`).
+ * A bare `Number()` would coerce `null`, `false`, `""` and `[]` to `0`, so a
+ * vendor encoding "not finished yet" as `null` would report a live background
+ * child as complete and drop it out of `activeSubagentToolIds`. Only a real
+ * number — or a numeric string, which the renderer also accepts — counts as a
+ * reported duration.
  */
 export function boundedDurationMs(value: unknown): number | undefined {
   const numeric = typeof value === "number"
@@ -1002,10 +1054,11 @@ export function findToolPart(
  *   and `durationMs` is populated only when the tool result case is `success`.
  * - The one send site is `toolCallCompleted`, immediately after the
  *   `status: "completed"` tool call update. A frame with no duration and no
- *   named state is still launch metadata, not an ending: `durationMs` is the
- *   observed completion field. The launch tool itself resolves with
- *   `isBackground: true` still set, which is why that flag cannot be read as
- *   liveness.
+ *   named state is still launch metadata, not an ending. `durationMs` is the
+ *   observed completion field *except* when it equals the background launch
+ *   tool's own `durationMs` — that is spawn time, not the child's end. The
+ *   launch tool itself resolves with `isBackground: true` still set, which is
+ *   why that flag cannot be read as liveness.
  *
  * The status/outcome handling below is therefore forward-compatibility, not an
  * observed contract: it is written so that a future Cursor which does start
@@ -1038,11 +1091,21 @@ export function applyCursorTask(state: SessionState, params: JsonObject): void {
   }
 
   const isProgress = namedState === "progress";
-  const agentState: "finished" | "failed" | undefined = isProgress
+  let agentState: "finished" | "failed" | undefined = isProgress
     ? undefined
-    : namedState ?? (durationMs !== undefined ? "finished" : undefined);
+    : namedState;
 
   let found = findToolPart(state, toolCallId);
+  if (!agentState && !isProgress && durationMs !== undefined) {
+    const part = found?.part;
+    const sourcePeek = part ? acpToolSourceStates.get(part) : undefined;
+    if (!isCursorBackgroundSpawnDuration({
+      toolArgs: sourcePeek?.toolArgs ?? part?.toolArgs,
+      rawOutput: sourcePeek?.rawOutput ?? part?.toolOutput,
+    }, durationMs)) {
+      agentState = "finished";
+    }
+  }
   if (!found) {
     if (state.activeSubagentToolIds.has(toolCallId)) {
       if (agentState) finishSubagentTool(state, toolCallId, agentState);
@@ -1226,10 +1289,11 @@ export function terminalAgentState(status: string | undefined): "finished" | "fa
  * Named status/outcome on a `cursor/task` frame.
  *
  * Cursor today sends neither field — `durationMs` is the observed completion
- * signal (see `applyCursorTask`). A *present* but non-terminal state is a
- * progress report and must be distinguishable from an absent one, or it would
- * settle a running child. That is why this cannot default to `"finished"` the
- * way the by-definition-terminal `subagent_finished` notification does.
+ * signal except for the background spawn echo (see `applyCursorTask`). A
+ * *present* but non-terminal state is a progress report and must be
+ * distinguishable from an absent one, or it would settle a running child.
+ * That is why this cannot default to `"finished"` the way the
+ * by-definition-terminal `subagent_finished` notification does.
  */
 export function cursorTaskNamedState(
   payload: JsonObject,

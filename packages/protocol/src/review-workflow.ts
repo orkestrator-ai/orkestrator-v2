@@ -955,13 +955,23 @@ export function buildReviewBody(opts: ReviewBodyOptions): string {
 11. A remaining path blocks validation only when it can change validation inputs: any tracked path, or an untracked path under a source, test, build, or configuration location. If none remains, validate in place at the captured head. If one remains, do not validate in this checkout: use an isolated temporary worktree pinned to the captured head, or record validation as not run and explain why.`
     : `## Step 1: Establish the automated review snapshot
 
-The preceding build stage is responsible for committing the change. Do not edit source files or create another commit during this review. Validation commands may write generated artifacts and tool caches.
+The change under review may be committed, entirely uncommitted, or a mix of both. Committing is not your job here: do not edit source files, stage paths, or create a commit during this review. Validation commands may write generated artifacts and tool caches.
 
-1. Run \`git status --porcelain\` and record every remaining path. If the authoritative worktree state above already reports this, reconcile against it and report any disagreement as a limitation rather than re-deriving it.
-2. A remaining path blocks validation only when it can change validation inputs: any tracked path, or an untracked path under a source, test, build, or configuration location. Do not stage or commit any remaining path from this automated review.
-3. Record the immutable head and base commits with \`git rev-parse HEAD\` and \`git rev-parse origin/${targetBranch}^{commit}\`.
-4. Use those fixed commits for the entire review so validation and analysis examine the same source.
-5. If no blocking path remains, validate in place at the captured head. If one does, run validation in a clean checkout at the captured head or in an isolated temporary worktree pinned to that head; if neither is available, record validation as not run, record the blocking paths as a limitation, and report the not-ready verdict value defined by the required output format.`;
+1. Run \`git status --porcelain\` and \`git diff HEAD\`, and record every uncommitted path. If the authoritative worktree state above already reports this, reconcile against it and report any disagreement as a limitation rather than re-deriving it.
+2. Record the immutable head and base commits with \`git rev-parse HEAD\` and \`git rev-parse origin/${targetBranch}^{commit}\`.
+3. The review snapshot is this worktree as it now stands: the committed range \`origin/${targetBranch}...HEAD\`, plus every uncommitted tracked modification and untracked file recorded in step 1. Exclude an uncommitted path only when it is generated, vendored, binary, a suspected secret, or clearly unrelated, and record each exclusion with its reason.
+4. An empty committed range is not an empty change. When \`origin/${targetBranch}...HEAD\` produces no diff and uncommitted paths exist, those paths are the entire change under review. Never report that there is nothing to review while they exist.
+5. Review and validate that snapshot in this worktree. Do not clone the repository, check out another ref, or \`git worktree add\` a separate copy and review that instead: a fresh checkout pinned to the captured head does not contain the uncommitted work, so it would review the wrong source and report an empty change. If you create an isolated worktree to parallelise validation, reproduce the uncommitted overlay inside it first; otherwise validate in place.
+6. Hold that snapshot fixed for the whole review so analysis and validation examine the same source. Re-run \`git status --porcelain\` once validation finishes, and record any path that appeared, changed, or disappeared meanwhile as a limitation.
+7. If validation cannot run against this snapshot at all, record validation as not run, record why as a limitation, and report the not-ready verdict value defined by the required output format.`;
+
+  // A `verify-clean` review never commits, so the change it must judge is not
+  // necessarily in the committed range: pointing it only at `base...HEAD` is
+  // what let a reviewer certify an empty diff while the whole change sat
+  // uncommitted in the worktree.
+  const reviewScopeStep = preparationMode === "commit"
+    ? `1. Review the diff between the immutable base and head commits captured in Step 1. \`git diff origin/${targetBranch}...HEAD\` may be used only while those refs still resolve to the captured commits.`
+    : `1. Review the complete snapshot captured in Step 1: the diff between the immutable base and head commits, plus every uncommitted change it includes. \`git diff origin/${targetBranch}...HEAD\` covers only the committed part, and may be used only while those refs still resolve to the captured commits; use \`git diff HEAD\` for uncommitted tracked edits and read each in-scope untracked file in full.`;
 
   const outputSection = outputFormat === "structured"
     ? `## Output contract
@@ -1058,7 +1068,7 @@ Plan validation for the fixed head commit, then start it before detailed code an
 
 ## Step 3: Code Review
 
-1. Review the diff between the immutable base and head commits captured in Step 1. \`git diff origin/${targetBranch}...HEAD\` may be used only while those refs still resolve to the captured commits.
+${reviewScopeStep}
 2. Before judging the change, establish what it actually does from the diff:
    - Identify the problem or need the change addresses.
    - Describe the relevant behaviour before this change and after it.

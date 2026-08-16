@@ -125,7 +125,7 @@ describe("build pipeline prompts", () => {
 
     expect(prompt).toContain("## Security and instruction hierarchy");
     expect(prompt).toContain("## Step 1: Establish the automated review snapshot");
-    expect(prompt).toContain("Do not edit source files or create another commit");
+    expect(prompt).toContain("do not edit source files, stage paths, or create a commit");
     expect(prompt).toContain("## Step 4: Test Coverage Review");
     expect(prompt).toContain("git diff origin/main...HEAD");
     expect(prompt).toContain("provider-enforced JSON Schema");
@@ -150,7 +150,7 @@ describe("build pipeline prompts", () => {
 
     expect(prompt).toContain("correctness, regressions, security");
     expect(prompt).toContain(
-      "blocks validation only when it can change validation inputs",
+      "Review and validate that snapshot in this worktree",
     );
     expect(prompt).toContain(
       "report the not-ready verdict value defined by the required output format",
@@ -194,7 +194,9 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("the preceding build stage did not commit everything");
     expect(prompt).toContain("- `src/left-behind.ts`");
     expect(prompt).toContain("- `docs/notes.md`");
-    expect(prompt).toContain("record them as a limitation either way");
+    // Uncommitted paths are part of the change, not a reason to review a
+    // narrower snapshot than the one the pipeline is about to ship.
+    expect(prompt).toContain("They are part of the change under review");
   });
 
   test("reviewPrompt tells the reviewer to re-derive an unknown worktree state", () => {

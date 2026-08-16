@@ -960,11 +960,50 @@ describe("review body assembly", () => {
     });
 
     expect(body).toContain("## Step 1: Establish the automated review snapshot");
-    expect(body).toContain("Do not edit source files or create another commit");
+    expect(body).toContain("do not edit source files, stage paths, or create a commit");
     expect(body).toContain("Validation commands may write generated artifacts and tool caches");
-    expect(body).toContain("isolated temporary worktree pinned to that head");
     expect(body).toContain("Enforce the snapshot precondition from Step 1");
     expect(body).not.toContain("Create one rollback commit");
+  });
+
+  // A review that cannot commit is routinely pointed at a branch whose entire
+  // change is still uncommitted. Scoping it to `base...HEAD` made a reviewer
+  // certify an empty diff and report that there was nothing to review.
+  test("puts uncommitted work inside the automated review scope", () => {
+    const body = buildReviewBody({
+      targetBranch: "main",
+      preparationMode: "verify-clean",
+      outputFormat: "structured",
+      allowClarifyingQuestions: false,
+    });
+
+    expect(body).toContain(
+      "plus every uncommitted tracked modification and untracked file recorded in step 1",
+    );
+    expect(body).toContain("An empty committed range is not an empty change");
+    expect(body).toContain("Never report that there is nothing to review while they exist");
+    expect(body).toContain(
+      "`git diff origin/main...HEAD` covers only the committed part",
+    );
+    expect(body).toContain("use `git diff HEAD` for uncommitted tracked edits");
+  });
+
+  // The failure mode was not a missing instruction but a followed one: the
+  // reviewer was told to validate in an isolated worktree pinned to the
+  // captured head, which by construction cannot contain the uncommitted change.
+  test("forbids reviewing a separate checkout that omits the uncommitted change", () => {
+    const body = buildReviewBody({
+      targetBranch: "main",
+      preparationMode: "verify-clean",
+      outputFormat: "structured",
+      allowClarifyingQuestions: false,
+    });
+
+    expect(body).toContain(
+      "Do not clone the repository, check out another ref, or `git worktree add` a separate copy",
+    );
+    expect(body).toContain("reproduce the uncommitted overlay inside it first");
+    expect(body).not.toContain("isolated temporary worktree pinned to that head");
   });
 
   test("keeps interactive validation pinned to the committed snapshot", () => {
@@ -982,31 +1021,41 @@ describe("review body assembly", () => {
   // A blanket "any remaining path blocks validation" rule fights the same
   // step's instruction to deliberately leave unrelated files uncommitted, so an
   // ordinary stray file would silently downgrade every review to "not
-  // validated". Both modes must scope the blocker to validation inputs.
-  for (
-    const [label, preparationMode, outputFormat] of [
-      ["interactive", "commit", "markdown"],
-      ["automated", "verify-clean", "structured"],
-    ] as const
-  ) {
-    test(`scopes the ${label} validation blocker to validation-affecting paths`, () => {
-      const body = buildReviewBody({
-        targetBranch: "main",
-        preparationMode,
-        outputFormat,
-        allowClarifyingQuestions: preparationMode === "commit",
-      });
-
-      expect(body).toContain(
-        "blocks validation only when it can change validation inputs: any tracked path, or an untracked path under a source, test, build, or configuration location",
-      );
-      // The unscoped forms this replaced. Their return would restore the bug.
-      expect(body).not.toContain("If any path remains, do not validate in this checkout");
-      expect(body).not.toContain(
-        "If any path remains, do not run validation in the current checkout",
-      );
+  // validated". The interactive mode commits the change first, so it still has
+  // a blocker to scope; the automated mode reviews the worktree as it stands
+  // and therefore validates in place.
+  test("scopes the interactive validation blocker to validation-affecting paths", () => {
+    const body = buildReviewBody({
+      targetBranch: "main",
+      preparationMode: "commit",
+      outputFormat: "markdown",
+      allowClarifyingQuestions: true,
     });
-  }
+
+    expect(body).toContain(
+      "blocks validation only when it can change validation inputs: any tracked path, or an untracked path under a source, test, build, or configuration location",
+    );
+    // The unscoped forms this replaced. Their return would restore the bug.
+    expect(body).not.toContain("If any path remains, do not validate in this checkout");
+    expect(body).not.toContain(
+      "If any path remains, do not run validation in the current checkout",
+    );
+  });
+
+  test("keeps automated validation in the reviewed worktree", () => {
+    const body = buildReviewBody({
+      targetBranch: "main",
+      preparationMode: "verify-clean",
+      outputFormat: "structured",
+      allowClarifyingQuestions: false,
+    });
+
+    expect(body).toContain("Review and validate that snapshot in this worktree");
+    expect(body).toContain("otherwise validate in place");
+    // Uncommitted paths are the change under review here, so they can no longer
+    // be the reason validation is skipped.
+    expect(body).not.toContain("blocks validation only when it can change validation inputs");
+  });
 
   test("does not name a verdict value the output contract cannot express", () => {
     const body = buildReviewBody({

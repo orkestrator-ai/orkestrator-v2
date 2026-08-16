@@ -37,6 +37,8 @@ import {
   createMultiReviewConsolidationPrompt,
   createMultiReviewerPrompt,
 } from "./multi-review-prompts.js";
+import { probeReviewWorktree } from "./review-worktree-probe.js";
+import type { ReviewWorktreeSnapshot } from "./build-pipeline-prompts.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 const DEFAULT_POLL_MS = 1_000;
@@ -779,17 +781,23 @@ export class MultiReviewService {
       fence: reviewer.sessionKey,
     });
     if (reviewer.dispatchState === "prepared") {
+      // Built before the dispatch is journaled: the worktree probe is a command
+      // round trip that can be slow or fail, and nothing about it is ambiguous
+      // while `dispatchState` is still `prepared`.
+      const prompt = reviewer.schemaRepairPrompt ?? createMultiReviewerPrompt({
+        targetBranch: workflow.targetBranch,
+        reviewInstruction: workflow.reviewInstruction,
+        reviewerNumber: index + 1,
+        reviewerCount: workflow.reviewers.length,
+        worktree: await this.reviewWorktree(workflow),
+      });
+      await this.assertFence(workflow.id, token);
       reviewer.dispatchState = "dispatching";
       await this.save(workflow, token);
       try {
         await provider.send(
           reviewer.providerSessionId,
-          reviewer.schemaRepairPrompt ?? createMultiReviewerPrompt({
-              targetBranch: workflow.targetBranch,
-              reviewInstruction: workflow.reviewInstruction,
-              reviewerNumber: index + 1,
-              reviewerCount: workflow.reviewers.length,
-            }),
+          prompt,
           {
             requestId: reviewer.requestId,
             schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema,
@@ -970,11 +978,13 @@ export class MultiReviewService {
     }
     const request = workflow.activeRequest;
     if (request.state === "prepared") {
-      request.state = "dispatching";
-      await this.save(workflow, token);
+      // Built while the dispatch is still unjournaled, for the same reason the
+      // reviewer prompt is: the worktree probe must not widen the window in
+      // which a crash leaves the turn ambiguous.
       const prompt = request.schemaRepairPrompt ?? (request.kind === "consolidate"
         ? createMultiReviewConsolidationPrompt({
             targetBranch: workflow.targetBranch,
+            worktree: await this.reviewWorktree(workflow),
             reports: workflow.reviewers.flatMap((reviewer) =>
               reviewer.status === "completed" && reviewer.report
                 ? [{
@@ -986,6 +996,9 @@ export class MultiReviewService {
                 : []),
           })
         : addressPrompt(workflow.consolidatedReport!));
+      await this.assertFence(workflow.id, token);
+      request.state = "dispatching";
+      await this.save(workflow, token);
       try {
         await provider.send(session.providerSessionId, prompt, {
           requestId: request.requestId,
@@ -1280,6 +1293,24 @@ export class MultiReviewService {
 
   private controllerLeaseMs(): number {
     return this.options.controllerLeaseMs ?? CONTROLLER_LEASE_MS;
+  }
+
+  /**
+   * What the backend observed in the environment worktree as this prompt was
+   * built.
+   *
+   * A Multi Review starts from whatever state the user is in, so an entirely
+   * uncommitted change is ordinary rather than exceptional — and nothing in the
+   * workflow commits it. Each prompt carries a fresh observation instead of a
+   * persisted one: reviewers run for many minutes, and a stale "clean" would be
+   * worse evidence than none. An unknown state is not fatal; the reviewer
+   * establishes it in Step 1 and records the disagreement as a limitation.
+   */
+  private reviewWorktree(workflow: MultiReviewWorkflow): Promise<ReviewWorktreeSnapshot> {
+    return probeReviewWorktree(
+      (command, args) => this.invoke(command, args),
+      workflow.environmentId,
+    );
   }
 
   private providerKey(

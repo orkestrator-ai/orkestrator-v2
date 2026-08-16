@@ -396,6 +396,91 @@ test("MultiReviewService hands off a consolidation session whose last turn faile
   });
 });
 
+// A Multi Review is started by hand from whatever state the environment is in,
+// so the change is routinely still in the working tree. A reviewer that was
+// told nothing about that reviewed the committed range, found it empty, and
+// reported that there was nothing to review.
+test("MultiReviewService tells every reviewer about the uncommitted change", async () => {
+  const provider = new Provider();
+  const commands: string[] = [];
+  await withService("env-dirty-worktree", provider, async ({ service, start, snapshot }) => {
+    const started = await start([
+      { agent: "claude", model: "opus" },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+
+    expect(commands).toContain("get_environment_uncommitted_paths");
+    const reviewerPrompts = [...provider.sends.values()]
+      .map((sent) => sent.prompt)
+      .filter((prompt) => prompt.includes("You are independent reviewer"));
+    expect(reviewerPrompts).toHaveLength(2);
+    for (const prompt of reviewerPrompts) {
+      expect(prompt).toContain("the backend observed these uncommitted paths");
+      expect(prompt).toContain("- `src/feature.ts`");
+      expect(prompt).toContain("never review a fresh clone, checkout, or worktree that omits them");
+      // The authoritative state has to precede the body that tells the reviewer
+      // to reconcile against it rather than re-derive it.
+      expect(prompt.indexOf("**Authoritative worktree state**"))
+        .toBeLessThan(prompt.indexOf("## Step 1: Establish the automated review snapshot"));
+    }
+
+    const consolidation = [...provider.sends.values()]
+      .find((sent) => sent.prompt.includes("<multi-review-reports-json>"))!;
+    expect(consolidation.prompt).toContain(
+      "A report whose scope covers only the committed range examined an incomplete snapshot",
+    );
+  }, {
+    invoke: (async (command: string) => {
+      commands.push(command);
+      if (command !== "get_environment_uncommitted_paths") throw new Error("unexpected command");
+      return {
+        head: "1111111111111111111111111111111111111111",
+        paths: ["src/feature.ts"],
+      };
+    }) as <T>(command: string, args?: Record<string, unknown>) => Promise<T>,
+  });
+});
+
+test("MultiReviewService reports a clean worktree and dispatches without it when unprobeable", async () => {
+  const clean = new Provider();
+  await withService("env-clean-worktree", clean, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+    const reviewer = [...clean.sends.values()]
+      .find((sent) => sent.prompt.includes("You are independent reviewer"))!;
+    expect(reviewer.prompt).toContain("was clean when the review started");
+    const consolidation = [...clean.sends.values()]
+      .find((sent) => sent.prompt.includes("<multi-review-reports-json>"))!;
+    expect(consolidation.prompt).not.toContain("examined an incomplete snapshot");
+  }, {
+    invoke: (async () => ({
+      head: "1111111111111111111111111111111111111111",
+      paths: [],
+    })) as <T>() => Promise<T>,
+  });
+
+  // A failed probe is corroborating evidence lost, not a reason to abandon the
+  // review: the body still makes the reviewer establish the state in Step 1.
+  const unknown = new Provider();
+  await withService("env-unprobeable-worktree", unknown, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+    const reviewer = [...unknown.sends.values()]
+      .find((sent) => sent.prompt.includes("You are independent reviewer"))!;
+    expect(reviewer.prompt).toContain("could not determine the worktree state");
+  });
+});
+
 async function withService(
   environmentId: string,
   provider: Provider,
@@ -405,7 +490,11 @@ async function withService(
     start: (reviewers?: MultiReviewModelSelection[]) => Promise<MultiReviewWorkflow>;
     snapshot: (workflowId: string) => Promise<MultiReviewWorkflow | undefined>;
   }) => Promise<void>,
-  options: { createProvider?: () => Promise<BuildPipelineProvider> } = {},
+  options: {
+    createProvider?: () => Promise<BuildPipelineProvider>;
+    /** Backend command runner; defaults to one that refuses every command. */
+    invoke?: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+  } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), `ork-multi-review-${environmentId}-`));
   const storage = new StorageService(dataDir);
@@ -416,10 +505,14 @@ async function withService(
     hasMergeConflicts: null, createdAt: new Date(0).toISOString(), networkAccessMode: "full",
     order: 0, environmentType: "local", worktreePath: "/tmp/review", setupScriptsComplete: true,
   });
-  const service = new MultiReviewService(storage, async () => { throw new Error("unexpected command"); }, {
-    autoAdvance: false,
-    provider: options.createProvider ?? (async () => provider),
-  });
+  const service = new MultiReviewService(
+    storage,
+    options.invoke ?? (async () => { throw new Error("unexpected command"); }),
+    {
+      autoAdvance: false,
+      provider: options.createProvider ?? (async () => provider),
+    },
+  );
   try {
     await run({
       service,

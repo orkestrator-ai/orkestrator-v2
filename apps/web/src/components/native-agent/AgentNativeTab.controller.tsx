@@ -180,6 +180,7 @@ export function SharedNativeAgentController({
     sessionKey,
     runtimeProjection: projection,
     runtimeError,
+    isRefreshing,
     hasCompletedRead,
     isDispatching,
     connect,
@@ -1064,8 +1065,14 @@ export function SharedNativeAgentController({
   // A settled read is the opposite case. The backend answered, and answered
   // with nothing, so the session really is gone — say so, because "error" is
   // the only state carrying the retry control and the failure text.
+  //
+  // Retry and a new identity both start work with `isRefreshing`. That has to
+  // win over the previous completed-read/error, or the only recovery control
+  // stays on screen while the reconnect is already running.
   const connectionState = projection?.connection
-    ?? (runtimeError || hasCompletedRead ? "error" as const : "connecting" as const);
+    ?? (isRefreshing
+      ? "connecting" as const
+      : runtimeError || hasCompletedRead ? "error" as const : "connecting" as const);
   const contextUsage = projection?.contextUsage;
   const maximumTokens = contextUsage?.maximumTokens;
   const composeContextUsage = contextUsage === undefined

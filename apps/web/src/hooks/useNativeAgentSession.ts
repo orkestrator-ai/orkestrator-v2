@@ -299,6 +299,11 @@ export function useNativeAgentSession<TMessage = unknown>({
       return null;
     }
     setIsRefreshing(true);
+    // Leave the previous identity's failure behind so Retry is not stuck on
+    // Connection Failed for the whole reconnect, and a later platform cannot
+    // inherit a completed read it never made.
+    setRuntimeError(null);
+    setHasCompletedRead(false);
     const cached = projectionRef.current;
     const cachedSessionMatches = Boolean(
       initialProviderSessionId

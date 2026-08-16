@@ -298,6 +298,25 @@ function NativeSessionHarness({ isActive = true }: { isActive?: boolean } = {}) 
   );
 }
 
+function NativeSessionIdentityHarness({
+  platform,
+  enabled = true,
+}: {
+  platform: NonNullable<NativeAgentTabData["platform"]>;
+  enabled?: boolean;
+}) {
+  const session = useNativeAgentSession<NativeMessage>({
+    platform,
+    environmentId: "env-1",
+    tabId: "tab-identity",
+    isActive: true,
+    enabled,
+  });
+  return (
+    <output data-testid="has-completed-read">{String(session.hasCompletedRead)}</output>
+  );
+}
+
 function seedUnassignedPane(tabId: string) {
   usePaneLayoutStore.setState({
     environments: new Map([
@@ -1246,6 +1265,126 @@ describe("AgentNativeTab", () => {
     await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
     expect(screen.getByText("bridge refused the session")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  test("returns to connecting after Retry on an empty session read", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    render(<AgentNativeTab tabId="tab-retry-empty" data={identity("cursor")} isActive />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy());
+
+    let settleRetry: (() => void) | undefined;
+    adoptNativeAgentSessionMock.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        settleRetry = () => resolve(defaultAdoptNativeAgentSession({
+          agent: "cursor",
+          providerSessionId: "cursor-session",
+          logicalSessionKey: createSessionKey("env-1", "tab-retry-empty"),
+          environmentId: "env-1",
+        }));
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    // Retry starts work immediately. Staying on Connection Failed would leave
+    // the only recovery control on screen for the whole reconnect.
+    await waitFor(() => expect(screen.getByText("Connecting to Cursor Agent...")).toBeTruthy());
+    expect(screen.queryByText("Connection Failed") === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
+    await act(async () => {
+      settleRetry!();
+    });
+  });
+
+  test("returns to connecting after Retry on a failed connect", async () => {
+    adoptNativeAgentSessionMock.mockImplementation(async () => {
+      throw new Error("bridge refused the session");
+    });
+    render(<AgentNativeTab tabId="tab-retry-connect" data={identity("codex")} isActive />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy());
+
+    let settleRetry: (() => void) | undefined;
+    adoptNativeAgentSessionMock.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        settleRetry = () => resolve(defaultAdoptNativeAgentSession({
+          agent: "codex",
+          providerSessionId: "codex-session",
+          logicalSessionKey: createSessionKey("env-1", "tab-retry-connect"),
+          environmentId: "env-1",
+        }));
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => expect(screen.getByText("Connecting to Codex...")).toBeTruthy());
+    expect(screen.queryByText("Connection Failed") === null).toBe(true);
+    expect(screen.queryByText("bridge refused the session") === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
+    await act(async () => {
+      settleRetry!();
+    });
+  });
+
+  test("does not keep a failed connection after the tab identity changes", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    const { rerender } = render(
+      <AgentNativeTab tabId="tab-identity-swap" data={identity("cursor")} isActive />,
+    );
+    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
+
+    let settleOpenCode: (() => void) | undefined;
+    adoptNativeAgentSessionMock.mockImplementation((input) => {
+      if (input.agent !== "opencode") {
+        return defaultAdoptNativeAgentSession(input);
+      }
+      return new Promise((resolve) => {
+        settleOpenCode = () => resolve(defaultAdoptNativeAgentSession(input));
+      });
+    });
+    rerender(
+      <AgentNativeTab tabId="tab-identity-swap" data={identity("opencode")} isActive />,
+    );
+
+    // The cursor read answered "no session". That must not keep vouching for
+    // OpenCode, which has not been asked yet.
+    await waitFor(() => expect(screen.getByText("Connecting to OpenCode...")).toBeTruthy());
+    expect(screen.queryByText("Connection Failed") === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
+    await act(async () => {
+      settleOpenCode!();
+    });
+  });
+
+  test("does not let a completed empty read mark a later identity as failed", async () => {
+    let settleOpenCode: (() => void) | undefined;
+    getNativeAgentProjectionMock.mockImplementation(async (input: {
+      agent: string;
+    }) => {
+      if (input.agent !== "opencode") return null as never;
+      await new Promise<void>((resolve) => {
+        settleOpenCode = resolve;
+      });
+      return null as never;
+    });
+
+    const { rerender } = render(<NativeSessionIdentityHarness platform="cursor" />);
+    await waitFor(() => expect(screen.getByTestId("has-completed-read").textContent).toBe("true"));
+
+    rerender(<NativeSessionIdentityHarness platform="opencode" />);
+    await waitFor(() => expect(screen.getByTestId("has-completed-read").textContent).toBe("false"));
+    expect(settleOpenCode).toBeDefined();
+    await act(async () => {
+      settleOpenCode!();
+    });
+  });
+
+  test("forgets a completed read when the hook is no longer allowed to read", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+
+    const { rerender } = render(<NativeSessionIdentityHarness platform="cursor" />);
+    await waitFor(() => expect(screen.getByTestId("has-completed-read").textContent).toBe("true"));
+
+    rerender(<NativeSessionIdentityHarness platform="cursor" enabled={false} />);
+    await waitFor(() => expect(screen.getByTestId("has-completed-read").textContent).toBe("false"));
   });
 
   test("does not let a stale projection refresh undo a resumed session", async () => {

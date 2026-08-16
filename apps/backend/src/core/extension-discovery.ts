@@ -338,22 +338,72 @@ function collectNamedRecords(value: unknown, result: KeyedItem[], fromArray = fa
 }
 
 /**
+ * The wrapper keys an agent may nest a name → server-config map under. Cursor
+ * prints its `mcp.json` shape verbatim; Grok is given the same list because
+ * neither documents its output, and a map arriving under a key this parser does
+ * not know would otherwise read as "none configured" with no error to show.
+ */
+const MCP_MAP_KEYS = ["mcpServers", "servers", "mcp"] as const;
+
+/**
+ * True for a value that resembles one server's configuration rather than an
+ * unrelated setting sitting beside the map — the same test
+ * `parseOpenCodeMcpServers` applies to OpenCode's map.
+ */
+function isServerConfig(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return typeof value.type === "string"
+    || typeof value.url === "string"
+    || typeof value.command === "string"
+    || Array.isArray(value.command);
+}
+
+function mapEntryItems(map: Record<string, unknown>): KeyedItem[] {
+  return Object.entries(map).flatMap(([name, value]): KeyedItem[] => {
+    if (!nonBlankString(name) || (value != null && !isRecord(value))) return [];
+    const record = isRecord(value) ? value : {};
+    return [{
+      key: name,
+      item: { name, status: recordStatus(record) },
+    }];
+  });
+}
+
+/**
+ * A map whose every entry is itself a record, which is what a name → config map
+ * looks like. `{ mcp: { servers: [...] } }` fails this and falls through to the
+ * recursive walk, where the array it wraps is still found.
+ */
+function isNamedConfigMap(value: unknown): value is Record<string, unknown> {
+  return isRecord(value)
+    && Object.values(value).every((entry) => entry == null || isRecord(entry));
+}
+
+/**
  * Cursor and Grok both emit JSON lists, but the wrapping varies: a bare array,
  * `{ servers: [...] }` / `{ plugins: [...] }`, or Cursor's mcp.json map of
  * `{ mcpServers: { name: { command, url, disabled } } }`.
  */
-function parseNamedJsonCollection(output: string, mapKey?: string): ExtensionItem[] {
+function parseNamedJsonCollection(
+  output: string,
+  mapKeys: readonly string[] = [],
+): ExtensionItem[] {
   const parsed = parseJsonOutput(output);
-  if (mapKey && isRecord(parsed) && isRecord(parsed[mapKey])) {
-    const mapped = Object.entries(parsed[mapKey]).flatMap(([name, value]): KeyedItem[] => {
-      if (!nonBlankString(name) || (value != null && !isRecord(value))) return [];
-      const record = isRecord(value) ? value : {};
-      return [{
-        key: name,
-        item: { name, status: recordStatus(record) },
-      }];
-    });
-    if (mapped.length > 0 || parsed[mapKey] !== undefined) return sortAndDedupeKeyed(mapped);
+  if (isRecord(parsed)) {
+    for (const key of mapKeys) {
+      // A present wrapper is authoritative even when empty: the agent answered
+      // for this surface and listed nothing, which is not the same as an answer
+      // this parser failed to recognise.
+      if (isNamedConfigMap(parsed[key])) return sortAndDedupeKeyed(mapEntryItems(parsed[key]));
+    }
+    // Some builds print the map with no wrapper at all. Accept that only when an
+    // entry actually resembles a server, so an unrelated object is still walked
+    // for named records below rather than read as a server list.
+    if (mapKeys.length > 0
+      && isNamedConfigMap(parsed)
+      && Object.values(parsed).some(isServerConfig)) {
+      return sortAndDedupeKeyed(mapEntryItems(parsed));
+    }
   }
 
   const result: KeyedItem[] = [];
@@ -362,7 +412,7 @@ function parseNamedJsonCollection(output: string, mapKey?: string): ExtensionIte
 }
 
 export function parseCursorMcpList(output: string): ExtensionItem[] {
-  return parseNamedJsonCollection(output, "mcpServers");
+  return parseNamedJsonCollection(output, MCP_MAP_KEYS);
 }
 
 export function parseCursorPlugins(output: string): ExtensionItem[] {
@@ -370,7 +420,7 @@ export function parseCursorPlugins(output: string): ExtensionItem[] {
 }
 
 export function parseGrokMcpList(output: string): ExtensionItem[] {
-  return parseNamedJsonCollection(output);
+  return parseNamedJsonCollection(output, MCP_MAP_KEYS);
 }
 
 export function parseGrokPlugins(output: string): ExtensionItem[] {

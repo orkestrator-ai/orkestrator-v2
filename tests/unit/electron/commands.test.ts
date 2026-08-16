@@ -18407,6 +18407,35 @@ describe("agent extension discovery commands", () => {
     expect(calls[1]!.args).toEqual(["debug", "config"]);
   });
 
+  // Cursor and Grok never fall back to a PATH lookup — `cursor` on PATH is the
+  // desktop editor — so an unmanaged toolchain makes the launch impossible.
+  // That has to surface as this one agent's failure, not as a spawn of the
+  // wrong executable and not as a failure of the whole catalog.
+  for (const agent of [
+    { id: "cursor", message: "Cursor Agent is not installed in this backend's toolchain." },
+    { id: "grok", message: "Grok Build is not installed in this backend's toolchain." },
+  ] as const) {
+    test(`fails ${agent.id} discovery locally without spawning anything when it is not installed`, async () => {
+      const environment = createEnvironment({
+        id: "env-local",
+        environmentType: "local",
+        worktreePath: "/tmp/worktree",
+        containerId: null,
+      });
+      const { context } = createContext(environment);
+      const { run, calls } = recordingRun("docs: cmd - Connected");
+
+      const runner = commandTesting.createExtensionCommandRunner(environment, context, run);
+      await expect(runner(agent.id, ["mcp", "list", "--json"])).rejects.toThrow(agent.message);
+      expect(calls).toEqual([]);
+
+      // The sibling agents share this runner, so the missing toolchain must not
+      // take them down with it.
+      await expect(runner("claude", ["mcp", "list"])).resolves.toBe("docs: cmd - Connected");
+      expect(calls).toHaveLength(1);
+    });
+  }
+
   test("runs the agent CLI in the container for a containerized environment", async () => {
     const environment = createEnvironment({
       id: "env-container",

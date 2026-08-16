@@ -85,17 +85,33 @@ export function stripFrontmatter(content: string): string {
  * Keep the settings pane compatible with an older or unavailable backend. The
  * command is typed as `AgentSkillScan`, but IPC responses are still untrusted
  * at runtime; an old agent-test backend returned `[]` for this command.
+ *
+ * Only that one shape is coerced. Anything else throws so the pane shows its
+ * error state, because "0 skills · 0 of 0 directories present" is a claim about
+ * the user's disk — rendering it for a response we could not read would be a
+ * false statement, not a neutral one, and it would hide the broken backend
+ * behind a screen that looks like a successful empty scan.
  */
 function normalizeSkillScan(value: unknown, provider: AgentSkillProvider): AgentSkillScan {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+  if (Array.isArray(value) && value.length === 0) {
     return { provider, roots: [], skills: [], errors: [] };
   }
-  const candidate = value as Partial<AgentSkillScan>;
+  const candidate = value as Partial<AgentSkillScan> | null;
+  if (value === null
+    || typeof value !== "object"
+    || Array.isArray(value)
+    || !Array.isArray(candidate?.roots)
+    || !Array.isArray(candidate.skills)
+    || !Array.isArray(candidate.errors)) {
+    throw new Error("The backend returned an unreadable skill catalogue");
+  }
+  // The response's own `provider` is ignored: state is keyed by the tab that
+  // was asked, and a mismatched echo must not file results under another tab.
   return {
     provider,
-    roots: Array.isArray(candidate.roots) ? candidate.roots : [],
-    skills: Array.isArray(candidate.skills) ? candidate.skills : [],
-    errors: Array.isArray(candidate.errors) ? candidate.errors : [],
+    roots: candidate.roots,
+    skills: candidate.skills,
+    errors: candidate.errors,
   };
 }
 

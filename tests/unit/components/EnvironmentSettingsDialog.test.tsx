@@ -312,9 +312,8 @@ describe("EnvironmentSettingsDialog", () => {
 
     // Scoped to this tablist: a document-wide role query also matched tabs left
     // in the shared happy-dom document by whichever file shared this worker.
-    const tabs = within(
-      screen.getByRole("tablist", { name: "Agent extensions" }),
-    ).getAllByRole("tab");
+    const tabList = screen.getByRole("tablist", { name: "Agent extensions" });
+    const tabs = within(tabList).getAllByRole("tab");
     expect(tabs.map((tab) => tab.textContent?.trim())).toEqual([
       "Claude",
       "Codex",
@@ -322,6 +321,12 @@ describe("EnvironmentSettingsDialog", () => {
       "Grok",
       "OpenCode",
     ]);
+    // Five tabs no longer fit one row at a narrow width. happy-dom does not lay
+    // out, so the class contract stands in for the measurement: a fixed row
+    // height with no wrapping is what clipped the two agents added last.
+    expect(tabList.className).toContain("flex-wrap");
+    expect(tabList.className).toContain("h-auto");
+    expect(/(^|\s)h-10(\s|$)/.test(tabList.className)).toBe(false);
     expect(screen.getByText("claude-review")).toBeTruthy();
     await waitFor(() => expect(screen.getAllByText("claude-skill").length).toBeGreaterThan(0));
     expect(screen.getByText("Project")).toBeTruthy();

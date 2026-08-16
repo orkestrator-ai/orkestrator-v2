@@ -175,6 +175,52 @@ describe("SkillsSettings", () => {
     expect(screen.queryByRole("alert") === null).toBe(true);
   });
 
+  // The empty-list coercion above must not widen into "anything unreadable is
+  // an empty disk". A zeroed footer is a claim about the user's skill
+  // directories, so a response this pane cannot read has to say so instead.
+  for (const unreadable of [
+    { label: "an object missing every field", value: {} },
+    { label: "an error envelope", value: { error: "backend exploded" } },
+    { label: "a scan whose skills are not a list", value: { roots: [], skills: null, errors: [] } },
+    { label: "a non-empty array", value: ["skill"] },
+    { label: "a bare string", value: "no" },
+    { label: "null", value: null },
+  ] as const) {
+    test(`reports ${unreadable.label} as a failed scan rather than an empty one`, async () => {
+      listOverride = async () => unreadable.value;
+
+      render(<SkillsSettings />);
+
+      await waitFor(() =>
+        expect(screen.getByText("The backend returned an unreadable skill catalogue")).toBeTruthy());
+      expect(footerText()).toBe("Scan failed");
+      expect(screen.queryByText("No skills found in any of this agent's skill directories.") === null)
+        .toBe(true);
+    });
+  }
+
+  test("wraps the provider tab strip so all five agents stay reachable", async () => {
+    render(<SkillsSettings />);
+
+    const tabList = await screen.findByRole("tablist");
+    const tabs = within(tabList).getAllByRole("tab");
+    expect(tabs.map((tab) => tab.textContent?.trim())).toEqual([
+      "Claude",
+      "Codex",
+      "Cursor",
+      "Grok",
+      "OpenCode",
+    ]);
+    // Every tab keeps an accessible name, so the wrapped strip is still
+    // navigable by keyboard and by name rather than by position.
+    for (const tab of tabs) expect(tab.getAttribute("aria-selected")).toBeTruthy();
+    // happy-dom does not lay out, so the class contract stands in for the
+    // measurement: the fixed `h-8` row is what clipped the two new agents.
+    expect(tabList.className).toContain("flex-wrap");
+    expect(tabList.className).toContain("h-auto");
+    expect(/(^|\s)h-8(\s|$)/.test(tabList.className)).toBe(false);
+  });
+
   test("uses controlled environment callbacks and hides host-only controls", async () => {
     const listSkills = mock(async (provider: AgentSkillProvider): Promise<AgentSkillScan> => ({
       provider,

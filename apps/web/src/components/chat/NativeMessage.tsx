@@ -8,6 +8,7 @@ import {
   useState,
   useMemo,
   useEffect,
+  useLayoutEffect,
   type AnchorHTMLAttributes,
   type ReactNode,
 } from "react";
@@ -1013,7 +1014,7 @@ function ImagePreviewOverlay({
     [onClose],
   );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleKeyDown]);
@@ -1243,6 +1244,8 @@ function FilePart({
     setPreviewOpen(true);
   }, [imageSrc, isImage, loadImage]);
 
+  const closePreview = useCallback(() => setPreviewOpen(false), []);
+
   return (
     <>
       <button
@@ -1301,7 +1304,7 @@ function FilePart({
         <ImagePreviewOverlay
           imageSrc={imageSrc}
           filename={displayName}
-          onClose={() => setPreviewOpen(false)}
+          onClose={closePreview}
         />
       )}
     </>

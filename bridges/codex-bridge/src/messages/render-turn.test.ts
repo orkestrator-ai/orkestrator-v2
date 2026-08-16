@@ -369,6 +369,28 @@ describe("renderTurn", () => {
     expect(rendered.parts).toEqual([{ type: "thinking", content: meaningful }]);
   });
 
+  test("stamps item parts with the backend item start clock", async () => {
+    const accumulator = turn();
+    accumulator.onItemStarted(
+      { id: "message", type: "agent_message", text: "Answer" },
+      Date.parse("2026-07-25T12:00:45.000Z"),
+    );
+    const rendered = await renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state: createTurnRenderState(),
+      loadSubagentParts: async () => [],
+    });
+
+    expect(rendered.parts).toEqual([
+      {
+        type: "text",
+        content: "Answer",
+        createdAt: "2026-07-25T12:00:45.000Z",
+      },
+    ]);
+  });
+
   test("passes the effective turn snapshot to the subagent loader", async () => {
     const accumulator = turn();
     accumulator.onTextDelta("streamed", "hello");

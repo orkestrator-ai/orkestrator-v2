@@ -43,6 +43,7 @@ export interface BridgeTextPart {
   content: string;
   sourcePartId: string;
   sourceMessageId: string;
+  createdAt?: string;
   /** Launch tool this nested text belongs to, when hydrated from a child transcript. */
   parentTaskUseId?: string;
 }
@@ -59,6 +60,7 @@ export interface BridgeFilePart {
   fileUrl?: string;
   sourcePartId: string;
   sourceMessageId: string;
+  createdAt?: string;
 }
 
 export interface BridgeToolDiff {
@@ -76,6 +78,7 @@ export interface BridgeToolPart {
   sourcePartId: string;
   sourceMessageId: string;
   toolUseId: string;
+  createdAt?: string;
   toolName?: string;
   toolArgs?: JsonObject;
   toolState?: "success" | "failure" | "pending";

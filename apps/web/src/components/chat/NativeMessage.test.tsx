@@ -224,9 +224,8 @@ describe("NativeMessage assistant attribution", () => {
   });
 
   test("keeps a caller-supplied action reachable on a content-empty assistant message", () => {
-    // `buildMessageForkActionKinds` can place a block's only "fork response"
-    // action on a content-empty trailing row; suppressing the footer there
-    // would strand the affordance for the whole exchange.
+    // A content-empty trailing row can still host a fork action; suppressing
+    // the footer there would strand the affordance for that section.
     render(
       <NativeMessage
         message={makeMessage([], {
@@ -329,6 +328,38 @@ describe("NativeMessage assistant attribution", () => {
     expect(screen.queryByText("GPT 5.6 Sol") === null).toBe(true);
     expect(screen.getByText(expectedTimeLabel("2026-03-21T10:00:40.000Z"))).toBeTruthy();
     expect(screen.getByRole("button", { name: "Copy text" })).toBeTruthy();
+  });
+
+  test("shows a backend section timestamp on a tool-group row", () => {
+    const previousText = makeMessage([{ type: "text", content: "I'll inspect that." }], {
+      id: "assistant-text-section",
+      createdAt: "2026-03-21T10:00:00.000Z",
+    });
+    render(
+      <NativeMessage
+        message={makeMessage(
+          [{
+            type: "tool-group",
+            content: "",
+            parts: [{
+              type: "tool-invocation",
+              content: "Read",
+              toolName: "Read",
+              createdAt: "2026-03-21T10:02:15.000Z",
+            }],
+          }],
+          {
+            id: "assistant-tool-section",
+            createdAt: "2026-03-21T10:02:15.000Z",
+          },
+        )}
+        previousMessage={previousText}
+        actions={<button type="button">Fork response</button>}
+      />,
+    );
+
+    expect(screen.getByText(expectedTimeLabel("2026-03-21T10:02:15.000Z"))).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Fork response" })).toBeTruthy();
   });
 
   test("anchors attribution and duration on the user after an empty info block", () => {

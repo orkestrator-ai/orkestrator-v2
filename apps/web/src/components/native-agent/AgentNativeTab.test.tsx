@@ -1630,6 +1630,67 @@ describe("AgentNativeTab", () => {
     }
   });
 
+  test("reports a completed turn's duration from the transcript on a fresh mount", async () => {
+    /*
+     * The tab that started this turn may never have seen it end — it could have
+     * been unmounted while another environment was active. Both ends of the
+     * duration come from backend clocks in the transcript, so a first mount
+     * against the projection still reports it.
+     */
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      platform: input.agent,
+      environmentId: input.environmentId,
+      sessionId: "claude-session",
+      connection: "connected" as const,
+      turn: { phase: "idle" as const },
+      messages: [
+        {
+          id: "user-1",
+          role: "user" as const,
+          content: "Refactor the parser",
+          parts: [{ type: "text" as const, content: "Refactor the parser" }],
+          createdAt: "2026-08-14T10:00:00.000Z",
+        },
+        {
+          id: "assistant-1",
+          role: "assistant" as const,
+          content: "Done",
+          parts: [{
+            type: "text" as const,
+            content: "Done",
+            createdAt: "2026-08-14T10:00:45.000Z",
+          }],
+          createdAt: "2026-08-14T10:00:05.000Z",
+        },
+      ],
+      interactions: [],
+      composerControls: [],
+      composer: {
+        models: [], fastModeEnabled: false, fastModeAvailable: false,
+        selectedModeId: "build" as const, modes: [{ id: "build" as const, label: "Build" }],
+      },
+      capabilities: {
+        attachments: { files: false, images: false }, queue: false, resume: false,
+        fork: false, slashCommands: false, backgroundTasks: false,
+        composer: { provider: true, model: true, reasoning: true, speed: true, mode: true },
+      },
+      revision: 1,
+      generation: "test-generation",
+    }));
+
+    render(
+      <AgentNativeTab
+        tabId="tab-elapsed"
+        data={identity("claude")}
+        isActive
+        ownsGlobalShortcuts
+      />,
+    );
+
+    // 10:00:00 prompt → 10:00:45 newest response section, both backend-stamped.
+    expect(await screen.findByText("Completed in 45s")).toBeTruthy();
+  });
+
   test("restores review follow-up, manual refresh, notices, and Escape stop in the shared tab", async () => {
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       platform: input.agent,

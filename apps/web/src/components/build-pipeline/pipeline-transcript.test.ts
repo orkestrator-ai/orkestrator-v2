@@ -1,7 +1,18 @@
 import { describe, expect, test } from "bun:test";
+import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
 import { toPipelineTranscript } from "./pipeline-transcript";
 
 const FALLBACK = "2026-07-29T00:00:00.000Z";
+
+function flattenedParts(messages: NativeMessage[]): NativeMessagePart[] {
+  return messages.flatMap((message) =>
+    message.parts.flatMap((part) =>
+      part.type === "tool-group" || part.type === "agent-group"
+        ? part.parts
+        : [part],
+    ),
+  );
+}
 
 describe("toPipelineTranscript", () => {
   test("hides the initial pipeline handoff and starts with the agent output", () => {
@@ -95,18 +106,19 @@ quoted context
       FALLBACK,
     );
 
-    expect(transcript).toHaveLength(1);
+    expect(transcript.map((message) => ({
+      id: message.id,
+      partTypes: message.parts.map((part) => part.type),
+    }))).toEqual([
+      { id: "message-1", partTypes: ["text"] },
+      { id: "message-1:text-block:1", partTypes: ["tool-group"] },
+    ]);
     expect(transcript[0]).toMatchObject({
-      id: "message-1",
       role: "assistant",
       createdAt: "2026-07-29T00:01:00.000Z",
       modelId: "gpt-5-codex",
     });
-    expect(transcript[0]!.parts.map((part) => part.type)).toEqual([
-      "text",
-      "tool-invocation",
-    ]);
-    expect(transcript[0]!.parts[1]).toMatchObject({
+    expect(flattenedParts(transcript)[1]).toMatchObject({
       toolName: "shell",
       toolArgs: { command: "bun test" },
       toolOutput: "33 pass",
@@ -229,7 +241,7 @@ quoted context
       FALLBACK,
     );
 
-    const parts = transcript[0]!.parts;
+    const parts = flattenedParts(transcript);
     expect(parts[0]).toMatchObject({ type: "subagent", subagentActions: [] });
     expect(parts[1]!.taskSnapshot).toBeUndefined();
     expect(parts[2]!.toolArgs).toBeUndefined();
@@ -410,7 +422,7 @@ quoted context
     );
 
     expect(transcript[0]).toMatchObject({ turnId: "turn-7" });
-    expect(transcript[0]!.parts[0]).toMatchObject({
+    expect(flattenedParts(transcript)[0]).toMatchObject({
       toolUseId: "use-1",
       toolUseCount: 3,
       tokenCount: 1024,
@@ -447,7 +459,7 @@ quoted context
       FALLBACK,
     );
 
-    const [part] = transcript[0]!.parts;
+    const [part] = flattenedParts(transcript);
     expect(part!.toolState).toBeUndefined();
     expect(part!.agentState).toBeUndefined();
     expect(part!.toolUseCount).toBeUndefined();
@@ -483,7 +495,7 @@ quoted context
       FALLBACK,
     );
 
-    const parts = transcript[0]!.parts;
+    const parts = flattenedParts(transcript);
     expect(parts[0]!.toolDiff).toBeUndefined();
     expect(parts[1]!.toolDiff).toMatchObject({ filePath: "src/a.ts" });
     expect(parts[1]!.toolDiff?.before).toBeUndefined();
@@ -532,7 +544,7 @@ quoted context
       FALLBACK,
     );
 
-    const parts = transcript[0]!.parts;
+    const parts = flattenedParts(transcript);
     expect(parts[0]!.taskSnapshot).toEqual({
       items: [
         { id: "t1", subject: "Write the adapter", status: "completed" },
@@ -564,10 +576,10 @@ quoted context
       FALLBACK,
     );
 
-    expect(transcript[0]!.parts[0]!.taskSnapshot?.complete).toBe(false);
+    expect(flattenedParts(transcript)[0]!.taskSnapshot?.complete).toBe(false);
   });
 
-  test("splits a Claude turn at a long pause, as the Claude tab does", () => {
+  test("splits a Claude turn at every text and tool boundary", () => {
     const transcript = toPipelineTranscript(
       [{
         id: "m1",
@@ -601,10 +613,15 @@ quoted context
 
     // The Claude adapter reads `timestamp`/`_messageUuid`, not the native
     // `createdAt`/`sourcePartId` this module validates into. Without the names
-    // being put back, every part arrives untimestamped and this is one row.
-    expect(transcript.map((message) => message.id))
-      .toEqual(["m1", "m1:text-block:2"]);
-    expect(transcript[1]!.createdAt).toBe("2026-07-29T00:30:00.000Z");
+    // being put back, every section would inherit the prompt time.
+    expect(transcript.map((message) => ({
+      id: message.id,
+      createdAt: message.createdAt,
+    }))).toEqual([
+      { id: "m1", createdAt: "2026-07-29T00:00:00.000Z" },
+      { id: "m1:text-block:1", createdAt: "2026-07-29T00:01:00.000Z" },
+      { id: "m1:text-block:2", createdAt: "2026-07-29T00:30:00.000Z" },
+    ]);
     expect(transcript[0]!.parts[0]).toMatchObject({ sourcePartId: "uuid-a" });
   });
 
@@ -677,6 +694,123 @@ quoted context
     expect(transcript.map((message) => message.id)).toEqual(["m2"]);
   });
 
+  test("splits a bridge turn into timestamped sections and groups its tool activity", () => {
+    // The generic branch shares the chat adapter, so one provider turn becomes
+    // one row per text/activity section, each stamped from its own backend
+    // parts rather than from the prompt that started the turn.
+    const transcript = toPipelineTranscript(
+      [{
+        id: "m1",
+        role: "assistant",
+        content: "PlanningDone",
+        createdAt: "2026-07-29T00:00:00.000Z",
+        parts: [
+          { type: "text", content: "Planning", createdAt: "2026-07-29T00:00:05.000Z" },
+          {
+            type: "tool-invocation", content: "Read", toolName: "Read",
+            createdAt: "2026-07-29T00:00:20.000Z",
+          },
+          {
+            type: "tool-invocation", content: "Grep", toolName: "Grep",
+            createdAt: "2026-07-29T00:00:30.000Z",
+          },
+          { type: "text", content: "Done", createdAt: "2026-07-29T00:00:45.000Z" },
+        ],
+      }],
+      "codex",
+      FALLBACK,
+    );
+
+    expect(transcript.map((message) => ({
+      id: message.id,
+      content: message.content,
+      createdAt: message.createdAt,
+      partTypes: message.parts.map((part) => part.type),
+    }))).toEqual([
+      {
+        id: "m1",
+        content: "Planning",
+        createdAt: "2026-07-29T00:00:05.000Z",
+        partTypes: ["text"],
+      },
+      {
+        id: "m1:text-block:1",
+        content: "",
+        createdAt: "2026-07-29T00:00:30.000Z",
+        partTypes: ["tool-group"],
+      },
+      {
+        id: "m1:text-block:2",
+        content: "Done",
+        createdAt: "2026-07-29T00:00:45.000Z",
+        partTypes: ["text"],
+      },
+    ]);
+    expect(flattenedParts(transcript).map((part) => part.content))
+      .toEqual(["Planning", "Read", "Grep", "Done"]);
+  });
+
+  test("splits an OpenCode turn on its own part clocks", () => {
+    const transcript = toPipelineTranscript(
+      [{
+        info: { id: "m1", role: "assistant", time: { created: 1_800_000_000_000 } },
+        parts: [
+          { id: "p1", type: "text", text: "Looking", time: { start: 1_800_000_005_000 } },
+          {
+            id: "p2", type: "tool", tool: "bash", state: { status: "completed" },
+            time: { start: 1_800_000_020_000 },
+          },
+          { id: "p3", type: "text", text: "Finished", time: { start: 1_800_000_040_000 } },
+        ],
+      }],
+      "opencode",
+      FALLBACK,
+    );
+
+    expect(transcript.map((message) => ({
+      id: message.id,
+      createdAt: message.createdAt,
+      partTypes: message.parts.map((part) => part.type),
+    }))).toEqual([
+      {
+        id: "m1",
+        createdAt: "2027-01-15T08:00:05.000Z",
+        partTypes: ["text"],
+      },
+      {
+        id: "m1:text-block:1",
+        createdAt: "2027-01-15T08:00:20.000Z",
+        partTypes: ["tool-group"],
+      },
+      {
+        id: "m1:text-block:2",
+        createdAt: "2027-01-15T08:00:40.000Z",
+        partTypes: ["text"],
+      },
+    ]);
+  });
+
+  test("keeps a section that splitting leaves without renderable content out of the transcript", () => {
+    // Splitting can isolate a part the renderer draws nothing for. The filter
+    // runs after the split so an empty section never reaches the list.
+    const transcript = toPipelineTranscript(
+      [{
+        id: "m1",
+        role: "assistant",
+        content: "",
+        parts: [
+          { type: "text", content: "narration" },
+          { type: "tool-result", content: "" },
+        ],
+      }],
+      "codex",
+      FALLBACK,
+    );
+
+    expect(transcript.map((message) => message.id)).toEqual(["m1"]);
+    expect(transcript[0]!.parts.map((part) => part.type)).toEqual(["text"]);
+  });
+
   test("routes on the envelope, not the pipeline's recorded agent", () => {
     // A pipeline whose agent was recorded as codex can still hold an OpenCode
     // snapshot, and vice versa, so each entry is detected on its own shape.
@@ -746,7 +880,7 @@ quoted context
       FALLBACK,
     );
 
-    const parts = transcript[0]!.parts;
+    const parts = flattenedParts(transcript);
     expect(parts[0]!.backgroundTask)
       .toEqual({ id: "bg-1", description: "dev server", status: "killed" });
     // The task itself survives; only the unreadable status is dropped.
@@ -780,7 +914,7 @@ quoted context
 
     // The vocabulary is the protocol's, not a copy kept here: a snapshot the
     // registry would have accepted must not be dropped on its way to the tab.
-    expect(transcript[0]!.parts[0]!.taskSnapshot?.items.map((item) => item.status))
+    expect(flattenedParts(transcript)[0]!.taskSnapshot?.items.map((item) => item.status))
       .toEqual(["in_progress", "in_progress", "completed"]);
   });
 
@@ -810,7 +944,7 @@ quoted context
       FALLBACK,
     );
 
-    const parts = transcript[0]!.parts;
+    const parts = flattenedParts(transcript);
     // `parentTaskUseId` is what groups a tool under the Task that spawned it,
     // and `fileUrl` is what makes an image an image rather than a path.
     expect(parts[0]).toMatchObject({

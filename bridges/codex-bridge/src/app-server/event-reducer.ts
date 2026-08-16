@@ -54,6 +54,11 @@ function nonNegativeNum(value: unknown): number | undefined {
  */
 const MAX_DATE_MS = 8.64e15;
 
+function nonNegativeDateMs(value: unknown): number | undefined {
+  const parsed = nonNegativeNum(value);
+  return parsed !== undefined && parsed <= MAX_DATE_MS ? parsed : undefined;
+}
+
 function epochSecondsToIso(value: unknown): string | undefined {
   const seconds = num(value);
   if (seconds === undefined) return undefined;
@@ -384,6 +389,7 @@ export function reduceNotification(
       const { item, unsupportedType } = adaptAppServerItem(params.item);
       if (!item) return { events: [], unsupportedItemType: unsupportedType };
       const completed = notification.method === "item/completed";
+      const startedAtMs = completed ? undefined : nonNegativeDateMs(params.startedAtMs);
       return {
         events: [
           {
@@ -391,6 +397,7 @@ export function reduceNotification(
             threadId,
             turnId,
             item,
+            ...(startedAtMs === undefined ? {} : { startedAtMs }),
             ...base,
           },
         ],
@@ -456,6 +463,7 @@ export function reduceNotification(
       if (!callId) return { events: [] };
 
       if (payloadType === "custom_tool_call" && str(rawItem.name) === "apply_patch") {
+        const startedAtMs = nonNegativeDateMs(params.startedAtMs);
         return {
           events: [{
             kind: "item.dynamic.started",
@@ -469,6 +477,7 @@ export function reduceNotification(
               content_items: [],
               status: "in_progress",
             },
+            ...(startedAtMs === undefined ? {} : { startedAtMs }),
             ...base,
           }],
         };

@@ -537,6 +537,43 @@ describe("BuildChatTab presentation", () => {
     }} />);
   }
 
+  /*
+   * The pipeline transcript runs through the same adapter as the chat tabs, so
+   * tool activity arrives grouped into a `tool-group` and one provider turn is
+   * split into several timestamped rows. These helpers flatten both so the
+   * assertions below stay about *which* activity survived payload filtering
+   * rather than about the section boundaries, which `pipeline-transcript.test.ts`
+   * owns.
+   */
+  interface RenderedPart {
+    type: string;
+    content: string;
+    parts?: RenderedPart[];
+  }
+
+  function renderedParts(): RenderedPart[] {
+    return (listProps.messages as Array<{ parts: RenderedPart[] }>)
+      .flatMap((message) => message.parts);
+  }
+
+  function visibleToolInvocations(): string[] {
+    const collect = (parts: RenderedPart[]): string[] =>
+      parts.flatMap((part) => {
+        if (part.type === "tool-invocation") return [part.content];
+        if (part.type === "tool-group" || part.type === "agent-group") {
+          return collect(part.parts ?? []);
+        }
+        return [];
+      });
+    return collect(renderedParts());
+  }
+
+  function visibleTextContents(): string[] {
+    return renderedParts()
+      .filter((part) => part.type === "text")
+      .map((part) => part.content);
+  }
+
   beforeEach(() => {
     cleanup();
     retryStageMock.mockClear();
@@ -628,12 +665,10 @@ describe("BuildChatTab presentation", () => {
 
     expect(screen.getAllByText("Structured review report")).toHaveLength(1);
     expect(screen.queryByText(/Ready: no/) === null).toBe(true);
-    expect(listProps.messages[0]?.parts).toEqual([
-      expect.objectContaining({
-        type: "tool-invocation",
-        content: "git diff --stat",
-      }),
-    ]);
+    expect(visibleToolInvocations()).toEqual(["git diff --stat"]);
+    // Both the provisional and the final payload are schema-shaped text, so the
+    // transcript keeps only the tool activity between them.
+    expect(visibleTextContents()).toEqual([]);
   });
 
   test("shows only the completed turn's final verification verdict", async () => {
@@ -687,11 +722,7 @@ describe("BuildChatTab presentation", () => {
 
     expect(screen.queryByText("Verification failed") === null).toBe(true);
     expect(screen.getAllByText("Verification passed")).toHaveLength(1);
-    expect(
-      listProps.messages[0]?.parts
-        .filter((part: { type: string }) => part.type === "tool-invocation")
-        .map((part: { content: string }) => part.content),
-    ).toEqual(["bun test", "bun run build"]);
+    expect(visibleToolInvocations()).toEqual(["bun test", "bun run build"]);
   });
 
   test("does not call a provisional running verdict a verification failure", () => {
@@ -728,12 +759,8 @@ describe("BuildChatTab presentation", () => {
     });
 
     expect(screen.queryByText("Verification failed") === null).toBe(true);
-    expect(listProps.messages[0]?.parts).toEqual([
-      expect.objectContaining({
-        type: "tool-invocation",
-        content: "bun test",
-      }),
-    ]);
+    expect(visibleToolInvocations()).toEqual(["bun test"]);
+    expect(visibleTextContents()).toEqual([]);
   });
 
   test("does not reveal an idle provisional verdict after pause or cancellation", () => {
@@ -769,9 +796,8 @@ describe("BuildChatTab presentation", () => {
       sessions: [pipeline.sessions[0]!, verification],
     });
     expect(screen.queryByText("Verification failed") === null).toBe(true);
-    expect(listProps.messages[0]?.parts).toEqual([
-      expect.objectContaining({ type: "tool-invocation", content: "bun test" }),
-    ]);
+    expect(visibleToolInvocations()).toEqual(["bun test"]);
+    expect(visibleTextContents()).toEqual([]);
 
     cleanup();
     renderTab({
@@ -984,11 +1010,7 @@ describe("BuildChatTab presentation", () => {
     fireEvent.click(screen.getByText("Verification Session"));
     expect(screen.queryByText("Verification failed") === null).toBe(true);
     expect(screen.getAllByText("Verification passed")).toHaveLength(1);
-    expect(
-      listProps.messages[0]?.parts
-        .filter((part: { type: string }) => part.type === "tool-invocation")
-        .map((part: { content: string }) => part.content),
-    ).toEqual(["bun test"]);
+    expect(visibleToolInvocations()).toEqual(["bun test"]);
 
     cleanup();
     renderTab({
@@ -1000,9 +1022,8 @@ describe("BuildChatTab presentation", () => {
     });
     fireEvent.click(screen.getByText("Verification Session"));
     expect(screen.queryByText("Verification failed") === null).toBe(true);
-    expect(listProps.messages[0]?.parts).toEqual([
-      expect.objectContaining({ type: "tool-invocation", content: "bun test" }),
-    ]);
+    expect(visibleToolInvocations()).toEqual(["bun test"]);
+    expect(visibleTextContents()).toEqual([]);
   });
 
   test("keeps the report's sections collapsed and its JSON out of the transcript", async () => {

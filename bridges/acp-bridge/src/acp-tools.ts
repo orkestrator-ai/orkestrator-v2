@@ -188,6 +188,7 @@ export function applyToolCallUpdate(
         sourceMessageId: owner.id,
         toolUseId: toolCallId,
         toolState: "pending",
+        createdAt: new Date().toISOString(),
       };
       if (!pushToolPart(state, owner, part, isInitial)) return;
     }
@@ -1500,6 +1501,7 @@ export function applyCursorTask(state: SessionState, params: JsonObject): void {
       toolName: "task",
       toolState: agentState === "finished" ? "success" : "pending",
       agentState: agentState ?? "active",
+      createdAt: new Date().toISOString(),
     };
     // Not an initial `tool_call`: a late `cursor/task` for a trimmed id must
     // not rebuild the evicted launch as a context-free ghost part.

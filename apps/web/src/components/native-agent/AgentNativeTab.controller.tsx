@@ -58,6 +58,7 @@ import { normalizeNativeMessages } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import {
   createOptimisticNativeMessage,
+  isClientOnlyNativeMessage,
   TURN_STOPPED_BY_USER,
 } from "@/lib/chat/client-only-messages";
 import {
@@ -68,11 +69,13 @@ import { persistAgentModelDefault } from "@/lib/chat/agent-model-preferences";
 import { persistCodexGlobalPreferences } from "@/components/codex/codex-preferences";
 import {
   buildMessageForkPlan,
-  findNextForkMessage,
-  findPreviousForkMessage,
   forkAttachmentNotice,
   type MessageForkKind,
 } from "@/components/chat/message-fork";
+import {
+  resolveNativeAgentPromptBoundary,
+  resolveNativeAgentResponseBoundary,
+} from "./native-agent-fork";
 import { composeDraftKey, discardComposeDraft } from "@/lib/compose-draft-persistence";
 import { composerOccupiedError } from "@/lib/prompt-queue-errors";
 import {
@@ -103,6 +106,10 @@ import { NativeAgentInteractionCard } from "./NativeAgentInteractionCard";
 import { CodexPlanModeCard } from "@/components/codex/CodexPlanModeCard";
 import { ClaudeBackgroundTaskHoldCard } from "@/components/claude/ClaudeBackgroundTaskHoldCard";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
+import {
+  findLatestBackendTurnElapsedSeconds,
+  findLatestBackendUserTurnStartedAt,
+} from "@/lib/session-timer";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { isSetupBlocked } from "@/lib/setup-commands";
 
@@ -431,10 +438,33 @@ export function SharedNativeAgentController({
     : phase === "recovering"
       ? <span role="status" className="text-xs">Reconnecting to {label}…</span>
       : undefined;
+  const turnStartedAt = projection?.turn.startedAt
+    ?? (isTurnActive
+      ? findLatestBackendUserTurnStartedAt(
+          normalizedMessages,
+          (message) => !isClientOnlyNativeMessage(message),
+        )
+      : undefined);
+  /*
+   * `useElapsedTimer` no longer keeps a renderer-local start, so the completed
+   * duration has to come from the transcript too. Deriving it from the backend
+   * clocks — rather than from the moment this tab happened to observe the turn
+   * end — is also what makes it survive a switch away and back.
+   */
+  const completedElapsedSeconds = useMemo(
+    () => (isTurnActive
+      ? null
+      : findLatestBackendTurnElapsedSeconds(
+          normalizedMessages,
+          (message) => !isClientOnlyNativeMessage(message),
+        ) ?? null),
+    [isTurnActive, normalizedMessages],
+  );
   const { elapsedSeconds, finalElapsedSeconds } = useElapsedTimer(
     isTurnActive,
     projection?.sessionId,
-    projection?.turn.startedAt,
+    turnStartedAt,
+    completedElapsedSeconds,
   );
   const canQueue = isRunning && adapter.capabilities.queue;
   /*
@@ -851,50 +881,10 @@ export function SharedNativeAgentController({
   const forkPlan = useMemo(
     () => buildMessageForkPlan(handoff.displayMessages, {
       responseInProgress: isTurnActive,
-      resolvePromptBoundary: (message, allMessages) => {
-        if (platform === "opencode") {
-          return { type: "message", messageId: message.id };
-        }
-        if (platform === "codex") {
-          const previousTurn = findPreviousForkMessage(
-            allMessages,
-            message.id,
-            (candidate) => Boolean(candidate.turnId)
-              && candidate.turnId !== message.turnId,
-          );
-          if (previousTurn) {
-            return { type: "message", messageId: previousTurn.id };
-          }
-          return findPreviousForkMessage(allMessages, message.id)
-            ? null
-            : { type: "session-start" };
-        }
-        const previous = findPreviousForkMessage(allMessages, message.id);
-        if (!previous) return { type: "session-start" };
-        return {
-          type: "message",
-          messageId: previous.parts.find((part) => part.sourceMessageId)?.sourceMessageId
-            ?? previous.id.split(":text-block:")[0]!,
-        };
-      },
-      resolveResponseBoundary: (message, allMessages) => {
-        if (platform === "opencode") {
-          const next = findNextForkMessage(allMessages, message.id);
-          return next
-            ? { type: "message", messageId: next.id }
-            : { type: "whole-session" };
-        }
-        if (platform === "codex") {
-          return message.turnId
-            ? { type: "message", messageId: message.id }
-            : null;
-        }
-        return {
-          type: "message",
-          messageId: message.parts.find((part) => part.sourceMessageId)?.sourceMessageId
-            ?? message.id.split(":text-block:")[0]!,
-        };
-      },
+      resolvePromptBoundary: (message, allMessages) =>
+        resolveNativeAgentPromptBoundary(platform, message, allMessages),
+      resolveResponseBoundary: (message, allMessages) =>
+        resolveNativeAgentResponseBoundary(platform, message, allMessages),
     }),
     [handoff.displayMessages, isTurnActive, platform],
   );

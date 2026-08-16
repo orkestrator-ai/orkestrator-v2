@@ -19,7 +19,7 @@ import {
   type TaskListSnapshot,
   type TaskSnapshotItem,
 } from "@orkestrator/protocol/task-list";
-import { normalizeClaudeMessagesForDisplay } from "@/lib/chat/native-message-adapters";
+import { normalizeClaudeMessagesForDisplay, normalizeNativeMessages } from "@/lib/chat/native-message-adapters";
 import { normalizeOpenCodeMessage } from "@/lib/opencode-client";
 import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
 import type {
@@ -288,9 +288,8 @@ const CLAUDE_PART_TYPES = new Set([
  *
  * `toNativePart` normalizes `timestamp` → `createdAt` and `_messageUuid` →
  * `sourcePartId`, but `normalizeClaudePart` reads the wire names. Handing it a
- * native part directly leaves every part untimestamped, so
- * `splitClaudeAssistantTextBlocks` can never fire and a long stage renders as
- * one row — the exact behaviour this module claims to share with the Claude tab.
+ * native part directly would drop those fields, so each text/tool section
+ * would fall back to the prompt time instead of the backend part clock.
  */
 function toClaudeParts(value: unknown): ClaudeMessagePart[] {
   if (!Array.isArray(value)) return [];
@@ -468,7 +467,11 @@ export function toPipelineTranscript(
     const info = openCodeInfo(raw);
     if (info) {
       const message = toOpenCodeMessage(raw, info, index, fallbackCreatedAt);
-      if (message) transcript.push(message);
+      if (message) {
+        transcript.push(
+          ...normalizeNativeMessages([message]).filter(hasRenderableContent),
+        );
+      }
       return;
     }
 
@@ -481,7 +484,7 @@ export function toPipelineTranscript(
 
     if (agentType === "claude") {
       // Claude parts are grouped into their parent Task/Agent call and split at
-      // long pauses by the same adapter the Claude tab uses.
+      // every text/tool boundary by the same adapter the Claude tab uses.
       const claudeMessage: ClaudeMessage = {
         id: messageId(raw, index),
         role,
@@ -506,7 +509,9 @@ export function toPipelineTranscript(
       ...(modelId ? { modelId } : {}),
       ...(asString(raw.turnId) ? { turnId: asString(raw.turnId) } : {}),
     };
-    if (hasRenderableContent(message)) transcript.push(message);
+    transcript.push(
+      ...normalizeNativeMessages([message]).filter(hasRenderableContent),
+    );
   });
 
   if (interactions.length === 0) return transcript;

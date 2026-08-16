@@ -1742,6 +1742,32 @@ describe("session lifecycle", () => {
     expect(toolPart.toolState).toBe("pending");
   });
 
+  test("carries the app-server item start clock into rendered parts", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "answer", requestId: "req-clock", attachments: [] });
+
+    h.child().notify("item/started", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      startedAtMs: Date.parse("2026-08-16T12:00:45.000Z"),
+      item: {
+        id: "message-1",
+        type: "agentMessage",
+        text: "Answer",
+      },
+    });
+    await h.drain();
+
+    const messages = (await h.runtime.getMessages(sessionId))!;
+    const assistant = messages.find((message) => message.role === "assistant");
+    expect(assistant?.parts).toContainEqual({
+      type: "text",
+      content: "Answer",
+      createdAt: "2026-08-16T12:00:45.000Z",
+    });
+  });
+
   test("plan updates do not disrupt per-file raw patch fallback or structured replacement", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });

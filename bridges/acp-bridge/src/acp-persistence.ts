@@ -349,6 +349,9 @@ export function normalizeBridgePart(
   const sourceMessageId = typeof value.sourceMessageId === "string"
     ? value.sourceMessageId.slice(0, 256)
     : messageId;
+  const createdAt = typeof value.createdAt === "string" && Number.isFinite(Date.parse(value.createdAt))
+    ? value.createdAt.slice(0, 64)
+    : undefined;
 
   if (value.type === "text" || value.type === "reasoning" || value.type === "thinking") {
     const content = typeof value.content === "string"
@@ -363,6 +366,7 @@ export function normalizeBridgePart(
       content: truncateUtf8(content, MAX_MESSAGE_TEXT_BYTES),
       sourcePartId,
       sourceMessageId,
+      ...(createdAt ? { createdAt } : {}),
       ...(parentTaskUseId ? { parentTaskUseId } : {}),
     };
   }
@@ -377,6 +381,7 @@ export function normalizeBridgePart(
       ...(fileUrl ? { fileUrl } : {}),
       sourcePartId,
       sourceMessageId,
+      ...(createdAt ? { createdAt } : {}),
     };
   }
 
@@ -414,6 +419,7 @@ export function normalizeBridgePart(
     ...(toolError !== undefined ? { toolError } : {}),
     ...(toolDiff ? { toolDiff } : {}),
     ...(parentTaskUseId ? { parentTaskUseId } : {}),
+    ...(createdAt ? { createdAt } : {}),
   };
 }
 

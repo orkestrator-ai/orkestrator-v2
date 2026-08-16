@@ -2526,6 +2526,7 @@ describe("ACP bridge", () => {
       toolUseId: "clear-1",
       toolState: "failure",
       toolError: "Tool call ended without a result",
+      createdAt: expect.any(String),
     });
   });
 

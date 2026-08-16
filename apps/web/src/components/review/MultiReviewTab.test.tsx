@@ -561,13 +561,24 @@ describe("MultiReviewReviewerTab", () => {
     expect(screen.queryByRole("textbox") === null).toBe(true);
 
     const normalized = toMultiReviewReviewerMessages(await loadTranscript());
-    expect(normalized.map((message) => message.id)).toEqual(["progress"]);
-    expect(normalized[0]?.parts).toContainEqual(expect.objectContaining({
-      type: "tool-invocation",
-      toolName: "shell",
-      toolArgs: { command: "git diff" },
-      toolOutput: "diff output",
-    }));
+    // The reviewer transcript shares the chat adapter, so the progress turn is
+    // split into its narration and its tool activity, and the schema-shaped
+    // final answer is dropped in favour of the validated report above.
+    expect(normalized.map((message) => message.id))
+      .toEqual(["progress", "progress:text-block:1"]);
+    expect(normalized[0]?.parts).toEqual([
+      expect.objectContaining({ type: "text", content: "Inspecting the changed files" }),
+    ]);
+    const toolGroup = normalized[1]?.parts[0];
+    expect(toolGroup?.type).toBe("tool-group");
+    expect(toolGroup?.type === "tool-group" ? toolGroup.parts : []).toContainEqual(
+      expect.objectContaining({
+        type: "tool-invocation",
+        toolName: "shell",
+        toolArgs: { command: "git diff" },
+        toolOutput: "diff output",
+      }),
+    );
   });
 
   test("keeps the transcript full-height and does not overlap slow refreshes", async () => {

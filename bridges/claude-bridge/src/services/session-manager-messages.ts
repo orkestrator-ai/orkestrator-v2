@@ -39,6 +39,7 @@ import {
   structuredOutputFailure,
   type StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
+import { toolDiffFromToolInput } from "@orkestrator/protocol/tool-diff";
 import { eventEmitter } from "./event-emitter.js";
 import {
   deleteSessionPreferences,
@@ -194,64 +195,19 @@ export function isTaskToolName(toolName: string): boolean {
   return normalized === "task" || normalized === "agent";
 }
 
+/**
+ * Derive bounded `toolDiff` metadata from a tool's raw input.
+ *
+ * The tool-name mapping is shared with the tmux store so the same rollout is
+ * described identically whichever path produced it; only the memory budget is
+ * applied here, because only the bridge retains parts for the session's life.
+ */
 function buildClaudeToolDiff(
   toolName: string,
   input: Record<string, unknown>,
 ): ToolDiffMetadata | undefined {
-  const normalized = toolName.toLowerCase();
-  const filePath = typeof input.file_path === "string"
-    ? input.file_path
-    : typeof input.filePath === "string"
-      ? input.filePath
-      : typeof input.notebook_path === "string"
-        ? input.notebook_path
-        : undefined;
-
-  if (normalized === "edit") {
-    return applyDiffBudget({
-      filePath,
-      before: typeof input.old_string === "string"
-        ? input.old_string
-        : typeof input.oldString === "string" ? input.oldString : undefined,
-      after: typeof input.new_string === "string"
-        ? input.new_string
-        : typeof input.newString === "string" ? input.newString : undefined,
-    });
-  }
-
-  if (normalized === "write") {
-    return applyDiffBudget({
-      filePath,
-      before: "",
-      after: typeof input.content === "string" ? input.content : undefined,
-    });
-  }
-
-  if (normalized === "multiedit") {
-    const edits = Array.isArray(input.edits) ? input.edits : [];
-    const before: string[] = [];
-    const after: string[] = [];
-    for (const edit of edits) {
-      if (!edit || typeof edit !== "object" || Array.isArray(edit)) continue;
-      const fields = edit as Record<string, unknown>;
-      if (typeof fields.old_string === "string") before.push(fields.old_string);
-      if (typeof fields.new_string === "string") after.push(fields.new_string);
-    }
-    return applyDiffBudget({
-      filePath,
-      before: before.join("\n"),
-      after: after.join("\n"),
-    });
-  }
-
-  if (normalized === "notebookedit") {
-    return applyDiffBudget({
-      filePath,
-      after: typeof input.new_source === "string" ? input.new_source : undefined,
-    });
-  }
-
-  return undefined;
+  const sides = toolDiffFromToolInput(toolName, input);
+  return sides ? applyDiffBudget(sides) : undefined;
 }
 
 /**

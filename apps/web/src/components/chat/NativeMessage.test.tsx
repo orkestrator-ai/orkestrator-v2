@@ -1031,6 +1031,31 @@ describe("NativeMessage task list rendering", () => {
     expect(await screen.findByText("+new")).toBeTruthy();
   });
 
+  test("counts the badge from before/after without charging a trailing newline", () => {
+    // The fallback used when a provider sends sides but no counts. A trailing
+    // newline terminates the last line, so this is -2/+1, not -3/+2.
+    render(
+      <TerminalProvider>
+        <NativeMessage
+          message={makeMessage([{
+            type: "tool-invocation",
+            content: "src/a.ts",
+            toolName: "Edit",
+            toolState: "success",
+            toolDiff: {
+              filePath: "/workspace/src/a.ts",
+              before: "one\ntwo\n",
+              after: "three\n",
+            },
+          }])}
+        />
+      </TerminalProvider>,
+    );
+
+    expect(screen.getByText("+1")).toBeTruthy();
+    expect(screen.getByText("-2")).toBeTruthy();
+  });
+
   test("routes a location-only diff hint to the generic tool row", () => {
     // The mirror of the case above: metadata with no deferred marker really is
     // just a hint, and must not be dressed up as an edit.

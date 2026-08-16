@@ -351,6 +351,25 @@ describe("opencode-client streaming part normalization", () => {
         },
         expected: { filePath: "meta.ts", additions: 2, deletions: 1, before: "a", after: "b\nc" },
       },
+      {
+        // A trailing newline terminates the last line rather than starting
+        // another one, so this replaces two lines with one, not three with two.
+        part: {
+          type: "tool", tool: "edit", state: {
+            status: "completed",
+            input: { filePath: "nl.ts", oldString: "one\ntwo\n", newString: "three\n" },
+          },
+        },
+        expected: { filePath: "nl.ts", additions: 1, deletions: 2 },
+      },
+      {
+        part: {
+          type: "tool", tool: "write", state: {
+            status: "completed", input: { filePath: "nl-new.ts", content: "one\ntwo\n" },
+          },
+        },
+        expected: { filePath: "nl-new.ts", additions: 2, deletions: 0 },
+      },
     ];
 
     for (const { part, expected } of cases) {

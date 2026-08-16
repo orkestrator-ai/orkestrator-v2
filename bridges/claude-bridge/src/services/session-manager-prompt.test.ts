@@ -1782,6 +1782,92 @@ describe("sendPrompt", () => {
     });
   });
 
+  test("does not invent lines for a multiedit chunk that ends in a newline", async () => {
+    /*
+     * The synthetic before/after sides are a concatenation of the individual
+     * edits. A chunk that already ends in a newline supplies its own separator;
+     * adding another puts a blank line into the rendered diff that the file
+     * never had and charges it to the badge.
+     */
+    const { session } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        uuid: "multi-newline-message",
+        message: {
+          id: "multi-newline-message",
+          content: [
+            {
+              type: "tool_use",
+              id: "multi-nl",
+              name: "MultiEdit",
+              input: {
+                file_path: "c.ts",
+                edits: [
+                  { old_string: "four\n", new_string: "x\n" },
+                  { old_string: "one", new_string: "y" },
+                ],
+              },
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          content: [{ type: "tool_result", tool_use_id: "multi-nl", content: "ok" }],
+        },
+      },
+      { type: "result", subtype: "success", result: "done" },
+    ]);
+
+    const tool = session.messages
+      .find((message) => message.role === "assistant")
+      ?.parts.find((part) => part.type === "tool-invocation");
+    expect(tool?.toolDiff).toMatchObject({
+      filePath: "c.ts",
+      before: "four\none",
+      after: "x\ny",
+      additions: 2,
+      deletions: 2,
+    });
+  });
+
+  test("leaves a delete-mode notebook edit without counts it cannot measure", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        uuid: "notebook-delete-message",
+        message: {
+          id: "notebook-delete-message",
+          content: [
+            {
+              type: "tool_use",
+              id: "notebook-del",
+              name: "NotebookEdit",
+              input: { notebook_path: "notes.ipynb", edit_mode: "delete" },
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          content: [{ type: "tool_result", tool_use_id: "notebook-del", content: "ok" }],
+        },
+      },
+      { type: "result", subtype: "success", result: "done" },
+    ]);
+
+    const tool = session.messages
+      .find((message) => message.role === "assistant")
+      ?.parts.find((part) => part.type === "tool-invocation");
+    // The path still identifies the file; reporting +0/-0 would state a count
+    // nothing measured, and the badge is hidden at zero either way.
+    expect(tool?.toolDiff?.filePath).toBe("notes.ipynb");
+    expect(tool?.toolDiff?.additions).toBeUndefined();
+    expect(tool?.toolDiff?.deletions).toBeUndefined();
+  });
+
   test("stamps each task tool call with the resulting task list state", async () => {
     const { session } = await runPromptWithMessages([
       {

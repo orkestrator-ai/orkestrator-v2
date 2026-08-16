@@ -93,6 +93,17 @@ describe("part budget", () => {
     expect(applyDiffBudget(undefined)).toBeUndefined();
   });
 
+  test("hands back the same object when there is nothing to add or cap", () => {
+    // Identity, not just equality. Metadata with no sides has no counts to
+    // derive and no payload to bound, so an untouched part must not pay for a
+    // copy on every message that carries it.
+    const locationOnly = { filePath: "/a.ts" };
+    expect(applyDiffBudget(locationOnly)).toBe(locationOnly);
+
+    const alreadyCounted = { filePath: "/a.ts", before: "old", after: "new", additions: 1, deletions: 1 };
+    expect(applyDiffBudget(alreadyCounted)).toBe(alreadyCounted);
+  });
+
   test("caps oversized tool output and error text", () => {
     const output = "o".repeat(MAX_TOOL_TEXT_BYTES + 1_000);
     const error = "e".repeat(MAX_TOOL_TEXT_BYTES + 1_000);

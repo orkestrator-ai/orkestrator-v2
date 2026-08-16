@@ -172,7 +172,7 @@ export type NativeAgentServiceLayerTypes = [
 
 import { NativeAgentServiceProjection } from "./native-agent-service-projection.ts";
 
-export class NativeAgentServicePrompt extends NativeAgentServiceProjection {
+export abstract class NativeAgentServicePrompt extends NativeAgentServiceProjection {
   async dispatchPrompt(
     input: DispatchNativeAgentPromptInput,
   ): Promise<PersistedNativeAgentSession> {

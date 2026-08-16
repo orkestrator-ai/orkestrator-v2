@@ -262,7 +262,7 @@ export type StorageLayerTypes = [
     ResourceChangeListener
 ];
 
-export class StorageDrafts extends StoragePrompts {
+export abstract class StorageDrafts extends StoragePrompts {
   async getComposeDraft(draftKey: string): Promise<PersistedComposeDraft | null> {
     if (!isNonBlankString(draftKey)) throw new Error("Compose draft key must not be blank");
     return (await this.loadComposeDrafts())[draftKey] ?? null;

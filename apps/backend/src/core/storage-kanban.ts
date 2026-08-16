@@ -846,5 +846,20 @@ export class StorageKanban extends StorageDrafts {
     });
   }
 
-
+  async setAllEnvironmentStatusesForContainer(
+    containerId: string,
+    status: EnvironmentStatus,
+  ): Promise<void> {
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      let changed = false;
+      for (const environment of environments) {
+        if (environment.containerId === containerId) {
+          environment.status = status;
+          changed = true;
+        }
+      }
+      if (changed) await this.saveEnvironments(environments);
+    });
+  }
 }

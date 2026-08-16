@@ -262,7 +262,7 @@ export type StorageLayerTypes = [
     ResourceChangeListener
 ];
 
-export class StorageNative extends StorageReviews {
+export abstract class StorageNative extends StorageReviews {
   async getAgentInteractionResolutionJournal(): Promise<
     AgentInteractionResolutionJournal
   > {

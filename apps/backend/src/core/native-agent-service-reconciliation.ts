@@ -172,7 +172,7 @@ export type NativeAgentServiceLayerTypes = [
 
 import { NativeAgentServicePrompt } from "./native-agent-service-prompt.ts";
 
-export class NativeAgentServiceReconciliation extends NativeAgentServicePrompt {
+export abstract class NativeAgentServiceReconciliation extends NativeAgentServicePrompt {
   reconcileAgentActivity(): Promise<void> {
     if (this.stopped) return Promise.resolve();
     if (this.activityScan) return this.activityScan;
@@ -1336,4 +1336,3 @@ export class NativeAgentServiceReconciliation extends NativeAgentServicePrompt {
    */
 
 }
-

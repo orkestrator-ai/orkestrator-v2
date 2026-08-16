@@ -8,9 +8,12 @@ import { isAwaitBridgeReadyResult, type AgentBridgeKind, type AwaitBridgeReadyRe
 import type { NativeAgentControlUpdate, NativeAgentSessionAction, NativeAgentSessionActionOutcome, NativeAgentDispatchOutcome, NativeAgentForkOutcome, NativeAgentResumeEntry, NativeAgentSessionProjection, NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
 /** PR detection result containing URL, state, and merge conflict status */
 
-import { parseTerminalSessionCreateResult, type TerminalSessionCreateResult } from "./terminals";
+import {
+  isRecord,
+  parseTerminalSessionCreateResult,
+  type TerminalSessionCreateResult,
+} from "./shared";
 import type { KanbanTask } from "./kanban";
-import { isRecord } from "./files-sessions";
 
 export async function startLoopedReview(
   input: StartLoopedReviewInput,
@@ -934,4 +937,3 @@ export async function resizeLocalTerminal(sessionId: string, cols: number, rows:
 export async function closeLocalTerminalSession(sessionId: string): Promise<void> {
   return invoke("close_local_terminal_session", { sessionId });
 }
-

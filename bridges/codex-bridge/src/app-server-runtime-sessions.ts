@@ -138,7 +138,7 @@ import {
 import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
 
 
-export class AppServerRuntimeSessions extends AppServerRuntimeLifecycle {
+export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle {
   createSession(body: Record<string, unknown>): { sessionId: string; title?: string } {
     const clientSessionKey =
       typeof body.clientSessionKey === "string"

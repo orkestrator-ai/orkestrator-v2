@@ -604,11 +604,6 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     };
     finishTurnInputForThisTurn = finishTurnInputIfSettled;
     session.finishTurnInputIfSettled = finishTurnInputIfSettled;
-    const stream = createPromptStreamState(session, sessionId, {
-      flushIntervalMs: STREAM_EVENT_COALESCE_MS,
-      maxBlockIndex: MAX_STREAM_CONTENT_BLOCK_INDEX,
-    });
-    const { toolTracker, taskRegistry, activeTaskIds } = stream;
 
     const queryEnvironment = await runtimeEnvironmentForAgentQuery();
     const queryIterator = query({
@@ -1987,4 +1982,3 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     stream.clearFlushTimer();
   }
 }
-

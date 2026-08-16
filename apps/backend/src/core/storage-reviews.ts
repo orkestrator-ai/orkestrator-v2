@@ -262,7 +262,7 @@ export type StorageLayerTypes = [
     ResourceChangeListener
 ];
 
-export class StorageReviews extends StorageSessions {
+export abstract class StorageReviews extends StorageSessions {
   async getLoopedReviewWorkflow(
     workflowId: string,
   ): Promise<PersistedLoopedReviewWorkflow | null> {

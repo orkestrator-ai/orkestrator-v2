@@ -139,7 +139,7 @@ import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
 import { toEngineInput } from "./app-server-runtime-helpers.js";
 
 
-export class AppServerRuntimePrompt extends AppServerRuntimeSessions {
+export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
   async prompt(
     sessionId: string,
     input: {

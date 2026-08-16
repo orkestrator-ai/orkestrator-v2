@@ -1,6 +1,5 @@
 import { path, createHash, resolveComparisonRef, DiffStatsService, GitFetchScheduler, runCommand, spawnCommand, terminateProcessTree } from "./commands-dependencies.js";
 import type { ChildProcessWithoutNullStreams, ClientEnvironment, Environment, PtyProcess } from "./commands-dependencies.js";
-import { getContainerGitStatusDetailed, getLocalGitStatusDetailed } from "./commands-files.js";
 import type { CommandContext, BackendEmit } from "./commands-context.js";
 
 export type TerminalSessionConfig =
@@ -495,6 +494,13 @@ export let diffStatsSyncQueue: Promise<void> = Promise.resolve();
 export const diffStatsService = new DiffStatsService({
   emit: (event, payload) => diffStatsEmit?.(event, payload),
   scan: async (target) => {
+    // Load the scanners only when a scan runs. `commands-files` consumes shared
+    // runtime constants from this module, so a static import here creates an
+    // initialization cycle before those constants have been assigned.
+    const {
+      getContainerGitStatusDetailed,
+      getLocalGitStatusDetailed,
+    } = await import("./commands-files.js");
     const detailed = target.kind === "local"
       ? await getLocalGitStatusDetailed(target.worktreePath!, target.comparisonRef, true)
       : await getContainerGitStatusDetailed(target.containerId!, target.comparisonRef, true);

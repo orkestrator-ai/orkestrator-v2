@@ -1,6 +1,11 @@
 import { invoke } from "@/lib/native/backend";
 import type { TabTeardownInput } from "@orkestrator/protocol/tab-teardown";
 import type { EnvironmentSetupSession } from "@/types";
+import {
+  parseTerminalSessionCreateResult,
+  type TerminalSessionCreateResult,
+} from "./shared";
+export type { TerminalSessionCreateResult } from "./shared";
 /** PR detection result containing URL, state, and merge conflict status */
 
 export async function attachTerminal(
@@ -9,35 +14,6 @@ export async function attachTerminal(
   rows: number
 ): Promise<string> {
   return invoke<string>("attach_terminal", { containerId, cols, rows });
-}
-
-export interface TerminalSessionCreateResult {
-  sessionId: string;
-  created: boolean;
-  bootstrapped: boolean;
-}
-
-export function parseTerminalSessionCreateResult(
-  value: unknown,
-): TerminalSessionCreateResult {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    typeof (value as { sessionId?: unknown }).sessionId !== "string" ||
-    (value as { sessionId: string }).sessionId.length === 0 ||
-    typeof (value as { created?: unknown }).created !== "boolean" ||
-    (
-      (value as { bootstrapped?: unknown }).bootstrapped !== undefined &&
-      typeof (value as { bootstrapped?: unknown }).bootstrapped !== "boolean"
-    )
-  ) {
-    throw new Error("Backend returned an invalid terminal session result");
-  }
-  return {
-    ...(value as Omit<TerminalSessionCreateResult, "bootstrapped">),
-    // Compatibility with the previous backend for one release.
-    bootstrapped: (value as { bootstrapped?: boolean }).bootstrapped ?? false,
-  };
 }
 
 export async function createTerminalSession(
@@ -182,4 +158,3 @@ export async function resizeTerminal(
 }
 
 // --- Configuration Commands ---
-

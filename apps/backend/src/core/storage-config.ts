@@ -262,7 +262,7 @@ export type StorageLayerTypes = [
     ResourceChangeListener
 ];
 
-export class StorageConfig extends StorageProjects {
+export abstract class StorageConfig extends StorageProjects {
   async loadConfig(): Promise<AppConfig> {
     const configExists = await fs.access(this.configFile()).then(
       () => true,

@@ -137,7 +137,7 @@ import {
 import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
 
 
-export class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
+export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
   async start(): Promise<void> {
     if (this.started) return;
     if (this.startPromise) return this.startPromise;
@@ -1696,4 +1696,3 @@ export class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
 
 
 }
-

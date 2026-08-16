@@ -154,7 +154,7 @@ describe("AlertDialog primitives", () => {
     // each of these is triggered from inside `FullscreenSettingsLayout`, which
     // renders above the shadcn default.
     const sources = [
-      "apps/web/src/components/settings/GlobalSettings.tsx",
+      "apps/web/src/components/settings/GlobalSettings.sections.tsx",
       "apps/web/src/components/docker/DockerStatsDialog.tsx",
       "apps/web/src/components/environments/EnvironmentSettingsDialog.tsx",
     ];

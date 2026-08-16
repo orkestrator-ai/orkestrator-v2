@@ -4,7 +4,7 @@ import { parseGatewayCursor } from "./gateway-event-replay.js";
 import { API_PREFIX, MAX_INVOKE_BODY_BYTES, DROPPABLE_EVENT_PREFIX, SSE_CLIENT_HARD_BUFFER_BYTES, MAX_CLIENT_METRICS_BODY_BYTES, METRIC_UNKNOWN_COMMAND_KEY, METRIC_KEEPALIVE_KEY, InvalidRequestBodyError, RequestBodyTooLargeError, sanitizeClientBootReport, negotiateEncoding, appendHeadersVary, responseCompressionContexts, jsonResponse, serializedJsonResponse, readJsonBody, IdentityEventClientWriter, GzipEventClientWriter, parseEventSubscriptionFilter } from "./gateway-internals.js";
 import type { GatewayRequestMetrics, DrainAwareEventClientWriter, GatewayEventClient } from "./gateway-internals.js";
 
-export class GatewayHandlers extends GatewayAuth {
+export abstract class GatewayHandlers extends GatewayAuth {
   protected commandIsRegistered(command: string, errorMessage: string): boolean {
     const hasCommand = this.backend.hasCommand;
     if (hasCommand) return hasCommand.call(this.backend, command);

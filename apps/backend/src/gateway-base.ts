@@ -1,4 +1,4 @@
-import http, { createServer, type Server } from "node:http";
+import http, { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import { randomBytes } from "node:crypto";
 import { GatewayEventReplay } from "./gateway-event-replay.js";
@@ -6,10 +6,9 @@ import { TerminalWebSocketGateway } from "./terminal-websocket-server.js";
 import type { GatewayTokenSettings } from "@orkestrator/protocol/web-client";
 import { GatewayTokenValidationError, normalizeGatewayToken } from "@orkestrator/protocol/gateway-token";
 import { AUTH_COOKIE, DEFAULT_GATEWAY_PORT, GATEWAY_PORT_FALLBACK_ATTEMPTS, KEEPALIVE_MS, BUFFERED_PROXY_BODY_IDLE_TIMEOUT_MS, DEFAULT_GATEWAY_REPLAY_HANDSHAKE_FRAME_CAPACITY, DEFAULT_GATEWAY_REPLAY_HANDSHAKE_MAX_BYTES, resolveGatewayCompressionMode, GatewayMetricsStore, parsePort, isAddressInUseError, isTailscaleAddress, selectTailscaleBindAddress, formatHostForUrl, isLoopbackAddress, parseAllowedOrigins, jsonResponse, getCookie, getBearerToken, authFilePath, loadOrCreateGatewayToken, persistGatewayToken } from "./gateway-internals.js";
-import type { BackendInvoker, NetworkInterfaceMap, ListenerKind, GatewayCompressionMode, GatewayStartInfo, OrkestratorGatewayOptions, EventClientWriter, GatewayEventClient } from "./gateway-internals.js";
+import type { BackendInvoker, NetworkInterfaceMap, ListenerKind, GatewayCompressionMode, GatewayStartInfo, OrkestratorGatewayOptions, EventClientWriter, GatewayEventClient, GatewayRequestMetrics } from "./gateway-internals.js";
 
-export class GatewayBase {
-  [key: string]: any;
+export abstract class GatewayBase {
   protected readonly backend: BackendInvoker;
   protected readonly dataDir: string;
   protected readonly rendererRoot: string;
@@ -56,6 +55,60 @@ export class GatewayBase {
   protected sockets = new Set<Socket>();
   protected keepalive: ReturnType<typeof setInterval> | null = null;
   protected tokenTransition: Promise<unknown> = Promise.resolve();
+
+  protected abstract gatewayCredentialMatches(candidate: string | null): boolean;
+  protected abstract isOriginAllowed(
+    request: IncomingMessage,
+    originValue: string,
+  ): boolean;
+  protected abstract handle(
+    request: IncomingMessage,
+    response: ServerResponse,
+    listenerKind: ListenerKind,
+  ): Promise<void>;
+  protected abstract handleInvoke(
+    request: IncomingMessage,
+    response: ServerResponse,
+    requestMetrics: GatewayRequestMetrics,
+  ): Promise<void>;
+  protected abstract handleEvents(
+    request: IncomingMessage,
+    response: ServerResponse,
+    url: URL,
+  ): void;
+  protected abstract handleMetrics(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): void;
+  protected abstract handleClientMetrics(
+    request: IncomingMessage,
+    response: ServerResponse,
+    requestMetrics: GatewayRequestMetrics,
+  ): Promise<void>;
+  protected abstract handleLoopbackProxy(
+    request: IncomingMessage,
+    response: ServerResponse,
+    url: URL,
+  ): Promise<void>;
+  protected abstract handleBrowserLoopbackProxy(
+    request: IncomingMessage,
+    response: ServerResponse,
+    url: URL,
+  ): Promise<void>;
+  protected abstract serveStatic(
+    request: IncomingMessage,
+    url: URL,
+    response: ServerResponse,
+    allowCompression: boolean,
+  ): Promise<void>;
+  protected abstract proxyToTarget(
+    request: IncomingMessage,
+    response: ServerResponse,
+    target: URL,
+    proxyPrefix?: string,
+    browserPreview?: boolean,
+    stripOrigin?: boolean,
+  ): Promise<void>;
 
   constructor(options: OrkestratorGatewayOptions) {
     this.backend = options.backend;

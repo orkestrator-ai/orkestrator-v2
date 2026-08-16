@@ -169,8 +169,7 @@ export type NativeAgentServiceLayerTypes = [
   OpenCodeRecoveryCandidate,
   PromptDispatchPreparation,
 ];
-export class NativeAgentServiceBase {
-  [key: string]: any;
+export abstract class NativeAgentServiceBase {
   protected readonly providers = new Map<string, NativeAgentRuntimeProvider>();
   /**
    * Identity of the live bridge generation behind each production provider.
@@ -232,6 +231,82 @@ export class NativeAgentServiceBase {
     string,
     OpenCodeRecoveryCandidate
   >();
+
+  protected abstract trackScan(task: Promise<void>): Promise<void>;
+  protected abstract reconcilePendingLaunches(): Promise<void>;
+  protected abstract drainPromptQueues(): Promise<void>;
+  abstract reconcileAgentInteractions(): Promise<void>;
+  protected abstract assertAcceptingWork(): void;
+  protected abstract assertEnvironmentLive(environmentId: string): Promise<Environment>;
+  protected abstract provider(
+    input: EnsureNativeAgentSessionInput,
+  ): Promise<NativeAgentRuntimeProvider>;
+  protected abstract assertSessionIdentity(
+    session: PersistedNativeAgentSession,
+    input: EnsureNativeAgentSessionInput,
+    key: string,
+  ): void;
+  protected abstract createProviderSession(
+    provider: NativeAgentRuntimeProvider,
+    input: EnsureNativeAgentSessionInput,
+  ): Promise<string>;
+  protected abstract assertProjectionInput(input: NativeAgentProjectionInput): void;
+  protected abstract refreshProjection(
+    input: NativeAgentProjectionInput,
+    force: boolean,
+  ): Promise<NativeAgentSessionProjection | null>;
+  protected abstract dispatchIntentInternal(
+    input: DispatchNativeAgentPromptInput,
+    preserveExistingPending: boolean,
+  ): Promise<NativeAgentDispatchOutcome>;
+  abstract claimOpenCodeManualPrompt(input: {
+    environmentId: string;
+    logicalSessionKey: string;
+    providerSessionId: string;
+    requestId: string;
+  }): Promise<void>;
+  abstract releaseOpenCodeManualPrompt(input: {
+    environmentId: string;
+    logicalSessionKey: string;
+    providerSessionId: string;
+    requestId: string;
+  }): void;
+  protected abstract dispatchPromptInternal(
+    input: DispatchNativeAgentPromptInput,
+    prepare?: (
+      session: PersistedNativeAgentSession,
+      provider: NativeAgentRuntimeProvider,
+    ) => Promise<PromptDispatchPreparation>,
+    persistAmbiguousDispatch?: boolean,
+  ): Promise<PersistedNativeAgentSession>;
+  protected abstract invalidateProjection(key: string): void;
+  protected abstract drainPromptQueue(queueKey: string): Promise<void>;
+  protected abstract observeProvider(
+    input: EnsureNativeAgentSessionInput,
+  ): Promise<NativeAgentRuntimeProvider | undefined>;
+  protected abstract evictProvider(
+    input: Pick<EnsureNativeAgentSessionInput, "environmentId" | "agent">,
+    provider: NativeAgentRuntimeProvider,
+  ): void;
+  protected abstract pruneProviders(liveEnvironmentIds: Set<string>): Promise<void>;
+  protected abstract composeDraftHoldsQueue(value: unknown): boolean;
+  protected abstract queueExecutionMode(
+    agent: BuildPipelineAgent,
+    message: unknown,
+  ): ProviderExecutionMode;
+  protected abstract queueString(
+    message: unknown,
+    field: string,
+  ): string | undefined;
+  protected abstract queueReasoningEffort(message: unknown): string | undefined;
+  protected abstract queueFastMode(
+    agent: BuildPipelineAgent,
+    message: unknown,
+  ): boolean | undefined;
+  protected abstract queueBoolean(
+    message: unknown,
+    field: string,
+  ): boolean | undefined;
   /** Short-lived manual-send claims prevent stale automatic continuations. */
   protected readonly openCodeManualPromptClaims = new Map<
     string,
@@ -577,4 +652,3 @@ export class NativeAgentServiceBase {
 
 
 }
-

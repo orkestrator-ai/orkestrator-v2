@@ -2,6 +2,7 @@ import { invoke } from "@/lib/native/backend";
 import type { EnvironmentDiffStatsSnapshot } from "@orkestrator/protocol/diff-stats";
 import type { PrMonitorMode, PrMonitorSnapshot } from "@orkestrator/protocol/pr-monitor";
 import type { Environment, PortMapping, Session, SessionType, SessionStatus, DefaultAgent, ClaudeMode, ClaudeNativeBackend, CodexMode, OpenCodeMode, InitialPromptImageAttachment, PersistedPaneLayout, PersistedPaneLayoutInput } from "@/types";
+import { isRecord } from "./shared";
 /** PR detection result containing URL, state, and merge conflict status */
 
 export interface GitFileChange {
@@ -34,10 +35,6 @@ export interface ConditionalSnapshot<T> {
   unchanged: boolean;
   digest: string;
   value?: T;
-}
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function normalizeConditionalArraySnapshot<T>(

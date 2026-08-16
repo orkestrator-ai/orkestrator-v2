@@ -412,6 +412,4 @@ export function registerTeardownCommands(register: CommandRegistrar, dependencie
       : undefined;
     return { terminals, nativeSessions, tmuxSessions: tmux?.reaped ?? 0 };
   });
-
-  return commands;
 }

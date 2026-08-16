@@ -2,7 +2,6 @@ import type {
   AwaitBridgeReadyResult,
   ClaudeModelCatalogSnapshot,
   ConditionalResourceSnapshot,
-  Environment,
   ResourceManifestKind,
   StorageService,
 } from "./commands-dependencies.js";
@@ -17,8 +16,11 @@ import {
   renameEnvironmentFromPrompt,
 } from "./commands-helpers.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
-import type { ClaudeStatePollManager } from "./commands-dependencies.js";
-import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import type {
+  CommandRegistrar,
+  CommandRegistryOptions,
+  RegistryDependencies,
+} from "./commands-registry-types.js";
 import { registerBuildPipelineCommands } from "./commands-registry-build.js";
 import { registerDockerCommands } from "./commands-registry-docker.js";
 import { registerEnvironmentCommands } from "./commands-registry-environments.js";
@@ -36,21 +38,7 @@ import { registerTeardownCommands } from "./commands-registry-teardown.js";
 import { registerTerminalCommands } from "./commands-registry-terminal.js";
 import { registerToolingCommands } from "./commands-registry-tools.js";
 
-export type CommandRegistryOptions = {
-  claudeStatePolls?: ClaudeStatePollManager;
-  projectCreation?: {
-    runCommand?: typeof runCommand;
-  };
-  tabTeardown?: {
-    peekBridge?: (
-      environment: Environment,
-      agent: import("./commands-helpers.js").LocalServerKind,
-      context: CommandContext,
-    ) => Promise<{ port: number; authToken: string } | null>;
-    fetch?: typeof fetch;
-    deleteTimeoutMs?: number;
-  };
-};
+export type { CommandRegistryOptions } from "./commands-registry-types.js";
 
 export function createCommandRegistry(
   options: CommandRegistryOptions = {},

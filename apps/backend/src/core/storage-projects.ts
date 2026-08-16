@@ -262,7 +262,7 @@ export type StorageLayerTypes = [
     ResourceChangeListener
 ];
 
-export class StorageProjects extends StorageBase {
+export abstract class StorageProjects extends StorageBase {
   async loadProjects(): Promise<Project[]> {
     const projects = await this.loadJsonCached<Project[]>(this.projectsFile(), () => []);
     return projects.sort((a, b) => a.order - b.order);

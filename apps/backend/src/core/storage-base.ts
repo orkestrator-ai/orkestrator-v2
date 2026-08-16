@@ -259,8 +259,7 @@ export type StorageLayerTypes = [
     ResourceChangeListener
 ];
 
-export class StorageBase {
-  [key: string]: any;
+export abstract class StorageBase {
   protected readonly dataDir: string;
   /** Process identity: client revision knowledge never crosses this boundary. */
   protected readonly resourceGeneration = randomBytes(16).toString("hex");
@@ -287,6 +286,10 @@ export class StorageBase {
   protected agentHandoffMutation: Promise<unknown> = Promise.resolve();
   protected changeListener: ResourceChangeListener | null = null;
   protected changeRevision = 0;
+  protected abstract recoverExpiredPromptQueueClaims(): Promise<void>;
+  protected abstract promptQueueMessageFingerprint(message: unknown): string;
+  protected abstract deleteComposeDraftsByProject(projectId: string): Promise<void>;
+  protected abstract deleteSessionBuffer(sessionId: string): Promise<void>;
   /**
    * Parsed-JSON read cache for the hot stores, keyed by file path and
    * validated against an (inode, size, mtime) fingerprint on every read.

@@ -172,7 +172,7 @@ export type NativeAgentServiceLayerTypes = [
 
 import { NativeAgentServiceDispatch } from "./native-agent-service-dispatch.ts";
 
-export class NativeAgentServiceProjection extends NativeAgentServiceDispatch {
+export abstract class NativeAgentServiceProjection extends NativeAgentServiceDispatch {
   protected cacheToolDetails(
     sessionKey: string,
     messageId: string,
@@ -1039,4 +1039,3 @@ export class NativeAgentServiceProjection extends NativeAgentServiceDispatch {
 
 
 }
-

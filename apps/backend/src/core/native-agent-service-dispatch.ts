@@ -172,7 +172,7 @@ export type NativeAgentServiceLayerTypes = [
 
 import { NativeAgentServiceBase } from "./native-agent-service-base.ts";
 
-export class NativeAgentServiceDispatch extends NativeAgentServiceBase {
+export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase {
   protected async dispatchIntentInternal(
     input: DispatchNativeAgentPromptInput,
     preserveExistingPending: boolean,

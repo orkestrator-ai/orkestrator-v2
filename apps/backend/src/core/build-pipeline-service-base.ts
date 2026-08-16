@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
-import type { BuildPipeline, BuildPipelineAgent, StartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
+import type { BuildPipeline, BuildPipelineAgent, PipelineSession, PipelineSessionPhase, StartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
 import { isBuildPipeline, isActiveBuildPhase, isStartBuildPipelineInput, MAX_PIPELINE_USER_MESSAGES, MAX_PIPELINE_USER_MESSAGE_LENGTH } from "@orkestrator/protocol/build-pipeline";
+import type { ReviewContractValidationError } from "@orkestrator/protocol/structured-review";
 import type { Environment, PersistedBuildPipeline } from "./models.js";
 import type { StorageService } from "./storage.js";
-import { type BuildPipelineProvider, type ProviderDependencies, type ProviderInteractionObservationEvent } from "./build-pipeline-provider.js";
+import { type BridgeConnection, type BuildPipelineProvider, type ProviderDependencies, type ProviderInteractionObservationEvent, ProviderUnavailableError } from "./build-pipeline-provider.js";
 import { errorMessage, buildAdmissionKey, sessionForCurrentPhase, resumablePhase, sessionAgent, pipelineAgents, normalizeSteps, sessionPhaseFor, resumePromptFor, DEFAULT_RECONNECT_DEADLINE_MS, DEFAULT_STRUCTURED_RESULT_DEADLINE_MS, DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS, withUnattendedPolicy } from "./build-pipeline-service-helpers.js";
 import type { CommandInvoker } from "./build-pipeline-service-helpers.js";
 
 export abstract class BuildPipelineServiceBase {
-  [key: string]: any;
   protected timer: ReturnType<typeof setInterval> | null = null;
   protected readonly locks = new Map<string, Promise<void>>();
   protected readonly providers = new Map<string, BuildPipelineProvider>();
@@ -28,6 +28,59 @@ export abstract class BuildPipelineServiceBase {
   protected tickPromise: Promise<void> | null = null;
   protected tickRequested = false;
   protected stopped = false;
+
+  protected abstract save(
+    pipeline: BuildPipeline,
+    expectedRevision: number,
+  ): Promise<PersistedBuildPipeline>;
+  protected abstract bridgeConnection(
+    agent: BuildPipelineAgent,
+    environment: Environment,
+  ): Promise<BridgeConnection>;
+  protected abstract recordReconnect(
+    pipelineId: string,
+    error: ProviderUnavailableError,
+  ): Promise<void>;
+  protected abstract fail(pipelineId: string, error: unknown): Promise<void>;
+  protected abstract configureEnvironment(pipeline: BuildPipeline): Promise<void>;
+  protected abstract enforcePendingInteraction(
+    pipeline: BuildPipeline,
+    provider: BuildPipelineProvider,
+    session: PipelineSession,
+  ): Promise<boolean>;
+  protected abstract finishVerification(
+    pipeline: BuildPipeline,
+    provider: BuildPipelineProvider,
+    session: PipelineSession,
+  ): Promise<void>;
+  protected abstract finishPullRequest(pipeline: BuildPipeline): Promise<void>;
+  protected abstract finishConflictResolution(
+    pipeline: BuildPipeline,
+  ): Promise<void>;
+  protected abstract updateKanbanLifecycle(
+    pipeline: BuildPipeline,
+    updates: {
+      status?: "backlog" | "in-progress" | "review";
+      comment?: string;
+      prUrl?: string;
+      prState?: "open" | "merged" | "closed";
+    },
+  ): Promise<void>;
+  protected abstract stepSettings(
+    pipeline: BuildPipeline,
+    sessionPhase: PipelineSessionPhase,
+  ): Promise<{ agent: BuildPipelineAgent; model?: string; effort?: string }>;
+  protected abstract awaitStructuredResult(
+    pipeline: BuildPipeline,
+    session: PipelineSession,
+    label: string,
+  ): Promise<void>;
+  protected abstract repairStructuredReport(
+    pipeline: BuildPipeline,
+    provider: BuildPipelineProvider,
+    session: PipelineSession,
+    error: ReviewContractValidationError,
+  ): Promise<void>;
 
   constructor(
     protected readonly storage: StorageService,
@@ -685,4 +738,3 @@ export abstract class BuildPipelineServiceBase {
   protected abstract needsTerminalReconciliation(pipeline: BuildPipeline): boolean;
   protected abstract reconcileTerminalState(pipeline: BuildPipeline): Promise<void>;
 }
-

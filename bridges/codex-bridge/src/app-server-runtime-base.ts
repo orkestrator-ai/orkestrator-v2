@@ -538,8 +538,7 @@ export interface PromptAcceptedResult {
   duplicate?: boolean;
 }
 
-export class AppServerRuntimeBase {
-  [key: string]: any;
+export abstract class AppServerRuntimeBase {
   protected readonly options: AppServerRuntimeOptions;
   protected readonly registry: ThreadRegistry;
   protected readonly journal: DispatchJournal;
@@ -636,6 +635,41 @@ export class AppServerRuntimeBase {
   >();
   protected accountRateLimits: EngineRateLimitWindow[] = [];
   protected accountCredits?: import("./engine/types.js").EngineCreditSnapshot;
+
+  protected abstract onEngineEvent(event: EngineEvent): void;
+  protected abstract enqueueAfterMessageFlush(
+    threadId: string,
+    publish: () => void,
+    options?: { bytes?: number; coalesceKey?: "status" },
+  ): void;
+  abstract abort(
+    sessionId: string,
+  ): Promise<{ status: "cancelling" | "idle"; phase: SessionPhase } | null>;
+  protected abstract notifyThreadActivity(): void;
+  protected abstract scheduleRecoveryBackstop(context: ThreadContext): void;
+  protected abstract bumpMessageRevision(context: ThreadContext): void;
+  protected abstract settleAmbiguousDispatch(
+    context: ThreadContext,
+    requestId: string,
+    assistantMessageId: string,
+    options?: { forgetIfAbsent?: boolean },
+  ): Promise<AmbiguousDispatchResolution>;
+  protected abstract clearCompactionBackstop(threadId: string): void;
+  protected abstract finishCompaction(context: ThreadContext, error?: string): void;
+  protected abstract persistSession(session: BridgeSession): Promise<void>;
+  abstract listModels(): Promise<{
+    models: BridgeModel[];
+    source: "app-server" | "cache" | "fallback";
+  }>;
+  protected abstract appendUserMessage(
+    context: ThreadContext,
+    prompt: string,
+    attachments: PromptAttachmentInput[],
+  ): NormalizedMessage;
+  protected abstract messagesForSession(
+    session: BridgeSession,
+    context: ThreadContext,
+  ): NormalizedMessage[];
 
   constructor(options: AppServerRuntimeOptions) {
     this.options = options;

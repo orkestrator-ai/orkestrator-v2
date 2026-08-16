@@ -4,7 +4,7 @@ import type { GatewayEventReplay, GatewayCursorParseResult, GatewayReplayFrame }
 import { DROPPABLE_EVENT_PREFIX, SSE_CLIENT_SOFT_BUFFER_BYTES, SSE_CLIENT_HARD_BUFFER_BYTES, GATEWAY_CONNECTED_EVENT, GATEWAY_RECONCILE_REQUIRED_EVENT, GATEWAY_CURSOR_EVENT, eventMatchesSubscription } from "./gateway-internals.js";
 import type { EventClientWriter, GatewayEventClient, GatewayReconcileReason } from "./gateway-internals.js";
 
-export class GatewayEvents extends GatewayBase {
+export abstract class GatewayEvents extends GatewayBase {
   emit(event: string, payload: unknown): void {
     this.terminalWebSocket.emit(event, payload);
     const droppable = event.startsWith(DROPPABLE_EVENT_PREFIX);

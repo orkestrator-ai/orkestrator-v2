@@ -9,12 +9,20 @@ function read(rel: string): string {
   return readFileSync(join(repoRoot, rel), "utf8");
 }
 
+function readBackendCommandSources(): string {
+  return [
+    "apps/backend/src/core/commands.ts",
+    "apps/backend/src/core/commands-registry-servers.ts",
+    "apps/backend/src/core/commands-servers.ts",
+  ].map(read).join("\n");
+}
+
 describe("codex bridge process environment", () => {
   test("there is no engine selection left to make", () => {
     // app-server is the only engine; `ORKESTRATOR_CODEX_ENGINE` was removed along
     // with the `codex exec` path. A reappearance means a second execution path is
     // back, which is what the consolidation removed.
-    const commands = read("apps/backend/src/core/commands.ts");
+    const commands = readBackendCommandSources();
     expect(commands).not.toContain("ORKESTRATOR_CODEX_ENGINE");
     expect(commands).not.toContain("resolveCodexEngine");
 
@@ -26,7 +34,7 @@ describe("codex bridge process environment", () => {
   test("both spawn paths forward the app version to app-server", () => {
     // app-server records `clientInfo.version` in its compliance logs, so it has to
     // reach the bridge on the local-worktree and container paths alike.
-    const commands = read("apps/backend/src/core/commands.ts");
+    const commands = readBackendCommandSources();
     expect(commands).toContain("env.ORKESTRATOR_VERSION = APP_VERSION;");
     expect(commands).toContain('export ORKESTRATOR_VERSION="${APP_VERSION}"');
 
@@ -35,7 +43,7 @@ describe("codex bridge process environment", () => {
   });
 
   test("both spawn paths forward the configured concurrent thread limit", () => {
-    const commands = read("apps/backend/src/core/commands.ts");
+    const commands = readBackendCommandSources();
     expect(commands).toContain("env[CODEX_MAX_CONCURRENT_THREADS_ENV] = String(");
     expect(commands).toContain("export ${CODEX_MAX_CONCURRENT_THREADS_ENV}=${maxConcurrentThreads}");
   });

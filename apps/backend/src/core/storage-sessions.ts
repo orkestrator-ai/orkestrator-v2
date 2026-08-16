@@ -262,7 +262,7 @@ export type StorageLayerTypes = [
     ResourceChangeListener
 ];
 
-export class StorageSessions extends StorageConfig {
+export abstract class StorageSessions extends StorageConfig {
   async createSession(environmentId: string, containerId: string, tabId: string, sessionType: SessionType): Promise<Session> {
     const sessions = await this.loadJson<Session[]>(this.sessionsFile(), () => []);
     const session = createSessionObject(environmentId, containerId, tabId, sessionType);

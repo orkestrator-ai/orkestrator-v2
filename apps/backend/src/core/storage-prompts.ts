@@ -262,7 +262,7 @@ export type StorageLayerTypes = [
     ResourceChangeListener
 ];
 
-export class StoragePrompts extends StorageNative {
+export abstract class StoragePrompts extends StorageNative {
   async getPromptQueue(queueKey: string): Promise<PersistedPromptQueue | null> {
     if (!isNonBlankString(queueKey)) {
       throw new Error("Prompt queue key must not be blank");

@@ -5,7 +5,7 @@ import { GatewayTokenValidationError, gatewayTokenCookieHeader } from "@orkestra
 import { AUTH_COOKIE, API_PREFIX, AGENT_TEST_BOOTSTRAP_TTL_MS, AGENT_TEST_SESSION_TTL_MS, MAX_AGENT_TEST_BOOTSTRAPS, MAX_AGENT_TEST_SESSIONS, CORS_ALLOWED_METHODS, CORS_ALLOWED_HEADERS, InvalidRequestBodyError, RequestBodyTooLargeError, compressionModeForListener, headerValueToString, parseContentLengthHeader, classifyGatewayRoute, instrumentGatewayResponse, isLoopbackAddress, originMatchesRule, appendVary, appendResponseVary, appendHeadersVary, responseCompressionContexts, jsonResponse, textResponse, getCookie, getBearerToken, tokenMatches, readJsonBody, readLoginToken, loginPage, wantsHtml, browserPreviewRefererPrefix } from "./gateway-internals.js";
 import type { ListenerKind, GatewayRequestMetrics } from "./gateway-internals.js";
 
-export class GatewayAuth extends GatewayEvents {
+export abstract class GatewayAuth extends GatewayEvents {
   protected authenticated(request: IncomingMessage): boolean {
     const credential = getBearerToken(request.headers) ?? getCookie(request.headers, AUTH_COOKIE);
     return this.gatewayCredentialMatches(credential);

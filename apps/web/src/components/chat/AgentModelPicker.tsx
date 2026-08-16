@@ -90,6 +90,17 @@ const VISIBLE_MODEL_ROWS = 5;
 const RADIO_ROW_CLASS = "items-start py-2 [&>span:first-child]:top-2 [&>span:first-child]:h-5";
 const FAVORITE_LONG_PRESS_MS = 400;
 const FAVORITE_DRAG_TOLERANCE_PX = 8;
+/**
+ * Favourite rows carry no drag handle, and `cursor-grab` does not exist on
+ * touch, so the gesture that reorders them has to be spelled out. Keyed by the
+ * pointer activation each layout uses, which is also what `data-favorite-reorder`
+ * reports.
+ */
+const FAVORITE_REORDER_HINTS = {
+  drag: "Drag to reorder",
+  "long-press": "Long-press to reorder",
+} as const;
+type FavoriteReorderMode = keyof typeof FAVORITE_REORDER_HINTS;
 type MobileSubmenu = "reasoning" | "speed";
 
 const PLATFORM_LABELS: Record<AgentPlatform, string> = {
@@ -102,6 +113,22 @@ const PLATFORM_LABELS: Record<AgentPlatform, string> = {
 
 function PlatformIcon({ platform }: { platform: AgentPlatform }) {
   return <AgentPlatformIcon platform={platform} className="size-4" />;
+}
+
+function ModelListLabel({ reorderMode }: { reorderMode?: FavoriteReorderMode }) {
+  return (
+    <DropdownMenuLabel className="flex items-baseline justify-between gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+      <span>Model</span>
+      {reorderMode ? (
+        <span
+          data-native-favorite-reorder-hint={reorderMode}
+          className="shrink-0 normal-case tracking-normal text-muted-foreground/70"
+        >
+          {FAVORITE_REORDER_HINTS[reorderMode]}
+        </span>
+      ) : null}
+    </DropdownMenuLabel>
+  );
 }
 
 function modelRowKey(model: AgentModel): string {
@@ -591,6 +618,9 @@ export function AgentModelPicker({
     && Boolean(onReorderFavorites)
     && !normalizedSearch
     && visibleModels.length > 1;
+  const favoriteReorderMode: FavoriteReorderMode | undefined = canReorderFavorites
+    ? isMobile ? "long-press" : "drag"
+    : undefined;
   const favoriteEmptyLabel = normalizedSearch ? "No matches" : "No favorite models";
   const choiceLabels = [
     "model",
@@ -859,13 +889,11 @@ export function AgentModelPicker({
                 </button>
               ))}
             </div>
-            <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              Model
-            </DropdownMenuLabel>
+            <ModelListLabel reorderMode={favoriteReorderMode} />
             <div
               className="max-h-70 overflow-y-auto overscroll-contain"
               data-native-model-list
-              data-favorite-reorder={canReorderFavorites ? "long-press" : undefined}
+              data-favorite-reorder={favoriteReorderMode}
             >
               <ModelItems
                 models={visibleModels}
@@ -1018,14 +1046,12 @@ export function AgentModelPicker({
               ))}
             </div>
             <div className="flex min-h-0 min-w-0 flex-col pr-1" role="group" aria-label="Models">
-              <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Model
-              </DropdownMenuLabel>
+              <ModelListLabel reorderMode={favoriteReorderMode} />
               <div
                 ref={modelListRef}
                 className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
                 data-native-model-list
-                data-favorite-reorder={canReorderFavorites ? "drag" : undefined}
+                data-favorite-reorder={favoriteReorderMode}
               >
                 <ModelItems
                   models={visibleModels}

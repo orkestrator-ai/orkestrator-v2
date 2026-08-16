@@ -73,6 +73,10 @@ function getModelRowPlatformIcon(platform: string, root: ParentNode = document) 
   return root.querySelector(`[data-native-model-row-platform='${platform}']`);
 }
 
+function getReorderHint() {
+  return document.querySelector("[data-native-favorite-reorder-hint]");
+}
+
 function getMobileTrigger(kind: "reasoning" | "speed") {
   return document.querySelector<HTMLElement>(`[data-native-mobile-${kind}-trigger]`)!;
 }
@@ -1205,6 +1209,93 @@ describe("AgentModelPicker", () => {
       [...document.querySelectorAll("[data-native-model-list] svg")]
         .some((svg) => (svg.getAttribute("class") ?? "").includes("grip")),
     ).toBe(false);
+  });
+
+  test("names the drag gesture that replaced the handle, and only where it applies", () => {
+    setMobileViewport(false);
+    renderPicker({
+      models: [
+        { platform: "codex", id: "model-1", label: "Model 1" },
+        { platform: "codex", id: "model-2", label: "Model 2" },
+        { platform: "claude", id: "opus", label: "Opus" },
+      ],
+      enabledPlatforms: ["claude", "codex"],
+      selectedPlatform: "codex",
+      favorites: [
+        { platform: "codex", modelId: "model-1" },
+        { platform: "codex", modelId: "model-2" },
+      ],
+      onReorderFavorites: () => {},
+    });
+    openPicker();
+
+    expect(getReorderHint()?.textContent).toBe("Drag to reorder");
+    expect(getReorderHint()?.getAttribute("data-native-favorite-reorder-hint")).toBe("drag");
+    expect(document.querySelector("[data-native-model-list]")?.getAttribute("data-favorite-reorder"))
+      .toBe("drag");
+
+    // Searching suspends reordering, so the hint must go with it.
+    fireEvent.change(screen.getByPlaceholderText("Search models..."), {
+      target: { value: "model 1" },
+    });
+    expect(getReorderHint() === null).toBe(true);
+    fireEvent.change(screen.getByPlaceholderText("Search models..."), {
+      target: { value: "" },
+    });
+    expect(getReorderHint()?.textContent).toBe("Drag to reorder");
+
+    // A single-platform catalog view is not reorderable.
+    showPlatformCatalog("claude");
+    expect(getReorderHint() === null).toBe(true);
+  });
+
+  test("names the long-press gesture on mobile, where no cursor affordance exists", () => {
+    setMobileViewport(true);
+    renderPicker({
+      models: [
+        { platform: "codex", id: "model-1", label: "Model 1" },
+        { platform: "codex", id: "model-2", label: "Model 2" },
+      ],
+      selectedPlatform: "codex",
+      favorites: [
+        { platform: "codex", modelId: "model-1" },
+        { platform: "codex", modelId: "model-2" },
+      ],
+      onReorderFavorites: () => {},
+    });
+    openPicker();
+
+    expect(getReorderHint()?.textContent).toBe("Long-press to reorder");
+    expect(document.querySelector("[data-native-model-list]")?.getAttribute("data-favorite-reorder"))
+      .toBe("long-press");
+  });
+
+  test("omits the reorder hint when favorites cannot be reordered", () => {
+    setMobileViewport(false);
+    const withoutHandler = renderPicker({
+      models: models.slice(0, 2),
+      enabledPlatforms: ["codex"],
+      selectedPlatform: "codex",
+      favorites: [
+        { platform: "codex", modelId: "model-1" },
+        { platform: "codex", modelId: "model-2" },
+      ],
+    });
+    openPicker();
+    expect(document.querySelector("[data-native-model-list]")).toBeTruthy();
+    expect(getReorderHint() === null).toBe(true);
+    withoutHandler.unmount();
+
+    // One favorite has nothing to reorder against.
+    renderPicker({
+      models: models.slice(0, 2),
+      enabledPlatforms: ["codex"],
+      selectedPlatform: "codex",
+      favorites: [{ platform: "codex", modelId: "model-1" }],
+      onReorderFavorites: () => {},
+    });
+    openPicker();
+    expect(getReorderHint() === null).toBe(true);
   });
 
   test("opens on the selected platform when no favorites exist", () => {

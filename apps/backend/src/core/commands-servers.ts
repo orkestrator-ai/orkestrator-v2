@@ -918,8 +918,20 @@ export async function deleteEnvironment(
       // Best-effort, like its siblings: leaving a stale session mapping behind
       // is recoverable, but aborting here would strand the environment record
       // itself because `removeEnvironment` below would never run.
+      //
+      // Logged rather than swallowed. This call queues behind an in-flight
+      // prompt dispatch, which legitimately holds the native-agent lock across
+      // provider I/O, so a failure here is the one way a deleted environment
+      // keeps its session record and its pending prompt on disk. The lock's
+      // acquire timeout is sized to outlast that holder, so if this still fires
+      // it is evidence of something else and must not be invisible.
       await storage.deleteNativeAgentSessionsByEnvironment(environmentId)
-        .catch(() => undefined);
+        .catch((error: unknown) => {
+          console.warn(
+            `[backend] native agent session cleanup failed for ${environmentId}:`,
+            error instanceof Error ? error.message : error,
+          );
+        });
       await storage.deleteComposeDraftsByEnvironment(environmentId);
       await storage.deleteFileDraftsByEnvironment(environmentId);
       await storage.deleteAgentHandoffsByEnvironment(environmentId);

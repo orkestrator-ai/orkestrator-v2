@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { OPEN_CODE_MESSAGE_HISTORY_LIMIT, OpenCodeMessageIdCoordinator } from "@orkestrator/protocol/opencode-message-id";
 import { AmbiguousPromptDispatchError, createNativeAgentProvider, PromptRejectedError, ProviderUnavailableError } from "./native-agent-provider.js";
+import { openCodeIncompleteTurnRequestId } from "./opencode-turn-recovery.js";
 import {
   deferred,
   expectedOpenCodeMessageId,
@@ -227,6 +228,57 @@ describe("OpenCode provider dispatch", () => {
         { sessionID: "owned-session", limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
         { sessionID: "owned-session", limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
       ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("keeps an incomplete-turn continuation and a manual prompt from settling each other", async () => {
+    // Both reach OpenCode as ordinary user turns on the same session, so the
+    // only thing separating them is the marker. If a continuation could vouch
+    // for a manual prompt, recovery would clear a composer prompt that never
+    // ran — and the request id is burned, so nothing would show the user.
+    const continuation = openCodeIncompleteTurnRequestId("msg_stalled_assistant");
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      fake.setMessagesResponse({
+        data: [{
+          info: { id: expectedOpenCodeMessageId(continuation), role: "user" },
+          parts: [],
+        }],
+      });
+      await expect(provider.dispatchStatus?.("owned-session", continuation))
+        .resolves.toBe("dispatched");
+      await expect(provider.dispatchStatus?.("owned-session", "manual-1"))
+        .resolves.toBe("unknown");
+
+      // And the reverse, so neither direction can settle the other.
+      fake.setMessagesResponse({
+        data: [{
+          info: { id: expectedOpenCodeMessageId("manual-1"), role: "user" },
+          parts: [],
+        }],
+      });
+      await expect(provider.dispatchStatus?.("owned-session", "manual-1"))
+        .resolves.toBe("dispatched");
+      await expect(provider.dispatchStatus?.("owned-session", continuation))
+        .resolves.toBe("unknown");
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("refuses a malformed request id without consulting OpenCode", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      // The marker parser is the same validation `send` performs. Rejecting here
+      // means a caller-owned id that could never have been embedded also never
+      // gets a chance to match provider history by accident.
+      await expect(provider.dispatchStatus?.("owned-session", "   "))
+        .resolves.toBe("unknown");
+      expect(fake.messageCalls).toEqual([]);
     } finally {
       await provider.dispose?.();
     }

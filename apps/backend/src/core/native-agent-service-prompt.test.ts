@@ -588,6 +588,89 @@ describe("NativeAgentService", () => {
 
 
 
+  test("does not hold the environment mutation lock across a cold provider session create", async () => {
+    // The session-create path is slower than the send path, not faster: a cold
+    // agent start runs up to four create attempts with backoff. Fencing it on
+    // the environments lock stalled activity, unread and deletion bookkeeping
+    // for every environment for that whole time.
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-native-cold-create-"));
+    const storage = await createStorage(dataDir);
+    const otherProcess = await createStorage(dataDir);
+    await addEnvironment(storage);
+    await addEnvironment(storage, {
+      id: "env-2",
+      name: "Unrelated environment",
+      worktreePath: "/tmp/env-2",
+    });
+    let signalCreateEntered: (() => void) | undefined;
+    const createEntered = new Promise<void>((resolve) => {
+      signalCreateEntered = resolve;
+    });
+    let releaseCreate: (() => void) | undefined;
+    const createBarrier = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const createSession = mock(async () => {
+      signalCreateEntered?.();
+      await createBarrier;
+      return "provider-session";
+    });
+    const provider = {
+      agent: "codex",
+      createSession,
+      registerSession: () => undefined,
+      send: async () => undefined,
+      status: async () => "idle",
+      messages: async () => [],
+      structured: async () => null,
+      abort: async () => undefined,
+    } as AgentSessionProvider;
+    const service = new NativeAgentService(storage, async <T>(): Promise<T> => {
+      throw new Error("unused");
+    }, { provider: async () => provider });
+    const input = {
+      environmentId: "env-1",
+      agent: "codex" as const,
+      logicalSessionKey: "env-env-1:tab-1",
+    };
+    try {
+      const ensure = service.ensureSession(input);
+      await createEntered;
+
+      const activityAt = new Date(2_000).toISOString();
+      const activity = otherProcess.recordEnvironmentActivity(
+        "env-2",
+        activityAt,
+      );
+      let activityTimeout: ReturnType<typeof setTimeout> | undefined;
+      const activityOutcome = await Promise.race([
+        activity.then(() => "settled" as const),
+        new Promise<"timed-out">((resolve) => {
+          activityTimeout = setTimeout(() => resolve("timed-out"), 500);
+        }),
+      ]);
+      clearTimeout(activityTimeout);
+
+      if (activityOutcome === "timed-out") releaseCreate?.();
+      await activity;
+      expect(activityOutcome).toBe("settled");
+      expect((await storage.getEnvironment("env-2"))?.lastActivityAt)
+        .toBe(activityAt);
+
+      releaseCreate?.();
+      // The native-agent lock is still held across the create, so the mapping is
+      // published exactly once for this logical key.
+      expect((await ensure).providerSessionId).toBe("provider-session");
+      expect(createSession).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseCreate?.();
+      await service.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+
+
   test("does not hold the environment mutation lock across a slow provider send", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-native-send-delete-"));
     const storage = await createStorage(dataDir);

@@ -622,6 +622,70 @@ describe("StorageService native agent sessions", () => {
     });
   });
 
+  test("budgets the native agent lock for a holder that spans provider I/O", async () => {
+    // This lock is deliberately held across provider calls: a dispatch keeps it
+    // until the provider acknowledges the request id, and a session create keeps
+    // it across the external create so two processes cannot mint two provider
+    // sessions. The worst legitimate holder is a cold ACP session create — four
+    // 30s attempts plus 1.75s of backoff — so a waiter budgeted for a JSON write
+    // would fail against a perfectly healthy holder.
+    const budget = (StorageService as unknown as {
+      NATIVE_AGENT_SESSION_LOCK_TIMEOUT_MS: number;
+    }).NATIVE_AGENT_SESSION_LOCK_TIMEOUT_MS;
+    expect(budget).toBeGreaterThan(4 * 30_000 + 1_750);
+  });
+
+  test("completes deletion's session cleanup queued behind an in-flight dispatch", async () => {
+    await withStorage(async (first, second) => {
+      await first.getOrCreateNativeAgentSession(
+        input,
+        async () => "provider-session",
+      );
+      let signalDispatchEntered!: () => void;
+      const dispatchEntered = new Promise<void>((resolve) => {
+        signalDispatchEntered = resolve;
+      });
+      let releaseSend!: () => void;
+      const sendBarrier = new Promise<void>((resolve) => {
+        releaseSend = resolve;
+      });
+
+      try {
+        const dispatch = first.dispatchNativeAgentPromptOnce(
+          input.key,
+          "request-1",
+          async () => {
+            signalDispatchEntered();
+            await sendBarrier;
+          },
+        );
+        await dispatchEntered;
+
+        // Environment deletion runs this from whichever process owns the delete
+        // command, and its caller can only log the failure — aborting there would
+        // strand the environment record itself. So a rejection here is how a
+        // deleted environment keeps its session record, its provider session id
+        // and its pending prompt on disk after the user asked for it to go away.
+        let cleanupSettled = false;
+        const cleanup = second
+          .deleteNativeAgentSessionsByEnvironment("env-1")
+          .then(() => {
+            cleanupSettled = true;
+          });
+        for (let attempt = 0; attempt < 20; attempt += 1) await Promise.resolve();
+        expect(cleanupSettled).toBe(false);
+
+        releaseSend();
+        await dispatch;
+        await cleanup;
+        await expect(second.listNativeAgentSessions()).resolves.toEqual([]);
+        await expect(first.getNativeAgentSession(input.key)).resolves.toBeNull();
+      } finally {
+        releaseSend();
+      }
+    });
+  });
+
   test("creates one provider session for a logical session across backend processes", async () => {
     await withStorage(async (first, second) => {
       const createProviderSession = mock(async () => {

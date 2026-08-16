@@ -173,9 +173,14 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
      * unrelated global lock here only stalls activity and deletion bookkeeping
      * for every environment while a provider is slow.
      *
-     * Deletion may begin after this check. That is safe: an accepted request is
-     * still confirmed atomically under the native-agent lock, and environment
-     * cleanup queues behind that same lock before removing the session.
+     * Deletion may begin after this check, and physical teardown — the
+     * container, the worktree — is no longer ordered behind this send at all.
+     * That is the accepted trade: a send racing a teardown fails, and the user
+     * asked for the environment to go away. What *is* still ordered is the part
+     * that matters for at-most-once: an accepted request is confirmed
+     * atomically under the native-agent lock, and deletion's session cleanup
+     * queues behind that same lock, so it cannot remove the record mid-dispatch
+     * and leave a confirmed turn unattributed.
      */
     await this.assertEnvironmentLive(input.environmentId);
     this.providerDispatchCounts.set(

@@ -804,10 +804,19 @@ export abstract class StorageNative extends StorageReviews {
   }
 
   /**
-   * Orders outbound provider work against environment deletion intent across
-   * processes. The callback intentionally runs while the environment file lock
-   * is held so deletion either becomes visible first or waits for the accepted
-   * provider operation to finish.
+   * Orders an operation against environment deletion intent across processes.
+   * The callback intentionally runs while the environment file lock is held, so
+   * deletion either becomes visible first or waits for the accepted operation
+   * to finish.
+   *
+   * Do **not** wrap provider I/O in this. The environments lock is the hottest
+   * one in the process — activity, unread, completion and deletion bookkeeping
+   * all queue behind it, for every environment — and a provider call can hold it
+   * for the full 90s prompt budget or a cold agent start's retry loop. Both the
+   * dispatch and session-create paths deliberately fence on a plain
+   * `assertEnvironmentLive` / `assertEnvironmentAcceptsBackgroundState` read
+   * instead, and re-assert after the provider call where it matters. Use this
+   * only for short, storage-local critical sections.
    */
   async runWithLiveEnvironment<T>(
     environmentId: string,

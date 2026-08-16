@@ -54,6 +54,16 @@ the two synchronous cases still pass; all five pass against the current helper.
 The three web, codex-bridge, and electron owners passed individually, the three
 typechecks passed, and a third complete aggregate passed in 162.9 seconds.
 
+Second review follow-up, same branch. The standalone ready helper now kills
+only on the timeout path, clears the deadline before reading the auth file, and
+is covered by `standalone-ready.test.ts` (named timeout without waiting for
+stdout to close, SIGTERM-to-SIGKILL escalation, bounded stderr drain,
+abandoned-read swallowing, slow auth-file success without a kill, and a missing
+token that fails immediately). The authoritative resync case fires the boot
+connect before restart work so it stays inside `BOOT_ANNOUNCE_COALESCE_MS`,
+asserts that coalesced load count, then settles for that window after the
+reconnect.
+
 ## Renamed owning files
 
 Every entry below records the file name, line number, command, and counts

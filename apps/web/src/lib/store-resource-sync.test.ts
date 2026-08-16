@@ -65,6 +65,7 @@ mock.module("@/lib/prompt-queue-persistence", () => ({ hydratePromptQueuesForEnv
 mock.module("@/lib/prompt-queue-sources", () => ({ createPromptQueueSources }));
 
 const {
+  BOOT_ANNOUNCE_COALESCE_MS,
   dispatchResourceChange,
   requestResourceResync,
   resetResourceSync,
@@ -1728,6 +1729,21 @@ describe("authoritative resync", () => {
       });
 
       await waitForState(
+        () => eventHandlers.has(nativeEvents.NATIVE_EVENT_STREAM_CONNECTED_EVENT)
+          && manifestCalls.length >= 1,
+        "attach-time resync and connection listener",
+      );
+      const connected = eventHandlers.get(
+        nativeEvents.NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+      );
+      if (!connected) throw new Error("Connection listener did not attach");
+      // Pin the first announcement to the attach-time window before any
+      // restart work can expire BOOT_ANNOUNCE_COALESCE_MS. A coalesced boot
+      // connect must not start a second load.
+      connected({ payload: undefined });
+      expect(manifestCalls).toHaveLength(1);
+
+      await waitForState(
         () => useProjectStore.getState().projects.some(({ id }) => id === project.id)
           && useEnvironmentStore.getState().environments.some(({ id }) => id === environmentSnapshot.id),
         "initial project and environment hydration",
@@ -1750,14 +1766,8 @@ describe("authoritative resync", () => {
         name: "After restart",
       });
 
-      const connected = eventHandlers.get(
-        nativeEvents.NATIVE_EVENT_STREAM_CONNECTED_EVENT,
-      );
-      if (!connected) throw new Error("Connection listener did not attach");
-      // The first connection announcement shares the attach-time reconciliation
-      // window and is deliberately coalesced. A subsequent announcement models
-      // the backend process reconnect that must retain the first generation.
-      connected({ payload: undefined });
+      // A later announcement models the backend process reconnect that must
+      // retain the first generation. It is outside the boot window by design.
       connected({ payload: undefined });
       await waitForState(
         () => manifestCalls.length >= 2
@@ -1766,10 +1776,10 @@ describe("authoritative resync", () => {
         "post-restart authoritative collection hydration",
       );
       // Polling stops at the first satisfying observation, which on its own
-      // cannot prove the second announcement was coalesced rather than merely
-      // slower. Settle past the reconciliation window so an uncoalesced third
-      // load is counted here instead of after the test has already passed.
-      await tick();
+      // cannot prove no follow-up load is still queued. Settle past the
+      // attach-time window so an extra manifest load is counted here instead
+      // of after the test has already passed.
+      await tick(BOOT_ANNOUNCE_COALESCE_MS);
 
       expect(manifestCalls).toHaveLength(2);
       expect(manifestCalls[1]?.knownGeneration).toEqual(expect.any(String));
@@ -1788,7 +1798,7 @@ describe("authoritative resync", () => {
       listenMock.mockImplementation(async () => () => undefined);
       await fs.rm(dataDir, { recursive: true, force: true });
     }
-  });
+  }, 20_000);
 
   test("does not let an older project snapshot overwrite a newer collection", async () => {
     detach?.();

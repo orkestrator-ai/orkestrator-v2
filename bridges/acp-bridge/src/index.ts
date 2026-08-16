@@ -125,6 +125,18 @@ interface AcpToolSourceState {
   contentDiffs: BridgeToolDiff[];
   locationPath?: string;
   /**
+   * Cursor's `cursor/task` extension names the sub-agent. Keep it off the live
+   * `rawInput` patch so a later generic Task update cannot wipe the prompt.
+   */
+  cursorTask?: {
+    description?: string;
+    prompt?: string;
+    subagentType?: string;
+    durationMs?: number;
+    model?: string;
+    agentId?: string;
+  };
+  /**
    * Serialized size of the rendered part the last time it was charged against
    * `uncheckedTranscriptBytes`. Tool parts are patched in place, so charging the
    * whole part on every update would re-bill a 1MiB diff per streaming frame and
@@ -1444,6 +1456,64 @@ function rememberHistoryMessage(state: SessionState, providerMessageId: string, 
   state.historyMessageIds.set(providerMessageId, messageId);
 }
 
+/**
+ * Append a tool part, trimming oldest siblings when the per-message cap is full.
+ * Returns false when the part must not be created: a non-initial update for a
+ * trimmed id, or a structured turn that cannot lose output.
+ */
+function pushToolPart(
+  state: SessionState,
+  owner: BridgeMessage,
+  part: BridgeToolPart,
+  isInitial: boolean,
+): boolean {
+  const trimmed = trimmedToolCalls.get(owner);
+  if (trimmed?.has(part.toolUseId)) {
+    // This call's part was dropped on purpose. Rebuilding it from one late
+    // update would append an empty `Tool call` *after* the notice saying
+    // those steps went, with none of the title, arguments or output the
+    // original carried. A genuinely new call reusing the id still starts.
+    if (!isInitial) return false;
+    trimmed.delete(part.toolUseId);
+  }
+  if (owner.parts.length >= MAX_PARTS_PER_MESSAGE) {
+    if (turnRequiresCompleteOutput(state)) {
+      failTranscriptLimit(state);
+      return false;
+    }
+    state.droppedParts += trimPartsTo(owner, MAX_PARTS_PER_MESSAGE - 1);
+    state.transcriptTruncated = true;
+  }
+  owner.parts.push(part);
+  return true;
+}
+
+/**
+ * Bill the rendered part against the transcript dirty counter and persist.
+ * Returns false when a structured turn had to fail because bounding dropped
+ * current-message content.
+ */
+function commitToolPartMutation(
+  state: SessionState,
+  part: BridgeToolPart,
+  source: AcpToolSourceState,
+): boolean {
+  state.revision += 1;
+  const serializedBytes = Buffer.byteLength(JSON.stringify(part));
+  state.uncheckedTranscriptBytes += Math.max(0, serializedBytes - (source.chargedBytes ?? 0));
+  source.chargedBytes = serializedBytes;
+  const transcriptTruncated = state.messages.length > MAX_MESSAGES
+    || state.uncheckedTranscriptBytes >= TRANSCRIPT_CHECK_INTERVAL_BYTES
+    ? boundTranscript(state)
+    : false;
+  if (transcriptTruncated && turnRequiresCompleteOutput(state)) {
+    failTranscriptLimit(state);
+    return false;
+  }
+  schedulePersist();
+  return true;
+}
+
 function applyToolCallUpdate(
   state: SessionState,
   update: JsonObject,
@@ -1491,23 +1561,6 @@ function applyToolCallUpdate(
 
   if (!part) {
     owner = currentAssistantMessage(state);
-    const trimmed = trimmedToolCalls.get(owner);
-    if (trimmed?.has(toolCallId)) {
-      // This call's part was dropped on purpose. Rebuilding it from one late
-      // update would append an empty `Tool call` *after* the notice saying
-      // those steps went, with none of the title, arguments or output the
-      // original carried. A genuinely new call reusing the id still starts.
-      if (!isInitial) return;
-      trimmed.delete(toolCallId);
-    }
-    if (owner.parts.length >= MAX_PARTS_PER_MESSAGE) {
-      if (turnRequiresCompleteOutput(state)) {
-        failTranscriptLimit(state);
-        return;
-      }
-      state.droppedParts += trimPartsTo(owner, MAX_PARTS_PER_MESSAGE - 1);
-      state.transcriptTruncated = true;
-    }
     part = {
       type: "tool-invocation",
       content: "Tool call",
@@ -1516,7 +1569,7 @@ function applyToolCallUpdate(
       toolUseId: toolCallId,
       toolState: "pending",
     };
-    owner.parts.push(part);
+    if (!pushToolPart(state, owner, part, isInitial)) return;
   }
 
   let source = acpToolSourceStates.get(part);
@@ -1540,19 +1593,7 @@ function applyToolCallUpdate(
   }
   syncActiveSubagentTool(state, part);
 
-  state.revision += 1;
-  const serializedBytes = Buffer.byteLength(JSON.stringify(part));
-  state.uncheckedTranscriptBytes += Math.max(0, serializedBytes - (source.chargedBytes ?? 0));
-  source.chargedBytes = serializedBytes;
-  const transcriptTruncated = state.messages.length > MAX_MESSAGES
-    || state.uncheckedTranscriptBytes >= TRANSCRIPT_CHECK_INTERVAL_BYTES
-    ? boundTranscript(state)
-    : false;
-  if (transcriptTruncated && turnRequiresCompleteOutput(state)) {
-    failTranscriptLimit(state);
-    return;
-  }
-  schedulePersist();
+  if (!commitToolPartMutation(state, part, source)) return;
 
   // Cursor's live ACP stream intentionally reduces read/search calls to
   // generic labels such as `Read File` and `grep`. Its indexed session replay
@@ -2058,7 +2099,10 @@ function applyAcpToolSourcePatch(source: AcpToolSourceState, update: JsonObject)
   if ("rawInput" in update) {
     if (isObject(update.rawInput)) {
       source.inputName = boundedString(update.rawInput._toolName, MAX_TOOL_NAME_BYTES);
-      source.toolArgs = boundedToolArguments(update.rawInput);
+      source.toolArgs = preserveTaskLaunchArgs(
+        source.toolArgs,
+        boundedToolArguments(update.rawInput),
+      );
     } else {
       source.inputName = undefined;
       source.toolArgs = undefined;
@@ -2094,7 +2138,7 @@ function renderAcpToolSource(part: BridgeToolPart, source: AcpToolSourceState): 
     ?? source.kind;
   setOptionalPartField(part, "toolTitle", source.title);
   setOptionalPartField(part, "toolName", toolName);
-  setOptionalPartField(part, "toolArgs", source.toolArgs);
+  setOptionalPartField(part, "toolArgs", mergeCursorTaskArgs(source.toolArgs, source.cursorTask));
   setOptionalPartField(part, "toolState", source.toolState);
   part.content = source.title ?? toolName ?? "Tool call";
 
@@ -2231,6 +2275,232 @@ function settleActiveSubagent(state: SessionState, toolUseId: string): void {
   }
 }
 
+const MAX_CURSOR_TASK_PROMPT_BYTES = 64 * 1024;
+const TASK_LAUNCH_ARG_KEYS = [
+  "description",
+  "prompt",
+  "subagent_type",
+  "subagentType",
+  "model",
+  "agentId",
+  "agent_id",
+] as const;
+
+/**
+ * `durationMs` is the one `cursor/task` field that decides lifecycle: any
+ * present value settles the sub-agent as finished. A bare `Number()` would
+ * coerce `null`, `false`, `""` and `[]` to `0`, so a vendor encoding "not
+ * finished yet" as `null` would report a live background child as complete and
+ * drop it out of `activeSubagentToolIds`. Only a real number — or a numeric
+ * string, which the renderer also accepts — counts as a reported duration.
+ */
+function boundedDurationMs(value: unknown): number | undefined {
+  const numeric = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim()
+      ? Number(value)
+      : Number.NaN;
+  if (!Number.isFinite(numeric) || numeric < 0) return undefined;
+  return Math.floor(numeric);
+}
+
+function cursorSubagentTypeLabel(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return boundedString(value, MAX_TOOL_NAME_BYTES)?.trim();
+  }
+  if (isObject(value) && typeof value.custom === "string") {
+    return boundedString(value.custom, MAX_TOOL_NAME_BYTES)?.trim();
+  }
+  return undefined;
+}
+
+/**
+ * Cursor's Task `rawInput` is often just `{ _toolName: "task" }`. A later
+ * status patch must not erase the description/prompt that `cursor/task` added.
+ */
+function preserveTaskLaunchArgs(
+  previous: JsonObject | undefined,
+  next: JsonObject,
+): JsonObject {
+  const merged: JsonObject = { ...next };
+  if (!previous) return merged;
+  for (const key of TASK_LAUNCH_ARG_KEYS) {
+    if (merged[key] == null && typeof previous[key] === "string" && previous[key].trim()) {
+      merged[key] = previous[key];
+    }
+  }
+  if (
+    merged.durationMs == null
+    && typeof previous.durationMs === "number"
+    && Number.isFinite(previous.durationMs)
+    && previous.durationMs >= 0
+  ) {
+    merged.durationMs = previous.durationMs;
+  }
+  return merged;
+}
+
+function mergeCursorTaskArgs(
+  toolArgs: JsonObject | undefined,
+  cursorTask: AcpToolSourceState["cursorTask"],
+): JsonObject | undefined {
+  if (!cursorTask) return toolArgs;
+  const merged: JsonObject = { ...(toolArgs ?? {}) };
+  if (cursorTask.description) merged.description = cursorTask.description;
+  if (cursorTask.prompt) merged.prompt = cursorTask.prompt;
+  if (cursorTask.subagentType) merged.subagent_type = cursorTask.subagentType;
+  if (cursorTask.durationMs !== undefined) merged.durationMs = cursorTask.durationMs;
+  if (cursorTask.model) merged.model = cursorTask.model;
+  if (cursorTask.agentId) merged.agentId = cursorTask.agentId;
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function findToolPart(
+  state: SessionState,
+  toolUseId: string,
+): { owner: BridgeMessage; part: BridgeToolPart } | undefined {
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    const owner = state.messages[index]!;
+    const part = owner.parts.find(
+      (messagePart): messagePart is BridgeToolPart =>
+        messagePart.type === "tool-invocation" && messagePart.toolUseId === toolUseId,
+    );
+    if (part) return { owner, part };
+  }
+  return undefined;
+}
+
+/**
+ * Cursor reports sub-agent identity through `cursor/task`, not nested ACP
+ * tool_calls. The live Task tool is typically titled "Task: Subagent task"
+ * with empty input; this notification is what carries description, prompt,
+ * type, and duration.
+ *
+ * Observed in `cursor-agent` 2026.08.11-e8db854 (`src/acp/agent-session.ts`,
+ * `src/acp/types.ts`):
+ *
+ * - It is sent through `extMethod`, which is `sendRequest` — so on the wire it
+ *   is a **request**, despite Cursor naming its own helper
+ *   `sendNonBlockingExtensionNotification`. `extNotification` sits beside it
+ *   unused. The notification form is still accepted here because that naming
+ *   says which way Cursor intends to move, and a notification costs nothing.
+ * - Cursor discards the response: the helper only `.catch()`es, and the SDK
+ *   does not validate the result. Even a `-32601` is just a debug log there.
+ * - The payload is `toolCallId`, `description`, `prompt`, `subagentType`,
+ *   `model`, `agentId`, `durationMs`. There is **no status or outcome field**,
+ *   and `durationMs` is populated only when the tool result case is `success`.
+ * - The one send site is `toolCallCompleted`, immediately after the
+ *   `status: "completed"` tool call update. A frame with no duration and no
+ *   named state is still launch metadata, not an ending: `durationMs` is the
+ *   observed completion field. The launch tool itself resolves with
+ *   `isBackground: true` still set, which is why that flag cannot be read as
+ *   liveness.
+ *
+ * The status/outcome handling below is therefore forward-compatibility, not an
+ * observed contract: it is written so that a future Cursor which does start
+ * reporting a state cannot be read as an ending unless it says so. A named
+ * non-terminal state is a progress report and must not settle a live child.
+ */
+function applyCursorTask(state: SessionState, params: JsonObject): void {
+  if (params.sessionId !== undefined && params.sessionId !== state.acpSessionId) return;
+  const payload = isObject(params.update) ? params.update : params;
+  const toolCallId = boundedString(payload.toolCallId, MAX_TOOL_ID_BYTES)?.trim();
+  if (!toolCallId) return;
+
+  const description = boundedString(payload.description, MAX_TOOL_TITLE_BYTES)?.trim();
+  const prompt = boundedString(payload.prompt, MAX_CURSOR_TASK_PROMPT_BYTES)?.trim();
+  const subagentType = cursorSubagentTypeLabel(payload.subagentType ?? payload.subagent_type);
+  const model = boundedString(payload.model, MAX_TOOL_NAME_BYTES)?.trim();
+  const agentId = boundedString(payload.agentId ?? payload.agent_id, MAX_TOOL_ID_BYTES)?.trim();
+  const durationMs = boundedDurationMs(payload.durationMs);
+  const namedState = cursorTaskNamedState(payload);
+  if (
+    !description
+    && !prompt
+    && !subagentType
+    && !model
+    && !agentId
+    && durationMs === undefined
+    && namedState === undefined
+  ) {
+    return;
+  }
+
+  const isProgress = namedState === "progress";
+  const agentState: "finished" | "failed" | undefined = isProgress
+    ? undefined
+    : namedState ?? (durationMs !== undefined ? "finished" : undefined);
+
+  let found = findToolPart(state, toolCallId);
+  if (!found) {
+    if (state.activeSubagentToolIds.has(toolCallId)) {
+      if (agentState) finishSubagentTool(state, toolCallId, agentState);
+      return;
+    }
+    // A terminal or progress frame for an id that is not a live child must not
+    // invent a launch part while other children are running.
+    if ((agentState || isProgress) && state.activeSubagentToolIds.size > 0) return;
+
+    const owner = currentAssistantMessage(state);
+    const part: BridgeToolPart = {
+      type: "tool-invocation",
+      content: description ?? "Task",
+      sourcePartId: `tool:${toolCallId}`,
+      sourceMessageId: owner.id,
+      toolUseId: toolCallId,
+      toolName: "task",
+      toolState: agentState === "finished" ? "success" : "pending",
+      agentState: agentState ?? "active",
+    };
+    // Not an initial `tool_call`: a late `cursor/task` for a trimmed id must
+    // not rebuild the evicted launch as a context-free ghost part.
+    if (!pushToolPart(state, owner, part, false)) {
+      if (agentState) finishSubagentTool(state, toolCallId, agentState);
+      return;
+    }
+    found = { owner, part };
+  } else if (
+    !state.activeSubagentToolIds.has(toolCallId)
+    && found.part.agentState !== "active"
+    && (agentState || isProgress)
+  ) {
+    return;
+  }
+
+  const { part } = found;
+  let source = acpToolSourceStates.get(part);
+  if (!source) {
+    source = {
+      title: part.toolTitle,
+      explicitName: part.toolName,
+      toolArgs: part.toolArgs,
+      toolState: part.toolState,
+      agentState: part.agentState,
+      rawOutput: part.toolOutput,
+      contentDiffs: part.toolDiff ? [part.toolDiff] : [],
+    };
+    acpToolSourceStates.set(part, source);
+  }
+  source.cursorTask = {
+    ...(source.cursorTask ?? {}),
+    ...(description ? { description } : {}),
+    ...(prompt ? { prompt } : {}),
+    ...(subagentType ? { subagentType } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {}),
+    ...(model ? { model } : {}),
+    ...(agentId ? { agentId } : {}),
+  };
+  if (agentState && source.agentState !== "finished" && source.agentState !== "failed") {
+    source.agentState = agentState;
+    if (agentState === "finished" && (source.toolState === "pending" || source.toolState === undefined)) {
+      source.toolState = "success";
+    }
+  }
+  renderAcpToolSource(part, source);
+  syncActiveSubagentTool(state, part);
+  commitToolPartMutation(state, part, source);
+}
+
 function failAllActiveSubagents(state: SessionState): void {
   for (const message of state.messages) {
     for (const part of message.parts) {
@@ -2312,52 +2582,12 @@ function applySubagentFinished(state: SessionState, update: JsonObject): void {
   finishSubagentTool(state, toolUseId, terminalAgentState(typeof update.status === "string" ? update.status : undefined) ?? "finished");
 }
 
-/**
- * Cursor's sub-agent completion signal, as observed in `cursor-agent`
- * 2026.08.11-e8db854 (`src/acp/agent-session.ts`, `src/acp/types.ts`):
- *
- * - It is sent through `extMethod`, which is `sendRequest` — so on the wire it
- *   is a **request**, despite Cursor naming its own helper
- *   `sendNonBlockingExtensionNotification`. `extNotification` sits beside it
- *   unused. The notification form is still accepted here because that naming
- *   says which way Cursor intends to move, and a notification costs nothing.
- * - Cursor discards the response: the helper only `.catch()`es, and the SDK
- *   does not validate the result. Even a `-32601` is just a debug log there.
- * - The payload is `toolCallId`, `description`, `prompt`, `subagentType`,
- *   `model`, `agentId`, `durationMs`. There is **no status or outcome field**,
- *   and `durationMs` is populated only when the tool result case is `success`.
- * - The one send site is `toolCallCompleted`, immediately after the
- *   `status: "completed"` tool call update, so today it can only ever be
- *   terminal. The launch tool itself resolves with `isBackground: true` still
- *   set, which is why that flag cannot be read as liveness.
- *
- * The status/outcome handling below is therefore forward-compatibility, not an
- * observed contract: it is written so that a future Cursor which does start
- * reporting a state cannot be read as an ending unless it says so.
- */
-function applyCursorTask(state: SessionState, params: JsonObject): void {
-  if (params.sessionId !== undefined && params.sessionId !== state.acpSessionId) return;
-  const payload = isObject(params.update) ? params.update : params;
-  const toolCallId = boundedString(payload.toolCallId, MAX_TOOL_ID_BYTES)?.trim();
-  if (!toolCallId) return;
-  // A frame that names a state of its own and that state is not terminal is a
-  // progress report, not an ending. Settling on it would strand a live child as
-  // Finished and hand the session back as idle mid-turn.
-  const agentState = cursorTaskAgentState(payload);
-  if (!agentState) return;
-  if (!state.activeSubagentToolIds.has(toolCallId)) {
-    const part = findToolPart(state, toolCallId);
-    if (!part || part.agentState !== "active") return;
-  }
-  finishSubagentTool(state, toolCallId, agentState);
-}
-
 function finishSubagentTool(
   state: SessionState,
   toolUseId: string,
   agentState: "finished" | "failed",
 ): void {
-  const part = findToolPart(state, toolUseId);
+  const part = findToolPart(state, toolUseId)?.part;
   if (part && part.agentState !== "finished" && part.agentState !== "failed") {
     part.agentState = agentState;
     const source = acpToolSourceStates.get(part);
@@ -2366,17 +2596,6 @@ function finishSubagentTool(
   settleActiveSubagent(state, toolUseId);
   state.revision += 1;
   schedulePersist();
-}
-
-function findToolPart(state: SessionState, toolUseId: string): BridgeToolPart | undefined {
-  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
-    const candidate = state.messages[index]!.parts.find(
-      (part): part is BridgeToolPart =>
-        part.type === "tool-invocation" && part.toolUseId === toolUseId,
-    );
-    if (candidate) return candidate;
-  }
-  return undefined;
 }
 
 function lifecycleStatus(lifecycle: JsonObject | undefined): string | undefined {
@@ -2393,25 +2612,25 @@ function terminalAgentState(status: string | undefined): "finished" | "failed" |
 }
 
 /**
- * The child state a `cursor/task` frame reports, or `undefined` when it names a
- * state that is not terminal.
+ * Named status/outcome on a `cursor/task` frame.
  *
- * Absent state is completion, and that is the only branch Cursor reaches today
- * — it sends neither field (see `applyCursorTask`). The rest guards the version
- * that starts to: a *present* but non-terminal state has to be distinguishable
- * from an absent one, or a progress report would settle a running child. That
- * is why this cannot default to `"finished"` the way the by-definition-terminal
- * `subagent_finished` notification does.
+ * Cursor today sends neither field — `durationMs` is the observed completion
+ * signal (see `applyCursorTask`). A *present* but non-terminal state is a
+ * progress report and must be distinguishable from an absent one, or it would
+ * settle a running child. That is why this cannot default to `"finished"` the
+ * way the by-definition-terminal `subagent_finished` notification does.
  */
-function cursorTaskAgentState(payload: JsonObject): "finished" | "failed" | undefined {
+function cursorTaskNamedState(
+  payload: JsonObject,
+): "finished" | "failed" | "progress" | undefined {
   const outcome = typeof payload.outcome === "string"
     ? payload.outcome
     : isObject(payload.outcome) && typeof payload.outcome.outcome === "string"
       ? payload.outcome.outcome
       : undefined;
   const status = typeof payload.status === "string" ? payload.status : undefined;
-  if (outcome === undefined && status === undefined) return "finished";
-  return terminalAgentState(outcome) ?? terminalAgentState(status);
+  if (outcome === undefined && status === undefined) return undefined;
+  return terminalAgentState(outcome) ?? terminalAgentState(status) ?? "progress";
 }
 
 function setOptionalPartField<TKey extends keyof BridgeToolPart>(

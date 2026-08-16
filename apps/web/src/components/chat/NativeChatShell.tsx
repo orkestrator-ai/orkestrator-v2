@@ -312,6 +312,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
               actions={messageActions?.(message)}
               resolveModelLabel={resolveModelLabel}
               loadToolDetails={loadToolDetails}
+              platform={platform}
             />
           )}
           header={transcriptHeader}

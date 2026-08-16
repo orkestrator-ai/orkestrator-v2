@@ -1595,6 +1595,452 @@ describe("ACP bridge", () => {
     }).then((response) => response.json())).toEqual({ activity: "idle" });
   });
 
+  test("applies Cursor's cursor/task notification onto the matching Task launch", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASK: summarize" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.messages.some((message) =>
+        message.parts.some((part) =>
+          part.toolUseId === "cursor-task-1"
+          && (part.toolArgs as { description?: string } | undefined)?.description
+            === "Summarize two docs"
+        )
+      ),
+    );
+    expect(settled.messages.flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "cursor-task-1")).toMatchObject({
+      toolName: "task",
+      toolState: "success",
+      agentState: "finished",
+      toolArgs: {
+        description: "Summarize two docs",
+        prompt: "Read docs/upgrade-agents.md and docs/flaky-tests.md. Return one line each.",
+        subagent_type: "explore",
+        model: "composer-2.5",
+        agentId: "bc-abc123",
+        durationMs: 1_240,
+      },
+    });
+  });
+
+  test("acknowledges a cursor/task request instead of refusing it", async () => {
+    const directory = await temporaryDirectory();
+    const responseFile = resolve(directory, "cursor-task-response.log");
+    const { base, headers } = await spawnBridge({
+      env: { FAKE_ACP_CURSOR_TASK_REQUEST_FILE: responseFile },
+    });
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task-request:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASKREQUEST: summarize" }),
+    })).status).toBe(202);
+
+    const response = await waitFor(
+      () => fs.readFile(responseFile, "utf8")
+        .then((value) => JSON.parse(value.trim()))
+        .catch(() => null) as Promise<Record<string, unknown> | null>,
+      Boolean,
+    );
+    expect(response).toMatchObject({
+      id: 903,
+      result: {},
+    });
+    expect(response).not.toHaveProperty("error");
+    expect(response).not.toHaveProperty("result.outcome");
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.messages.some((message) =>
+        message.parts.some((part) =>
+          (part.toolArgs as { description?: string } | undefined)?.description
+            === "Summarize two docs"
+        )
+      ),
+    );
+    expect(settled.messages.flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "cursor-task-1")).toMatchObject({
+      agentState: "finished",
+      toolArgs: { subagent_type: "explore" },
+    });
+  });
+
+  test("keeps cursor/task launch args after a later generic Task rawInput patch", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task-wipe:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASKWIPE: summarize" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    const parts = settled.messages.flatMap((message) => message.parts)
+      .filter((part) => part.toolUseId === "cursor-task-wipe");
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({
+      toolName: "task",
+      toolState: "success",
+      toolArgs: {
+        description: "Summarize two docs",
+        prompt: "Read docs/upgrade-agents.md and docs/flaky-tests.md.",
+        subagent_type: "explore",
+        model: "composer-2.5",
+        agentId: "bc-wipe",
+        durationMs: 1_240,
+      },
+    });
+  });
+
+  test("creates a single Task part when cursor/task arrives before the tool_call", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task-first:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASKFIRST: explore" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    const parts = settled.messages.flatMap((message) => message.parts)
+      .filter((part) => part.toolUseId === "cursor-task-first");
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({
+      toolName: "task",
+      toolTitle: "Task: Subagent task",
+      agentState: "active",
+      toolArgs: {
+        description: "Explore the repo",
+        prompt: "List the files that own native chat rendering.",
+        subagent_type: "explore",
+        model: "composer-2.5",
+        agentId: "bc-first",
+      },
+    });
+  });
+
+  test("trims oldest parts when a synthetic cursor/task would exceed the per-message cap", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task-cap:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASKCAP: overflow" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    expect(settled.error).toBeUndefined();
+    expect(settled.messages[1]?.parts).toHaveLength(512);
+    expect(settled.messages[1]?.parts[0]).toMatchObject({
+      type: "text",
+      content: expect.stringContaining("Earlier steps in this response were dropped"),
+    });
+    expect(settled.messages[1]?.parts.at(-1)).toMatchObject({
+      toolUseId: "cursor-task-cap",
+      toolName: "task",
+      toolArgs: { description: "Overflow task", subagent_type: "explore" },
+    });
+    expect(settled.messages[1]?.parts.filter((part) => part.toolUseId === "cursor-task-cap"))
+      .toHaveLength(1);
+  });
+
+  test("charges a cursor/task prompt so a near-cap transcript stays inside the byte budget", async () => {
+    const maximumTranscriptBytes = 1024 * 1024;
+    const { base, headers } = await spawnBridge({
+      env: { ACP_MAX_TRANSCRIPT_BYTES: String(maximumTranscriptBytes) },
+    });
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task-charge:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASKCHARGE: fill then prompt" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    expect(settled.error).toBeUndefined();
+    expect(Buffer.byteLength(JSON.stringify(settled.messages)))
+      .toBeLessThanOrEqual(maximumTranscriptBytes);
+    const charged = settled.messages.flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "cursor-task-charge");
+    expect(charged).toMatchObject({
+      toolName: "task",
+      toolArgs: { description: "Charge the prompt", subagent_type: "explore" },
+    });
+    expect((charged?.toolArgs as { prompt?: string } | undefined)?.prompt?.length)
+      .toBe(64 * 1024);
+  });
+
+  test("only accepts a real cursor/task duration, never a coerced null or blank", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task-durations:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASKDURATIONS: coerce" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    const byId = new Map(settled.messages.flatMap((message) => message.parts)
+      .map((part) => [part.toolUseId as string, part]));
+
+    // Reportable durations settle the sub-agent and survive into the args.
+    expect(byId.get("duration-zero")).toMatchObject({
+      toolState: "success",
+      agentState: "finished",
+      toolArgs: { durationMs: 0 },
+    });
+    expect(byId.get("duration-string")).toMatchObject({
+      toolState: "success",
+      agentState: "finished",
+      toolArgs: { durationMs: 1_500 },
+    });
+    expect(byId.get("duration-float")).toMatchObject({
+      toolState: "success",
+      toolArgs: { durationMs: 12 },
+    });
+
+    // Everything else means "no duration reported". `Number()` would turn
+    // null/true/""/[] into 0 and finish a sub-agent that is still running, so
+    // each must leave the part unsettled and carry no `durationMs` at all.
+    for (const toolUseId of [
+      "duration-negative",
+      "duration-null",
+      "duration-boolean",
+      "duration-empty",
+      "duration-array",
+      "duration-text",
+    ]) {
+      const part = byId.get(toolUseId);
+      expect({ toolUseId, part: part !== undefined }).toEqual({ toolUseId, part: true });
+      expect({ toolUseId, durationMs: (part?.toolArgs as { durationMs?: unknown })?.durationMs })
+        .toEqual({ toolUseId, durationMs: undefined });
+      // Never reported complete, so the turn's own reconciliation settles it.
+      expect({ toolUseId, agentState: part?.agentState })
+        .toEqual({ toolUseId, agentState: "failed" });
+    }
+  });
+
+  test("keeps a null-duration cursor/task running and still reports it as activity", async () => {
+    const directory = await temporaryDirectory();
+    const holdTurnFile = resolve(directory, "release-turn");
+    const { base, headers } = await spawnBridge({
+      env: { FAKE_ACP_HOLD_TURN_FILE: holdTurnFile },
+    });
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task-held:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASKHELD: run" }),
+    })).status).toBe(202);
+
+    // Observed while the turn is genuinely still open, not by racing its end.
+    const running = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "running"
+        && value.messages.flatMap((message) => message.parts)
+          .some((part) => part.toolUseId === "cursor-task-held"),
+    );
+    const live = running.messages.flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "cursor-task-held");
+    expect(live).toMatchObject({
+      toolName: "task",
+      toolState: "pending",
+      agentState: "active",
+      toolArgs: { description: "Held task", subagent_type: "explore" },
+    });
+    expect((live?.toolArgs as { durationMs?: unknown }).durationMs).toBeUndefined();
+    expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
+      .then((response) => response.json())).toEqual({ activity: "working" });
+
+    await fs.writeFile(holdTurnFile, "");
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    expect(settled.messages.flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "cursor-task-held")).toMatchObject({
+      toolState: "success",
+      agentState: "finished",
+      toolArgs: { description: "Held task", durationMs: 2_400 },
+    });
+    expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
+      .then((response) => response.json())).toEqual({ activity: "idle" });
+  });
+
+  test("drops a cursor/task whose launch part was already trimmed away", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-task-trimmed:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORTASKTRIMMED: overflow" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    expect(settled.error).toBeUndefined();
+    expect(settled.messages[1]?.parts).toHaveLength(512);
+    expect(settled.messages[1]?.parts[0]).toMatchObject({
+      type: "text",
+      content: expect.stringContaining("Earlier steps in this response were dropped"),
+    });
+    // The launch was evicted on purpose. Rebuilding it here would append the
+    // task *after* the notice saying those steps went, detached from the work
+    // it launched, so the late metadata is dropped instead.
+    expect(settled.messages.flatMap((message) => message.parts)
+      .filter((part) => part.toolUseId === "cursor-task-trimmed")).toHaveLength(0);
+    expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
+      .then((response) => response.json())).toEqual({ activity: "idle" });
+  });
+
+  test("carries launch arguments across a rawInput patch that drops them", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-preserve-non-task:tab-1" }),
+    }).then((response) => response.json()) as { id: string };
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORPRESERVENONTASK: read" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    // The carry-over exists for Cursor's Task launches, whose status patches
+    // arrive as a bare `{ _toolName: "task" }`, but it is keyed on the argument
+    // names rather than the tool, so any tool reusing them keeps the earlier
+    // value when a later patch omits it. The patched key still wins.
+    expect(settled.messages.flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "plain-tool-1")).toMatchObject({
+      toolState: "success",
+      toolArgs: {
+        path: "/workspace/b.ts",
+        description: "First pass",
+        model: "m-1",
+      },
+    });
+  });
+
   test("preserves ACP nested child parentToolCallId as parentTaskUseId", async () => {
     const bridge = await spawnBridge();
     const created = await nativeFetch(`${bridge.base}/session/create`, {

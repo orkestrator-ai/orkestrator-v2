@@ -835,6 +835,57 @@ describe("NativeChatShell", () => {
       expect(screen.getByText(/responded in 45s/)).toBeTruthy();
     });
 
+    test("forwards platform so Cursor agent rows hide reported tool counts", () => {
+      const message: NativeMessage = {
+        id: "assistant-cursor-task",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-03-21T10:00:00.000Z",
+        parts: [
+          {
+            type: "task-group",
+            content: "Task: Subagent task",
+            task: {
+              type: "tool-invocation",
+              content: "Task: Subagent task",
+              toolName: "task",
+              toolTitle: "Task: Subagent task",
+              toolState: "success",
+              agentState: "finished",
+              toolUseCount: 8,
+              toolArgs: {
+                description: "Summarize two docs",
+                prompt: "Read the two docs.",
+                subagent_type: "explore",
+                durationMs: 1_240,
+              },
+            },
+            childTools: [],
+          },
+        ],
+      };
+
+      const { rerender } = render(
+        <NativeChatShell
+          {...shellProps()}
+          platform="cursor"
+          messages={[message]}
+        />,
+      );
+      expect(screen.getByText("Summarize two docs (explore)")).toBeTruthy();
+      expect(screen.getByText("1.2s")).toBeTruthy();
+      expect(screen.queryByText("8 tool uses") === null).toBe(true);
+
+      rerender(
+        <NativeChatShell
+          {...shellProps()}
+          platform="claude"
+          messages={[message]}
+        />,
+      );
+      expect(screen.getByText("8 tool uses")).toBeTruthy();
+    });
+
     test("passes the resolver through to the list", () => {
       render(<NativeChatShell {...shellProps()} messages={[]} />);
 

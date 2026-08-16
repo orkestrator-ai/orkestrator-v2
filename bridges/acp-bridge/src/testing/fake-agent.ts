@@ -1132,6 +1132,360 @@ lines.on("line", (line) => {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return;
     }
+    if (prompt.startsWith("CURSORTASKWIPE")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "cursor-task-wipe",
+            title: "Task: Subagent task",
+            kind: "other",
+            status: "in_progress",
+            rawInput: { _toolName: "task" },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          toolCallId: "cursor-task-wipe",
+          description: "Summarize two docs",
+          prompt: "Read docs/upgrade-agents.md and docs/flaky-tests.md.",
+          subagentType: "explore",
+          model: "composer-2.5",
+          agentId: "bc-wipe",
+          durationMs: 1_240,
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "cursor-task-wipe",
+            status: "completed",
+            rawInput: { _toolName: "task" },
+            content: [{ type: "content", content: { type: "text", text: "Sub-agent launched." } }],
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("CURSORTASKFIRST")) {
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          toolCallId: "cursor-task-first",
+          description: "Explore the repo",
+          prompt: "List the files that own native chat rendering.",
+          subagentType: "explore",
+          model: "composer-2.5",
+          agentId: "bc-first",
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "cursor-task-first",
+            title: "Task: Subagent task",
+            kind: "other",
+            status: "in_progress",
+            rawInput: { _toolName: "task" },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "cursor-task-first",
+            status: "completed",
+            content: [{ type: "content", content: { type: "text", text: "Sub-agent launched." } }],
+            rawOutput: { durationMs: 42, isBackground: true },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("CURSORTASKCAP")) {
+      for (let index = 0; index < 512; index += 1) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `cap-fill-${index}`,
+              kind: "noop",
+              status: "pending",
+            },
+          },
+        });
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          toolCallId: "cursor-task-cap",
+          description: "Overflow task",
+          prompt: "This launch has no matching tool_call yet.",
+          subagentType: "explore",
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("CURSORTASKCHARGE")) {
+      // 42 × 28 KiB completions: every third tool crosses the 64 KiB dirty
+      // interval and resets it, so `cursor/task` below starts from a clean
+      // counter against a transcript already sitting on the 1 MiB test floor.
+      for (let index = 0; index < 42; index += 1) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `charge-fill-${index}`,
+              kind: "read",
+              status: "completed",
+              rawOutput: `${index}:`.padEnd(28 * 1024, "x"),
+            },
+          },
+        });
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          toolCallId: "cursor-task-charge",
+          description: "Charge the prompt",
+          prompt: "P".repeat(64 * 1024),
+          subagentType: "explore",
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("CURSORTASKDURATIONS")) {
+      // `durationMs` is the field that settles a sub-agent, so every shape a
+      // vendor might use for "no duration yet" is exercised here alongside the
+      // two that are genuinely reportable.
+      const durationCases: Array<[string, unknown]> = [
+        ["duration-zero", 0],
+        ["duration-string", "1500"],
+        ["duration-float", 12.7],
+        ["duration-negative", -5],
+        ["duration-null", null],
+        ["duration-boolean", true],
+        ["duration-empty", ""],
+        ["duration-array", []],
+        ["duration-text", "soon"],
+      ];
+      for (const [toolCallId, durationMs] of durationCases) {
+        write({
+          jsonrpc: "2.0",
+          method: "cursor/task",
+          params: {
+            toolCallId,
+            description: `Case ${toolCallId}`,
+            subagentType: "explore",
+            durationMs,
+          },
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("CURSORTASKHELD")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "cursor-task-held",
+            title: "Task: Subagent task",
+            kind: "other",
+            status: "in_progress",
+            rawInput: { _toolName: "task" },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          toolCallId: "cursor-task-held",
+          description: "Held task",
+          subagentType: "explore",
+          // "Still running": must not be read as a completed 0ms turn.
+          durationMs: null,
+        },
+      });
+      whenReleased(() => {
+        write({
+          jsonrpc: "2.0",
+          method: "cursor/task",
+          params: { toolCallId: "cursor-task-held", durationMs: 2_400 },
+        });
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      });
+      return;
+    }
+    if (prompt.startsWith("CURSORTASKTRIMMED")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "cursor-task-trimmed",
+            title: "Task: Subagent task",
+            kind: "other",
+            status: "in_progress",
+            rawInput: { _toolName: "task" },
+          },
+        },
+      });
+      // Enough siblings to push the launch part out of the message before its
+      // metadata arrives.
+      for (let index = 0; index < 512; index += 1) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `trimmed-fill-${index}`,
+              kind: "noop",
+              status: "pending",
+            },
+          },
+        });
+      }
+      write({
+        jsonrpc: "2.0",
+        method: "cursor/task",
+        params: {
+          toolCallId: "cursor-task-trimmed",
+          description: "Trimmed task",
+          subagentType: "explore",
+          durationMs: 900,
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("CURSORPRESERVENONTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "plain-tool-1",
+            title: "Read File",
+            kind: "read",
+            status: "in_progress",
+            rawInput: { path: "/workspace/a.ts", description: "First pass", model: "m-1" },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "plain-tool-1",
+            status: "completed",
+            rawInput: { path: "/workspace/b.ts" },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (prompt.startsWith("CURSORTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "cursor-task-1",
+            title: "Task: Subagent task",
+            kind: "other",
+            status: "in_progress",
+            rawInput: { _toolName: "task" },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "cursor-task-1",
+            status: "completed",
+            content: [{ type: "content", content: { type: "text", text: "Sub-agent launched." } }],
+            rawOutput: { durationMs: 42, isBackground: true },
+          },
+        },
+      });
+      const taskParams = {
+        toolCallId: "cursor-task-1",
+        description: "Summarize two docs",
+        prompt: "Read docs/upgrade-agents.md and docs/flaky-tests.md. Return one line each.",
+        subagentType: "explore",
+        model: "composer-2.5",
+        agentId: "bc-abc123",
+        durationMs: 1_240,
+      };
+      if (prompt.startsWith("CURSORTASKREQUEST")) {
+        write({
+          jsonrpc: "2.0",
+          id: 903,
+          method: "cursor/task",
+          params: taskParams,
+        });
+      } else {
+        write({
+          jsonrpc: "2.0",
+          method: "cursor/task",
+          params: taskParams,
+        });
+      }
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return;
+    }
     if (prompt.startsWith("NESTEDSUBAGENT")) {
       write({
         jsonrpc: "2.0",
@@ -3399,6 +3753,14 @@ lines.on("line", (line) => {
       process.env.FAKE_ACP_VENDOR_MODEL_REQUEST_FILE,
       `${JSON.stringify(message)}\n`,
     );
+    return;
+  }
+  if (message.id === 903 && process.env.FAKE_ACP_CURSOR_TASK_REQUEST_FILE) {
+    appendFileSync(
+      process.env.FAKE_ACP_CURSOR_TASK_REQUEST_FILE,
+      `${JSON.stringify(message)}\n`,
+    );
+    return;
   }
   if (message.id === 903 && process.env.FAKE_ACP_CURSOR_TASK_REQUEST_FILE) {
     appendFileSync(

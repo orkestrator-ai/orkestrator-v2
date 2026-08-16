@@ -1,7 +1,7 @@
 /**
  * Recovery, retry and back-pressure behaviour of the build pipeline supervisor.
  *
- * The happy path lives in `build-pipeline-service.test.ts`. Everything here is
+ * The happy path lives in `build-pipeline-service-base.test.ts`. Everything here is
  * a path the design's correctness rests on but the happy path never reaches: an
  * unreachable bridge, a dispatch whose response was lost, a turn that never
  * produced its structured result, a concurrent writer, and the user talking to

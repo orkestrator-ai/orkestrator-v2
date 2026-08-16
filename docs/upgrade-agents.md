@@ -421,7 +421,7 @@ contract.
    ```bash
    bun run --cwd apps/web typecheck
    bun run --cwd apps/backend typecheck
-   bun test --cwd apps/web src/lib/opencode-client.test.ts --parallel
+   bun test --cwd apps/web 'src/lib/opencode-*.test.ts' --parallel
    bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
      src/core/opencode-provider-dispatch.test.ts \
      src/core/opencode-provider-lifecycle.test.ts \

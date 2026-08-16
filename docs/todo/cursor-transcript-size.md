@@ -335,7 +335,7 @@ decide the next one:
 
 - **No headroom constant.** Even a perfectly bounded 8 MiB transcript cannot
   fit in an 8 MiB `publicSession` body.
-- **Test gap.** `bridges/acp-bridge/src/index.test.ts` asserts
+- **Test gap.** `bridges/acp-bridge/src/acp-http.test.ts` asserts
   `JSON.stringify(session.messages) < 8 MiB` after an oversized turn. It does
   not assert the HTTP body of `GET /session/:id`, does not add composer size,
   and does not simulate the 64 KiB deferred check against a consumer with a

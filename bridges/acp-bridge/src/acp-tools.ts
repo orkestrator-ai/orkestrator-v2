@@ -921,7 +921,10 @@ export function syncActiveSubagentTool(state: SessionState, part: BridgeToolPart
         ? { subagentType: truncateUtf8(part.toolArgs.subagent_type.trim(), MAX_TOOL_NAME_BYTES) }
         : {}),
       ...(part.toolState ? { toolState: part.toolState } : {}),
-      ...(agentId ? { agentId } : {}),
+      // An id rendered on the tool part came from Cursor's own payload, not
+      // transcript-directory inference. Clear the weaker provenance so the
+      // background continuation waiter can trust the now-authoritative id.
+      ...(agentId ? { agentId, agentIdDiscovered: false } : {}),
     });
     if (!activated) {
       part.agentState = "failed";

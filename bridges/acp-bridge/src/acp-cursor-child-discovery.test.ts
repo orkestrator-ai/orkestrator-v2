@@ -17,12 +17,18 @@ import {
 } from "./acp-cursor-child-discovery.js";
 import {
   hydrateCursorChildTranscripts,
+  listWatchableCursorChildren,
   resetCursorTranscriptReadCache,
 } from "./acp-cursor-background.js";
 import { cursorChildTranscriptPrompt } from "./acp-cursor-transcript-parts.js";
-import type { SessionState } from "./acp-context.js";
+import {
+  CURSOR_CHILD_DISCOVERY_SKEW_MS,
+  sessions,
+  type SessionState,
+} from "./acp-context.js";
+import { syncActiveSubagentTool } from "./acp-tools.js";
 
-const LAUNCHED_AT = "2026-01-01T00:00:00.000Z";
+const LAUNCHED_AT = "1970-01-01T00:00:00.000Z";
 const LAUNCHED_AT_MS = Date.parse(LAUNCHED_AT);
 
 function makeState(launches: Array<{ toolUseId: string; createdAt?: string; agentId?: string }>) {
@@ -60,23 +66,19 @@ function makeState(launches: Array<{ toolUseId: string; createdAt?: string; agen
   return state;
 }
 
-/**
- * Directory creation time is the whole signal, so the fixtures set it
- * explicitly rather than relying on how fast the test writes files.
- */
 async function writeChildTranscript(
   root: string,
   agentId: string,
   body: string,
-  createdAtMs: number,
-): Promise<string> {
+): Promise<number> {
   const directory = resolve(root, agentId);
   await fs.mkdir(directory, { recursive: true });
   const file = resolve(directory, `${agentId}.jsonl`);
   await fs.writeFile(file, body);
-  const when = new Date(createdAtMs);
-  await fs.utimes(directory, when, when);
-  return file;
+  const stats = await fs.stat(directory);
+  // Match the production fallback order instead of pretending `utimes` can
+  // rewrite a filesystem's creation timestamp.
+  return stats.birthtimeMs || stats.ctimeMs || stats.mtimeMs;
 }
 
 const toolRecord = (name: string) => `${JSON.stringify({
@@ -136,8 +138,8 @@ describe("Cursor child transcript discovery", () => {
 
   test("lists child directories oldest first and ignores unsafe names", async () => {
     await withTranscriptRoot(async (root) => {
-      await writeChildTranscript(root, "child-late", toolRecord("Read"), LAUNCHED_AT_MS + 20_000);
-      await writeChildTranscript(root, "child-early", toolRecord("Read"), LAUNCHED_AT_MS + 10_000);
+      await writeChildTranscript(root, "child-early", toolRecord("Read"));
+      await writeChildTranscript(root, "child-late", toolRecord("Read"));
       await fs.writeFile(resolve(root, "stray-file.jsonl"), "{}\n");
       await fs.mkdir(resolve(root, ".hidden"), { recursive: true });
 
@@ -149,8 +151,8 @@ describe("Cursor child transcript discovery", () => {
 
   test("binds running unnamed launches to child directories in creation order", async () => {
     await withTranscriptRoot(async (root) => {
-      await writeChildTranscript(root, "child-a", toolRecord("Read"), LAUNCHED_AT_MS + 10_000);
-      await writeChildTranscript(root, "child-b", toolRecord("Grep"), LAUNCHED_AT_MS + 20_000);
+      await writeChildTranscript(root, "child-a", toolRecord("Read"));
+      await writeChildTranscript(root, "child-b", toolRecord("Grep"));
       const state = makeState([
         { toolUseId: "task-1" },
         { toolUseId: "task-2", createdAt: new Date(LAUNCHED_AT_MS + 5_000).toISOString() },
@@ -172,8 +174,13 @@ describe("Cursor child transcript discovery", () => {
   // older directory belongs to an earlier turn and must never be adopted.
   test("never binds a directory older than the launch", async () => {
     await withTranscriptRoot(async (root) => {
-      await writeChildTranscript(root, "child-old", toolRecord("Read"), LAUNCHED_AT_MS - 60_000);
-      const state = makeState([{ toolUseId: "task-1" }]);
+      const childCreatedAtMs = await writeChildTranscript(root, "child-old", toolRecord("Read"));
+      const state = makeState([{
+        toolUseId: "task-1",
+        createdAt: new Date(
+          childCreatedAtMs + CURSOR_CHILD_DISCOVERY_SKEW_MS + 1_000,
+        ).toISOString(),
+      }]);
 
       expect(bindDiscoveredCursorChildren(state as unknown as SessionState)).toBe(false);
       expect(state.activeSubagentDescriptors.get("task-1")).toEqual({});
@@ -182,7 +189,7 @@ describe("Cursor child transcript discovery", () => {
 
   test("leaves a launch Cursor already named alone and does not reuse its child", async () => {
     await withTranscriptRoot(async (root) => {
-      await writeChildTranscript(root, "child-a", toolRecord("Read"), LAUNCHED_AT_MS + 10_000);
+      await writeChildTranscript(root, "child-a", toolRecord("Read"));
       const state = makeState([
         { toolUseId: "task-1", agentId: "child-a" },
         { toolUseId: "task-2" },
@@ -198,7 +205,7 @@ describe("Cursor child transcript discovery", () => {
 
   test("skips a launch with no recorded start time", async () => {
     await withTranscriptRoot(async (root) => {
-      await writeChildTranscript(root, "child-a", toolRecord("Read"), LAUNCHED_AT_MS + 10_000);
+      await writeChildTranscript(root, "child-a", toolRecord("Read"));
       const state = makeState([{ toolUseId: "task-1" }]);
       delete (state.messages[0]!.parts[0] as { createdAt?: string }).createdAt;
 
@@ -214,7 +221,6 @@ describe("Cursor child transcript discovery", () => {
         "child-a",
         promptRecord("<timestamp>now</timestamp>\n<user_query>\nAudit the OpenCode surface.\n</user_query>")
           + toolRecord("Read"),
-        LAUNCHED_AT_MS + 10_000,
       );
       const state = makeState([{ toolUseId: "task-1" }]);
 
@@ -242,17 +248,81 @@ describe("Cursor child transcript discovery", () => {
     });
   });
 
+  test("keeps a child claimed by another live session out of discovery", async () => {
+    await withTranscriptRoot(async (root) => {
+      await writeChildTranscript(root, "child-a", toolRecord("Read"));
+      const owner = makeState([{ toolUseId: "owner-task", agentId: "child-a" }]);
+      const contender = makeState([{ toolUseId: "contender-task" }]);
+      const sessionKey = `cursor-discovery-test:${root}`;
+      const previous = sessions.get(sessionKey);
+      sessions.set(sessionKey, owner as unknown as SessionState);
+      try {
+        expect(bindDiscoveredCursorChildren(contender as unknown as SessionState)).toBe(false);
+        expect(contender.activeSubagentDescriptors.get("contender-task")).toEqual({});
+      } finally {
+        if (previous) sessions.set(sessionKey, previous);
+        else sessions.delete(sessionKey);
+      }
+    });
+  });
+
+  test("invalidates the directory cache when a new child appears", async () => {
+    await withTranscriptRoot(async (root) => {
+      await writeChildTranscript(root, "child-a", toolRecord("Read"));
+      expect(discoverCursorChildTranscriptDirectories().map((child) => child.agentId))
+        .toEqual(["child-a"]);
+
+      await writeChildTranscript(root, "child-b", toolRecord("Grep"));
+      // Filesystems have different timestamp granularity. Force a distinct root
+      // mtime so this test targets the cache contract rather than the host clock.
+      const rootStats = await fs.stat(root);
+      await fs.utimes(root, rootStats.atime, new Date(rootStats.mtimeMs + 2_000));
+
+      expect(discoverCursorChildTranscriptDirectories().map((child) => child.agentId))
+        .toEqual(["child-a", "child-b"]);
+    });
+  });
+
+  test("promotes a reported live child id to continuation-safe authority", async () => {
+    await withTranscriptRoot(async (root) => {
+      await writeChildTranscript(root, "child-discovered", toolRecord("Read"));
+      await writeChildTranscript(root, "child-reported", toolRecord("Grep"));
+      const state = makeState([{ toolUseId: "task-1" }]);
+
+      hydrateCursorChildTranscripts(state as unknown as SessionState);
+      expect(state.activeSubagentDescriptors.get("task-1")).toMatchObject({
+        agentId: "child-discovered",
+        agentIdDiscovered: true,
+      });
+
+      const launch = state.messages[0]!.parts[0]!;
+      launch.toolArgs = { ...launch.toolArgs, agentId: "child-reported" };
+      syncActiveSubagentTool(
+        state as unknown as SessionState,
+        launch,
+      );
+
+      expect(state.activeSubagentDescriptors.get("task-1")).toMatchObject({
+        agentId: "child-reported",
+        agentIdDiscovered: false,
+      });
+      expect(listWatchableCursorChildren(
+        state as unknown as SessionState,
+        { includeDiscovered: false },
+      ).map((child) => child.agentId)).toEqual(["child-reported"]);
+    });
+  });
+
   // The inference can pair the wrong directory when a child never writes one.
   // Whatever Cursor eventually reports wins, and the superseded projection goes
   // with it rather than doubling the card's activity.
   test("re-anchors a card when the reported agentId supersedes a discovered one", async () => {
     await withTranscriptRoot(async (root) => {
-      await writeChildTranscript(root, "child-a", toolRecord("Read"), LAUNCHED_AT_MS + 10_000);
+      await writeChildTranscript(root, "child-a", toolRecord("Read"));
       await writeChildTranscript(
         root,
         "child-b",
         `${toolRecord("Grep")}${JSON.stringify({ type: "turn_ended", status: "success" })}\n`,
-        LAUNCHED_AT_MS + 20_000,
       );
       const state = makeState([{ toolUseId: "task-1" }]);
 

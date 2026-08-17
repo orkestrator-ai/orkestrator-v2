@@ -639,6 +639,8 @@ exit 0
       XDG_DATA_HOME: process.env.XDG_DATA_HOME,
       XDG_STATE_HOME: process.env.XDG_STATE_HOME,
       ORKESTRATOR_AGENT_TEST_HOST_HOME: process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME,
+      ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR:
+        process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR,
       CURSOR_API_KEY: process.env.CURSOR_API_KEY,
     };
 
@@ -683,6 +685,7 @@ exit 0
         process.env.XDG_DATA_HOME = xdgDataHome;
         process.env.XDG_STATE_HOME = xdgStateHome;
         process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
+        process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = claudeConfigDir;
         process.env.CURSOR_API_KEY = "agent-test-cursor-key";
 
         await commands.get("provision_environment")?.(

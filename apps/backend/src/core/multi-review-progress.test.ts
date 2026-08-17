@@ -1,0 +1,116 @@
+import { expect, test } from "bun:test";
+import {
+  MultiReviewProgressTracker,
+  noProgressElapsedMs,
+  stalledMinutes,
+} from "./multi-review-progress.js";
+
+function clock(start = 0): { now: () => number; advance: (ms: number) => void } {
+  let value = start;
+  return { now: () => value, advance: (ms: number) => { value += ms; } };
+}
+
+test("the first observation establishes a baseline instead of claiming progress", async () => {
+  const tracker = new MultiReviewProgressTracker(1_000, clock().now);
+
+  // An unseen transcript is not evidence that anything moved. Reporting it as
+  // progress would restart the stall clock on every backend restart, which is
+  // exactly when a wedged session most needs to be noticed.
+  await expect(tracker.observe("session-1", async () => [{ id: "a" }]))
+    .resolves.toEqual({ probed: true, changed: false });
+});
+
+test("a changed transcript is reported once the probe interval has elapsed", async () => {
+  const time = clock();
+  const tracker = new MultiReviewProgressTracker(1_000, time.now);
+  let messages: unknown[] = [{ id: "a" }];
+  const read = async () => messages;
+
+  await tracker.observe("session-1", read);
+  // Inside the interval the transcript is not read at all: the read pulls the
+  // whole transcript, and the supervisor ticks every second.
+  messages = [{ id: "a" }, { id: "b" }];
+  await expect(tracker.observe("session-1", read))
+    .resolves.toEqual({ probed: false, changed: false });
+
+  time.advance(1_000);
+  await expect(tracker.observe("session-1", read))
+    .resolves.toEqual({ probed: true, changed: true });
+
+  time.advance(1_000);
+  await expect(tracker.observe("session-1", read))
+    .resolves.toEqual({ probed: true, changed: false });
+});
+
+test("a rewritten streaming entry counts as progress", async () => {
+  const time = clock();
+  const tracker = new MultiReviewProgressTracker(0, time.now);
+  let messages: unknown[] = [{ id: "a", content: "Read" }];
+  const read = async () => messages;
+
+  await tracker.observe("session-1", read);
+  // Providers grow a transcript by appending and by rewriting the entry that is
+  // currently streaming. Length alone would miss the second case entirely.
+  messages = [{ id: "a", content: "Reading src/a.ts" }];
+  await expect(tracker.observe("session-1", read))
+    .resolves.toEqual({ probed: true, changed: true });
+});
+
+test("a failed transcript read answers nothing learned and keeps the baseline", async () => {
+  const time = clock();
+  const tracker = new MultiReviewProgressTracker(1_000, time.now);
+  const messages = [{ id: "a" }];
+
+  await tracker.observe("session-1", async () => messages);
+  time.advance(1_000);
+  // The caller fails a reviewer on the errors it sees, so a transient read
+  // failure must not reach it — and it is not evidence of a stall either.
+  await expect(tracker.observe("session-1", async () => { throw new Error("bridge down"); }))
+    .resolves.toEqual({ probed: false, changed: false });
+  // The attempt still counts against the throttle, so a bridge refusing reads
+  // is retried on the probe interval rather than on every supervisor tick.
+  await expect(tracker.observe("session-1", async () => { throw new Error("bridge down"); }))
+    .resolves.toEqual({ probed: false, changed: false });
+
+  time.advance(1_000);
+  await expect(tracker.observe("session-1", async () => messages))
+    .resolves.toEqual({ probed: true, changed: false });
+});
+
+test("a read that only ever fails never invents a baseline", async () => {
+  const time = clock();
+  const tracker = new MultiReviewProgressTracker(1_000, time.now);
+
+  await tracker.observe("session-1", async () => { throw new Error("bridge down"); });
+  time.advance(1_000);
+  // The first successful read is still a baseline, not a change: comparing it
+  // against a failure would report progress that was never observed.
+  await expect(tracker.observe("session-1", async () => [{ id: "a" }]))
+    .resolves.toEqual({ probed: true, changed: false });
+});
+
+test("forgetting a session drops its baseline", async () => {
+  const tracker = new MultiReviewProgressTracker(0, clock().now);
+  const read = async () => [{ id: "a" }];
+
+  await tracker.observe("session-1", read);
+  tracker.forget("session-1");
+  await expect(tracker.observe("session-1", read))
+    .resolves.toEqual({ probed: true, changed: false });
+});
+
+test("the stall clock falls back to the start time until progress is seen", () => {
+  const now = Date.parse("2026-08-17T00:30:00.000Z");
+  expect(noProgressElapsedMs(undefined, "2026-08-17T00:00:00.000Z", now)).toBe(30 * 60_000);
+  expect(noProgressElapsedMs("2026-08-17T00:20:00.000Z", "2026-08-17T00:00:00.000Z", now))
+    .toBe(10 * 60_000);
+  // An unusable pair is "no verdict", never "stalled": a missing timestamp must
+  // not abandon a session that may be working.
+  expect(noProgressElapsedMs(undefined, undefined, now)).toBeNull();
+  expect(noProgressElapsedMs("not-a-date", undefined, now)).toBeNull();
+});
+
+test("stalled minutes never round a real stall down to zero", () => {
+  expect(stalledMinutes(1_000)).toBe(1);
+  expect(stalledMinutes(45 * 60_000)).toBe(45);
+});

@@ -36,6 +36,10 @@ export interface MultiReviewReviewer extends MultiReviewModelSelection {
   schemaRepairAttempts?: number;
   schemaRepairPrompt?: string;
   idleResultPolls?: number;
+  /** Last time the supervisor observed this reviewer's transcript change. */
+  progressAt?: string;
+  /** Set once the reviewer has produced no transcript activity for too long. */
+  stalledSince?: string;
   report?: StructuredReviewReport;
   error?: string;
   startedAt?: string;
@@ -53,6 +57,8 @@ export interface MultiReviewReviewerTranscript {
   messages: unknown[];
   report?: StructuredReviewReport;
   error?: string;
+  progressAt?: string;
+  stalledSince?: string;
   startedAt?: string;
   completedAt?: string;
 }
@@ -74,6 +80,10 @@ export interface MultiReviewFixSession extends MultiReviewModelSelection {
   requestIds: string[];
   status: "running" | "idle" | "failed" | "cancelled";
   startedAt: string;
+  /** Last time the supervisor observed this session's transcript change. */
+  progressAt?: string;
+  /** Set once the session has produced no transcript activity for too long. */
+  stalledSince?: string;
   completedAt?: string;
   error?: string;
 }
@@ -202,7 +212,8 @@ function isFixSession(value: unknown): boolean {
   return record(value)
     && hasOnlyKeys(value, [
       "agent", "model", "reasoningEffort", "sessionKey", "providerSessionId",
-      "requestIds", "status", "startedAt", "completedAt", "error",
+      "requestIds", "status", "startedAt", "progressAt", "stalledSince",
+      "completedAt", "error",
     ])
     && isMultiReviewModelSelectionFields(value)
     && nonBlank(value.sessionKey)
@@ -213,6 +224,8 @@ function isFixSession(value: unknown): boolean {
     && ["running", "idle", "failed", "cancelled"].includes(value.status as string)
     && optionalDate(value.startedAt)
     && typeof value.startedAt === "string"
+    && optionalDate(value.progressAt)
+    && optionalDate(value.stalledSince)
     && optionalDate(value.completedAt)
     && optionalString(value.error, 4_096);
 }
@@ -302,7 +315,8 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     && hasOnlyKeys(entry, [
       "agent", "model", "reasoningEffort", "id", "status", "sessionKey",
       "providerSessionId", "requestId", "dispatchState", "idleResultPolls", "report",
-      "schemaRepairAttempts", "schemaRepairPrompt", "error", "startedAt", "completedAt",
+      "schemaRepairAttempts", "schemaRepairPrompt", "error", "progressAt",
+      "stalledSince", "startedAt", "completedAt",
     ])
     && isMultiReviewModelSelectionFields(entry)
     && nonBlank(entry.id)
@@ -315,6 +329,8 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     && optionalString(entry.schemaRepairPrompt, 100_000)
     && optionalPollCount(entry.idleResultPolls)
     && optionalString(entry.error, 4_096)
+    && optionalDate(entry.progressAt)
+    && optionalDate(entry.stalledSince)
     && optionalDate(entry.startedAt)
     && optionalDate(entry.completedAt)
     && (entry.report === undefined || isStructuredReviewReport(entry.report)))) {

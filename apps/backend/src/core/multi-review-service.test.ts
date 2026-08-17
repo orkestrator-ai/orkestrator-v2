@@ -27,7 +27,7 @@ import {
 } from "./build-pipeline-provider.js";
 import { REVIEW_FIX_RESULT_JSON_SCHEMA } from "./looped-review-prompts.js";
 import { StorageService } from "./storage.js";
-import { MultiReviewService } from "./multi-review-service.js";
+import { MultiReviewService, type MultiReviewServiceOptions } from "./multi-review-service.js";
 
 const cleanReport: StructuredReviewReport = {
   reviewScope: { targetBranch: "main", baseRef: "origin/main...HEAD", commit: null,
@@ -64,6 +64,7 @@ class Provider implements BuildPipelineProvider {
    * stays failed until the next turn runs.
    */
   readonly sessionFailures = new Map<string, string>();
+  readonly attached: string[] = [];
   sessions = 0;
   statusValue: ProviderStatus = "idle";
   statusCalls = 0;
@@ -94,6 +95,9 @@ class Provider implements BuildPipelineProvider {
     }
     this.sessions += 1;
     return `session-${this.sessions}`;
+  }
+  async prepareDispatch(sessionId: string) {
+    this.attached.push(sessionId);
   }
   async send(_sessionId: string, prompt: string, options: ProviderSendOptions) {
     this.sends.set(options.requestId, { prompt, options });
@@ -405,7 +409,10 @@ async function withService(
     start: (reviewers?: MultiReviewModelSelection[]) => Promise<MultiReviewWorkflow>;
     snapshot: (workflowId: string) => Promise<MultiReviewWorkflow | undefined>;
   }) => Promise<void>,
-  options: { createProvider?: () => Promise<BuildPipelineProvider> } = {},
+  options: {
+    createProvider?: () => Promise<BuildPipelineProvider>;
+    serviceOptions?: Partial<MultiReviewServiceOptions>;
+  } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), `ork-multi-review-${environmentId}-`));
   const storage = new StorageService(dataDir);
@@ -419,6 +426,7 @@ async function withService(
   const service = new MultiReviewService(storage, async () => { throw new Error("unexpected command"); }, {
     autoAdvance: false,
     provider: options.createProvider ?? (async () => provider),
+    ...options.serviceOptions,
   });
   try {
     await run({
@@ -1576,4 +1584,219 @@ test("MultiReviewService leaves a workflow that is not failed untouched on retry
     expect(provider.aborted).toEqual([]);
     expect((await snapshot(started.id))?.reviewers[0]?.providerSessionId).toBe("session-1");
   });
+});
+
+test("MultiReviewService attaches the agent before it dispatches a reviewer prompt", async () => {
+  const provider = new Provider();
+  await withService("env-attach", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+
+    // The cold spawn is the slowest thing a dispatch can wait on, and time spent
+    // on it inside the request is time the outcome is unknowable. Both supervised
+    // sessions pay it before their at-most-once window opens.
+    expect(provider.attached).toContain("session-1");
+    expect(provider.attached).toContain("session-2");
+  });
+});
+
+test("MultiReviewService keeps reviewing when a reviewer cannot be attached", async () => {
+  const provider = new Provider();
+  provider.prepareDispatch = async () => { throw new Error("bridge is warming up"); };
+  await withService("env-attach-failure", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+
+    // Attach is best-effort: the prompt request performs the same work and is
+    // the one that answers authoritatively.
+    expect((await snapshot(started.id))?.reviewers[0]?.status).toBe("completed");
+  });
+});
+
+test("MultiReviewService consolidates from the reviewers left after one is stopped", async () => {
+  const provider = new Provider();
+  provider.statusValue = "idle";
+  // Reviewer 1 never leaves `running`, which is exactly the wedged-sub-agent
+  // shape: the pass cannot consolidate while any reviewer is still running.
+  provider.statusOverrides.set("session-1", "running");
+  await withService("env-stop-reviewer", provider, async ({ service, start, snapshot }) => {
+    const started = await start([
+      { agent: "claude", model: "opus" },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.reviewers[1]?.status === "completed";
+    });
+    await service.advanceNow(started.id);
+    const halted = (await snapshot(started.id))!;
+    expect(halted.phase).toBe("reviewing");
+    expect(halted.reviewers[0]?.status).toBe("running");
+
+    const stopped = await service.stopReviewer(started.id, halted.reviewers[0]!.id);
+    expect(stopped.reviewers[0]).toMatchObject({
+      status: "cancelled",
+      // The session id survives so the read-only transcript stays reachable.
+      providerSessionId: "session-1",
+    });
+    expect(stopped.reviewers[0]?.error).toBeUndefined();
+    expect(provider.aborted).toContain("session-1");
+
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+    const ready = (await snapshot(started.id))!;
+    expect(ready.consolidatedReport).toBeDefined();
+    // Only the reviewer that finished may reach the fix model.
+    const consolidation = [...provider.sends.values()]
+      .find((sent) => sent.prompt.includes("<multi-review-reports-json>"))!;
+    expect(consolidation.prompt).toContain(ready.reviewers[1]!.id);
+    expect(consolidation.prompt).not.toContain(ready.reviewers[0]!.id);
+  });
+});
+
+test("MultiReviewService leaves a settled reviewer alone when it is stopped", async () => {
+  const provider = new Provider();
+  await withService("env-stop-settled", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.reviewers[0]?.status === "completed";
+    });
+    const completed = (await snapshot(started.id))!.reviewers[0]!;
+
+    // A double click, or a reviewer that settled between the render and the
+    // command, must not rewrite a finished result or abort a reused session.
+    const stopped = await service.stopReviewer(started.id, completed.id);
+    expect(stopped.reviewers[0]).toMatchObject({
+      status: "completed",
+      completedAt: completed.completedAt,
+    });
+    expect(stopped.reviewers[0]?.report).toBeDefined();
+    expect(provider.aborted).toEqual([]);
+
+    await expect(service.stopReviewer(started.id, "not-a-reviewer"))
+      .rejects.toThrow("Multi review reviewer not found");
+  });
+});
+
+test("MultiReviewService reports a fully stopped panel as stopped, not as a bad report", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  await withService("env-stop-all", provider, async ({ service, start, snapshot }) => {
+    const started = await start([
+      { agent: "claude", model: "opus" },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.reviewers.every(
+        (reviewer) => reviewer.status === "running",
+      ) === true;
+    });
+    const running = (await snapshot(started.id))!;
+    for (const reviewer of running.reviewers) {
+      await service.stopReviewer(started.id, reviewer.id);
+    }
+
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "failed";
+    });
+    const failed = (await snapshot(started.id))!;
+    // A stopped reviewer carries no error, so without the stopped count this
+    // would read as "the models failed to produce a report".
+    expect(failed.error).toContain("2 reviewers were stopped");
+
+    // Retrying a panel that was stopped in full means running it again: the
+    // consolidation branch would otherwise merge an empty set of reports.
+    const retried = await service.retry(started.id);
+    expect(retried.phase).toBe("reviewing");
+    expect(retried.reviewers.map((reviewer) => reviewer.status)).toEqual(["pending", "pending"]);
+    expect(retried.consolidatedReport).toBeUndefined();
+  });
+});
+
+test("MultiReviewService abandons a reviewer whose transcript stopped moving", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Reading" }];
+  await withService("env-stall-abandon", provider, async ({ service, start, snapshot }) => {
+    const started = await start([
+      { agent: "claude", model: "opus" },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      const reviewers = (await snapshot(started.id))?.reviewers ?? [];
+      return reviewers.length > 0 && reviewers.every((reviewer) => reviewer.status === "failed");
+    });
+
+    const failed = (await snapshot(started.id))!;
+    expect(failed.reviewers[0]?.error).toContain("produced no activity");
+    // The session is aborted on the way out: a turn nothing can reach again must
+    // not keep running through consolidation and the fix stage.
+    expect(provider.aborted).toContain("session-1");
+    expect(provider.aborted).toContain("session-2");
+    expect(failed.phase).toBe("failed");
+  }, { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 0 } });
+});
+
+test("MultiReviewService warns about a stalled reviewer and retires the warning on progress", async () => {
+  const provider = new Provider(false);
+  provider.statusValue = "running";
+  provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Reading" }];
+  await withService("env-stall-warning", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.reviewers[0]?.stalledSince !== undefined;
+    });
+    expect((await snapshot(started.id))?.reviewers[0]?.status).toBe("running");
+
+    // Bridges stream sub-agent activity into the parent transcript, so a long
+    // turn that is genuinely working keeps moving and must lose the warning.
+    provider.messagesValue = [
+      ...provider.messagesValue,
+      { id: "assistant-2", role: "assistant", content: "Read src/a.ts" },
+    ];
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.reviewers[0]?.stalledSince === undefined;
+    });
+    expect((await snapshot(started.id))?.reviewers[0]?.progressAt).toBeDefined();
+  }, {
+    serviceOptions: {
+      progressProbeIntervalMs: 0,
+      stallWarningMs: 0,
+      stallAbandonMs: 60 * 60_000,
+    },
+  });
+});
+
+test("MultiReviewService fails a consolidation session whose transcript stopped moving", async () => {
+  const provider = new Provider();
+  provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Merging" }];
+  // The reviewer (session-1) settles normally; only the consolidation session
+  // wedges. Session ids are allocated in order, so this arms the second one
+  // before the pass can create it.
+  provider.statusOverrides.set("session-2", "running");
+  await withService("env-stall-consolidation", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "failed";
+    });
+    const failed = (await snapshot(started.id))!;
+    expect(failed.error).toContain("consolidation session produced no activity");
+    expect(failed.fixSession?.status).toBe("failed");
+    expect(provider.aborted).toContain("session-2");
+  }, { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 0 } });
 });

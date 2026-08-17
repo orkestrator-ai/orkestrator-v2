@@ -596,6 +596,12 @@ function isExplicitSubagentFailureEvent(eventType: string | undefined): boolean 
     || eventType === "task_error"
     || eventType === "task_aborted"
     || eventType === "task_cancelled"
+    // An interrupted child writes `turn_aborted`, *not* `task_aborted`, and that
+    // record is the only terminal marker its rollout ever gets. Omitting it left
+    // the row pending forever, because the parent-side snapshot cannot be relied
+    // on to name an interrupted child either (see `applyCodexCollabStateToSubagentParts`).
+    // A follow-up on the same thread still reopens the row through `markPending`.
+    || eventType === "turn_aborted"
   );
 }
 
@@ -646,6 +652,8 @@ function parseChildTranscript(
     state = terminalState;
     sawTerminalState = true;
   };
+  /** Read through a closure: the loop's control flow cannot narrow `state`. */
+  const settledSuccessfully = (): boolean => state === "success";
 
   for (const record of records) {
     const payload = record.payload;
@@ -679,9 +687,22 @@ function parseChildTranscript(
       continue;
     }
 
-    if (record.type === "event_msg" && isExplicitSubagentFailureEvent(asString(payload.type))) {
-      markTerminal("failure");
-      continue;
+    if (record.type === "event_msg") {
+      const eventType = asString(payload.type);
+      if (isExplicitSubagentFailureEvent(eventType)) {
+        // `turn_aborted` is the weakest of these events: it names the cancelled
+        // turn, not the agent, and an interrupt aimed at a child that already
+        // finished is a no-op. Every real turn writes `turn_context`,
+        // `task_started` or `user_message` first, all of which reopen the row,
+        // so an abort with nothing between it and a terminal success describes
+        // no turn this child ever ran and must not repaint that outcome. Mirrors
+        // `preserveTerminalState` in `applyCodexCollabStateToSubagentParts`. The
+        // `task_*` events name the agent's own task and stay unconditional.
+        if (eventType !== "turn_aborted" || !settledSuccessfully()) {
+          markTerminal("failure");
+        }
+        continue;
+      }
     }
 
     if (record.type === "event_msg" && payload.type === "agent_message") {

@@ -2,24 +2,10 @@ import * as React from "react"
 import * as SelectPrimitive from "@radix-ui/react-select"
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react"
 
+import { OverlayPortalLayer, useOverlayPortalLayer } from "@/components/ui/overlay-portal-layer"
 import { cn } from "@/lib/utils"
 
-const SelectPortalLayerContext = React.createContext<string | undefined>(undefined)
-
-function SelectPortalLayer({
-  className,
-  children,
-}: {
-  className: string
-  children: React.ReactNode
-}) {
-  const parentClassName = React.useContext(SelectPortalLayerContext)
-  return (
-    <SelectPortalLayerContext.Provider value={cn(parentClassName, className)}>
-      {children}
-    </SelectPortalLayerContext.Provider>
-  )
-}
+const SelectPortalLayer = OverlayPortalLayer
 
 function Select({
   ...props
@@ -72,7 +58,7 @@ function SelectContent({
   align = "center",
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
-  const portalLayerClassName = React.useContext(SelectPortalLayerContext)
+  const portalLayerClassName = useOverlayPortalLayer()
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content

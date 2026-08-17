@@ -2,6 +2,12 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { FullscreenSettingsLayout } from "./FullscreenSettingsLayout";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -113,6 +119,31 @@ describe("FullscreenSettingsLayout", () => {
 
     fireEvent.click(option);
     expect(onValueChange).toHaveBeenCalledWith("two");
+  });
+
+  test("raises descendant dropdown menus above the fullscreen surface", () => {
+    const onSelect = mock(() => undefined);
+    render(
+      <FullscreenSettingsLayout open onOpenChange={() => undefined} title="Settings" menuItems={menuItems}>
+        {() => (
+          <DropdownMenu>
+            <DropdownMenuTrigger aria-label="Nested dropdown">Open</DropdownMenuTrigger>
+            <DropdownMenuContent>
+              <DropdownMenuItem onSelect={onSelect}>Haiku</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </FullscreenSettingsLayout>,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Nested dropdown" }));
+    const item = screen.getByRole("menuitem", { name: "Haiku" });
+    const menu = item.closest('[data-slot="dropdown-menu-content"]');
+    expect(menu?.className).toContain("z-[70]");
+    expect(menu?.className).not.toContain("z-50");
+
+    fireEvent.click(item);
+    expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
   test("uses Escape to close the mobile selector before closing settings", () => {

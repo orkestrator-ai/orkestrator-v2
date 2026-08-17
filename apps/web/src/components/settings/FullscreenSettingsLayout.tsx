@@ -2,11 +2,11 @@ import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { OverlayPortalLayer } from "@/components/ui/overlay-portal-layer";
 import {
   Select,
   SelectContent,
   SelectItem,
-  SelectPortalLayer,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -67,7 +67,7 @@ export function FullscreenSettingsLayout({
   const activeMenuItem = menuItems.find((item) => item.id === activeSection);
 
   const settingsLayout = (
-    <SelectPortalLayer className={Z_FULLSCREEN_POPOVER}>
+    <OverlayPortalLayer className={Z_FULLSCREEN_POPOVER}>
       <div
         role="dialog"
         aria-modal="true"
@@ -162,7 +162,7 @@ export function FullscreenSettingsLayout({
           </div>
         </div>
       </div>
-    </SelectPortalLayer>
+    </OverlayPortalLayer>
   );
 
   // Action dialogs can be opened from transformed popovers. Portaling keeps this

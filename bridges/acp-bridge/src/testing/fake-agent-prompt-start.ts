@@ -1125,6 +1125,57 @@ export function handlePromptStart(message: JsonObject): boolean {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return true;
     }
+    // Real foreground order, from `cursor-agent` 2026.08.11-e8db854: the launch
+    // tool spans the child's whole life, so the completed update lands *first*
+    // and `cursor/task` — the only frame naming the child — arrives after the
+    // card has already settled. It carries no `sessionId`, as the live agent's
+    // payload does not.
+    if (prompt.startsWith("CURSORFOREGROUNDTASK")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "cursor-foreground-task-1",
+            title: "Task: Subagent task",
+            kind: "other",
+            status: "in_progress",
+            rawInput: { _toolName: "task" },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "cursor-foreground-task-1",
+            status: "completed",
+            rawOutput: { durationMs: 291_849, isBackground: false },
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        id: 904,
+        method: "cursor/task",
+        params: {
+          toolCallId: "cursor-foreground-task-1",
+          description: "Audit the OpenCode surface",
+          prompt: "Inventory every OpenCode capability and cite file:line evidence.",
+          subagentType: "explore",
+          model: "composer-2.5",
+          agentId: "fg-child-1",
+          durationMs: 291_849,
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return true;
+    }
     if (prompt.startsWith("CURSORTASK")) {
       write({
         jsonrpc: "2.0",

@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
   MAX_ACTIVE_SUBAGENTS_PER_SESSION,
+  MAX_CURSOR_CHILD_PROMPT_BYTES,
   MAX_MESSAGES,
   MAX_PARTS_PER_MESSAGE,
   MAX_CURSOR_TOOL_REPLAY_PROCESSES,
@@ -854,6 +855,43 @@ export function acpSubagentState(
   return source.agentState;
 }
 
+/**
+ * The render state for a part, rebuilt from the part itself when this process
+ * never saw the frames that produced it (a restored transcript, or a vendor
+ * frame arriving before any update for that call).
+ */
+export function ensureAcpToolSource(part: BridgeToolPart): AcpToolSourceState {
+  const existing = acpToolSourceStates.get(part);
+  if (existing) return existing;
+  const source: AcpToolSourceState = {
+    title: part.toolTitle,
+    explicitName: part.toolName,
+    toolArgs: part.toolArgs,
+    toolState: part.toolState,
+    agentState: part.agentState,
+    rawOutput: part.toolOutput,
+    contentDiffs: part.toolDiff ? [part.toolDiff] : [],
+  };
+  acpToolSourceStates.set(part, source);
+  return source;
+}
+
+/**
+ * Stand-in prompt for a Task Cursor has not described yet, recovered from the
+ * child's own transcript. It goes to `cursorTask` rather than the part so a
+ * later `rawInput` patch cannot wipe it and the real `cursor/task` prompt,
+ * when it arrives, replaces it.
+ */
+export function recordCursorTaskPrompt(part: BridgeToolPart, prompt: string): boolean {
+  const bounded = truncateUtf8(prompt.trim(), MAX_CURSOR_CHILD_PROMPT_BYTES);
+  if (!bounded) return false;
+  const source = ensureAcpToolSource(part);
+  if (source.cursorTask?.prompt) return false;
+  source.cursorTask = { ...(source.cursorTask ?? {}), prompt: bounded };
+  renderAcpToolSource(part, source);
+  return true;
+}
+
 /** Cursor Task `agentId`, from `cursor/task` args or the launch `rawOutput`. */
 export function toolPartAgentId(part: BridgeToolPart): string | undefined {
   if (typeof part.toolArgs?.agentId === "string") {
@@ -883,7 +921,10 @@ export function syncActiveSubagentTool(state: SessionState, part: BridgeToolPart
         ? { subagentType: truncateUtf8(part.toolArgs.subagent_type.trim(), MAX_TOOL_NAME_BYTES) }
         : {}),
       ...(part.toolState ? { toolState: part.toolState } : {}),
-      ...(agentId ? { agentId } : {}),
+      // An id rendered on the tool part came from Cursor's own payload, not
+      // transcript-directory inference. Clear the weaker provenance so the
+      // background continuation waiter can trust the now-authoritative id.
+      ...(agentId ? { agentId, agentIdDiscovered: false } : {}),
     });
     if (!activated) {
       part.agentState = "failed";
@@ -1512,26 +1553,22 @@ export function applyCursorTask(state: SessionState, params: JsonObject): void {
     found = { owner, part };
   } else if (
     !state.activeSubagentToolIds.has(toolCallId)
-    && found.part.agentState !== "active"
+    && found.part.agentState === undefined
     && (agentState || isProgress)
   ) {
+    // Only a call that was never a sub-agent launch is rejected here. "Already
+    // settled" cannot be the test: Cursor sends this frame *after* the tool
+    // call update that completes the launch, so a foreground Task — where the
+    // tool spans the child's whole life — is always finished by the time its
+    // description, prompt and `agentId` arrive. Dropping those left the card
+    // permanently anonymous and, with no `agentId`, unable to find the
+    // transcript the child had already written. The settled state itself is
+    // still protected: the terminal check below refuses to reopen or reverse it.
     return;
   }
 
   const { part } = found;
-  let source = acpToolSourceStates.get(part);
-  if (!source) {
-    source = {
-      title: part.toolTitle,
-      explicitName: part.toolName,
-      toolArgs: part.toolArgs,
-      toolState: part.toolState,
-      agentState: part.agentState,
-      rawOutput: part.toolOutput,
-      contentDiffs: part.toolDiff ? [part.toolDiff] : [],
-    };
-    acpToolSourceStates.set(part, source);
-  }
+  const source = ensureAcpToolSource(part);
   source.cursorTask = {
     ...(source.cursorTask ?? {}),
     ...(description ? { description } : {}),

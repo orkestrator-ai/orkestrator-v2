@@ -170,6 +170,13 @@ export interface ActiveSubagentDescriptor {
    * `subagent_id` instead.
    */
   agentId?: string;
+  /**
+   * True when `agentId` was inferred from a transcript directory rather than
+   * reported by `cursor/task`. Good enough to project the child's activity into
+   * its card, deliberately *not* good enough to hold a parent turn open: a
+   * mis-inferred id would block `session/prompt` for the whole wait budget.
+   */
+  agentIdDiscovered?: boolean;
 }
 
 export interface SessionState {
@@ -496,6 +503,24 @@ export const MAX_CURSOR_CHILD_RESULT_BYTES = 64 * 1024;
 export const MAX_CURSOR_CHILD_PARTS = 64;
 export const MAX_CURSOR_TRANSCRIPT_HYDRATE_CHILDREN = 8;
 export const CURSOR_JSONL_SOURCE_PREFIX = "cursor-jsonl:";
+/**
+ * Cap on the transcript-root entries one discovery scan will stat. The scan is
+ * gated on the root's mtime, so it runs when a child appears rather than per
+ * poll, but a project with more children than this stops yielding new
+ * candidates rather than growing an unbounded syscall pass.
+ */
+export const MAX_CURSOR_DISCOVERY_ENTRIES = 4_096;
+/**
+ * How far *before* a Task tool call a transcript directory may have been
+ * created and still be considered that call's child. Cursor writes the
+ * directory seconds after the call, so this only absorbs filesystem timestamp
+ * granularity — it is not a matching window.
+ */
+export const CURSOR_CHILD_DISCOVERY_SKEW_MS = 5_000;
+/** Prompt recovered from a child's own transcript when Cursor reported none. */
+export const MAX_CURSOR_CHILD_PROMPT_BYTES = 4 * 1024;
+/** Leading records of a child transcript scanned for that prompt. */
+export const MAX_CURSOR_CHILD_PROMPT_RECORDS = 8;
 export const CURSOR_BACKGROUND_CONTINUATION_PREFIX = "Background subagent finished.";
 export const RESOURCE_EXHAUSTED_MAX_RETRIES = 3;
 export const RESOURCE_EXHAUSTED_RETRY_BASE_MS = parseDuration(

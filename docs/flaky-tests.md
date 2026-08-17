@@ -10,6 +10,45 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## Root-suite 5000 ms timeout cluster (`tests/unit/electron/`, `tests/unit/test-diagnostic-bounds.test.ts`)
+
+Three tests failed together in one root-suite run, and three further runs each
+failed a different subset. They are recorded as one entry because the evidence
+points at a single shared cause — starvation against a fixed 5000 ms deadline —
+rather than independent defects. Every owning file passes alone, and the failing
+set is not stable between runs, which is the signature this registry already
+records for the `tmux-backend.test.ts` and `standalone.test.ts` clusters below.
+
+- **Status:** open
+- **Date observed:** 2026-08-17
+- **Original command:** `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4`
+- **Worker configuration:** `--parallel=4` (which implies `--isolate`). Run concurrently with a second `bun test --test-worker` fleet from another worktree on the same host; load average during the run was 18.67 / 27.53 / 21.07.
+- **Suite counts:** 3,733 passed, 1 skipped, 3 failed, 2 non-fatal between-test errors; 179 files in 341.4 s (exit 1).
+- **Failures:**
+  - `remote gateway > keeps a slow but progressing proxy body alive past the idle timeout` (`tests/unit/electron/gateway-proxy.test.ts:674`) — `expect(received).toBe(expected)`, expected `200`, received `502`.
+  - `remote gateway > serializes invoke results once and keeps command metrics private and bounded` (`tests/unit/electron/gateway-support-extra.test.ts`) — timed out after 5000 ms (5034.33 ms), with an unhandled `ECONNREFUSED` between tests.
+  - `Electron backend command registry > clears a stale failure only once the stop has actually committed` (`tests/unit/electron/commands-registry-environments.test.ts:3892`) — expected a promise that resolves, received one that rejected; timed out after 5000 ms (5002.20 ms).
+- **Isolated reruns:** `bun test tests/unit/electron/gateway-proxy.test.ts` → passed, exit 0, 1.7 s. `bun test tests/unit/electron/gateway-support-extra.test.ts` → passed, exit 0, 2.1 s. `bun test tests/unit/electron/commands-registry-environments.test.ts` → also failed alone, but on **two different tests** than the aggregate run; all three originally-failing tests passed when selected individually with `-t`.
+- **Recurrence (2026-08-17, same day):** Three further `bun test ./tests --parallel=4` runs on an otherwise idle host, each failing a **different** subset of 5000 ms-deadline tests:
+  - Run 1 — none of this cluster failed.
+  - Run 2 — `remote gateway > serializes invoke results once and keeps command metrics private and bounded` (5059.89 ms). 3,741 passed, 1 skipped, 1 failed, 179 files, 244.2 s. Isolated rerun of `gateway-support-extra.test.ts` → 23 passed, 0 failed, in **1.03 s**.
+  - Run 3 — `bounded test diagnostics > never passes a DOM-producing query result directly to toBeNull` (`tests/unit/test-diagnostic-bounds.test.ts`, 5011.17 ms) and `Electron backend command registry > rejects malformed container status framing and invalid encoded sections` (`tests/unit/electron/commands-registry-environments.test.ts`, 5006.02 ms). 3,740 passed, 1 skipped, 2 failed, 361.4 s. Both owning files passed alone: 12 passed in 2.18 s, and 114 passed in 43.40 s.
+- **Widened scope:** run 3 shows the cluster is not confined to the gateway and command-registry files. `test-diagnostic-bounds.test.ts` walks every test file in the repository and needs 2.18 s even alone, so it sits close to the 5000 ms deadline before any contention is added; it is the clearest example of a deadline that is too tight for the work rather than a test that hangs. A test needing 1–2 s alone but exceeding 5 s under `--parallel=4` is being starved.
+- **Hypothesis:** All three are fixed-deadline (5000 ms) assertions in files that spawn child processes and bind loopback ports. Under the observed load they lose the CPU long enough to cross the deadline, and the gateway proxy's `502` is the same starvation surfacing as an upstream connect failure rather than a timeout. The `commands-registry-environments.test.ts` file failing on a *different* pair of tests in isolation is the strongest evidence that the deadline, not any one test's logic, is what is being hit. A fix should replace the fixed deadlines in these three files with progress-based waits, or raise them proportionally to detected host load; do not simply widen the constant, which moves the threshold without removing the race.
+- **Not attributable to the change under review:** the diff that surfaced this (`packages/protocol/src/action-defaults.ts` and the settings/toolbar wiring) touches none of these files or the code they exercise.
+
+## `live session read paths > denies an oversized blocking hook without broadcasting truncated approval data` (`tests/unit/electron/tmux-session.test.ts:1166`)
+
+- **Status:** open
+- **Date observed:** 2026-08-16
+- **Original command:** `bun run test:logged -- --name full-tests -- bun run test`
+- **Worker configuration:** `scripts/test-all.ts` ran the workspace, root/agent-support, bridges, and protocol-lockfile groups concurrently; the failure was in the root/agent-support group.
+- **Failure:** `expect(existsSync(pending)).toBe(false)` received `true` at `tmux-session.test.ts:1166` (duration: 606.40 ms). The oversized approval was correctly denied — the emitted hook response carried `permissionDecision: "deny"` — but the pending approval file had not yet been removed when the assertion ran.
+- **Suite counts:** 3,741 passed, 1 skipped, 1 failed; 3,743 tests across 181 files in 95.69 s.
+- **Isolated rerun:** `bun test tests/unit/electron/tmux-session.test.ts` → 69 passed, 0 failed, in 25.36 s.
+- **Follow-up:** Five further complete aggregate runs (`bun run test`) passed, at 94.5 s, 86.6 s, and three more; the failure has not recurred.
+- **Hypothesis:** The assertion checks the pending-approval file synchronously right after the deny response is observed, but the file removal is a separate filesystem write on the tmux hook path. Under aggregate contention the removal can land after the response. A recurrence should poll for the file's absence with a bounded diagnostic rather than asserting it in the same tick as the response, and should first confirm that the removal is genuinely ordered after the response rather than racing it in production.
+
 ## `ACP bridge > quarantines an unusable state file instead of refusing to start` (`bridges/acp-bridge/src/acp-persistence.test.ts:448`)
 
 - **Status:** open
@@ -1466,36 +1505,46 @@ Post-fix stress verification:
   failing path touches the transcript, agent cards, or background tasks, which
   are the only areas the change that observed this touched.
 
-## `Electron backend command registry > rejects malformed container status framing and invalid encoded sections` (`tests/unit/electron/commands-registry-terminal.test.ts:1408`)
+## Electron command-registry fixture-shim timeouts (four tests, three files)
 
 - **Status:** open
 - **Date observed:** 2026-08-17
-- **Original command:**
-  `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures`,
-  at `55539f08ac3dcb3b4b9e18e522f881e9992f9057` on `unify-agent-components`.
-- **Worker configuration:** four Bun workers on the root suite alone, not under
-  `scripts/test-all.ts`. Two other suites (bridges, web) were run back to back in
-  the same session, so host load was above a quiet single-suite run.
-- **Failure:** two symptoms from one case. The assertion at
-  `commands-registry-terminal.test.ts:1418` reported
-  `expect(received).toThrow(expected)` — expected substring `"Malformed"`,
-  received `Command failed: docker exec container-1 bash -lc …` (the git-status
-  script echoed back) — and the case then timed out after 5000 ms (5019.09 ms).
-  The suite's additional `# Unhandled error between tests` is the same case, not
-  a second failure.
-- **Suite counts:** `3727 pass, 1 skip, 1 fail, 1 error. Ran 3729 tests across 178 files. [379.1s]`
-- **Isolated rerun:** `bun run test:logged -- --name root-terminal-isolated -- bun test tests/unit/electron/commands-registry-terminal.test.ts`
-  → exit 0 in 31.7 s. The same aggregate command passed at the follow-up commit
-  in the same session (79.6 s, exit 0).
-- **Hypothesis:** the case exercises a rejection path whose fake `docker exec`
-  resolves through a queued command stub, and it asserts on the rejection
-  synchronously inside a 5 s per-test budget. The received message is the
-  *unrejected* command failure rather than the framing error, which suggests the
-  stub answering a different queued invocation than the one under test — an
-  ordering dependency between queued fakes rather than plain slowness, since the
-  isolated file takes 31.7 s in total and no single case approaches 5 s there. A
-  recurrence should record which stubbed command actually answered before the
-  per-test timeout is raised; raising it would hide the ordering bug rather than
-  fix it. Nothing in the failing path touches the transcript, agent cards, or
-  background tasks, which are the only areas the change that observed this
-  touched.
+- **Tests:**
+  - `Electron backend command registry > rolls back a local rename when push configuration fails` (`tests/unit/electron/commands-registry-environments.test.ts:1667`, assertion at `:1672`)
+  - `Electron backend command registry > advances the stored branch when a local rollback fails and the new branch is the only one left` (`tests/unit/electron/commands-registry-environments.test.ts:1709`, assertion at `:1717`)
+  - `Electron backend command registry > rejects malformed container status framing and invalid encoded sections` (`tests/unit/electron/commands-registry-terminal.test.ts:1408`, assertion at `:1418`)
+  - `Electron backend command registry > treats empty, null, and non-boolean draft output as non-draft` (`tests/unit/electron/commands-registry-pr.test.ts:634`, assertion at `:650`)
+- **Original command:** `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures`, at `19a1001123b16a89e2a09324a0033ae9b26eb74f` on `agent-jsonl-acp`.
+- **Worker configuration:** The root group ran on its own with `--parallel=4`, not under `scripts/test-all.ts`. No other suite was running against this clone.
+- **Failure:** all four are Bun's generic `this test timed out after 5000ms`, at 5,004.99 ms, 5,004.18 ms, 5,002.52 ms and 5,017.16 ms respectively. Each is accompanied by an "Unhandled error between tests" block showing its fixture shim was already gone when the command finally ran:
+  - the two environments cases logged `[ElectronBackend] Failed to rename local git branch: CommandFailedError: Command failed: git -C /var/folders/.../ork-electron-rename-repo-<suffix> branch -m -- old-branch review-oauth-flow`, then a post-timeout `git ... branch --show-current` against a temp repo directory that had already been torn down;
+  - the terminal case reported `expect(received).toThrow(expected)`, expected substring `"Malformed"`, received `"Command failed: docker exec container-1 bash -lc ..."` (the full `get_git_status` script), i.e. the fake `docker` shim was no longer on `PATH`;
+  - the PR case reported `Expected promise that resolves / Received promise that rejected` at `commands-registry-pr.test.ts:650`, inside `withFakeGh` (`tests/unit/electron/command-fixtures.ts:1212`).
+- **Suite counts:** 3,724 passed, 1 skipped, 4 failed, 4 errors, 16,581 `expect()` calls; 3,729 tests across 178 files in 361.24 seconds. The four errors are the four "Unhandled error between tests" blocks above. The bridges group and the web, backend, desktop and acp-bridge typechecks all passed in the same validation round.
+- **Isolated rerun:** each owning file passed alone — `bun run test:logged -- --name rerun-env-alone -- bun test tests/unit/electron/commands-registry-environments.test.ts` -> exit 0 in 34.4 s; `... commands-registry-terminal.test.ts` -> exit 0 in 28.7 s; `... commands-registry-pr.test.ts` -> exit 0 in 34.8 s.
+- **Follow-up:** the identical whole-group command passed on a rerun later the same day, exit 0 in 161.9 s — under half the failing run's 361.24 s. The wall-clock gap is the useful part of that observation: the failing run was roughly 2.2x slower overall, which is consistent with host contention rather than with anything specific to these four cases.
+- **Related:** the "Command-registry Git fixture, deduplicated/admitted container starts, and process-launch coverage" row of the 2026-08-16 resolution sweep. That sweep raised the shared condition deadline to 10 s and gave several cases explicit budgets precisely because the shared helper's deadline had grown past Bun's 5 s default. These four cases wait on real `git`/`docker`/`gh` shims but carry **no** `ASYNC_TEST_BUDGET_MS`, so Bun's 5 s default still wins and reports a generic timeout instead of naming the condition.
+- **Hypothesis:** Same family as that sweep row rather than a new product defect — the change in flight touched only `bridges/acp-bridge`, which none of these files load. Under `--parallel=4` the real `git`/`docker`/`gh` shim processes under `$TMPDIR` are slow enough to exceed the 5 s outer budget; the timeout then interrupts the case mid-flight and its `finally` tears the shim down, which is what produces the trailing "command failed"/"promise rejected" errors *after* the timeout rather than before it. The log also shows repeated "killed 1 dangling process" lines around them. A recurrence should record how long the shim command actually took before any budget is raised: give each of the four an explicit `ASYNC_TEST_BUDGET_MS` so the named condition wins the race and the real latency is visible, rather than widening a tolerance against a generic timeout.
+- **Recurrence (terminal case only), 2026-08-17:** `rejects malformed container
+  status framing and invalid encoded sections` failed alone under
+  `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures`
+  at `55539f08ac3dcb3b4b9e18e522f881e9992f9057` on `unify-agent-components`, four
+  Bun workers on the root suite alone, with the bridges and web suites run back
+  to back in the same session. Same two symptoms as above in the same order —
+  `expect(received).toThrow(expected)` at `:1418`, expected substring
+  `"Malformed"`, received `Command failed: docker exec container-1 bash -lc …`
+  (the git-status script echoed back), then a 5,019.09 ms timeout and one
+  trailing "Unhandled error between tests" for the same case. Suite counts:
+  `3727 pass, 1 skip, 1 fail, 1 error. Ran 3729 tests across 178 files. [379.1s]`
+  — again roughly 2.2x the passing run's wall clock. Isolated rerun
+  `bun run test:logged -- --name root-terminal-isolated -- bun test tests/unit/electron/commands-registry-terminal.test.ts`
+  → exit 0 in 31.7 s, and the same aggregate command passed at the follow-up
+  commit in the same session (79.6 s, exit 0). The change in flight touched only
+  the chat transcript, agent cards and background tasks, none of which this path
+  loads. One alternative worth ruling out when the measurement above is taken:
+  the received message is the *unrejected* command failure rather than the
+  framing error, which would also fit the queued `docker` stub answering a
+  different invocation than the one under test — an ordering dependency between
+  queued fakes rather than plain shim latency. The isolated file takes 31.7 s in
+  total with no single case near 5 s, so recording which stubbed command actually
+  answered distinguishes the two before any budget is raised.

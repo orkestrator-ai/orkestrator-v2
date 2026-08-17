@@ -194,7 +194,9 @@ export async function dispatchAcpPrompt(
     retryStillOwned(state, child, promptSequence)
     && continuations < MAX_CURSOR_BACKGROUND_CONTINUATIONS
   ) {
-    const watchable = listWatchableCursorChildren(state);
+    // Only children Cursor itself named. An inferred binding is good enough to
+    // show activity in a card; it is not good enough to hold this turn open.
+    const watchable = listWatchableCursorChildren(state, { includeDiscovered: false });
     if (watchable.length === 0) return result;
 
     const wait = abortWhenPromptLost(state, child, promptSequence);

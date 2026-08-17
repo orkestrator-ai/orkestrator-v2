@@ -19,6 +19,7 @@ import type {
   DefaultAgent,
   DomainTestResult,
   GatewayTokenSettings,
+  GlobalConfig,
   OpenCodeMode,
   PreferredEditor,
   TerminalAppearance,
@@ -32,6 +33,10 @@ import {
 import {
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
+import {
+  normalizeActionDefaults,
+  type ActionDefaults,
+} from "@orkestrator/protocol/action-defaults";
 import {
   normalizeOpenCodeModelProviders,
 } from "@orkestrator/protocol/native-agent";
@@ -47,6 +52,49 @@ function getSavedReviewInstruction(value: unknown): string {
   return typeof value === "string" && getReviewInstructionValidationError(value) === null
     ? value
     : DEFAULT_REVIEW_INSTRUCTION;
+}
+
+/**
+ * Exactly the persisted values this form syncs itself from.
+ *
+ * The config store replaces `config.global` on every write, including writes
+ * this form does not own — the Defaults pane's favourite star and drag-reorder
+ * persist `favoriteModels` optimistically while the user is still editing.
+ * Re-syncing on object identity alone would discard those in-progress edits
+ * with no indication and leave Save Changes disabled, so the sync is keyed on
+ * the values instead. Any field the sync effect below reads belongs here.
+ */
+function globalFormSignature(global: GlobalConfig): string {
+  return JSON.stringify([
+    global.containerResources.cpuCores,
+    global.containerResources.memoryGb,
+    global.envFilePatterns,
+    global.useHostGitHubCredentials ?? true,
+    global.useHostClaudeCredentials ?? true,
+    global.allowedDomains ?? [],
+    global.preferredEditor ?? "vscode",
+    global.defaultAgent ?? "claude",
+    global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
+    global.opencodeModel ?? "",
+    global.opencodeMode ?? "",
+    normalizeOpenCodeModelProviders(global.openCodeModelProviders),
+    global.claudeMode ?? "",
+    global.claudeNativeBackend ?? "",
+    global.claudeNativeFastModeDefault ?? false,
+    global.codexMode ?? "",
+    global.codexNativeFastModeDefault ?? false,
+    global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
+    global.terminalAppearance?.fontFamily ?? "",
+    global.terminalAppearance?.fontSize ?? 0,
+    global.terminalAppearance?.backgroundColor ?? "",
+    global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK,
+    global.experimentalCodexRawEventLogging ?? true,
+    global.debugLogging ?? false,
+    global.webClientEnabled ?? true,
+    getSavedReviewInstruction(global.reviewInstruction),
+    // Canonical key order, so an edit that only reorders keys is not a change.
+    normalizeActionDefaults(global.actionDefaults),
+  ]);
 }
 
 interface GlobalSettingsProps {
@@ -136,6 +184,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [reviewInstruction, setReviewInstruction] = useState(
     getSavedReviewInstruction(global.reviewInstruction)
   );
+  const [actionDefaults, setActionDefaults] = useState<ActionDefaults>(
+    () => normalizeActionDefaults(global.actionDefaults)
+  );
   const [webClientStatus, setWebClientStatus] = useState<WebClientStatus | null>(null);
   const [webClientApplyError, setWebClientApplyError] = useState<string | null>(null);
   const [gatewayTokenSettings, setGatewayTokenSettings] = useState<GatewayTokenSettings | null>(null);
@@ -162,6 +213,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [isTesting, setIsTesting] = useState(false);
   const [testResults, setTestResults] = useState<DomainTestResult[] | null>(null);
   const webClientStatusRequestRef = useRef(0);
+  // The last `global` this form synced itself from, as a value rather than an
+  // object identity. `null` until the first sync so a fresh mount always runs.
+  const syncedGlobalSignatureRef = useRef<string | null>(null);
   const pendingGitHubCredentialEditRef = useRef<{
     token: string;
     clear: boolean;
@@ -177,6 +231,13 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
 
   // Sync local state when config changes in the store
   useEffect(() => {
+    // A store write that changes none of the values this form edits must not
+    // reach the setters below: they would discard whatever the user has typed
+    // or selected but not yet saved. The Defaults pane's favourite star is the
+    // routine case — it persists `favoriteModels` from inside this very form.
+    const signature = globalFormSignature(global);
+    if (syncedGlobalSignatureRef.current === signature) return;
+    syncedGlobalSignatureRef.current = signature;
     setCpuCores(global.containerResources.cpuCores);
     setMemoryGb(global.containerResources.memoryGb);
     setEnvPatterns(global.envFilePatterns.join(", "));
@@ -218,6 +279,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setDebugLogging(global.debugLogging ?? false);
     setWebClientEnabled(global.webClientEnabled ?? true);
     setReviewInstruction(getSavedReviewInstruction(global.reviewInstruction));
+    setActionDefaults(normalizeActionDefaults(global.actionDefaults));
   }, [global]);
 
   const refreshWebClientStatus = useCallback(async () => {
@@ -318,13 +380,17 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       debugLogging !== (global.debugLogging ?? false) ||
       webClientEnabled !== (global.webClientEnabled ?? true) ||
       reviewInstruction !== getSavedReviewInstruction(global.reviewInstruction) ||
+      // Both sides go through the normalizer so key order, which the editing
+      // path can change without changing the value, cannot report a change.
+      JSON.stringify(normalizeActionDefaults(actionDefaults))
+        !== JSON.stringify(normalizeActionDefaults(global.actionDefaults)) ||
       webClientApplyError !== null ||
       gatewayToken !== savedGatewayToken;
     setHasChanges(changed);
     if (changed) {
       setSaveSuccess(false);
     }
-  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, clearAnthropicApiKey, cursorApiKey, clearCursorApiKey, useHostGitHubCredentials, useHostClaudeCredentials, githubToken, clearGithubToken, githubCredentialPropagationPending, allowedDomains, preferredEditor, enabledAgentPlatforms, defaultAgent, opencodeModel, opencodeMode, openCodeModelProviders, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, codexMaxConcurrentThreads, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewInstruction, webClientApplyError, gatewayToken, savedGatewayToken, global]);
+  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, clearAnthropicApiKey, cursorApiKey, clearCursorApiKey, useHostGitHubCredentials, useHostClaudeCredentials, githubToken, clearGithubToken, githubCredentialPropagationPending, allowedDomains, preferredEditor, enabledAgentPlatforms, defaultAgent, opencodeModel, opencodeMode, openCodeModelProviders, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, codexMaxConcurrentThreads, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewInstruction, actionDefaults, webClientApplyError, gatewayToken, savedGatewayToken, global]);
 
   // Validate domains on change
   const validateDomainsLocally = useCallback((domainsText: string) => {
@@ -432,6 +498,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         experimentalCodexRawEventLogging: boolean;
         debugLogging: boolean;
         webClientEnabled: boolean;
+        actionDefaults: ActionDefaults;
         reviewInstruction?: string;
       } = {
         containerResources: { cpuCores, memoryGb },
@@ -464,6 +531,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         experimentalCodexRawEventLogging,
         debugLogging,
         webClientEnabled,
+        // `update_global_config` replaces the stored global wholesale, so this
+        // has to be sent from every section's save, not only the Defaults tab.
+        actionDefaults: normalizeActionDefaults(actionDefaults),
       };
 
       if (reviewInstruction !== DEFAULT_REVIEW_INSTRUCTION) {
@@ -662,6 +732,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setDebugLogging(global.debugLogging ?? false);
     setWebClientEnabled(global.webClientEnabled ?? true);
     setReviewInstruction(getSavedReviewInstruction(global.reviewInstruction));
+    setActionDefaults(normalizeActionDefaults(global.actionDefaults));
     setWebClientApplyError(null);
     setGatewayToken(savedGatewayToken);
     setDomainErrors([]);
@@ -744,6 +815,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setWebClientEnabled,
     reviewInstruction,
     setReviewInstruction,
+    actionDefaults,
+    setActionDefaults,
     webClientStatus,
     setWebClientStatus,
     webClientApplyError,

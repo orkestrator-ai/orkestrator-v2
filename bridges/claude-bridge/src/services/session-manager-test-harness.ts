@@ -88,6 +88,12 @@ export const sessionManagerTestHome = mkdtempSync(
 setClaudeHomeForTesting(sessionManagerTestHome);
 
 
+// The types from `../types/index.js` and the budget constants from
+// `./part-budget.js` are already imported at the top of this file. A second
+// copy of both blocks was left here by the 2026-08-16 split and fails
+// `bun run typecheck` with TS2300 on all eight identifiers.
+
+
 export const {
   createSession,
   createOrRecoverSession,

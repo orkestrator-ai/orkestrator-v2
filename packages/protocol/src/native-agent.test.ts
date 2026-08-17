@@ -15,6 +15,11 @@ import {
   openCodeModelProvidersKey,
   nativeAgentCapabilities,
   resolveReasoningId,
+  BACKGROUND_TASK_ID_MAX_LENGTH,
+  BACKGROUND_TASK_LAUNCH_SCAN_CHARS,
+  isBackgroundCapableShellTool,
+  isBackgroundTaskLaunchCandidate,
+  recoverBackgroundTaskLaunchId,
 } from "./native-agent";
 
 describe("native agent capability table", () => {
@@ -334,5 +339,111 @@ describe("resolveReasoningId", () => {
 
   test("returns undefined for an empty catalog even with a preference", () => {
     expect(resolveReasoningId([], "high", "medium")).toBeUndefined();
+  });
+});
+
+describe("background task launch id recovery", () => {
+  const shellRow = (toolOutput: string, toolArgs: Record<string, unknown> = {}) => ({
+    toolName: "Bash",
+    toolArgs,
+    toolOutput,
+  });
+
+  test.each([
+    [
+      "an explicit background launch",
+      "Command running in background with ID: bg-suite. Output is being written elsewhere.",
+      { command: "bun test", run_in_background: true },
+    ],
+    [
+      "a command the user backgrounded with Ctrl+B",
+      "Command was manually backgrounded by user with ID: bg-dev",
+      { command: "bun run dev" },
+    ],
+    [
+      "a command a foreground timeout moved to the background",
+      "Command exceeded its timeout and was moved to the background (ID: bg-build). Use BashOutput to read it.",
+      { command: "bun run build" },
+    ],
+  ])("recovers the id from %s", (_case, output, args) => {
+    expect(recoverBackgroundTaskLaunchId(shellRow(output, args))).toBe(
+      output.includes("bg-suite")
+        ? "bg-suite"
+        : output.includes("bg-dev")
+          ? "bg-dev"
+          : "bg-build",
+    );
+  });
+
+  test.each([
+    ["backgroundTaskId", '{"backgroundTaskId":"bg-json"}'],
+    ["task_id", '{"task_id":"bg-json"}'],
+    ["taskId", '{"taskId":"bg-json"}'],
+  ])("recovers a %s carried as a JSON body", (_key, output) => {
+    expect(recoverBackgroundTaskLaunchId(shellRow(output))).toBe("bg-json");
+  });
+
+  test("refuses a row whose tool could not have backgrounded anything", () => {
+    // The note is quoted verbatim in this repository's own source, so a Read of
+    // it must not be mistaken for a launch and given a stop control.
+    const read = {
+      toolName: "Read",
+      toolArgs: { file_path: "/repo/native-agent.ts" },
+      toolOutput: "Command running in background with ID: bg-suite. …",
+    };
+    expect(isBackgroundTaskLaunchCandidate(read)).toBe(false);
+    expect(recoverBackgroundTaskLaunchId(read)).toBeUndefined();
+  });
+
+  test("accepts a non-shell row that declared the launch in its arguments", () => {
+    expect(isBackgroundTaskLaunchCandidate({
+      toolName: "Task",
+      toolArgs: { description: "Review", run_in_background: true },
+    })).toBe(true);
+  });
+
+  test("treats a shell tool by any supported spelling", () => {
+    for (const name of ["Bash", "bash", " SHELL ", "run_command", "run_terminal_cmd"]) {
+      expect(isBackgroundCapableShellTool(name)).toBe(true);
+    }
+    for (const name of ["Read", "Task", "", undefined, 7, null]) {
+      expect(isBackgroundCapableShellTool(name)).toBe(false);
+    }
+  });
+
+  test("drops an id longer than the transport bound rather than carrying it", () => {
+    const oversized = "x".repeat(BACKGROUND_TASK_ID_MAX_LENGTH + 1);
+    expect(recoverBackgroundTaskLaunchId(
+      shellRow(`Command running in background with ID: ${oversized}.`),
+    )).toBeUndefined();
+    const atLimit = "y".repeat(BACKGROUND_TASK_ID_MAX_LENGTH);
+    expect(recoverBackgroundTaskLaunchId(
+      shellRow(`Command running in background with ID: ${atLimit}.`),
+    )).toBe(atLimit);
+  });
+
+  test("never parses a result larger than the scan bound as JSON", () => {
+    // The regex scan is bounded by a slice; the JSON fallback has no such
+    // option, so an oversized result must be refused outright rather than
+    // parsed in full to decorate one transcript row.
+    const padded = `{"task_id":"bg-json","noise":"${"z".repeat(BACKGROUND_TASK_LAUNCH_SCAN_CHARS)}"}`;
+    expect(padded.length).toBeGreaterThan(BACKGROUND_TASK_LAUNCH_SCAN_CHARS);
+    expect(recoverBackgroundTaskLaunchId(shellRow(padded))).toBeUndefined();
+  });
+
+  test("answers undefined for a row with no result at all", () => {
+    expect(recoverBackgroundTaskLaunchId({ toolName: "Bash", toolArgs: {} }))
+      .toBeUndefined();
+    expect(recoverBackgroundTaskLaunchId({ toolName: "Bash", toolOutput: "" }))
+      .toBeUndefined();
+    expect(recoverBackgroundTaskLaunchId({ toolName: "Bash", toolOutput: 7 }))
+      .toBeUndefined();
+  });
+
+  test("tolerates a malformed toolArgs without throwing", () => {
+    expect(isBackgroundTaskLaunchCandidate({ toolName: "Read", toolArgs: [1, 2] }))
+      .toBe(false);
+    expect(isBackgroundTaskLaunchCandidate({ toolName: "Read", toolArgs: null }))
+      .toBe(false);
   });
 });

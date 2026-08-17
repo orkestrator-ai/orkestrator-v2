@@ -3,6 +3,10 @@ import { useUIStore, useEnvironmentStore, useProjectStore, useConfigStore, useFi
 import { useShallow } from "zustand/react/shallow";
 import { useTerminalContext, MAX_TABS, type AgentLaunchModeOverride } from "@/contexts";
 import type { DefaultAgent } from "@/types";
+import {
+  resolveActionDefault,
+  type ActionDefaultKey,
+} from "@orkestrator/protocol/action-defaults";
 import { usePullRequest, useProjects, useEnvironments } from "@/hooks";
 import {
   createPRPrompt,
@@ -297,6 +301,53 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const defaultAgent: DefaultAgent = enabledAgents.has(configuredDefaultAgent)
     ? configuredDefaultAgent
     : (enabledAgents.values().next().value ?? "claude");
+  /**
+   * The configured default for a toolbar action launched with a plain click.
+   *
+   * Right-clicking opens a launch dialog whose selection is authoritative, so
+   * an explicit `launchOptions` always wins over this. An agent chosen for this
+   * specific environment is narrower than an application-level default and wins
+   * over it too.
+   */
+  const environmentAgent = selectedEnvironment?.defaultAgent;
+  const actionDefaultFor = useCallback(
+    (key: ActionDefaultKey) => resolveActionDefault(config.global.actionDefaults, key, {
+      fallbackAgent: defaultAgent,
+      overrideAgent: environmentAgent,
+      enabledAgents: enabledAgentList,
+    }),
+    [config.global.actionDefaults, defaultAgent, enabledAgentList, environmentAgent],
+  );
+  /**
+   * The same choice a plain click would make, expressed as launch-dialog
+   * preferences. The configured action default must be what the dialog opens
+   * on, otherwise right-clicking would silently propose a different run than
+   * the button next to it performs.
+   */
+  const launchDialogDefaultsFor = useCallback((key: ActionDefaultKey) => {
+    const actionDefault = actionDefaultFor(key);
+    return {
+      defaultAgent: actionDefault.agent,
+      preferredModels: {
+        claude: config.global.claudeModel,
+        codex: config.global.codexModel,
+        opencode: config.global.opencodeModel,
+        ...(actionDefault.model ? { [actionDefault.agent]: actionDefault.model } : {}),
+      },
+      preferredReasoningEfforts: {
+        codex: config.global.codexReasoningEffort,
+        ...(actionDefault.reasoningEffort
+          ? { [actionDefault.agent]: actionDefault.reasoningEffort }
+          : {}),
+      },
+    };
+  }, [
+    actionDefaultFor,
+    config.global.claudeModel,
+    config.global.codexModel,
+    config.global.codexReasoningEffort,
+    config.global.opencodeModel,
+  ]);
   const { installLoopedReviewWorkflow, removeLoopedReviewWorkflow } =
     useLoopedReviewStore(useShallow((state) => ({
       installLoopedReviewWorkflow: state.replaceWorkflow,
@@ -326,7 +377,21 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       config.global.reviewInstruction,
     );
 
-    const agent = agentOverride || defaultAgent;
+    // A plain click has no dialog to configure the run, so the Defaults tab is
+    // what stands in for one. An explicit override — the dialog, or a caller
+    // that already chose an agent — always wins.
+    const actionDefault = actionDefaultFor("review");
+    const agent = agentOverride || actionDefault.agent;
+    // The configured default only carries its model and reasoning level while
+    // the launch is still going to the platform it named.
+    const defaultForAgent = agent === actionDefault.agent ? actionDefault : undefined;
+    // Resolved before the tab is created so the tab's own model selector and
+    // the first queued turn cannot disagree about what a plain click asked for.
+    // Every follow-up turn in the tab reads the tab's model, not this queue
+    // entry, so omitting it here would confine the default to one turn.
+    const initialAgentModel = launchOptions?.initialAgentModel ?? defaultForAgent?.model;
+    const initialReasoningEffort =
+      launchOptions?.initialReasoningEffort ?? defaultForAgent?.reasoningEffort;
     const tabId = `tab-${createUuid()}`;
     const created = createTab(agent, {
       tabId,
@@ -338,6 +403,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       isReviewTab: true,
       agentLaunchMode: "native",
       ...launchOptions,
+      ...(initialAgentModel ? { initialAgentModel } : {}),
+      ...(initialReasoningEffort ? { initialReasoningEffort } : {}),
     });
     if (!created) {
       toast.error("Could not open review", {
@@ -348,18 +415,21 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
     const requestId = `initial-prompt:${selectedEnvironmentId}:${tabId}`;
     const logicalSessionKey = createSessionKey(selectedEnvironmentId, tabId);
-    const preferredModel = agent === "claude"
-      ? config.global.claudeModel
-      : agent === "codex"
-        ? config.global.codexModel
-        : agent === "opencode"
-          ? config.global.opencodeModel
-          : undefined;
-    const requestedModel = launchOptions?.initialAgentModel ?? preferredModel;
+    // When neither the dialog nor a configured default named a model, the
+    // queued turn falls back to the platform's globally configured one. The tab
+    // is left to resolve that itself, which is why it is not passed above.
+    const requestedModel = initialAgentModel
+      ?? (agent === "claude"
+        ? config.global.claudeModel
+        : agent === "codex"
+          ? config.global.codexModel
+          : agent === "opencode"
+            ? config.global.opencodeModel
+            : undefined);
     const model = requestedModel === "default"
       ? undefined
       : requestedModel;
-    const reasoningEffort = launchOptions?.initialReasoningEffort
+    const reasoningEffort = initialReasoningEffort
       ?? (agent === "codex" ? config.global.codexReasoningEffort : undefined);
     const queuedReview = agent === "claude"
       ? {
@@ -415,6 +485,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       });
     });
   }, [
+    actionDefaultFor,
     canCreateTab,
     config.global.claudeModel,
     config.global.claudeNativeFastModeDefault,
@@ -425,7 +496,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     config.global.reviewInstruction,
     config.repositories,
     createTab,
-    defaultAgent,
     selectedEnvironmentId,
     selectedProjectId,
   ]);
@@ -982,7 +1052,14 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     // as "", and an empty base would reach the agent as `gh pr create --base `.
     const targetBranch = targetBranchOverride || repoConfig?.prBaseBranch || "main";
     const prPrompt = createPRPrompt(targetBranch);
-    const agent = agentOverride || defaultAgent;
+    const actionDefault = actionDefaultFor("pr");
+    const agent = agentOverride || actionDefault.agent;
+    const defaultForAgent = agent === actionDefault.agent ? actionDefault : undefined;
+    // Resolved once so the queued path and the tab-owned path cannot disagree
+    // about which model a plain click asked for.
+    const initialAgentModel = launchOptions?.initialAgentModel ?? defaultForAgent?.model;
+    const initialReasoningEffort =
+      launchOptions?.initialReasoningEffort ?? defaultForAgent?.reasoningEffort;
     // ACP tabs are always native unless explicitly opened as a CLI. The
     // configured workflow likewise forces every provider through its native
     // surface. Give those launches a stable identity before the tab mounts so
@@ -997,14 +1074,15 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       initialPrompt: prPrompt,
       displayTitle: "PR",
       ...launchOptions,
+      ...(initialAgentModel ? { initialAgentModel } : {}),
+      ...(initialReasoningEffort ? { initialReasoningEffort } : {}),
     });
     if (!created) return false;
 
     if (tabId) {
       const requestId = `initial-prompt:${selectedEnvironmentId}:${tabId}`;
-      const requestedModel = launchOptions?.initialAgentModel;
-      const model = requestedModel === "default" ? undefined : requestedModel;
-      const reasoningEffort = launchOptions?.initialReasoningEffort;
+      const model = initialAgentModel === "default" ? undefined : initialAgentModel;
+      const reasoningEffort = initialReasoningEffort;
       const queuedPrompt = {
         id: requestId,
         requestId,
@@ -1045,12 +1123,12 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     setModeCreatePending();
     return true;
   }, [
+    actionDefaultFor,
     canCreateTab,
     config.global.claudeNativeFastModeDefault,
     config.global.codexNativeFastModeDefault,
     config.repositories,
     createTab,
-    defaultAgent,
     hasPR,
     isRunning,
     selectedEnvironmentId,
@@ -1123,11 +1201,20 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     if (!createTab || !canCreateTab) return;
 
     const pushPrompt = createPushChangesPrompt();
-    createTab(agentOverride || defaultAgent, {
+    // The context menu picks an agent only, so its choice keeps the configured
+    // model and reasoning level only while it stays on the same platform.
+    const actionDefault = actionDefaultFor("push");
+    const agent = agentOverride || actionDefault.agent;
+    const defaultForAgent = agent === actionDefault.agent ? actionDefault : undefined;
+    createTab(agent, {
       initialPrompt: pushPrompt,
       displayTitle: "Git Push",
+      ...(defaultForAgent?.model ? { initialAgentModel: defaultForAgent.model } : {}),
+      ...(defaultForAgent?.reasoningEffort
+        ? { initialReasoningEffort: defaultForAgent.reasoningEffort }
+        : {}),
     });
-  }, [createTab, canCreateTab, defaultAgent]);
+  }, [actionDefaultFor, createTab, canCreateTab]);
 
   // Handler for resolving merge conflicts - launches agent tab with conflict resolution prompt
   const handleResolveConflicts = useCallback(async (options?: {
@@ -1203,10 +1290,20 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         return await fail("The selected environment changed before the agent could launch.");
       }
 
-      const created = createTab(agentOverride || defaultAgent, {
+      const actionDefault = actionDefaultFor("resolve");
+      const agent = agentOverride || actionDefault.agent;
+      const defaultForAgent = agent === actionDefault.agent ? actionDefault : undefined;
+      // Same precedence as every other action: the dialog's selection first,
+      // then the configured default, resolved once rather than by spread order.
+      const initialAgentModel = launchOptions?.initialAgentModel ?? defaultForAgent?.model;
+      const initialReasoningEffort =
+        launchOptions?.initialReasoningEffort ?? defaultForAgent?.reasoningEffort;
+      const created = createTab(agent, {
         initialPrompt: resolvePrompt,
         displayTitle: "Resolve",
         ...launchOptions,
+        ...(initialAgentModel ? { initialAgentModel } : {}),
+        ...(initialReasoningEffort ? { initialReasoningEffort } : {}),
       });
       if (!created) {
         return await fail(
@@ -1223,6 +1320,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       }
     }
   }, [
+    actionDefaultFor,
     armRefreshAfterAgentCompletion,
     disarmRefreshAfterAgentCompletion,
     createTab,
@@ -1230,7 +1328,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     selectedProjectId,
     canCreateTab,
     config.repositories,
-    defaultAgent,
   ]);
 
   const resolveLaunchInFlight = resolveLaunchEnvironmentId !== null;
@@ -1534,6 +1631,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     enabledAgents,
     configuredDefaultAgent,
     defaultAgent,
+    launchDialogDefaultsFor,
     installLoopedReviewWorkflow,
     removeLoopedReviewWorkflow,
     handleReview,

@@ -17,6 +17,7 @@ import { promptQueueKey } from "@/lib/prompt-queue-persistence";
 import * as realMultiReviewPersistence from "@/lib/multi-review-persistence";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment, PrState, Project } from "@/types";
+import type { ActionDefaults } from "@orkestrator/protocol/action-defaults";
 import type { KanbanTask } from "@/lib/backend";
 import {
   mockToastError as toastErrorMock,
@@ -180,6 +181,7 @@ let currentFilesPanelOpen = false;
 let currentReviewPrompt: string | undefined;
 let currentDefaultAgent: "claude" | "opencode" | "codex" | undefined = "codex";
 let currentEnabledAgentPlatforms: Array<"claude" | "codex" | "cursor" | "grok" | "opencode"> | undefined;
+let currentActionDefaults: ActionDefaults | undefined;
 let currentPreferredEditor: "vscode" | "cursor" | undefined = "vscode";
 let currentRepositoryConfig: Record<string, { prBaseBranch?: string }> = {
   "project-1": { prBaseBranch: "main" },
@@ -474,6 +476,7 @@ mock.module("@/stores", () => ({
         codexNativeFastModeDefault?: boolean;
         opencodeModel: string;
         enabledAgentPlatforms?: Array<"claude" | "codex" | "cursor" | "grok" | "opencode">;
+        actionDefaults?: ActionDefaults;
       };
       repositories: Record<string, { prBaseBranch?: string }>;
     };
@@ -492,6 +495,7 @@ mock.module("@/stores", () => ({
             codexNativeFastModeDefault: currentCodexFastModeDefault,
             opencodeModel: currentOpenCodeModel,
             enabledAgentPlatforms: currentEnabledAgentPlatforms,
+            actionDefaults: currentActionDefaults,
           },
           repositories: currentRepositoryConfig,
         },
@@ -783,6 +787,7 @@ beforeEach(() => {
   currentReviewPrompt = undefined;
   currentDefaultAgent = "codex";
   currentEnabledAgentPlatforms = undefined;
+  currentActionDefaults = undefined;
   currentClaudeModel = "claude-default-model";
   currentClaudeFastModeDefault = false;
   currentCodexModel = "codex-default-model";
@@ -3946,6 +3951,236 @@ describe("ActionBar workflow tabs", () => {
       "claude",
       expect.objectContaining({ displayTitle: "PR" }),
     );
+  });
+});
+
+describe("ActionBar configured action defaults", () => {
+  test("launches a one-click review with the configured Review default", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    // The app default agent is Codex; the Review default names Claude, so the
+    // whole decision — platform, model and reasoning — must come from it.
+    currentActionDefaults = {
+      review: { platform: "claude", model: "opus[1m]", reasoningEffort: "max" },
+    };
+
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Code review" }));
+
+    // The tab owns the model for every follow-up turn, so passing it only to
+    // the queued message would confine the configured default to the first one.
+    expect(createTabMock).toHaveBeenLastCalledWith(
+      "claude",
+      expect.objectContaining({
+        displayTitle: "Review",
+        initialAgentModel: "opus[1m]",
+        initialReasoningEffort: "max",
+      }),
+    );
+    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+      expect.stringMatching(/^claude\u0000env-env-1:tab-/),
+      "env-1",
+      expect.objectContaining({ model: "opus[1m]", effort: "max" }),
+    ));
+  });
+
+  test("keeps the environment's own agent ahead of an application-level default", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      // The user created this environment with Codex explicitly.
+      defaultAgent: "codex",
+    };
+    currentActionDefaults = {
+      review: { platform: "claude", model: "opus[1m]", reasoningEffort: "max" },
+    };
+
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Code review" }));
+
+    // Action defaults are application-level, so the narrower per-environment
+    // choice wins — and Claude's model cannot travel to Codex with it.
+    expect(createTabMock).toHaveBeenLastCalledWith(
+      "codex",
+      expect.objectContaining({ displayTitle: "Review" }),
+    );
+    expect(createTabMock.mock.calls.at(-1)?.[1]).not.toHaveProperty("initialAgentModel");
+  });
+
+  test("applies a default whose platform matches the environment's own agent", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      defaultAgent: "claude",
+    };
+    currentActionDefaults = {
+      pr: { platform: "claude", model: "haiku", reasoningEffort: "low" },
+    };
+
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
+
+    // Same platform, so nothing is being retargeted and the configured model
+    // and reasoning level still apply.
+    expect(createTabMock).toHaveBeenLastCalledWith(
+      "claude",
+      expect.objectContaining({
+        displayTitle: "PR",
+        initialAgentModel: "haiku",
+        initialReasoningEffort: "low",
+      }),
+    );
+  });
+
+  test("ignores a Review default whose platform is no longer enabled", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentEnabledAgentPlatforms = ["codex"];
+    currentActionDefaults = {
+      review: { platform: "claude", model: "opus[1m]", reasoningEffort: "max" },
+    };
+
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Code review" }));
+
+    expect(createTabMock).toHaveBeenLastCalledWith(
+      "codex",
+      expect.objectContaining({ displayTitle: "Review" }),
+    );
+    // Claude's model must not be carried onto Codex; the configured Codex
+    // defaults are what the launch falls back to.
+    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+      expect.stringMatching(/^codex\u0000env-env-1:tab-/),
+      "env-1",
+      expect.objectContaining({
+        model: "codex-default-model",
+        reasoningEffort: "medium",
+      }),
+    ));
+  });
+
+  test("applies the configured PR default to a plain Create PR click", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentActionDefaults = {
+      pr: { platform: "claude", model: "haiku", reasoningEffort: "low" },
+    };
+
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
+
+    expect(createTabMock).toHaveBeenLastCalledWith(
+      "claude",
+      expect.objectContaining({
+        displayTitle: "PR",
+        initialAgentModel: "haiku",
+        initialReasoningEffort: "low",
+      }),
+    );
+  });
+
+  test("applies the configured Resolve and Push defaults", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    currentActionDefaults = {
+      resolve: { platform: "claude", model: "sonnet" },
+      push: { platform: "opencode", model: "openai/gpt-push", reasoningEffort: "high" },
+    };
+    const view = render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+    await waitFor(() => expect(createTabMock).toHaveBeenLastCalledWith(
+      "claude",
+      expect.objectContaining({
+        displayTitle: "Resolve",
+        initialAgentModel: "sonnet",
+      }),
+    ));
+
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: false,
+    };
+    currentChanges = [{ path: "src/example.ts" }];
+    view.rerender(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Push Changes" }));
+
+    expect(createTabMock).toHaveBeenLastCalledWith(
+      "opencode",
+      expect.objectContaining({
+        displayTitle: "Git Push",
+        initialAgentModel: "openai/gpt-push",
+        initialReasoningEffort: "high",
+      }),
+    );
+  });
+
+  test("keeps a context-menu agent choice ahead of the Push default", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: false,
+    };
+    currentChanges = [{ path: "src/example.ts" }];
+    currentActionDefaults = {
+      push: { platform: "opencode", model: "openai/gpt-push" },
+    };
+
+    render(<ActionBar />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Push Changes" }));
+    fireEvent.click(screen.getByText("Push with Claude"));
+
+    // The menu picks a platform, so OpenCode's model cannot travel with it.
+    expect(createTabMock).toHaveBeenLastCalledWith(
+      "claude",
+      expect.objectContaining({ displayTitle: "Git Push" }),
+    );
+    expect(createTabMock.mock.calls.at(-1)?.[1]).not.toHaveProperty("initialAgentModel");
+  });
+
+  test("opens the Create PR dialog on the configured PR default", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentActionDefaults = {
+      pr: { platform: "claude", model: "haiku" },
+    };
+
+    render(<ActionBar />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+
+    // Right-clicking must propose what the plain click would have done, or the
+    // two adjacent affordances disagree about the same button.
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy());
+    expect(
+      screen.getByRole("combobox", { name: "Agent, model and reasoning" }).textContent,
+    ).toContain("Haiku");
   });
 });
 

@@ -89,6 +89,12 @@ export interface NativeBasePart {
   mcpServerName?: string;
   /** Background task represented or acted on by this tool row. */
   backgroundTask?: NativeBackgroundTask;
+  /**
+   * Bounded task id recovered before a heavy launch result is moved behind
+   * `detailRef`. This is correlation metadata only; lifecycle still comes from
+   * the authoritative background-task snapshot.
+   */
+  backgroundTaskId?: string;
   /** Task list state immediately after this tool call, for task tools. */
   taskSnapshot?: TaskListSnapshot;
   subagentId?: string;

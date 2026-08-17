@@ -65,12 +65,15 @@ describe("ACP bridge", () => {
       expect(RETRIABLE_PROVIDER_ERROR.test(detail)).toBe(true);
       expect(FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(`Answer.\n\nError: ${detail}`)).toBe(true);
     }
-    // An empty detail is retriable to neither: there is nothing after the code
-    // to distinguish a real failure from prose that merely names one.
-    expect(RETRIABLE_PROVIDER_ERROR.test("RetriableError: [unavailable] ")).toBe(false);
-    expect(FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(
-      "Answer.\n\nError: RetriableError: [unavailable] ",
-    )).toBe(false);
+    // An empty or whitespace-only detail is retriable to neither: there is
+    // nothing after the code to distinguish a real failure from prose that
+    // merely names one. Two-or-more spaces used to disagree — flattened's
+    // `[^\n]+` treated them as a detail while RPC's `\S` did not.
+    for (const blank of ["", " ", "  ", "   ", "\t", " \t ", "\n", "\n  "]) {
+      const detail = `RetriableError: [unavailable]${blank}`;
+      expect(RETRIABLE_PROVIDER_ERROR.test(detail)).toBe(false);
+      expect(FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(`Answer.\n\nError: ${detail}`)).toBe(false);
+    }
   });
 
 

@@ -388,6 +388,48 @@ describe("ACP bridge", () => {
 
 
 
+  test("fails visibly after three unavailable retries", async () => {
+    const directory = await temporaryDirectory();
+    const counterFile = resolve(directory, "unavailable-retry-exhausted.log");
+    const { base, headers } = await spawnBridge({ env: {
+      ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "4",
+      FAKE_ACP_RETRIABLE_CODE: "unavailable",
+      FAKE_ACP_RETRIABLE_DETAIL: "PING timed out",
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: "RESOURCEEXHAUSTED: keep failing the ping timeout",
+        requestId: "unavailable-retry-2",
+      }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ role: string; content: string }>;
+        }>,
+      (value) => value.status === "error",
+    );
+
+    expect(session.error).toBe("cursor remained in a retriable provider error after 3 retries");
+    expect(session.messages.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(session.messages.at(-1)?.content).toContain(
+      "Error: RetriableError: [unavailable] PING timed out",
+    );
+    // Initial dispatch plus exactly three retries.
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(4);
+  });
+
+
+
   test("cancels a resource-exhausted turn while it is in backoff", async () => {
     const directory = await temporaryDirectory();
     const counterFile = resolve(directory, "resource-retry-cancelled.log");

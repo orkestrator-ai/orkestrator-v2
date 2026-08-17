@@ -36,8 +36,13 @@ const RETRIABLE_PROVIDER_CODE = String.raw`\[(?:resource_exhausted|unavailable)\
 // retry the typed RPC rejection while reporting the flattened form as a
 // finished turn, leaving the raw provider serialization in the transcript.
 const RETRIABLE_PROVIDER_SEPARATOR = String.raw`\s+`;
+// A real detail starts with a non-whitespace character. Both classifiers use
+// this so whitespace-only tails (`[unavailable]  `) are retriable to neither:
+// the flattened suffix used to use `[^\n]+`, which treated extra spaces as a
+// detail while the RPC matcher required `\S`.
+const RETRIABLE_PROVIDER_DETAIL = String.raw`\S`;
 export const RETRIABLE_PROVIDER_ERROR = new RegExp(
-  `${RETRIABLE_PROVIDER_CODE}${RETRIABLE_PROVIDER_SEPARATOR}\\S`,
+  `${RETRIABLE_PROVIDER_CODE}${RETRIABLE_PROVIDER_SEPARATOR}${RETRIABLE_PROVIDER_DETAIL}`,
   "i",
 );
 // The class name is whatever the provider's own error carried — `RetriableError`
@@ -45,14 +50,14 @@ export const RETRIABLE_PROVIDER_ERROR = new RegExp(
 // would silently exclude every other name and leave the turn dead, so the
 // identifier is quantified and the flag set matches `RETRIABLE_PROVIDER_ERROR`.
 //
-// The detail is deliberately bounded to the final line (`[^\n]+\s*$`). A
+// The detail is deliberately bounded to the final line (`\S[^\n]*\s*$`). A
 // provider error whose detail carries its own stack trace is therefore *not*
 // stripped or retried: it stays in the transcript and the turn ends. That is
 // the safe direction. Assistant text is model-controlled, so a pattern that
 // swallowed trailing lines could delete a real answer and silently re-run the
 // turn — a far worse failure than surfacing one unretried provider error.
 export const FLATTENED_RETRIABLE_PROVIDER_SUFFIX = new RegExp(
-  `(?:^|\\n\\n)Error: [A-Za-z_$][\\w$]*: ${RETRIABLE_PROVIDER_CODE}${RETRIABLE_PROVIDER_SEPARATOR}[^\\n]+\\s*$`,
+  `(?:^|\\n\\n)Error: [A-Za-z_$][\\w$]*: ${RETRIABLE_PROVIDER_CODE}${RETRIABLE_PROVIDER_SEPARATOR}${RETRIABLE_PROVIDER_DETAIL}[^\\n]*\\s*$`,
   "i",
 );
 export const RETRIABLE_PROVIDER_CONTINUATION =

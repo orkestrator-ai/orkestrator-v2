@@ -491,6 +491,37 @@ describe("Codex collaboration state", () => {
     });
   });
 
+  test("keeps a collab-only completed child successful after a no-op interrupt", () => {
+    // Transcript discovery can lag or fail, so the preceding collaboration
+    // snapshot must be sufficient to protect the completed outcome.
+    const [part] = applyCodexCollabStateToSubagentParts(
+      [],
+      [
+        {
+          id: "wait-1",
+          type: "collab_tool_call",
+          tool: "wait",
+          receiver_thread_ids: ["agent-1"],
+          agents_states: {
+            "agent-1": { status: "completed", message: "Review complete" },
+          },
+        },
+        {
+          id: "interrupt-1",
+          type: "subagent_activity",
+          activity: "interrupted",
+          agent_thread_id: "agent-1",
+        },
+      ],
+    );
+
+    expect(part).toMatchObject({
+      subagentId: "agent-1",
+      toolState: "success",
+      subagentActions: [{ type: "text", content: "Review complete" }],
+    });
+  });
+
   test("preserves an earlier-turn final message when an interaction invalidates its status", () => {
     const [part] = applyCodexCollabStateToSubagentParts([], [
       {

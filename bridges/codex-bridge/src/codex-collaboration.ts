@@ -326,18 +326,28 @@ export function applyCodexCollabStateToSubagentParts(
       // already-finished child cannot repaint its terminal state.
       const interrupted = item.activity === "interrupted";
       if (item.activity !== "started" && !interrupted && !previous) continue;
+      const previousToolState = toToolState(previous?.state?.status);
+      const preserveTerminalState = interrupted
+        && (previousToolState === "success" || previousToolState === "failure");
+      const nextState = preserveTerminalState
+        ? previous?.state
+        : previous?.state?.message !== undefined
+          ? { message: previous.state.message }
+          : undefined;
       latestByAgentId.set(item.agent_thread_id, {
         spawnPrompt: previous?.spawnPrompt,
         taskName: previous?.taskName ?? taskNameFromAgentPath(item.agent_path),
-        // Keep any final message so an earlier-turn agent does not lose its
-        // only transcript text when the old terminal status is invalidated.
-        ...(previous?.state?.message !== undefined
-          ? { state: { message: previous.state.message } }
-          : {}),
+        // An interrupt issued after a terminal snapshot is a no-op, so retain
+        // that authoritative outcome even when the child transcript is not
+        // available. Other activity beats reopen the child while preserving
+        // any final message from its earlier task.
+        ...(nextState ? { state: nextState } : {}),
         // Only an interrupt carries this forward: a started or interacted beat
         // means the child is working again, so an earlier interrupt no longer
         // describes it.
-        ...(interrupted ? { interruptedWithoutSnapshot: true } : {}),
+        ...(interrupted && !preserveTerminalState
+          ? { interruptedWithoutSnapshot: true }
+          : {}),
       });
       continue;
     }

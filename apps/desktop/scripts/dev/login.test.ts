@@ -291,4 +291,29 @@ describe("dev:login profile command", () => {
     expect(lines[0]).toContain(login.loginUrl);
     expect(lines[0]).not.toContain("durable-gateway-token");
   });
+
+  test("prints machine-readable JSON under --json", async () => {
+    // The browser suite parses this stdout, so the shape is a contract: one JSON
+    // document on its own, with no human preamble to trip JSON.parse.
+    const lines: string[] = [];
+    const login = {
+      profile: "login-qa",
+      browserUrl: "http://127.0.0.1:41234/",
+      loginUrl: "http://127.0.0.1:41234/__orkestrator/agent-test/login?code=bootstrap-code-value",
+      expiresAt: Date.now() + 120_000,
+      expiresInSeconds: 120,
+    };
+    const status = await loginProfile({ ...cliArgs, json: true }, {
+      resolveProfile: async () => fakeProfile,
+      readStatus: async () => liveStatus,
+      liveness: () => ({ launcher: true }),
+      mint: async () => login,
+      log: (line) => lines.push(line),
+    });
+
+    expect(status).toBe(0);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!)).toEqual(login);
+    expect(lines[0]).not.toContain("durable-gateway-token");
+  });
 });

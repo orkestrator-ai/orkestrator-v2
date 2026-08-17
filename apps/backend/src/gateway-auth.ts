@@ -57,12 +57,32 @@ export abstract class GatewayAuth extends GatewayEvents {
     }
   }
 
+  /**
+   * The session that dies soonest. `refreshAgentTestSession` slides `expiresAt`
+   * in place, so Map insertion order no longer tracks the deadline the way it did
+   * when every session had one fixed TTL: evicting the first key would drop the
+   * session a browser is actively using and keep idle ones that lapse seconds
+   * later. Ties keep the earlier-inserted entry, which is the old behaviour.
+   */
+  private nearestAgentTestSession(): string | undefined {
+    let nearest: string | undefined;
+    let deadline = Number.POSITIVE_INFINITY;
+    for (const [session, expiry] of this.agentTestSessions) {
+      const effective = Math.min(expiry.expiresAt, expiry.absoluteExpiresAt);
+      if (effective < deadline) {
+        deadline = effective;
+        nearest = session;
+      }
+    }
+    return nearest;
+  }
+
   protected issueAgentTestSession(now = Date.now()): string {
     this.pruneAgentTestCredentials(now);
     while (this.agentTestSessions.size >= MAX_AGENT_TEST_SESSIONS) {
-      const oldest = this.agentTestSessions.keys().next().value as string | undefined;
-      if (!oldest) break;
-      this.agentTestSessions.delete(oldest);
+      const evicted = this.nearestAgentTestSession();
+      if (!evicted) break;
+      this.agentTestSessions.delete(evicted);
     }
     const session = randomBytes(32).toString("base64url");
     this.agentTestSessions.set(session, {

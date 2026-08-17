@@ -1,6 +1,12 @@
 import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
-import { appendVary, loadOrCreateGatewayToken, OrkestratorGateway } from "../../../apps/backend/src/gateway";
+import {
+  appendVary,
+  loadOrCreateGatewayToken,
+  MAX_AGENT_TEST_BOOTSTRAPS,
+  MAX_AGENT_TEST_SESSIONS,
+  OrkestratorGateway,
+} from "../../../apps/backend/src/gateway";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 
@@ -742,6 +748,170 @@ describe("remote gateway", () => {
 
 
 
+  test("gates the agent-test session route the same way as the bootstrap routes", async () => {
+    // Renewing a credential is as much of a privileged operation as minting one,
+    // so this route needs the identical agent-test/browser-listener/loopback gate.
+    const outside = await startGateway();
+    for (const method of ["GET", "POST"]) {
+      const denied = await requestUrl(`${outside.info.url}__orkestrator/agent-test/session`, {
+        method,
+        headers: { authorization: `Bearer ${outside.info.token}` },
+      });
+      expect(denied.status).toBe(404);
+    }
+
+    const control = await startGateway({
+      agentTestMode: true,
+      controlBindAddress: "127.0.0.1",
+      controlPort: 0,
+    });
+    expect(control.info.url).not.toBe(control.info.browserUrl);
+    const onControl = await requestUrl(`${control.info.url}__orkestrator/agent-test/session`, {
+      headers: { authorization: `Bearer ${control.info.token}` },
+    });
+    expect(onControl.status).toBe(404);
+  });
+
+
+
+  test("answers the agent-test session route 404 without a session and 405 for other methods", async () => {
+    const { info } = await startGateway({ agentTestMode: true });
+    // Authenticated by the durable token, so the request passes the auth gate and
+    // reaches the handler; it simply has no cookie session to report or renew.
+    const tokenOnly = await requestUrl(`${info.url}__orkestrator/agent-test/session`, {
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+    expect(tokenOnly.status).toBe(404);
+
+    const minted = await requestUrl(`${info.url}__orkestrator/agent-test/bootstrap`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+    const exchanged = await requestUrl(`${info.url}__orkestrator/agent-test/bootstrap/exchange`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: (minted.json() as { code: string }).code }),
+    });
+    const cookie = exchanged.headers["set-cookie"]![0]!;
+    const wrongMethod = await requestUrl(`${info.url}__orkestrator/agent-test/session`, {
+      method: "DELETE",
+      headers: { cookie },
+    });
+    expect(wrongMethod.status).toBe(405);
+    expect(wrongMethod.headers.allow).toBe("GET, POST");
+
+    // Renewing a session a browser already holds is not minting a credential, so
+    // routine per-tab activity must not read as repeated bootstrap attempts.
+    const metrics = await readGatewayMetrics(info);
+    expect(metrics.routes["agent-test-session"]?.requests).toBe(2);
+    expect(metrics.routes["agent-test-bootstrap"]?.requests).toBe(2);
+  });
+
+
+
+  test("evicts the nearest-deadline agent-test session, not the earliest issued", async () => {
+    const { gateway } = await startGateway({ agentTestMode: true });
+    const internals = gateway as unknown as {
+      agentTestSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
+      issueAgentTestSession(now?: number): string;
+      refreshAgentTestSession(candidate: string, now?: number): boolean;
+      gatewayCredentialMatches(candidate: string | null): boolean;
+    };
+    const sessions = internals.agentTestSessions;
+
+    // Fill the map to its cap. The first session issued is then kept alive by
+    // activity, which is exactly the entry insertion-ordered eviction would drop.
+    const issued: string[] = [];
+    while (sessions.size < MAX_AGENT_TEST_SESSIONS) issued.push(internals.issueAgentTestSession());
+    expect(sessions.size).toBe(MAX_AGENT_TEST_SESSIONS);
+    const oldestIssued = issued[0]!;
+    const idle = issued[1]!;
+    expect(internals.refreshAgentTestSession(oldestIssued)).toBe(true);
+    // Leave one entry closest to lapsing without letting it expire outright, so
+    // pruning cannot be what removes it.
+    sessions.get(idle)!.expiresAt = Date.now() + 60_000;
+
+    const fresh = internals.issueAgentTestSession();
+    expect(sessions.size).toBe(MAX_AGENT_TEST_SESSIONS);
+    expect(internals.gatewayCredentialMatches(fresh)).toBe(true);
+    expect(internals.gatewayCredentialMatches(oldestIssued)).toBe(true);
+    expect(sessions.has(idle)).toBe(false);
+  });
+
+
+
+  test("bounds minted bootstrap codes at their cap", async () => {
+    const { gateway, info } = await startGateway({ agentTestMode: true });
+    const bootstraps = (gateway as unknown as { agentTestBootstraps: Map<string, number> })
+      .agentTestBootstraps;
+    const codes: string[] = [];
+    for (let index = 0; index < MAX_AGENT_TEST_BOOTSTRAPS + 4; index += 1) {
+      const minted = await requestUrl(`${info.url}__orkestrator/agent-test/bootstrap`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${info.token}` },
+      });
+      expect(minted.status).toBe(201);
+      codes.push((minted.json() as { code: string }).code);
+    }
+    expect(bootstraps.size).toBeLessThanOrEqual(MAX_AGENT_TEST_BOOTSTRAPS);
+    // The most recent code still works; an evicted one fails closed.
+    const evicted = await requestUrl(
+      `${info.url}__orkestrator/agent-test/login?code=${encodeURIComponent(codes[0]!)}`,
+    );
+    expect(evicted.status).toBe(401);
+    const newest = await requestUrl(
+      `${info.url}__orkestrator/agent-test/login?code=${encodeURIComponent(codes.at(-1)!)}`,
+    );
+    expect(newest.status).toBe(303);
+  });
+
+
+
+  test("leaves a durable-token event stream open when another client's session lapses", async () => {
+    // The expiry timers must key off the credential actually presented. Closing a
+    // token-authenticated stream would break every production browser client.
+    const { gateway, info } = await startGateway({ agentTestMode: true });
+    // Issue a real cookie session so the expiry sweep below has something to act
+    // on; without one this would pass against a broken implementation too.
+    const minted = await requestUrl(`${info.url}__orkestrator/agent-test/bootstrap`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+    const exchanged = await requestUrl(`${info.url}__orkestrator/agent-test/bootstrap/exchange`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: (minted.json() as { code: string }).code }),
+    });
+    const cookie = exchanged.headers["set-cookie"]![0]!;
+    const sessions = (gateway as unknown as {
+      agentTestSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
+    }).agentTestSessions;
+    expect(sessions.size).toBe(1);
+
+    // The token stream connects first, while the session is still healthy, so its
+    // survival cannot be explained by it having been rejected up front.
+    const tokenStream = await openEventStream(gateway, info);
+    // Each stream arms its expiry timer from the deadline it sees at connect time,
+    // and a session deadline only ever slides forward, so the short window has to
+    // be in place before the cookie stream subscribes.
+    for (const entry of sessions.values()) entry.expiresAt = Date.now() + 150;
+    const sessionStream = await openEventStream(gateway, info, "", {
+      authorization: "",
+      cookie,
+    });
+    expect(eventClients(gateway).size).toBe(2);
+
+    await waitUntil(() => sessionStream.aborted(), "Lapsed session stream stayed connected");
+
+    // Only the cookie-authenticated stream goes; the token one has no deadline.
+    expect(tokenStream.aborted()).toBe(false);
+    expect(eventClients(gateway).size).toBe(1);
+    tokenStream.close();
+    sessionStream.close();
+  });
+
+
+
   test("renews only on explicit activity and stops at its absolute lifetime", async () => {
     const { gateway, info } = await startGateway({ agentTestMode: true });
     const sessions = (gateway as unknown as {
@@ -810,8 +980,11 @@ describe("remote gateway", () => {
       authorization: "",
       cookie,
     });
-    await waitUntil(() => eventClients(gateway).size === 0, "Expired event stream remained connected");
-    expect(stream.aborted()).toBe(true);
+    // Wait on the client-side signal, which is the later of the two: the gateway
+    // clears its own map synchronously inside `close()`, so asserting the abort
+    // straight after that would race the socket teardown reaching this process.
+    await waitUntil(() => stream.aborted(), "Expired event stream was never aborted");
+    expect(eventClients(gateway).size).toBe(0);
     stream.close();
   });
 

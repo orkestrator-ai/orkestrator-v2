@@ -41,6 +41,7 @@ export type ListenerKind = "control" | "browser";
 export type GatewayRouteKey =
   | "login"
   | "agent-test-bootstrap"
+  | "agent-test-session"
   | "logout"
   | "status"
   | "gateway-settings"
@@ -650,6 +651,10 @@ export function measureChunkBytes(
 
 export function classifyGatewayRoute(pathname: string): GatewayRouteKey {
   if (pathname === `${API_PREFIX}/login`) return "login";
+  // Renewing a session a browser already holds is not minting a credential, so
+  // it gets its own bucket: conflating them would make routine per-tab activity
+  // look like repeated bootstrap attempts.
+  if (pathname === `${API_PREFIX}/agent-test/session`) return "agent-test-session";
   // Covers minting, the POST exchange, and the one-shot login link: all three
   // are the same bootstrap credential, and none may be served as static.
   if (pathname.startsWith(`${API_PREFIX}/agent-test/`)) return "agent-test-bootstrap";

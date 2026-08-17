@@ -51,6 +51,11 @@ lapses after 30 minutes without user activity, after 12 hours regardless of
 activity, and whenever the backend restarts. Existing event and terminal streams
 are closed at the same deadline. Any of those simply means minting another link.
 
+A lapse is never silent. The first command or renewal that comes back `401`
+sends the tab to the login page, so a stale-but-rendered UI is not a state an
+agent has to diagnose: if the browser under test is suddenly showing the login
+page, the session lapsed and the fix is a fresh `dev:login` link.
+
 Agent-test profiles authorize the host's Claude, Codex, Cursor, Grok, and
 OpenCode credentials by default so manual QA can run real agents:
 

@@ -245,6 +245,7 @@ afterEach(() => {
 describe("web gateway browser API", () => {
   test("renews agent-test sessions only after explicit browser activity", async () => {
     const calls: Array<{ url: string; method: string }> = [];
+    const lapsed = mock(() => undefined);
     globalThis.fetch = mock(async (input, init) => {
       const method = init?.method ?? "GET";
       calls.push({ url: String(input), method });
@@ -253,7 +254,7 @@ describe("web gateway browser API", () => {
         : new Response(null, { status: 401 });
     }) as unknown as typeof fetch;
 
-    createBrowserGatewayApi({ agentTestSessionActivity: true });
+    createBrowserGatewayApi({ agentTestSessionActivity: true, onCredentialLapsed: lapsed });
     await waitForCondition(() => calls.length === 1, "Agent-test session was not detected");
     expect(calls).toEqual([{ url: "/__orkestrator/agent-test/session", method: "GET" }]);
 
@@ -261,11 +262,145 @@ describe("web gateway browser API", () => {
     await waitForCondition(() => calls.length === 2, "Explicit activity did not renew the session");
     expect(calls[1]).toEqual({ url: "/__orkestrator/agent-test/session", method: "POST" });
 
-    // A rejected renewal removes both listeners, so unrelated later activity
-    // cannot become a background keepalive loop.
+    // A 401 renewal is a lapsed session, so the tab is sent to the login page
+    // rather than left rendering stale state, and both listeners come off so
+    // unrelated later activity cannot become a background keepalive loop.
+    await waitForCondition(() => lapsed.mock.calls.length === 1, "Lapsed session was not surfaced");
     window.dispatchEvent(new Event("keydown"));
     await Promise.resolve();
     expect(calls).toHaveLength(2);
+    expect(lapsed).toHaveBeenCalledTimes(1);
+  });
+
+  test("surfaces a lapsed agent-test session detected by a command rather than by activity", async () => {
+    // The idle deadline can pass with no keyboard or pointer activity at all, so
+    // the authoritative signal is a 401 from a command the tab was already making.
+    const lapsed = mock(() => undefined);
+    let probes = 0;
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      if (!String(input).includes("/agent-test/session")) {
+        return new Response(JSON.stringify({ error: "Authentication required" }), { status: 401 });
+      }
+      probes += 1;
+      return new Response(JSON.stringify({ active: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const api = createBrowserGatewayApi({
+      agentTestSessionActivity: true,
+      onCredentialLapsed: lapsed,
+    });
+    await waitForCondition(() => probes === 1, "Agent-test session was not detected");
+
+    await expect(api.invoke("list_projects")).rejects.toThrow("Authentication required");
+    expect(lapsed).toHaveBeenCalledTimes(1);
+    // Recovery happens once; a burst of failing commands must not fight over it.
+    await expect(api.invoke("list_projects")).rejects.toThrow("Authentication required");
+    expect(lapsed).toHaveBeenCalledTimes(1);
+  });
+
+  test("leaves a client with no agent-test session alone when a command returns 401", async () => {
+    // A durable-token client has no deadline to trip, so a 401 there is not a
+    // lapsed session and must not navigate the tab away from the app.
+    const lapsed = mock(() => undefined);
+    let probes = 0;
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      if (!String(input).includes("/agent-test/session")) {
+        return new Response(JSON.stringify({ error: "Authentication required" }), { status: 401 });
+      }
+      probes += 1;
+      return new Response(null, { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const api = createBrowserGatewayApi({
+      agentTestSessionActivity: true,
+      onCredentialLapsed: lapsed,
+    });
+    await waitForCondition(() => probes === 1, "Agent-test session probe did not run");
+
+    await expect(api.invoke("list_projects")).rejects.toThrow("Authentication required");
+    expect(lapsed).not.toHaveBeenCalled();
+  });
+
+  test("probes for an agent-test session only when served by a development profile", async () => {
+    // Every production gateway client runs this install path. Probing there would
+    // spend a request per boot on a route that is always 404. Under Bun
+    // `import.meta.env` aliases `process.env`, so the profile signal is set here
+    // rather than inherited from whatever shell happens to run the suite.
+    const previousProfile = process.env.VITE_ORKESTRATOR_PROFILE;
+    const install = async () => {
+      const probed: string[] = [];
+      globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+        if (String(input).includes("/agent-test/session")) probed.push(String(input));
+        return new Response(null, { status: 202 });
+      }) as unknown as typeof fetch;
+      const fakeWindow: TestGatewayWindow = {
+        location: { protocol: "http:" },
+        orkestrator: undefined,
+        orkestratorGateway: undefined,
+      };
+      installBrowserGatewayApi(
+        fakeWindow as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(fakeWindow.orkestrator).toBeDefined();
+      return probed;
+    };
+
+    try {
+      delete process.env.VITE_ORKESTRATOR_PROFILE;
+      expect(await install()).toHaveLength(0);
+
+      process.env.VITE_ORKESTRATOR_PROFILE = "agent-probe-qa";
+      expect(await install()).toHaveLength(1);
+    } finally {
+      if (previousProfile === undefined) delete process.env.VITE_ORKESTRATOR_PROFILE;
+      else process.env.VITE_ORKESTRATOR_PROFILE = previousProfile;
+    }
+  });
+
+  test("disposing a gateway stops its agent-test activity renewals", async () => {
+    const calls: Array<{ url: string; method: string }> = [];
+    globalThis.fetch = mock(async (input, init) => {
+      calls.push({ url: String(input), method: init?.method ?? "GET" });
+      return new Response(JSON.stringify({ active: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+    // Boot metrics also POST from this install path, so every assertion below is
+    // scoped to the session route rather than to the method alone.
+    const sessionCalls = (method: string) => calls.filter((call) => (
+      call.url.includes("/agent-test/session") && call.method === method
+    ));
+    const fakeWindow: TestGatewayWindow = {
+      location: { protocol: "http:" },
+      orkestrator: undefined,
+      orkestratorGateway: undefined,
+    };
+    installBrowserGatewayApi(
+      fakeWindow as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">,
+      { agentTestSessionActivity: true },
+    );
+    // Prove the listener is live before disposing, so a passing assertion after
+    // the replacement cannot just mean it was never attached. The probe attaches
+    // a microtask after its GET resolves and `waitForCondition` checks
+    // synchronously first, so the event is redispatched until it lands; the
+    // renewal throttle keeps that to a single POST.
+    await waitForCondition(() => {
+      window.dispatchEvent(new Event("pointerdown"));
+      return sessionCalls("POST").length === 1;
+    }, "Activity did not renew the session");
+    expect(sessionCalls("GET")).toHaveLength(1);
+
+    // Replacing the gateway runs its disposer. The old closure's window listeners
+    // must come off with it, or a replaced tab keeps renewing a session forever.
+    installBrowserGatewayApi(
+      fakeWindow as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">,
+      { replaceExisting: true },
+    );
+    window.dispatchEvent(new Event("keydown"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(sessionCalls("POST")).toHaveLength(1);
   });
 
   test("passes through an optional server-connections API", async () => {

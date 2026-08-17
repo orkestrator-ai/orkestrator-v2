@@ -28,7 +28,7 @@ import {
 } from "./build-pipeline-provider.js";
 import { REVIEW_FIX_RESULT_JSON_SCHEMA } from "./looped-review-prompts.js";
 import { StorageService } from "./storage.js";
-import { MultiReviewService } from "./multi-review-service.js";
+import { MultiReviewService, type MultiReviewServiceOptions } from "./multi-review-service.js";
 
 const REVIEW_HEAD = "1111111111111111111111111111111111111111";
 const REVIEW_FINGERPRINT = "a".repeat(64);
@@ -77,6 +77,7 @@ class Provider implements BuildPipelineProvider {
    * stays failed until the next turn runs.
    */
   readonly sessionFailures = new Map<string, string>();
+  readonly attached: string[] = [];
   sessions = 0;
   statusValue: ProviderStatus = "idle";
   statusCalls = 0;
@@ -93,6 +94,7 @@ class Provider implements BuildPipelineProvider {
   fixStructuredFailure: StructuredOutputFailureCode | null = null;
   messagesValue: unknown[] = [];
   messagesCalls = 0;
+  readonly messageOptions: Array<{ limit?: number } | undefined> = [];
   disposeCalls = 0;
   /** Throws from `createSession` once this many sessions already exist. */
   failCreateSessionAfter: number | null = null;
@@ -107,6 +109,9 @@ class Provider implements BuildPipelineProvider {
     }
     this.sessions += 1;
     return `session-${this.sessions}`;
+  }
+  async prepareDispatch(sessionId: string) {
+    this.attached.push(sessionId);
   }
   async send(_sessionId: string, prompt: string, options: ProviderSendOptions) {
     this.sends.set(options.requestId, { prompt, options });
@@ -130,8 +135,9 @@ class Provider implements BuildPipelineProvider {
     if (failure) throw new ProviderSessionFailedError(this.agent, failure);
     return this.statusOverrides.get(sessionId) ?? this.statusValue;
   }
-  async messages(): Promise<unknown[]> {
+  async messages(_sessionId: string, options?: { limit?: number }): Promise<unknown[]> {
     this.messagesCalls += 1;
+    this.messageOptions.push(options);
     if (this.messagesGate) await this.messagesGate;
     return this.messagesValue;
   }
@@ -755,6 +761,7 @@ async function withService(
   }) => Promise<void>,
   options: {
     createProvider?: () => Promise<BuildPipelineProvider>;
+    serviceOptions?: Partial<MultiReviewServiceOptions>;
     /** Backend command runner; defaults to a stable clean review snapshot. */
     invoke?: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
   } = {},
@@ -781,6 +788,7 @@ async function withService(
     {
       autoAdvance: false,
       provider: options.createProvider ?? (async () => provider),
+      ...options.serviceOptions,
     },
   );
   try {
@@ -806,6 +814,20 @@ async function waitUntil(predicate: () => boolean | Promise<boolean>, timeoutMs 
     if (Date.now() >= deadline) throw new Error("Timed out waiting for Multi Review state");
     await Bun.sleep(10);
   }
+}
+
+async function mutateStoredWorkflow(
+  storage: StorageService,
+  workflowId: string,
+  mutate: (workflow: MultiReviewWorkflow) => void,
+): Promise<void> {
+  const record = await storage.getMultiReviewWorkflow(workflowId);
+  if (!record) throw new Error(`missing multi review workflow: ${workflowId}`);
+  const snapshot = record.snapshot as MultiReviewWorkflow;
+  mutate(snapshot);
+  await storage.saveMultiReviewWorkflow(
+    workflowId, snapshot.environmentId, snapshot.version, snapshot, record.revision,
+  );
 }
 
 test("MultiReviewService keeps environment activity working until its agents settle", async () => {
@@ -1939,4 +1961,479 @@ test("MultiReviewService leaves a workflow that is not failed untouched on retry
     expect(provider.aborted).toEqual([]);
     expect((await snapshot(started.id))?.reviewers[0]?.providerSessionId).toBe("session-1");
   });
+});
+
+test("MultiReviewService attaches the agent before it dispatches a reviewer prompt", async () => {
+  const provider = new Provider();
+  await withService("env-attach", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+
+    // The cold spawn is the slowest thing a dispatch can wait on, and time spent
+    // on it inside the request is time the outcome is unknowable. Both supervised
+    // sessions pay it before their at-most-once window opens.
+    expect(provider.attached).toContain("session-1");
+    expect(provider.attached).toContain("session-2");
+  });
+});
+
+test("MultiReviewService keeps reviewing when a reviewer cannot be attached", async () => {
+  const provider = new Provider();
+  provider.prepareDispatch = async () => { throw new Error("bridge is warming up"); };
+  await withService("env-attach-failure", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+
+    // Attach is best-effort: the prompt request performs the same work and is
+    // the one that answers authoritatively.
+    expect((await snapshot(started.id))?.reviewers[0]?.status).toBe("completed");
+  });
+});
+
+test("MultiReviewService consolidates from the reviewers left after one is stopped", async () => {
+  const provider = new Provider();
+  provider.statusValue = "idle";
+  // Reviewer 1 never leaves `running`, which is exactly the wedged-sub-agent
+  // shape: the pass cannot consolidate while any reviewer is still running.
+  provider.statusOverrides.set("session-1", "running");
+  await withService("env-stop-reviewer", provider, async ({ service, start, snapshot }) => {
+    const started = await start([
+      { agent: "claude", model: "opus" },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.reviewers[1]?.status === "completed";
+    });
+    await service.advanceNow(started.id);
+    const halted = (await snapshot(started.id))!;
+    expect(halted.phase).toBe("reviewing");
+    expect(halted.reviewers[0]?.status).toBe("running");
+
+    const stopped = await service.stopReviewer(started.id, halted.reviewers[0]!.id);
+    expect(stopped.reviewers[0]).toMatchObject({
+      status: "cancelled",
+      // The session id survives so the read-only transcript stays reachable.
+      providerSessionId: "session-1",
+    });
+    expect(stopped.reviewers[0]?.error).toBeUndefined();
+    expect(provider.aborted).toContain("session-1");
+
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+    const ready = (await snapshot(started.id))!;
+    expect(ready.consolidatedReport).toBeDefined();
+    // Only the reviewer that finished may reach the fix model.
+    const consolidation = [...provider.sends.values()]
+      .find((sent) => sent.prompt.includes("<multi-review-reports-json>"))!;
+    expect(consolidation.prompt).toContain(ready.reviewers[1]!.id);
+    expect(consolidation.prompt).not.toContain(ready.reviewers[0]!.id);
+  });
+});
+
+test("MultiReviewService leaves a settled reviewer alone and releases its stop claim", async () => {
+  const provider = new Provider();
+  await withService("env-stop-settled", provider, async ({ service, storage, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+    const completed = (await snapshot(started.id))!.reviewers[0]!;
+
+    // A double click, or a reviewer that settled between the render and the
+    // command, must not rewrite a finished result or abort a reused session.
+    const stopped = await service.stopReviewer(started.id, completed.id);
+    expect(stopped.reviewers[0]).toMatchObject({
+      status: "completed",
+      completedAt: completed.completedAt,
+    });
+    expect(stopped.reviewers[0]?.report).toBeDefined();
+    expect(provider.aborted).toEqual([]);
+
+    const afterNoop = await storage.claimMultiReviewController(
+      started.id, "other-owner", 15_000,
+    );
+    expect(afterNoop.granted).toBe(true);
+    await storage.releaseMultiReviewController(started.id, "other-owner", afterNoop.token);
+
+    await expect(service.stopReviewer(started.id, "not-a-reviewer"))
+      .rejects.toThrow("Multi review reviewer not found");
+    const afterError = await storage.claimMultiReviewController(
+      started.id, "other-owner-2", 15_000,
+    );
+    expect(afterError.granted).toBe(true);
+  });
+});
+
+test("MultiReviewService keeps its claim when a stale stop targets a settled reviewer", async () => {
+  const provider = new Provider();
+  provider.statusValue = "idle";
+  // Reviewer 1 stays running, so the workflow is still supervised while the
+  // command lands: exactly the shape of a click on a Stop button rendered from
+  // a snapshot taken before reviewer 2 finished.
+  provider.statusOverrides.set("session-1", "running");
+  await withService("env-stop-stale", provider, async ({ service, storage, start, snapshot }) => {
+    const started = await start([
+      { agent: "claude", model: "opus" },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.reviewers[1]?.status === "completed";
+    });
+    const running = (await snapshot(started.id))!;
+    expect(running.phase).toBe("reviewing");
+    const disposalsBefore = provider.disposeCalls;
+
+    const noop = await service.stopReviewer(started.id, running.reviewers[1]!.id);
+    expect(noop.reviewers[1]?.status).toBe("completed");
+
+    // Releasing here would drop the lease, forget every live progress clock and
+    // dispose the provider that reviewer 1 is still running on.
+    const claim = await storage.claimMultiReviewController(started.id, "other-owner", 15_000);
+    expect(claim.granted).toBe(false);
+    expect(provider.disposeCalls).toBe(disposalsBefore);
+    expect((await snapshot(started.id))?.reviewers[0]?.status).toBe("running");
+
+    // The same holds for a reviewer id that no longer resolves.
+    await expect(service.stopReviewer(started.id, "not-a-reviewer"))
+      .rejects.toThrow("Multi review reviewer not found");
+    const afterError = await storage.claimMultiReviewController(
+      started.id, "other-owner-2", 15_000,
+    );
+    expect(afterError.granted).toBe(false);
+    expect(provider.disposeCalls).toBe(disposalsBefore);
+  }, { serviceOptions: { progressProbeIntervalMs: 0 } });
+});
+
+test("MultiReviewService reports a fully stopped panel as stopped, not as a bad report", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  await withService("env-stop-all", provider, async ({ service, start, snapshot }) => {
+    const started = await start([
+      { agent: "claude", model: "opus" },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.reviewers.every(
+        (reviewer) => reviewer.status === "running",
+      ) === true;
+    });
+    const running = (await snapshot(started.id))!;
+    for (const reviewer of running.reviewers) {
+      await service.stopReviewer(started.id, reviewer.id);
+    }
+
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "failed";
+    });
+    const failed = (await snapshot(started.id))!;
+    // A stopped reviewer carries no error, so without the stopped count this
+    // would read as "the models failed to produce a report".
+    expect(failed.error).toContain("2 reviewers were stopped");
+
+    // Retrying a panel that was stopped in full means running it again: the
+    // consolidation branch would otherwise merge an empty set of reports.
+    const retried = await service.retry(started.id);
+    expect(retried.phase).toBe("reviewing");
+    expect(retried.reviewers.map((reviewer) => reviewer.status)).toEqual(["pending", "pending"]);
+    expect(retried.consolidatedReport).toBeUndefined();
+  });
+});
+
+test("MultiReviewService abandons a reviewer whose transcript stopped moving", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Reading" }];
+  await withService("env-stall-abandon", provider, async ({ service, start, snapshot }) => {
+    const started = await start([
+      { agent: "claude", model: "opus" },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      const reviewers = (await snapshot(started.id))?.reviewers ?? [];
+      return reviewers.length > 0 && reviewers.every((reviewer) => reviewer.status === "failed");
+    });
+
+    const failed = (await snapshot(started.id))!;
+    expect(failed.reviewers[0]?.error).toContain("produced no activity");
+    // The session is aborted on the way out: a turn nothing can reach again must
+    // not keep running through consolidation and the fix stage.
+    expect(provider.aborted).toContain("session-1");
+    expect(provider.aborted).toContain("session-2");
+    expect(failed.phase).toBe("failed");
+  }, { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 0 } });
+});
+
+test("MultiReviewService gives a fresh reviewer baseline a grace clock", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Fresh progress" }];
+  await withService("env-stall-baseline", provider, async ({ start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () =>
+      (await snapshot(started.id))?.reviewers[0]?.progressAt !== undefined);
+
+    const running = (await snapshot(started.id))!;
+    expect(running.reviewers[0]?.status).toBe("running");
+    expect(running.reviewers[0]?.progressDigest).toHaveLength(64);
+    expect(provider.aborted).toEqual([]);
+    expect(provider.messageOptions).toContainEqual({ limit: 1 });
+  }, { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 0 } });
+});
+
+test("MultiReviewService warns about a stalled reviewer and retires the warning on progress", async () => {
+  const provider = new Provider(false);
+  provider.statusValue = "running";
+  provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Reading" }];
+  await withService("env-stall-warning", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.reviewers[0]?.stalledSince !== undefined;
+    });
+    expect((await snapshot(started.id))?.reviewers[0]?.status).toBe("running");
+
+    // Bridges stream sub-agent activity into the parent transcript, so a long
+    // turn that is genuinely working keeps moving and must lose the warning.
+    provider.messagesValue = [
+      ...provider.messagesValue,
+      { id: "assistant-2", role: "assistant", content: "Read src/a.ts" },
+    ];
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.reviewers[0]?.stalledSince === undefined;
+    });
+    expect((await snapshot(started.id))?.reviewers[0]?.progressAt).toBeDefined();
+  }, {
+    serviceOptions: {
+      progressProbeIntervalMs: 0,
+      stallWarningMs: 0,
+      stallAbandonMs: 60 * 60_000,
+    },
+  });
+});
+
+test("MultiReviewService keeps a durable stall warning across a restart baseline", async () => {
+  const provider = new Provider(false);
+  provider.statusValue = "running";
+  provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Reading" }];
+  await withService("env-stall-restart", provider, async ({ service, storage, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.reviewers[0]?.stalledSince !== undefined;
+    });
+    const warned = (await snapshot(started.id))!.reviewers[0]!;
+
+    // A restart loses the in-memory fingerprints but not the durable clock, so
+    // the next probe reports a fresh baseline for a session that never moved.
+    await service.shutdown();
+    const restarted = new MultiReviewService(
+      storage,
+      async () => { throw new Error("unexpected command"); },
+      {
+        autoAdvance: false,
+        provider: async () => provider,
+        progressProbeIntervalMs: 0,
+        stallWarningMs: 0,
+        stallAbandonMs: 60 * 60_000,
+      },
+    );
+    try {
+      await restarted.advanceNow(started.id);
+    } finally {
+      await restarted.shutdown();
+    }
+
+    // Restarting is not evidence of progress: only an observed transcript
+    // change may retire the notice the user is looking at.
+    const after = (await snapshot(started.id))!.reviewers[0]!;
+    expect(after.status).toBe("running");
+    expect(after.stalledSince).toBe(warned.stalledSince!);
+  }, {
+    serviceOptions: {
+      progressProbeIntervalMs: 0,
+      stallWarningMs: 0,
+      stallAbandonMs: 60 * 60_000,
+    },
+  });
+});
+
+test("MultiReviewService fails a consolidation session whose transcript stopped moving", async () => {
+  const provider = new Provider();
+  provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Merging" }];
+  // The reviewer (session-1) settles normally; only the consolidation session
+  // wedges. Session ids are allocated in order, so this arms the second one
+  // before the pass can create it.
+  provider.statusOverrides.set("session-2", "running");
+  await withService("env-stall-consolidation", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "failed";
+    });
+    const failed = (await snapshot(started.id))!;
+    expect(failed.error).toContain("consolidation session produced no activity");
+    expect(failed.fixSession?.status).toBe("failed");
+    expect(provider.aborted).toContain("session-2");
+  }, { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 0 } });
+});
+
+test("MultiReviewService gives a fresh consolidation baseline a grace clock", async () => {
+  const provider = new Provider();
+  provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Fresh merge" }];
+  provider.statusOverrides.set("session-2", "running");
+  await withService("env-stall-consolidation-baseline", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.fixSession?.progressAt !== undefined;
+    });
+
+    const consolidating = (await snapshot(started.id))!;
+    expect(consolidating.phase).toBe("consolidating");
+    expect(consolidating.fixSession?.status).toBe("running");
+    expect(provider.aborted).not.toContain("session-2");
+    expect(provider.messageOptions).toContainEqual({ limit: 1 });
+  }, { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 0 } });
+});
+
+test("MultiReviewService still abandons a reviewer when transcript reads fail", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  provider.messages = async () => {
+    throw new Error("transcript is oversized");
+  };
+  await withService("env-stall-read-failure", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.reviewers[0]?.status === "failed";
+    });
+
+    // A wedged session whose /messages route is failing is still wedged: the
+    // durable clock keeps ticking even though the fingerprint cannot be read.
+    expect((await snapshot(started.id))?.reviewers[0]?.error).toContain("produced no activity");
+    expect(provider.aborted).toContain("session-1");
+  }, { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 0 } });
+});
+
+test("MultiReviewService still fails a consolidation session when transcript reads fail", async () => {
+  const provider = new Provider();
+  provider.statusOverrides.set("session-2", "running");
+  const originalMessages = provider.messages.bind(provider);
+  provider.messages = async (sessionId, options) => {
+    if (sessionId === "session-2") throw new Error("transcript is oversized");
+    return originalMessages(sessionId, options);
+  };
+  await withService("env-stall-consolidation-read-failure", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "failed";
+    });
+    expect((await snapshot(started.id))?.error).toContain("consolidation session produced no activity");
+    expect(provider.aborted).toContain("session-2");
+  }, { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 0 } });
+});
+
+test("MultiReviewService abandons a backdated reviewer after restart instead of granting grace", async () => {
+  const provider = new Provider(false);
+  provider.statusValue = "running";
+  provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Reading" }];
+  await withService("env-stall-restart-abandon", provider, async ({ service, storage, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () =>
+      (await snapshot(started.id))?.reviewers[0]?.progressDigest !== undefined);
+    const digest = (await snapshot(started.id))!.reviewers[0]!.progressDigest!;
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+    await service.shutdown();
+    await mutateStoredWorkflow(storage, started.id, (workflow) => {
+      workflow.reviewers[0]!.startedAt = twoHoursAgo;
+      workflow.reviewers[0]!.progressAt = twoHoursAgo;
+    });
+
+    const restarted = new MultiReviewService(
+      storage,
+      async () => { throw new Error("unexpected command"); },
+      {
+        autoAdvance: false,
+        provider: async () => provider,
+        progressProbeIntervalMs: 0,
+        stallAbandonMs: 30 * 60_000,
+      },
+    );
+    try {
+      await waitUntil(async () => {
+        await restarted.advanceNow(started.id);
+        return (await snapshot(started.id))?.reviewers[0]?.status === "failed";
+      });
+    } finally {
+      await restarted.shutdown();
+    }
+
+    // Ten minutes of restart grace would leave elapsed under 30 minutes and
+    // keep the reviewer running. The persisted digest must compare instead.
+    const failed = (await snapshot(started.id))!.reviewers[0]!;
+    expect(failed.error).toContain("produced no activity");
+    expect(failed.progressAt).toBe(twoHoursAgo);
+    expect(failed.progressDigest).toBe(digest);
+  }, { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 60 * 60_000 } });
+});
+
+test("MultiReviewService does not move a durable stall clock forward across restarts", async () => {
+  const provider = new Provider(false);
+  provider.statusValue = "running";
+  provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Reading" }];
+  await withService("env-stall-restart-clock", provider, async ({ service, storage, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () =>
+      (await snapshot(started.id))?.reviewers[0]?.progressDigest !== undefined);
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+    await service.shutdown();
+    await mutateStoredWorkflow(storage, started.id, (workflow) => {
+      workflow.reviewers[0]!.startedAt = twoHoursAgo;
+      workflow.reviewers[0]!.progressAt = twoHoursAgo;
+    });
+
+    const restart = async () => {
+      const next = new MultiReviewService(
+        storage,
+        async () => { throw new Error("unexpected command"); },
+        {
+          autoAdvance: false,
+          provider: async () => provider,
+          progressProbeIntervalMs: 0,
+          stallWarningMs: 0,
+          stallAbandonMs: 24 * 60 * 60_000,
+        },
+      );
+      try {
+        await next.advanceNow(started.id);
+      } finally {
+        await next.shutdown();
+      }
+    };
+
+    await restart();
+    await restart();
+
+    // Each restart used to slide progressAt to now-minus-one-warning-interval,
+    // which postponed abandon indefinitely. The durable clock must stay put.
+    expect((await snapshot(started.id))?.reviewers[0]?.progressAt).toBe(twoHoursAgo);
+    expect((await snapshot(started.id))?.reviewers[0]?.status).toBe("running");
+  }, { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 60 * 60_000 } });
 });

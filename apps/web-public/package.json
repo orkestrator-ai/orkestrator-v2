@@ -1,6 +1,6 @@
 {
   "name": "@orkestrator/web-public",
-  "version": "2.10.6",
+  "version": "2.10.7",
   "private": true,
   "type": "module",
   "scripts": {

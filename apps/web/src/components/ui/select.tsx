@@ -2,10 +2,8 @@ import * as React from "react"
 import * as SelectPrimitive from "@radix-ui/react-select"
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react"
 
-import { OverlayPortalLayer, useOverlayPortalLayer } from "@/components/ui/overlay-portal-layer"
+import { useOverlayPortalLayer } from "@/components/ui/overlay-portal-layer"
 import { cn } from "@/lib/utils"
-
-const SelectPortalLayer = OverlayPortalLayer
 
 function Select({
   ...props
@@ -186,7 +184,6 @@ export {
   SelectGroup,
   SelectItem,
   SelectLabel,
-  SelectPortalLayer,
   SelectScrollDownButton,
   SelectScrollUpButton,
   SelectSeparator,

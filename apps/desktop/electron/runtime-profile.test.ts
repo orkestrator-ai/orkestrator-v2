@@ -54,6 +54,32 @@ describe("runtime profiles", () => {
     })).not.toThrow();
   });
 
+  test("validates a stored platform selection at the file boundary", () => {
+    const safe = resolveRuntimeProfile({
+      repositoryRoot: "/repo/a",
+      requestedId: "safe",
+      roots,
+      agentPlatforms: ["grok", "cursor", "grok"],
+    });
+    expect(safe.agentPlatforms).toEqual(["grok", "cursor"]);
+    expect(parseRuntimeProfile({ ...safe }).agentPlatforms).toEqual(["grok", "cursor"]);
+    // The selection decides which executables get provisioned, so a profile file
+    // must not be able to name something that is not an agent platform.
+    expect(() => parseRuntimeProfile({ ...safe, agentPlatforms: ["cursor", "sh"] }))
+      .toThrow("agentPlatforms is invalid");
+    expect(() => parseRuntimeProfile({ ...safe, agentPlatforms: "cursor" as never }))
+      .toThrow("agentPlatforms is invalid");
+  });
+
+  test("reads a profile written before platform selection existed", () => {
+    const safe = resolveRuntimeProfile({ repositoryRoot: "/repo/a", requestedId: "safe", roots });
+    const { agentPlatforms: _omitted, ...legacy } = safe;
+    // Such a profile provisioned nothing, which is what an empty selection means.
+    // Failing the parse instead would make dev:stop and dev:reset fall back to a
+    // profile rebuilt from arguments rather than the one on disk.
+    expect(parseRuntimeProfile(legacy).agentPlatforms).toEqual([]);
+  });
+
   test("refuses a loaded development profile rooted in production state", () => {
     const roots = defaultRuntimeProfileRoots();
     const safe = resolveRuntimeProfile({ repositoryRoot: "/repo/a", requestedId: "safe" });

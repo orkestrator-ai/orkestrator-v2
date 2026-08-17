@@ -671,6 +671,57 @@ describe("BuildChatTab presentation", () => {
     expect(visibleTextContents()).toEqual([]);
   });
 
+  test("withholds a half-written report draft and keeps the reviewer's prose", async () => {
+    // What a provider that answers a schema-constrained turn in the text
+    // channel actually streams: prose progress, then longer and longer drafts
+    // of the report. A draft validates as nothing, so no payload filter claims
+    // it, and it would otherwise render as a wall of raw JSON. The review
+    // prompt tells the agent this withholding happens.
+    const draft = '{"reviewScope":{"targetBranch":"main","filesReviewed":["a.ts"';
+    const fencedDraft = '```json\n{"issues":[{"severity":"P1",\n```';
+    renderTab({
+      ...reviewed,
+      sessions: reviewed.sessions.map((session) =>
+        session.phase === "review"
+          ? {
+              ...session,
+              messages: [{
+                id: "review-answer",
+                role: "assistant",
+                content: draft,
+                parts: [
+                  { type: "text", content: "Inspecting the changed files." },
+                  { type: "text", content: draft },
+                  {
+                    type: "tool-invocation",
+                    content: "git diff --stat",
+                    toolName: "shell",
+                    toolState: "success",
+                  },
+                  { type: "text", content: fencedDraft },
+                  {
+                    type: "text",
+                    content: 'The config `{"strict":true}` is already covered.',
+                  },
+                ],
+              }],
+            }
+          : session
+      ),
+    });
+
+    fireEvent.click(screen.getByText("Review Session"));
+    await waitFor(() =>
+      expect(screen.getByText("Inspecting the changed files.")).toBeTruthy());
+
+    expect(visibleTextContents()).toEqual([
+      "Inspecting the changed files.",
+      'The config `{"strict":true}` is already covered.',
+    ]);
+    expect(visibleToolInvocations()).toEqual(["git diff --stat"]);
+    expect(screen.queryByText(/filesReviewed/) === null).toBe(true);
+  });
+
   test("shows only the completed turn's final verification verdict", async () => {
     const inspecting = JSON.stringify({
       complete: false,

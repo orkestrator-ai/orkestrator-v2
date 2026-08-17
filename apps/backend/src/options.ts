@@ -32,6 +32,8 @@ export type BackendOptions = {
   tailscaleServePort: number;
   tailscaleExecutable: string;
   runtimeFlavor: "production" | "development" | "agent-test";
+  /** Isolated development profile name; only used for developer-facing hints. */
+  runtimeProfileId?: string;
   worktreeDir?: string;
   dockerImage: string;
   strictDockerOwner: boolean;
@@ -161,6 +163,7 @@ export function parseOptions(
       ?? env.ORKESTRATOR_TAILSCALE_BIN
       ?? defaultTailscaleExecutable(),
     runtimeFlavor,
+    runtimeProfileId: (valueAfter(args, "--runtime-profile-id") ?? env.ORKESTRATOR_RUNTIME_PROFILE_ID)?.trim() || undefined,
     worktreeDir: (valueAfter(args, "--worktree-dir") ?? env.ORKESTRATOR_WORKTREE_DIR)
       ? path.resolve(valueAfter(args, "--worktree-dir") ?? env.ORKESTRATOR_WORKTREE_DIR!)
       : undefined,

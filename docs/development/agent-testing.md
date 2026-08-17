@@ -24,6 +24,38 @@ The second start is idempotent and reports the already-running launcher. Wait fo
 `testProject`, `electronTitle`, and `logDir`. The manifest names the mode-0600
 gateway auth file but never includes its token.
 
+## Sign a browser in
+
+```bash
+bun run dev:login -- --profile codex-qa          # human-readable
+bun run dev:login -- --profile codex-qa --json   # { loginUrl, expiresAt, ... }
+```
+
+This is the normal way to reach the UI. The command reads the profile's auth
+file on the host, exchanges it for a bootstrap code over loopback, and prints a
+`loginUrl`. Open that URL in the browser under test: the gateway consumes the
+code, sets the session cookie, and redirects to the app, so nothing has to be
+typed into the login form.
+
+The link is deliberately weak on its own. It carries a single-use code, not the
+gateway token; it is destroyed by the first request that presents it; it expires
+in two minutes; and it is only accepted on an agent-test profile's loopback
+browser listener. Mint a new one whenever a link is spent or stale — that is
+cheaper than reusing anything. The durable token never appears in the URL,
+`dev:login` output, or browser state, and must still never be echoed, pasted
+into chat, or captured in artifacts.
+
+The resulting browser session renews on throttled keyboard and pointer activity,
+so background status polling cannot keep an abandoned tab authenticated. It
+lapses after 30 minutes without user activity, after 12 hours regardless of
+activity, and whenever the backend restarts. Existing event and terminal streams
+are closed at the same deadline. Any of those simply means minting another link.
+
+A lapse is never silent. The first command or renewal that comes back `401`
+sends the tab to the login page, so a stale-but-rendered UI is not a state an
+agent has to diagnose: if the browser under test is suddenly showing the login
+page, the session lapsed and the fix is a fresh `dev:login` link.
+
 Agent-test profiles authorize the host's Claude, Codex, Cursor, Grok, and
 OpenCode credentials by default so manual QA can run real agents:
 
@@ -39,6 +71,51 @@ other agent platform). To test the signed-out experience, pass
 `--no-agent-credentials`. GitHub and unrelated ambient API credentials remain
 disabled. Live agent requests can incur external effects or cost, so use only
 the seeded fixture and do not put credentials in test output.
+
+## Agent toolchains in an isolated profile
+
+An agent-test profile provisions its own managed toolchain for every agent
+platform by default, taking its selection from the launcher rather than from the
+durable per-installation choice — an isolated run never inherits or rewrites
+your real one.
+
+This matters most for Cursor and Grok. Claude, Codex and OpenCode fall back to a
+PATH lookup, so they run in a profile that provisioned nothing; Cursor and Grok
+resolve **only** through the managed toolchain, by design (`cursor` on PATH is
+the desktop editor, not the ACP agent). A profile without them reports
+`Cursor Agent is enabled but not installed yet` when a session is created,
+which reads like a broken install rather than a missing selection.
+
+The launcher's selection is also written into the profile's own state, so the
+platforms it provisions are the platforms the app offers. Without that, a run
+would download Cursor and Grok and still show only the legacy three in every
+agent picker.
+
+Startup seeds each toolchain from your host installation when it has the same
+pinned version, so the default normally costs a local copy rather than a
+download. Anything the host lacks is downloaded as usual, and a toolchain the
+profile already has is left alone. Narrow the set when a run does not need all
+five:
+
+```bash
+bun run dev:test -- --profile cursor-qa --fixture --agent-platforms cursor,grok
+```
+
+`--agent-platforms` belongs to `dev:test` only; `bun run dev` rejects it rather
+than accept a value it would ignore, because ordinary development keeps its
+durable per-installation selection.
+
+The launcher prints what it seeded, what it could not seed, and what Electron
+will therefore download. A first run on a host without the pinned versions needs
+network access for that download, and it is the slow part of startup — narrowing
+the selection is the way to avoid it. If preparation fails, an agent-test profile
+logs the reason and exits instead of waiting on a retry dialog nobody is there to
+answer; look for it under the manifest's `logDir` and in the launcher output, then
+re-run once the cause is fixed.
+
+Seeding is one-way: nothing is written back into the production data directory,
+and its activation directory is never touched. Use `--keep-toolchains` with
+`dev:reset` to retain what a profile has provisioned.
 
 On macOS, Claude's and Cursor's logins live in the login Keychain rather than on
 disk. Startup reads only the explicitly authorized provider's named Keychain
@@ -153,12 +230,14 @@ clipboard, preload/IPC, window identity, or shutdown. For those native checks,
 target the exact `electronTitle`; never interact with a window titled only
 `Orkestrator AI`.
 
-If the browser shows the login page, `authFile` is an owner-only JSON file and
-its `token` property is the exact code the page is requesting. It is the gateway
-token, not an OTP or a code shown elsewhere. Read the value locally, type it only
-into the gateway-token password field, and submit. Never echo it, include it in
-a shell argument or URL, paste it into chat, or capture it in screenshots,
-traces, logs, and reports.
+If the browser shows the login page, do not go looking for the token: run
+`bun run dev:login -- --profile <profile>` and open the `loginUrl` it prints, as
+described above. The page itself repeats that command for the running profile.
+Typing the token into the form still works and remains the fallback if the
+launcher is unavailable — `authFile` is an owner-only JSON file whose `token`
+property is exactly what the field wants, it is the gateway token rather than an
+OTP, and it must never be echoed, put in a shell argument or URL, pasted into
+chat, or captured in screenshots, traces, logs, and reports.
 
 Use the fixture to create/start an environment, open a terminal, run
 `bun run dev`, open the printed preview, change the `fixture-v1` marker, and
@@ -181,6 +260,9 @@ bun run dev:stop -- --profile codex-qa
 bun run dev:reset -- --profile codex-qa
 ```
 
+Stopping the profile also discards every issued browser session, since they live
+only in the backend process.
+
 Reset refuses a live launcher unless `--stop-first` is explicit. It validates the
 profile sentinel and path, removes only exact-owner Docker containers, and then
 deletes that profile's disposable state. Preserve downloaded binaries with
@@ -188,7 +270,10 @@ deletes that profile's disposable state. Preserve downloaded binaries with
 
 ## Troubleshooting
 
-- Read `dev:status --json`, then inspect only the returned `logDir`.
+- Read `dev:status --json`, then inspect only the returned `logDir`. Its derived
+  `loginCommand` is the exact `dev:login` invocation for that profile.
+- A login page that reappears mid-session means the browser session lapsed or the
+  backend restarted. Mint a fresh link rather than hunting for the token.
 - For failed tests and typechecks, inspect the compressed artifact directory
   printed by the logged runner rather than relying on the agent/tool buffer.
 - An occupied reserved port fails startup clearly; retrying allocates fresh ports.

@@ -3,6 +3,10 @@ import { AlertCircle, CheckCircle2, Loader2, RefreshCw, Square } from "lucide-re
 import type { MultiReviewReviewerTranscript } from "@orkestrator/protocol/multi-review";
 import type { MultiReviewTabData } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
+import {
+  MessageRenderBoundary,
+  messageRenderResetKey,
+} from "@/components/chat/MessageRenderBoundary";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
@@ -10,7 +14,11 @@ import { StructuredReviewReportView } from "@/components/review/StructuredReview
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useVirtuosoScrollState } from "@/hooks";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
-import { showOnlyFinalStructuredReviewMessage } from "@/lib/structured-review-messages";
+import { multiReviewReviewerScrollKey } from "@/lib/multi-review-keys";
+import {
+  hideMachineOutputText,
+  showOnlyFinalStructuredReviewMessage,
+} from "@/lib/structured-review-messages";
 import * as backend from "@/lib/backend";
 import { toPipelineTranscript } from "@/components/build-pipeline/pipeline-transcript";
 
@@ -62,7 +70,15 @@ export function toMultiReviewReviewerMessages(snapshot: MultiReviewReviewerTrans
   // The workflow's validated report is authoritative. Schema-shaped text in
   // the provider transcript is progress data and must never be shown as raw
   // JSON (or mistaken for an accepted result).
-  return showOnlyFinalStructuredReviewMessage(output, false);
+  //
+  // Two passes because they catch different things. The first removes reports
+  // that validate. The second removes every remaining JSON document — the
+  // half-written drafts a provider streams while composing its answer, which
+  // validate as nothing and would otherwise render verbatim. Whatever survives
+  // is prose: the reviewer's actual commentary.
+  return hideMachineOutputText(
+    showOnlyFinalStructuredReviewMessage(output, false),
+  );
 }
 
 export function MultiReviewReviewerTab({
@@ -149,7 +165,7 @@ export function MultiReviewReviewerTab({
     return toMultiReviewReviewerMessages(snapshot);
   }, [snapshot]);
 
-  const scrollKey = `multi-review:${data.workflowId}:reviewer:${data.reviewerId}`;
+  const scrollKey = multiReviewReviewerScrollKey(data.workflowId, data.reviewerId);
   const { virtuosoRef, scrollProps } = useVirtuosoScrollState({
     isActive,
     persistKey: scrollKey,
@@ -227,14 +243,24 @@ export function MultiReviewReviewerTab({
           computeItemKey={(_index, message) => message.id}
           resolvePreviousMessage={findPreviousNativeMessage}
           renderMessage={(_index, message, previous) => (
-            <NativeMessage
-              message={message}
-              previousMessage={previous}
-              assistantLabel={label}
-              containerId={containerId}
-              agentExpansionScope={data.environmentId}
-              platform={snapshot?.agent}
-            />
+            // This read-only view re-reads the whole provider transcript every
+            // few seconds while the reviewer streams, so a frame can hold a
+            // message shape no renderer has seen before. One such message must
+            // degrade to its own row — not hand the entire tab to the view
+            // error boundary — and retries as soon as a poll reports that this
+            // message changed. Keyed on content, not identity: every poll
+            // rebuilds all message objects, so identity would retry a row that
+            // fails deterministically on every interval for the whole review.
+            <MessageRenderBoundary resetKey={messageRenderResetKey(message)}>
+              <NativeMessage
+                message={message}
+                previousMessage={previous}
+                assistantLabel={label}
+                containerId={containerId}
+                agentExpansionScope={data.environmentId}
+                platform={snapshot?.agent}
+              />
+            </MessageRenderBoundary>
           )}
           emptyState={
             <div className="px-6 py-12 text-center text-sm text-muted-foreground">

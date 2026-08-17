@@ -165,6 +165,35 @@ export function useNativeAgentSession<TMessage = unknown>({
   const projectionOperationEpochRef = useRef(0);
   const refreshesInFlightRef = useRef(0);
   const reconcileAfterInFlightRef = useRef(false);
+  /**
+   * How many `connect()` calls are still establishing this tab's provider
+   * session — that is, still inside `adopt`/`ensure`.
+   *
+   * A read taken inside that window is not authoritative. The backend resolves
+   * a logical session key to a provider session, and until the adopt or ensure
+   * that creates the mapping returns there is nothing to resolve, so the read
+   * answers `null`. That is "not created yet", not "this session is gone", and
+   * the two are indistinguishable at the call site. Spawning a fresh agent is
+   * slow enough — seconds, for a cold ACP bridge — that ordinary background
+   * refreshes land squarely in the middle of it, and one of them settling the
+   * connection surface is what flashes Connection Failed on a tab that goes on
+   * to connect perfectly well.
+   */
+  const establishingSessionRef = useRef(0);
+  /**
+   * Whether the last `connect()` failed to establish a session and its error is
+   * still the truest thing known about this tab.
+   *
+   * A failed adopt/ensure leaves no provider mapping behind, so every read that
+   * follows resolves to `null` — and a read that installs `null` normally clears
+   * `runtimeError`, because an authoritative "no session" is not an error state.
+   * That combination replaces a message the user can act on ("provider session
+   * was not found", an auth failure, a bridge that would not spawn) with the
+   * generic connection-failed surface, within one poll interval. The flag keeps
+   * the establishment error until a read actually finds a session or a fresh
+   * connect supersedes it.
+   */
+  const establishmentFailureRef = useRef(false);
   const backgroundRefreshEnabledRef = useRef(enabled && isActive);
   backgroundRefreshEnabledRef.current = enabled && isActive;
   const refreshRef = useRef<(
@@ -226,13 +255,38 @@ export function useNativeAgentSession<TMessage = unknown>({
     }
   }, [environmentId, sessionKey, tabId, updateTabNativeSessionId]);
 
+  /**
+   * Run the trailing reconciliation a coalesced invalidation asked for, once
+   * nothing is left that would make its read stale or premature.
+   */
+  const flushPendingReconcile = useCallback(() => {
+    if (!reconcileAfterInFlightRef.current) return;
+    if (refreshesInFlightRef.current > 0 || establishingSessionRef.current > 0) return;
+    reconcileAfterInFlightRef.current = false;
+    if (!backgroundRefreshEnabledRef.current) return;
+    queueMicrotask(() => {
+      void refreshRef.current?.({
+        manual: false,
+        reconcileAfterInFlight: true,
+      });
+    });
+  }, []);
+
   const refresh = useCallback(async (options?: {
     manual?: boolean;
     reconcileAfterInFlight?: boolean;
   }) => {
     if (!enabled) return null;
     const background = options?.manual === false;
-    if (background && refreshesInFlightRef.current > 0) {
+    // A background read is never worth issuing while the session is still
+    // being established: it cannot resolve to anything but `null`, and the
+    // per-environment invalidation that triggers most of them fires for every
+    // sibling tab in the environment, so a second agent tab makes this the
+    // common case rather than a rare race.
+    if (
+      background
+      && (refreshesInFlightRef.current > 0 || establishingSessionRef.current > 0)
+    ) {
       if (options.reconcileAfterInFlight) {
         reconcileAfterInFlightRef.current = true;
       }
@@ -252,9 +306,17 @@ export function useNativeAgentSession<TMessage = unknown>({
       if (
         sequence === refreshSequenceRef.current
         && operationEpoch === projectionOperationEpochRef.current
+        // An empty read that raced this tab's own session creation says
+        // nothing about the session; installing it would discard a cached
+        // projection in favour of a state the backend never asserted.
+        && !(next === null && establishingSessionRef.current > 0)
       ) {
         applyProjection(next);
-        setRuntimeError(null);
+        // A session that exists supersedes any earlier creation failure. One
+        // that still does not exist is exactly what that failure described, so
+        // its message survives instead of decaying into a generic failure.
+        if (next) establishmentFailureRef.current = false;
+        if (next || !establishmentFailureRef.current) setRuntimeError(null);
       }
       return next;
     } catch (error) {
@@ -270,25 +332,19 @@ export function useNativeAgentSession<TMessage = unknown>({
       if (
         sequence === refreshSequenceRef.current
         && operationEpoch === projectionOperationEpochRef.current
+        // Nothing this read saw is settled while the session it describes is
+        // still being created. `connect` owns the connection surface for that
+        // window and reads authoritatively once the provider mapping exists.
+        && establishingSessionRef.current === 0
       ) {
         setIsRefreshing(false);
         // Settled, whatever it returned. A read that resolves to null is an
         // authoritative "no session", not a pending one.
         setHasCompletedRead(true);
       }
-      if (refreshesInFlightRef.current === 0 && reconcileAfterInFlightRef.current) {
-        reconcileAfterInFlightRef.current = false;
-        if (backgroundRefreshEnabledRef.current) {
-          queueMicrotask(() => {
-            void refreshRef.current?.({
-              manual: false,
-              reconcileAfterInFlight: true,
-            });
-          });
-        }
-      }
+      flushPendingReconcile();
     }
-  }, [applyProjection, enabled, identity, messageLimit]);
+  }, [applyProjection, enabled, flushPendingReconcile, identity, messageLimit]);
 
   useEffect(() => {
     refreshRef.current = refresh;
@@ -308,6 +364,20 @@ export function useNativeAgentSession<TMessage = unknown>({
     // inherit a completed read it never made.
     setRuntimeError(null);
     setHasCompletedRead(false);
+    establishmentFailureRef.current = false;
+    // Held only for as long as the provider mapping is genuinely missing, so
+    // the reads that follow the adopt/ensure below still settle normally and a
+    // session that really is gone is still reported as one.
+    establishingSessionRef.current += 1;
+    let establishing = true;
+    const settleEstablishing = () => {
+      if (!establishing) return;
+      establishing = false;
+      establishingSessionRef.current = Math.max(
+        0,
+        establishingSessionRef.current - 1,
+      );
+    };
     const cached = projectionRef.current;
     const cachedSessionMatches = Boolean(
       initialProviderSessionId
@@ -363,7 +433,11 @@ export function useNativeAgentSession<TMessage = unknown>({
       isInitializedRef.current = true;
       lastInitTimeRef.current = Date.now();
       acknowledgeInitialLaunchOptions();
+      establishmentFailureRef.current = false;
       setRuntimeError(null);
+      // The provider mapping now exists, so every read from here on is
+      // authoritative again — including the two below.
+      settleEstablishing();
       if (cachedSessionRefresh) {
         const hydrated = await cachedSessionRefresh;
         if (
@@ -376,10 +450,21 @@ export function useNativeAgentSession<TMessage = unknown>({
       }
       return await refresh();
     } catch (error) {
+      // A failed adopt/ensure is a real, reportable failure: close the window
+      // first so this error actually reaches the connection surface, and mark it
+      // so the reads that follow — the trailing reconcile below, then the poll
+      // loop — report the same failure rather than overwriting it.
+      settleEstablishing();
+      establishmentFailureRef.current = true;
       setRuntimeError(error instanceof Error ? error.message : String(error));
       setIsRefreshing(false);
       setHasCompletedRead(true);
       return null;
+    } finally {
+      // Backstop for a path that returned before the settle above, and the
+      // point where a reconciliation coalesced during establishment is run.
+      settleEstablishing();
+      flushPendingReconcile();
     }
   }, [
     acknowledgeInitialLaunchOptions,
@@ -394,6 +479,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     initialProviderSessionId,
     initialReasoningEffort,
     enabled,
+    flushPendingReconcile,
     platform,
     refresh,
   ]);
@@ -404,6 +490,9 @@ export function useNativeAgentSession<TMessage = unknown>({
   // tab resolves its platform after mount, which is exactly that case.
   useEffect(() => {
     setHasCompletedRead(false);
+    // For the same reason: one identity's creation failure must not keep
+    // suppressing another identity's authoritative reads.
+    establishmentFailureRef.current = false;
   }, [enabled, identity]);
 
   useEffect(() => {

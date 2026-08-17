@@ -129,6 +129,14 @@ interface LazyLoadErrorBoundaryProps {
   renderError: (details: LazyLoadErrorDetails) => ReactNode;
   onReload: () => void;
   resetKeys?: readonly unknown[];
+  /**
+   * Called with the bounded diagnostic when a failure is caught. Owners use
+   * this to discard module-level state (persisted scroll snapshots, caches)
+   * that outlives the remount — without it, state that contributed to the
+   * crash replays the identical crash on every retry, so the "Retry view"
+   * affordance can never succeed.
+   */
+  onError?: (diagnostic: LazyLoadFailureDiagnostic) => void;
 }
 
 interface LazyLoadErrorBoundaryState {
@@ -154,10 +162,13 @@ class LazyLoadErrorBoundary extends Component<
     // contain chunk URLs, absolute paths, transcript text, or file contents.
     // The bounded diagnostic keeps only an allowlisted type, a one-way
     // fingerprint and component names extracted without source locations.
-    console.error(
-      "[LazyLoadBoundary] View failure",
-      createLazyLoadFailureDiagnostic(error, info),
-    );
+    const diagnostic = createLazyLoadFailureDiagnostic(error, info);
+    console.error("[LazyLoadBoundary] View failure", diagnostic);
+    try {
+      this.props.onError?.(diagnostic);
+    } catch {
+      // A cleanup hook must not replace the fallback with a second crash.
+    }
   }
 
   componentDidUpdate(previousProps: LazyLoadErrorBoundaryProps): void {
@@ -280,6 +291,8 @@ interface LazyLoadBoundaryProps {
   onReload?: () => void;
   /** Retry a failed child when any authoritative generation value changes. */
   resetKeys?: readonly unknown[];
+  /** Discard state that outlives the remount; see LazyLoadErrorBoundaryProps. */
+  onError?: (diagnostic: LazyLoadFailureDiagnostic) => void;
 }
 
 export function LazyLoadBoundary({
@@ -288,12 +301,14 @@ export function LazyLoadBoundary({
   renderError = (details) => <LazyLoadOverlayErrorFallback {...details} />,
   onReload = () => window.location.reload(),
   resetKeys,
+  onError,
 }: LazyLoadBoundaryProps) {
   return (
     <LazyLoadErrorBoundary
       renderError={renderError}
       onReload={onReload}
       resetKeys={resetKeys}
+      onError={onError}
     >
       <Suspense fallback={loadingFallback}>{children}</Suspense>
     </LazyLoadErrorBoundary>

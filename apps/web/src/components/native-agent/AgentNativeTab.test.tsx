@@ -80,7 +80,7 @@ const defaultAdoptNativeAgentSession = async (input: {
   agent: input.agent,
 });
 const adoptNativeAgentSessionMock = mock(defaultAdoptNativeAgentSession);
-const ensureNativeAgentSessionMock = mock(async (input: {
+const defaultEnsureNativeAgentSession = async (input: {
   agent: string;
   logicalSessionKey: string;
   environmentId: string;
@@ -89,7 +89,8 @@ const ensureNativeAgentSessionMock = mock(async (input: {
   logicalSessionKey: input.logicalSessionKey,
   environmentId: input.environmentId,
   agent: input.agent,
-}));
+});
+const ensureNativeAgentSessionMock = mock(defaultEnsureNativeAgentSession);
 const listNativeAgentResumableSessionsMock = mock(async () => []);
 const getAgentHandoffMock = mock(
   async (_handoffId: string): Promise<unknown> => null,
@@ -248,6 +249,9 @@ afterEach(() => {
   // provider that refuses.
   adoptNativeAgentSessionMock.mockImplementation(defaultAdoptNativeAgentSession);
   ensureNativeAgentSessionMock.mockClear();
+  // Restored for the same reason as the adoption above: a test that parks or
+  // fails session creation must not leave later tests unable to connect.
+  ensureNativeAgentSessionMock.mockImplementation(defaultEnsureNativeAgentSession);
   listNativeAgentResumableSessionsMock.mockClear();
   getAgentHandoffMock.mockClear();
   dispatchNativeAgentIntentMock.mockClear();
@@ -294,6 +298,21 @@ function identity(platform: NativeAgentTabData["platform"]): NativeAgentTabData 
     environmentId: "env-1",
     containerId: "container-1",
     sessionId: `${platform}-session`,
+    isLocal: false,
+  };
+}
+
+/**
+ * A tab the user has just created.
+ *
+ * The absence of `sessionId` is the whole point: there is no durable provider
+ * session to adopt, so the tab has to create one before anything can read it.
+ */
+function freshTab(platform: NativeAgentTabData["platform"]): NativeAgentTabData {
+  return {
+    platform,
+    environmentId: "env-1",
+    containerId: "container-1",
     isLocal: false,
   };
 }
@@ -356,7 +375,10 @@ function NativeSessionIdentityHarness({
     enabled,
   });
   return (
-    <output data-testid="has-completed-read">{String(session.hasCompletedRead)}</output>
+    <>
+      <output data-testid="has-completed-read">{String(session.hasCompletedRead)}</output>
+      <output data-testid="runtime-error">{session.runtimeError ?? ""}</output>
+    </>
   );
 }
 
@@ -558,9 +580,9 @@ describe("AgentNativeTab", () => {
 
     expect(screen.queryByRole("button", { name: "Conversation mode" }) === null).toBe(true);
     const profileButton = await screen.findByRole("button", { name: "Execution profile" });
-    expect(profileButton.textContent).toContain("Build agent");
+    expect(profileButton.textContent).toContain("Build");
     fireEvent.pointerDown(profileButton);
-    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Plan agent" }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Plan" }));
 
     const input = screen.getByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Plan the change" } });
@@ -585,6 +607,69 @@ describe("AgentNativeTab", () => {
     ));
     expect(JSON.stringify(flushPaneLayoutNowMock.mock.calls[0]?.[1]))
       .toContain('"initialExecutionProfileId":"plan"');
+  });
+
+  test("cycles the launcher's execution profile with Shift+Tab", async () => {
+    // Shift+Tab is the Plan/Build toggle on a platform with conversation modes.
+    // A platform whose Plan/Build is an execution profile has to answer the same
+    // keystroke, and the two handlers must stay mutually exclusive so one
+    // keystroke never writes both fields.
+    getNativeAgentModelCatalogMock.mockImplementation(async () => [
+      {
+        platform: "opencode",
+        id: "opencode/sonnet",
+        label: "OpenCode Sonnet",
+        supportsSpeed: false,
+        supportsMode: false,
+      },
+    ] as never);
+    useEnvironmentStore.setState({
+      environments: [{
+        id: "env-1",
+        projectId: "project-1",
+        name: "Profile cycle",
+        order: 0,
+        setupPhase: "ready",
+      } as never],
+    });
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["opencode"],
+      favoriteModels: [],
+    } as never);
+    const tabId = "tab-opencode-profile-cycle";
+    seedUnassignedPane(tabId);
+    const sessionKey = createSessionKey("env-1", tabId);
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      platform: "opencode",
+      modelId: "opencode/sonnet",
+    });
+
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+
+    const profileButton = await screen.findByRole("button", { name: "Execution profile" });
+    expect(profileButton.textContent).toContain("Build");
+    const input = screen.getByRole("textbox");
+
+    fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+    await waitFor(() => expect(
+      useNativeComposeStore.getState().drafts.get(sessionKey)?.executionProfileId,
+    ).toBe("plan"));
+    // The conversation-mode field still holds its default: only one of the two
+    // handlers may claim the keystroke, and the mode one would have flipped
+    // this to "plan".
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.mode)
+      .toBe("build");
+
+    // Wraps back round rather than running off the end of the pair.
+    fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+    await waitFor(() => expect(
+      useNativeComposeStore.getState().drafts.get(sessionKey)?.executionProfileId,
+    ).toBe("build"));
+
+    // A plain Tab is still the browser's focus move, not a profile change.
+    fireEvent.keyDown(input, { key: "Tab" });
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.executionProfileId)
+      .toBe("build");
   });
 
   test("drops the previous platform's effort when one click also switches platform", async () => {
@@ -1436,6 +1521,276 @@ describe("AgentNativeTab", () => {
     expect(screen.queryByText("Connecting to Cursor Agent...") === null).toBe(true);
   });
 
+  test("stays connecting while an invalidation races a new tab's session creation", async () => {
+    // What the backend really answers while `ensure` is still spawning the
+    // agent: the logical key has no provider session to resolve yet.
+    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    let settleEnsure: (() => void) | undefined;
+    ensureNativeAgentSessionMock.mockImplementation((input) => new Promise((resolve) => {
+      settleEnsure = () => resolve({
+        providerSessionId: "cursor-session",
+        logicalSessionKey: input.logicalSessionKey,
+        environmentId: input.environmentId,
+        agent: input.agent,
+      });
+    }));
+
+    render(<AgentNativeTab tabId="tab-new-cursor" data={freshTab("cursor")} isActive />);
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
+
+    // Invalidations are announced per environment, so every projection commit
+    // by a sibling agent tab reaches this one too. With a second Cursor tab
+    // open that makes this the common path, not a rare race.
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
+      });
+      // The dispatcher coalesces for 50ms; wait past that so the invalidation
+      // genuinely reaches the hook while creation is still in flight.
+      await new Promise<void>((resolve) => { setTimeout(resolve, 120); });
+    });
+
+    // Cursor is still being spawned. "No session" is not something the backend
+    // can assert yet, and a failure the user cannot act on — on a tab that goes
+    // on to connect — is worse than showing the wait it is already in.
+    expect(screen.getByText("Connecting to Cursor Agent...")).toBeTruthy();
+    expect(screen.queryByText("Connection Failed") === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
+
+    getNativeAgentProjectionMock.mockImplementation(defaultProjection);
+    await act(async () => {
+      settleEnsure!();
+      await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
+    });
+    await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
+  });
+
+  test("keeps a creation failure that raced an invalidation instead of a generic one", async () => {
+    // The pairing that loses the message: a sibling tab's invalidation is
+    // coalesced while creation is in flight, then creation fails. The trailing
+    // reconcile — and, a poll later, the refresh interval — read a session that
+    // does not exist, and installing that empty read used to clear the error.
+    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    let failEnsure: (() => void) | undefined;
+    ensureNativeAgentSessionMock.mockImplementation(() => new Promise((_resolve, reject) => {
+      failEnsure = () => reject(new Error("cursor-agent is enabled but not installed yet"));
+    }));
+
+    render(<AgentNativeTab tabId="tab-new-cursor-fail" data={freshTab("cursor")} isActive />);
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
+
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
+      });
+      await new Promise<void>((resolve) => { setTimeout(resolve, 120); });
+    });
+
+    await act(async () => {
+      failEnsure!();
+      await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
+    });
+
+    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
+    // The actionable reason, not "Unable to connect".
+    expect(screen.getByText("cursor-agent is enabled but not installed yet")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+
+    // And it survives the poll loop, which reads the same absent session again.
+    await act(async () => {
+      await new Promise<void>((resolve) => { setTimeout(resolve, 1_700); });
+    });
+    expect(screen.getByText("cursor-agent is enabled but not installed yet")).toBeTruthy();
+  }, 10_000);
+
+  test("releases a creation failure once a read finds the session", async () => {
+    ensureNativeAgentSessionMock.mockImplementation(async () => {
+      throw new Error("bridge refused the session");
+    });
+    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+
+    render(<NativeSessionIdentityHarness platform="cursor" />);
+    await waitFor(() => expect(
+      screen.getByTestId("runtime-error").textContent,
+    ).toBe("bridge refused the session"));
+
+    // Suppression is scoped to "the session still is not there". A read that
+    // does find one supersedes the failure — otherwise the message outlives what
+    // it described, and the next genuine absence reports a stale cause.
+    getNativeAgentProjectionMock.mockImplementation(defaultProjection);
+    await waitFor(
+      () => expect(screen.getByTestId("runtime-error").textContent).toBe(""),
+      { timeout: 4_000 },
+    );
+
+    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    await waitFor(
+      () => expect(screen.getByTestId("has-completed-read").textContent).toBe("true"),
+      { timeout: 4_000 },
+    );
+    expect(screen.getByTestId("runtime-error").textContent).toBe("");
+  }, 10_000);
+
+  test("runs the reconcile an invalidation asked for once creation completes", async () => {
+    let settleEnsure: (() => void) | undefined;
+    ensureNativeAgentSessionMock.mockImplementation((input) => new Promise((resolve) => {
+      settleEnsure = () => resolve({
+        providerSessionId: "cursor-session",
+        logicalSessionKey: input.logicalSessionKey,
+        environmentId: input.environmentId,
+        agent: input.agent,
+      });
+    }));
+
+    render(<AgentNativeTab tabId="tab-new-cursor-reconcile" data={freshTab("cursor")} isActive />);
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
+    getNativeAgentProjectionMock.mockClear();
+
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
+      });
+      await new Promise<void>((resolve) => { setTimeout(resolve, 120); });
+    });
+    // Deferred, not dropped: reading now could only answer "not created yet".
+    expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      settleEnsure!();
+      await new Promise<void>((resolve) => { setTimeout(resolve, 30); });
+    });
+
+    // Two reads: the one `connect` owns, and the deferred reconcile. Counting
+    // matters — the connect-owned read alone would satisfy "was called" and hide
+    // a dropped invalidation, which is the state the announcement described.
+    expect(getNativeAgentProjectionMock).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
+  });
+
+  test("keeps the establishment window open while a second connect is still in flight", async () => {
+    // An identity change mid-establishment runs a second connect before the
+    // first has returned. Counting is what makes the first completion release
+    // only its own claim; a boolean — or anything that resets to zero — would
+    // reopen the gate while a session is still being created, and the empty read
+    // that follows is exactly the false Connection Failed this all exists to
+    // prevent.
+    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    const settles: Array<() => void> = [];
+    ensureNativeAgentSessionMock.mockImplementation((input) => new Promise((resolve) => {
+      settles.push(() => resolve({
+        providerSessionId: `${input.agent}-session`,
+        logicalSessionKey: input.logicalSessionKey,
+        environmentId: input.environmentId,
+        agent: input.agent,
+      }));
+    }));
+
+    const { rerender } = render(
+      <AgentNativeTab tabId="tab-overlap" data={freshTab("cursor")} isActive />,
+    );
+    await waitFor(() => expect(settles.length).toBe(1));
+    rerender(<AgentNativeTab tabId="tab-overlap" data={freshTab("codex")} isActive />);
+    await waitFor(() => expect(settles.length).toBe(2));
+
+    await act(async () => {
+      settles[0]!();
+      await new Promise<void>((resolve) => { setTimeout(resolve, 30); });
+    });
+
+    getNativeAgentProjectionMock.mockClear();
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 2,
+      });
+      await new Promise<void>((resolve) => { setTimeout(resolve, 120); });
+    });
+
+    // The second connect has not returned, so there is still nothing to resolve.
+    expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
+    expect(screen.getByText("Connecting to Codex...")).toBeTruthy();
+    expect(screen.queryByText("Connection Failed") === null).toBe(true);
+
+    getNativeAgentProjectionMock.mockImplementation(defaultProjection);
+    await act(async () => {
+      settles[1]!();
+      await new Promise<void>((resolve) => { setTimeout(resolve, 30); });
+    });
+    // And the window does close — a stuck counter would mute this tab's
+    // background refreshes for the rest of its life.
+    await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
+    getNativeAgentProjectionMock.mockClear();
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 3,
+      });
+      await new Promise<void>((resolve) => { setTimeout(resolve, 120); });
+    });
+    expect(getNativeAgentProjectionMock).toHaveBeenCalled();
+  });
+
+  test("rehydrates from an authoritative read after establishing while inactive", async () => {
+    let settleEnsure: (() => void) | undefined;
+    ensureNativeAgentSessionMock.mockImplementation((input) => new Promise((resolve) => {
+      settleEnsure = () => resolve({
+        providerSessionId: "cursor-session",
+        logicalSessionKey: input.logicalSessionKey,
+        environmentId: input.environmentId,
+        agent: input.agent,
+      });
+    }));
+
+    const { rerender } = render(
+      <AgentNativeTab tabId="tab-inactive-establish" data={freshTab("cursor")} isActive />,
+    );
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
+
+    // Switching away drops the background-refresh permission that a coalesced
+    // reconcile needs, so the invalidation raised during creation is discarded.
+    rerender(
+      <AgentNativeTab tabId="tab-inactive-establish" data={freshTab("cursor")} isActive={false} />,
+    );
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
+      });
+      settleEnsure!();
+      await new Promise<void>((resolve) => { setTimeout(resolve, 120); });
+    });
+
+    // Returning has to recover from a snapshot rather than from the event that
+    // was dropped while the tab was not the visible one.
+    rerender(
+      <AgentNativeTab tabId="tab-inactive-establish" data={freshTab("cursor")} isActive />,
+    );
+    await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
+  });
+
+  test("reports a created session that still reads empty as a failed connection", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+
+    render(
+      <AgentNativeTab tabId="tab-new-cursor-empty" data={freshTab("cursor")} isActive />,
+    );
+
+    // Holding the empty read back is scoped to session creation alone. Once
+    // `ensure` has returned there is a session to resolve, so an empty read is
+    // the backend answering — and the user needs the retry control.
+    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
   test("reports a failed connect attempt as a failed connection", async () => {
     adoptNativeAgentSessionMock.mockImplementation(async () => {
       throw new Error("bridge refused the session");
@@ -1971,6 +2326,9 @@ describe("AgentNativeTab", () => {
       recoverableDispatch?: NativeAgentSessionProjection["recoverableDispatch"];
       notices?: NativeAgentSessionProjection["notices"];
       composer?: Partial<NonNullable<NativeAgentSessionProjection["composer"]>>;
+      composerCapabilities?: Partial<
+        NativeAgentSessionProjection["capabilities"]["composer"]
+      >;
       contextUsage?: NativeAgentSessionProjection["contextUsage"];
       backgroundTasks?: NativeAgentSessionProjection["backgroundTasks"];
     } = {}) {
@@ -2038,6 +2396,7 @@ describe("AgentNativeTab", () => {
             ...(overrides.promptSuggestions === undefined
               ? {}
               : { promptSuggestions: true }),
+            ...overrides.composerCapabilities,
           },
           ...(overrides.actions ? { actions: overrides.actions } : {}),
         },
@@ -2870,6 +3229,203 @@ describe("AgentNativeTab", () => {
       expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
         update: { mode: "plan" },
       });
+    });
+
+    test("lets an existing OpenCode session switch Plan/Build from the compose bar", async () => {
+      seedProjection({
+        composer: {
+          modes: [],
+          selectedModeId: undefined,
+          fastModeEnabled: null,
+          fastModeAvailable: false,
+          executionProfiles: [
+            { id: "build", label: "build" },
+            { id: "plan", label: "plan" },
+            { id: "reviewer", label: "Reviewer" },
+          ],
+          selectedExecutionProfileId: "build",
+        },
+        composerCapabilities: {
+          speed: false,
+          mode: false,
+          executionProfile: true,
+        },
+      });
+      render(<AgentNativeTab tabId="tab-opencode-mode" data={identity("opencode")} isActive />);
+
+      const trigger = await screen.findByTitle("Choose mode");
+      expect(trigger.textContent).toContain("Build");
+      expect(screen.getByTitle(/Choose model/).textContent).not.toContain("speed");
+
+      const input = screen.getByRole("textbox");
+      fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+      await waitFor(() => expect(updateNativeAgentControlsMock).toHaveBeenCalled());
+      expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        update: { executionProfileId: "plan" },
+      });
+
+      fireEvent.pointerDown(trigger);
+      fireEvent.click(await screen.findByRole("menuitemradio", { name: "Reviewer" }));
+      await waitFor(() => expect(updateNativeAgentControlsMock.mock.calls.length).toBeGreaterThan(1));
+      expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        update: { executionProfileId: "reviewer" },
+      });
+    });
+
+    test("keeps Plan/Build on an OpenCode session whose agent list has not arrived", async () => {
+      seedProjection({
+        composer: {
+          modes: [],
+          selectedModeId: undefined,
+          executionProfiles: [],
+          selectedExecutionProfileId: undefined,
+        },
+        composerCapabilities: {
+          speed: false,
+          mode: false,
+          executionProfile: true,
+        },
+      });
+      render(<AgentNativeTab tabId="tab-opencode-fallback-mode" data={identity("opencode")} isActive />);
+
+      const trigger = await screen.findByTitle("Choose mode");
+      expect(trigger.textContent).toContain("Build");
+      fireEvent.pointerDown(trigger);
+      fireEvent.click(await screen.findByRole("menuitemradio", { name: "Plan" }));
+      await waitFor(() => expect(updateNativeAgentControlsMock).toHaveBeenCalled());
+      expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        update: { executionProfileId: "plan" },
+      });
+    });
+
+    test("dispatches the execution profile the compose bar is showing", async () => {
+      // The projection leaves `selectedExecutionProfileId` undefined whenever no
+      // id was ever stored, one was cleared to null from the agent-information
+      // panel, or a stored id is missing from the arrived listing. `app.agents`
+      // has no defined order, so the first entry is an arbitrary primary agent —
+      // showing it while dispatching `undefined` ran the turn under OpenCode's
+      // own `build` default under a different agent's name.
+      seedProjection({
+        composer: {
+          modes: [],
+          selectedModeId: undefined,
+          executionProfiles: [
+            { id: "reviewer", label: "Reviewer" },
+            { id: "build", label: "build" },
+            { id: "plan", label: "plan" },
+          ],
+          selectedExecutionProfileId: undefined,
+        },
+        composerCapabilities: { speed: false, mode: false, executionProfile: true },
+      });
+      render(
+        <AgentNativeTab tabId="tab-opencode-default-profile" data={identity("opencode")} isActive />,
+      );
+
+      const trigger = await screen.findByTitle("Choose mode");
+      // The listed `build`, not `executionProfiles[0]`.
+      expect(trigger.textContent).toContain("Build");
+
+      const input = screen.getByRole("textbox");
+      fireEvent.input(input, { target: { textContent: "Do the thing" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalled());
+      expect(dispatchNativeAgentIntentMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        agent: "opencode",
+        executionAgent: "build",
+      });
+    });
+
+    test("dispatches the first listed profile when the agent set has no build", async () => {
+      // A custom agent set with no `build` makes OpenCode's own default name an
+      // agent that does not exist, so the shown entry is the only valid thing to
+      // send — and it still has to be the one the trigger names.
+      seedProjection({
+        composer: {
+          modes: [],
+          selectedModeId: undefined,
+          executionProfiles: [
+            { id: "reviewer", label: "Reviewer" },
+            { id: "deploy", label: "Deploy" },
+          ],
+          selectedExecutionProfileId: undefined,
+        },
+        composerCapabilities: { speed: false, mode: false, executionProfile: true },
+      });
+      render(
+        <AgentNativeTab tabId="tab-opencode-no-build" data={identity("opencode")} isActive />,
+      );
+
+      const trigger = await screen.findByTitle("Choose mode");
+      expect(trigger.textContent).toContain("Reviewer");
+
+      const input = screen.getByRole("textbox");
+      fireEvent.input(input, { target: { textContent: "Do the thing" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalled());
+      expect(dispatchNativeAgentIntentMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        agent: "opencode",
+        executionAgent: "reviewer",
+      });
+    });
+
+    test("does not invent a Claude subagent when none is selected", async () => {
+      // Claude's execution profile is a subagent, and it has no provider-side
+      // default. Synthesising one here would silently route the turn away from
+      // the main agent.
+      seedProjection({
+        composer: {
+          executionProfiles: [
+            { id: "reviewer", label: "Reviewer" },
+            { id: "planner", label: "Planner" },
+          ],
+          selectedExecutionProfileId: undefined,
+        },
+        composerCapabilities: { executionProfile: true },
+      });
+      render(
+        <AgentNativeTab tabId="tab-claude-no-subagent" data={identity("claude")} isActive />,
+      );
+
+      const input = await screen.findByRole("textbox");
+      fireEvent.input(input, { target: { textContent: "Do the thing" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalled());
+      expect(dispatchNativeAgentIntentMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        agent: "claude",
+        subAgent: undefined,
+      });
+    });
+
+    test("locks the execution-profile control while a turn is settling", async () => {
+      seedProjection({
+        phase: "running",
+        composer: {
+          modes: [],
+          selectedModeId: undefined,
+          executionProfiles: [
+            { id: "build", label: "build" },
+            { id: "plan", label: "plan" },
+          ],
+          selectedExecutionProfileId: "build",
+        },
+        composerCapabilities: { speed: false, mode: false, executionProfile: true },
+      });
+      render(
+        <AgentNativeTab tabId="tab-opencode-locked-profile" data={identity("opencode")} isActive />,
+      );
+
+      const trigger = await screen.findByTitle("Choose mode");
+      expect((trigger as HTMLButtonElement).disabled).toBe(true);
+
+      // Shift+Tab has to be inert too: `cycleMode` is the same gate, and a
+      // keystroke that bypassed the disabled trigger would change the agent
+      // mid-turn.
+      updateNativeAgentControlsMock.mockClear();
+      const input = screen.getByRole("textbox");
+      fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+      await Promise.resolve();
+      expect(updateNativeAgentControlsMock).not.toHaveBeenCalled();
     });
 
     test("keeps advanced session settings out of the input bar", async () => {

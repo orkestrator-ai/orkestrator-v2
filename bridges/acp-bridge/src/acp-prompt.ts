@@ -20,6 +20,7 @@ import {
   pushContinuationUserMessage,
   waitForWatchableCursorChildren,
 } from "./acp-cursor-background.js";
+import { STRUCTURED_PROMPT_INSTRUCTION_PREFIX } from "./structured-prompt-marker.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { schedulePersist } from "./acp-persist-writer.js";
 import { failAllActiveSubagents, finishSubagentTool } from "./acp-tools.js";
@@ -91,8 +92,18 @@ export function stripFlattenedRetriableProviderTail(
   schedulePersist();
 }
 
+/**
+ * The schema constrains the *final* message, not the whole turn.
+ *
+ * The reader of an agent tab watches the text channel, and this instruction
+ * used to forbid commentary outright — so a long structured turn showed them
+ * nothing at all, or a half-written JSON document, until it finished. Turn
+ * output is recovered with `tryParseStructuredOutputText`, which takes the last
+ * well-formed document in the concatenated turn, so prose before it is already
+ * safe; saying so is what makes the agent willing to narrate its progress.
+ */
 export function structuredPromptInstruction(schema: JsonObject): string {
-  return `Return only one JSON value matching this JSON Schema. Do not use a Markdown fence or add commentary.\n\n${JSON.stringify(schema)}`;
+  return `${STRUCTURED_PROMPT_INSTRUCTION_PREFIX} matching this JSON Schema. That final message must be the JSON value alone, with no Markdown fence and no commentary around it.\n\nBefore that final message you may send ordinary prose progress updates. Keep them plain sentences: never send a JSON object or array as a progress update, and never draft or preview the final value.\n\n${JSON.stringify(schema)}`;
 }
 
 export function retriableProviderError(error: unknown): error is Error {

@@ -41,6 +41,7 @@ import type {
   NativeAgentToolDetails,
 } from "@orkestrator/protocol/native-agent";
 import {
+  isFallbackExecutionProfileId,
   nativeAgentCapabilities,
   resolveReasoningId,
 } from "@orkestrator/protocol/native-agent";
@@ -521,6 +522,7 @@ export {
   INTERACTIVE_AGENT_INTERACTION_POLICY,
   UNATTENDED_AGENT_INTERACTION_POLICY,
   isAgentInteractionPolicy,
+  isFallbackExecutionProfileId,
   nativeAgentCapabilities,
   resolveReasoningId,
   withSessionActionSlashCommands,

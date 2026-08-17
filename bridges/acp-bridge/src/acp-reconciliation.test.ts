@@ -555,7 +555,7 @@ describe("ACP bridge", () => {
       .map((line) => JSON.parse(line) as Array<{ type?: string; text?: string }>);
     expect(promptBlocks).toHaveLength(2);
     expect(promptBlocks[1]?.[0]?.text).toContain(
-      "Return only one JSON value matching this JSON Schema.",
+      "End your turn with exactly one JSON value matching this JSON Schema.",
     );
     expect(promptBlocks[1]?.[0]?.text).toContain("\"answer\"");
   });

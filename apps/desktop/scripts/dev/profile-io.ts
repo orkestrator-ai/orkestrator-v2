@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { constants, type Stats } from "node:fs";
-import { chmod, link, lstat, mkdir, open, readFile, readdir, rename, rm, writeFile, type FileHandle } from "node:fs/promises";
+import { chmod, cp, link, lstat, mkdir, open, readFile, readdir, rename, rm, writeFile, type FileHandle } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import process from "node:process";
@@ -17,6 +17,11 @@ import {
   type RuntimeProfileRoots,
   type RuntimeStatusManifest,
 } from "../../electron/runtime-profile.js";
+import { pinnedArtifactDirectory } from "../../electron/toolchain-manager.js";
+import {
+  pinnedToolchainArtifacts,
+  type ToolchainArtifact,
+} from "../../electron/toolchain-manifest.js";
 
 const MAX_MODEL_CACHE_BYTES = 16 * 1024 * 1024;
 const MODEL_CACHE_COPY_CHUNK_BYTES = 64 * 1024;
@@ -240,6 +245,109 @@ export async function seedInstalledModelCatalogCaches(
     },
   ];
   return seedBoundedFiles(candidates, options);
+}
+
+export type ToolchainSeedOptions = {
+  roots?: RuntimeProfileRoots;
+  /** Defaults to the pinned manifest; narrowed by tests. */
+  artifacts?: readonly ToolchainArtifact[];
+  platform?: NodeJS.Platform;
+  architecture?: string;
+  /** Defaults to `console.warn`; a path-free line, never the copy's paths. */
+  warn?: (message: string) => void;
+};
+
+export type ToolchainSeedResult = {
+  /** `name@version` for each artifact copied from the host installation. */
+  seeded: string[];
+  /**
+   * Artifacts whose copy failed for a reason other than "the host has not
+   * installed this".
+   *
+   * Reported separately because the two are indistinguishable in the outcome —
+   * both fall through to the installer's download — but not in what they mean. A
+   * bare host is the expected case; a permission error, a full disk, or a layout
+   * change that makes the source path wrong is a seeder that has silently
+   * stopped working, and its only other symptom is a startup that is minutes
+   * slower than it should be.
+   */
+  failed: string[];
+};
+
+/**
+ * Pre-populate an isolated profile's managed toolchain from the host install.
+ *
+ * Without this, `dev:test` would download every pinned toolchain again for each
+ * profile — hundreds of megabytes of identical, hash-pinned bytes. The copy is
+ * one-way and read-only with respect to the host: nothing is written back, no
+ * install lock is taken there, and the production activation directory is never
+ * touched. Anything missing or damaged simply falls through to the installer's
+ * normal download, because it re-verifies every artifact against the manifest
+ * before activating it.
+ *
+ * A profile that already has the artifact is left alone, so a restart cannot
+ * disturb a toolchain a running backend resolved through.
+ */
+export async function seedInstalledAgentToolchains(
+  profile: RuntimeProfile,
+  options: ToolchainSeedOptions = {},
+): Promise<ToolchainSeedResult> {
+  if (profile.agentPlatforms.length === 0) return { seeded: [], failed: [] };
+  const roots = options.roots ?? defaultRuntimeProfileRoots();
+  const platform = options.platform ?? process.platform;
+  const architecture = options.architecture ?? process.arch;
+  const selected = new Set<string>(profile.agentPlatforms);
+  const artifacts = (options.artifacts ?? pinnedToolchainArtifacts()).filter(
+    (artifact) => selected.has(artifact.name)
+      && artifact.platform === platform
+      && artifact.architecture === architecture,
+  );
+
+  const warn = options.warn ?? ((message: string) => console.warn(message));
+  const seeded: string[] = [];
+  const failed: string[] = [];
+  for (const artifact of artifacts) {
+    const label = `${artifact.name}@${artifact.version}`;
+    const source = pinnedArtifactDirectory(roots.productionDataDir, artifact);
+    const destination = pinnedArtifactDirectory(profile.dataDir, artifact);
+    // Staged beside the destination and renamed, so an interrupted copy cannot
+    // leave a partial tree where the installer expects a complete one.
+    const staging = `${destination}.${process.pid}.${Date.now()}.seed`;
+    try {
+      if (await pathExists(destination)) continue;
+      const sourceInfo = await lstat(source);
+      if (!sourceInfo.isDirectory() || sourceInfo.isSymbolicLink()) continue;
+      await mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
+      await cp(source, staging, {
+        recursive: true,
+        preserveTimestamps: true,
+        // Never follow a link out of the host toolchain tree, and never carry
+        // one into the profile.
+        dereference: false,
+        verbatimSymlinks: true,
+        // Finder droppings are not in the manifest, and Cursor's bundle is
+        // verified by an aggregate digest over the whole tree — one stray file
+        // would fail that check and force the download this exists to avoid.
+        filter: (candidate) => path.basename(candidate) !== ".DS_Store",
+      });
+      await rename(staging, destination);
+      seeded.push(label);
+    } catch (error) {
+      // Either way the installer downloads it — seeding is an optimization,
+      // never a dependency — but only one of the two is expected.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        failed.push(label);
+        warn(
+          `Could not seed ${label} from the host install (${
+            (error as NodeJS.ErrnoException).code ?? "unknown error"
+          }); it will be downloaded instead.`,
+        );
+      }
+    } finally {
+      await rm(staging, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+  return { seeded, failed };
 }
 
 /**

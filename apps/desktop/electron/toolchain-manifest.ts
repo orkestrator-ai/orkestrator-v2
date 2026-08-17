@@ -600,3 +600,21 @@ export function pinnedToolchainArtifacts(
     architecture,
   );
 }
+
+/**
+ * The pinned artifacts for an enabled-platform selection.
+ *
+ * Artifact names and agent platform ids coincide, and this is the one place that
+ * relies on it — keeping the filter here means the selection-to-download mapping
+ * is testable without starting Electron.
+ */
+export function pinnedArtifactsForPlatforms(
+  enabled: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+  architecture: string = process.arch,
+): readonly ToolchainArtifact[] {
+  const selected = new Set(enabled);
+  return pinnedToolchainArtifacts(platform, architecture).filter(
+    (artifact) => selected.has(artifact.name),
+  );
+}

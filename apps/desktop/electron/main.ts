@@ -10,7 +10,7 @@ import { createMainWindow } from "./window.js";
 import { ConnectionManager } from "./connection-manager.js";
 import { installRemoteGatewayRequestAuth } from "./remote-gateway-request-auth.js";
 import { ensurePinnedToolchains } from "./toolchain-manager.js";
-import { pinnedToolchainArtifacts } from "./toolchain-manifest.js";
+import { pinnedArtifactsForPlatforms } from "./toolchain-manifest.js";
 import {
   chooseAgentPlatforms,
   createToolchainBootstrapWindow,
@@ -18,6 +18,7 @@ import {
 } from "./toolchain-bootstrap-window.js";
 import { createToolchainProgressController, preparePinnedToolchains } from "./toolchain-startup.js";
 import {
+  applyAgentTestPlatformSelection,
   loadAgentPlatformSelection,
   saveAgentPlatformSelection,
 } from "./agent-platform-selection.js";
@@ -142,8 +143,14 @@ async function startApplication(): Promise<void> {
     resourcesPath: process.resourcesPath,
   });
   const dataDir = app.getPath("userData");
-  const storedPlatformSelection = runtimeFlavor === "agent-test"
-    ? { enabled: [], needsFirstRunChoice: false }
+  // An agent-test profile takes its selection from the launcher rather than the
+  // durable per-installation choice, so an isolated run never inherits or
+  // rewrites the user's. It must still be a real selection: Cursor and Grok
+  // resolve only through the managed toolchain, so provisioning nothing leaves
+  // them permanently unlaunchable in exactly the profiles meant to test them.
+  const isAgentTest = runtimeFlavor === "agent-test";
+  const storedPlatformSelection = isAgentTest
+    ? { enabled: runtimeProfile?.agentPlatforms ?? [], needsFirstRunChoice: false }
     : await loadAgentPlatformSelection(dataDir);
   const enabledAgentPlatforms = storedPlatformSelection.needsFirstRunChoice
     ? await chooseAgentPlatforms({ BrowserWindowCtor: BrowserWindow, dirname: __dirname })
@@ -151,10 +158,13 @@ async function startApplication(): Promise<void> {
   if (storedPlatformSelection.needsFirstRunChoice) {
     await saveAgentPlatformSelection(dataDir, enabledAgentPlatforms);
   }
-  const selectedPlatformSet = new Set(enabledAgentPlatforms);
-  const artifacts = pinnedToolchainArtifacts().filter((artifact) =>
-    selectedPlatformSet.has(artifact.name)
-  );
+  // Downloading a toolchain the app then refuses to offer is not provisioning.
+  // The backend derives the enabled set from this profile's own state, so the
+  // launcher's choice has to be written where it will read it.
+  if (isAgentTest) {
+    await applyAgentTestPlatformSelection(dataDir, enabledAgentPlatforms);
+  }
+  const artifacts = pinnedArtifactsForPlatforms(enabledAgentPlatforms);
   const toolchainBinDir = await preparePinnedToolchains({
     dataDir,
     ensure: ensurePinnedToolchains,
@@ -164,6 +174,11 @@ async function startApplication(): Promise<void> {
     quit: () => app.quit(),
     logError: (error) => console.error("[Toolchains] Failed to prepare pinned tools:", error),
     artifacts,
+    // Nobody is watching an agent-driven `dev:test` run, so a modal asking
+    // whether to retry would hang the launcher instead of failing it: the
+    // profile never reaches ready, never exits, and the cause stays trapped in a
+    // dialog rather than in the log directory dev:status points at.
+    interactive: !isAgentTest,
   });
   if (!toolchainBinDir) return;
   backend = await backendProcess.start({
@@ -179,6 +194,7 @@ async function startApplication(): Promise<void> {
     allowNonTailscaleBind: runtimeFlavor === "agent-test",
     desktopWebClient: runtimeFlavor !== "agent-test",
     runtimeFlavor,
+    runtimeProfileId: runtimeProfile?.id,
     worktreeDir: runtimeProfile?.worktreeDir,
     dockerImage: runtimeProfile?.dockerImage,
     strictDockerOwner: runtimeFlavor === "agent-test",

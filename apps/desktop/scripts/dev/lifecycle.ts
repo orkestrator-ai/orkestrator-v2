@@ -23,9 +23,11 @@ import {
   readStatus,
   reserveLoopbackPorts,
   seedAgentTestProviderCredentials,
+  seedInstalledAgentToolchains,
   seedInstalledModelCatalogCaches,
 } from "./profile-io.js";
 import { seedFixture } from "./fixture.js";
+import { formatAgentTestLogin, mintAgentTestLoginUrl, type AgentTestLogin } from "./login.js";
 
 const packageRoot = path.resolve(import.meta.dir, "../..");
 const repositoryRoot = path.resolve(packageRoot, "../..");
@@ -124,6 +126,7 @@ async function resolveStoredProfile(args: DevArguments, flavor: "development" | 
     requestedId: args.profile,
     flavor,
     credentialSources: args.credentialSources,
+    agentPlatforms: args.agentPlatforms,
   });
   const stored = path.join(provisional.profileRoot, "profile.json");
   return readProfile(stored).catch(() => provisional);
@@ -262,6 +265,53 @@ export function stoppedRuntimeStatusIfUnchanged(
   return { ...latest, status: "stopped", updatedAt };
 }
 
+export type ProfileSeedDependencies = {
+  seedModelCatalogCaches?: typeof seedInstalledModelCatalogCaches;
+  seedProviderCredentials?: typeof seedAgentTestProviderCredentials;
+  seedAgentToolchains?: typeof seedInstalledAgentToolchains;
+  log?: (message: string) => void;
+  warn?: (message: string) => void;
+};
+
+/**
+ * Pre-populate an isolated profile from the host installation, before Electron.
+ *
+ * Only `agent-test` seeds anything: an ordinary `dev` run uses the durable
+ * per-installation state and has nothing to copy into. Electron downloads
+ * whatever is still missing, so this must complete first — Cursor and Grok have
+ * no PATH fallback, and the difference between seeding and downloading is
+ * minutes of startup, not whether the profile works.
+ */
+export async function seedAgentTestProfileState(
+  profile: RuntimeProfile,
+  flavor: "development" | "agent-test",
+  dependencies: ProfileSeedDependencies = {},
+): Promise<void> {
+  if (flavor !== "agent-test") return;
+  const log = dependencies.log ?? ((message: string) => console.log(message));
+  const warn = dependencies.warn ?? ((message: string) => console.warn(message));
+  const [, , toolchains] = await Promise.all([
+    (dependencies.seedModelCatalogCaches ?? seedInstalledModelCatalogCaches)(profile),
+    (dependencies.seedProviderCredentials ?? seedAgentTestProviderCredentials)(profile),
+    (dependencies.seedAgentToolchains ?? seedInstalledAgentToolchains)(profile),
+  ]);
+  if (toolchains.seeded.length > 0) {
+    log(`Seeded toolchains from the host install: ${toolchains.seeded.join(", ")}`);
+  }
+  // A slow startup is otherwise the only symptom of a seeder that has stopped
+  // working, and it looks exactly like a host that has nothing installed.
+  if (toolchains.failed.length > 0) {
+    warn(`Could not seed from the host install: ${toolchains.failed.join(", ")}`);
+  }
+  const pending = profile.agentPlatforms.filter((platform) => (
+    !toolchains.seeded.some((entry) => entry.startsWith(`${platform}@`))
+  ));
+  if (pending.length > 0) {
+    // Attributes a long or hung startup before Electron is even launched.
+    log(`Electron will download managed toolchains for: ${pending.join(", ")}`);
+  }
+}
+
 export async function startDevelopment(args: DevArguments, flavor: "development" | "agent-test"): Promise<void> {
   const existingProfile = await resolveStoredProfile(args, flavor);
   const existingStatusPath = statusManifestPath(existingProfile);
@@ -287,14 +337,10 @@ export async function startDevelopment(args: DevArguments, flavor: "development"
     rendererPort,
     gatewayPort,
     credentialSources: args.credentialSources,
+    agentPlatforms: args.agentPlatforms,
   });
   const profilePath = await initializeProfile(profile);
-  if (flavor === "agent-test") {
-    await Promise.all([
-      seedInstalledModelCatalogCaches(profile),
-      seedAgentTestProviderCredentials(profile),
-    ]);
-  }
+  await seedAgentTestProfileState(profile, flavor);
   const statusPath = statusManifestPath(profile);
   const rendererUrl = `http://${profile.rendererHost}:${profile.rendererPort}`;
   const startedAt = new Date().toISOString();
@@ -481,6 +527,9 @@ export function printHumanStatus(status: RuntimeStatusManifest, live: Record<str
   console.log(`Electron: ${status.electronTitle}`);
   console.log(`Renderer: ${status.rendererUrl}`);
   if (status.browserUrl) console.log(`Browser: ${status.browserUrl}`);
+  if (status.flavor === "agent-test") {
+    console.log(`Login: bun run dev:login -- --profile ${status.profile}`);
+  }
   if (status.testProject) console.log(`Test project: ${status.testProject}`);
   console.log(`Status: ${status.statusPath}`);
   console.log(`Logs: ${status.logDir}`);
@@ -496,9 +545,35 @@ export async function showStatus(args: DevArguments): Promise<number> {
     return 1;
   }
   const live = liveness(status);
-  if (args.json) console.log(JSON.stringify({ ...status, live }, null, 2));
+  // Derived, never persisted: the manifest names the auth file, and this names
+  // the command that turns it into a browser login without anyone reading,
+  // echoing, or retyping the token.
+  const loginCommand = status.flavor === "agent-test"
+    ? `bun run dev:login -- --profile ${status.profile}`
+    : undefined;
+  if (args.json) console.log(JSON.stringify({ ...status, live, loginCommand }, null, 2));
   else printHumanStatus(status, live);
   return status.status === "ready" && live.launcher ? 0 : 1;
+}
+
+export type LoginProfileDependencies = {
+  resolveProfile?: (args: DevArguments, flavor: "agent-test") => Promise<RuntimeProfile>;
+  readStatus?: (statusPath: string) => Promise<RuntimeStatusManifest | null>;
+  liveness?: (status: RuntimeStatusManifest | null) => { launcher: boolean };
+  mint?: (options: { status: RuntimeStatusManifest }) => Promise<AgentTestLogin>;
+  log?: (message: string) => void;
+};
+
+export async function loginProfile(args: DevArguments, deps: LoginProfileDependencies = {}): Promise<number> {
+  const profile = await (deps.resolveProfile ?? resolveStoredProfile)(args, "agent-test");
+  const status = await (deps.readStatus ?? readStatus)(statusManifestPath(profile));
+  if (!status) throw new Error(`Profile ${profile.id} has no runtime status. Start it with bun run dev:test.`);
+  if (!(deps.liveness ?? liveness)(status).launcher) {
+    throw new Error(`Profile ${profile.id} is not running. Start it with bun run dev:test.`);
+  }
+  const login = await (deps.mint ?? mintAgentTestLoginUrl)({ status });
+  (deps.log ?? console.log)(args.json ? JSON.stringify(login, null, 2) : formatAgentTestLogin(login));
+  return 0;
 }
 
 export async function stopProfile(args: DevArguments): Promise<number> {

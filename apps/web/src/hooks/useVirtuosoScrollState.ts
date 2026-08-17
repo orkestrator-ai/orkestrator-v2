@@ -44,6 +44,50 @@ interface PersistedEntry {
 
 const persistedStates = new Map<string, PersistedEntry>();
 
+/**
+ * Whether a persisted snapshot is safe to hand back to Virtuoso.
+ *
+ * `restoreStateFrom` feeds these numbers straight into Virtuoso's size and
+ * offset trees, whose binary search throws from inside a render for values it
+ * cannot order (negative indices, NaN, inverted ranges). A snapshot is captured
+ * by `getState` and should always be well-formed, but a malformed one is not a
+ * recoverable degradation: the throw reaches the view's error boundary, and
+ * because this map outlives the remount, every retry replays the same crash.
+ * Restoring nothing merely costs the scroll position.
+ *
+ * Only the ranges are checked for orderability, because only they reach that
+ * binary search. `scrollTop` is validated for finiteness alone: `getState`
+ * records it as `scrollTop - headerHeight`, and restore feeds it straight back
+ * as `{ align: "start", index: 0, offset }` — so a view with a Virtuoso Header
+ * legitimately persists a *negative* value whenever the viewport sits inside
+ * that header, and rejecting the sign would forfeit the position it encodes.
+ */
+export function isRestorableStateSnapshot(
+  snapshot: StateSnapshot | undefined,
+): snapshot is StateSnapshot {
+  if (!snapshot || typeof snapshot !== "object") return false;
+  if (!Number.isFinite(snapshot.scrollTop)) return false;
+  if (!Array.isArray(snapshot.ranges)) return false;
+  return snapshot.ranges.every((range, index, ranges) => {
+    const endIndexIsValid = Number.isInteger(range?.endIndex)
+      || (
+        range?.endIndex === Number.POSITIVE_INFINITY
+        && index === ranges.length - 1
+      );
+    const previous = ranges[index - 1];
+    return Number.isInteger(range?.startIndex)
+      && endIndexIsValid
+      && Number.isFinite(range?.size)
+      && range.startIndex >= 0
+      && range.endIndex >= range.startIndex
+      && range.size >= 0
+      && (
+        previous === undefined
+        || range.startIndex > previous.endIndex
+      );
+  });
+}
+
 function setPersistedState(key: string, entry: PersistedEntry) {
   persistedStates.delete(key);
   persistedStates.set(key, entry);
@@ -136,10 +180,19 @@ export function useVirtuosoScrollState(
   const scrollerElRef = useRef<HTMLElement | null>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const isAtBottomRef = useRef(true);
-  // Resolve persisted state once on mount.
-  const [persisted] = useState<PersistedEntry | undefined>(() =>
-    persistKey ? persistedStates.get(persistKey) : undefined
-  );
+  // Resolve persisted state once on mount. A snapshot that fails validation is
+  // dropped from the map as well: it would fail identically on every future
+  // mount, and retaining it keeps a crash-then-retry cycle deterministic.
+  const [persisted] = useState<PersistedEntry | undefined>(() => {
+    if (!persistKey) return undefined;
+    const entry = persistedStates.get(persistKey);
+    if (!entry) return undefined;
+    if (!isRestorableStateSnapshot(entry.snapshot)) {
+      persistedStates.delete(persistKey);
+      return undefined;
+    }
+    return entry;
+  });
 
   /**
    * Intent: the user wants new content to auto-scroll into view. Only

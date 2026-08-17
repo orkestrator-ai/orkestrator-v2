@@ -14,6 +14,7 @@ import * as realLoopedReviewTab from "@/components/review/LoopedReviewTab";
 import * as realMultiReviewTab from "@/components/review/MultiReviewTab";
 import * as realFileViewerTab from "@/components/terminal/FileViewerTab";
 import * as realBuildChatTab from "@/components/build-pipeline/BuildChatTab";
+import * as realHooks from "@/hooks";
 
 const realClaudeTmuxChatTabSnapshot = { ...realClaudeTmuxChatTab };
 const realNativeAgentSnapshot = { ...realNativeAgent };
@@ -22,6 +23,13 @@ const realLoopedReviewTabSnapshot = { ...realLoopedReviewTab };
 const realMultiReviewTabSnapshot = { ...realMultiReviewTab };
 const realFileViewerTabSnapshot = { ...realFileViewerTab };
 const realBuildChatTabSnapshot = { ...realBuildChatTab };
+const realHooksSnapshot = { ...realHooks };
+const clearPersistedVirtuosoState = mock((_persistKey: string) => undefined);
+
+mock.module("@/hooks", () => ({
+  ...realHooksSnapshot,
+  clearPersistedVirtuosoState,
+}));
 
 mock.module("@dnd-kit/core", () => ({
   DndContext: ({ children }: { children: React.ReactNode }) => children,
@@ -323,6 +331,7 @@ describe("PaneLeafContainer", () => {
       "@/components/build-pipeline/BuildChatTab",
       () => realBuildChatTabSnapshot,
     );
+    mock.module("@/hooks", () => realHooksSnapshot);
   });
 
   const hiddenPane = {
@@ -388,6 +397,7 @@ describe("PaneLeafContainer", () => {
       },
     }));
     useMultiReviewStore.setState({ workflows: new Map() });
+    clearPersistedVirtuosoState.mockClear();
     multiReviewTabFailure = null;
     multiReviewMountCount = 0;
     paneRenderCount = 0;
@@ -932,6 +942,69 @@ describe("PaneLeafContainer", () => {
       act(() => useMultiReviewStore.getState().replaceWorkflow(workflow(2)));
       expect(await screen.findByTestId("multi-review-tab")).toBeTruthy();
       expect(screen.queryByRole("alert") === null).toBe(true);
+    } finally {
+      console.error = originalError;
+      multiReviewTabFailure = null;
+    }
+  });
+
+  test("clears the failed reviewer's exact persisted scroll state before retrying", async () => {
+    const timestamp = "2026-08-17T00:00:00.000Z";
+    const workflow = (backendRevision: number): MultiReviewWorkflow => ({
+      version: 1,
+      controller: "backend",
+      id: "workflow-1",
+      environmentId: "env-visible",
+      projectId: "project-1",
+      targetBranch: "main",
+      reviewers: [],
+      fixModel: { agent: "codex", model: "default" },
+      phase: "reviewing",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      backendRevision,
+    });
+    useMultiReviewStore.getState().replaceWorkflow(workflow(1));
+    multiReviewTabFailure = new TypeError("poisoned reviewer scroll state");
+    const originalError = console.error;
+    console.error = mock(() => undefined) as typeof console.error;
+    const pane: PaneLeaf = {
+      kind: "leaf",
+      id: "pane-multi-review",
+      tabs: [{
+        id: "tab-multi-review",
+        type: "multi-review",
+        multiReviewTabData: {
+          environmentId: "env-visible",
+          workflowId: "workflow-1",
+          reviewerId: "reviewer-1",
+        },
+      }],
+      activeTabId: "tab-multi-review",
+    };
+
+    try {
+      render(
+        <PaneLeafContainer
+          pane={pane}
+          environmentId="env-visible"
+          containerId="container-visible"
+          isActive
+        />,
+      );
+
+      expect(await screen.findByRole("alert")).toBeTruthy();
+      await waitFor(() => {
+        expect(clearPersistedVirtuosoState).toHaveBeenCalledTimes(1);
+      });
+      expect(clearPersistedVirtuosoState).toHaveBeenCalledWith(
+        "multi-review:workflow-1:reviewer:reviewer-1",
+      );
+
+      multiReviewTabFailure = null;
+      act(() => useMultiReviewStore.getState().replaceWorkflow(workflow(2)));
+      expect(await screen.findByTestId("multi-review-tab")).toBeTruthy();
+      expect(clearPersistedVirtuosoState).toHaveBeenCalledTimes(1);
     } finally {
       console.error = originalError;
       multiReviewTabFailure = null;

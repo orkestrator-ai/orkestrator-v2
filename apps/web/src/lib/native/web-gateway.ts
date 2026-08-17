@@ -37,6 +37,7 @@ const GATEWAY_CURSOR_EVENT = "gateway.cursor";
  * still retrying for us.
  */
 const EVENT_SOURCE_CLOSED = 2;
+export const AGENT_TEST_SESSION_ACTIVITY_REFRESH_INTERVAL_MS = 60_000;
 export const TERMINAL_TRANSPORT_STORAGE_KEY = "orkestrator-terminal-transport";
 /** How long a shared-stream filter narrowing waits for its siblings. */
 const TERMINAL_FILTER_NARROW_DELAY_MS = 50;
@@ -72,6 +73,13 @@ export interface BrowserGatewayOptions {
   onTokenChanged?: (token: string) => void;
   eventReconnectDelayMs?: number;
   reportBootMetrics?: boolean;
+  /** Same-origin app install probes for the agent-test-only activity endpoint. */
+  agentTestSessionActivity?: boolean;
+  /**
+   * Test/embedding override for the lapsed-credential recovery. Production
+   * navigates to the gateway login page, which cannot be asserted in happy-dom.
+   */
+  onCredentialLapsed?: () => void;
   connections?: NonNullable<Window["orkestrator"]>["connections"];
   /** Test/embedding overrides; production uses the bounded defaults. */
   terminalInputBatchDelayMs?: number;
@@ -183,6 +191,83 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   const credentials = bearerToken || baseUrl ? "omit" as const : "same-origin" as const;
   const websocketTerminalsEnabled = terminalTransportEnabled(options);
   let terminalSocket: TerminalWebSocketClient | null = null;
+  let disposeAgentTestActivity: () => void = () => undefined;
+  /** Set once the gateway confirms this tab holds an agent-test cookie session. */
+  let agentTestSessionActive = false;
+  let credentialLapseHandled = false;
+
+  /**
+   * An agent-test session has a sliding idle deadline and a hard absolute one,
+   * and the gateway tears down this tab's event stream and terminal sockets the
+   * moment either passes. Nothing the tab does afterwards can succeed, so a 401
+   * has to become a visible, actionable state: send the browser to the login
+   * page, which names the `dev:login` command that mints a fresh link. Without
+   * this the tab keeps rendering stale state behind an EventSource that retries
+   * forever, which reads as a regression in whatever was being tested.
+   *
+   * Scoped to confirmed agent-test sessions on purpose. A durable-token client
+   * has no deadline to trip, and a remote/bearer client must never be navigated.
+   */
+  const handleCredentialLapse = () => {
+    if (!agentTestSessionActive || credentialLapseHandled) return;
+    credentialLapseHandled = true;
+    disposeAgentTestActivity();
+    if (options.onCredentialLapsed) {
+      options.onCredentialLapsed();
+      return;
+    }
+    if (typeof window !== "undefined") {
+      window.location.assign(apiUrl(`${GATEWAY_PREFIX}/login`));
+    }
+  };
+
+  const detectAgentTestSession = async () => {
+    if (credentials !== "same-origin" || !options.agentTestSessionActivity) return;
+    const controller = new AbortController();
+    let disposed = false;
+    let lastRefreshAt = 0;
+    const removeListeners = () => {
+      if (disposed) return;
+      disposed = true;
+      agentTestSessionActive = false;
+      controller.abort();
+      window.removeEventListener("keydown", refreshAfterActivity);
+      window.removeEventListener("pointerdown", refreshAfterActivity);
+    };
+    const refreshAfterActivity = () => {
+      const now = Date.now();
+      if (disposed || now - lastRefreshAt < AGENT_TEST_SESSION_ACTIVITY_REFRESH_INTERVAL_MS) return;
+      lastRefreshAt = now;
+      void fetch(apiUrl(`${GATEWAY_PREFIX}/agent-test/session`), {
+        method: "POST",
+        credentials,
+        signal: controller.signal,
+      }).then((response) => {
+        // 401 is a lapsed session and needs the login page. 404 only means this
+        // gateway has no such route, so the tab is fine and simply has nothing
+        // to renew — tearing it down further would be wrong.
+        if (response.status === 401) handleCredentialLapse();
+        else if (response.status === 404) removeListeners();
+      }).catch(() => undefined);
+    };
+    disposeAgentTestActivity = removeListeners;
+    try {
+      const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/agent-test/session`), {
+        credentials,
+        signal: controller.signal,
+      });
+      if (!response.ok || disposed) {
+        removeListeners();
+        return;
+      }
+      agentTestSessionActive = true;
+      window.addEventListener("keydown", refreshAfterActivity);
+      window.addEventListener("pointerdown", refreshAfterActivity);
+    } catch {
+      removeListeners();
+    }
+  };
+  void detectAgentTestSession();
 
   /**
    * Receive every authoritative state event, but only terminal byte streams
@@ -840,6 +925,11 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   const readGatewayResponse = async <T>(response: Response, fallback: string): Promise<T> => {
     const payload = await response.json().catch(() => ({})) as T & { error?: string };
     if (!response.ok) {
+      // The gateway only answers 401 from its authentication gate, so on an
+      // agent-test session this is the deadline having passed rather than a
+      // command-specific failure. Surface it before the throw: the idle path can
+      // lapse with no pointer or key activity to notice it.
+      if (response.status === 401) handleCredentialLapse();
       // The status travels as a property, not just inside the message. A
       // gateway 502/503 during environment bring-up has to reach the startup
       // retry classifier, and it looks for `error.status`.
@@ -1242,6 +1332,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     },
   };
   browserGatewayDisposers.set(api, (reason = new Error("Browser gateway disposed")) => {
+    disposeAgentTestActivity();
     terminalInputDisposedReason = reason;
     terminalInputBatcher.dispose(reason);
     terminalSocket?.dispose();
@@ -1269,7 +1360,17 @@ export function installBrowserGatewayApi(
       configureDirectGatewayTransport(baseUrl, options.token.trim());
     }
     targetWindow.orkestratorGateway = { enabled: true, ...(baseUrl ? { baseUrl } : {}) };
-    targetWindow.orkestrator = createBrowserGatewayApi({ ...options, baseUrl, reportBootMetrics: true });
+    targetWindow.orkestrator = createBrowserGatewayApi({
+      ...options,
+      baseUrl,
+      reportBootMetrics: true,
+      // Only an isolated development profile can hold an agent-test session, and
+      // its Vite instance is the only one given a profile id. Probing anywhere
+      // else would spend a request per boot on a route that is always 404 —
+      // including on every production gateway client.
+      agentTestSessionActivity: options.agentTestSessionActivity
+        ?? Boolean(import.meta.env.VITE_ORKESTRATOR_PROFILE?.trim()),
+    });
   }
 }
 

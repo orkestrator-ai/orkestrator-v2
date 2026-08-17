@@ -440,11 +440,15 @@ The detailed operational reference is
   to narrow a run to one provider, or `--no-agent-credentials` only when the
   scenario specifically requires a credential-free state. Credentials permit
   real external requests, so keep prompts and mutations scoped to the seeded
-  fixture and never place secrets in logs or artifacts.
+  fixture and never place secrets in logs or artifacts. Managed toolchains are
+  provisioned separately, for every platform by default, so Cursor and Grok —
+  which have no PATH fallback — are launchable; `--agent-platforms` narrows it.
 - Do not assume ports, profile paths, browser URLs, or process IDs. Discover them
   through `dev:status --json` on every run.
-- Never print, paste into chat, add to a URL, or save the gateway token. The
-  status manifest contains only the path to the mode-`0600` auth file.
+- Sign the browser in with `bun run dev:login -- --profile <profile>` and open
+  the single-use `loginUrl` it prints. Never print, paste into chat, add to a
+  URL, or save the gateway token itself. The status manifest contains only the
+  path to the mode-`0600` auth file.
 - Do not use broad cleanup commands (`docker prune`, recursive removal of a
   development root, killing by executable name, or killing by port). Use the
   profile lifecycle commands below.
@@ -488,7 +492,10 @@ the launcher, Vite, Electron, and backend as live. Use these returned fields:
 - `electronTitle` — exact native window to target only for Electron-specific QA.
 - `testProject` — the only repository allowed for destructive/manual fixture work.
 - `logDir` — bounded launcher, Vite, Electron, and backend diagnostics.
-- `authFile` — owner-only JSON whose `token` property is the exact login code.
+- `loginCommand` — the `dev:login` invocation that signs a browser into this
+  profile. Use it instead of touching `authFile`.
+- `authFile` — owner-only JSON whose `token` property is the durable gateway
+  token, and the fallback for the login form when the launcher is unavailable.
   It is not an OTP and no other code needs to be generated. Read it locally,
   enter that exact value in the gateway-token password field, and do not echo,
   paste into chat, or save it in artifacts.
@@ -502,6 +509,20 @@ The setup does not copy projects, sessions, prompts, application settings, or
 any extra credential files, and it never replaces catalogue state already
 updated inside the profile. A credential-free run therefore still has
 last-known model metadata.
+
+`dev:test` also provisions a managed toolchain for every agent platform,
+seeding each one from the host installation when it has the same pinned version
+so the default normally costs a local copy rather than a download, and enabling
+that same selection in the profile so the platforms it provisions are the ones
+the app offers. Narrow it with `--agent-platforms cursor,grok` when a run does
+not need all five; the flag is rejected by `bun run dev`, which keeps the
+durable per-installation selection. Do not remove this to save startup time
+without checking what the run launches: Claude, Codex and OpenCode fall back to
+a PATH lookup, but Cursor and Grok resolve only through the managed toolchain,
+so a profile that provisions nothing fails their session creation with
+`enabled but not installed yet`. Anything the host cannot seed is downloaded at
+startup, which needs network access; an agent-test profile that cannot prepare
+its toolchains logs the reason and exits rather than waiting on a retry dialog.
 
 If startup reports `failed`, inspect the manifest and files below its `logDir`.
 Do not search arbitrary production application-data directories for diagnostics.
@@ -544,12 +565,20 @@ the change specifically concerns native-only behavior such as the window,
 menus, clipboard, preload, IPC, or shutdown. For repeatable assertions prefer
 Playwright and accessible roles/names.
 
-If the login page appears, the requested "code" is exactly the string in the
-`token` property of the JSON file at `authFile`. Read it locally and type it only
-into the gateway-token password field, then submit. Do not search for a separate
-verification code and never put the token in a query string, screenshot, shell
-argument, test report, or commentary. Confirm the page displays the orange DEV
-identity and the expected profile before changing any state.
+If the login page appears, do not read the token and do not drive the password
+field. Run `bun run dev:login -- --profile <profile>` (add `--json` for
+`{ loginUrl, expiresAt }`) and navigate the browser under test to the printed
+`loginUrl`. That URL carries a single-use bootstrap code — not the gateway token
+— which the gateway consumes on the first request before redirecting to the app,
+and which expires within two minutes. If a link is spent or expired, mint another
+rather than reusing one. The login page repeats this command for the running
+profile, so a browser that lands there can always recover.
+
+Typing the token remains the fallback when the launcher is not available: it is
+the `token` property of the JSON file at `authFile`, entered only into the
+gateway-token password field. Never put the token in a query string, screenshot,
+shell argument, test report, or commentary. Confirm the page displays the orange
+DEV identity and the expected profile before changing any state.
 
 For a frontend change, exercise at least:
 

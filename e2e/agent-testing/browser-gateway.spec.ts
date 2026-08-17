@@ -1,5 +1,4 @@
 import { expect, test, type Page } from "@playwright/test";
-import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
@@ -7,6 +6,8 @@ import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profi
 
 type Status = {
   status: string;
+  profile?: string;
+  flavor?: string;
   browserUrl?: string;
   authFile?: string;
   testProject?: string;
@@ -34,26 +35,33 @@ async function profileStatus(): Promise<Status> {
 }
 
 async function authenticatedInvoke(page: Page, status: Status) {
-  const auth = JSON.parse(await readFile(status.authFile!, "utf8")) as { token: string };
-  // Mint outside Playwright so the persistent gateway token can never enter a
-  // browser trace. The exchanged code is short-lived and consumed exactly once.
-  const minted = await fetch(new URL("/__orkestrator/agent-test/bootstrap", status.browserUrl!).href, {
-    method: "POST",
-    headers: { authorization: `Bearer ${auth.token}` },
+  // Exercise the exact host command agents use. Its stdout is parsed in memory
+  // and never copied into Playwright output, so the one-shot code stays out of
+  // traces and reports.
+  const command = spawnSync("bun", [
+    "run", "dev:login", "--", "--profile", profile, "--json",
+  ], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
   });
-  expect(minted.ok).toBe(true);
-  const { code } = await minted.json() as { code: string };
-  const exchanged = await page.request.post(
-    new URL("/__orkestrator/agent-test/bootstrap/exchange", status.browserUrl!).href,
-    { data: { code } },
-  );
-  expect(exchanged.ok()).toBe(true);
+  if (command.status !== 0) throw new Error(command.stderr || "dev:login failed");
+  let login: { loginUrl?: unknown };
+  try {
+    login = JSON.parse(command.stdout) as { loginUrl?: unknown };
+  } catch {
+    throw new Error("dev:login returned invalid JSON");
+  }
+  if (typeof login.loginUrl !== "string") throw new Error("dev:login returned no login URL");
+  const response = await page.goto(login.loginUrl, { waitUntil: "domcontentloaded" });
+  expect(response?.ok() ?? false).toBe(true);
+  expect(page.url()).not.toContain("/__orkestrator/agent-test/login");
+  expect(page.url()).not.toContain("code=");
   return async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
-    const response = await page.request.post(new URL("/__orkestrator/invoke", status.browserUrl!).href, {
+    const invokeResponse = await page.request.post(new URL("/__orkestrator/invoke", status.browserUrl!).href, {
       data: { command, args },
     });
-    expect(response.ok(), `${command}: ${await response.text()}`).toBe(true);
-    return (await response.json() as { result: T }).result;
+    expect(invokeResponse.ok(), `${command}: ${await invokeResponse.text()}`).toBe(true);
+    return (await invokeResponse.json() as { result: T }).result;
   };
 }
 

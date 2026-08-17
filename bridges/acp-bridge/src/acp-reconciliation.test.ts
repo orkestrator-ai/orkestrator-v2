@@ -388,6 +388,45 @@ describe("ACP bridge", () => {
 
 
 
+  test("preserves assistant text after an unavailable marker with no detail", async () => {
+    const directory = await temporaryDirectory();
+    const counterFile = resolve(directory, "unavailable-no-detail-prompts.log");
+    const { base, headers } = await spawnBridge({ env: {
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "1",
+      FAKE_ACP_RETRIABLE_CODE: "unavailable",
+      FAKE_ACP_RETRIABLE_DETAIL: "\n\nActual successful response",
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: "RESOURCEEXHAUSTED: preserve the successful response",
+        requestId: "unavailable-no-detail-1",
+      }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ role: string; content: string }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    expect(session.error).toBeUndefined();
+    expect(session.messages.at(-1)?.content).toContain(
+      "Error: RetriableError: [unavailable] \n\nActual successful response",
+    );
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(1);
+  });
+
+
+
   test("fails visibly after three unavailable retries", async () => {
     const directory = await temporaryDirectory();
     const counterFile = resolve(directory, "unavailable-retry-exhausted.log");

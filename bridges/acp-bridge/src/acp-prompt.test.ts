@@ -60,7 +60,7 @@ describe("ACP bridge", () => {
     // `\n` included: a provider that wraps the detail onto its own line is the
     // same failure, and the flattened detail stays bounded to one line either
     // way, so accepting it costs no extra transcript.
-    for (const separator of [" ", "  ", "\t", " \t ", "\n"]) {
+    for (const separator of [" ", "  ", "\t", " \t ", "\n", "\r\n", " \n\t"]) {
       const detail = `RetriableError: [unavailable]${separator}PING timed out`;
       expect(RETRIABLE_PROVIDER_ERROR.test(detail)).toBe(true);
       expect(FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(`Answer.\n\nError: ${detail}`)).toBe(true);
@@ -74,6 +74,17 @@ describe("ACP bridge", () => {
       expect(RETRIABLE_PROVIDER_ERROR.test(detail)).toBe(false);
       expect(FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(`Answer.\n\nError: ${detail}`)).toBe(false);
     }
+  });
+
+
+
+  test("does not consume a later assistant paragraph as provider-error detail", () => {
+    const answer =
+      "Answer.\n\nError: RetriableError: [unavailable]\n\nActual successful response";
+
+    expect(RETRIABLE_PROVIDER_ERROR.test(answer)).toBe(false);
+    expect(FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(answer)).toBe(false);
+    expect(answer.replace(FLATTENED_RETRIABLE_PROVIDER_SUFFIX, "")).toBe(answer);
   });
 
 

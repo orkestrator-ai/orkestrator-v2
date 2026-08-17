@@ -32,10 +32,12 @@ import { failAllActiveSubagents, finishSubagentTool } from "./acp-tools.js";
 const RETRIABLE_PROVIDER_CODE = String.raw`\[(?:resource_exhausted|unavailable)\]`;
 // One definition of "what separates the code from its detail", shared by both
 // classifiers below, which recognise the same provider failure arriving over
-// two different transports. A separator accepted by only one of them would
-// retry the typed RPC rejection while reporting the flattened form as a
-// finished turn, leaving the raw provider serialization in the transcript.
-const RETRIABLE_PROVIDER_SEPARATOR = String.raw`\s+`;
+// two different transports. Accept horizontal whitespace or one wrapped line,
+// but never cross a blank-line paragraph boundary: flattened assistant text is
+// model-controlled, so treating a later paragraph as the error detail would
+// delete a real answer and silently retry the turn.
+const RETRIABLE_PROVIDER_SEPARATOR =
+  String.raw`(?:[^\S\r\n]+(?:\r?\n[^\S\r\n]*)?|\r?\n[^\S\r\n]*)`;
 // A real detail starts with a non-whitespace character. Both classifiers use
 // this so whitespace-only tails (`[unavailable]  `) are retriable to neither:
 // the flattened suffix used to use `[^\n]+`, which treated extra spaces as a

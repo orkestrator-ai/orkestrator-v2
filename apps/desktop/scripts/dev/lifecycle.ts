@@ -23,6 +23,7 @@ import {
   readStatus,
   reserveLoopbackPorts,
   seedAgentTestProviderCredentials,
+  seedInstalledAgentToolchains,
   seedInstalledModelCatalogCaches,
 } from "./profile-io.js";
 import { seedFixture } from "./fixture.js";
@@ -124,6 +125,7 @@ async function resolveStoredProfile(args: DevArguments, flavor: "development" | 
     requestedId: args.profile,
     flavor,
     credentialSources: args.credentialSources,
+    agentPlatforms: args.agentPlatforms,
   });
   const stored = path.join(provisional.profileRoot, "profile.json");
   return readProfile(stored).catch(() => provisional);
@@ -262,6 +264,53 @@ export function stoppedRuntimeStatusIfUnchanged(
   return { ...latest, status: "stopped", updatedAt };
 }
 
+export type ProfileSeedDependencies = {
+  seedModelCatalogCaches?: typeof seedInstalledModelCatalogCaches;
+  seedProviderCredentials?: typeof seedAgentTestProviderCredentials;
+  seedAgentToolchains?: typeof seedInstalledAgentToolchains;
+  log?: (message: string) => void;
+  warn?: (message: string) => void;
+};
+
+/**
+ * Pre-populate an isolated profile from the host installation, before Electron.
+ *
+ * Only `agent-test` seeds anything: an ordinary `dev` run uses the durable
+ * per-installation state and has nothing to copy into. Electron downloads
+ * whatever is still missing, so this must complete first — Cursor and Grok have
+ * no PATH fallback, and the difference between seeding and downloading is
+ * minutes of startup, not whether the profile works.
+ */
+export async function seedAgentTestProfileState(
+  profile: RuntimeProfile,
+  flavor: "development" | "agent-test",
+  dependencies: ProfileSeedDependencies = {},
+): Promise<void> {
+  if (flavor !== "agent-test") return;
+  const log = dependencies.log ?? ((message: string) => console.log(message));
+  const warn = dependencies.warn ?? ((message: string) => console.warn(message));
+  const [, , toolchains] = await Promise.all([
+    (dependencies.seedModelCatalogCaches ?? seedInstalledModelCatalogCaches)(profile),
+    (dependencies.seedProviderCredentials ?? seedAgentTestProviderCredentials)(profile),
+    (dependencies.seedAgentToolchains ?? seedInstalledAgentToolchains)(profile),
+  ]);
+  if (toolchains.seeded.length > 0) {
+    log(`Seeded toolchains from the host install: ${toolchains.seeded.join(", ")}`);
+  }
+  // A slow startup is otherwise the only symptom of a seeder that has stopped
+  // working, and it looks exactly like a host that has nothing installed.
+  if (toolchains.failed.length > 0) {
+    warn(`Could not seed from the host install: ${toolchains.failed.join(", ")}`);
+  }
+  const pending = profile.agentPlatforms.filter((platform) => (
+    !toolchains.seeded.some((entry) => entry.startsWith(`${platform}@`))
+  ));
+  if (pending.length > 0) {
+    // Attributes a long or hung startup before Electron is even launched.
+    log(`Electron will download managed toolchains for: ${pending.join(", ")}`);
+  }
+}
+
 export async function startDevelopment(args: DevArguments, flavor: "development" | "agent-test"): Promise<void> {
   const existingProfile = await resolveStoredProfile(args, flavor);
   const existingStatusPath = statusManifestPath(existingProfile);
@@ -287,14 +336,10 @@ export async function startDevelopment(args: DevArguments, flavor: "development"
     rendererPort,
     gatewayPort,
     credentialSources: args.credentialSources,
+    agentPlatforms: args.agentPlatforms,
   });
   const profilePath = await initializeProfile(profile);
-  if (flavor === "agent-test") {
-    await Promise.all([
-      seedInstalledModelCatalogCaches(profile),
-      seedAgentTestProviderCredentials(profile),
-    ]);
-  }
+  await seedAgentTestProfileState(profile, flavor);
   const statusPath = statusManifestPath(profile);
   const rendererUrl = `http://${profile.rendererHost}:${profile.rendererPort}`;
   const startedAt = new Date().toISOString();

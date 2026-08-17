@@ -131,4 +131,31 @@ describe("toolchain startup orchestration", () => {
     expect(showMessageBox.mock.calls[0]?.[0].detail).toContain("offline");
     expect(quit).toHaveBeenCalledTimes(1);
   });
+
+  test("fails an unattended profile instead of waiting on a retry prompt", async () => {
+    const error = new Error("network down");
+    const showMessageBox = mock(async () => ({ response: 0 }));
+    const quit = mock(() => undefined);
+    const logError = mock(() => undefined);
+    const ensure = mock(async () => { throw error; });
+
+    // Nobody answers a modal in an agent-driven `dev:test` run, so prompting
+    // would hang the launcher: never ready, never exited, with the cause trapped
+    // in a dialog instead of the log directory dev:status points at.
+    await expect(preparePinnedToolchains({
+      dataDir: "/data",
+      ensure,
+      fetchImpl: mock(async () => new Response()),
+      onProgress: mock(() => undefined),
+      showMessageBox,
+      quit,
+      logError,
+      interactive: false,
+    })).resolves.toBeNull();
+
+    expect(showMessageBox).not.toHaveBeenCalled();
+    expect(ensure).toHaveBeenCalledTimes(1);
+    expect(logError).toHaveBeenCalledWith(error);
+    expect(quit).toHaveBeenCalledTimes(1);
+  });
 });

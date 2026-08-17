@@ -40,6 +40,51 @@ other agent platform). To test the signed-out experience, pass
 disabled. Live agent requests can incur external effects or cost, so use only
 the seeded fixture and do not put credentials in test output.
 
+## Agent toolchains in an isolated profile
+
+An agent-test profile provisions its own managed toolchain for every agent
+platform by default, taking its selection from the launcher rather than from the
+durable per-installation choice — an isolated run never inherits or rewrites
+your real one.
+
+This matters most for Cursor and Grok. Claude, Codex and OpenCode fall back to a
+PATH lookup, so they run in a profile that provisioned nothing; Cursor and Grok
+resolve **only** through the managed toolchain, by design (`cursor` on PATH is
+the desktop editor, not the ACP agent). A profile without them reports
+`Cursor Agent is enabled but not installed yet` when a session is created,
+which reads like a broken install rather than a missing selection.
+
+The launcher's selection is also written into the profile's own state, so the
+platforms it provisions are the platforms the app offers. Without that, a run
+would download Cursor and Grok and still show only the legacy three in every
+agent picker.
+
+Startup seeds each toolchain from your host installation when it has the same
+pinned version, so the default normally costs a local copy rather than a
+download. Anything the host lacks is downloaded as usual, and a toolchain the
+profile already has is left alone. Narrow the set when a run does not need all
+five:
+
+```bash
+bun run dev:test -- --profile cursor-qa --fixture --agent-platforms cursor,grok
+```
+
+`--agent-platforms` belongs to `dev:test` only; `bun run dev` rejects it rather
+than accept a value it would ignore, because ordinary development keeps its
+durable per-installation selection.
+
+The launcher prints what it seeded, what it could not seed, and what Electron
+will therefore download. A first run on a host without the pinned versions needs
+network access for that download, and it is the slow part of startup — narrowing
+the selection is the way to avoid it. If preparation fails, an agent-test profile
+logs the reason and exits instead of waiting on a retry dialog nobody is there to
+answer; look for it under the manifest's `logDir` and in the launcher output, then
+re-run once the cause is fixed.
+
+Seeding is one-way: nothing is written back into the production data directory,
+and its activation directory is never touched. Use `--keep-toolchains` with
+`dev:reset` to retain what a profile has provisioned.
+
 On macOS, Claude's and Cursor's logins live in the login Keychain rather than on
 disk. Startup reads only the explicitly authorized provider's named Keychain
 records: Claude receives its access token only in the Claude bridge process,

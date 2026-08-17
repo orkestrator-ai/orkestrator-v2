@@ -4,8 +4,9 @@ import os from "node:os";
 import path from "node:path";
 
 import { parseRuntimeStatusManifest, resolveRuntimeProfile, statusManifestPath } from "../../electron/runtime-profile.js";
-import { atomicWriteJson, initializeProfile, processMatches, processStartTime, readAndValidateSentinel, removeProfileState, reserveLoopbackPorts, seedAgentTestProviderCredentials, seedInstalledModelCatalogCaches } from "./profile-io.js";
-import { createBoundedLogWriter, orphanedRuntimeProcesses, stoppedRuntimeStatusIfUnchanged, stopTrackedRuntimeProcesses } from "./lifecycle.js";
+import type { ToolchainArtifact } from "../../electron/toolchain-manifest.js";
+import { atomicWriteJson, initializeProfile, processMatches, processStartTime, readAndValidateSentinel, removeProfileState, reserveLoopbackPorts, seedAgentTestProviderCredentials, seedInstalledAgentToolchains, seedInstalledModelCatalogCaches } from "./profile-io.js";
+import { createBoundedLogWriter, orphanedRuntimeProcesses, seedAgentTestProfileState, stoppedRuntimeStatusIfUnchanged, stopTrackedRuntimeProcesses } from "./lifecycle.js";
 
 const directories: string[] = [];
 afterEach(async () => Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))));
@@ -214,6 +215,223 @@ describe("development profile lifecycle primitives", () => {
     await expect(seedAgentTestProviderCredentials(enabled, { roots }))
       .resolves.toEqual(["grok/auth.json"]);
     expect(await readFile(destination, "utf8")).toBe("host-auth-v2");
+  });
+
+  /**
+   * A stand-in for one pinned artifact. Only the fields the seeder reads to
+   * derive a path matter; nothing here is verified against real bytes.
+   */
+  function toolchainArtifact(name: "cursor" | "grok", version: string): ToolchainArtifact {
+    return {
+      name,
+      version,
+      platform: "darwin",
+      architecture: "arm64",
+      archive: {
+        format: "raw",
+        url: `https://example.invalid/${name}`,
+        allowedHosts: ["example.invalid"],
+        entryPath: name,
+        size: 1,
+        sha256: "0".repeat(64),
+      },
+      executable: { fileName: name, size: 1, sha256: "0".repeat(64) },
+    };
+  }
+
+  async function toolchainFixture(platforms: Array<"cursor" | "grok">) {
+    const fixture = await modelCacheFixture();
+    const artifacts = [
+      toolchainArtifact("cursor", "2026.08.11"),
+      toolchainArtifact("grok", "1.0.3"),
+    ];
+    const hostDirectory = (name: string, version: string) =>
+      path.join(fixture.roots.productionDataDir, "toolchains", name, version, "darwin-arm64");
+    const profileDirectory = (name: string, version: string) =>
+      path.join(fixture.profile.dataDir, "toolchains", name, version, "darwin-arm64");
+    return {
+      ...fixture,
+      artifacts,
+      hostDirectory,
+      profileDirectory,
+      profile: { ...fixture.profile, agentPlatforms: platforms },
+    };
+  }
+
+  test("seeds selected agent toolchains from the host installation", async () => {
+    const { roots: profileRoots, profile, artifacts, hostDirectory, profileDirectory } =
+      await toolchainFixture(["cursor", "grok"]);
+    for (const [name, version] of [["cursor", "2026.08.11"], ["grok", "1.0.3"]] as const) {
+      await mkdir(hostDirectory(name, version), { recursive: true });
+      await writeFile(path.join(hostDirectory(name, version), name), `${name}-bytes`);
+    }
+    // Finder droppings would change Cursor's aggregate bundle digest, which is
+    // exactly the check that would then force the download this avoids.
+    await writeFile(path.join(hostDirectory("cursor", "2026.08.11"), ".DS_Store"), "junk");
+
+    await expect(seedInstalledAgentToolchains(profile, {
+      roots: profileRoots,
+      artifacts,
+      platform: "darwin",
+      architecture: "arm64",
+    })).resolves.toEqual({ seeded: ["cursor@2026.08.11", "grok@1.0.3"], failed: [] });
+    expect(await readFile(path.join(profileDirectory("cursor", "2026.08.11"), "cursor"), "utf8"))
+      .toBe("cursor-bytes");
+    expect(await readFile(path.join(profileDirectory("grok", "1.0.3"), "grok"), "utf8"))
+      .toBe("grok-bytes");
+    await expect(access(path.join(profileDirectory("cursor", "2026.08.11"), ".DS_Store")))
+      .rejects.toThrow();
+  });
+
+  test("seeds only the selected platforms and leaves the host untouched", async () => {
+    const { roots: profileRoots, profile, artifacts, hostDirectory, profileDirectory } =
+      await toolchainFixture(["grok"]);
+    for (const [name, version] of [["cursor", "2026.08.11"], ["grok", "1.0.3"]] as const) {
+      await mkdir(hostDirectory(name, version), { recursive: true });
+      await writeFile(path.join(hostDirectory(name, version), name), `${name}-bytes`);
+    }
+
+    await expect(seedInstalledAgentToolchains(profile, {
+      roots: profileRoots,
+      artifacts,
+      platform: "darwin",
+      architecture: "arm64",
+    })).resolves.toEqual({ seeded: ["grok@1.0.3"], failed: [] });
+    await expect(access(profileDirectory("cursor", "2026.08.11"))).rejects.toThrow();
+    // One-way: the profile never writes back into the user's real installation.
+    expect(await readFile(path.join(hostDirectory("grok", "1.0.3"), "grok"), "utf8"))
+      .toBe("grok-bytes");
+  });
+
+  test("leaves an already-provisioned profile toolchain alone", async () => {
+    const { roots: profileRoots, profile, artifacts, hostDirectory, profileDirectory } =
+      await toolchainFixture(["grok"]);
+    await mkdir(hostDirectory("grok", "1.0.3"), { recursive: true });
+    await writeFile(path.join(hostDirectory("grok", "1.0.3"), "grok"), "host-bytes");
+    await mkdir(profileDirectory("grok", "1.0.3"), { recursive: true });
+    await writeFile(path.join(profileDirectory("grok", "1.0.3"), "grok"), "profile-bytes");
+
+    // A running backend resolves through this directory. Re-seeding it on every
+    // restart would swap the executable underneath a live session.
+    await expect(seedInstalledAgentToolchains(profile, {
+      roots: profileRoots,
+      artifacts,
+      platform: "darwin",
+      architecture: "arm64",
+    })).resolves.toEqual({ seeded: [], failed: [] });
+    expect(await readFile(path.join(profileDirectory("grok", "1.0.3"), "grok"), "utf8"))
+      .toBe("profile-bytes");
+  });
+
+  test("reports nothing when the host has not installed the toolchain", async () => {
+    const { roots: profileRoots, profile, artifacts, profileDirectory } =
+      await toolchainFixture(["cursor", "grok"]);
+
+    // The installer downloads it instead. Seeding is an optimization, so a bare
+    // host must not fail the profile start.
+    await expect(seedInstalledAgentToolchains(profile, {
+      roots: profileRoots,
+      artifacts,
+      platform: "darwin",
+      architecture: "arm64",
+    })).resolves.toEqual({ seeded: [], failed: [] });
+    await expect(access(profileDirectory("grok", "1.0.3"))).rejects.toThrow();
+  });
+
+  test("refuses a symlinked host toolchain directory", async () => {
+    const { root, roots: profileRoots, profile, artifacts, hostDirectory, profileDirectory } =
+      await toolchainFixture(["grok"]);
+    const elsewhere = path.join(root, "elsewhere", "grok");
+    await mkdir(elsewhere, { recursive: true });
+    await writeFile(path.join(elsewhere, "grok"), "elsewhere-bytes");
+    await mkdir(path.dirname(hostDirectory("grok", "1.0.3")), { recursive: true });
+    // Following it would copy from a tree outside the host toolchain root, which
+    // is not the installation this seeding is allowed to trust.
+    await symlink(elsewhere, hostDirectory("grok", "1.0.3"));
+
+    await expect(seedInstalledAgentToolchains(profile, {
+      roots: profileRoots,
+      artifacts,
+      platform: "darwin",
+      architecture: "arm64",
+      warn: () => undefined,
+    })).resolves.toEqual({ seeded: [], failed: [] });
+    await expect(access(profileDirectory("grok", "1.0.3"))).rejects.toThrow();
+  });
+
+  test("reports a failed copy distinctly from a host that has nothing installed", async () => {
+    const { roots: profileRoots, profile, artifacts, hostDirectory, profileDirectory } =
+      await toolchainFixture(["grok"]);
+    await mkdir(hostDirectory("grok", "1.0.3"), { recursive: true });
+    await writeFile(path.join(hostDirectory("grok", "1.0.3"), "grok"), "host-bytes");
+    // A file where the version directory has to go. The copy cannot succeed, and
+    // this must not look like the bare-host case, which is byte-identical in its
+    // outcome — both fall through to the installer's download.
+    await mkdir(path.dirname(path.dirname(profileDirectory("grok", "1.0.3"))), { recursive: true });
+    await writeFile(path.dirname(profileDirectory("grok", "1.0.3")), "not-a-directory");
+
+    const warnings: string[] = [];
+    await expect(seedInstalledAgentToolchains(profile, {
+      roots: profileRoots,
+      artifacts,
+      platform: "darwin",
+      architecture: "arm64",
+      warn: (message) => warnings.push(message),
+    })).resolves.toEqual({ seeded: [], failed: ["grok@1.0.3"] });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("grok@1.0.3");
+    // Diagnostics name the artifact, never the filesystem paths involved.
+    expect(warnings[0]).not.toContain(profileRoots.productionDataDir);
+    expect(warnings[0]).not.toContain(profile.dataDir);
+  });
+
+  test("seeds nothing for a profile that provisions no platforms", async () => {
+    const { roots: profileRoots, profile, artifacts, hostDirectory } = await toolchainFixture([]);
+    await mkdir(hostDirectory("grok", "1.0.3"), { recursive: true });
+    await writeFile(path.join(hostDirectory("grok", "1.0.3"), "grok"), "host-bytes");
+
+    await expect(seedInstalledAgentToolchains(
+      { ...profile, agentPlatforms: [] },
+      { roots: profileRoots, artifacts, platform: "darwin", architecture: "arm64" },
+    )).resolves.toEqual({ seeded: [], failed: [] });
+  });
+
+  test("seeds an agent-test profile and reports what Electron still has to download", async () => {
+    const { profile } = await toolchainFixture(["cursor", "grok"]);
+    const logs: string[] = [];
+    const warnings: string[] = [];
+
+    await seedAgentTestProfileState(profile, "agent-test", {
+      seedModelCatalogCaches: async () => [],
+      seedProviderCredentials: async () => [],
+      seedAgentToolchains: async () => ({ seeded: ["cursor@2026.08.11"], failed: ["grok@1.0.3"] }),
+      log: (message) => logs.push(message),
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(logs).toEqual([
+      "Seeded toolchains from the host install: cursor@2026.08.11",
+      // Attributes a slow or hung startup before Electron is even launched.
+      "Electron will download managed toolchains for: grok",
+    ]);
+    expect(warnings).toEqual(["Could not seed from the host install: grok@1.0.3"]);
+  });
+
+  test("seeds nothing for an ordinary development profile", async () => {
+    const { profile } = await toolchainFixture(["cursor", "grok"]);
+    const calls: string[] = [];
+
+    // `dev` uses the durable per-installation state; copying host toolchains
+    // into it would be provisioning a profile that does not exist.
+    await seedAgentTestProfileState({ ...profile, flavor: "development" }, "development", {
+      seedModelCatalogCaches: async () => { calls.push("caches"); return []; },
+      seedProviderCredentials: async () => { calls.push("credentials"); return []; },
+      seedAgentToolchains: async () => { calls.push("toolchains"); return { seeded: [], failed: [] }; },
+      log: (message) => calls.push(message),
+      warn: (message) => calls.push(message),
+    });
+
+    expect(calls).toEqual([]);
   });
 
   test("skips missing, symlinked, and oversized model cache sources", async () => {

@@ -790,6 +790,38 @@ describe("OpenCode provider runtime", () => {
     }
   });
 
+  test("dispatches a connected model beyond the normalized catalogue cap", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: {
+        list: mock(async () => {
+          const catalog = crowdedOpenCodeCatalog();
+          return {
+            data: {
+              ...catalog.data,
+              connected: ["hpc-ai"],
+            },
+          };
+        }),
+      },
+    });
+    const provider = openCodeActivityProvider(fake, {
+      resolveOpenCodeModelProviders: () => ["opencode"],
+    });
+    try {
+      await provider.send("owned-session", "prompt", {
+        requestId: "request-1",
+        // `hpc-ai` advertises 600 models in this fixture. Dispatchability must
+        // inspect the requested model directly instead of the first 512 models
+        // retained for picker and durable-cache reads.
+        model: "hpc-ai/flood-599",
+      });
+      expect(fake.promptCalls).toHaveLength(1);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("still rejects a model whose provider OpenCode reports disconnected", async () => {
     const fake = openCodeFake();
     Object.assign(fake.client as object, {

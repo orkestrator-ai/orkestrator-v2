@@ -214,8 +214,10 @@ export function normalizeOpenCodeComposerCatalog(
  * allowlist: a model chosen before that list narrowed — or a stored default
  * naming a provider since deselected — is still one OpenCode can serve, so
  * judging it against the filtered catalogue rejected perfectly good prompts as
- * "not connected". The model's own provider leads the priority order so the
- * unfiltered read's caps cannot hide it either.
+ * "not connected". This lookup deliberately bypasses the picker and durable
+ * cache caps: a connected provider can itself advertise more than 512 models,
+ * and truncating it before the exact lookup would reject a model merely because
+ * of its listing position.
  *
  * `unknown` covers the builds that do not report connectivity at all, whose
  * prior behaviour was to dispatch.
@@ -224,12 +226,25 @@ export function openCodeModelDispatchability(
   value: unknown,
   modelId: string,
 ): "available" | "unavailable" | "unknown" {
-  const catalog = normalizeOpenCodeComposerCatalog(value, [], {
-    requireConnected: true,
-    priorityProviders: [openCodeModelProviderId(modelId)],
+  const connected = asRecord(value)?.connected;
+  if (!Array.isArray(connected)) return "unknown";
+
+  const providerId = openCodeModelProviderId(modelId);
+  const localModelId = providerId ? modelId.slice(providerId.length + 1) : "";
+  const providerConnected = connected.some((candidate) => {
+    const connectedProviderId = typeof candidate === "string"
+      ? nonEmptyString(candidate)
+      : nonEmptyString(asRecord(candidate)?.id);
+    return connectedProviderId === providerId;
   });
-  if (catalog.connectedProviderIds === undefined) return "unknown";
-  return catalog.models.some((candidate) => candidate.id === modelId)
+  if (!providerConnected || !providerId || !localModelId) return "unavailable";
+
+  return openCodeCatalogProviders(value).some((provider) =>
+    nonEmptyString(provider.id) === providerId
+    && openCodeProviderModels(provider.models).some((model) =>
+      nonEmptyString(model.id) === localModelId
+    )
+  )
     ? "available"
     : "unavailable";
 }

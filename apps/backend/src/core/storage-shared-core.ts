@@ -1593,6 +1593,12 @@ export function storedOpenCodeModelIds(
 /** The OpenCode default a fresh install ships with. */
 export const DEFAULT_OPENCODE_MODEL_ID = "opencode/claude-sonnet-5";
 
+/** Whether an OpenCode id contains both a provider and a non-blank model. */
+function isConcreteOpenCodeModelId(modelId: string): boolean {
+  const separator = modelId.indexOf("/");
+  return separator > 0 && modelId.slice(separator + 1).trim().length > 0;
+}
+
 /**
  * Keep the default OpenCode model inside the configured provider allowlist.
  *
@@ -1626,7 +1632,10 @@ export function selectableOpenCodeDefaultModel(
       .filter((favorite) => favorite.platform === "opencode")
       .map((favorite) => favorite.modelId),
     DEFAULT_OPENCODE_MODEL_ID,
-  ].find((modelId) => isSelectableOpenCodeModelId(modelId, allowedProviders))
+  ].find((modelId) =>
+    isConcreteOpenCodeModelId(modelId)
+    && isSelectableOpenCodeModelId(modelId, allowedProviders)
+  )
     ?? storedModelId;
 }
 
@@ -2027,4 +2036,3 @@ export type {
   Session,
   SessionType,
 };
-

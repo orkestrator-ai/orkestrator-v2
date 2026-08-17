@@ -378,6 +378,22 @@ describe("OpenCode model provider allowlist config", () => {
     });
   });
 
+  test("skips malformed favorites when repointing the default", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await writeLegacyConfig(dataDir, {
+        opencodeModel: "hpc-ai/deepseek/deepseek-v4-flash",
+        openCodeModelProviders: ["opencode", "opencode-go"],
+        favoriteModels: [
+          { platform: "opencode", modelId: "opencode/" },
+          { platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" },
+        ],
+      });
+
+      expect((await storage.loadConfig()).global.opencodeModel)
+        .toBe("opencode-go/deepseek-v4-flash");
+    });
+  });
+
   test("keeps an unreachable default when nothing selectable is on hand", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       await writeLegacyConfig(dataDir, {

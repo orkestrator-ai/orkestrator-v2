@@ -68,7 +68,10 @@ export const pluginConfigSnapshot = { ...realPluginConfig };
 export const childProcessSnapshot = { ...realChildProcess };
 
 
-export const fsSnapshot = { ...realFs };
+// Annotated rather than inferred: spreading the module widens to a structural
+// type that names `ReadStreamOptions`/`WriteStreamOptions`, which `node:fs`
+// does not export, so the emitted declaration cannot refer to them (TS4023).
+export const fsSnapshot: typeof realFs = { ...realFs };
 
 
 export const fsPromisesSnapshot = { ...realFsPromises };

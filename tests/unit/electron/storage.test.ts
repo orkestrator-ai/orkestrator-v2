@@ -696,6 +696,40 @@ describe("Electron StorageService", () => {
     );
   });
 
+  test("normalizes action defaults at the global-update boundary", async () => {
+    const dataDir = await createTempDir("ork-storage-action-defaults-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+
+    // This is the trust boundary between any client and persisted config: a
+    // malformed entry accepted here is later applied to a launch the user
+    // cannot see being configured.
+    await storage.updateGlobalConfig({
+      ...defaultConfig().global,
+      actionDefaults: {
+        review: { platform: "codex", model: "  gpt-5.4  ", reasoningEffort: " high " },
+        pr: { model: "sonnet" },
+        resolve: { platform: "not-an-agent", model: "sonnet" },
+        push: { platform: "opencode", model: "default" },
+        deploy: { platform: "claude" },
+      },
+    } as never);
+
+    expect((await storage.loadConfig()).global.actionDefaults).toEqual({
+      review: { platform: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+      // A model without a platform, an unknown platform, and an unknown action
+      // key are all dropped; OpenCode's `default` is a UI placeholder no
+      // OpenCode server knows, so only its platform survives.
+      push: { platform: "opencode" },
+    });
+
+    // `update_global_config` replaces the stored global wholesale, so a client
+    // that omits the field clears it rather than leaving it untouched. Every
+    // save path in the renderer has to resend it for this reason.
+    await storage.updateGlobalConfig({ ...defaultConfig().global } as never);
+    expect((await storage.loadConfig()).global.actionDefaults).toEqual({});
+  });
+
   test("preserves concurrent environment mutations across storage instances", async () => {
     const dataDir = await createTempDir("ork-storage-concurrent-environments-");
     const firstStorage = new StorageService(dataDir);

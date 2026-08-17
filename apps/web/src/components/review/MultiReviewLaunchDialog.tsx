@@ -85,6 +85,7 @@ function ModelRow({
   label,
   models,
   catalog,
+  preferredReasoningEfforts,
   favorites,
   onToggleFavorite,
   onReorderFavorites,
@@ -95,6 +96,7 @@ function ModelRow({
   label: string;
   models: AgentModel[];
   catalog: AgentModelCatalog;
+  preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
   favorites: ReturnType<typeof useAgentModelFavorites>["favorites"];
   onToggleFavorite: ReturnType<typeof useAgentModelFavorites>["toggleFavorite"];
   onReorderFavorites: ReturnType<typeof useAgentModelFavorites>["reorderFavorites"];
@@ -107,6 +109,24 @@ function ModelRow({
     id: effort,
     label: effort === "xhigh" ? "Extra high" : effort[0]?.toUpperCase() + effort.slice(1),
   })) ?? [];
+  /**
+   * Applies the chosen model *and* the platform it came from in one update.
+   *
+   * The picker lists every platform's models — and its favourites view mixes
+   * them — so a chosen row routinely belongs to a platform other than this
+   * row's. Handling it as `onPlatformChange` then `onModelChange` would run
+   * both against the same stale `row`, so the second call restored the old
+   * agent and the reviewer launched a Codex or Cursor model against Claude.
+   */
+  const selectModel = (agent: LaunchAgent, modelId: string) => {
+    const effort = defaultEffortFor(agent, modelId, catalog, preferredReasoningEfforts);
+    onChange({
+      ...row,
+      agent,
+      model: modelId,
+      reasoningEffort: effort === "default" ? undefined : effort,
+    });
+  };
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-950/55 p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
@@ -129,10 +149,10 @@ function ModelRow({
         selectedModelId={row.model}
         selectedModelLabel={selected?.name ?? row.model}
         onPlatformChange={(agent) => {
-          const model = firstModelFor(agent, catalog);
-          onChange({ ...row, agent, model, reasoningEffort: undefined });
+          selectModel(agent, firstModelFor(agent, catalog));
         }}
-        onModelChange={(model) => onChange({ ...row, model, reasoningEffort: undefined })}
+        onModelChange={(model) => selectModel(row.agent, model)}
+        onModelSelect={(model) => selectModel(model.platform, model.id)}
         reasoningOptions={reasoning}
         selectedReasoningId={row.reasoningEffort ?? ""}
         selectedReasoningLabel={row.reasoningEffort ?? "Default effort"}
@@ -227,6 +247,7 @@ export function MultiReviewLaunchDialog({
                   label={`Reviewer ${index + 1}`}
                   models={models}
                   catalog={catalog}
+                  preferredReasoningEfforts={preferredReasoningEfforts}
                   favorites={favorites}
                   onToggleFavorite={toggleFavorite}
                   onReorderFavorites={reorderFavorites}
@@ -248,6 +269,7 @@ export function MultiReviewLaunchDialog({
               label="Consolidation & fix model"
               models={models}
               catalog={catalog}
+              preferredReasoningEfforts={preferredReasoningEfforts}
               favorites={favorites}
               onToggleFavorite={toggleFavorite}
               onReorderFavorites={reorderFavorites}

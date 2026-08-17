@@ -32,7 +32,9 @@ import {
   deleteRetainedTerminalOutputBuffer,
   dockerOwnerMatches,
   environmentLifecycleErrorMessage,
+  getClaudeOAuthAccessToken,
   getHostClaudeCredentials,
+  getHostCursorCredentials,
   invalidateDockerContainerStateCache,
   localClaudeBridgeTokens,
   localCodexBridgeTokens,
@@ -74,6 +76,7 @@ import {
   setSpawnLocalServerCommandImplementation,
   setTerminateProcessTreeImplementation,
   setTerminalOutputRetentionMs,
+  syncAgentTestCursorCredentials,
 } from "./commands-helpers.js";
 
 export const __testing = {
@@ -133,8 +136,11 @@ export const __testing = {
   parseHeadCommit,
   buildSyncContainerGitHubCredentialCommand,
   buildSyncContainerClaudeCredentialCommand,
+  getClaudeOAuthAccessToken,
   getHostClaudeCredentials,
+  getHostCursorCredentials,
   resolveContainerClaudeCredentials,
+  syncAgentTestCursorCredentials,
   buildOpenCodeGitHubEnvironmentPluginSource,
   OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT,
   CLAUDE_GITHUB_ENV_FINGERPRINT,

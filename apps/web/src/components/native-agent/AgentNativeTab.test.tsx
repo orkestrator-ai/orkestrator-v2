@@ -142,6 +142,9 @@ const defaultProjection = async (input: {
   generation: "test-generation",
 });
 const getNativeAgentProjectionMock = mock(defaultProjection);
+const stopNativeAgentBackgroundTaskMock = mock(async () =>
+  getNativeAgentProjectionMock({ agent: "claude", environmentId: "env-1" })
+);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -157,6 +160,7 @@ mock.module("@/lib/backend", () => ({
   renameEnvironmentFromPrompt: renameEnvironmentFromPromptMock,
   resumeNativeAgentSession: resumeNativeAgentSessionMock,
   stopNativeAgentSession: stopNativeAgentSessionMock,
+  stopNativeAgentBackgroundTask: stopNativeAgentBackgroundTaskMock,
   getFileTree: async () => [],
   getLocalFileTree: async () => [],
   getNativeAgentProjection: getNativeAgentProjectionMock,
@@ -221,6 +225,7 @@ afterEach(() => {
   renameEnvironmentFromPromptMock.mockImplementation(async () => {});
   resumeNativeAgentSessionMock.mockClear();
   stopNativeAgentSessionMock.mockClear();
+  stopNativeAgentBackgroundTaskMock.mockClear();
   performNativeAgentSessionActionMock.mockClear();
   enqueuePromptQueueMessageMock.mockClear();
   removePromptQueueMessageMock.mockClear();
@@ -1933,6 +1938,7 @@ describe("AgentNativeTab", () => {
       notices?: NativeAgentSessionProjection["notices"];
       composer?: Partial<NonNullable<NativeAgentSessionProjection["composer"]>>;
       contextUsage?: NativeAgentSessionProjection["contextUsage"];
+      backgroundTasks?: NativeAgentSessionProjection["backgroundTasks"];
     } = {}) {
       getNativeAgentProjectionMock.mockImplementation(async (input) => ({
         platform: input.agent,
@@ -1954,6 +1960,9 @@ describe("AgentNativeTab", () => {
           : {}),
         ...(overrides.suggestedPrompt
           ? { suggestedPrompt: overrides.suggestedPrompt }
+          : {}),
+        ...(overrides.backgroundTasks
+          ? { backgroundTasks: overrides.backgroundTasks }
           : {}),
         ...(overrides.contextUsage ? { contextUsage: overrides.contextUsage } : {}),
         ...(overrides.notices ? { notices: overrides.notices } : {}),
@@ -1985,7 +1994,7 @@ describe("AgentNativeTab", () => {
           resume: true,
           fork: true,
           slashCommands: true,
-          backgroundTasks: false,
+          backgroundTasks: overrides.backgroundTasks !== undefined,
           composer: {
             provider: true,
             model: true,
@@ -2002,6 +2011,255 @@ describe("AgentNativeTab", () => {
         generation: "test-generation",
       }));
     }
+
+    test("deduplicates a projection-recovered background Agent and rehydrates it", async () => {
+      seedProjection({
+        backgroundTasks: [{
+          id: "child-task",
+          description: "Review the bridge",
+          status: "running",
+        }],
+        messages: [{
+          id: "assistant-background-agent",
+          role: "assistant",
+          content: "",
+          createdAt: "2026-08-16T10:00:00.000Z",
+          parts: [{
+            type: "tool-invocation",
+            content: "Agent",
+            toolName: "Agent",
+            toolUseId: "agent-launch",
+            backgroundTaskId: "child-task",
+            toolState: "success",
+            toolArgs: {
+              description: "Review the bridge",
+              run_in_background: true,
+            },
+          }],
+        }],
+      });
+
+      const view = render(
+        <AgentNativeTab
+          tabId="tab-claude-background-agent"
+          data={identity("claude")}
+          isActive={false}
+        />,
+      );
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      });
+      expect(screen.queryByRole("button", { name: /Review the bridge/ }) === null)
+        .toBe(true);
+
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-claude-background-agent"
+          data={identity("claude")}
+          isActive
+        />,
+      );
+      expect(await screen.findByRole("status", {
+        name: "1 background task running: Review the bridge.",
+      })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /Task Review the bridge/ }) === null)
+        .toBe(true);
+
+      view.unmount();
+      useNativeAgentProjectionStore.getState().reset();
+      getNativeAgentProjectionMock.mockClear();
+      render(
+        <AgentNativeTab
+          tabId="tab-claude-background-agent"
+          data={identity("claude")}
+          isActive
+        />,
+      );
+      expect(await screen.findByRole("status", {
+        name: "1 background task running: Review the bridge.",
+      })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /Task Review the bridge/ }) === null)
+        .toBe(true);
+    });
+
+    test("keeps an unrendered live task available as one fallback card", async () => {
+      seedProjection({
+        backgroundTasks: [{
+          id: "orphan-task",
+          description: "Watch the server",
+          status: "running",
+        }],
+        messages: [],
+      });
+
+      render(
+        <AgentNativeTab
+          tabId="tab-claude-orphan-task"
+          data={identity("claude")}
+          isActive
+        />,
+      );
+
+      expect(await screen.findByRole("button", {
+        name: /Task Watch the server Running/,
+      })).toBeTruthy();
+      expect(screen.getAllByRole("button", { name: "Stop Watch the server" }))
+        .toHaveLength(1);
+      fireEvent.click(screen.getByRole("button", { name: "Stop Watch the server" }));
+      await waitFor(() => expect(stopNativeAgentBackgroundTaskMock).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: "orphan-task" }),
+      ));
+    });
+
+    test("retires the fallback card once the transcript renders the same task", async () => {
+      /*
+       * The pinned card exists only because the transcript cannot show the
+       * task. The moment the launch row arrives, keeping both would put two
+       * stop controls on screen for one task, and the reader could not tell
+       * which of the two the task actually belongs to.
+       */
+      const launchRow = {
+        id: "assistant-late-launch",
+        role: "assistant" as const,
+        content: "",
+        createdAt: "2026-08-16T10:00:00.000Z",
+        parts: [{
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolUseId: "bash-launch",
+          toolState: "success",
+          toolArgs: {
+            command: "bun run dev",
+            description: "Run the dev server",
+            run_in_background: true,
+          },
+        }],
+      };
+      const seed = (messages: unknown[]) => seedProjection({
+        backgroundTasks: [{
+          id: "bg-dev",
+          toolUseId: "bash-launch",
+          description: "Run the dev server",
+          status: "running",
+        }],
+        messages: messages as never,
+      });
+
+      seed([]);
+      const view = render(
+        <AgentNativeTab
+          tabId="tab-claude-fallback-retire"
+          data={identity("claude")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+
+      expect(await screen.findByRole("button", {
+        name: /Task Run the dev server Running/,
+      })).toBeTruthy();
+      expect(screen.getAllByRole("button", { name: "Stop Run the dev server" }))
+        .toHaveLength(1);
+
+      seed([launchRow]);
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-claude-fallback-retire"
+          data={identity("claude")}
+          isActive
+          refreshRequestId={1}
+        />,
+      );
+
+      /*
+       * The launch row now owns the task, so the fallback withdraws. It goes to
+       * zero here rather than one because this harness does not paint
+       * virtualized transcript rows — only the dock, which is where the
+       * fallback lives. `native-message-adapters.test.ts` covers the other half:
+       * that this same row does render a card carrying the task's id.
+       */
+      await waitFor(() => expect(
+        screen.queryByRole("button", { name: "Stop Run the dev server" }) === null,
+      ).toBe(true));
+      expect(screen.queryByRole("button", {
+        name: /Task Run the dev server Running/,
+      }) === null).toBe(true);
+      // The task is still live, and the tab still says so.
+      expect(await screen.findByRole("status", {
+        name: "1 background task running: Run the dev server.",
+      })).toBeTruthy();
+    });
+
+    test("announces background task pause and stop lifecycle accurately", async () => {
+      const seedBackgroundStatus = (
+        status: "running" | "paused" | "killed",
+      ) => seedProjection({
+        backgroundTasks: [{
+          id: "bg-suite",
+          toolUseId: "bash-launch",
+          description: "Run the full suite",
+          status,
+        }],
+        messages: [{
+          id: "assistant-background-command",
+          role: "assistant",
+          content: "",
+          createdAt: "2026-08-16T10:00:00.000Z",
+          parts: [{
+            type: "tool-invocation",
+            content: "Bash",
+            toolName: "Bash",
+            toolUseId: "bash-launch",
+            toolState: "success",
+            toolArgs: {
+              command: "bun test",
+              description: "Run the full suite",
+              run_in_background: true,
+            },
+          }],
+        }],
+      });
+
+      seedBackgroundStatus("running");
+      const view = render(
+        <AgentNativeTab
+          tabId="tab-claude-task-announcement"
+          data={identity("claude")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+      expect(await screen.findByRole("status", {
+        name: "1 background task running: Run the full suite.",
+      })).toBeTruthy();
+
+      seedBackgroundStatus("paused");
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-claude-task-announcement"
+          data={identity("claude")}
+          isActive
+          refreshRequestId={1}
+        />,
+      );
+      expect(await screen.findByRole("status", {
+        name: "Run the full suite paused.",
+      })).toBeTruthy();
+
+      seedBackgroundStatus("killed");
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-claude-task-announcement"
+          data={identity("claude")}
+          isActive
+          refreshRequestId={2}
+        />,
+      );
+      expect(await screen.findByRole("status", {
+        name: "Run the full suite stopped.",
+      })).toBeTruthy();
+    });
 
     test("announces an active Cursor Task pinned to the transcript", async () => {
       seedProjection({

@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { appendFile, readdir, rename, rm, stat, truncate } from "node:fs/promises";
+import { appendFile, rename, rm, stat, truncate } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
@@ -17,6 +17,7 @@ import {
   liveness,
   processMatches,
   processStartTime,
+  removeProfileState,
   readAndValidateSentinel,
   readProfile,
   readStatus,
@@ -541,20 +542,7 @@ export async function resetProfile(args: DevArguments): Promise<number> {
     }
   }
 
-  if (args.keepToolchains) {
-    for (const child of await readdir(profile.profileRoot)) {
-      if (child === "profile.json" || child === ".orkestrator-dev-profile") continue;
-      if (child === "data") {
-        for (const dataChild of await readdir(profile.dataDir).catch(() => [])) {
-          if (dataChild !== "toolchains") await rm(path.join(profile.dataDir, dataChild), { recursive: true, force: true });
-        }
-      } else {
-        await rm(path.join(profile.profileRoot, child), { recursive: true, force: true });
-      }
-    }
-  } else {
-    await rm(profile.profileRoot, { recursive: true, force: true });
-  }
+  await removeProfileState(profile, args.keepToolchains);
   console.log(`Reset profile ${profile.id}: removed ${containersRemoved} exact-owner Docker container(s) and disposable profile state.${args.keepToolchains ? " Toolchains were retained." : " It can be recreated with bun run dev:test."}`);
   return 0;
 }

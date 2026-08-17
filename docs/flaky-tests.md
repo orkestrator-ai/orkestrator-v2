@@ -10,6 +10,119 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `Electron backend command registry > rejects malformed container status framing and invalid encoded sections` (`tests/unit/electron/commands-registry-terminal.test.ts:1418`)
+
+- **Status:** open
+- **Date observed:** 2026-08-17
+- **Original command:** `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures`
+- **Worker configuration:** four Bun workers over `tests/`, run concurrently with three typechecks and two other Bun test groups on the same host. A separate observation used the root group only, four Bun workers.
+- **Failure:** `expect(received).toThrow(expected)` with `Expected substring: "Malformed"`; the received message was `Command failed: docker exec container-1 bash -lc ...`, and the log also recorded `this test timed out after 5000ms` (duration: 5,013.59 ms). A paired observation reported duration 5,002.30 ms with the fake `docker exec` echoing the whole git-status script back as a failure and `killed 1 dangling process`.
+- **Suite counts:** 3,726 passed, 1 skipped, 2 failed; 16,602 expect() calls, 238.8 s. A second observation of the same pair recorded 3,726 passed, 1 skipped, 2 failed, 2 errors, 16,592 `expect()` calls; 3,729 tests across 178 files in 359.91 s.
+- **Isolated rerun:** `bun test tests/unit/electron/commands-registry-terminal.test.ts` → passed in 23.0 s. A logged rerun `bun run test:logged -- --name rerun-terminal -- bun test tests/unit/electron/commands-registry-terminal.test.ts` → passed in 25.6 s.
+- **Follow-up:** A later `--parallel=4` run of the same command on a quieter host passed in 79.2 s without this failure.
+- **Hypothesis:** The case drives a real fake-`docker` child process against the generic 5-second outer budget. Under host contention the fake process did not return before the outer timeout, so the timeout message replaced the expected `Malformed` rejection. This matches the 2026-08-16 sweep's command-registry row, which gave sibling cases explicit budgets; this case appears not to have received one. A recurrence should give the case an explicit budget and capture the fixture's process timing rather than loosening the `Malformed` assertion, which is the actual product behaviour under test.
+
+## `remote gateway > keeps a slow but progressing proxy body alive past the idle timeout` (`tests/unit/electron/gateway-proxy.test.ts:674`)
+
+- **Status:** open
+- **Date observed:** 2026-08-17
+- **Original command:** `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures`
+- **Worker configuration:** four Bun workers over `tests/`, run concurrently with three typechecks and two other Bun test groups on the same host.
+- **Failure:** `expect(received).toBe(expected)`, `Expected: 200`, `Received: 502` (duration: 315.30 ms).
+- **Suite counts:** as above — 3,726 passed, 1 skipped, 2 failed.
+- **Isolated rerun:** `bun test tests/unit/electron/gateway-proxy.test.ts` → passed in 1.0 s.
+- **Follow-up:** A later `--parallel=4` run of the same command passed in 79.2 s without this failure.
+- **Hypothesis:** The case drives a deliberately slow proxy body and asserts the idle timer treats forward progress as liveness. Under contention the gaps between the test's own body chunks can exceed the configured idle window, so the gateway legitimately aborts and returns 502. A recurrence should widen the chunk cadence relative to the idle timeout rather than accepting a 502, because tolerating it would stop testing the behaviour.
+
+## `ActionBar toolbar interactions > runs commands and opens the editor from keyboard shortcuts` (`apps/web/src/components/layout/ActionBar.test.tsx:1704`)
+
+- **Status:** open
+- **Date observed:** 2026-08-17
+- **Original command:** `bun run test` (complete concurrent cross-platform suite)
+- **Worker configuration:** `scripts/test-all.ts` ran the workspace, root/agent-support, bridges, and protocol-lockfile groups concurrently; the failure was inside `@orkestrator/web:test:workspace`, 5,095 tests across 222 files in 118.5 s.
+- **Failure:** a mock assertion reporting the expected call arguments followed by `But it was not called.` (duration: 47.14 ms).
+- **Suite counts:** web workspace group — 1 skipped, 1 failed; the root, bridges, and codex-protocol-lockfile groups all passed.
+- **Isolated rerun:** `bun --cwd=apps/web test src/components/layout/ActionBar.test.tsx` → 171 passed in 17.3 s. Also passed under `--parallel=4` (16.0 s), and passed on a stashed working tree at `4d25c8ea` with no local changes, so it is not attributable to the branch under test.
+- **Hypothesis:** The case dispatches a keyboard shortcut and asserts the resulting command mock synchronously. Under renderer contention the React commit that installs the shortcut handler can land after the key event is dispatched, so the handler never runs. A recurrence should wait for the control the shortcut targets to be mounted before dispatching, rather than relaxing the call assertion.
+
+## `Electron backend command registry > treats empty, null, and non-boolean draft output as non-draft` (`tests/unit/electron/commands-registry-pr.test.ts:650`)
+
+- **Status:** open
+- **Date observed:** 2026-08-17
+- **Original command:** `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures`
+- **Worker configuration:** root group only, four Bun workers.
+- **Failure:** `this test timed out after 5000ms` (duration: 5,021.67 ms). The paired unhandled error reported between tests was an expected-to-resolve promise rejecting: `commands.get("merge_pr_local")?.({ environmentId, method: "squash", deleteBranch: false })` was expected to resolve to `{ outcome: "merged" }`. The file also logged `killed 1 dangling process`.
+- **Suite counts:** as above — the two failures and two errors in that run are these entries.
+- **Isolated rerun:** `bun run test:logged -- --name rerun-pr -- bun test tests/unit/electron/commands-registry-pr.test.ts` → passed in 32.5 s.
+- **Hypothesis:** Same shape as the terminal entry — a real fake-`gh`/Git fixture racing the generic 5-second budget under contention, with the paired `merge_pr_local` rejection being the fixture failing rather than the draft-parsing behavior under test. Both entries were observed while reviewing `model-platform-detection`, whose diff touches only `apps/web`, an ACP bridge tsconfig, and Claude bridge test fixtures — nothing either file imports. Because these are timeouts rather than assertion mismatches, an isolated rerun alone does not fully exclude a genuine slowdown; a recurrence should time the fixture's process startup before adjusting budgets.
+
+## `Electron backend process supervisor > reports backend readiness before slow managed Serve initialization finishes` (`tests/unit/electron/backend-process.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-17
+- **Direction:** the inverse of this file's usual pattern — it failed *in isolation* and passed in the aggregate suite, so it is recorded here rather than dismissed.
+- **Original command:** `bun run test:logged -- --name cred-focused2 -- bun test tests/unit/electron/backend-process.test.ts tests/unit/claude-credential-injection.test.ts --parallel=2 --only-failures`
+- **Worker configuration:** two Bun workers over two files, while an isolated `dev:test` profile (`agent-cred-inject`) was live on the same machine.
+- **Failure:** `Unable to inspect Tailscale Serve configuration: Command failed: <tmp>/tailscale serve status --json` from `apps/backend/src/tailscale-serve.ts:176` via `managed-web-client.ts:170` (duration: 7,977.82 ms).
+- **Suite counts:** 54 passed, 1 failed; 55 tests across 2 files.
+- **Isolated rerun:** `bun test tests/unit/electron/backend-process.test.ts -t "reports backend readiness before slow managed Serve initialization finishes"` → also failed (7,439.62 ms), and failed identically on a stashed clean tree (8,964.33 ms), confirming it is not caused by the credential-injection change on this branch.
+- **Follow-up:** after the live `dev:test` profile finished starting, the owning file passed alone (32 passed, 14.18 s) and the complete aggregate `bun run test` passed in 104.9 s.
+- **Recurrence:** during credential-isolation follow-up on the same date, `bun test tests/unit/electron/backend-process.test.ts --parallel=2 --only-failures` failed at `waitForPath(.../status-started)` after 7,182.99 ms (27 passed, 1 failed); an immediate single-test rerun with `-t "reports backend readiness before slow managed Serve initialization finishes"` passed in 7.1 s.
+- **Aggregate recurrence:** `bun run test` at `ea9d79bdfdd3b2d4f5e0754b1ed6d2adf619e98e` timed out at the same `status-started` wait after 5,497.76 ms; the exact test passed alone in 3.1 s.
+- **Hypothesis:** the case drives real backend startup against a fake `tailscale` shim in a temp directory. Concurrent process pressure from a starting `dev:test` profile appears to make the shim invocation fail rather than merely run slowly, so the failure is contention-shaped like the existing "Standalone backend shutdown and Tailscale Serve lifecycle" family. A recurrence should capture whether the shim was ever created and whether the failure is a spawn error or a non-zero exit before changing the Serve assertions.
+
+## Aggregate process-contention recurrences (credential-isolation follow-up)
+
+- **Status:** open
+- **Date observed:** 2026-08-17
+- **Original command:** `bun run test:logged -- --name final-full-test -- bun run test`
+- **Worker configuration:** `scripts/test-all.ts` ran workspace, root/agent-support, bridges, and protocol-lockfile groups concurrently; the root group used four Bun workers and the bridges group used two.
+- **Failures:** `agent completion immediately rechecks and clears a resolved conflict` timed out after 3,028.60 ms waiting for the immediate PR recheck; `runtime helper preserves caller PATH additions in non-interactive bash` timed out after 5,662.98 ms; `rejects malformed container status framing and invalid encoded sections` timed out after 5,009.79 ms and its interrupted fixture produced a follow-on assertion error; `hard-kills a process that exceeds stdout and file-output limits` timed out after 5,511.94 ms.
+- **Suite counts:** backend workspace: 1,892 passed and 1 failed across 73 files; root/agent-support: 3,742 passed and 4 failed across 180 files (two are listed here, one is the separately recorded backend-readiness recurrence, and one was an outdated changed-code fixture corrected in this follow-up); bridges: 2,649 passed and 1 failed across 91 files.
+- **Isolated reruns:** each exact failed test passed alone through `test:logged`: PR recheck in 0.6 s, runtime environment in 0.7 s, malformed framing in 2.1 s, and Codex title limit in 0.5 s.
+- **Second aggregate run:** `bun run test` at `26c100220c905c67fa8efe3a12f606c90e610d1a` passed the complete workspace group, then the six-worker root group reported 3,742 passed and 4 timed-out tests after 268.8 s. The malformed-framing and backend-readiness cases recurred; `stops local merges when draft inspection or readiness fails` and `treats empty, null, and non-boolean draft output as non-draft` were newly observed at 5,017.69 ms and 5,001.10 ms. Those two exact PR tests passed alone in 2.4 s and 3.4 s respectively.
+- **Hypothesis:** these cases cross real timer or subprocess boundaries and exhausted generic aggregate budgets while the independently scheduled groups competed for process startup. The isolated passes confirm this observation as contention-shaped; recurrence counts should be gathered before changing product assertions.
+
+## Root-suite 5000 ms timeout cluster (`tests/unit/electron/`, `tests/unit/test-diagnostic-bounds.test.ts`)
+
+Three tests failed together in one root-suite run, and three further runs each
+failed a different subset. They are recorded as one entry because the evidence
+points at a single shared cause — starvation against a fixed 5000 ms deadline —
+rather than independent defects. Every owning file passes alone, and the failing
+set is not stable between runs, which is the signature this registry already
+records for the `tmux-backend.test.ts` and `standalone.test.ts` clusters below.
+
+- **Status:** open
+- **Date observed:** 2026-08-17
+- **Original command:** `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4`
+- **Worker configuration:** `--parallel=4` (which implies `--isolate`). Run concurrently with a second `bun test --test-worker` fleet from another worktree on the same host; load average during the run was 18.67 / 27.53 / 21.07.
+- **Suite counts:** 3,733 passed, 1 skipped, 3 failed, 2 non-fatal between-test errors; 179 files in 341.4 s (exit 1).
+- **Failures:**
+  - `remote gateway > keeps a slow but progressing proxy body alive past the idle timeout` (`tests/unit/electron/gateway-proxy.test.ts:674`) — `expect(received).toBe(expected)`, expected `200`, received `502`.
+  - `remote gateway > serializes invoke results once and keeps command metrics private and bounded` (`tests/unit/electron/gateway-support-extra.test.ts`) — timed out after 5000 ms (5034.33 ms), with an unhandled `ECONNREFUSED` between tests.
+  - `Electron backend command registry > clears a stale failure only once the stop has actually committed` (`tests/unit/electron/commands-registry-environments.test.ts:3892`) — expected a promise that resolves, received one that rejected; timed out after 5000 ms (5002.20 ms).
+- **Isolated reruns:** `bun test tests/unit/electron/gateway-proxy.test.ts` → passed, exit 0, 1.7 s. `bun test tests/unit/electron/gateway-support-extra.test.ts` → passed, exit 0, 2.1 s. `bun test tests/unit/electron/commands-registry-environments.test.ts` → also failed alone, but on **two different tests** than the aggregate run; all three originally-failing tests passed when selected individually with `-t`.
+- **Recurrence (2026-08-17, same day):** Three further `bun test ./tests --parallel=4` runs on an otherwise idle host, each failing a **different** subset of 5000 ms-deadline tests:
+  - Run 1 — none of this cluster failed.
+  - Run 2 — `remote gateway > serializes invoke results once and keeps command metrics private and bounded` (5059.89 ms). 3,741 passed, 1 skipped, 1 failed, 179 files, 244.2 s. Isolated rerun of `gateway-support-extra.test.ts` → 23 passed, 0 failed, in **1.03 s**.
+  - Run 3 — `bounded test diagnostics > never passes a DOM-producing query result directly to toBeNull` (`tests/unit/test-diagnostic-bounds.test.ts`, 5011.17 ms) and `Electron backend command registry > rejects malformed container status framing and invalid encoded sections` (`tests/unit/electron/commands-registry-environments.test.ts`, 5006.02 ms). 3,740 passed, 1 skipped, 2 failed, 361.4 s. Both owning files passed alone: 12 passed in 2.18 s, and 114 passed in 43.40 s.
+- **Widened scope:** run 3 shows the cluster is not confined to the gateway and command-registry files. `test-diagnostic-bounds.test.ts` walks every test file in the repository and needs 2.18 s even alone, so it sits close to the 5000 ms deadline before any contention is added; it is the clearest example of a deadline that is too tight for the work rather than a test that hangs. A test needing 1–2 s alone but exceeding 5 s under `--parallel=4` is being starved.
+- **Hypothesis:** All three are fixed-deadline (5000 ms) assertions in files that spawn child processes and bind loopback ports. Under the observed load they lose the CPU long enough to cross the deadline, and the gateway proxy's `502` is the same starvation surfacing as an upstream connect failure rather than a timeout. The `commands-registry-environments.test.ts` file failing on a *different* pair of tests in isolation is the strongest evidence that the deadline, not any one test's logic, is what is being hit. A fix should replace the fixed deadlines in these three files with progress-based waits, or raise them proportionally to detected host load; do not simply widen the constant, which moves the threshold without removing the race.
+- **Not attributable to the change under review:** the diff that surfaced this (`packages/protocol/src/action-defaults.ts` and the settings/toolbar wiring) touches none of these files or the code they exercise.
+
+## `live session read paths > denies an oversized blocking hook without broadcasting truncated approval data` (`tests/unit/electron/tmux-session.test.ts:1166`)
+
+- **Status:** open
+- **Date observed:** 2026-08-16
+- **Original command:** `bun run test:logged -- --name full-tests -- bun run test`
+- **Worker configuration:** `scripts/test-all.ts` ran the workspace, root/agent-support, bridges, and protocol-lockfile groups concurrently; the failure was in the root/agent-support group.
+- **Failure:** `expect(existsSync(pending)).toBe(false)` received `true` at `tmux-session.test.ts:1166` (duration: 606.40 ms). The oversized approval was correctly denied — the emitted hook response carried `permissionDecision: "deny"` — but the pending approval file had not yet been removed when the assertion ran.
+- **Suite counts:** 3,741 passed, 1 skipped, 1 failed; 3,743 tests across 181 files in 95.69 s.
+- **Isolated rerun:** `bun test tests/unit/electron/tmux-session.test.ts` → 69 passed, 0 failed, in 25.36 s.
+- **Follow-up:** Five further complete aggregate runs (`bun run test`) passed, at 94.5 s, 86.6 s, and three more; the failure has not recurred.
+- **Hypothesis:** The assertion checks the pending-approval file synchronously right after the deny response is observed, but the file removal is a separate filesystem write on the tmux hook path. Under aggregate contention the removal can land after the response. A recurrence should poll for the file's absence with a bounded diagnostic rather than asserting it in the same tick as the response, and should first confirm that the removal is genuinely ordered after the response rather than racing it in production.
+
+
 ## `ACP bridge > quarantines an unusable state file instead of refusing to start` (`bridges/acp-bridge/src/acp-persistence.test.ts:448`)
 
 - **Status:** open
@@ -1446,3 +1559,79 @@ Post-fix stress verification:
 - **Frequency:** failed in 2 of 4 consecutive `bun run test` runs on the same commit; passed in the other 2 and in every isolated rerun. The second occurrence (89.77 ms) shared a run with a batch of 5,000 ms Electron timeouts caused by *another worktree's* live `dev:test` profile (see "Environmental, not flaky: the root group while a `dev:test` profile is live"). This failure is **not** that signature — it fails in under 100 ms rather than exhausting a deadline — so host load may make it likelier without being the mechanism. A final `bun run test` on an idle host passed in 93.5 s.
 - **Hypothesis:** Same load-sensitive family as the three resolved `ActionBar` entries above, but the mechanism looks different: those timed out against Testing Library's default wait, whereas this one asserts synchronously on a mock immediately after `fireEvent.keyDown`. If the shortcut handler's effect subscription had not committed when the events were dispatched, the mock is legitimately never called and no amount of waiting inside the current assertion would help. A recurrence should check whether the handler is registered in a `useEffect` that had not flushed, and if so wrap the assertion in a bounded `waitFor` **and** confirm the listener is attached before dispatching, rather than only widening a timeout.
 - **Unrelated to the change under test:** `ActionBar` does not read `nativeAgentCapabilities`, the native composer projection, or any of the composer control paths modified in this branch.
+
+## `ActionBar workflow tabs > opens the Resolve modal after a mobile long press without launching a default resolve` (`apps/web/src/components/layout/ActionBar.test.tsx:2910`)
+
+- **Status:** open
+- **Date observed:** 2026-08-16
+- **Original command:**
+  `bun run test:logged -- --name web-all -- bun --cwd=apps/web test --parallel=4 --only-failures`,
+  at `a9107f112ffe2642388c0279aada5c8430019e7c` on `unify-agent-components`.
+- **Worker configuration:** four Bun workers on the web package alone, not under
+  `scripts/test-all.ts`. An isolated `dev:test` profile (Electron, Vite, backend,
+  bridges) had been running on this host earlier in the same session, so host
+  load was above a quiet single-suite run.
+- **Failure:** `getElementError` from `tests/bounded-test-diagnostics.ts:28`,
+  raised at `ActionBar.test.tsx:2933` — the
+  `screen.getByRole("dialog", { name: "Configure conflict resolution" })`
+  assertion found no dialog. Duration 736.72 ms.
+- **Suite counts:** `5095 pass, 1 fail. Ran 5096 tests across 221 files. [53.17s]`
+- **Isolated rerun:** `bun --cwd=apps/web test src/components/layout/ActionBar --parallel=2`
+  → exit 0, no failures. The aggregate command had also passed twice earlier in
+  the same session at the same commit.
+- **Hypothesis:** the same wall-clock race already documented and fixed for
+  `clears active long-press click suppression when the action bar unmounts`
+  above. The case fires a touch `pointerDown`, sleeps a bare
+  `setTimeout(575)` — the entire margin over the component's long-press
+  threshold — then asserts synchronously. Under contention the timer fires late
+  or React commits the dialog after the sleep resolves, and the immediate
+  `getByRole` misses it. The documented fix for the sibling case (wait for the
+  accessible dialog with a bounded UI wait instead of sleeping past the
+  threshold) applies unchanged here; this occurrence is a second instance of the
+  same pattern in a case the earlier sweep did not convert. Nothing in the
+  failing path touches the transcript, agent cards, or background tasks, which
+  are the only areas the change that observed this touched.
+
+## Electron command-registry fixture-shim timeouts (four tests, three files)
+
+- **Status:** open
+- **Date observed:** 2026-08-17
+- **Tests:**
+  - `Electron backend command registry > rolls back a local rename when push configuration fails` (`tests/unit/electron/commands-registry-environments.test.ts:1667`, assertion at `:1672`)
+  - `Electron backend command registry > advances the stored branch when a local rollback fails and the new branch is the only one left` (`tests/unit/electron/commands-registry-environments.test.ts:1709`, assertion at `:1717`)
+  - `Electron backend command registry > rejects malformed container status framing and invalid encoded sections` (`tests/unit/electron/commands-registry-terminal.test.ts:1408`, assertion at `:1418`)
+  - `Electron backend command registry > treats empty, null, and non-boolean draft output as non-draft` (`tests/unit/electron/commands-registry-pr.test.ts:634`, assertion at `:650`)
+- **Original command:** `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures`, at `19a1001123b16a89e2a09324a0033ae9b26eb74f` on `agent-jsonl-acp`.
+- **Worker configuration:** The root group ran on its own with `--parallel=4`, not under `scripts/test-all.ts`. No other suite was running against this clone.
+- **Failure:** all four are Bun's generic `this test timed out after 5000ms`, at 5,004.99 ms, 5,004.18 ms, 5,002.52 ms and 5,017.16 ms respectively. Each is accompanied by an "Unhandled error between tests" block showing its fixture shim was already gone when the command finally ran:
+  - the two environments cases logged `[ElectronBackend] Failed to rename local git branch: CommandFailedError: Command failed: git -C /var/folders/.../ork-electron-rename-repo-<suffix> branch -m -- old-branch review-oauth-flow`, then a post-timeout `git ... branch --show-current` against a temp repo directory that had already been torn down;
+  - the terminal case reported `expect(received).toThrow(expected)`, expected substring `"Malformed"`, received `"Command failed: docker exec container-1 bash -lc ..."` (the full `get_git_status` script), i.e. the fake `docker` shim was no longer on `PATH`;
+  - the PR case reported `Expected promise that resolves / Received promise that rejected` at `commands-registry-pr.test.ts:650`, inside `withFakeGh` (`tests/unit/electron/command-fixtures.ts:1212`).
+- **Suite counts:** 3,724 passed, 1 skipped, 4 failed, 4 errors, 16,581 `expect()` calls; 3,729 tests across 178 files in 361.24 seconds. The four errors are the four "Unhandled error between tests" blocks above. The bridges group and the web, backend, desktop and acp-bridge typechecks all passed in the same validation round.
+- **Isolated rerun:** each owning file passed alone — `bun run test:logged -- --name rerun-env-alone -- bun test tests/unit/electron/commands-registry-environments.test.ts` -> exit 0 in 34.4 s; `... commands-registry-terminal.test.ts` -> exit 0 in 28.7 s; `... commands-registry-pr.test.ts` -> exit 0 in 34.8 s.
+- **Follow-up:** the identical whole-group command passed on a rerun later the same day, exit 0 in 161.9 s — under half the failing run's 361.24 s. The wall-clock gap is the useful part of that observation: the failing run was roughly 2.2x slower overall, which is consistent with host contention rather than with anything specific to these four cases.
+- **Related:** the "Command-registry Git fixture, deduplicated/admitted container starts, and process-launch coverage" row of the 2026-08-16 resolution sweep. That sweep raised the shared condition deadline to 10 s and gave several cases explicit budgets precisely because the shared helper's deadline had grown past Bun's 5 s default. These four cases wait on real `git`/`docker`/`gh` shims but carry **no** `ASYNC_TEST_BUDGET_MS`, so Bun's 5 s default still wins and reports a generic timeout instead of naming the condition.
+- **Hypothesis:** Same family as that sweep row rather than a new product defect — the change in flight touched only `bridges/acp-bridge`, which none of these files load. Under `--parallel=4` the real `git`/`docker`/`gh` shim processes under `$TMPDIR` are slow enough to exceed the 5 s outer budget; the timeout then interrupts the case mid-flight and its `finally` tears the shim down, which is what produces the trailing "command failed"/"promise rejected" errors *after* the timeout rather than before it. The log also shows repeated "killed 1 dangling process" lines around them. A recurrence should record how long the shim command actually took before any budget is raised: give each of the four an explicit `ASYNC_TEST_BUDGET_MS` so the named condition wins the race and the real latency is visible, rather than widening a tolerance against a generic timeout.
+- **Recurrence (terminal case only), 2026-08-17:** `rejects malformed container
+  status framing and invalid encoded sections` failed alone under
+  `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures`
+  at `55539f08ac3dcb3b4b9e18e522f881e9992f9057` on `unify-agent-components`, four
+  Bun workers on the root suite alone, with the bridges and web suites run back
+  to back in the same session. Same two symptoms as above in the same order —
+  `expect(received).toThrow(expected)` at `:1418`, expected substring
+  `"Malformed"`, received `Command failed: docker exec container-1 bash -lc …`
+  (the git-status script echoed back), then a 5,019.09 ms timeout and one
+  trailing "Unhandled error between tests" for the same case. Suite counts:
+  `3727 pass, 1 skip, 1 fail, 1 error. Ran 3729 tests across 178 files. [379.1s]`
+  — again roughly 2.2x the passing run's wall clock. Isolated rerun
+  `bun run test:logged -- --name root-terminal-isolated -- bun test tests/unit/electron/commands-registry-terminal.test.ts`
+  → exit 0 in 31.7 s, and the same aggregate command passed at the follow-up
+  commit in the same session (79.6 s, exit 0). The change in flight touched only
+  the chat transcript, agent cards and background tasks, none of which this path
+  loads. One alternative worth ruling out when the measurement above is taken:
+  the received message is the *unrejected* command failure rather than the
+  framing error, which would also fit the queued `docker` stub answering a
+  different invocation than the one under test — an ordering dependency between
+  queued fakes rather than plain shim latency. The isolated file takes 31.7 s in
+  total with no single case near 5 s, so recording which stubbed command actually
+  answered distinguishes the two before any budget is raised.

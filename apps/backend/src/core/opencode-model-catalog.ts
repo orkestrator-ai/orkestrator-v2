@@ -3,6 +3,8 @@ import {
   DEFAULT_OPENCODE_MODEL_PROVIDERS,
   isSelectableOpenCodeModelId,
   isSelectableOpenCodeProvider,
+  openCodeModelProviderId,
+  openCodeModelProvidersKey,
 } from "@orkestrator/protocol/native-agent";
 import { asRecord, nonEmptyString } from "./agent-provider-runtime.js";
 
@@ -81,11 +83,21 @@ function openCodeCatalogDefault(value: unknown): {
  *
  * `connectedProviderIds` is reported either way, so a caller that skipped the
  * filter can still see what OpenCode considered connected.
+ *
+ * `priorityProviders` is for the unfiltered read. Its provider and model caps
+ * are spent in the order OpenCode lists providers, and OpenCode advertises
+ * thousands of models, so the configured allowlist has to be normalized *first*
+ * or the durable cache can be truncated to a catalogue that contains none of the
+ * providers the user actually selected — the same failure the filter avoids for
+ * the picker-facing reads.
  */
 export function normalizeOpenCodeComposerCatalog(
   value: unknown,
   allowedProviders: readonly string[] = DEFAULT_OPENCODE_MODEL_PROVIDERS,
-  options: { requireConnected?: boolean } = {},
+  options: {
+    requireConnected?: boolean;
+    priorityProviders?: readonly string[];
+  } = {},
 ): {
   models: AgentModel[];
   selectedModelId?: string;
@@ -106,17 +118,27 @@ export function normalizeOpenCodeComposerCatalog(
   const connectedProviders = options.requireConnected && connectedProviderIds
     ? new Set(connectedProviderIds)
     : null;
+  const priorityProviders = new Set(
+    (options.priorityProviders ?? []).map((providerId) => providerId.trim().toLowerCase()),
+  );
   // Reject the provider before either cap is applied. OpenCode advertises
   // thousands of models across every provider it knows about, so an excluded
   // provider allowed to consume the 128-provider or 512-model budget pushes the
   // selectable catalogues out of the picker entirely.
-  const selectableProviders = openCodeCatalogProviders(value)
+  const accepted = openCodeCatalogProviders(value)
     .filter((provider) => {
       const providerId = nonEmptyString(provider.id);
       return providerId !== null
         && (!connectedProviders || connectedProviders.has(providerId))
         && isSelectableOpenCodeProvider(providerId, allowedProviders);
-    })
+    });
+  // A stable partition, so a catalogue with no priority list — every
+  // picker-facing read — keeps OpenCode's own provider order exactly.
+  const isPriority = (provider: Record<string, unknown>): boolean =>
+    priorityProviders.has((nonEmptyString(provider.id) ?? "").toLowerCase());
+  const selectableProviders = (priorityProviders.size === 0
+    ? accepted
+    : [...accepted.filter(isPriority), ...accepted.filter((provider) => !isPriority(provider))])
     .slice(0, 128);
   for (const provider of selectableProviders) {
     const providerId = nonEmptyString(provider.id);
@@ -184,4 +206,89 @@ export function normalizeOpenCodeComposerCatalog(
       ? { selectedReasoningId: defaults.reasoningId }
       : {}),
   };
+}
+
+/**
+ * Whether OpenCode can currently serve one `providerID/modelID`.
+ *
+ * Availability is a statement about OpenCode, never about the picker's provider
+ * allowlist: a model chosen before that list narrowed — or a stored default
+ * naming a provider since deselected — is still one OpenCode can serve, so
+ * judging it against the filtered catalogue rejected perfectly good prompts as
+ * "not connected". This lookup deliberately bypasses the picker and durable
+ * cache caps: a connected provider can itself advertise more than 512 models,
+ * and truncating it before the exact lookup would reject a model merely because
+ * of its listing position.
+ *
+ * `unknown` covers the builds that do not report connectivity at all, whose
+ * prior behaviour was to dispatch.
+ */
+export function openCodeModelDispatchability(
+  value: unknown,
+  modelId: string,
+): "available" | "unavailable" | "unknown" {
+  const connected = asRecord(value)?.connected;
+  if (!Array.isArray(connected)) return "unknown";
+
+  const providerId = openCodeModelProviderId(modelId);
+  const localModelId = providerId ? modelId.slice(providerId.length + 1) : "";
+  const providerConnected = connected.some((candidate) => {
+    const connectedProviderId = typeof candidate === "string"
+      ? nonEmptyString(candidate)
+      : nonEmptyString(asRecord(candidate)?.id);
+    return connectedProviderId === providerId;
+  });
+  if (!providerConnected || !providerId || !localModelId) return "unavailable";
+
+  return openCodeCatalogProviders(value).some((provider) =>
+    nonEmptyString(provider.id) === providerId
+    && openCodeProviderModels(provider.models).some((model) =>
+      nonEmptyString(model.id) === localModelId
+    )
+  )
+    ? "available"
+    : "unavailable";
+}
+
+/**
+ * Cache key identifying the inputs one normalized catalogue was built from.
+ *
+ * The connectivity filter has to be part of the key. An allowlist configured
+ * empty means "unrestricted", which collides with the empty allowlist the
+ * durable-cache read passes — without this the picker could be served the
+ * deliberately unfiltered entry written for that cache. The priority list
+ * decides which providers survive the caps, so it separates entries for the
+ * same reason.
+ */
+export function openCodeCatalogCacheKey(
+  allowedProviders: readonly string[],
+  requireConnected: boolean,
+  priorityProviders: readonly string[] = [],
+): string {
+  return `${requireConnected ? "connected" : "all"}:${
+    openCodeModelProvidersKey(allowedProviders)
+  }:${openCodeModelProvidersKey(priorityProviders)}`;
+}
+
+/**
+ * Normalize `provider/list`, falling back to `config/providers` only when the
+ * first read said nothing at all.
+ *
+ * An empty connected set is authoritative. Falling back merely because it
+ * yielded no models would re-expose every provider OpenCode knows about,
+ * including providers that cannot currently serve a prompt.
+ */
+export function selectOpenCodeComposerCatalog(
+  live: unknown,
+  fallback: () => unknown,
+  allowedProviders: readonly string[],
+  options: {
+    requireConnected?: boolean;
+    priorityProviders?: readonly string[];
+  } = {},
+): ReturnType<typeof normalizeOpenCodeComposerCatalog> {
+  const catalog = normalizeOpenCodeComposerCatalog(live, allowedProviders, options);
+  return catalog.connectedProviderIds !== undefined || catalog.models.length > 0
+    ? catalog
+    : normalizeOpenCodeComposerCatalog(fallback(), allowedProviders, options);
 }

@@ -1666,7 +1666,8 @@ describe("NativeMessage task list rendering", () => {
     ).toContain("my-0");
     expect(container.innerHTML).toContain("my-0 rounded-lg border border-zinc-700/70");
     expect(
-      screen.getByRole("button", { name: /task wrapper/i }).parentElement?.className,
+      screen.getByRole("button", { name: /task wrapper/i }).parentElement
+        ?.parentElement?.className,
     ).toContain("my-0");
   });
 
@@ -3227,9 +3228,11 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     expect(container.textContent).toContain("Read");
   });
 
-  test("shows a background command's description and authoritative lifecycle state", () => {
+  test("renders a background command as a task card with a stop control", () => {
+    const stopBackgroundTask = mock(async () => true);
     render(
       <NativeMessage
+        stopBackgroundTask={stopBackgroundTask}
         message={makeMessage([{
           type: "tool-invocation",
           content: "Bash",
@@ -3249,11 +3252,85 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
       />,
     );
 
+    // The same card an agent gets, saying Task rather than Agent, and carrying
+    // a stop control where an agent carries its tool and update counts.
     const row = screen.getByRole("button", {
-      name: /Run Command Run the full suite running/,
+      name: /Task Run the full suite Running bun test/,
     });
     expect(row).toBeTruthy();
+    // The launch succeeding is not the task finishing.
     expect(row.textContent).not.toContain("success");
+    expect(row.textContent).not.toContain("tool");
+    expect(row.textContent).not.toContain("update");
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop Run the full suite" }));
+    expect(stopBackgroundTask).toHaveBeenCalledWith("bg-suite");
+  });
+
+  test("keeps a backgrounded subagent as one stoppable Agent card", () => {
+    const stopBackgroundTask = mock(async () => true);
+    const message = (status: "running" | "killed") => makeMessage([
+      makeAgentTaskGroupPart({
+        task: {
+          toolUseId: "agent-launch",
+          toolState: "success",
+          agentState: status === "running" ? "active" : "failed",
+          toolArgs: {
+            description: "Review the bridge",
+            run_in_background: true,
+          },
+          backgroundTask: {
+            id: "child-task",
+            description: "Review the bridge",
+            status,
+          },
+        },
+      }),
+    ]);
+    const view = render(
+      <NativeMessage
+        message={message("running")}
+        stopBackgroundTask={stopBackgroundTask}
+      />,
+    );
+
+    expect(screen.getByRole("button", {
+      name: /Agent Review the bridge Running/,
+    })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Stop Review the bridge" }));
+    expect(stopBackgroundTask).toHaveBeenCalledWith("child-task");
+
+    view.rerender(
+      <NativeMessage
+        message={message("killed")}
+        stopBackgroundTask={stopBackgroundTask}
+      />,
+    );
+    expect(screen.getByRole("button", {
+      name: /Agent Review the bridge Stopped/,
+    })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Stop Review the bridge" }) === null,
+    ).toBe(true);
+  });
+
+  test("offers no stop control when the tab cannot stop background tasks", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: { command: "bun test", run_in_background: true },
+          backgroundTask: { id: "bg-suite", status: "running" },
+        }])}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /^Stop / }) === null).toBe(true);
+    expect(screen.getByRole("button", { name: /Task Background task bg-suite Running/ }))
+      .toBeTruthy();
   });
 
   test("shows the task name, id, and stopped state on TaskStop rows", () => {
@@ -3371,17 +3448,18 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
   });
 
   test.each([
-    ["pending", "running…"],
-    ["running", "running…"],
-    ["paused", "paused"],
-    ["completed", "completed"],
-    ["failed", "failed"],
-    ["killed", "stopped"],
+    ["pending", "Starting", true],
+    ["running", "Running", true],
+    ["paused", "Paused", true],
+    ["completed", "Completed", false],
+    ["failed", "Failed", false],
+    ["killed", "Stopped", false],
   ] as const)(
-    "labels a background command whose task is %s as %s",
-    (status, label) => {
+    "labels a background task card %s as %s and offers a stop control: %s",
+    (status, label, stoppable) => {
       render(
         <NativeMessage
+          stopBackgroundTask={async () => true}
           message={makeMessage([{
             type: "tool-invocation",
             content: "Bash",
@@ -3397,11 +3475,193 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
         />,
       );
 
-      const row = screen.getByRole("button", { name: /Run Command Run the full suite/ });
+      const row = screen.getByRole("button", { name: /Task Run the full suite/ });
       expect(row.textContent).toContain(label);
       expect(row.textContent).not.toContain("success");
+      // A terminal task cannot be stopped, so the control is absent rather
+      // than present-and-disabled: there is nothing left to act on.
+      expect(
+        screen.queryByRole("button", { name: "Stop Run the full suite" }) !== null,
+      ).toBe(stoppable);
     },
   );
+
+  test("keeps a background task card open when it has no live snapshot", () => {
+    render(
+      <NativeMessage
+        stopBackgroundTask={async () => true}
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: { command: "bun test", run_in_background: true },
+          backgroundTask: { id: "bg-suite", description: "Run the full suite" },
+        }])}
+      />,
+    );
+
+    // No status means the provider has forgotten the task, so its outcome is
+    // unknown and no stop may be offered against an id that may name nothing.
+    const row = screen.getByRole("button", { name: /Task Run the full suite Launched/ });
+    expect(row).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Stop Run the full suite" }) === null,
+    ).toBe(true);
+  });
+
+  test("reports a refused stop on the card that asked for it", async () => {
+    render(
+      <NativeMessage
+        stopBackgroundTask={async () => false}
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: { command: "bun test", run_in_background: true },
+          backgroundTask: {
+            id: "bg-suite",
+            description: "Run the full suite",
+            status: "running",
+          },
+        }])}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop Run the full suite" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert").textContent).toContain(
+        "Could not stop “Run the full suite”",
+      );
+    });
+    // The control comes back, because the task is still running.
+    expect(screen.getByRole("button", { name: "Stop Run the full suite" })).toBeTruthy();
+  });
+
+  test("frees the stop control again when an accepted stop left the task alive", async () => {
+    // The backend took the request, so the button holds to prevent a duplicate.
+    // If the next authoritative snapshot still shows live work, holding forever
+    // would leave the only way to ask again permanently disabled.
+    const message = (status: "running" | "paused") => makeMessage([{
+      type: "tool-invocation",
+      content: "Bash",
+      toolName: "Bash",
+      toolState: "success",
+      toolArgs: { command: "bun run dev", run_in_background: true },
+      backgroundTask: { id: "bg-dev", description: "Run the dev server", status },
+    }]);
+    const view = render(
+      <NativeMessage message={message("running")} stopBackgroundTask={async () => true} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop Run the dev server" }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Stop Run the dev server" })
+          .hasAttribute("disabled"),
+      ).toBe(true);
+    });
+
+    view.rerender(
+      <NativeMessage message={message("paused")} stopBackgroundTask={async () => true} />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Stop Run the dev server" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  test("cards a command backgrounded after it started, with a stop control", () => {
+    // Ctrl+B and a foreground timeout both background a command launched
+    // without `run_in_background`, so the argument alone cannot route this row.
+    render(
+      <NativeMessage
+        stopBackgroundTask={async () => true}
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: { command: "bun run dev", description: "Run the dev server" },
+          backgroundTask: {
+            id: "bg-dev",
+            description: "Run the dev server",
+            status: "running",
+          },
+        }])}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /Task Run the dev server Running/ }))
+      .toBeTruthy();
+    expect(screen.getByRole("button", { name: "Stop Run the dev server" })).toBeTruthy();
+  });
+
+  test("loads a background task card's deferred launch output once expanded", async () => {
+    const loadToolDetails = mock(async (detailRef: string) => ({
+      detailRef,
+      toolOutput: "Command running in background with ID: bg-suite.",
+    }));
+    render(
+      <NativeMessage
+        loadToolDetails={loadToolDetails}
+        stopBackgroundTask={async () => true}
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: { command: "bun test", run_in_background: true },
+          // The projection defers every tool result, so this is the only way
+          // the card can ever reach the launch output.
+          detailRef: "detail-background-launch",
+          backgroundTask: {
+            id: "bg-suite",
+            description: "Run the full suite",
+            status: "running",
+          },
+        }])}
+      />,
+    );
+
+    expect(loadToolDetails).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /Task Run the full suite/ }));
+    await waitFor(() =>
+      expect(loadToolDetails).toHaveBeenCalledWith("detail-background-launch")
+    );
+    expect(
+      await screen.findByText("Command running in background with ID: bg-suite."),
+    ).toBeTruthy();
+  });
+
+  test("surfaces a failed deferred load on the background task card", async () => {
+    render(
+      <NativeMessage
+        loadToolDetails={mock(async () => {
+          throw new Error("Tool details expired");
+        })}
+        stopBackgroundTask={async () => true}
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: { command: "bun test", run_in_background: true },
+          detailRef: "detail-background-launch-error",
+          backgroundTask: {
+            id: "bg-error",
+            description: "Run the failing suite",
+            status: "running",
+          },
+        }])}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Task Run the failing suite/ }));
+    expect(await screen.findByText("Tool details expired")).toBeTruthy();
+  });
 
   test("shows a failed task action instead of the task's own lifecycle state", () => {
     render(
@@ -3463,6 +3723,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     );
 
     expect(screen.getByText("Run the full suite").className).not.toContain("font-mono");
+    expect(screen.getByText("bun test").className).toContain("font-mono");
     unmount();
 
     render(

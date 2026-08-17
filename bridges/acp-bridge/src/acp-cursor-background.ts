@@ -9,8 +9,7 @@ import {
   watch,
   type FSWatcher,
 } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import {
   CURSOR_BACKGROUND_CONTINUATION_PREFIX,
   MAX_CURSOR_CHILD_RESULT_BYTES,
@@ -18,7 +17,6 @@ import {
   MAX_MESSAGE_TEXT_BYTES,
   isObject,
   provider,
-  workingDirectory,
   type SessionState,
 } from "./acp-context.js";
 import { schedulePersist } from "./acp-persist-writer.js";
@@ -28,16 +26,23 @@ import {
   syncCursorChildTranscriptParts,
   type CursorChildTranscriptState,
 } from "./acp-cursor-transcript-parts.js";
+import {
+  bindDiscoveredCursorChildren,
+  cursorChildTranscriptPath,
+} from "./acp-cursor-child-discovery.js";
+
+// Path derivation moved to the discovery module, which owns the transcript
+// root. Re-exported so existing callers and tests keep one import site.
+export {
+  cursorChildTranscriptPath,
+  cursorTranscriptRoot,
+  isSafeCursorAgentId,
+} from "./acp-cursor-child-discovery.js";
 
 const TRANSCRIPT_TAIL_BYTES = 256 * 1024;
 const TRANSCRIPT_POLL_MS = 250;
 /** One entry per watched child path; a session cannot exceed the hydrate cap. */
 const MAX_TRANSCRIPT_READ_CACHE_ENTRIES = 64;
-/**
- * Cursor ids are short slugs. The cap is a sanity bound on an agent-supplied
- * value before it reaches the filesystem, well under any real path limit.
- */
-const MAX_CURSOR_AGENT_ID_LENGTH = 128;
 
 interface TranscriptReadCacheEntry {
   size: number;
@@ -77,39 +82,25 @@ export function cursorBackgroundContinueEnabled(): boolean {
   return true;
 }
 
-export function cursorTranscriptRoot(cwd: string = workingDirectory): string {
-  const override = process.env.CURSOR_AGENT_TRANSCRIPTS_DIR?.trim();
-  if (override) return override;
-  const slug = cwd.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\//g, "-");
-  return join(homedir(), ".cursor", "projects", slug, "agent-transcripts");
-}
-
 /**
- * The transcript path is built from an id the *agent* supplies, so it is
- * untrusted input crossing into the filesystem. Only a single safe path
- * segment may be used: anything containing a separator, a drive prefix or a
- * `..` traversal would read outside the transcript root and project the
- * result into the user's transcript.
+ * Live children this session can follow on disk.
+ *
+ * `includeDiscovered` decides whether inferred bindings count. Projection wants
+ * them — that is the whole point of the inference — but the continuation waiter
+ * must not: holding `session/prompt` open on a guess would stall the parent
+ * turn for the entire wait budget if the guess were wrong.
  */
-export function isSafeCursorAgentId(agentId: string): boolean {
-  if (!agentId || agentId.length > MAX_CURSOR_AGENT_ID_LENGTH) return false;
-  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(agentId) && !agentId.includes("..");
-}
-
-export function cursorChildTranscriptPath(
-  agentId: string,
-  cwd: string = workingDirectory,
-): string | undefined {
-  if (!isSafeCursorAgentId(agentId)) return undefined;
-  return join(cursorTranscriptRoot(cwd), agentId, `${agentId}.jsonl`);
-}
-
-export function listWatchableCursorChildren(state: SessionState): WatchableCursorChild[] {
+export function listWatchableCursorChildren(
+  state: SessionState,
+  options: { includeDiscovered?: boolean } = {},
+): WatchableCursorChild[] {
+  const includeDiscovered = options.includeDiscovered ?? true;
   const children: WatchableCursorChild[] = [];
   for (const toolUseId of state.activeSubagentToolIds) {
     const descriptor = state.activeSubagentDescriptors.get(toolUseId);
     const agentId = descriptor?.agentId?.trim();
     if (!descriptor || !agentId) continue;
+    if (descriptor.agentIdDiscovered && !includeDiscovered) continue;
     // An unusable id is treated exactly like a missing one: no watch, no
     // hydration, and the parent turn does not block on a child it cannot find.
     const transcriptPath = cursorChildTranscriptPath(agentId);
@@ -130,6 +121,10 @@ export function listWatchableCursorChildren(state: SessionState): WatchableCurso
  */
 export function hydrateCursorChildTranscripts(state: SessionState): void {
   if (provider !== "cursor") return;
+  // A foreground child is never named on the wire until it ends, so the read
+  // that is about to project activity is also the moment to work out which
+  // transcript a still-running card belongs to.
+  bindDiscoveredCursorChildren(state);
   const children: WatchableCursorChild[] = [];
   const seen = new Set<string>();
   for (const child of listWatchableCursorChildren(state)) {

@@ -64,7 +64,7 @@ describe("DraggableTabBar", () => {
     expect(onTabSelect).toHaveBeenCalledWith("terminal");
   });
 
-  test("requests server refreshes only for server-backed agent tabs", () => {
+  test("requests refreshes only for server-backed tabs", () => {
     const onTabRefresh = mock(() => undefined);
     const pane: PaneLeaf = {
       kind: "leaf",
@@ -92,6 +92,14 @@ describe("DraggableTabBar", () => {
           claudeTmuxData: { environmentId: "environment" },
         },
         { id: "browser", type: "browser", browserData: { url: "http://localhost:3000/" } },
+        {
+          id: "multi-review",
+          type: "multi-review",
+          multiReviewTabData: {
+            environmentId: "environment",
+            workflowId: "workflow",
+          },
+        },
         { id: "terminal", type: "plain" },
       ],
     };
@@ -113,14 +121,15 @@ describe("DraggableTabBar", () => {
       ["OpenCode 3", "opencode"],
       ["Claude 4", "tmux"],
       ["Browser 5", "browser"],
+      ["Multi Review 6", "multi-review"],
     ] as const) {
       fireEvent.contextMenu(screen.getByText(label));
       fireEvent.click(screen.getByText("Refresh"));
       expect(onTabRefresh).toHaveBeenLastCalledWith(tabId);
     }
 
-    expect(onTabRefresh).toHaveBeenCalledTimes(5);
-    fireEvent.contextMenu(screen.getByText("Terminal 6"));
+    expect(onTabRefresh).toHaveBeenCalledTimes(6);
+    fireEvent.contextMenu(screen.getByText("Terminal 7"));
     expect(screen.queryByText("Refresh") === null).toBe(true);
   });
 

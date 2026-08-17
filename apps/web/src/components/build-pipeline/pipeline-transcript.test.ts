@@ -880,12 +880,16 @@ quoted context
       FALLBACK,
     );
 
-    const parts = flattenedParts(transcript);
-    expect(parts[0]!.backgroundTask)
+    // A shell row carrying a resolved task is a background-task card, so the
+    // sanitized task rides on the group's launch row rather than on a flat one.
+    const tasks = flattenedParts(transcript).map((part) =>
+      part.type === "task-group" ? part.task.backgroundTask : part.backgroundTask
+    );
+    expect(tasks[0])
       .toEqual({ id: "bg-1", description: "dev server", status: "killed" });
     // The task itself survives; only the unreadable status is dropped.
-    expect(parts[1]!.backgroundTask).toEqual({ id: "bg-2", description: undefined });
-    expect(parts[2]!.backgroundTask).toEqual({ id: "bg-3", description: undefined });
+    expect(tasks[1]).toEqual({ id: "bg-2", description: undefined });
+    expect(tasks[2]).toEqual({ id: "bg-3", description: undefined });
   });
 
   test("accepts every task status spelling the protocol's own registry accepts", () => {

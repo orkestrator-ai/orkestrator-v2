@@ -344,6 +344,180 @@ describe("OpenCode model provider allowlist config", () => {
     });
   });
 
+  // A default naming an excluded provider is unreachable, not merely unusual:
+  // no picker lists it, so the user cannot replace it there, while environment
+  // launches and build pipelines keep dispatching it.
+  test("repoints a default model the allowlist no longer admits", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await writeLegacyConfig(dataDir, {
+        opencodeModel: "hpc-ai/deepseek/deepseek-v4-flash",
+        openCodeModelProviders: ["opencode", "opencode-go"],
+        favoriteModels: [
+          { platform: "claude", modelId: "opus" },
+          { platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" },
+          { platform: "opencode", modelId: "opencode-go/deepseek-v4-pro" },
+        ],
+      });
+
+      // Their own favourite, not an invented model.
+      expect((await storage.loadConfig()).global.opencodeModel)
+        .toBe("opencode-go/deepseek-v4-flash");
+    });
+  });
+
+  test("repoints to the shipped default when no favorite is selectable", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await writeLegacyConfig(dataDir, {
+        opencodeModel: "hpc-ai/deepseek/deepseek-v4-flash",
+        openCodeModelProviders: ["opencode", "opencode-go"],
+        favoriteModels: [{ platform: "opencode", modelId: "openrouter/kimi-k2.5" }],
+      });
+
+      expect((await storage.loadConfig()).global.opencodeModel)
+        .toBe("opencode/claude-sonnet-5");
+    });
+  });
+
+  test("skips malformed favorites when repointing the default", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await writeLegacyConfig(dataDir, {
+        opencodeModel: "hpc-ai/deepseek/deepseek-v4-flash",
+        openCodeModelProviders: ["opencode", "opencode-go"],
+        favoriteModels: [
+          { platform: "opencode", modelId: "opencode/" },
+          { platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" },
+        ],
+      });
+
+      expect((await storage.loadConfig()).global.opencodeModel)
+        .toBe("opencode-go/deepseek-v4-flash");
+    });
+  });
+
+  // `repository.defaultModel` is read before `global.opencodeModel` by both
+  // `connectionDefaultsFor` and the startup-agent launch, so repointing only the
+  // global default leaves the unreachable id in charge one level down.
+  test("repoints a repository default the allowlist no longer admits", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await writeLegacyConfig(
+        dataDir,
+        {
+          opencodeModel: "opencode/claude-sonnet-5",
+          openCodeModelProviders: ["opencode", "opencode-go"],
+          favoriteModels: [
+            { platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" },
+          ],
+        },
+        {
+          "repo-explicit": {
+            defaultBranch: "main",
+            prBaseBranch: "main",
+            defaultAgent: "opencode",
+            defaultModel: "hpc-ai/deepseek-v4-flash",
+          },
+        },
+      );
+
+      const config = await storage.loadConfig();
+      expect(config.repositories["repo-explicit"]?.defaultModel)
+        .toBe("opencode-go/deepseek-v4-flash");
+      // The rest of the repository record survives the rewrite.
+      expect(config.repositories["repo-explicit"]?.defaultBranch).toBe("main");
+    });
+  });
+
+  test("repoints a repository that inherits OpenCode as the global default agent", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await writeLegacyConfig(
+        dataDir,
+        {
+          defaultAgent: "opencode",
+          enabledAgentPlatforms: ["opencode"],
+          opencodeModel: "opencode/claude-sonnet-5",
+          openCodeModelProviders: ["opencode", "opencode-go"],
+          favoriteModels: [],
+        },
+        {
+          "repo-inherited": {
+            defaultBranch: "main",
+            prBaseBranch: "main",
+            defaultModel: "hpc-ai/deepseek-v4-flash",
+          },
+        },
+      );
+
+      // No selectable favourite, so it lands on the shipped default.
+      expect((await storage.loadConfig()).repositories["repo-inherited"]?.defaultModel)
+        .toBe("opencode/claude-sonnet-5");
+    });
+  });
+
+  test("leaves repository defaults belonging to another agent untouched", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await writeLegacyConfig(
+        dataDir,
+        {
+          opencodeModel: "opencode/claude-sonnet-5",
+          openCodeModelProviders: ["opencode", "opencode-go"],
+          favoriteModels: [
+            { platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" },
+          ],
+        },
+        {
+          // The field holds one id shared by every agent. A Claude repository's
+          // model must not be reinterpreted as `provider/model` and repointed.
+          "repo-claude": {
+            defaultBranch: "main",
+            prBaseBranch: "main",
+            defaultAgent: "claude",
+            defaultModel: "vendor/claude-sonnet-5",
+          },
+          // The "use the agent default" sentinel is not a model id either.
+          "repo-sentinel": {
+            defaultBranch: "main",
+            prBaseBranch: "main",
+            defaultAgent: "opencode",
+            defaultModel: "default",
+          },
+        },
+      );
+
+      const config = await storage.loadConfig();
+      expect(config.repositories["repo-claude"]?.defaultModel)
+        .toBe("vendor/claude-sonnet-5");
+      expect(config.repositories["repo-sentinel"]?.defaultModel).toBe("default");
+    });
+  });
+
+  test("keeps an unreachable default when nothing selectable is on hand", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await writeLegacyConfig(dataDir, {
+        opencodeModel: "hpc-ai/deepseek/deepseek-v4-flash",
+        openCodeModelProviders: ["opencode-go"],
+        favoriteModels: [],
+      });
+
+      // Inventing a model the user never picked would be worse than leaving the
+      // one they can still see in settings.
+      expect((await storage.loadConfig()).global.opencodeModel)
+        .toBe("hpc-ai/deepseek/deepseek-v4-flash");
+    });
+  });
+
+  test("leaves the default alone when the allowlist admits it", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await writeLegacyConfig(dataDir, {
+        opencodeModel: "hpc-ai/deepseek/deepseek-v4-flash",
+        // Unrestricted admits everything, so nothing is ever repointed.
+        openCodeModelProviders: [],
+        favoriteModels: [{ platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" }],
+      });
+
+      expect((await storage.loadConfig()).global.opencodeModel)
+        .toBe("hpc-ai/deepseek/deepseek-v4-flash");
+    });
+  });
+
   test("normalizes a stored list on read and survives a restart", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       // Normalization is a read boundary, as it is for `favoriteModels`: a

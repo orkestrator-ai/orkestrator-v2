@@ -74,6 +74,12 @@ import {
   normalizeOpenCodeModelProviders,
 } from "@orkestrator/protocol/native-agent";
 import {
+  DEFAULT_OPENCODE_MODEL_ID,
+  normalizeOpenCodeRepositoryDefaults,
+  selectableOpenCodeDefaultModel,
+  storedOpenCodeModelIds,
+} from "./storage-opencode-models.js";
+import {
   DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
   isValidCodexMaxConcurrentThreads,
   MAX_CODEX_CONCURRENT_THREADS,
@@ -1561,33 +1567,15 @@ export function sanitizePersistedReviewInstruction(config: AppConfig): AppConfig
   };
 }
 
-/**
- * Every place a previously-chosen OpenCode model id is durably stored.
- *
- * These were all selected from a picker that offered every provider OpenCode
- * advertises, so they are what the allowlist migration has to preserve. Ids
- * belonging to another agent contribute nothing: they carry no `provider/model`
- * separator, so they resolve to no provider.
- */
-export function storedOpenCodeModelIds(
-  global: JsonRecord,
-  repositories: AppConfig["repositories"] | undefined,
-): unknown[] {
-  const ids: unknown[] = [global.opencodeModel];
-  if (Array.isArray(global.favoriteModels)) {
-    for (const favorite of global.favoriteModels) {
-      if (isRecord(favorite) && favorite.platform === "opencode") {
-        ids.push(favorite.modelId);
-      }
-    }
-  }
-  if (isRecord(repositories)) {
-    for (const repository of Object.values(repositories)) {
-      if (isRecord(repository)) ids.push(repository.defaultModel);
-    }
-  }
-  return ids;
-}
+// The OpenCode model helpers moved to their own module, but this one is where
+// `storage-shared.ts` and every existing caller reach for them, so the surface
+// stays here.
+export {
+  DEFAULT_OPENCODE_MODEL_ID,
+  normalizeOpenCodeRepositoryDefaults,
+  selectableOpenCodeDefaultModel,
+  storedOpenCodeModelIds,
+};
 
 export function normalizePersistedConfig(config: AppConfig): AppConfig {
   const reviewInstructionSanitized = sanitizePersistedReviewInstruction(config);
@@ -1643,8 +1631,23 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     : migrateOpenCodeModelProviders(
         storedOpenCodeModelIds(global, reviewInstructionSanitized.repositories),
       );
+  const opencodeModel = selectableOpenCodeDefaultModel(
+    global.opencodeModel,
+    favoriteModels,
+    openCodeModelProviders,
+  );
+  // A repository default outranks the global one everywhere it is read, so the
+  // repointing has to reach it too or the unreachable id simply survives one
+  // level down. Identity is preserved when nothing moved.
+  const repositories = normalizeOpenCodeRepositoryDefaults(
+    reviewInstructionSanitized.repositories,
+    defaultAgent,
+    favoriteModels,
+    openCodeModelProviders,
+  );
   if (
-    global.codexMaxConcurrentThreads === codexMaxConcurrentThreads
+    repositories === reviewInstructionSanitized.repositories
+    && global.codexMaxConcurrentThreads === codexMaxConcurrentThreads
     && global.useHostGitHubCredentials === useHostGitHubCredentials
     && JSON.stringify(global.enabledAgentPlatforms) === JSON.stringify(enabledAgentPlatforms)
     && global.defaultAgent === defaultAgent
@@ -1652,12 +1655,14 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     && JSON.stringify(global.favoriteModels ?? []) === JSON.stringify(favoriteModels)
     && JSON.stringify(global.openCodeModelProviders)
       === JSON.stringify(openCodeModelProviders)
+    && global.opencodeModel === opencodeModel
   ) {
     return reviewInstructionSanitized;
   }
 
   return {
     ...reviewInstructionSanitized,
+    repositories,
     global: {
       ...global,
       codexMaxConcurrentThreads,
@@ -1667,6 +1672,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
       claudeMode,
       favoriteModels,
       openCodeModelProviders,
+      opencodeModel,
     } as unknown as AppConfig["global"],
   };
 }
@@ -1722,7 +1728,7 @@ export function defaultConfig(): AppConfig {
       enabledAgentPlatforms: [...LEGACY_ENABLED_AGENT_PLATFORMS],
       favoriteModels: [],
       defaultAgent: "claude",
-      opencodeModel: "opencode/claude-sonnet-5",
+      opencodeModel: DEFAULT_OPENCODE_MODEL_ID,
       claudeModel: "claude-sonnet-5",
       codexModel: "gpt-5.4",
       // New installs only. An existing config.json already holds a concrete
@@ -1979,4 +1985,3 @@ export type {
   Session,
   SessionType,
 };
-

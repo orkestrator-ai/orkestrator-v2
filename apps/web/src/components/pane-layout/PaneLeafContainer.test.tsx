@@ -1,13 +1,17 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
+import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import type { PaneLeaf } from "@/types/paneLayout";
 import * as realClaudeTmuxChatTab from "@/components/claude/ClaudeTmuxChatTab";
 import * as realNativeAgent from "@/components/native-agent";
 import * as realBrowserTab from "@/components/browser/BrowserTab";
 import * as realLoopedReviewTab from "@/components/review/LoopedReviewTab";
+import * as realMultiReviewTab from "@/components/review/MultiReviewTab";
 import * as realFileViewerTab from "@/components/terminal/FileViewerTab";
 import * as realBuildChatTab from "@/components/build-pipeline/BuildChatTab";
 
@@ -15,6 +19,7 @@ const realClaudeTmuxChatTabSnapshot = { ...realClaudeTmuxChatTab };
 const realNativeAgentSnapshot = { ...realNativeAgent };
 const realBrowserTabSnapshot = { ...realBrowserTab };
 const realLoopedReviewTabSnapshot = { ...realLoopedReviewTab };
+const realMultiReviewTabSnapshot = { ...realMultiReviewTab };
 const realFileViewerTabSnapshot = { ...realFileViewerTab };
 const realBuildChatTabSnapshot = { ...realBuildChatTab };
 
@@ -46,7 +51,11 @@ mock.module("./DraggableTabBar", () => ({
   }: {
     onTabSelect: (tabId: string) => void;
     onTabRefresh?: (tabId: string) => void;
-  }) => (
+  }) => {
+    // The tab bar renders exactly once per PaneLeafContainer render, so this
+    // stands in for a render counter on the pane itself.
+    paneRenderCount += 1;
+    return (
     <>
       <button type="button" onClick={() => onTabSelect("tab-2")}>
         Select tab 2
@@ -66,8 +75,12 @@ mock.module("./DraggableTabBar", () => ({
       <button type="button" onClick={() => onTabRefresh?.("tab-browser")}>
         Refresh Browser tab
       </button>
+      <button type="button" onClick={() => onTabRefresh?.("tab-multi-review")}>
+        Refresh Multi Review tab
+      </button>
     </>
-  ),
+    );
+  },
 }));
 
 mock.module("./DropZoneOverlay", () => ({
@@ -194,6 +207,37 @@ mock.module("@/components/review/LoopedReviewTab", () => ({
   ),
 }));
 
+/** Set to make the Multi Review tab throw during render. */
+let multiReviewTabFailure: Error | null = null;
+/** Bumped once per mount so a forced remount is observable, unlike a re-render. */
+let multiReviewMountCount = 0;
+/** Counts renders of the whole pane so subscription breadth is observable. */
+let paneRenderCount = 0;
+
+mock.module("@/components/review/MultiReviewTab", () => ({
+  MultiReviewTab: ({
+    data,
+    isActive,
+  }: {
+    data: { environmentId: string; workflowId: string };
+    isActive: boolean;
+  }) => {
+    if (multiReviewTabFailure) throw multiReviewTabFailure;
+    // A state initializer runs once per mount, so this survives re-renders and
+    // only advances when the tab is genuinely torn down and recreated.
+    const [mountIndex] = useState(() => ++multiReviewMountCount);
+    return (
+      <div
+        data-testid="multi-review-tab"
+        data-environment-id={data.environmentId}
+        data-workflow-id={data.workflowId}
+        data-mount-index={String(mountIndex)}
+        data-active={String(isActive)}
+      />
+    );
+  },
+}));
+
 mock.module("@/components/terminal/FileViewerTab", () => ({
   FileViewerTab: ({
     tabId,
@@ -268,6 +312,10 @@ describe("PaneLeafContainer", () => {
       () => realLoopedReviewTabSnapshot,
     );
     mock.module(
+      "@/components/review/MultiReviewTab",
+      () => realMultiReviewTabSnapshot,
+    );
+    mock.module(
       "@/components/terminal/FileViewerTab",
       () => realFileViewerTabSnapshot,
     );
@@ -339,6 +387,10 @@ describe("PaneLeafContainer", () => {
         repositories: {},
       },
     }));
+    useMultiReviewStore.setState({ workflows: new Map() });
+    multiReviewTabFailure = null;
+    multiReviewMountCount = 0;
+    paneRenderCount = 0;
   });
 
   test("clicking the pane scopes the active pane update to its environment", () => {
@@ -829,6 +881,146 @@ describe("PaneLeafContainer", () => {
       console.error = originalError;
       buildChatTabFailure = null;
     }
+  });
+
+  test("recovers a failed Multi Review view at the next authoritative revision", async () => {
+    const timestamp = "2026-08-17T00:00:00.000Z";
+    const workflow = (backendRevision: number): MultiReviewWorkflow => ({
+      version: 1,
+      controller: "backend",
+      id: "workflow-1",
+      environmentId: "env-visible",
+      projectId: "project-1",
+      targetBranch: "main",
+      reviewers: [],
+      fixModel: { agent: "codex", model: "default" },
+      phase: "reviewing",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      backendRevision,
+    });
+    useMultiReviewStore.getState().replaceWorkflow(workflow(1));
+    multiReviewTabFailure = new TypeError("transient reviewer render failure");
+    const originalError = console.error;
+    console.error = mock(() => undefined) as typeof console.error;
+    const pane: PaneLeaf = {
+      kind: "leaf",
+      id: "pane-multi-review",
+      tabs: [{
+        id: "tab-multi-review",
+        type: "multi-review",
+        multiReviewTabData: {
+          environmentId: "env-visible",
+          workflowId: "workflow-1",
+        },
+      }],
+      activeTabId: "tab-multi-review",
+    };
+
+    try {
+      render(
+        <PaneLeafContainer
+          pane={pane}
+          environmentId="env-visible"
+          containerId="container-visible"
+          isActive
+        />,
+      );
+
+      expect(await screen.findByRole("alert")).toBeTruthy();
+      multiReviewTabFailure = null;
+      act(() => useMultiReviewStore.getState().replaceWorkflow(workflow(2)));
+      expect(await screen.findByTestId("multi-review-tab")).toBeTruthy();
+      expect(screen.queryByRole("alert") === null).toBe(true);
+    } finally {
+      console.error = originalError;
+      multiReviewTabFailure = null;
+    }
+  });
+
+  test("remounts the Multi Review tab on refresh so it rehydrates authoritatively", async () => {
+    const pane: PaneLeaf = {
+      kind: "leaf",
+      id: "pane-multi-review",
+      tabs: [{
+        id: "tab-multi-review",
+        type: "multi-review",
+        multiReviewTabData: {
+          environmentId: "env-visible",
+          workflowId: "workflow-1",
+        },
+      }],
+      activeTabId: "tab-multi-review",
+    };
+
+    render(
+      <PaneLeafContainer
+        pane={pane}
+        environmentId="env-visible"
+        containerId="container-visible"
+        isActive
+      />,
+    );
+
+    expect((await screen.findByTestId("multi-review-tab")).dataset.mountIndex).toBe("1");
+
+    // Refresh has no prop to forward, so it has to tear the tab down; a stale
+    // mount would keep showing the workflow snapshot the user asked to refresh.
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Multi Review tab" }));
+    await waitFor(async () => {
+      expect((await screen.findByTestId("multi-review-tab")).dataset.mountIndex).toBe("2");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Multi Review tab" }));
+    await waitFor(async () => {
+      expect((await screen.findByTestId("multi-review-tab")).dataset.mountIndex).toBe("3");
+    });
+  });
+
+  test("keeps a workflow update from re-rendering panes that do not show it", async () => {
+    const timestamp = "2026-08-17T00:00:00.000Z";
+    const workflow = (backendRevision: number): MultiReviewWorkflow => ({
+      version: 1,
+      controller: "backend",
+      id: "workflow-elsewhere",
+      environmentId: "env-other",
+      projectId: "project-1",
+      targetBranch: "main",
+      reviewers: [],
+      fixModel: { agent: "codex", model: "default" },
+      phase: "reviewing",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      backendRevision,
+    });
+    const pane: PaneLeaf = {
+      kind: "leaf",
+      id: "pane-agents",
+      tabs: [{
+        id: "tab-claude",
+        type: "agent-native",
+        nativeAgentData: { platform: "claude", environmentId: "env-visible" },
+      }],
+      activeTabId: "tab-claude",
+    };
+
+    render(
+      <PaneLeafContainer
+        pane={pane}
+        environmentId="env-visible"
+        containerId="container-visible"
+        isActive
+      />,
+    );
+    await screen.findByTestId("claude-tab");
+
+    // The store swaps its whole workflow map on every update, including no-op
+    // refreshes, so a pane-level subscription would re-render every pane in
+    // every environment on any Multi Review event.
+    const rendersBefore = paneRenderCount;
+    act(() => useMultiReviewStore.getState().replaceWorkflow(workflow(1)));
+    act(() => useMultiReviewStore.getState().replaceWorkflow(workflow(2)));
+    expect(paneRenderCount).toBe(rendersBefore);
   });
 
   test("forwards independent repeated refresh requests to every refreshable tab", async () => {

@@ -2,7 +2,7 @@ import { existsSync, path, createHash, randomBytes, APP_VERSION, CLAUDE_BRIDGE_P
 import { enqueueLocalServerEnvironmentOperation, localServerFields, releaseLocalServerOwnership, terminateLocalServerChild, cancelOpenCodeAgentToolsConfiguration, aggregateRejectedResults, stopLocalServerUnlocked, stopLocalServersForEnvironmentUnlocked } from "./commands-local-server-lifecycle.js";
 import { checkHttpHealth, waitForLocalServerHealth, openCodeHealthHeaders, bearerBridgeHeaders, agentToolConnectionFingerprint } from "./commands-server-health.js";
 import type { ChildProcessWithoutNullStreams, Environment, AgentToolConnection, AgentModel, AgentReasoningOption } from "./commands-dependencies.js";
-import { localServerProcesses, localCodexBridgeTokens, localClaudeBridgeTokens, localOpenCodeServerPasswords, localCursorBridgeTokens, localGrokBridgeTokens, localCursorCredentialFingerprints, openCodeAgentToolsConfigurations, configuredOpenCodeAgentTools, BRIDGE_TOKEN_PATTERN, localServerEnvironmentOperations, containerBridgeOperations, deletingLocalServerEnvironments, mergingEnvironments, mergeCleanupRecoveryTasks, retryableBridgeStartupError, LOCAL_SERVER_KINDS, isLocalServerShutdownRequested, requestLocalServerShutdown, getLocalServerShutdownPromise, setLocalServerShutdownPromise, spawnLocalServerCommandImpl, gitFetchScheduler, diffStatsService, invalidatePendingDiffStatsSync } from "./commands-runtime-state.js";
+import { AGENT_TEST_CURSOR_CREDENTIAL_STORE_ENV, AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV, localServerProcesses, localCodexBridgeTokens, localClaudeBridgeTokens, localOpenCodeServerPasswords, localCursorBridgeTokens, localGrokBridgeTokens, localCursorCredentialFingerprints, openCodeAgentToolsConfigurations, configuredOpenCodeAgentTools, BRIDGE_TOKEN_PATTERN, localServerEnvironmentOperations, containerBridgeOperations, deletingLocalServerEnvironments, mergingEnvironments, mergeCleanupRecoveryTasks, retryableBridgeStartupError, LOCAL_SERVER_KINDS, isLocalServerShutdownRequested, requestLocalServerShutdown, getLocalServerShutdownPromise, setLocalServerShutdownPromise, spawnLocalServerCommandImpl, gitFetchScheduler, diffStatsService, invalidatePendingDiffStatsSync } from "./commands-runtime-state.js";
 import { prMonitorService, invalidatePendingPrMonitorSync, setMergeCleanupScheduler } from "./commands-pr-monitor.js";
 import { resolveCursorApiKey, cursorApiKeyFingerprint } from "./commands-validation.js";
 import { resolveCodexBinary, resolveOpenCodeBinary, resolveClaudeBinary, resolveManagedAcpBinary, resolveBunBinary } from "./commands-agent-support.js";
@@ -11,6 +11,7 @@ import { assertDockerContainerOwned, cleanupEnvironmentSetupState, enqueueEnviro
 import { getHostPort } from "./commands-container-exec.js";
 import { dockerExec } from "./commands-container-exec.js";
 import { conciseError, cleanupErrorMessage } from "./commands-error-text.js";
+import { getClaudeOAuthAccessToken, getHostClaudeCredentials, getHostCursorCredentials, syncAgentTestCursorCredentials } from "./commands-files.js";
 import type { OpenCodeAgentToolsOutcome, LocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 
@@ -581,11 +582,31 @@ export async function startLocalServerUnlocked(
   kind: LocalServerKind,
 ): Promise<{ port: number; pid: number; wasRunning: boolean; authToken?: string }> {
   const key = `${kind}:${environmentId}`;
-  const cursorApiKey = kind === "cursor"
+  const allowCursorCredentials = context.runtimeFlavor !== "agent-test"
+    || context.credentialSources?.has("cursor");
+  const cursorApiKey = kind === "cursor" && allowCursorCredentials
     ? resolveCursorApiKey((await context.storage.loadConfig()).global).apiKey
     : undefined;
+  const agentTestHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME?.trim();
+  const hostCursorCredentials = kind === "cursor"
+    && context.runtimeFlavor === "agent-test"
+    && allowCursorCredentials
+    && !cursorApiKey
+    && agentTestHostHome
+    ? await getHostCursorCredentials(process.platform, agentTestHostHome)
+    : undefined;
   const cursorCredentialFingerprint = kind === "cursor"
-    ? cursorApiKeyFingerprint(cursorApiKey)
+    ? createHash("sha256")
+      .update(allowCursorCredentials ? "allowed" : "denied")
+      .update("\0")
+      .update(cursorApiKeyFingerprint(cursorApiKey))
+      .update("\0")
+      .update(hostCursorCredentials?.accessToken ?? "")
+      .update("\0")
+      .update(hostCursorCredentials?.refreshToken ?? "")
+      .update("\0")
+      .update(hostCursorCredentials?.apiKey ?? "")
+      .digest("hex")
     : undefined;
   const existing = localServerProcesses.get(key);
   if (existing && !existing.killed && existing.pid) {
@@ -664,6 +685,19 @@ export async function startLocalServerUnlocked(
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "claude-bridge");
     env.CLAUDE_CLI_PATH = resolveClaudeBinary(context);
+    if (context.runtimeFlavor === "agent-test" && context.credentialSources?.has("claude")) {
+      const hostConfigDir = process.env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]?.trim();
+      if (hostConfigDir) env.CLAUDE_CONFIG_DIR = hostConfigDir;
+      if (!env.ANTHROPIC_API_KEY && agentTestHostHome) {
+        const credentials = await getHostClaudeCredentials(
+          process.platform,
+          agentTestHostHome,
+          hostConfigDir,
+        );
+        const accessToken = getClaudeOAuthAccessToken(credentials);
+        if (accessToken) env.ANTHROPIC_AUTH_TOKEN = accessToken;
+      }
+    }
   } else if (kind === "codex") {
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "codex-bridge");
@@ -707,6 +741,20 @@ export async function startLocalServerUnlocked(
     if (kind === "cursor") {
       if (cursorApiKey) env.CURSOR_API_KEY = cursorApiKey;
       else delete env.CURSOR_API_KEY;
+      if (context.runtimeFlavor === "agent-test") {
+        const cursorHome = path.join(
+          context.storage.getDataDir(),
+          "agent-credentials",
+          "provider-homes",
+          "cursor",
+        );
+        env.HOME = cursorHome;
+        env[AGENT_TEST_CURSOR_CREDENTIAL_STORE_ENV] = "file";
+        await syncAgentTestCursorCredentials(
+          cursorHome,
+          cursorApiKey ? undefined : hostCursorCredentials,
+        );
+      }
     }
   }
 

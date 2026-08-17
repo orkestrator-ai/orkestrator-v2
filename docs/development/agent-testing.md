@@ -24,6 +24,32 @@ The second start is idempotent and reports the already-running launcher. Wait fo
 `testProject`, `electronTitle`, and `logDir`. The manifest names the mode-0600
 gateway auth file but never includes its token.
 
+## Sign a browser in
+
+```bash
+bun run dev:login -- --profile codex-qa          # human-readable
+bun run dev:login -- --profile codex-qa --json   # { loginUrl, expiresAt, ... }
+```
+
+This is the normal way to reach the UI. The command reads the profile's auth
+file on the host, exchanges it for a bootstrap code over loopback, and prints a
+`loginUrl`. Open that URL in the browser under test: the gateway consumes the
+code, sets the session cookie, and redirects to the app, so nothing has to be
+typed into the login form.
+
+The link is deliberately weak on its own. It carries a single-use code, not the
+gateway token; it is destroyed by the first request that presents it; it expires
+in two minutes; and it is only accepted on an agent-test profile's loopback
+browser listener. Mint a new one whenever a link is spent or stale — that is
+cheaper than reusing anything. The durable token never appears in the URL,
+`dev:login` output, or browser state, and must still never be echoed, pasted
+into chat, or captured in artifacts.
+
+The resulting browser session slides with use, so an active QA run is not logged
+out mid-flow; it still lapses after 30 idle minutes, after 12 hours regardless of
+activity, and whenever the backend restarts. Any of those simply means minting
+another link.
+
 Agent-test profiles authorize the host's Claude, Codex, Cursor, Grok, and
 OpenCode credentials by default so manual QA can run real agents:
 
@@ -153,12 +179,14 @@ clipboard, preload/IPC, window identity, or shutdown. For those native checks,
 target the exact `electronTitle`; never interact with a window titled only
 `Orkestrator AI`.
 
-If the browser shows the login page, `authFile` is an owner-only JSON file and
-its `token` property is the exact code the page is requesting. It is the gateway
-token, not an OTP or a code shown elsewhere. Read the value locally, type it only
-into the gateway-token password field, and submit. Never echo it, include it in
-a shell argument or URL, paste it into chat, or capture it in screenshots,
-traces, logs, and reports.
+If the browser shows the login page, do not go looking for the token: run
+`bun run dev:login -- --profile <profile>` and open the `loginUrl` it prints, as
+described above. The page itself repeats that command for the running profile.
+Typing the token into the form still works and remains the fallback if the
+launcher is unavailable — `authFile` is an owner-only JSON file whose `token`
+property is exactly what the field wants, it is the gateway token rather than an
+OTP, and it must never be echoed, put in a shell argument or URL, pasted into
+chat, or captured in screenshots, traces, logs, and reports.
 
 Use the fixture to create/start an environment, open a terminal, run
 `bun run dev`, open the printed preview, change the `fixture-v1` marker, and
@@ -181,6 +209,9 @@ bun run dev:stop -- --profile codex-qa
 bun run dev:reset -- --profile codex-qa
 ```
 
+Stopping the profile also discards every issued browser session, since they live
+only in the backend process.
+
 Reset refuses a live launcher unless `--stop-first` is explicit. It validates the
 profile sentinel and path, removes only exact-owner Docker containers, and then
 deletes that profile's disposable state. Preserve downloaded binaries with
@@ -188,7 +219,10 @@ deletes that profile's disposable state. Preserve downloaded binaries with
 
 ## Troubleshooting
 
-- Read `dev:status --json`, then inspect only the returned `logDir`.
+- Read `dev:status --json`, then inspect only the returned `logDir`. Its derived
+  `loginCommand` is the exact `dev:login` invocation for that profile.
+- A login page that reappears mid-session means the browser session lapsed or the
+  backend restarted. Mint a fresh link rather than hunting for the token.
 - For failed tests and typechecks, inspect the compressed artifact directory
   printed by the logged runner rather than relying on the agent/tool buffer.
 - An occupied reserved port fails startup clearly; retrying allocates fresh ports.

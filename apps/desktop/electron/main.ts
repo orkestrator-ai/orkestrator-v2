@@ -179,6 +179,7 @@ async function startApplication(): Promise<void> {
     allowNonTailscaleBind: runtimeFlavor === "agent-test",
     desktopWebClient: runtimeFlavor !== "agent-test",
     runtimeFlavor,
+    runtimeProfileId: runtimeProfile?.id,
     worktreeDir: runtimeProfile?.worktreeDir,
     dockerImage: runtimeProfile?.dockerImage,
     strictDockerOwner: runtimeFlavor === "agent-test",

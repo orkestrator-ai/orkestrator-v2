@@ -381,6 +381,7 @@ export class BackendProcess {
     desktopWebClient?: boolean;
     tailscaleExecutable?: string;
     runtimeFlavor?: "production" | "development" | "agent-test";
+    runtimeProfileId?: string;
     worktreeDir?: string;
     dockerImage?: string;
     strictDockerOwner?: boolean;
@@ -412,6 +413,7 @@ export class BackendProcess {
     desktopWebClient?: boolean;
     tailscaleExecutable?: string;
     runtimeFlavor?: "production" | "development" | "agent-test";
+    runtimeProfileId?: string;
     worktreeDir?: string;
     dockerImage?: string;
     strictDockerOwner?: boolean;
@@ -445,6 +447,7 @@ export class BackendProcess {
     if (options.allowNonTailscaleBind) args.push("--allow-non-tailscale-bind");
     if (options.rendererDevServerUrl) args.push("--renderer-dev-server-url", options.rendererDevServerUrl);
     if (options.runtimeFlavor) args.push("--runtime-flavor", options.runtimeFlavor);
+    if (options.runtimeProfileId) args.push("--runtime-profile-id", options.runtimeProfileId);
     if (options.worktreeDir) args.push("--worktree-dir", options.worktreeDir);
     if (options.dockerImage) args.push("--docker-image", options.dockerImage);
     if (options.strictDockerOwner) args.push("--strict-docker-owner");

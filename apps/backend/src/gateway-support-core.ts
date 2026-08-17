@@ -78,6 +78,11 @@ export interface OrkestratorGatewayOptions {
   strictPort?: boolean;
   /** Enables the loopback-only, single-use browser bootstrap used by agent tests. */
   agentTestMode?: boolean;
+  /**
+   * Development profile name, shown on the agent-test login page so an agent
+   * that lands there can mint its own link instead of hunting for the token.
+   */
+  agentTestProfile?: string;
   controlBindAddress?: string;
   controlPort?: number;
   env?: NodeJS.ProcessEnv;
@@ -104,8 +109,21 @@ export interface OrkestratorGatewayOptions {
 
 export const AUTH_COOKIE = "orkestrator_gateway_auth";
 export const API_PREFIX = "/__orkestrator";
-export const AGENT_TEST_BOOTSTRAP_TTL_MS = 60_000;
-export const AGENT_TEST_SESSION_TTL_MS = 15 * 60_000;
+/**
+ * Lifetime of a minted bootstrap code. It is generous enough that a slow agent
+ * can mint a link, decide what to do, and open it, and short enough that a code
+ * captured from a tool transcript is dead before anyone could reuse it. The
+ * code is single-use regardless, so this only bounds the unused window.
+ */
+export const AGENT_TEST_BOOTSTRAP_TTL_MS = 120_000;
+/**
+ * Idle timeout for an exchanged agent-test browser session. It slides on every
+ * authenticated request, so a QA run is never logged out mid-flow, while an
+ * abandoned browser tab still loses access.
+ */
+export const AGENT_TEST_SESSION_IDLE_TTL_MS = 30 * 60_000;
+/** Hard ceiling on a session regardless of activity. */
+export const AGENT_TEST_SESSION_MAX_LIFETIME_MS = 12 * 60 * 60_000;
 export const MAX_AGENT_TEST_BOOTSTRAPS = 16;
 export const MAX_AGENT_TEST_SESSIONS = 32;
 export const DEFAULT_GATEWAY_PORT = 34121;
@@ -633,7 +651,9 @@ export function measureChunkBytes(
 
 export function classifyGatewayRoute(pathname: string): GatewayRouteKey {
   if (pathname === `${API_PREFIX}/login`) return "login";
-  if (pathname.startsWith(`${API_PREFIX}/agent-test/bootstrap`)) return "agent-test-bootstrap";
+  // Covers minting, the POST exchange, and the one-shot login link: all three
+  // are the same bootstrap credential, and none may be served as static.
+  if (pathname.startsWith(`${API_PREFIX}/agent-test/`)) return "agent-test-bootstrap";
   if (pathname === `${API_PREFIX}/logout`) return "logout";
   if (pathname === `${API_PREFIX}/status`) return "status";
   if (pathname === `${API_PREFIX}/gateway-settings`) return "gateway-settings";

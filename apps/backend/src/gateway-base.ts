@@ -18,6 +18,7 @@ export abstract class GatewayBase {
   protected readonly port?: number;
   protected readonly strictPort: boolean;
   protected readonly agentTestMode: boolean;
+  protected readonly agentTestProfile?: string;
   protected readonly controlBindAddress?: string;
   protected readonly controlPort?: number;
   protected readonly env: NodeJS.ProcessEnv;
@@ -38,7 +39,11 @@ export abstract class GatewayBase {
   protected token = "";
   protected authFile = "";
   protected agentTestBootstraps = new Map<string, number>();
-  protected agentTestSessions = new Map<string, number>();
+  /**
+   * `expiresAt` slides with activity; `absoluteExpiresAt` never moves, so a
+   * continuously polled browser cannot hold a session open indefinitely.
+   */
+  protected agentTestSessions = new Map<string, { expiresAt: number; absoluteExpiresAt: number }>();
   protected clients = new Map<EventClientWriter, GatewayEventClient>();
   /**
    * Latest full-pane tmux frame dropped for each lagging client/session.
@@ -120,6 +125,7 @@ export abstract class GatewayBase {
     this.port = options.port;
     this.strictPort = options.strictPort ?? false;
     this.agentTestMode = options.agentTestMode ?? false;
+    this.agentTestProfile = options.agentTestProfile?.trim() || undefined;
     this.controlBindAddress = options.controlBindAddress;
     this.controlPort = options.controlPort;
     this.env = options.env ?? process.env;

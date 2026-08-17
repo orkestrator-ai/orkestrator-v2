@@ -637,7 +637,9 @@ describe("remote gateway", () => {
     const cookie = exchange.headers["set-cookie"]?.[0];
     expect(cookie).toContain("orkestrator_gateway_auth=");
     expect(cookie).not.toContain(info.token);
-    expect(cookie).toContain("Max-Age=900");
+    // A browser-session cookie: the sliding idle window and its absolute cap
+    // are enforced by the gateway, so a fixed client expiry could only disagree.
+    expect(cookie).not.toContain("Max-Age");
 
     const authenticated = await requestUrl(`${info.url}__orkestrator/status`, {
       headers: { cookie },
@@ -650,6 +652,97 @@ describe("remote gateway", () => {
       body: JSON.stringify({ code }),
     });
     expect(reused.status).toBe(401);
+  });
+
+
+
+  test("signs a browser in through a single-use agent-test login link", async () => {
+    const { info } = await startGateway({ agentTestMode: true, agentTestProfile: "agent-login-qa" });
+    const mint = async () => {
+      const minted = await requestUrl(`${info.url}__orkestrator/agent-test/bootstrap`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${info.token}` },
+      });
+      expect(minted.status).toBe(201);
+      return (minted.json() as { code: string }).code;
+    };
+    const loginUrl = (code: string) =>
+      `${info.url}__orkestrator/agent-test/login?code=${encodeURIComponent(code)}`;
+
+    const code = await mint();
+    const redeemed = await requestUrl(loginUrl(code));
+    expect(redeemed.status).toBe(303);
+    expect(redeemed.headers.location).toBe("/");
+    expect(redeemed.headers["referrer-policy"]).toBe("no-referrer");
+    const cookie = redeemed.headers["set-cookie"]?.[0];
+    expect(cookie).toContain("orkestrator_gateway_auth=");
+    expect(cookie).not.toContain(info.token);
+    expect(cookie).not.toContain(code);
+
+    const authenticated = await requestUrl(`${info.url}__orkestrator/status`, {
+      headers: { cookie: cookie! },
+    });
+    expect(authenticated.status).toBe(200);
+
+    // A replayed link is spent, and the failure page says how to mint another
+    // rather than leaving the caller at an unexplained token prompt.
+    const replayed = await requestUrl(loginUrl(code));
+    expect(replayed.status).toBe(401);
+    expect(replayed.body).toContain("already used or has expired");
+    expect(replayed.body).toContain("bun run dev:login -- --profile agent-login-qa");
+    expect(replayed.headers["set-cookie"]).toBeUndefined();
+
+    const wrongMethod = await requestUrl(loginUrl(await mint()), { method: "POST" });
+    expect(wrongMethod.status).toBe(405);
+    expect(wrongMethod.headers.allow).toBe("GET");
+  });
+
+
+
+  test("hides the agent-test login link and its hint outside an agent-test profile", async () => {
+    const { info } = await startGateway();
+    const link = await requestUrl(`${info.url}__orkestrator/agent-test/login?code=anything`);
+    expect(link.status).toBe(404);
+
+    const page = await requestUrl(`${info.url}__orkestrator/login`, {
+      headers: { accept: "text/html" },
+    });
+    expect(page.status).toBe(200);
+    expect(page.body).not.toContain("dev:login");
+  });
+
+
+
+  test("slides an agent-test session on use and stops at its absolute lifetime", async () => {
+    const { gateway, info } = await startGateway({ agentTestMode: true });
+    const sessions = (gateway as unknown as {
+      agentTestSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
+    }).agentTestSessions;
+    const minted = await requestUrl(`${info.url}__orkestrator/agent-test/bootstrap`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+    const exchanged = await requestUrl(`${info.url}__orkestrator/agent-test/bootstrap/exchange`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: (minted.json() as { code: string }).code }),
+    });
+    const cookie = exchanged.headers["set-cookie"]![0]!;
+    const [session, entry] = [...sessions.entries()][0]!;
+    expect(cookie).toContain(session);
+
+    // An idle window about to lapse is renewed by the request that uses it, so
+    // a long QA run is never bounced back to the login page mid-flow.
+    entry.expiresAt = Date.now() + 1_000;
+    const renewed = await requestUrl(`${info.url}__orkestrator/status`, { headers: { cookie } });
+    expect(renewed.status).toBe(200);
+    expect(sessions.get(session)!.expiresAt).toBeGreaterThan(Date.now() + 60_000);
+
+    // The absolute cap is not slideable.
+    sessions.get(session)!.absoluteExpiresAt = Date.now() - 1;
+    const expired = await requestUrl(`${info.url}__orkestrator/status`, { headers: { cookie } });
+    expect(expired.status).toBe(401);
+    expect(sessions.has(session)).toBe(false);
   });
 
 

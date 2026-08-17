@@ -224,11 +224,21 @@ export async function readLoginToken(request: IncomingMessage): Promise<string> 
   return params.get("token") ?? "";
 }
 
-export function loginPage(message = ""): string {
-  const escapedMessage = message
+function escapeHtml(value: string): string {
+  return value
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+/**
+ * `hint` is only ever populated for an isolated development profile, where it
+ * names the command that mints a single-use login link. It must never carry
+ * credential material: the token stays in the mode-0600 auth file.
+ */
+export function loginPage(message = "", hint = ""): string {
+  const escapedMessage = escapeHtml(message);
+  const escapedHint = escapeHtml(hint);
   return `<!doctype html>
 <html>
   <head>
@@ -245,6 +255,7 @@ export function loginPage(message = ""): string {
       input { box-sizing: border-box; width: 100%; height: 40px; border-radius: 6px; border: 1px solid #3f3f46; background: #18181b; color: #fafafa; padding: 0 12px; }
       button { height: 40px; margin-top: 12px; width: 100%; border: 0; border-radius: 6px; background: #fafafa; color: #18181b; font-weight: 650; cursor: pointer; }
       .error { color: #fca5a5; margin-bottom: 14px; }
+      .hint { margin-top: 20px; padding: 12px; border: 1px solid #3f3f46; border-radius: 6px; background: #18181b; color: #a1a1aa; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
     </style>
   </head>
   <body>
@@ -257,6 +268,7 @@ export function loginPage(message = ""): string {
         <input id="token" name="token" type="password" autocomplete="current-password" autofocus />
         <button type="submit">Connect</button>
       </form>
+      ${escapedHint ? `<p class="hint">${escapedHint}</p>` : ""}
     </main>
   </body>
 </html>`;

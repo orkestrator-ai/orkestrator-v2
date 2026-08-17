@@ -2,7 +2,7 @@ import { GatewayEvents } from "./gateway-events.js";
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
 import { GatewayTokenValidationError, gatewayTokenCookieHeader } from "@orkestrator/protocol/gateway-token";
-import { AUTH_COOKIE, API_PREFIX, AGENT_TEST_BOOTSTRAP_TTL_MS, AGENT_TEST_SESSION_TTL_MS, MAX_AGENT_TEST_BOOTSTRAPS, MAX_AGENT_TEST_SESSIONS, CORS_ALLOWED_METHODS, CORS_ALLOWED_HEADERS, InvalidRequestBodyError, RequestBodyTooLargeError, compressionModeForListener, headerValueToString, parseContentLengthHeader, classifyGatewayRoute, instrumentGatewayResponse, isLoopbackAddress, originMatchesRule, appendVary, appendResponseVary, appendHeadersVary, responseCompressionContexts, jsonResponse, textResponse, getCookie, getBearerToken, tokenMatches, readJsonBody, readLoginToken, loginPage, wantsHtml, browserPreviewRefererPrefix } from "./gateway-internals.js";
+import { AUTH_COOKIE, API_PREFIX, AGENT_TEST_BOOTSTRAP_TTL_MS, AGENT_TEST_SESSION_IDLE_TTL_MS, AGENT_TEST_SESSION_MAX_LIFETIME_MS, MAX_AGENT_TEST_BOOTSTRAPS, MAX_AGENT_TEST_SESSIONS, CORS_ALLOWED_METHODS, CORS_ALLOWED_HEADERS, InvalidRequestBodyError, RequestBodyTooLargeError, compressionModeForListener, headerValueToString, parseContentLengthHeader, classifyGatewayRoute, instrumentGatewayResponse, isLoopbackAddress, originMatchesRule, appendVary, appendResponseVary, appendHeadersVary, responseCompressionContexts, jsonResponse, textResponse, getCookie, getBearerToken, tokenMatches, readJsonBody, readLoginToken, loginPage, wantsHtml, browserPreviewRefererPrefix } from "./gateway-internals.js";
 import type { ListenerKind, GatewayRequestMetrics } from "./gateway-internals.js";
 
 export abstract class GatewayAuth extends GatewayEvents {
@@ -14,12 +14,17 @@ export abstract class GatewayAuth extends GatewayEvents {
   protected gatewayCredentialMatches(candidate: string | null): boolean {
     if (tokenMatches(this.token, candidate)) return true;
     if (!this.agentTestMode || !candidate) return false;
-    const expiresAt = this.agentTestSessions.get(candidate);
-    if (expiresAt === undefined) return false;
-    if (expiresAt <= Date.now()) {
+    const session = this.agentTestSessions.get(candidate);
+    if (session === undefined) return false;
+    const now = Date.now();
+    if (session.expiresAt <= now || session.absoluteExpiresAt <= now) {
       this.agentTestSessions.delete(candidate);
       return false;
     }
+    // Slide the idle window. A QA run that is being driven should never be
+    // bounced back to the login page mid-flow, which is what turns a stalled
+    // browser session into a stalled agent.
+    session.expiresAt = Math.min(now + AGENT_TEST_SESSION_IDLE_TTL_MS, session.absoluteExpiresAt);
     return true;
   }
 
@@ -27,8 +32,10 @@ export abstract class GatewayAuth extends GatewayEvents {
     for (const [code, expiresAt] of this.agentTestBootstraps) {
       if (expiresAt <= now) this.agentTestBootstraps.delete(code);
     }
-    for (const [session, expiresAt] of this.agentTestSessions) {
-      if (expiresAt <= now) this.agentTestSessions.delete(session);
+    for (const [session, expiry] of this.agentTestSessions) {
+      if (expiry.expiresAt <= now || expiry.absoluteExpiresAt <= now) {
+        this.agentTestSessions.delete(session);
+      }
     }
   }
 
@@ -40,12 +47,26 @@ export abstract class GatewayAuth extends GatewayEvents {
       this.agentTestSessions.delete(oldest);
     }
     const session = randomBytes(32).toString("base64url");
-    this.agentTestSessions.set(session, now + AGENT_TEST_SESSION_TTL_MS);
+    this.agentTestSessions.set(session, {
+      expiresAt: now + AGENT_TEST_SESSION_IDLE_TTL_MS,
+      absoluteExpiresAt: now + AGENT_TEST_SESSION_MAX_LIFETIME_MS,
+    });
     return session;
   }
 
+  /**
+   * A browser-session cookie, deliberately without Max-Age: the server owns the
+   * sliding idle window and its absolute cap, so a fixed client-side expiry
+   * would only be able to disagree with it.
+   */
   protected agentTestSessionCookie(session: string): string {
-    return `${AUTH_COOKIE}=${session}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${Math.floor(AGENT_TEST_SESSION_TTL_MS / 1000)}`;
+    return `${AUTH_COOKIE}=${session}; HttpOnly; SameSite=Strict; Path=/`;
+  }
+
+  protected agentTestLoginHint(): string {
+    if (!this.agentTestMode) return "";
+    const profile = this.agentTestProfile ?? "<profile>";
+    return `Development profile "${profile}". On the host, run bun run dev:login -- --profile ${profile} and open the single-use URL it prints.`;
   }
 
   protected isOriginAllowed(request: IncomingMessage, originValue: string): boolean {
@@ -198,6 +219,11 @@ export abstract class GatewayAuth extends GatewayEvents {
       return;
     }
 
+    if (url.pathname === `${API_PREFIX}/agent-test/login`) {
+      this.handleAgentTestLoginLink(request, response, url, listenerKind);
+      return;
+    }
+
     if (url.pathname === `${API_PREFIX}/logout`) {
       response.writeHead(303, {
         location: `${API_PREFIX}/login`,
@@ -210,7 +236,7 @@ export abstract class GatewayAuth extends GatewayEvents {
 
     if (!this.authenticated(request)) {
       if (wantsHtml(request) && request.method === "GET") {
-        textResponse(response, 401, loginPage(), "text/html; charset=utf-8");
+        textResponse(response, 401, loginPage("", this.agentTestLoginHint()), "text/html; charset=utf-8");
       } else {
         jsonResponse(response, 401, { error: "Authentication required" });
       }
@@ -381,7 +407,7 @@ export abstract class GatewayAuth extends GatewayEvents {
 
   protected async handleLogin(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (request.method === "GET") {
-      textResponse(response, 200, loginPage(), "text/html; charset=utf-8");
+      textResponse(response, 200, loginPage("", this.agentTestLoginHint()), "text/html; charset=utf-8");
       return;
     }
     if (request.method !== "POST") {
@@ -392,7 +418,12 @@ export abstract class GatewayAuth extends GatewayEvents {
 
     const token = await readLoginToken(request);
     if (!tokenMatches(this.token, token)) {
-      textResponse(response, 401, loginPage("Invalid gateway token."), "text/html; charset=utf-8");
+      textResponse(
+        response,
+        401,
+        loginPage("Invalid gateway token.", this.agentTestLoginHint()),
+        "text/html; charset=utf-8",
+      );
       return;
     }
 
@@ -468,10 +499,7 @@ export abstract class GatewayAuth extends GatewayEvents {
       }
       throw error;
     }
-    const code = typeof body.code === "string" ? body.code : "";
-    const expiresAt = this.agentTestBootstraps.get(code);
-    this.agentTestBootstraps.delete(code);
-    if (expiresAt === undefined || expiresAt <= Date.now()) {
+    if (!this.consumeAgentTestBootstrap(typeof body.code === "string" ? body.code : "")) {
       jsonResponse(response, 401, { error: "Bootstrap code is invalid or expired" });
       return;
     }
@@ -480,6 +508,58 @@ export abstract class GatewayAuth extends GatewayEvents {
       "cache-control": "no-store",
       "set-cookie": this.agentTestSessionCookie(session),
     });
+  }
+
+  /** Redeems a bootstrap code exactly once, whichever route presented it. */
+  protected consumeAgentTestBootstrap(code: string): boolean {
+    const expiresAt = this.agentTestBootstraps.get(code);
+    this.agentTestBootstraps.delete(code);
+    return expiresAt !== undefined && expiresAt > Date.now();
+  }
+
+  /**
+   * One-shot browser login link for agent-driven QA.
+   *
+   * Only the single-use bootstrap code travels in the URL, never the durable
+   * gateway token, and only on a dev profile's loopback browser listener. It is
+   * consumed by the first request that presents it and answered with a redirect
+   * to the app, so the credential neither survives in the address bar nor
+   * travels onward in a Referer.
+   */
+  protected handleAgentTestLoginLink(
+    request: IncomingMessage,
+    response: ServerResponse,
+    url: URL,
+    listenerKind: ListenerKind,
+  ): void {
+    if (!this.agentTestBootstrapAllowed(request, listenerKind)) {
+      jsonResponse(response, 404, { error: "Not found" });
+      return;
+    }
+    if (request.method !== "GET") {
+      response.writeHead(405, { allow: "GET" });
+      response.end();
+      return;
+    }
+    if (!this.consumeAgentTestBootstrap(url.searchParams.get("code") ?? "")) {
+      textResponse(
+        response,
+        401,
+        loginPage(
+          "That login link was already used or has expired. Mint a fresh one.",
+          this.agentTestLoginHint(),
+        ),
+        "text/html; charset=utf-8",
+      );
+      return;
+    }
+    response.writeHead(303, {
+      location: "/",
+      "set-cookie": this.agentTestSessionCookie(this.issueAgentTestSession()),
+      "cache-control": "no-store",
+      "referrer-policy": "no-referrer",
+    });
+    response.end();
   }
 
   /**

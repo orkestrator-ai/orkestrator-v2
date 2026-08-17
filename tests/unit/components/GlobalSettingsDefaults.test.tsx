@@ -136,7 +136,7 @@ describe("GlobalSettings defaults section", () => {
     view.rerender(<GlobalSettings activeSection="defaults" />);
 
     openPicker("Review");
-    expect(screen.queryByRole("button", { name: "claude models" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "claude models" }) === null).toBe(true);
     expect(screen.getByRole("button", { name: "codex models" })).toBeTruthy();
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^gpt-5\.4/ }));
 

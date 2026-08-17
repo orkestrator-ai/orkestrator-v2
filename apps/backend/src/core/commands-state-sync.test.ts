@@ -2656,6 +2656,7 @@ describe("native agent and looped-review controller commands", () => {
         expectedProviderSessionId: "provider-old",
         model: "provider/model",
         reasoningEffort: "high",
+        executionProfileId: "plan",
       })).resolves.toMatchObject({ operation: "adopt" });
       expect(adoptSession).toHaveBeenCalledWith({
         environmentId: "e1",
@@ -2669,7 +2670,34 @@ describe("native agent and looped-review controller commands", () => {
         model: "provider/model",
         reasoningEffort: "high",
         phase: undefined,
+        executionProfileId: "plan",
       });
+
+      // A blank profile would be persisted into the session controls and later
+      // dispatched as the provider's agent name, so it is refused at the edge
+      // rather than normalised to the provider default further in.
+      for (const executionProfileId of ["", "   ", 7, null]) {
+        await expect(invoke("ensure_native_agent_session", {
+          environmentId: "e1",
+          agent: "opencode",
+          logicalSessionKey: "env-e1:tab-blank-profile",
+          origin: "interactive-native",
+          executionProfileId,
+        })).rejects.toThrow(/executionProfileId/);
+        await expect(invoke("adopt_native_agent_session", {
+          environmentId: "e1",
+          agent: "opencode",
+          logicalSessionKey: "env-e1:tab-blank-profile",
+          origin: "interactive-native",
+          providerSessionId: "provider-new",
+          executionProfileId,
+        })).rejects.toThrow(/executionProfileId/);
+      }
+      // Omitting it stays legal — the `ensure` above passes no profile and is
+      // forwarded with `executionProfileId: undefined` — so validation rejects
+      // only a value that is present and unusable.
+      expect(ensureSession.mock.calls[0]?.[0])
+        .toMatchObject({ executionProfileId: undefined });
 
       const schema = { type: "object" };
       const images = [{ filename: "reference.png", data: "cG5n" }];
@@ -3353,7 +3381,12 @@ describe("multi review commands", () => {
     const address = mock(async (id: string) => ({ ...workflow("address"), id }));
     const retry = mock(async (id: string) => ({ ...workflow("retry"), id }));
     const cancel = mock(async (id: string) => ({ ...workflow("cancel"), id }));
-    const supervisor = { start, address, retry, cancel } as unknown as NonNullable<CommandContext["multiReviews"]>;
+    const stopReviewer = mock(async (id: string, _reviewerId: string) => ({
+      ...workflow("stopReviewer"), id,
+    }));
+    const supervisor = {
+      start, address, retry, cancel, stopReviewer,
+    } as unknown as NonNullable<CommandContext["multiReviews"]>;
 
     await withCommands(async (invoke) => {
       const calls: Array<[string, Record<string, unknown>]> = [
@@ -3361,6 +3394,7 @@ describe("multi review commands", () => {
         ["address_multi_review", { workflowId: "multi-1" }],
         ["retry_multi_review", { workflowId: "multi-1" }],
         ["cancel_multi_review", { workflowId: "multi-1" }],
+        ["stop_multi_review_reviewer", { workflowId: "multi-1", reviewerId: "reviewer-1" }],
       ];
       for (const [command, args] of calls) {
         const result = await invoke(command, args) as Record<string, unknown>;
@@ -3371,6 +3405,7 @@ describe("multi review commands", () => {
       expect(address).toHaveBeenCalledWith("multi-1");
       expect(retry).toHaveBeenCalledWith("multi-1");
       expect(cancel).toHaveBeenCalledWith("multi-1");
+      expect(stopReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1");
     }, { multiReviews: supervisor });
   });
 

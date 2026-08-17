@@ -39,6 +39,16 @@ import {
   createMultiReviewConsolidationPrompt,
   createMultiReviewerPrompt,
 } from "./multi-review-prompts.js";
+import {
+  DEFAULT_PROGRESS_PROBE_INTERVAL_MS,
+  DEFAULT_STALL_ABANDON_MS,
+  DEFAULT_STALL_WARNING_MS,
+  MultiReviewProgressTracker,
+  PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
+  noProgressElapsedMs,
+  stalledMinutes,
+  type ProgressObservation,
+} from "./multi-review-progress.js";
 import { probeReviewWorktree, REVIEW_WORKTREE_PROBE_ATTEMPTS } from "./review-worktree-probe.js";
 import type { ReviewWorktreeSnapshot } from "./build-pipeline-prompts.js";
 
@@ -128,6 +138,12 @@ function multiReviewFailureSummary(
 ): string {
   const reasons = [...new Set(reviewers.flatMap((reviewer) =>
     reviewer.error ? [reviewer.error] : []))];
+  // A stopped reviewer carries no error, so without this the user who stopped
+  // the whole panel would be told the models failed to produce a report.
+  const stopped = reviewers.filter((reviewer) => reviewer.status === "cancelled").length;
+  if (stopped > 0) {
+    reasons.push(`${stopped} reviewer${stopped === 1 ? " was" : "s were"} stopped`);
+  }
   if (reasons.length === 0) return NO_VALID_REPORT_ERROR;
   return `${NO_VALID_REPORT_ERROR}: ${reasons.join("; ")}`.slice(0, 4_096);
 }
@@ -138,6 +154,9 @@ export interface MultiReviewServiceOptions {
   controllerLeaseMs?: number;
   controllerRenewMs?: number;
   cancellationDeadlineMs?: number;
+  progressProbeIntervalMs?: number;
+  stallWarningMs?: number;
+  stallAbandonMs?: number;
   provider?: (
     workflow: MultiReviewWorkflow,
     selection: MultiReviewModelSelection,
@@ -155,6 +174,7 @@ export class MultiReviewService {
   private readonly providerUsers = new Map<string, Set<string>>();
   private readonly providerReaders = new Map<string, number>();
   private readonly leases = new Map<string, { token: string; expiresAt: string }>();
+  private readonly progress: MultiReviewProgressTracker;
   private timer: ReturnType<typeof setInterval> | null = null;
   private renewTimer: ReturnType<typeof setInterval> | null = null;
   private tickRun: { pending: boolean; promise: Promise<void> } | null = null;
@@ -164,7 +184,11 @@ export class MultiReviewService {
     private readonly storage: StorageService,
     private readonly invoke: CommandInvoker,
     private readonly options: MultiReviewServiceOptions = {},
-  ) {}
+  ) {
+    this.progress = new MultiReviewProgressTracker(
+      options.progressProbeIntervalMs ?? DEFAULT_PROGRESS_PROBE_INTERVAL_MS,
+    );
+  }
 
   async init(): Promise<void> {
     this.stopped = false;
@@ -208,6 +232,7 @@ export class MultiReviewService {
     await Promise.allSettled([...this.leases].map(([workflowId, lease]) =>
       this.storage.releaseMultiReviewController(workflowId, this.ownerId, lease.token)));
     this.leases.clear();
+    this.progress.clear();
   }
 
   /**
@@ -260,6 +285,8 @@ export class MultiReviewService {
       messages,
       ...(reviewer.report ? { report: reviewer.report } : {}),
       ...(reviewer.error ? { error: reviewer.error } : {}),
+      ...(reviewer.progressAt ? { progressAt: reviewer.progressAt } : {}),
+      ...(reviewer.stalledSince ? { stalledSince: reviewer.stalledSince } : {}),
       ...(reviewer.startedAt ? { startedAt: reviewer.startedAt } : {}),
       ...(reviewer.completedAt ? { completedAt: reviewer.completedAt } : {}),
     };
@@ -385,6 +412,7 @@ export class MultiReviewService {
         const replacement = await this.captureReviewWorktreeSnapshot(workflow.environmentId);
         for (const reviewer of workflow.reviewers) {
           await this.abandonSession(workflow, reviewer, reviewer.providerSessionId);
+          if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
           reviewer.status = "pending";
           delete reviewer.error;
           delete reviewer.report;
@@ -395,6 +423,9 @@ export class MultiReviewService {
           delete reviewer.schemaRepairAttempts;
           delete reviewer.schemaRepairPrompt;
           delete reviewer.idleResultPolls;
+          delete reviewer.progressAt;
+          delete reviewer.progressDigest;
+          delete reviewer.stalledSince;
           delete reviewer.startedAt;
           delete reviewer.completedAt;
         }
@@ -414,21 +445,37 @@ export class MultiReviewService {
         // them at once. Restoring only the first would consolidate from fewer
         // reviewers than the user asked for, without saying so.
         const failedReviewers = workflow.reviewers.filter((reviewer) => reviewer.status === "failed");
-        if (failedReviewers.length > 0) {
-          for (const failedReviewer of failedReviewers) {
+        const hasReport = workflow.reviewers.some((reviewer) =>
+          reviewer.status === "completed" && reviewer.report !== undefined);
+        // A panel the user stopped in full has nothing to consolidate, and the
+        // consolidation branch below would otherwise ask the fix model to merge an
+        // empty set of reports. Retrying that failure means running those
+        // reviewers again.
+        const restartable = failedReviewers.length > 0
+          ? failedReviewers
+          : hasReport
+            ? []
+            : workflow.reviewers.filter((reviewer) => reviewer.status === "cancelled");
+        if (restartable.length > 0) {
+          for (const reviewer of restartable) {
             // Retrying allocates a fresh session, so the abandoned one must be
             // aborted while its id is still known. Clearing the id first would
             // leave a provider turn running that nothing can ever reach again.
-            await this.abandonSession(workflow, failedReviewer, failedReviewer.providerSessionId);
-            failedReviewer.status = "pending";
-            delete failedReviewer.error;
-            delete failedReviewer.providerSessionId;
-            delete failedReviewer.sessionKey;
-            delete failedReviewer.requestId;
-            delete failedReviewer.dispatchState;
-            delete failedReviewer.schemaRepairAttempts;
-            delete failedReviewer.schemaRepairPrompt;
-            delete failedReviewer.idleResultPolls;
+            await this.abandonSession(workflow, reviewer, reviewer.providerSessionId);
+            if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
+            reviewer.status = "pending";
+            delete reviewer.error;
+            delete reviewer.providerSessionId;
+            delete reviewer.sessionKey;
+            delete reviewer.requestId;
+            delete reviewer.dispatchState;
+            delete reviewer.schemaRepairAttempts;
+            delete reviewer.schemaRepairPrompt;
+            delete reviewer.idleResultPolls;
+            delete reviewer.progressAt;
+            delete reviewer.progressDigest;
+            delete reviewer.stalledSince;
+            delete reviewer.completedAt;
           }
           workflow.phase = "reviewing";
         } else if (workflow.consolidatedReport && workflow.fixSession) {
@@ -449,6 +496,65 @@ export class MultiReviewService {
       const saved = await this.save(workflow, token);
       void this.advanceNow(workflowId);
       return saved;
+    });
+  }
+
+  /**
+   * Stop one reviewer without stopping the review.
+   *
+   * A single wedged reviewer otherwise holds the whole workflow in `reviewing`,
+   * because the pass will not consolidate while any reviewer is still pending or
+   * running. Stopping retires that reviewer as `cancelled`: the pass skips it,
+   * consolidation runs from whatever the remaining reviewers produced, and the
+   * fix stage follows as usual.
+   *
+   * The abort is best-effort by design. The reason to stop a reviewer is that it
+   * is unresponsive, so waiting for the provider to confirm the abort would
+   * reproduce the stall this control exists to escape. Cancelling the whole
+   * workflow keeps the strict path, where an unsettled session blocks the
+   * transition.
+   */
+  async stopReviewer(workflowId: string, reviewerId: string): Promise<MultiReviewWorkflow> {
+    return this.withLock(workflowId, async () => {
+      const controlled = await this.loadControlled(workflowId);
+      if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
+      const { workflow, token } = controlled;
+      let handedToSupervisor = false;
+      try {
+        const reviewer = workflow.reviewers.find((entry) => entry.id === reviewerId);
+        if (!reviewer) throw new Error(`Multi review reviewer not found: ${reviewerId}`);
+        // Idempotent: a double click, or a reviewer that settled between the
+        // render and the command, must not rewrite a finished result.
+        if (reviewer.status !== "pending" && reviewer.status !== "running") return workflow;
+        await this.abandonSession(workflow, reviewer, reviewer.providerSessionId);
+        if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
+        reviewer.status = "cancelled";
+        reviewer.completedAt = nowIso();
+        // The session id is kept so the read-only transcript stays reachable.
+        delete reviewer.idleResultPolls;
+        delete reviewer.stalledSince;
+        delete reviewer.progressDigest;
+        delete reviewer.schemaRepairPrompt;
+        delete reviewer.dispatchState;
+        const saved = await this.save(workflow, token);
+        if (isSupervisedPhase(saved.phase)) {
+          handedToSupervisor = true;
+          // Re-enter immediately rather than waiting for the next tick: with this
+          // reviewer out of the way the pass may already be able to consolidate.
+          void this.advanceNow(workflowId);
+        }
+        return saved;
+      } finally {
+        // A stale/no-op command against a settled workflow is a short-lived
+        // claim: a stop that arrives after `ready` must not resurrect a
+        // renewable lease on a workflow the background supervisor no longer
+        // visits. A supervised workflow keeps its claim, because `release` also
+        // forgets every live progress clock and drops the workflow's provider
+        // users — the reviewers still running are using both.
+        if (!handedToSupervisor && !isSupervisedPhase(workflow.phase)) {
+          await this.release(workflow, token);
+        }
+      }
     });
   }
 
@@ -772,10 +878,12 @@ export class MultiReviewService {
         // can abort again without harm.
         if (reviewer.providerSessionId) {
           await this.abandonSession(workflow, reviewer, reviewer.providerSessionId);
+          this.progress.forget(reviewer.providerSessionId);
         }
         reviewer.status = "failed";
         reviewer.error = errorMessage(error).slice(0, 4_096);
         delete reviewer.idleResultPolls;
+        delete reviewer.stalledSince;
         await this.save(workflow, token);
         done = "continue";
       }
@@ -836,6 +944,9 @@ export class MultiReviewService {
       reviewer.dispatchState = "prepared";
       reviewer.status = "running";
       reviewer.startedAt = nowIso();
+      delete reviewer.progressAt;
+      delete reviewer.progressDigest;
+      delete reviewer.stalledSince;
       await this.save(workflow, token);
     }
     if (!reviewer.providerSessionId || !reviewer.requestId) return "continue";
@@ -867,6 +978,10 @@ export class MultiReviewService {
           worktree: this.promptWorktreeSnapshot(reviewSnapshot),
         });
       }
+      // Attach the agent process before the at-most-once window opens: a cold
+      // spawn is the slowest thing a dispatch can wait on, and time spent on it
+      // inside the request is time the outcome is unknowable if it fails.
+      await this.attachBeforeDispatch(provider, reviewer.providerSessionId);
       await this.assertFence(workflow.id, token);
       reviewer.dispatchState = "dispatching";
       await this.save(workflow, token);
@@ -905,7 +1020,10 @@ export class MultiReviewService {
       reviewer.providerSessionId,
     );
     await this.assertFence(workflow.id, token);
-    if (status === "running") return this.clearStall(workflow, token, reviewer);
+    if (status === "running") {
+      await this.clearStall(workflow, token, reviewer);
+      return this.observeReviewerProgress(workflow, token, provider, reviewer);
+    }
     if (status === "blocked") {
       // Every unattended interaction was already resolved above, and a provider
       // without an interaction surface can never be unblocked from here. Bound
@@ -948,8 +1066,185 @@ export class MultiReviewService {
     reviewer.completedAt = nowIso();
     delete reviewer.schemaRepairPrompt;
     delete reviewer.idleResultPolls;
+    delete reviewer.stalledSince;
+    if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
+    delete reviewer.progressDigest;
     await this.save(workflow, token);
     return "continue";
+  }
+
+  /**
+   * Bounds a reviewer that reports `running` without producing anything.
+   *
+   * Provider status alone cannot distinguish a long turn from a wedged one — a
+   * Cursor parent holding its turn open for a background child whose transcript
+   * stopped moving reports `running` indefinitely, and the review phase will not
+   * advance while any reviewer is still running. Transcript movement is the
+   * signal that separates the two, because bridges stream sub-agent activity
+   * into the parent transcript as it happens.
+   *
+   * The warning is durable so the tab can show it; the abandon is what stops one
+   * stuck reviewer from halting consolidation and the fix stage for good.
+   *
+   * A failed or throttled probe is not a fingerprint comparison, but it is not
+   * a pause of the stall clock either: `progressAt` / `startedAt` still decide
+   * whether the session has been silent too long. A restart compares against
+   * the persisted digest so it cannot invent a new baseline or move the clock
+   * forward.
+   */
+  private async observeReviewerProgress(
+    workflow: MultiReviewWorkflow,
+    token: string,
+    provider: BuildPipelineProvider,
+    reviewer: MultiReviewWorkflow["reviewers"][number],
+  ): Promise<"continue"> {
+    const providerSessionId = reviewer.providerSessionId;
+    if (!providerSessionId) return "continue";
+    const previousDigest = reviewer.progressDigest;
+    const observation = await this.progress.observe(
+      providerSessionId,
+      () => provider.messages(providerSessionId, { limit: PROGRESS_TRANSCRIPT_TAIL_MESSAGES }),
+      reviewer.progressDigest,
+    );
+    await this.assertFence(workflow.id, token);
+    const decision = this.commitProgressObservation(reviewer, observation);
+    if (decision === "reset" || decision === "hold") {
+      await this.save(workflow, token);
+      return "continue";
+    }
+    const elapsedMs = noProgressElapsedMs(reviewer.progressAt, reviewer.startedAt);
+    if (elapsedMs === null) {
+      if (reviewer.progressDigest !== previousDigest) await this.save(workflow, token);
+      return "continue";
+    }
+    if (elapsedMs >= this.stallAbandonMs()) {
+      // Best-effort, like every other abandon: the session is unresponsive, so
+      // waiting for it to confirm the abort would reproduce the stall.
+      await this.abandonSession(workflow, reviewer, providerSessionId);
+      this.progress.forget(providerSessionId);
+      reviewer.status = "failed";
+      reviewer.error = `The reviewer produced no activity for ${stalledMinutes(elapsedMs)} minutes and was stopped so the rest of the review could continue`;
+      reviewer.completedAt = nowIso();
+      delete reviewer.stalledSince;
+      delete reviewer.idleResultPolls;
+      await this.save(workflow, token);
+      return "continue";
+    }
+    if (elapsedMs >= this.stallWarningMs() && reviewer.stalledSince === undefined) {
+      reviewer.stalledSince = nowIso();
+      await this.save(workflow, token);
+      return "continue";
+    }
+    if (reviewer.progressDigest !== previousDigest) await this.save(workflow, token);
+    return "continue";
+  }
+
+  /**
+   * The consolidation and fix session carries the same hazard as a reviewer: it
+   * can report `running` forever while a sub-agent it is waiting on has stopped
+   * producing anything. Abandoning it fails the workflow, which is recoverable
+   * through Retry, rather than leaving it supervised indefinitely.
+   */
+  private async observeFixSessionProgress(
+    workflow: MultiReviewWorkflow,
+    token: string,
+    provider: BuildPipelineProvider,
+    session: NonNullable<MultiReviewWorkflow["fixSession"]>,
+  ): Promise<void> {
+    const previousDigest = session.progressDigest;
+    const observation = await this.progress.observe(
+      session.providerSessionId,
+      () => provider.messages(session.providerSessionId, {
+        limit: PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
+      }),
+      session.progressDigest,
+    );
+    await this.assertFence(workflow.id, token);
+    const decision = this.commitProgressObservation(session, observation);
+    if (decision === "reset" || decision === "hold") {
+      await this.save(workflow, token);
+      return;
+    }
+    const elapsedMs = noProgressElapsedMs(session.progressAt, session.startedAt);
+    if (elapsedMs === null) {
+      if (session.progressDigest !== previousDigest) await this.save(workflow, token);
+      return;
+    }
+    if (elapsedMs >= this.stallAbandonMs()) {
+      await this.abandonSession(workflow, workflow.fixModel, session.providerSessionId);
+      this.progress.forget(session.providerSessionId);
+      throw new Error(
+        `The ${workflow.phase === "fixing" ? "fix" : "consolidation"} session produced no activity for ${stalledMinutes(elapsedMs)} minutes`,
+      );
+    }
+    if (elapsedMs >= this.stallWarningMs() && session.stalledSince === undefined) {
+      session.stalledSince = nowIso();
+      await this.save(workflow, token);
+      return;
+    }
+    if (session.progressDigest !== previousDigest) await this.save(workflow, token);
+  }
+
+  /**
+   * Apply a probe to the durable progress clocks.
+   *
+   * `reset` — the transcript moved; the stall clock starts from now.
+   * `hold` — first comparable sample of a session that has no clock yet; the
+   * caller must not treat it as "unchanged" or a `stallAbandonMs: 0` test would
+   * fail a reviewer on its first successful read.
+   * `evaluate` — unchanged, failed, throttled, or a restart of a session that
+   * already has a durable clock. The caller then applies the stall thresholds.
+   */
+  private commitProgressObservation(
+    target: {
+      progressAt?: string;
+      stalledSince?: string;
+      progressDigest?: string;
+    },
+    observation: ProgressObservation,
+  ): "reset" | "hold" | "evaluate" {
+    if (observation.probed && observation.digest) {
+      target.progressDigest = observation.digest;
+    }
+    if (observation.changed) {
+      target.progressAt = nowIso();
+      delete target.stalledSince;
+      return "reset";
+    }
+    if (observation.baselineEstablished && target.progressAt === undefined) {
+      target.progressAt = nowIso();
+      return "hold";
+    }
+    return "evaluate";
+  }
+
+  /**
+   * Attach the provider's agent process before a prompt is written.
+   *
+   * Best-effort by contract: the prompt request performs the same work and is
+   * the one that answers authoritatively, so a failure here is left for it to
+   * report rather than pre-empting it.
+   */
+  private async attachBeforeDispatch(
+    provider: BuildPipelineProvider,
+    providerSessionId: string,
+  ): Promise<void> {
+    try {
+      await provider.prepareDispatch?.(providerSessionId);
+    } catch (error) {
+      console.warn(
+        "[multi-review] Attaching the agent before dispatch failed:",
+        errorMessage(error),
+      );
+    }
+  }
+
+  private stallWarningMs(): number {
+    return this.options.stallWarningMs ?? DEFAULT_STALL_WARNING_MS;
+  }
+
+  private stallAbandonMs(): number {
+    return this.options.stallAbandonMs ?? DEFAULT_STALL_ABANDON_MS;
   }
 
   private async prepareReviewerReportRepair(
@@ -1079,6 +1374,9 @@ export class MultiReviewService {
           prompt = addressPrompt(workflow.consolidatedReport!);
         }
       }
+      // Same reason as the reviewer dispatch: pay the cold start before the
+      // at-most-once window rather than inside it.
+      await this.attachBeforeDispatch(provider, session.providerSessionId);
       await this.assertFence(workflow.id, token);
       request.state = "dispatching";
       await this.save(workflow, token);
@@ -1117,6 +1415,7 @@ export class MultiReviewService {
         delete request.idleResultPolls;
         await this.save(workflow, token);
       }
+      await this.observeFixSessionProgress(workflow, token, provider, session);
       return;
     }
     if (status === "blocked") {
@@ -1330,6 +1629,13 @@ export class MultiReviewService {
     await this.storage.releaseMultiReviewController(workflow.id, this.ownerId, token)
       .catch(() => undefined);
     this.leases.delete(workflow.id);
+    // Every caller of `release` is settling the workflow, so no progress clock
+    // it owns can be read again. Dropping them here keeps the tracker bounded by
+    // live sessions rather than by how many reviews the process has supervised.
+    for (const reviewer of workflow.reviewers) {
+      if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
+    }
+    if (workflow.fixSession) this.progress.forget(workflow.fixSession.providerSessionId);
     const keys = new Set([
       ...workflow.reviewers.map((reviewer) => this.providerKey(workflow, reviewer)),
       this.providerKey(workflow, workflow.fixModel),

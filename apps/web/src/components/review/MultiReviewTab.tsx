@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertCircle, CheckCircle2, Circle, Loader2, RefreshCw, Square, Wrench } from "lucide-react";
+import {
+  AlertCircle,
+  AlertTriangle,
+  CheckCircle2,
+  Circle,
+  Loader2,
+  RefreshCw,
+  Square,
+  Wrench,
+} from "lucide-react";
 import type { MultiReviewPhase, MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { MultiReviewTabData } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
@@ -20,12 +29,14 @@ interface MultiReviewCommands {
   address: (workflowId: string) => Promise<MultiReviewWorkflow>;
   retry: (workflowId: string) => Promise<MultiReviewWorkflow>;
   cancel: (workflowId: string) => Promise<MultiReviewWorkflow>;
+  stopReviewer: (workflowId: string, reviewerId: string) => Promise<MultiReviewWorkflow>;
 }
 
 const defaultCommands: MultiReviewCommands = {
   address: backend.addressMultiReview,
   retry: backend.retryMultiReview,
   cancel: backend.cancelMultiReview,
+  stopReviewer: backend.stopMultiReviewReviewer,
 };
 
 interface MultiReviewTabProps {
@@ -68,6 +79,45 @@ export function multiReviewFixSessionTabOptions(
   };
 }
 
+/**
+ * A reviewer only stops producing status while it is still supposed to be
+ * working, so the notice is limited to those states: a settled reviewer keeps
+ * its result rather than being relabelled by a stale stall flag.
+ */
+export function reviewerStatusNote(
+  reviewer: MultiReviewWorkflow["reviewers"][number],
+): { text: string; tone: "muted" | "warning" | "destructive" } | null {
+  if (reviewer.status === "cancelled") {
+    return { text: "Stopped · excluded from the consolidated report", tone: "muted" };
+  }
+  if (reviewer.error) return { text: reviewer.error, tone: "destructive" };
+  if (reviewer.status === "running" && reviewer.stalledSince) {
+    return {
+      text: "No activity for a while — stop it to continue without this reviewer",
+      tone: "warning",
+    };
+  }
+  return null;
+}
+
+export function reviewerProgressSummary(
+  reviewers: MultiReviewWorkflow["reviewers"],
+): string {
+  const completed = reviewers.filter((reviewer) => reviewer.status === "completed").length;
+  const stopped = reviewers.filter((reviewer) => reviewer.status === "cancelled").length;
+  const activePanelSize = reviewers.length - stopped;
+  const completion = activePanelSize === 0
+    ? `${completed} complete`
+    : `${completed}/${activePanelSize} complete`;
+  return stopped === 0 ? completion : `${completion} · ${stopped} stopped`;
+}
+
+const NOTE_TONE_CLASS = {
+  muted: "text-muted-foreground",
+  warning: "text-amber-500",
+  destructive: "text-destructive",
+} as const;
+
 function MultiReviewOverviewTab({
   data,
   isActive,
@@ -80,6 +130,7 @@ function MultiReviewOverviewTab({
   const replaceWorkflow = useMultiReviewStore((state) => state.replaceWorkflow);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [stoppingReviewerId, setStoppingReviewerId] = useState<string | null>(null);
 
   const hydrate = useCallback(async () => {
     setError(null);
@@ -121,6 +172,24 @@ function MultiReviewOverviewTab({
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setPending(false);
+    }
+  };
+
+  /**
+   * Stopping one reviewer is deliberately not the workflow-wide `run` gate: the
+   * remaining reviewers keep working, and the backend answers with the
+   * authoritative snapshot that already excludes this one.
+   */
+  const stopReviewer = async (reviewerId: string) => {
+    if (stoppingReviewerId !== null || !workflow) return;
+    setStoppingReviewerId(reviewerId);
+    setError(null);
+    try {
+      replaceWorkflow(await commands.stopReviewer(workflow.id, reviewerId));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setStoppingReviewerId(null);
     }
   };
 
@@ -187,6 +256,8 @@ function MultiReviewOverviewTab({
 
   const busy = workflow.phase === "reviewing" || workflow.phase === "consolidating"
     || workflow.phase === "fixing" || workflow.phase === "cancelling";
+  const fixSessionStalled = (workflow.phase === "consolidating" || workflow.phase === "fixing")
+    && workflow.fixSession?.stalledSince !== undefined;
   const canCancel = workflow.phase !== "completed" && workflow.phase !== "cancelled"
     && workflow.phase !== "cancelling" && workflow.phase !== "interactive";
 
@@ -199,7 +270,9 @@ function MultiReviewOverviewTab({
           </span>
           <div className="min-w-0">
             <h1 className="truncate text-sm font-semibold">Multi Review</h1>
-            <p className="truncate text-xs text-muted-foreground">{phaseCopy(workflow.phase)}</p>
+            <p className={`truncate text-xs ${fixSessionStalled ? "text-amber-500" : "text-muted-foreground"}`}>
+              {fixSessionStalled ? "No activity from the fix model" : phaseCopy(workflow.phase)}
+            </p>
           </div>
         </div>
         {busy && <Loader2 className="size-4 shrink-0 animate-spin text-cyan-400" />}
@@ -207,49 +280,92 @@ function MultiReviewOverviewTab({
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="mx-auto w-full max-w-5xl space-y-4 p-4 sm:p-6">
+          {fixSessionStalled && (
+            <section
+              role="status"
+              aria-live="polite"
+              className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/8 p-4"
+            >
+              <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-amber-500/12 text-amber-500">
+                <AlertTriangle className="size-4" />
+              </span>
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold text-amber-500">Fix model appears stalled</h2>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  No new activity has arrived. Cancel now, or wait for the workflow to stop
+                  automatically and then retry.
+                </p>
+              </div>
+            </section>
+          )}
           <section className="rounded-xl border border-border/60 bg-card/35 p-4">
             <div className="mb-3 flex items-center justify-between gap-2">
               <h2 className="text-sm font-semibold">Review panel</h2>
-              <span className="text-xs text-muted-foreground">{workflow.reviewers.filter((item) => item.status === "completed").length}/{workflow.reviewers.length} complete</span>
+              <span className="text-xs text-muted-foreground">
+                {reviewerProgressSummary(workflow.reviewers)}
+              </span>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
-              {workflow.reviewers.map((reviewer, index) => (
-                <button
-                  key={reviewer.id}
-                  type="button"
-                  disabled={!reviewer.providerSessionId || (!openReviewer && !createTab)}
-                  aria-label={`Open Reviewer ${index + 1} transcript`}
-                  className="flex items-center gap-2.5 rounded-lg border border-border/45 bg-background/40 px-3 py-2.5 text-left transition-colors enabled:cursor-pointer enabled:hover:border-cyan-400/35 enabled:hover:bg-cyan-500/5 disabled:cursor-default"
-                  onClick={() => {
-                    if (openReviewer) {
-                      openReviewer(reviewer.id, index);
-                      return;
-                    }
-                    createTab?.("multi-review", {
-                      multiReviewId: workflow.id,
-                      multiReviewReviewerId: reviewer.id,
-                      displayTitle: `Reviewer ${index + 1}`,
-                    });
-                  }}
-                >
-                  {reviewer.status === "completed" ? <CheckCircle2 className="size-4 text-emerald-500" />
-                    : reviewer.status === "failed" ? <AlertCircle className="size-4 text-destructive" />
-                      : reviewer.status === "cancelled" ? <Square className="size-4 text-muted-foreground" />
-                        : reviewer.status === "running" ? <Loader2 className="size-4 animate-spin text-cyan-400" />
-                          : <Circle className="size-4 text-muted-foreground" />}
-                  <div className="min-w-0">
-                    <p className="truncate text-xs font-medium">Reviewer {index + 1} · {reviewer.agent}</p>
-                    <p className="truncate text-[11px] text-muted-foreground">{reviewer.model}{reviewer.reasoningEffort ? ` · ${reviewer.reasoningEffort}` : ""}</p>
-                    {/* The workflow error generalizes a shared cause; this is the
-                        only place the reviewer's own failure is legible. */}
-                    {reviewer.error ? (
-                      <p className="truncate text-[11px] text-destructive" title={reviewer.error}>
-                        {reviewer.error}
-                      </p>
-                    ) : null}
+              {workflow.reviewers.map((reviewer, index) => {
+                const note = reviewerStatusNote(reviewer);
+                const stoppable = reviewer.status === "pending" || reviewer.status === "running";
+                return (
+                  <div
+                    key={reviewer.id}
+                    className="flex items-center rounded-lg border border-border/45 bg-background/40 transition-colors has-[button:enabled:hover]:border-cyan-400/35"
+                  >
+                    <button
+                      type="button"
+                      disabled={!reviewer.providerSessionId || (!openReviewer && !createTab)}
+                      aria-label={`Open Reviewer ${index + 1} transcript`}
+                      className="flex min-w-0 flex-1 items-center gap-2.5 rounded-l-lg px-3 py-2.5 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-cyan-500/5 disabled:cursor-default"
+                      onClick={() => {
+                        if (openReviewer) {
+                          openReviewer(reviewer.id, index);
+                          return;
+                        }
+                        createTab?.("multi-review", {
+                          multiReviewId: workflow.id,
+                          multiReviewReviewerId: reviewer.id,
+                          displayTitle: `Reviewer ${index + 1}`,
+                        });
+                      }}
+                    >
+                      {reviewer.status === "completed" ? <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
+                        : reviewer.status === "failed" ? <AlertCircle className="size-4 shrink-0 text-destructive" />
+                          : reviewer.status === "cancelled" ? <Square className="size-4 shrink-0 text-muted-foreground" />
+                            : reviewer.status === "running" ? <Loader2 className="size-4 shrink-0 animate-spin text-cyan-400" />
+                              : <Circle className="size-4 shrink-0 text-muted-foreground" />}
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-medium">Reviewer {index + 1} · {reviewer.agent}</p>
+                        <p className="truncate text-[11px] text-muted-foreground">{reviewer.model}{reviewer.reasoningEffort ? ` · ${reviewer.reasoningEffort}` : ""}</p>
+                        {/* The workflow error generalizes a shared cause; this is
+                            the only place the reviewer's own outcome is legible. */}
+                        {note ? (
+                          <p className={`truncate text-[11px] ${NOTE_TONE_CLASS[note.tone]}`} title={note.text}>
+                            {note.text}
+                          </p>
+                        ) : null}
+                      </div>
+                    </button>
+                    {stoppable && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="mr-1.5 size-7 shrink-0 text-muted-foreground hover:text-destructive"
+                        aria-label={`Stop Reviewer ${index + 1}`}
+                        title="Stop this reviewer; the review continues without it"
+                        disabled={stoppingReviewerId !== null}
+                        onClick={() => void stopReviewer(reviewer.id)}
+                      >
+                        {stoppingReviewerId === reviewer.id
+                          ? <Loader2 className="size-3.5 animate-spin" />
+                          : <Square className="size-3.5" />}
+                      </Button>
+                    )}
                   </div>
-                </button>
-              ))}
+                );
+              })}
             </div>
           </section>
 

@@ -15,6 +15,12 @@ export interface NativeComposeDraft {
   requestId?: string;
   fastMode: boolean;
   mode: AgentConversationMode;
+  /**
+   * Provider primary-agent name, so it is not a closed set: OpenCode users can
+   * rename or add agents. Bounded like the other free-form ids rather than
+   * narrowed to the two the launcher offers by default.
+   */
+  executionProfileId?: string;
 }
 
 const EMPTY_DRAFT: NativeComposeDraft = {
@@ -63,6 +69,9 @@ function persistedDraftMetadata(draft: NativeComposeDraft): Readonly<Record<stri
     ...(draft.requestId ? { requestId: draft.requestId } : {}),
     fastMode: draft.fastMode,
     mode: draft.mode,
+    ...(draft.executionProfileId
+      ? { executionProfileId: draft.executionProfileId }
+      : {}),
   });
   DRAFT_METADATA_CACHE.set(draft, metadata);
   return metadata;
@@ -86,8 +95,28 @@ function restoreDraftMetadata(value: unknown): Partial<NativeComposeDraft> | und
     : undefined;
   const fastMode = typeof metadata.fastMode === "boolean" ? metadata.fastMode : undefined;
   const mode = metadata.mode === "build" || metadata.mode === "plan" ? metadata.mode : undefined;
-  if (!platform && !modelId && !reasoningId && fastMode === undefined && !mode) return undefined;
-  return { platform, modelId, reasoningId, requestId, fastMode, mode };
+  const executionProfileId = typeof metadata.executionProfileId === "string"
+    && metadata.executionProfileId.trim().length > 0
+    && metadata.executionProfileId.length <= 256
+    ? metadata.executionProfileId
+    : undefined;
+  if (
+    !platform
+    && !modelId
+    && !reasoningId
+    && fastMode === undefined
+    && !mode
+    && !executionProfileId
+  ) return undefined;
+  return {
+    platform,
+    modelId,
+    reasoningId,
+    requestId,
+    fastMode,
+    mode,
+    executionProfileId,
+  };
 }
 
 export function nativeComposeDraft(

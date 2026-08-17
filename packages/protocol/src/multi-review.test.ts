@@ -62,6 +62,46 @@ describe("multi review protocol", () => {
     })).toBe(false);
   });
 
+  test("carries progress and stall timestamps on both supervised session kinds", () => {
+    const timestamp = new Date(0).toISOString();
+    const workflow = {
+      version: MULTI_REVIEW_WORKFLOW_VERSION,
+      controller: "backend",
+      id: "workflow-stall", environmentId: "env-1", projectId: "project-1",
+      targetBranch: "main",
+      reviewers: [{
+        id: "reviewer-1", agent: "claude", model: "opus", status: "running",
+        providerSessionId: "provider-1", startedAt: timestamp,
+        progressAt: timestamp, progressDigest: "a".repeat(64), stalledSince: timestamp,
+      }],
+      fixModel: { agent: "codex", model: "gpt-5.6" },
+      fixSession: {
+        agent: "codex", model: "gpt-5.6", sessionKey: "fix-session",
+        providerSessionId: "provider-fix", requestIds: ["request-1"], status: "running",
+        startedAt: timestamp, progressAt: timestamp, progressDigest: "b".repeat(64),
+        stalledSince: timestamp,
+      },
+      phase: "reviewing",
+      createdAt: timestamp, updatedAt: timestamp,
+      backendRevision: 2,
+    };
+    expect(isMultiReviewWorkflow(workflow)).toBe(true);
+    // The renderer reads these as clocks, so an unparseable one must be rejected
+    // at the boundary rather than rendered as an unbounded stall.
+    expect(isMultiReviewWorkflow({
+      ...workflow,
+      reviewers: [{ ...workflow.reviewers[0], progressAt: "soon" }],
+    })).toBe(false);
+    expect(isMultiReviewWorkflow({
+      ...workflow,
+      reviewers: [{ ...workflow.reviewers[0], progressDigest: "not-a-digest" }],
+    })).toBe(false);
+    expect(isMultiReviewWorkflow({
+      ...workflow,
+      fixSession: { ...workflow.fixSession, stalledSince: "soon" },
+    })).toBe(false);
+  });
+
   test("treats an interactive handoff as a terminal workflow", () => {
     expect(isMultiReviewTerminalPhase("interactive")).toBe(true);
     expect(isMultiReviewTerminalPhase("completed")).toBe(true);

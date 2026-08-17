@@ -191,7 +191,7 @@ describe("Files panel components", () => {
     const onClick = mock(() => {});
     render(<ChangedFileItem change={change} onClick={onClick} />);
 
-    const directory = screen.getByText("src/components");
+    const directory = screen.getByText("src/components").parentElement!;
     const filename = screen.getByText("/Button.tsx");
     expect(directory.className).toContain("[direction:rtl]");
     expect(directory.className).toContain("shrink");
@@ -241,6 +241,23 @@ describe("Files panel components", () => {
     );
 
     expect(screen.queryByRole("button", { name: "Reveal in file manager" }) === null).toBe(true);
+  });
+
+  test("ChangedFileItem isolates the directory so a leading dot stays at the start", () => {
+    const dotChange: GitFileChange = {
+      ...change,
+      path: ".playwright-mcp/page-2026-08-16T23-58-53-138Z.yml",
+      filename: "page-2026-08-16T23-58-53-138Z.yml",
+      directory: ".playwright-mcp",
+    };
+    render(<ChangedFileItem change={dotChange} />);
+
+    // The RTL truncation direction reorders a leading neutral "." to the visual end
+    // unless the text sits in its own LTR bidi isolate.
+    const isolate = screen.getByText(".playwright-mcp");
+    expect(isolate.tagName).toBe("BDI");
+    expect(isolate.getAttribute("dir")).toBe("ltr");
+    expect(isolate.parentElement?.className).toContain("[direction:rtl]");
   });
 
   test("ChangedFileItem renders a root-level file without a directory segment", () => {

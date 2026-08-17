@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, CheckCircle2, Loader2, RefreshCw } from "lucide-react";
+import { AlertCircle, CheckCircle2, Loader2, RefreshCw, Square } from "lucide-react";
 import type { MultiReviewReviewerTranscript } from "@orkestrator/protocol/multi-review";
 import type { MultiReviewTabData } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
@@ -46,6 +46,7 @@ interface MultiReviewReviewerTabProps {
   data: MultiReviewTabData & { reviewerId: string };
   isActive: boolean;
   loadTranscript?: typeof backend.getMultiReviewReviewerTranscript;
+  stopReviewer?: typeof backend.stopMultiReviewReviewer;
 }
 
 export function toMultiReviewReviewerMessages(snapshot: MultiReviewReviewerTranscript) {
@@ -68,9 +69,12 @@ export function MultiReviewReviewerTab({
   data,
   isActive,
   loadTranscript = backend.getMultiReviewReviewerTranscript,
+  stopReviewer = backend.stopMultiReviewReviewer,
 }: MultiReviewReviewerTabProps) {
   const [snapshot, setSnapshot] = useState<MultiReviewReviewerTranscript | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [transcriptError, setTranscriptError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
   const requestGeneration = useRef(0);
   const inFlightGeneration = useRef<number | null>(null);
   const containerId = useEnvironmentStore(
@@ -85,32 +89,60 @@ export function MultiReviewReviewerTab({
       const next = await loadTranscript(data.workflowId, data.reviewerId);
       if (requestGeneration.current !== generation) return;
       setSnapshot(next);
-      setError(null);
+      setTranscriptError(null);
     } catch (reason) {
       if (requestGeneration.current !== generation) return;
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setTranscriptError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       if (inFlightGeneration.current === generation) inFlightGeneration.current = null;
     }
   }, [data.reviewerId, data.workflowId, loadTranscript]);
 
+  /**
+   * The workflow, not this tab, owns the reviewer's lifecycle. Stopping only
+   * asks the backend to retire it; the transcript view then re-reads the
+   * authoritative snapshot rather than assuming the new status locally.
+   */
+  const stop = useCallback(async () => {
+    setStopping(true);
+    setActionError(null);
+    try {
+      await stopReviewer(data.workflowId, data.reviewerId);
+      // A poll may have captured `running` before the backend committed the stop
+      // and still be awaiting provider messages. Fence that response out, then
+      // force a new authoritative read instead of letting the in-flight guard
+      // turn this refresh into a no-op.
+      requestGeneration.current += 1;
+      inFlightGeneration.current = null;
+      await refresh();
+    } catch (reason) {
+      // Transcript polling continues after a refused action, but a successful
+      // read must not erase the action failure before the user can read it.
+      setActionError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setStopping(false);
+    }
+  }, [data.reviewerId, data.workflowId, refresh, stopReviewer]);
+
   useEffect(() => {
     setSnapshot(null);
-    setError(null);
+    setTranscriptError(null);
+    setActionError(null);
+    setStopping(false);
     requestGeneration.current += 1;
   }, [data.reviewerId, data.workflowId]);
 
   useEffect(() => {
     if (!isActive) return;
     void refresh();
-    const gone = error !== null && isGoneError(error);
+    const gone = transcriptError !== null && isGoneError(transcriptError);
     if (gone || (snapshot && snapshot.status !== "running" && snapshot.status !== "pending")) return;
     const interval = window.setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
     return () => {
       window.clearInterval(interval);
       requestGeneration.current += 1;
     };
-  }, [isActive, refresh, snapshot?.status, error]);
+  }, [isActive, refresh, snapshot?.status, transcriptError]);
 
   const messages = useMemo(() => {
     if (!snapshot) return [];
@@ -126,17 +158,32 @@ export function MultiReviewReviewerTab({
   });
 
   const running = snapshot?.status === "running";
+  // A refused action stays visible until the user acts again, so an ordinary
+  // transcript failure must not displace it. A gone workflow or reviewer is the
+  // exception: it makes the action failure moot and is terminal for this view,
+  // so reporting the stale action error instead would hide why polling stopped.
+  const error = transcriptError !== null && isGoneError(transcriptError)
+    ? transcriptError
+    : actionError ?? transcriptError;
   const label = snapshot ? AGENT_LABELS[snapshot.agent] : "Reviewer";
+  const stoppable = snapshot?.status === "running" || snapshot?.status === "pending";
+  const statusLine = snapshot
+    ? snapshot.status === "cancelled"
+      ? "Stopped · excluded from the consolidated report"
+      : snapshot.stalledSince && running
+        ? "No activity for a while · stop it to continue without this reviewer"
+        : `${snapshot.model}${snapshot.reasoningEffort ? ` · ${snapshot.reasoningEffort}` : ""} · Read only`
+    : "Loading read-only transcript…";
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border/60 px-4 py-3 sm:px-5">
         <div className="min-w-0">
           <h1 className="truncate text-sm font-semibold">{label} review</h1>
-          <p className="truncate text-xs text-muted-foreground">
-            {snapshot
-              ? `${snapshot.model}${snapshot.reasoningEffort ? ` · ${snapshot.reasoningEffort}` : ""} · Read only`
-              : "Loading read-only transcript…"}
+          <p
+            className={`truncate text-xs ${snapshot?.stalledSince && running ? "text-amber-500" : "text-muted-foreground"}`}
+          >
+            {statusLine}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -144,6 +191,21 @@ export function MultiReviewReviewerTab({
             : snapshot?.status === "completed" ? <CheckCircle2 className="size-4 text-emerald-500" />
               : snapshot?.status === "failed" ? <AlertCircle className="size-4 text-destructive" />
                 : null}
+          {stoppable && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={stopping}
+              aria-label="Stop this reviewer"
+              title="Stop this reviewer; the Multi Review continues without it"
+              onClick={() => void stop()}
+            >
+              {stopping
+                ? <Loader2 className="mr-2 size-3.5 animate-spin" />
+                : <Square className="mr-2 size-3.5" />}
+              Stop
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="icon"

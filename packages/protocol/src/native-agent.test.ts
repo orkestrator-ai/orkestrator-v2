@@ -64,7 +64,22 @@ describe("native agent capability table", () => {
     });
 
     expect(nativeAgentCapabilities("opencode").composer.speed).toBe(false);
+    // OpenCode's Build/Plan pair was a second execution-profile picker sent as
+    // the SDK `agent` name, not a Claude/Codex permission mode.
+    expect(nativeAgentCapabilities("opencode").composer.mode).toBe(false);
     expect(nativeAgentCapabilities("opencode").composer.executionProfile).toBe(true);
+
+    // Only Claude reports execution profiles, local settings or prompt
+    // suggestions today, and the projection is now gated on these rather than on
+    // whether a provider happened to send them.
+    for (const platform of ["codex", "cursor", "grok"] as const) {
+      expect(nativeAgentCapabilities(platform).composer.executionProfile).toBe(false);
+    }
+    for (const platform of AGENT_PLATFORMS) {
+      if (platform === "claude") continue;
+      expect(nativeAgentCapabilities(platform).composer.localSettings).toBe(false);
+      expect(nativeAgentCapabilities(platform).composer.promptSuggestions).toBe(false);
+    }
 
     for (const platform of ["cursor", "grok"] as const) {
       // Both ACP agents read inline image content blocks; neither takes files.
@@ -76,6 +91,10 @@ describe("native agent capability table", () => {
       expect(nativeAgentCapabilities(platform).fork).toBe(false);
       expect(nativeAgentCapabilities(platform).slashCommands).toBe(false);
       expect(nativeAgentCapabilities(platform).backgroundTasks).toBe(false);
+      // Both are real ACP surfaces — Cursor drives fast through a config
+      // option, Grok through a sibling `…-fast` model id, and both announce
+      // session modes — so the table permits them and the live composer's
+      // `fastModeAvailable` / `modes` decides per agent build.
       expect(nativeAgentCapabilities(platform).composer.speed).toBe(true);
       expect(nativeAgentCapabilities(platform).composer.mode).toBe(true);
       expect(nativeAgentCapabilities(platform).actions).toEqual({});

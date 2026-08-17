@@ -135,6 +135,20 @@ records for the `tmux-backend.test.ts` and `standalone.test.ts` clusters below.
 - **Follow-up:** The bridges group passed alone in 45.3 s, and a fresh aggregate rerun passed in 91.5 s.
 - **Hypothesis:** Aggregate bridge-process contention delayed readiness before the state-file quarantine behavior began. The isolated owner passed quickly, so this observation is recorded as a flake rather than a product or test assertion failure; a recurrence should capture the bridge startup timing before changing the quarantine assertions.
 
+## `MultiReviewReviewerTab stop control > reports a refused stop without pretending the reviewer settled` (`apps/web/src/components/review/MultiReviewTab.test.tsx:921`)
+
+- **Status:** resolved
+- **Date observed:** 2026-08-17
+- **Original command:** `bun run test:logged -- --name fix-full-tests -- bun run test`
+- **Worker configuration:** `scripts/test-all.ts` ran the workspace, root/agent-support, bridges, and protocol-lockfile groups concurrently; the web workspace suite used its normal parallel runner.
+- **Failure:** Testing Library timed out waiting for `Multi review reviewer not found` after the refused stop; the DOM had already returned to the ordinary running reviewer state (duration: 1,072.24 ms).
+- **Suite counts:** web workspace: 5,103 passed, 1 skipped, 1 failed; 5,105 tests across 222 files in 108.69 seconds. The root/agent-support, bridges, and protocol-lockfile groups passed.
+- **Isolated rerun:** `bun run test:logged -- --name fix-web-review-tests-rerun -- bun --cwd=apps/web test src/components/review/MultiReviewTab.test.tsx --only-failures` → passed in 5.2 seconds before the aggregate run.
+- **Hypothesis:** Aggregate scheduling allowed the transcript poll to finish after the stop rejection and clear the component's shared error state before the assertion observed it.
+- **Root cause:** Transcript reads and reviewer actions shared one `error` state. Any successful poll cleared a stop-action failure even though the action had not succeeded.
+- **Fix:** Track transcript-read and action failures separately; transcript polling clears only transcript failures, while the action failure remains visible until another action or tab identity change. The one exception is a gone workflow or reviewer, which is terminal for the view and displaces the stale action failure rather than hiding why polling stopped. The regression test now forces a successful refresh after the rejected stop and asserts the action error remains; a sibling test pins the gone-workflow exception.
+- **Verification:** The owning component test and the web typecheck were rerun for this change, followed by the aggregate suite. A real-browser pass over the reviewer tab has not been run against this fix and is still outstanding.
+
 ## 2026-08-16 resolution sweep
 
 The remaining open entries were reconciled against their current owning files
@@ -1546,6 +1560,19 @@ Post-fix stress verification:
 - **Frequency:** failed on two consecutive runs of the same command at `8f15f6c3`, then passed on a third run of the same command at the follow-up commit (47.3 seconds, exit 0). So it is intermittent rather than reliably reproducible, but more frequent than the single-shot spawn timeouts recorded above.
 - **Related:** `ACP bridge > rejects a concurrent second turn that carries a different requestId`, the same `spawnBridge` health-wait family in `index.test.ts`. That entry was recorded when `BRIDGE_STARTUP_TIMEOUT_MS` was 5 s; the constant is now 15 s, so this occurrence means a bridge child took longer than fifteen seconds to bind and answer `/global/health`.
 - **Hypothesis:** Spawn contention again, but the 15 s budget makes plain contention a weaker explanation than it was at 5 s — this file alone spawns a bridge child per test and several tests spawn twice (create, stop, respawn against the same state directory). A recurrence should record how long the child actually took to become healthy, and whether a previous test's child was still shutting down and holding its state directory or port, before the startup budget is raised again. Raising the budget without that measurement would hide a genuine startup regression.
+
+## `ActionBar toolbar interactions > runs commands and opens the editor from keyboard shortcuts` (`apps/web/src/components/layout/ActionBar.test.tsx:1704`)
+
+- **Status:** open
+- **Date observed:** 2026-08-17
+- **Original command:** `bun run test:logged -- --name full-suite -- bun run test`, on `native-composer-capabilities` (working tree: composer capability gating).
+- **Worker configuration:** Workspace web group under `scripts/test-all.ts`, with the root, bridge, and protocol-lockfile groups running concurrently.
+- **Failure:** `expect(createTabMock).toHaveBeenCalledWith("plain", { initialCommands: ["bun test"] })` -> "But it was not called", after 68.27 ms. The two `fireEvent.keyDown(window, …)` dispatches on the preceding lines (`Cmd+P`, `Cmd+O`) are synchronous and unwaited, so nothing in the test gives the shortcut handler a chance to run before the assertion.
+- **Suite counts:** Web package: 1 failed; every other workspace package reported `0 fail`. The immediately preceding aggregate run of the same command passed the whole web group, and the immediately following one did too.
+- **Isolated rerun:** `bun test --cwd apps/web src/components/layout/ActionBar.test.tsx -t 'runs commands and opens the editor from keyboard shortcuts'` -> 1 passed, 0 failed in 528 ms.
+- **Frequency:** failed in 2 of 4 consecutive `bun run test` runs on the same commit; passed in the other 2 and in every isolated rerun. The second occurrence (89.77 ms) shared a run with a batch of 5,000 ms Electron timeouts caused by *another worktree's* live `dev:test` profile (see "Environmental, not flaky: the root group while a `dev:test` profile is live"). This failure is **not** that signature — it fails in under 100 ms rather than exhausting a deadline — so host load may make it likelier without being the mechanism. A final `bun run test` on an idle host passed in 93.5 s.
+- **Hypothesis:** Same load-sensitive family as the three resolved `ActionBar` entries above, but the mechanism looks different: those timed out against Testing Library's default wait, whereas this one asserts synchronously on a mock immediately after `fireEvent.keyDown`. If the shortcut handler's effect subscription had not committed when the events were dispatched, the mock is legitimately never called and no amount of waiting inside the current assertion would help. A recurrence should check whether the handler is registered in a `useEffect` that had not flushed, and if so wrap the assertion in a bounded `waitFor` **and** confirm the listener is attached before dispatching, rather than only widening a timeout.
+- **Unrelated to the change under test:** `ActionBar` does not read `nativeAgentCapabilities`, the native composer projection, or any of the composer control paths modified in this branch.
 
 ## `ActionBar workflow tabs > opens the Resolve modal after a mobile long press without launching a default resolve` (`apps/web/src/components/layout/ActionBar.test.tsx:2910`)
 

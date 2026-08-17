@@ -16,6 +16,7 @@ import {
 import { useConfigStore } from "@/stores";
 import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
 import { Button } from "@/components/ui/button";
+import { TruncatedPath } from "@/components/ui/truncated-path";
 import { useMediaQuery } from "@/hooks";
 import type { GitFileStatus } from "@/types/paneLayout";
 import { ensureMonacoConfigured, isMonacoConfigured } from "@/lib/monaco-loader";
@@ -535,16 +536,12 @@ function DiffHeader({
           <span className="sr-only">{filePath}</span>
           {/* On a phone the directory is dropped entirely: the basename is the only
               part that fits, and the full path is still on the title/sr-only node. */}
-          <span aria-hidden="true" className="flex min-w-0 overflow-hidden">
-            {directory && !isMobile && (
-              <span className="min-w-0 shrink truncate text-left [direction:rtl]">
-                {directory}
-              </span>
-            )}
-            <span className="max-w-full min-w-0 shrink-0 truncate">
-              {isMobile ? filename : `${separator}${filename}`}
-            </span>
-          </span>
+          <TruncatedPath
+            aria-hidden="true"
+            directory={isMobile ? null : directory}
+            separator={separator}
+            filename={filename}
+          />
         </span>
         <span
           className={cn(

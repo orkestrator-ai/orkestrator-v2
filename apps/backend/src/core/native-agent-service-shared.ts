@@ -109,6 +109,8 @@ export interface EnsureNativeAgentSessionInput {
   sessionMode?: ProviderExecutionMode;
   /** Cursor/Grok ACP speed toggle applied at session create. */
   fastMode?: boolean;
+  /** Primary execution profile to persist before the first interactive prompt. */
+  executionProfileId?: string;
 }
 
 export interface DispatchNativeAgentPromptInput
@@ -163,6 +165,9 @@ export function controlsFromSessionInput(
     ...(input.reasoningEffort ? { reasoningId: input.reasoningEffort } : {}),
     ...(typeof input.fastMode === "boolean" ? { fastMode: input.fastMode } : {}),
     ...(input.sessionMode ? { mode: input.sessionMode } : {}),
+    ...(input.executionProfileId
+      ? { executionProfileId: input.executionProfileId }
+      : {}),
   };
   return Object.keys(controls).length > 0 ? controls : undefined;
 }
@@ -325,9 +330,20 @@ export function nativeCapabilities(agent: BuildPipelineAgent): NativeAgentCapabi
   return nativeAgentCapabilities(agent);
 }
 
+/**
+ * Build the composer control list for one projection.
+ *
+ * Capabilities are a required argument rather than an optional refinement: the
+ * generated array used to be derived from composer *state* alone, so a provider
+ * that happened to report execution profiles, local settings or prompt
+ * suggestions produced a control for a platform whose table says it has none.
+ * State decides whether a permitted control has anything to show; the table
+ * decides whether it is permitted at all.
+ */
 export function nativeComposerControls(
   composer: NativeAgentComposerState | undefined,
   disabled: boolean,
+  capabilities: NativeAgentCapabilities,
 ): NativeAgentComposerControl[] {
   if (!composer) return [];
   const selectedModel = composer.models.find(
@@ -358,7 +374,11 @@ export function nativeComposerControls(
       disabled,
     });
   }
-  if (composer.fastModeAvailable && composer.fastModeEnabled !== null) {
+  if (
+    capabilities.composer.speed
+    && composer.fastModeAvailable
+    && composer.fastModeEnabled !== null
+  ) {
     controls.push({
       kind: "toggle",
       id: "speed",
@@ -367,7 +387,7 @@ export function nativeComposerControls(
       disabled,
     });
   }
-  if (composer.modes.length > 0) {
+  if (capabilities.composer.mode && composer.modes.length > 0) {
     controls.push({
       kind: "segmented",
       id: "mode",
@@ -377,7 +397,10 @@ export function nativeComposerControls(
       disabled,
     });
   }
-  if ((composer.executionProfiles?.length ?? 0) > 0) {
+  if (
+    capabilities.composer.executionProfile
+    && (composer.executionProfiles?.length ?? 0) > 0
+  ) {
     controls.push({
       kind: "select",
       id: "execution-profile",
@@ -391,7 +414,10 @@ export function nativeComposerControls(
       disabled,
     });
   }
-  if (typeof composer.includeLocalSettings === "boolean") {
+  if (
+    capabilities.composer.localSettings
+    && typeof composer.includeLocalSettings === "boolean"
+  ) {
     controls.push({
       kind: "toggle",
       id: "local-settings",
@@ -400,7 +426,10 @@ export function nativeComposerControls(
       disabled,
     });
   }
-  if (typeof composer.promptSuggestionsEnabled === "boolean") {
+  if (
+    capabilities.composer.promptSuggestions
+    && typeof composer.promptSuggestionsEnabled === "boolean"
+  ) {
     controls.push({
       kind: "toggle",
       id: "prompt-suggestions",

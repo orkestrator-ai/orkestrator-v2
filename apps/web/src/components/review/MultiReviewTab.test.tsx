@@ -12,6 +12,8 @@ import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
   MultiReviewTab,
   multiReviewFixSessionTabOptions,
+  reviewerProgressSummary,
+  reviewerStatusNote,
 } from "./MultiReviewTab";
 import {
   MultiReviewReviewerTab,
@@ -60,6 +62,23 @@ function readyWorkflow(): MultiReviewWorkflow {
       requestIds: ["consolidate-1"], status: "idle", startedAt: timestamp, completedAt: timestamp,
     },
     consolidatedReport: report, createdAt: timestamp, updatedAt: timestamp, backendRevision: 7,
+  };
+}
+
+/** A panel mid-run: both reviewers are live and therefore stoppable. */
+function reviewingWorkflow(): MultiReviewWorkflow {
+  const ready = readyWorkflow();
+  const timestamp = "2026-08-14T00:00:00.000Z";
+  const { fixSession: _fixSession, consolidatedReport: _consolidatedReport, ...rest } = ready;
+  return {
+    ...rest,
+    phase: "reviewing",
+    reviewers: ready.reviewers.map((reviewer) => ({
+      ...reviewer,
+      status: "running" as const,
+      report: undefined,
+      startedAt: timestamp,
+    })),
   };
 }
 
@@ -184,6 +203,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
             address,
             retry: mock(async () => ready),
             cancel: mock(async () => ready),
+            stopReviewer: mock(async () => ready),
           }}
         />
       </TerminalProvider>,
@@ -234,6 +254,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
             address,
             retry: mock(async () => ready),
             cancel: mock(async () => ready),
+            stopReviewer: mock(async () => ready),
           }}
         />
       </TerminalProvider>,
@@ -267,6 +288,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
             address,
             retry: mock(async () => ready),
             cancel: mock(async () => ready),
+            stopReviewer: mock(async () => ready),
           }}
         />
       </TerminalProvider>,
@@ -292,6 +314,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
             address,
             retry: mock(async () => ready),
             cancel: mock(async () => ready),
+            stopReviewer: mock(async () => ready),
           }}
         />
       </TerminalProvider>,
@@ -340,6 +363,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
             }),
             retry: mock(async () => ready),
             cancel: mock(async () => ready),
+            stopReviewer: mock(async () => ready),
           }}
         />
       </TerminalProvider>,
@@ -361,6 +385,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
             }),
             retry: mock(async () => ready),
             cancel: mock(async () => ready),
+            stopReviewer: mock(async () => ready),
           }}
         />
       </TerminalProvider>,
@@ -470,6 +495,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         address: mock(async () => ready),
         retry: mock(async () => ready),
         cancel,
+        stopReviewer: mock(async () => ready),
       }}
     />);
 
@@ -485,7 +511,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
       isActive
       hydrateWorkflow={mock(async () => failed)}
-      commands={{ address: mock(async () => failed), retry, cancel }}
+      commands={{ address: mock(async () => failed), retry, cancel, stopReviewer: mock(async () => failed) }}
     />);
     expect(screen.getByRole("button", { name: "Abandon" })).toBeTruthy();
     expect(screen.getByText("offline")).toBeTruthy();
@@ -497,6 +523,147 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     await waitFor(() =>
       expect(useMultiReviewStore.getState().workflows.get(ready.id)?.phase).toBe("reviewing"));
     expect(screen.queryByRole("button", { name: "Retry failed stage" }) === null).toBe(true);
+  });
+
+  test("stops one reviewer and leaves the rest of the panel running", async () => {
+    const reviewing = reviewingWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(reviewing);
+    const withoutFirst: MultiReviewWorkflow = {
+      ...reviewing,
+      backendRevision: 8,
+      reviewers: [
+        { ...reviewing.reviewers[0]!, status: "cancelled" },
+        reviewing.reviewers[1]!,
+      ],
+    };
+    const stopReviewer = mock(async () => withoutFirst);
+
+    render(<MultiReviewTab
+      data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
+      isActive
+      hydrateWorkflow={mock(async () => reviewing)}
+      commands={{
+        address: mock(async () => reviewing),
+        retry: mock(async () => reviewing),
+        cancel: mock(async () => reviewing),
+        stopReviewer,
+      }}
+    />);
+
+    // Every running reviewer is independently stoppable; the workflow-wide
+    // Cancel remains the control that stops all of them.
+    expect(screen.getByRole("button", { name: "Stop Reviewer 2" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Stop Reviewer 1" }));
+    await waitFor(() => expect(stopReviewer).toHaveBeenCalledWith(reviewing.id, "reviewer-1"));
+
+    await waitFor(() => expect(
+      screen.queryByRole("button", { name: "Stop Reviewer 1" }) === null,
+    ).toBe(true));
+    expect(screen.getByText(/Stopped · excluded from the consolidated report/)).toBeTruthy();
+    expect(screen.getByText("0/1 complete · 1 stopped")).toBeTruthy();
+    // The other reviewer keeps working: stopping one is not cancelling the run.
+    expect(screen.getByRole("button", { name: "Stop Reviewer 2" })).toBeTruthy();
+    expect(useMultiReviewStore.getState().workflows.get(reviewing.id)?.reviewers[0]?.status)
+      .toBe("cancelled");
+  });
+
+  test("surfaces a stalled reviewer without claiming it failed", () => {
+    const reviewing = reviewingWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow({
+      ...reviewing,
+      reviewers: [
+        { ...reviewing.reviewers[0]!, stalledSince: "2026-08-14T00:20:00.000Z" },
+        reviewing.reviewers[1]!,
+      ],
+    });
+
+    render(<MultiReviewTab
+      data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
+      isActive
+      hydrateWorkflow={mock(async () => reviewing)}
+    />);
+
+    expect(screen.getByText(/No activity for a while/)).toBeTruthy();
+    // A stall is a prompt to intervene, not a verdict: the reviewer is still
+    // running and may still produce a report.
+    expect(screen.getByRole("button", { name: "Stop Reviewer 1" })).toBeTruthy();
+  });
+
+  test("reports a stopped reviewer as stopped rather than failed", () => {
+    expect(reviewerStatusNote({
+      id: "reviewer-1", agent: "claude", model: "opus", status: "cancelled",
+    })).toEqual({ text: "Stopped · excluded from the consolidated report", tone: "muted" });
+    expect(reviewerStatusNote({
+      id: "reviewer-1", agent: "claude", model: "opus", status: "failed", error: "offline",
+    })).toEqual({ text: "offline", tone: "destructive" });
+    // A stall flag left on a settled reviewer must not relabel its result.
+    expect(reviewerStatusNote({
+      id: "reviewer-1", agent: "claude", model: "opus", status: "completed",
+      report, stalledSince: "2026-08-14T00:20:00.000Z",
+    })).toBeNull();
+  });
+
+  test("summarises completed and stopped reviewers without an unfinished denominator", () => {
+    const ready = readyWorkflow();
+    expect(reviewerProgressSummary([
+      ready.reviewers[0]!,
+      { ...ready.reviewers[1]!, status: "cancelled", report: undefined },
+    ])).toBe("1/1 complete · 1 stopped");
+    expect(reviewerProgressSummary(ready.reviewers)).toBe("2/2 complete");
+    expect(reviewerProgressSummary(ready.reviewers.map((reviewer) => ({
+      ...reviewer, status: "cancelled" as const, report: undefined,
+    })))).toBe("0 complete · 2 stopped");
+  });
+
+  test("surfaces a stalled consolidation or fix session with recovery guidance", () => {
+    const ready = readyWorkflow();
+    for (const phase of ["consolidating", "fixing"] as const) {
+      const stalled: MultiReviewWorkflow = {
+        ...ready,
+        phase,
+        fixSession: {
+          ...ready.fixSession!,
+          status: "running",
+          stalledSince: "2026-08-14T00:20:00.000Z",
+        },
+        ...(phase === "fixing" ? {
+          activeRequest: {
+            kind: "fix" as const,
+            requestId: "fix-1",
+            state: "sent" as const,
+            createdAt: "2026-08-14T00:15:00.000Z",
+          },
+        } : {}),
+      };
+      useMultiReviewStore.setState({ workflows: new Map([[stalled.id, stalled]]) });
+      const view = render(<MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: stalled.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => stalled)}
+      />);
+
+      expect(screen.getByRole("status").textContent).toContain("Fix model appears stalled");
+      expect(screen.getByRole("status").textContent).toContain("Cancel now");
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+      view.unmount();
+    }
+  });
+
+  test("ignores a stale fix-session stall flag after the workflow settles", () => {
+    const ready = readyWorkflow();
+    const settled = {
+      ...ready,
+      fixSession: { ...ready.fixSession!, stalledSince: "2026-08-14T00:20:00.000Z" },
+    };
+    useMultiReviewStore.getState().replaceWorkflow(settled);
+    render(<MultiReviewTab
+      data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+      isActive
+      hydrateWorkflow={mock(async () => settled)}
+    />);
+
+    expect(screen.queryByRole("status") === null).toBe(true);
+    expect(screen.getByText("Consolidated report ready")).toBeTruthy();
   });
 });
 
@@ -691,5 +858,155 @@ describe("MultiReviewReviewerTab", () => {
     // during a full interval period after the error is shown.
     await new Promise((resolve) => setTimeout(resolve, REFRESH_INTERVAL_MS + 500));
     expect(calls).toBe(callsAtSettlement);
+  });
+});
+
+describe("MultiReviewReviewerTab stop control", () => {
+  const runningSnapshot: MultiReviewReviewerTranscript = {
+    workflowId: "multi-1",
+    reviewerId: "reviewer-1",
+    agent: "cursor",
+    model: "composer-1",
+    status: "running",
+    startedAt: "2026-08-14T00:00:00.000Z",
+    messages: [],
+  };
+
+  test("stops the reviewer and re-reads the authoritative snapshot", async () => {
+    let current: MultiReviewReviewerTranscript = runningSnapshot;
+    const loadTranscript = mock(async () => current);
+    const stopReviewer = mock(async () => {
+      current = { ...runningSnapshot, status: "cancelled" };
+      return {} as never;
+    });
+
+    render(<MultiReviewReviewerTab
+      data={{
+        environmentId: "env-1", workflowId: "multi-1", reviewerId: "reviewer-1", isLocal: true,
+      }}
+      isActive
+      loadTranscript={loadTranscript}
+      stopReviewer={stopReviewer}
+    />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Stop this reviewer" }));
+    await waitFor(() => expect(stopReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1"));
+    // The workflow owns the lifecycle, so the tab proves the new status by
+    // re-reading rather than assuming it locally.
+    expect(await screen.findByText(/Stopped · excluded from the consolidated report/)).toBeTruthy();
+    await waitFor(() => expect(
+      screen.queryByRole("button", { name: "Stop this reviewer" }) === null,
+    ).toBe(true));
+  });
+
+  test("surfaces a stall on a reviewer that is still running", async () => {
+    const loadTranscript = mock(async () => ({
+      ...runningSnapshot,
+      stalledSince: "2026-08-14T00:20:00.000Z",
+    }));
+
+    render(<MultiReviewReviewerTab
+      data={{
+        environmentId: "env-1", workflowId: "multi-1", reviewerId: "reviewer-1", isLocal: true,
+      }}
+      isActive
+      loadTranscript={loadTranscript}
+      stopReviewer={mock(async () => ({}) as never)}
+    />);
+
+    expect(await screen.findByText(/No activity for a while/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Stop this reviewer" })).toBeTruthy();
+  });
+
+  test("reports a refused stop without pretending the reviewer settled", async () => {
+    const loadTranscript = mock(async () => runningSnapshot);
+    const stopReviewer = mock(async () => {
+      throw new Error("Multi review reviewer not found: reviewer-1");
+    });
+
+    render(<MultiReviewReviewerTab
+      data={{
+        environmentId: "env-1", workflowId: "multi-1", reviewerId: "reviewer-1", isLocal: true,
+      }}
+      isActive
+      loadTranscript={loadTranscript}
+      stopReviewer={stopReviewer}
+    />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Stop this reviewer" }));
+    expect(await screen.findByText(/Multi review reviewer not found/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh reviewer transcript" }));
+    await waitFor(() => expect(loadTranscript.mock.calls.length).toBeGreaterThanOrEqual(2));
+    expect(screen.getByText(/Multi review reviewer not found/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Stop this reviewer" })).toBeTruthy();
+  });
+
+  test("lets a gone workflow displace a stale stop failure", async () => {
+    let gone = false;
+    const loadTranscript = mock(async () => {
+      if (gone) throw new Error("Multi review workflow not found: multi-1");
+      return runningSnapshot;
+    });
+    const stopReviewer = mock(async () => {
+      throw new Error("The Multi Review controller is busy");
+    });
+
+    render(<MultiReviewReviewerTab
+      data={{
+        environmentId: "env-1", workflowId: "multi-1", reviewerId: "reviewer-1", isLocal: true,
+      }}
+      isActive
+      loadTranscript={loadTranscript}
+      stopReviewer={stopReviewer}
+    />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Stop this reviewer" }));
+    expect(await screen.findByText(/controller is busy/)).toBeTruthy();
+
+    // The action failure outranks an ordinary transcript failure, but a gone
+    // workflow is terminal for this view: reporting the stale stop error there
+    // would hide why the transcript stopped refreshing.
+    gone = true;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh reviewer transcript" }));
+    expect(await screen.findByText(/Multi review workflow not found/)).toBeTruthy();
+    expect(screen.queryByText(/controller is busy/) === null).toBe(true);
+  });
+
+  test("fences out an older running poll after a reviewer is stopped", async () => {
+    let resolveStale!: (value: MultiReviewReviewerTranscript) => void;
+    const stalePoll = new Promise<MultiReviewReviewerTranscript>((resolve) => {
+      resolveStale = resolve;
+    });
+    const cancelled = { ...runningSnapshot, status: "cancelled" as const };
+    let calls = 0;
+    const loadTranscript = mock(async () => {
+      calls += 1;
+      if (calls === 1) return runningSnapshot;
+      if (calls === 2) return stalePoll;
+      return cancelled;
+    });
+    const stopReviewer = mock(async () => ({} as never));
+
+    render(<MultiReviewReviewerTab
+      data={{
+        environmentId: "env-1", workflowId: "multi-1", reviewerId: "reviewer-1", isLocal: true,
+      }}
+      isActive
+      loadTranscript={loadTranscript}
+      stopReviewer={stopReviewer}
+    />);
+
+    await screen.findByRole("button", { name: "Stop this reviewer" });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh reviewer transcript" }));
+    await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button", { name: "Stop this reviewer" }));
+
+    await waitFor(() => expect(loadTranscript.mock.calls.length).toBeGreaterThanOrEqual(3));
+    expect(await screen.findByText(/Stopped · excluded from the consolidated report/)).toBeTruthy();
+    await act(async () => {
+      resolveStale(runningSnapshot);
+      await stalePoll;
+    });
+    expect(screen.queryByRole("button", { name: "Stop this reviewer" }) === null).toBe(true);
   });
 });

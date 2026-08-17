@@ -412,4 +412,22 @@ describe("sub-agent runtime duration", () => {
     stampSubagentRuntimeDuration(part, Date.parse(part.createdAt!) + 5_400);
     expect(part.toolArgs?.durationMs).toBe(84);
   });
+
+  test("projects a real duration from a terminal background result", () => {
+    const part = spawnTaskPart({
+      agentState: "finished",
+      toolArgs: { agentId: "child-wait-1" },
+      toolOutput: JSON.stringify({
+        durationMs: 84,
+        isBackground: true,
+        status: "completed",
+      }),
+    });
+    const source = ensureAcpToolSource(part);
+    source.agentState = "finished";
+    source.toolArgs = { ...part.toolArgs };
+    source.rawOutput = part.toolOutput;
+    stampSubagentRuntimeDuration(part, Date.parse(part.createdAt!) + 5_400);
+    expect(part.toolArgs?.durationMs).toBe(84);
+  });
 });

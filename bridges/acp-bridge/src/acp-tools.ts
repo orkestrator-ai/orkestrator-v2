@@ -211,6 +211,9 @@ export function applyToolCallUpdate(
   applyAcpToolSourcePatch(source, update);
   absorbCursorTodosFromToolArgs(state, source, update);
   renderAcpToolSource(part, source);
+  if (part.agentState === "finished" || part.agentState === "failed") {
+    stampSubagentRuntimeDuration(part);
+  }
   const parentTaskUseId = acpParentTaskUseId(update);
   if (parentTaskUseId && parentTaskUseId !== toolCallId) {
     part.parentTaskUseId = parentTaskUseId;
@@ -1012,6 +1015,10 @@ export function isCursorBackgroundSpawnDuration(
   const lifecycle = isObject(source.rawOutput)
     ? source.rawOutput
     : toolCallLifecycle(source.rawOutput ?? source.contentOutput);
+  // Cursor keeps `isBackground: true` on the terminal result. Once that same
+  // payload reports a terminal lifecycle, its duration is the child's real
+  // runtime rather than the launch tool's spawn wall-clock.
+  if (terminalAgentState(lifecycleStatus(lifecycle)) !== undefined) return false;
   const background = source.toolArgs?.background === true
     || source.toolArgs?.run_in_background === true
     || lifecycle?.isBackground === true;
@@ -1064,15 +1071,24 @@ export function stampSubagentRuntimeDuration(
   now = Date.now(),
 ): void {
   const source = ensureAcpToolSource(part);
-  const existing = boundedDurationMs(
+  const projectedDuration = boundedDurationMs(
     source.cursorTask?.durationMs ?? part.toolArgs?.durationMs,
   );
+  const lifecycle = toolCallLifecycle(source.rawOutput ?? source.contentOutput);
+  const existing = projectedDuration ?? boundedDurationMs(lifecycle?.durationMs);
   const spawnEcho = existing !== undefined && isCursorBackgroundSpawnDuration({
     toolArgs: source.toolArgs ?? part.toolArgs,
     rawOutput: source.rawOutput ?? part.toolOutput,
     contentOutput: source.contentOutput,
   }, existing);
-  if (existing !== undefined && !spawnEcho) return;
+  if (existing !== undefined && !spawnEcho) {
+    if (projectedDuration === undefined) {
+      source.cursorTask = { ...(source.cursorTask ?? {}), durationMs: existing };
+      source.toolArgs = { ...(source.toolArgs ?? {}), durationMs: existing };
+      renderAcpToolSource(part, source);
+    }
+    return;
+  }
   const startedAt = part.createdAt ? Date.parse(part.createdAt) : Number.NaN;
   if (!Number.isFinite(startedAt) || startedAt < 0) return;
   const elapsed = Math.max(0, Math.floor(now - startedAt));

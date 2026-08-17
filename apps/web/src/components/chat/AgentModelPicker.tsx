@@ -138,7 +138,11 @@ function modelRowKey(model: AgentModel): string {
 
 function favoritePlaceholder(favorite: AgentModelRef): AgentModel {
   if (favorite.platform === "opencode") {
-    return synthesizedOpenCodeAgentModel(favorite.modelId) ?? {
+    const synthesized = synthesizedOpenCodeAgentModel(favorite.modelId);
+    return synthesized ? {
+      ...synthesized,
+      description: "Unavailable in the current catalog",
+    } : {
       platform: favorite.platform,
       id: favorite.modelId,
       label: favorite.modelId,

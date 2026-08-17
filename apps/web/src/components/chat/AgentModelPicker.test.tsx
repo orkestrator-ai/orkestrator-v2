@@ -804,10 +804,60 @@ describe("AgentModelPicker", () => {
     expect(screen.getByPlaceholderText("Search models...")).toBeTruthy();
   });
 
-  test("offers a selectable OpenCode favourite with the provider on the second line", () => {
+  test("keeps a missing OpenCode favourite disabled while preserving its provider label", () => {
     setMobileViewport(false);
     const { onModelChange } = renderPicker({
       models: [{ platform: "codex", id: "codex-model", label: "Codex model" }],
+      enabledPlatforms: ["codex"],
+      selectedPlatform: "codex",
+      selectedModelId: "codex-model",
+      platformSelectionLocked: true,
+      favorites: [{ platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" }],
+    });
+    openPicker();
+
+    const row = screen.getByRole("menuitemradio", { name: /deepseek-v4-flash/ });
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    expect(row.textContent).toContain("opencode-go");
+    expect(row.textContent).not.toContain("opencode-go/deepseek-v4-flash");
+    fireEvent.click(row);
+    expect(onModelChange).not.toHaveBeenCalled();
+  });
+
+  test("keeps an omitted same-platform OpenCode favourite disabled in a locked catalog", () => {
+    setMobileViewport(false);
+    const { onModelChange } = renderPicker({
+      models: [{
+        platform: "opencode",
+        id: "opencode/current",
+        label: "Current",
+      }],
+      enabledPlatforms: ["opencode"],
+      selectedPlatform: "opencode",
+      selectedModelId: "opencode/current",
+      platformSelectionLocked: true,
+      favorites: [{ platform: "opencode", modelId: "openrouter/kimi-k2.5" }],
+    });
+    openPicker();
+
+    const row = screen.getByRole("menuitemradio", { name: /kimi-k2\.5/ });
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(row);
+    expect(onModelChange).not.toHaveBeenCalled();
+  });
+
+  test("offers an upstream-catalogued OpenCode favourite", () => {
+    setMobileViewport(false);
+    const { onModelChange } = renderPicker({
+      models: [
+        { platform: "codex", id: "codex-model", label: "Codex model" },
+        {
+          platform: "opencode",
+          id: "opencode-go/deepseek-v4-flash",
+          label: "deepseek-v4-flash",
+          providerLabel: "opencode-go",
+        },
+      ],
       enabledPlatforms: ["codex", "opencode"],
       selectedPlatform: "codex",
       selectedModelId: "codex-model",
@@ -817,8 +867,6 @@ describe("AgentModelPicker", () => {
 
     const row = screen.getByRole("menuitemradio", { name: /deepseek-v4-flash/ });
     expect(row.getAttribute("aria-disabled") === "true").toBe(false);
-    expect(row.textContent).toContain("opencode-go");
-    expect(row.textContent).not.toContain("opencode-go/deepseek-v4-flash");
     fireEvent.click(row);
     expect(onModelChange).toHaveBeenCalledWith("opencode-go/deepseek-v4-flash");
   });

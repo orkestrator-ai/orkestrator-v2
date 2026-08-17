@@ -136,6 +136,25 @@ describe("useBuildLaunchOptions", () => {
     ]);
   });
 
+  test("does not synthesize a favourite from an excluded OpenCode provider", async () => {
+    useConfigStore.setState({
+      config: {
+        ...baseConfig,
+        global: {
+          ...baseConfig.global,
+          favoriteModels: [
+            { platform: "opencode", modelId: "openrouter/kimi-k2.5" },
+          ],
+          openCodeModelProviders: ["opencode", "opencode-go"],
+        },
+      },
+    });
+    const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
+    await flushPromises();
+
+    expect(result.current.catalog.opencode?.map((model) => model.id)).toEqual(["default"]);
+  });
+
   test("reacts to the shared backend-hydrated Cursor catalogue", async () => {
     const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
     await flushPromises();

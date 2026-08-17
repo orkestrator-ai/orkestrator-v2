@@ -111,6 +111,26 @@ function artifactDirectory(rootDir: string, artifact: ToolchainArtifact): string
   );
 }
 
+/** The toolchain root this module owns inside a given data directory. */
+export function toolchainRootDir(dataDir: string): string {
+  return path.join(dataDir, TOOLCHAIN_DIRECTORY);
+}
+
+/**
+ * Where a pinned artifact is installed under `dataDir`.
+ *
+ * Exported so anything that pre-populates a cache — the isolated dev-profile
+ * seeder — derives the layout from this module rather than re-deriving it. A
+ * duplicated path join would keep validating until the layout changed, and then
+ * silently seed into a directory the installer never looks at.
+ */
+export function pinnedArtifactDirectory(
+  dataDir: string,
+  artifact: ToolchainArtifact,
+): string {
+  return artifactDirectory(toolchainRootDir(dataDir), artifact);
+}
+
 function artifactExecutablePath(rootDir: string, artifact: ToolchainArtifact): string {
   return path.join(artifactDirectory(rootDir, artifact), artifact.executable.fileName);
 }

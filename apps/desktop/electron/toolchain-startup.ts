@@ -83,6 +83,15 @@ export async function preparePinnedToolchains(options: {
   quit(): void;
   logError(error: unknown): void;
   artifacts?: readonly ToolchainArtifact[];
+  /**
+   * Whether a human is present to answer a retry prompt.
+   *
+   * An unattended profile (`dev:test`) must fail rather than wait: a modal there
+   * is never answered, so the launcher would neither become ready nor exit, and
+   * the reason would live in a dialog instead of the log file its status
+   * manifest points at.
+   */
+  interactive?: boolean;
 }): Promise<string | null> {
   while (true) {
     try {
@@ -95,6 +104,10 @@ export async function preparePinnedToolchains(options: {
       return result.binDir;
     } catch (error) {
       options.logError(error);
+      if (options.interactive === false) {
+        options.quit();
+        return null;
+      }
       const message = error instanceof Error ? error.message : String(error);
       const { response } = await options.showMessageBox({
         type: "error",

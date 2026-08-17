@@ -32,6 +32,16 @@ export type RuntimeProfile = {
   gatewayPort: number;
   electronTitle: string;
   credentialSources: AgentPlatform[];
+  /**
+   * Agent platforms this profile provisions managed toolchains for.
+   *
+   * Only `agent-test` reads it; the other flavors keep their durable, user-made
+   * selection. Cursor and Grok are the reason it exists: they are ACP-only and
+   * never fall back to a PATH lookup, so a profile that provisions nothing can
+   * launch Claude, Codex and OpenCode from the host but cannot start those two
+   * at all.
+   */
+  agentPlatforms: AgentPlatform[];
 };
 
 export type RuntimeProcessName = "launcher" | "vite" | "electron" | "backend";
@@ -153,6 +163,7 @@ export function resolveRuntimeProfile(options: {
   gatewayPort?: number;
   roots?: RuntimeProfileRoots;
   credentialSources?: RuntimeProfile["credentialSources"];
+  agentPlatforms?: RuntimeProfile["agentPlatforms"];
 }): RuntimeProfile {
   const repositoryRoot = path.resolve(options.repositoryRoot);
   const roots = options.roots ?? defaultRuntimeProfileRoots();
@@ -184,6 +195,7 @@ export function resolveRuntimeProfile(options: {
     gatewayPort: options.gatewayPort ?? 0,
     electronTitle: `${PRODUCT_NAME} — DEV [${id}]`,
     credentialSources: [...new Set(options.credentialSources ?? [])],
+    agentPlatforms: [...new Set(options.agentPlatforms ?? [])],
   };
 }
 
@@ -224,6 +236,16 @@ export function parseRuntimeProfile(value: unknown): RuntimeProfile {
   if (!Array.isArray(candidate.credentialSources)
     || candidate.credentialSources.some((entry) => !isAgentPlatform(entry))) {
     throw new Error("Runtime profile credentialSources is invalid");
+  }
+  if (candidate.agentPlatforms === undefined) {
+    // A profile written before this field existed provisioned nothing, which is
+    // exactly what an empty selection means. Rejecting it instead would fail the
+    // parse, and `dev:stop`/`dev:reset` would fall back to a profile rebuilt
+    // from arguments rather than the one actually on disk.
+    candidate.agentPlatforms = [];
+  } else if (!Array.isArray(candidate.agentPlatforms)
+    || candidate.agentPlatforms.some((entry) => !isAgentPlatform(entry))) {
+    throw new Error("Runtime profile agentPlatforms is invalid");
   }
   const parsed = candidate as RuntimeProfile;
   assertProfileIsolatedFromProduction(parsed.profileRoot, defaultRuntimeProfileRoots().productionDataDir);

@@ -440,7 +440,9 @@ The detailed operational reference is
   to narrow a run to one provider, or `--no-agent-credentials` only when the
   scenario specifically requires a credential-free state. Credentials permit
   real external requests, so keep prompts and mutations scoped to the seeded
-  fixture and never place secrets in logs or artifacts.
+  fixture and never place secrets in logs or artifacts. Managed toolchains are
+  provisioned separately, for every platform by default, so Cursor and Grok —
+  which have no PATH fallback — are launchable; `--agent-platforms` narrows it.
 - Do not assume ports, profile paths, browser URLs, or process IDs. Discover them
   through `dev:status --json` on every run.
 - Never print, paste into chat, add to a URL, or save the gateway token. The
@@ -502,6 +504,20 @@ The setup does not copy projects, sessions, prompts, application settings, or
 any extra credential files, and it never replaces catalogue state already
 updated inside the profile. A credential-free run therefore still has
 last-known model metadata.
+
+`dev:test` also provisions a managed toolchain for every agent platform,
+seeding each one from the host installation when it has the same pinned version
+so the default normally costs a local copy rather than a download, and enabling
+that same selection in the profile so the platforms it provisions are the ones
+the app offers. Narrow it with `--agent-platforms cursor,grok` when a run does
+not need all five; the flag is rejected by `bun run dev`, which keeps the
+durable per-installation selection. Do not remove this to save startup time
+without checking what the run launches: Claude, Codex and OpenCode fall back to
+a PATH lookup, but Cursor and Grok resolve only through the managed toolchain,
+so a profile that provisions nothing fails their session creation with
+`enabled but not installed yet`. Anything the host cannot seed is downloaded at
+startup, which needs network access; an agent-test profile that cannot prepare
+its toolchains logs the reason and exits rather than waiting on a retry dialog.
 
 If startup reports `failed`, inspect the manifest and files below its `logDir`.
 Do not search arbitrary production application-data directories for diagnostics.

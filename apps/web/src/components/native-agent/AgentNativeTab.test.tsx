@@ -49,7 +49,7 @@ const defaultAdoptNativeAgentSession = async (input: {
   agent: input.agent,
 });
 const adoptNativeAgentSessionMock = mock(defaultAdoptNativeAgentSession);
-const ensureNativeAgentSessionMock = mock(async (input: {
+const defaultEnsureNativeAgentSession = async (input: {
   agent: string;
   logicalSessionKey: string;
   environmentId: string;
@@ -58,7 +58,8 @@ const ensureNativeAgentSessionMock = mock(async (input: {
   logicalSessionKey: input.logicalSessionKey,
   environmentId: input.environmentId,
   agent: input.agent,
-}));
+});
+const ensureNativeAgentSessionMock = mock(defaultEnsureNativeAgentSession);
 const listNativeAgentResumableSessionsMock = mock(async () => []);
 const getAgentHandoffMock = mock(
   async (_handoffId: string): Promise<unknown> => null,
@@ -216,6 +217,9 @@ afterEach(() => {
   // provider that refuses.
   adoptNativeAgentSessionMock.mockImplementation(defaultAdoptNativeAgentSession);
   ensureNativeAgentSessionMock.mockClear();
+  // Restored for the same reason as the adoption above: a test that parks or
+  // fails session creation must not leave later tests unable to connect.
+  ensureNativeAgentSessionMock.mockImplementation(defaultEnsureNativeAgentSession);
   listNativeAgentResumableSessionsMock.mockClear();
   getAgentHandoffMock.mockClear();
   dispatchNativeAgentIntentMock.mockClear();
@@ -260,6 +264,21 @@ function identity(platform: NativeAgentTabData["platform"]): NativeAgentTabData 
     environmentId: "env-1",
     containerId: "container-1",
     sessionId: `${platform}-session`,
+    isLocal: false,
+  };
+}
+
+/**
+ * A tab the user has just created.
+ *
+ * The absence of `sessionId` is the whole point: there is no durable provider
+ * session to adopt, so the tab has to create one before anything can read it.
+ */
+function freshTab(platform: NativeAgentTabData["platform"]): NativeAgentTabData {
+  return {
+    platform,
+    environmentId: "env-1",
+    containerId: "container-1",
     isLocal: false,
   };
 }
@@ -322,7 +341,10 @@ function NativeSessionIdentityHarness({
     enabled,
   });
   return (
-    <output data-testid="has-completed-read">{String(session.hasCompletedRead)}</output>
+    <>
+      <output data-testid="has-completed-read">{String(session.hasCompletedRead)}</output>
+      <output data-testid="runtime-error">{session.runtimeError ?? ""}</output>
+    </>
   );
 }
 
@@ -1400,6 +1422,276 @@ describe("AgentNativeTab", () => {
     await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(screen.queryByText("Connecting to Cursor Agent...") === null).toBe(true);
+  });
+
+  test("stays connecting while an invalidation races a new tab's session creation", async () => {
+    // What the backend really answers while `ensure` is still spawning the
+    // agent: the logical key has no provider session to resolve yet.
+    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    let settleEnsure: (() => void) | undefined;
+    ensureNativeAgentSessionMock.mockImplementation((input) => new Promise((resolve) => {
+      settleEnsure = () => resolve({
+        providerSessionId: "cursor-session",
+        logicalSessionKey: input.logicalSessionKey,
+        environmentId: input.environmentId,
+        agent: input.agent,
+      });
+    }));
+
+    render(<AgentNativeTab tabId="tab-new-cursor" data={freshTab("cursor")} isActive />);
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
+
+    // Invalidations are announced per environment, so every projection commit
+    // by a sibling agent tab reaches this one too. With a second Cursor tab
+    // open that makes this the common path, not a rare race.
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
+      });
+      // The dispatcher coalesces for 50ms; wait past that so the invalidation
+      // genuinely reaches the hook while creation is still in flight.
+      await new Promise<void>((resolve) => { setTimeout(resolve, 120); });
+    });
+
+    // Cursor is still being spawned. "No session" is not something the backend
+    // can assert yet, and a failure the user cannot act on — on a tab that goes
+    // on to connect — is worse than showing the wait it is already in.
+    expect(screen.getByText("Connecting to Cursor Agent...")).toBeTruthy();
+    expect(screen.queryByText("Connection Failed") === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
+
+    getNativeAgentProjectionMock.mockImplementation(defaultProjection);
+    await act(async () => {
+      settleEnsure!();
+      await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
+    });
+    await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
+  });
+
+  test("keeps a creation failure that raced an invalidation instead of a generic one", async () => {
+    // The pairing that loses the message: a sibling tab's invalidation is
+    // coalesced while creation is in flight, then creation fails. The trailing
+    // reconcile — and, a poll later, the refresh interval — read a session that
+    // does not exist, and installing that empty read used to clear the error.
+    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    let failEnsure: (() => void) | undefined;
+    ensureNativeAgentSessionMock.mockImplementation(() => new Promise((_resolve, reject) => {
+      failEnsure = () => reject(new Error("cursor-agent is enabled but not installed yet"));
+    }));
+
+    render(<AgentNativeTab tabId="tab-new-cursor-fail" data={freshTab("cursor")} isActive />);
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
+
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
+      });
+      await new Promise<void>((resolve) => { setTimeout(resolve, 120); });
+    });
+
+    await act(async () => {
+      failEnsure!();
+      await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
+    });
+
+    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
+    // The actionable reason, not "Unable to connect".
+    expect(screen.getByText("cursor-agent is enabled but not installed yet")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+
+    // And it survives the poll loop, which reads the same absent session again.
+    await act(async () => {
+      await new Promise<void>((resolve) => { setTimeout(resolve, 1_700); });
+    });
+    expect(screen.getByText("cursor-agent is enabled but not installed yet")).toBeTruthy();
+  }, 10_000);
+
+  test("releases a creation failure once a read finds the session", async () => {
+    ensureNativeAgentSessionMock.mockImplementation(async () => {
+      throw new Error("bridge refused the session");
+    });
+    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+
+    render(<NativeSessionIdentityHarness platform="cursor" />);
+    await waitFor(() => expect(
+      screen.getByTestId("runtime-error").textContent,
+    ).toBe("bridge refused the session"));
+
+    // Suppression is scoped to "the session still is not there". A read that
+    // does find one supersedes the failure — otherwise the message outlives what
+    // it described, and the next genuine absence reports a stale cause.
+    getNativeAgentProjectionMock.mockImplementation(defaultProjection);
+    await waitFor(
+      () => expect(screen.getByTestId("runtime-error").textContent).toBe(""),
+      { timeout: 4_000 },
+    );
+
+    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    await waitFor(
+      () => expect(screen.getByTestId("has-completed-read").textContent).toBe("true"),
+      { timeout: 4_000 },
+    );
+    expect(screen.getByTestId("runtime-error").textContent).toBe("");
+  }, 10_000);
+
+  test("runs the reconcile an invalidation asked for once creation completes", async () => {
+    let settleEnsure: (() => void) | undefined;
+    ensureNativeAgentSessionMock.mockImplementation((input) => new Promise((resolve) => {
+      settleEnsure = () => resolve({
+        providerSessionId: "cursor-session",
+        logicalSessionKey: input.logicalSessionKey,
+        environmentId: input.environmentId,
+        agent: input.agent,
+      });
+    }));
+
+    render(<AgentNativeTab tabId="tab-new-cursor-reconcile" data={freshTab("cursor")} isActive />);
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
+    getNativeAgentProjectionMock.mockClear();
+
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
+      });
+      await new Promise<void>((resolve) => { setTimeout(resolve, 120); });
+    });
+    // Deferred, not dropped: reading now could only answer "not created yet".
+    expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      settleEnsure!();
+      await new Promise<void>((resolve) => { setTimeout(resolve, 30); });
+    });
+
+    // Two reads: the one `connect` owns, and the deferred reconcile. Counting
+    // matters — the connect-owned read alone would satisfy "was called" and hide
+    // a dropped invalidation, which is the state the announcement described.
+    expect(getNativeAgentProjectionMock).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
+  });
+
+  test("keeps the establishment window open while a second connect is still in flight", async () => {
+    // An identity change mid-establishment runs a second connect before the
+    // first has returned. Counting is what makes the first completion release
+    // only its own claim; a boolean — or anything that resets to zero — would
+    // reopen the gate while a session is still being created, and the empty read
+    // that follows is exactly the false Connection Failed this all exists to
+    // prevent.
+    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    const settles: Array<() => void> = [];
+    ensureNativeAgentSessionMock.mockImplementation((input) => new Promise((resolve) => {
+      settles.push(() => resolve({
+        providerSessionId: `${input.agent}-session`,
+        logicalSessionKey: input.logicalSessionKey,
+        environmentId: input.environmentId,
+        agent: input.agent,
+      }));
+    }));
+
+    const { rerender } = render(
+      <AgentNativeTab tabId="tab-overlap" data={freshTab("cursor")} isActive />,
+    );
+    await waitFor(() => expect(settles.length).toBe(1));
+    rerender(<AgentNativeTab tabId="tab-overlap" data={freshTab("codex")} isActive />);
+    await waitFor(() => expect(settles.length).toBe(2));
+
+    await act(async () => {
+      settles[0]!();
+      await new Promise<void>((resolve) => { setTimeout(resolve, 30); });
+    });
+
+    getNativeAgentProjectionMock.mockClear();
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 2,
+      });
+      await new Promise<void>((resolve) => { setTimeout(resolve, 120); });
+    });
+
+    // The second connect has not returned, so there is still nothing to resolve.
+    expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
+    expect(screen.getByText("Connecting to Codex...")).toBeTruthy();
+    expect(screen.queryByText("Connection Failed") === null).toBe(true);
+
+    getNativeAgentProjectionMock.mockImplementation(defaultProjection);
+    await act(async () => {
+      settles[1]!();
+      await new Promise<void>((resolve) => { setTimeout(resolve, 30); });
+    });
+    // And the window does close — a stuck counter would mute this tab's
+    // background refreshes for the rest of its life.
+    await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
+    getNativeAgentProjectionMock.mockClear();
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 3,
+      });
+      await new Promise<void>((resolve) => { setTimeout(resolve, 120); });
+    });
+    expect(getNativeAgentProjectionMock).toHaveBeenCalled();
+  });
+
+  test("rehydrates from an authoritative read after establishing while inactive", async () => {
+    let settleEnsure: (() => void) | undefined;
+    ensureNativeAgentSessionMock.mockImplementation((input) => new Promise((resolve) => {
+      settleEnsure = () => resolve({
+        providerSessionId: "cursor-session",
+        logicalSessionKey: input.logicalSessionKey,
+        environmentId: input.environmentId,
+        agent: input.agent,
+      });
+    }));
+
+    const { rerender } = render(
+      <AgentNativeTab tabId="tab-inactive-establish" data={freshTab("cursor")} isActive />,
+    );
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
+
+    // Switching away drops the background-refresh permission that a coalesced
+    // reconcile needs, so the invalidation raised during creation is discarded.
+    rerender(
+      <AgentNativeTab tabId="tab-inactive-establish" data={freshTab("cursor")} isActive={false} />,
+    );
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
+      });
+      settleEnsure!();
+      await new Promise<void>((resolve) => { setTimeout(resolve, 120); });
+    });
+
+    // Returning has to recover from a snapshot rather than from the event that
+    // was dropped while the tab was not the visible one.
+    rerender(
+      <AgentNativeTab tabId="tab-inactive-establish" data={freshTab("cursor")} isActive />,
+    );
+    await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
+  });
+
+  test("reports a created session that still reads empty as a failed connection", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+
+    render(
+      <AgentNativeTab tabId="tab-new-cursor-empty" data={freshTab("cursor")} isActive />,
+    );
+
+    // Holding the empty read back is scoped to session creation alone. Once
+    // `ensure` has returned there is a session to resolve, so an empty read is
+    // the backend answering — and the user needs the retry control.
+    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
   test("reports a failed connect attempt as a failed connection", async () => {

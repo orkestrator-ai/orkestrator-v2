@@ -27,6 +27,7 @@ import {
   seedInstalledModelCatalogCaches,
 } from "./profile-io.js";
 import { seedFixture } from "./fixture.js";
+import { formatAgentTestLogin, mintAgentTestLoginUrl, type AgentTestLogin } from "./login.js";
 
 const packageRoot = path.resolve(import.meta.dir, "../..");
 const repositoryRoot = path.resolve(packageRoot, "../..");
@@ -526,6 +527,9 @@ export function printHumanStatus(status: RuntimeStatusManifest, live: Record<str
   console.log(`Electron: ${status.electronTitle}`);
   console.log(`Renderer: ${status.rendererUrl}`);
   if (status.browserUrl) console.log(`Browser: ${status.browserUrl}`);
+  if (status.flavor === "agent-test") {
+    console.log(`Login: bun run dev:login -- --profile ${status.profile}`);
+  }
   if (status.testProject) console.log(`Test project: ${status.testProject}`);
   console.log(`Status: ${status.statusPath}`);
   console.log(`Logs: ${status.logDir}`);
@@ -541,9 +545,35 @@ export async function showStatus(args: DevArguments): Promise<number> {
     return 1;
   }
   const live = liveness(status);
-  if (args.json) console.log(JSON.stringify({ ...status, live }, null, 2));
+  // Derived, never persisted: the manifest names the auth file, and this names
+  // the command that turns it into a browser login without anyone reading,
+  // echoing, or retyping the token.
+  const loginCommand = status.flavor === "agent-test"
+    ? `bun run dev:login -- --profile ${status.profile}`
+    : undefined;
+  if (args.json) console.log(JSON.stringify({ ...status, live, loginCommand }, null, 2));
   else printHumanStatus(status, live);
   return status.status === "ready" && live.launcher ? 0 : 1;
+}
+
+export type LoginProfileDependencies = {
+  resolveProfile?: (args: DevArguments, flavor: "agent-test") => Promise<RuntimeProfile>;
+  readStatus?: (statusPath: string) => Promise<RuntimeStatusManifest | null>;
+  liveness?: (status: RuntimeStatusManifest | null) => { launcher: boolean };
+  mint?: (options: { status: RuntimeStatusManifest }) => Promise<AgentTestLogin>;
+  log?: (message: string) => void;
+};
+
+export async function loginProfile(args: DevArguments, deps: LoginProfileDependencies = {}): Promise<number> {
+  const profile = await (deps.resolveProfile ?? resolveStoredProfile)(args, "agent-test");
+  const status = await (deps.readStatus ?? readStatus)(statusManifestPath(profile));
+  if (!status) throw new Error(`Profile ${profile.id} has no runtime status. Start it with bun run dev:test.`);
+  if (!(deps.liveness ?? liveness)(status).launcher) {
+    throw new Error(`Profile ${profile.id} is not running. Start it with bun run dev:test.`);
+  }
+  const login = await (deps.mint ?? mintAgentTestLoginUrl)({ status });
+  (deps.log ?? console.log)(args.json ? JSON.stringify(login, null, 2) : formatAgentTestLogin(login));
+  return 0;
 }
 
 export async function stopProfile(args: DevArguments): Promise<number> {

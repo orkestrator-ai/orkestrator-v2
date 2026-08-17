@@ -80,6 +80,7 @@ type SocketState = {
   ws: WebSocket;
   authenticated: boolean;
   authTimer: ReturnType<typeof setTimeout> | null;
+  credentialExpiryTimer: ReturnType<typeof setTimeout> | null;
   closeTimer: ReturnType<typeof setTimeout> | null;
   channels: Map<number, Channel>;
   sessions: Map<string, Channel>;
@@ -94,6 +95,7 @@ type SocketState = {
 export type TerminalWebSocketServerOptions = {
   backend: BackendInvoker;
   tokenMatches(request: IncomingMessage, suppliedToken?: string): boolean;
+  credentialExpiresAt?(request: IncomingMessage, suppliedToken?: string): number | null;
   originAllowed(request: IncomingMessage): boolean;
   logger: Pick<Console, "debug" | "warn" | "error">;
   authTimeoutMs?: number;
@@ -266,6 +268,7 @@ export class TerminalWebSocketGateway {
       ws,
       authenticated,
       authTimer: null,
+      credentialExpiryTimer: null,
       closeTimer: null,
       channels: new Map(),
       sessions: new Map(),
@@ -283,6 +286,7 @@ export class TerminalWebSocketGateway {
     ws.once("close", () => this.dispose(state));
     if (authenticated) {
       this.ready(state);
+      this.scheduleCredentialExpiry(state, request);
     } else {
       state.authTimer = setTimeout(() => {
         this.closeSocket(state, TERMINAL_WEBSOCKET_CLOSE.authenticationRequired, "Authentication required");
@@ -333,6 +337,7 @@ export class TerminalWebSocketGateway {
       if (state.authTimer) clearTimeout(state.authTimer);
       state.authTimer = null;
       this.ready(state);
+      this.scheduleCredentialExpiry(state, request, frame.token);
       return;
     }
     if (frame.type === "authenticate") {
@@ -854,14 +859,40 @@ export class TerminalWebSocketGateway {
 
   private dispose(state: SocketState): void {
     if (state.authTimer) clearTimeout(state.authTimer);
+    if (state.credentialExpiryTimer) clearTimeout(state.credentialExpiryTimer);
     if (state.closeTimer) clearTimeout(state.closeTimer);
     state.authTimer = null;
+    state.credentialExpiryTimer = null;
     state.closeTimer = null;
     state.channels.clear();
     state.sessions.clear();
     state.controlQueue = [];
     state.queuedBytes = 0;
     this.sockets.delete(state);
+  }
+
+  private scheduleCredentialExpiry(
+    state: SocketState,
+    request: IncomingMessage,
+    suppliedToken?: string,
+  ): void {
+    if (state.credentialExpiryTimer) clearTimeout(state.credentialExpiryTimer);
+    state.credentialExpiryTimer = null;
+    const expiresAt = this.options.credentialExpiresAt?.(request, suppliedToken) ?? null;
+    if (expiresAt === null) return;
+    state.credentialExpiryTimer = setTimeout(() => {
+      state.credentialExpiryTimer = null;
+      if (!this.options.tokenMatches(request, suppliedToken)) {
+        this.closeSocket(
+          state,
+          TERMINAL_WEBSOCKET_CLOSE.authenticationRequired,
+          "Authentication expired",
+        );
+        return;
+      }
+      this.scheduleCredentialExpiry(state, request, suppliedToken);
+    }, Math.max(1, expiresAt - Date.now()));
+    state.credentialExpiryTimer.unref?.();
   }
 
   private rejectUpgrade(

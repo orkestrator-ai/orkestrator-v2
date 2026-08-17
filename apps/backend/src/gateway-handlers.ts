@@ -1,7 +1,7 @@
 import { GatewayAuth } from "./gateway-auth.js";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
 import { parseGatewayCursor } from "./gateway-event-replay.js";
-import { API_PREFIX, MAX_INVOKE_BODY_BYTES, DROPPABLE_EVENT_PREFIX, SSE_CLIENT_HARD_BUFFER_BYTES, MAX_CLIENT_METRICS_BODY_BYTES, METRIC_UNKNOWN_COMMAND_KEY, METRIC_KEEPALIVE_KEY, InvalidRequestBodyError, RequestBodyTooLargeError, sanitizeClientBootReport, negotiateEncoding, appendHeadersVary, responseCompressionContexts, jsonResponse, serializedJsonResponse, readJsonBody, IdentityEventClientWriter, GzipEventClientWriter, parseEventSubscriptionFilter } from "./gateway-internals.js";
+import { AUTH_COOKIE, API_PREFIX, MAX_INVOKE_BODY_BYTES, DROPPABLE_EVENT_PREFIX, SSE_CLIENT_HARD_BUFFER_BYTES, MAX_CLIENT_METRICS_BODY_BYTES, METRIC_UNKNOWN_COMMAND_KEY, METRIC_KEEPALIVE_KEY, InvalidRequestBodyError, RequestBodyTooLargeError, sanitizeClientBootReport, negotiateEncoding, appendHeadersVary, responseCompressionContexts, jsonResponse, serializedJsonResponse, readJsonBody, IdentityEventClientWriter, GzipEventClientWriter, parseEventSubscriptionFilter, getBearerToken, getCookie } from "./gateway-internals.js";
 import type { GatewayRequestMetrics, DrainAwareEventClientWriter, GatewayEventClient } from "./gateway-internals.js";
 
 export abstract class GatewayHandlers extends GatewayAuth {
@@ -209,15 +209,33 @@ export abstract class GatewayHandlers extends GatewayAuth {
     this.keepalive.unref?.();
 
     let closed = false;
+    let credentialExpiryTimer: ReturnType<typeof setTimeout> | null = null;
+    const credential = getBearerToken(request.headers) ?? getCookie(request.headers, AUTH_COOKIE);
     const close = () => {
       if (closed) return;
       closed = true;
+      if (credentialExpiryTimer) clearTimeout(credentialExpiryTimer);
+      credentialExpiryTimer = null;
       this.clients.delete(client);
       client.destroy();
       this.metrics.recordStreamClosed();
     };
+    const scheduleCredentialExpiry = () => {
+      if (!this.gatewayCredentialMatches(credential)) {
+        close();
+        return;
+      }
+      const expiresAt = this.gatewayCredentialExpiresAt(credential);
+      if (expiresAt === null) return;
+      credentialExpiryTimer = setTimeout(
+        scheduleCredentialExpiry,
+        Math.max(1, expiresAt - Date.now()),
+      );
+      credentialExpiryTimer.unref?.();
+    };
     request.once("close", close);
     response.once("close", close);
+    scheduleCredentialExpiry();
   }
 
   protected handleMetrics(request: IncomingMessage, response: ServerResponse): void {

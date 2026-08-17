@@ -59,6 +59,7 @@ gateway = new OrkestratorGateway({
   allowedOrigins: options.allowedOrigins,
   strictPort: options.strictGatewayPort,
   agentTestMode: options.runtimeFlavor === "agent-test",
+  agentTestProfile: options.runtimeProfileId,
   webClientControl: managedWebClient ?? undefined,
 });
 

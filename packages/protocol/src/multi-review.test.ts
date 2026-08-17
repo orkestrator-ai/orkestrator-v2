@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   MULTI_REVIEW_MAX_REVIEWERS,
+  MULTI_REVIEW_MAX_SNAPSHOT_PATHS,
   MULTI_REVIEW_WORKFLOW_VERSION,
   isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
@@ -142,6 +143,33 @@ describe("multi review protocol", () => {
       reviewWorktreeSnapshot: { ...workflow.reviewWorktreeSnapshot, status: "clean" },
     })).toBe(false);
     expect(isMultiReviewWorkflow({ ...workflow, reviewSnapshotStale: true })).toBe(true);
+    expect(isMultiReviewWorkflow({ ...workflow, reviewSnapshotStale: "yes" })).toBe(false);
+
+    // `Date.parse` coerces its argument, so a numeric capturedAt would sail
+    // through a check that only asserted the parse succeeded: 0 stringifies to
+    // "0", which V8 reads as a valid date.
+    for (const capturedAt of [0, 1, null, {}, ["2020-01-01"], "not a date"]) {
+      expect(isMultiReviewWorkflow({
+        ...workflow,
+        reviewWorktreeSnapshot: { ...workflow.reviewWorktreeSnapshot, capturedAt },
+      })).toBe(false);
+    }
+
+    // A clean snapshot pins the empty path set; a dirty one must name at least
+    // one path, and neither may exceed the persisted bound.
+    expect(isMultiReviewWorkflow({
+      ...workflow,
+      reviewWorktreeSnapshot: {
+        ...workflow.reviewWorktreeSnapshot, status: "clean", paths: [],
+      },
+    })).toBe(true);
+    expect(isMultiReviewWorkflow({
+      ...workflow,
+      reviewWorktreeSnapshot: {
+        ...workflow.reviewWorktreeSnapshot,
+        paths: Array.from({ length: MULTI_REVIEW_MAX_SNAPSHOT_PATHS + 1 }, () => "src/a.ts"),
+      },
+    })).toBe(false);
   });
 
   test("requires a cancellation timestamp exactly while cancellation is active", () => {

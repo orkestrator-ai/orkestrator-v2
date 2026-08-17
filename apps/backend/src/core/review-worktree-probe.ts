@@ -1,4 +1,5 @@
 import type { ReviewWorktreeSnapshot } from "./build-pipeline-prompts.js";
+import { reviewWorktreeProbeReasonCode } from "./review-worktree-fingerprint.js";
 
 /**
  * Observes the worktree a review is about to run in.
@@ -15,14 +16,48 @@ import type { ReviewWorktreeSnapshot } from "./build-pipeline-prompts.js";
 export type ReviewWorktreeProbeInvoker =
   <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
+export interface ReviewWorktreeProbeOptions {
+  /**
+   * Ask for the content fingerprint. Off by default: hashing the whole diff and
+   * every untracked file is the expensive part of the probe, and a caller that
+   * only compares HEAD and the uncommitted path set must not pay for it.
+   */
+  fingerprint?: boolean;
+}
+
+/**
+ * Turns a failed probe into a reason a person can act on without leaking
+ * repository text into a prompt.
+ *
+ * The environment-side script reports a closed vocabulary of codes; anything
+ * else is reduced to the error's class name with every non-identifier character
+ * stripped, because the message can quote repository paths.
+ */
+function unknownReason(error: unknown): string {
+  const code = error instanceof Error
+    ? reviewWorktreeProbeReasonCode(error.message)
+    : null;
+  if (code) return `probe failed (${code})`;
+  const details = (error ?? {}) as { executableMissing?: unknown; timedOut?: unknown };
+  // A missing interpreter is the one failure a retry can never clear, so it is
+  // worth naming separately from an ordinary command error.
+  if (details.executableMissing === true) return "probe failed (interpreter-missing)";
+  if (details.timedOut === true) return "probe failed (timeout)";
+  const name = error instanceof Error
+    ? error.name.replace(/[^A-Za-z0-9_]/g, "").slice(0, 40)
+    : "";
+  return name ? `probe failed (${name})` : "probe failed";
+}
+
 export async function probeReviewWorktreeOnce(
   invoke: ReviewWorktreeProbeInvoker,
   environmentId: string,
+  options: ReviewWorktreeProbeOptions = {},
 ): Promise<ReviewWorktreeSnapshot> {
   try {
     const result = await invoke<{ head?: unknown; paths?: unknown; fingerprint?: unknown }>(
       "get_environment_uncommitted_paths",
-      { environmentId },
+      { environmentId, ...(options.fingerprint ? { fingerprint: true } : {}) },
     );
     const paths = result?.paths;
     const head = result?.head;
@@ -37,16 +72,16 @@ export async function probeReviewWorktreeOnce(
     ) {
       return { status: "unknown", reason: "the worktree probe returned an unusable result" };
     }
+    // Silently downgrading to a path-only answer would let a caller that needs
+    // content identity believe it had one.
+    if (options.fingerprint && fingerprint === undefined) {
+      return { status: "unknown", reason: "the worktree probe returned no content fingerprint" };
+    }
     return paths.length === 0
       ? { status: "clean", head, ...(fingerprint ? { fingerprint } : {}) }
       : { status: "dirty", paths: paths as string[], head, ...(fingerprint ? { fingerprint } : {}) };
   } catch (error) {
-    // The message can quote repository paths, so only the error class name is
-    // kept, and only after stripping anything that is not a bare identifier.
-    const name = error instanceof Error
-      ? error.name.replace(/[^A-Za-z0-9_]/g, "").slice(0, 40)
-      : "";
-    return { status: "unknown", reason: name ? `probe failed (${name})` : "probe failed" };
+    return { status: "unknown", reason: unknownReason(error) };
   }
 }
 
@@ -59,14 +94,30 @@ export async function probeReviewWorktreeOnce(
  */
 export const REVIEW_WORKTREE_PROBE_ATTEMPTS = 3;
 
+/**
+ * Failures a retry cannot clear. Re-running a missing interpreter or a worktree
+ * that exceeds the probe's byte caps just spends the same time again.
+ */
+const UNRETRYABLE_REASONS = [
+  "interpreter-missing",
+  "git-missing",
+  "too-large",
+];
+
+function retryable(snapshot: ReviewWorktreeSnapshot): boolean {
+  if (snapshot.status !== "unknown") return false;
+  return !UNRETRYABLE_REASONS.some((reason) => snapshot.reason.includes(reason));
+}
+
 export async function probeReviewWorktree(
   invoke: ReviewWorktreeProbeInvoker,
   environmentId: string,
   attempts: number = REVIEW_WORKTREE_PROBE_ATTEMPTS,
+  options: ReviewWorktreeProbeOptions = {},
 ): Promise<ReviewWorktreeSnapshot> {
-  let last = await probeReviewWorktreeOnce(invoke, environmentId);
-  for (let attempt = 1; attempt < attempts && last.status === "unknown"; attempt += 1) {
-    last = await probeReviewWorktreeOnce(invoke, environmentId);
+  let last = await probeReviewWorktreeOnce(invoke, environmentId, options);
+  for (let attempt = 1; attempt < attempts && retryable(last); attempt += 1) {
+    last = await probeReviewWorktreeOnce(invoke, environmentId, options);
   }
   return last;
 }

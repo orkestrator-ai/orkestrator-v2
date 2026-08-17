@@ -1,7 +1,7 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { path, randomUUID, pathExists, readFileBase64, readTextFile, spawnCommand, writeFileBase64, assertBase64PayloadWithinLimit, base64DecodedByteLength, MAX_BINARY_FILE_BYTES, removeConfinedDirectory, validateRelativeFilePath, workspaceFilePath, INITIAL_PROMPT_STAGING_DIRECTORY, MAX_TOTAL_ATTACHMENT_BYTES } from "./commands-dependencies.js";
 import type { EnvironmentDiffStatsSnapshot } from "./commands-dependencies.js";
-import { terminalProcesses, terminalSessionConfigs, terminalOutputBuffers, terminalOutputRevisions, terminalOutputGenerations, terminalOutputDeltas, terminalOutputTruncated, CONTAINER_INTERACTIVE_SHELL_COMMAND, CONTAINER_SAFE_BASE64_READER, DIFF_CACHE_MAX_AGE_MS, diffStatsService, syncDiffStatsTracking, asString, asRecord, assertOnlyKeys, asOptionalString, asBoolean, asNumber, asTerminalDimension, asNonBlankString, quoteShell, validateGitRefName, envWithManagedBinaries, createEnvironmentCommandRunner, parseGitPorcelainPaths, findEnvironmentByContainerId, conditionalSnapshot, readTerminalOutputBuffer, logSetupTerminal, resolveLocalShellPath, rememberTerminalSession, isTerminalBootstrapped, stableTerminalKey, rememberStableTerminalSession, existingStableTerminalSession, containerTerminalConfigMatches, localTerminalConfigMatches, recordTerminalInputActivity, trackedTerminalActivityHooks, explicitlyCloseTerminalSession, terminalStableKeyEnvironmentId, assertEnvironmentNotDeleting, assertEnvironmentDeletionNotRequested, spawnTerminalProcess, getWorktreeBaseDir, isSetupTerminalSessionId, isTerminalSessionAttachable, dockerExec, buildFileTree, buildContainerGitStatusScript, isMissingTargetRefResponse, parseContainerGitStatusResponse, getLocalGitStatus, getContainerGitStatusDetailed, validateWorkspaceMutationPath, pruneLocalInitialPromptBatches, containerPruneInitialPromptBatchesCommand, CONTAINER_PINNED_ATTACHMENT_WRITE, containerRemoveInitialPromptBatchCommand, writeConfinedLocalArtifact, revertLocalFile, deleteLocalFile, requireLocalMutationEnvironment, requireContainerMutationEnvironment, containerRevertFileCommand, containerDeleteFileCommand, readLocalFileAtBranch } from "./commands-helpers.js";
+import { terminalProcesses, terminalSessionConfigs, terminalOutputBuffers, terminalOutputRevisions, terminalOutputGenerations, terminalOutputDeltas, terminalOutputTruncated, CONTAINER_INTERACTIVE_SHELL_COMMAND, CONTAINER_SAFE_BASE64_READER, DIFF_CACHE_MAX_AGE_MS, diffStatsService, syncDiffStatsTracking, asString, asRecord, assertOnlyKeys, asOptionalString, asBoolean, asRequiredBoolean, asNumber, asTerminalDimension, asNonBlankString, quoteShell, validateGitRefName, envWithManagedBinaries, resolveBunBinary, createEnvironmentCommandRunner, parseGitPorcelainPaths, findEnvironmentByContainerId, conditionalSnapshot, readTerminalOutputBuffer, logSetupTerminal, resolveLocalShellPath, rememberTerminalSession, isTerminalBootstrapped, stableTerminalKey, rememberStableTerminalSession, existingStableTerminalSession, containerTerminalConfigMatches, localTerminalConfigMatches, recordTerminalInputActivity, trackedTerminalActivityHooks, explicitlyCloseTerminalSession, terminalStableKeyEnvironmentId, assertEnvironmentNotDeleting, assertEnvironmentDeletionNotRequested, spawnTerminalProcess, getWorktreeBaseDir, isSetupTerminalSessionId, isTerminalSessionAttachable, dockerExec, buildFileTree, buildContainerGitStatusScript, isMissingTargetRefResponse, parseContainerGitStatusResponse, getLocalGitStatus, getContainerGitStatusDetailed, validateWorkspaceMutationPath, pruneLocalInitialPromptBatches, containerPruneInitialPromptBatchesCommand, CONTAINER_PINNED_ATTACHMENT_WRITE, containerRemoveInitialPromptBatchCommand, writeConfinedLocalArtifact, revertLocalFile, deleteLocalFile, requireLocalMutationEnvironment, requireContainerMutationEnvironment, containerRevertFileCommand, containerDeleteFileCommand, readLocalFileAtBranch } from "./commands-helpers.js";
 import type { GitFileChange } from "./commands-helpers.js";
 import {
   parseReviewWorktreeFingerprint,
@@ -453,30 +453,51 @@ export function registerTerminalCommands(
    * need the fact itself rather than a diff to render.
    *
    * The build pipeline reads this before and after writable validation stages.
-   * Returning HEAD, the porcelain paths, and a content fingerprint lets review
-   * workflows detect edits to paths that were already dirty as well as ordinary
-   * additions, removals, and agent-created commits.
+   * Returning HEAD with the porcelain paths lets it reject both ordinary edits
+   * and an agent-created commit before accepting a review or verification
+   * result.
+   *
+   * `fingerprint: true` additionally hashes the whole `git diff HEAD` and every
+   * untracked file, which detects edits *inside* paths that were already dirty.
+   * It is opt-in because it is expensive and because the build pipeline's guard
+   * compares path sets rather than bytes: only a caller that must pin reviewers
+   * to identical source needs it.
    *
    * Scope is what Git reports and no more: tracked paths, plus untracked paths
    * Git does not ignore. Ignored files, anything under `.git/`, and paths
    * outside the worktree are invisible here, so no caller may describe this as
    * proof that the workspace was untouched.
    */
-  register("get_environment_uncommitted_paths", async ({ environmentId }, context) => {
+  register("get_environment_uncommitted_paths", async (args, context) => {
+    assertOnlyKeys(
+      asRecord(args, "args"),
+      ["environmentId", "fingerprint"],
+      "get_environment_uncommitted_paths",
+    );
+    const { environmentId, fingerprint } = args;
     const environment = await context.storage.getEnvironment(
       asString(environmentId, "environmentId"),
     );
     if (!environment) throw new Error("Environment not found");
+    const wantFingerprint = fingerprint === undefined
+      ? false
+      : asRequiredBoolean(fingerprint, "fingerprint");
     const runner = createEnvironmentCommandRunner(environment);
+    // The container image ships Node; a local worktree runs on the user's own
+    // machine, where the backend's inherited PATH is whatever the OS handed
+    // Electron and need not contain any Node at all. Use the same managed Bun
+    // the rest of the local command surface relies on.
+    const local = environment.environmentType === "local";
     const captured = parseReviewWorktreeFingerprint(await runner(
-      "node",
-      ["-e", REVIEW_WORKTREE_FINGERPRINT_SCRIPT],
-      120_000,
+      local ? resolveBunBinary(context) : "node",
+      ["-e", REVIEW_WORKTREE_FINGERPRINT_SCRIPT, ...(wantFingerprint ? ["fingerprint"] : [])],
+      wantFingerprint ? 120_000 : 30_000,
+      local ? envWithManagedBinaries(context) : undefined,
     ));
     return {
       head: captured.head,
       paths: parseGitPorcelainPaths(captured.status),
-      fingerprint: captured.fingerprint,
+      ...(captured.fingerprint === undefined ? {} : { fingerprint: captured.fingerprint }),
     };
   });
   register("get_file_tree", async ({ containerId, knownDigest }) => {

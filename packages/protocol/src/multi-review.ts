@@ -214,7 +214,10 @@ function isMultiReviewWorktreeSnapshot(value: unknown): value is MultiReviewWork
     && (value.status === "clean" ? value.paths.length === 0 : value.paths.length > 0)
     && typeof value.fingerprint === "string"
     && /^[0-9a-f]{64}$/i.test(value.fingerprint)
-    && Number.isFinite(Date.parse(value.capturedAt as string));
+    // `Date.parse` coerces, so the string check cannot be left to the cast:
+    // a numeric 0 stringifies to "0" and parses as a valid date.
+    && typeof value.capturedAt === "string"
+    && Number.isFinite(Date.parse(value.capturedAt));
 }
 
 function optionalPollCount(value: unknown): boolean {

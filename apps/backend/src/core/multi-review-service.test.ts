@@ -11,6 +11,7 @@ import type {
   StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
 import {
+  MULTI_REVIEW_MAX_SNAPSHOT_PATHS,
   MULTI_REVIEW_WORKFLOW_VERSION,
   type MultiReviewModelSelection,
   type MultiReviewWorkflow,
@@ -494,7 +495,7 @@ test("MultiReviewService reports a clean worktree and dispatches without it when
 test("MultiReviewService stops when the snapshot changes between reviewers and retries all reviewers", async () => {
   const provider = new Provider();
   const replacementFingerprint = "b".repeat(64);
-  let probes = 0;
+  const probes: Array<Record<string, unknown> | undefined> = [];
   await withService("env-reviewer-snapshot-drift", provider, async ({ service, start, snapshot }) => {
     const started = await start([
       { agent: "claude", model: "opus" },
@@ -509,23 +510,66 @@ test("MultiReviewService stops when the snapshot changes between reviewers and r
     expect([...provider.sends.values()].filter((sent) =>
       sent.prompt.includes("You are independent reviewer"))).toHaveLength(1);
 
+    // Only the snapshot that becomes prompt evidence pays for content hashing;
+    // every drift check compares HEAD and the path set.
+    expect(probes[0]).toEqual({ environmentId: "env-reviewer-snapshot-drift", fingerprint: true });
+    expect(probes.slice(1, 3)).toEqual([
+      { environmentId: "env-reviewer-snapshot-drift" },
+      { environmentId: "env-reviewer-snapshot-drift" },
+    ]);
+
     const retried = await service.retry(started.id);
     expect(retried.phase).toBe("reviewing");
     expect(retried.reviewSnapshotStale).toBeUndefined();
     expect(retried.reviewWorktreeSnapshot?.fingerprint).toBe(replacementFingerprint);
+    expect(retried.reviewWorktreeSnapshot?.paths)
+      .toEqual(["src/feature.ts", "src/added-while-reviewing.ts"]);
     expect(retried.reviewers.every((reviewer) => reviewer.status === "pending")).toBe(true);
     await waitUntil(async () => {
       await service.advanceNow(started.id);
       return (await snapshot(started.id))?.phase === "ready";
     });
   }, {
+    invoke: (async (_command: string, args?: Record<string, unknown>) => {
+      probes.push(args);
+      return probes.length <= 2
+        ? { head: REVIEW_HEAD, paths: ["src/feature.ts"], fingerprint: REVIEW_FINGERPRINT }
+        : {
+            head: REVIEW_HEAD,
+            paths: ["src/feature.ts", "src/added-while-reviewing.ts"],
+            fingerprint: replacementFingerprint,
+          };
+    }) as <T>(command: string, args?: Record<string, unknown>) => Promise<T>,
+  });
+});
+
+// A reviewer turn that is still executing keeps writing to the very worktree
+// whose state could not be trusted. Unlike a lost controller fence, no other
+// controller inherits it, so this pass has to abort it on the way out.
+test("MultiReviewService aborts a live reviewer turn when the snapshot drifts", async () => {
+  const provider = new Provider();
+  // Reviewer 1 never settles, so it is still running when reviewer 2 probes.
+  provider.statusOverrides.set("session-1", "running");
+  let probes = 0;
+  await withService("env-drift-live-turn", provider, async ({ start, snapshot }) => {
+    const started = await start([
+      { agent: "claude", model: "opus" },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await waitUntil(async () => (await snapshot(started.id))?.phase === "failed");
+
+    expect(provider.aborted).toContain("session-1");
+    const failed = (await snapshot(started.id))!;
+    expect(failed.reviewSnapshotStale).toBe(true);
+    expect(failed.reviewers[0]?.status).toBe("failed");
+    // The id survives the abort so the read-only transcript stays reachable.
+    expect(failed.reviewers[0]?.providerSessionId).toBe("session-1");
+  }, {
     invoke: (async () => {
       probes += 1;
-      return {
-        head: REVIEW_HEAD,
-        paths: ["src/feature.ts"],
-        fingerprint: probes <= 2 ? REVIEW_FINGERPRINT : replacementFingerprint,
-      };
+      return probes <= 2
+        ? { head: REVIEW_HEAD, paths: [], fingerprint: REVIEW_FINGERPRINT }
+        : { head: REVIEW_HEAD, paths: ["src/appeared.ts"], fingerprint: "b".repeat(64) };
     }) as <T>() => Promise<T>,
   });
 });
@@ -547,12 +591,156 @@ test("MultiReviewService refuses to consolidate reports after snapshot drift", a
   }, {
     invoke: (async () => {
       probes += 1;
+      return probes <= 2
+        ? { head: REVIEW_HEAD, paths: ["src/feature.ts"], fingerprint: REVIEW_FINGERPRINT }
+        : {
+            head: REVIEW_HEAD,
+            paths: ["src/feature.ts", "src/appeared.ts"],
+            fingerprint: "c".repeat(64),
+          };
+    }) as <T>() => Promise<T>,
+  });
+});
+
+// Reviewers are told validation "may write generated artifacts and tool
+// caches". Failing the workflow over the bytes those writes changed would
+// punish the reviewer for doing what it was asked, so drift is judged on HEAD
+// and the uncommitted path set instead.
+test("MultiReviewService tolerates content churn inside the same uncommitted paths", async () => {
+  const provider = new Provider();
+  let probes = 0;
+  await withService("env-content-churn", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+
+    const ready = (await snapshot(started.id))!;
+    expect(ready.reviewSnapshotStale).toBeUndefined();
+    // The prompts still quote the fingerprint captured at the start.
+    expect(ready.reviewWorktreeSnapshot?.fingerprint).toBe(REVIEW_FINGERPRINT);
+    expect([...provider.sends.values()].some((sent) =>
+      sent.prompt.includes("<multi-review-reports-json>"))).toBe(true);
+  }, {
+    invoke: (async () => {
+      probes += 1;
+      // Same HEAD and same paths, different bytes on every observation.
       return {
         head: REVIEW_HEAD,
         paths: ["src/feature.ts"],
-        fingerprint: probes <= 2 ? REVIEW_FINGERPRINT : "c".repeat(64),
+        fingerprint: probes <= 1 ? REVIEW_FINGERPRINT : `${probes}`.padStart(64, "d"),
       };
     }) as <T>() => Promise<T>,
+  });
+});
+
+// A schema repair re-sends a prompt the reviewer already answered. Re-probing
+// there would convert an already-handled formatting retry into a whole-workflow
+// failure, so the repair dispatch must not consult the worktree at all.
+test("MultiReviewService does not re-verify the snapshot for a schema repair", async () => {
+  const provider = new Provider();
+  provider.invalidReviewerReports = 1;
+  let probes = 0;
+  await withService("env-repair-no-reprobe", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+
+    const ready = (await snapshot(started.id))!;
+    expect(ready.reviewers[0]?.schemaRepairAttempts).toBe(1);
+    // Start, one reviewer dispatch, one consolidation dispatch. A fourth probe
+    // would mean the repair dispatch was gated.
+    expect(probes).toBe(3);
+  }, {
+    invoke: (async () => {
+      probes += 1;
+      return { head: REVIEW_HEAD, paths: ["src/feature.ts"], fingerprint: REVIEW_FINGERPRINT };
+    }) as <T>() => Promise<T>,
+  });
+});
+
+// "Could not look" is not evidence of "has changed". Treating it as drift would
+// throw away every completed report over a transient exec failure.
+test("MultiReviewService keeps its reports when the snapshot cannot be verified", async () => {
+  const provider = new Provider();
+  let probes = 0;
+  await withService("env-snapshot-unverifiable", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => (await snapshot(started.id))?.phase === "consolidating");
+    await service.advanceNow(started.id);
+
+    const failed = (await snapshot(started.id))!;
+    expect(failed.phase).toBe("failed");
+    expect(failed.error).toContain("cannot verify its worktree snapshot");
+    // Not drift: the snapshot is still trusted, so the reports survive.
+    expect(failed.reviewSnapshotStale).toBeUndefined();
+    expect(failed.reviewers[0]?.status).toBe("completed");
+    expect(failed.reviewers[0]?.report).toBeDefined();
+
+    // Retry therefore resumes consolidation instead of re-running every
+    // reviewer against a freshly captured snapshot.
+    const retried = await service.retry(started.id);
+    expect(retried.phase).toBe("consolidating");
+    expect(retried.reviewers[0]?.report).toBeDefined();
+    expect(retried.reviewWorktreeSnapshot?.fingerprint).toBe(REVIEW_FINGERPRINT);
+  }, {
+    invoke: (async () => {
+      probes += 1;
+      if (probes > 2) throw new Error("review-worktree-probe:git-failed");
+      return { head: REVIEW_HEAD, paths: ["src/feature.ts"], fingerprint: REVIEW_FINGERPRINT };
+    }) as <T>() => Promise<T>,
+  });
+});
+
+// A worktree big enough to blow the snapshot bound has to be refused where the
+// user can see it, not truncated into a snapshot that misrepresents the change.
+test("MultiReviewService refuses to start with more uncommitted paths than it can pin", async () => {
+  const provider = new Provider();
+  await withService("env-too-many-paths", provider, async ({ start }) => {
+    await expect(start()).rejects.toThrow(
+      `more than ${MULTI_REVIEW_MAX_SNAPSHOT_PATHS} uncommitted paths`,
+    );
+    expect(provider.sends.size).toBe(0);
+  }, {
+    invoke: (async () => ({
+      head: REVIEW_HEAD,
+      paths: Array.from(
+        { length: MULTI_REVIEW_MAX_SNAPSHOT_PATHS + 1 },
+        (_entry, index) => `src/file-${index}.ts`,
+      ),
+      fingerprint: REVIEW_FINGERPRINT,
+    })) as <T>() => Promise<T>,
+  });
+});
+
+// A workflow persisted before snapshots existed has no baseline to drift from.
+// Failing every in-flight review on upgrade would lose work for nothing, so the
+// first verification adopts the current state instead.
+test("MultiReviewService adopts a snapshot for a workflow persisted without one", async () => {
+  const provider = new Provider();
+  await withService("env-legacy-workflow", provider, async ({ service, storage, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => (await snapshot(started.id))?.phase === "consolidating");
+
+    // Rewrite the record the way a pre-upgrade backend would have left it.
+    const stored = (await storage.getMultiReviewWorkflow(started.id))!;
+    const legacy = { ...stored.snapshot as MultiReviewWorkflow };
+    delete legacy.reviewWorktreeSnapshot;
+    await storage.saveMultiReviewWorkflow(
+      started.id, "env-legacy-workflow", 1, legacy, stored.revision,
+    );
+
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+
+    const ready = (await snapshot(started.id))!;
+    expect(ready.reviewWorktreeSnapshot?.fingerprint).toBe(REVIEW_FINGERPRINT);
+    expect(ready.reviewSnapshotStale).toBeUndefined();
   });
 });
 

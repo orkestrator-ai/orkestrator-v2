@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach } from "bun:test";
 import { renderHook, act, waitFor } from "@testing-library/react";
+import type { StateSnapshot } from "react-virtuoso";
 import {
   useVirtuosoScrollState,
   clearPersistedVirtuosoState,
@@ -1216,8 +1217,14 @@ describe("useVirtuosoScrollState", () => {
   });
 
   describe("scroll state persistence", () => {
-    test("persists and restores snapshot when user had scrolled up (not sticky)", () => {
-      const mockSnapshot = { ranges: [], scrollTop: 500 } as any;
+    test("persists and restores a real getState snapshot when user had scrolled up", () => {
+      const mockSnapshot: StateSnapshot = {
+        // react-virtuoso represents the size tree's terminal entry as an
+        // open-ended range. Losing this snapshot regresses every persisted
+        // transcript to a mount-from-top instead of restoring the user's view.
+        ranges: [{ startIndex: 0, endIndex: Number.POSITIVE_INFINITY, size: 34 }],
+        scrollTop: 500,
+      };
       const { result, rerender } = renderHook(
         ({ isActive }) =>
           useVirtuosoScrollState({ isActive, persistKey: "test-key" }),

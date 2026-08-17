@@ -4,7 +4,12 @@ import { isRestorableStateSnapshot } from "./useVirtuosoScrollState";
 
 function snapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
   return {
-    ranges: [{ startIndex: 0, endIndex: 12, size: 34 }],
+    // Virtuoso serializes the final size-tree entry as an open-ended range.
+    // This is the real getState() shape, not a finite test-only substitute.
+    ranges: [
+      { startIndex: 0, endIndex: 11, size: 34 },
+      { startIndex: 12, endIndex: Number.POSITIVE_INFINITY, size: 36 },
+    ],
     scrollTop: 1764,
     ...overrides,
   } as StateSnapshot;
@@ -13,6 +18,9 @@ function snapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
 describe("isRestorableStateSnapshot", () => {
   test("accepts a well-formed getState snapshot", () => {
     expect(isRestorableStateSnapshot(snapshot())).toBe(true);
+    expect(isRestorableStateSnapshot(snapshot({
+      ranges: [{ startIndex: 0, endIndex: 12, size: 34 }],
+    }))).toBe(true);
     expect(isRestorableStateSnapshot(snapshot({ ranges: [], scrollTop: 0 }))).toBe(true);
   });
 
@@ -41,6 +49,21 @@ describe("isRestorableStateSnapshot", () => {
     }))).toBe(false);
     expect(isRestorableStateSnapshot(snapshot({
       ranges: [{ startIndex: 0.5, endIndex: 3, size: 10 }],
+    }))).toBe(false);
+    expect(isRestorableStateSnapshot(snapshot({
+      ranges: [
+        { startIndex: 0, endIndex: Number.POSITIVE_INFINITY, size: 10 },
+        { startIndex: 4, endIndex: 8, size: 12 },
+      ],
+    }))).toBe(false);
+    expect(isRestorableStateSnapshot(snapshot({
+      ranges: [
+        { startIndex: 0, endIndex: 5, size: 10 },
+        { startIndex: 5, endIndex: Number.POSITIVE_INFINITY, size: 12 },
+      ],
+    }))).toBe(false);
+    expect(isRestorableStateSnapshot(snapshot({
+      ranges: [{ startIndex: 0, endIndex: Number.NEGATIVE_INFINITY, size: 10 }],
     }))).toBe(false);
     expect(isRestorableStateSnapshot(
       snapshot({ ranges: undefined as unknown as StateSnapshot["ranges"] }),

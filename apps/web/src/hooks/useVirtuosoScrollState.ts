@@ -63,14 +63,24 @@ export function isRestorableStateSnapshot(
     return false;
   }
   if (!Array.isArray(snapshot.ranges)) return false;
-  return snapshot.ranges.every((range) =>
-    Number.isInteger(range?.startIndex)
-    && Number.isInteger(range?.endIndex)
-    && Number.isFinite(range?.size)
-    && range.startIndex >= 0
-    && range.endIndex >= range.startIndex
-    && range.size >= 0
-  );
+  return snapshot.ranges.every((range, index, ranges) => {
+    const endIndexIsValid = Number.isInteger(range?.endIndex)
+      || (
+        range?.endIndex === Number.POSITIVE_INFINITY
+        && index === ranges.length - 1
+      );
+    const previous = ranges[index - 1];
+    return Number.isInteger(range?.startIndex)
+      && endIndexIsValid
+      && Number.isFinite(range?.size)
+      && range.startIndex >= 0
+      && range.endIndex >= range.startIndex
+      && range.size >= 0
+      && (
+        previous === undefined
+        || range.startIndex > previous.endIndex
+      );
+  });
 }
 
 function setPersistedState(key: string, entry: PersistedEntry) {

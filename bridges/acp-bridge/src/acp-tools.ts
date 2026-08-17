@@ -781,6 +781,9 @@ export function renderAcpToolSource(part: BridgeToolPart, source: AcpToolSourceS
   // separate subagent lifecycle notifications.
   source.agentState = acpSubagentState(source, source.rawOutput ?? output);
   setOptionalPartField(part, "agentState", source.agentState);
+  if (source.agentState === "active") {
+    omitActiveSpawnDuration(part, source);
+  }
   setOptionalPartField(
     part,
     "toolError",
@@ -940,6 +943,8 @@ export function indexActiveSubagentsFromTranscript(state: SessionState): void {
   for (const message of state.messages) {
     for (const part of message.parts) {
       if (part.type === "tool-invocation" && part.agentState === "active") {
+        const source = ensureAcpToolSource(part);
+        omitActiveSpawnDuration(part, source);
         syncActiveSubagentTool(state, part);
       }
     }
@@ -1013,6 +1018,67 @@ export function isCursorBackgroundSpawnDuration(
   if (!background) return false;
   const launchDuration = boundedDurationMs(lifecycle?.durationMs);
   return launchDuration === durationMs;
+}
+
+function omitDurationMsField<T extends object>(
+  value: T,
+): Omit<T, "durationMs"> {
+  const { durationMs: _durationMs, ...rest } = value as T & { durationMs?: unknown };
+  return rest as Omit<T, "durationMs">;
+}
+
+/**
+ * Cursor echoes spawn wall-clock as `durationMs` on the launch `cursor/task`.
+ * That must not become the card's runtime while the child is still active —
+ * later `cursor/task` (or `stampSubagentRuntimeDuration`) writes the real end.
+ */
+export function omitActiveSpawnDuration(
+  part: BridgeToolPart,
+  source: AcpToolSourceState = ensureAcpToolSource(part),
+): void {
+  if (part.agentState !== "active" && source.agentState !== "active") return;
+  const durationMs = boundedDurationMs(
+    source.cursorTask?.durationMs ?? part.toolArgs?.durationMs,
+  );
+  if (durationMs === undefined) return;
+  if (!isCursorBackgroundSpawnDuration({
+    toolArgs: source.toolArgs ?? part.toolArgs,
+    rawOutput: source.rawOutput ?? part.toolOutput,
+    contentOutput: source.contentOutput,
+  }, durationMs)) return;
+  if (source.cursorTask) source.cursorTask = omitDurationMsField(source.cursorTask);
+  if (source.toolArgs) source.toolArgs = omitDurationMsField(source.toolArgs);
+  if (part.toolArgs) {
+    const rest = omitDurationMsField(part.toolArgs);
+    setOptionalPartField(part, "toolArgs", Object.keys(rest).length > 0 ? rest : undefined);
+  }
+}
+
+/**
+ * Wall-clock from the backend launch timestamp to now. Used when Cursor did
+ * not report a real completion duration (or only echoed spawn time). A vendor
+ * duration that is not the spawn echo is the child's own runtime and is kept.
+ */
+export function stampSubagentRuntimeDuration(
+  part: BridgeToolPart,
+  now = Date.now(),
+): void {
+  const source = ensureAcpToolSource(part);
+  const existing = boundedDurationMs(
+    source.cursorTask?.durationMs ?? part.toolArgs?.durationMs,
+  );
+  const spawnEcho = existing !== undefined && isCursorBackgroundSpawnDuration({
+    toolArgs: source.toolArgs ?? part.toolArgs,
+    rawOutput: source.rawOutput ?? part.toolOutput,
+    contentOutput: source.contentOutput,
+  }, existing);
+  if (existing !== undefined && !spawnEcho) return;
+  const startedAt = part.createdAt ? Date.parse(part.createdAt) : Number.NaN;
+  if (!Number.isFinite(startedAt) || startedAt < 0) return;
+  const elapsed = Math.max(0, Math.floor(now - startedAt));
+  source.cursorTask = { ...(source.cursorTask ?? {}), durationMs: elapsed };
+  source.toolArgs = { ...(source.toolArgs ?? {}), durationMs: elapsed };
+  renderAcpToolSource(part, source);
 }
 
 /**
@@ -1513,15 +1579,13 @@ export function applyCursorTask(state: SessionState, params: JsonObject): void {
     : namedState;
 
   let found = findToolPart(state, toolCallId);
-  if (!agentState && !isProgress && durationMs !== undefined) {
-    const part = found?.part;
-    const sourcePeek = part ? acpToolSourceStates.get(part) : undefined;
-    if (!isCursorBackgroundSpawnDuration({
-      toolArgs: sourcePeek?.toolArgs ?? part?.toolArgs,
-      rawOutput: sourcePeek?.rawOutput ?? part?.toolOutput,
-    }, durationMs)) {
-      agentState = "finished";
-    }
+  const sourcePeek = found?.part ? acpToolSourceStates.get(found.part) : undefined;
+  const spawnEcho = durationMs !== undefined && isCursorBackgroundSpawnDuration({
+    toolArgs: sourcePeek?.toolArgs ?? found?.part?.toolArgs,
+    rawOutput: sourcePeek?.rawOutput ?? found?.part?.toolOutput,
+  }, durationMs);
+  if (!agentState && !isProgress && durationMs !== undefined && !spawnEcho) {
+    agentState = "finished";
   }
   if (!found) {
     if (state.activeSubagentToolIds.has(toolCallId)) {
@@ -1574,7 +1638,9 @@ export function applyCursorTask(state: SessionState, params: JsonObject): void {
     ...(description ? { description } : {}),
     ...(prompt ? { prompt } : {}),
     ...(subagentType ? { subagentType } : {}),
-    ...(durationMs !== undefined ? { durationMs } : {}),
+    // Spawn wall-clock is not child runtime. Keep it off the card until settle
+    // stamps launch-to-end, or a later frame reports a different duration.
+    ...(durationMs !== undefined && !spawnEcho ? { durationMs } : {}),
     ...(model ? { model } : {}),
     ...(agentId ? { agentId } : {}),
   };
@@ -1585,6 +1651,9 @@ export function applyCursorTask(state: SessionState, params: JsonObject): void {
     }
   }
   renderAcpToolSource(part, source);
+  if (part.agentState === "finished" || part.agentState === "failed") {
+    stampSubagentRuntimeDuration(part);
+  }
   syncActiveSubagentTool(state, part);
   commitToolPartMutation(state, part, source);
 }
@@ -1597,6 +1666,7 @@ export function failAllActiveSubagents(state: SessionState): void {
       part.agentState = "failed";
       const source = acpToolSourceStates.get(part);
       if (source) source.agentState = "failed";
+      stampSubagentRuntimeDuration(part);
     }
   }
   state.activeSubagentToolIds.clear();
@@ -1680,6 +1750,7 @@ export function finishSubagentTool(
     part.agentState = agentState;
     const source = acpToolSourceStates.get(part);
     if (source) source.agentState = agentState;
+    stampSubagentRuntimeDuration(part);
   }
   settleActiveSubagent(state, toolUseId);
   state.revision += 1;

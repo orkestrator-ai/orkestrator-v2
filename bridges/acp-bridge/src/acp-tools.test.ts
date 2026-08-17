@@ -19,9 +19,14 @@ import {
   restoreCursorTodosFromMessages,
   isAcpTodosToolName,
   preserveTaskLaunchArgs,
+  ensureAcpToolSource,
+  omitActiveSpawnDuration,
+  renderAcpToolSource,
+  stampSubagentRuntimeDuration,
   MAX_CURSOR_TODOS,
   MAX_CURSOR_TODO_CANDIDATES,
 } from "./acp-tools.js";
+import type { BridgeToolPart } from "./acp-context.js";
 
 
 describe("waitFor", () => {
@@ -350,5 +355,61 @@ describe("Cursor todo list helpers", () => {
       content: `Item ${MAX_CURSOR_TODOS}`,
       status: "pending",
     });
+  });
+});
+
+function spawnTaskPart(
+  overrides: Partial<BridgeToolPart> = {},
+): BridgeToolPart {
+  return {
+    type: "tool-invocation",
+    content: "Task",
+    sourcePartId: "tool:cursor-subagent-1",
+    sourceMessageId: "assistant-1",
+    toolUseId: "cursor-subagent-1",
+    toolName: "task",
+    toolState: "success",
+    agentState: "active",
+    createdAt: "2026-03-21T10:00:00.000Z",
+    toolArgs: { agentId: "child-wait-1", durationMs: 31 },
+    toolOutput: JSON.stringify({ durationMs: 31, isBackground: true, agentId: "child-wait-1" }),
+    ...overrides,
+  };
+}
+
+describe("sub-agent runtime duration", () => {
+  test("strips Cursor spawn-echo duration from a still-active child", () => {
+    const part = spawnTaskPart();
+    const source = ensureAcpToolSource(part);
+    renderAcpToolSource(part, source);
+    omitActiveSpawnDuration(part, source);
+    expect(part.agentState).toBe("active");
+    expect(part.toolArgs).toMatchObject({ agentId: "child-wait-1" });
+    expect(part.toolArgs?.durationMs).toBeUndefined();
+    expect(source.cursorTask?.durationMs).toBeUndefined();
+  });
+
+  test("stamps launch-to-settle elapsed when Cursor only echoed spawn time", () => {
+    const part = spawnTaskPart({ agentState: "finished" });
+    const source = ensureAcpToolSource(part);
+    source.agentState = "finished";
+    source.toolArgs = { ...part.toolArgs };
+    source.rawOutput = part.toolOutput;
+    stampSubagentRuntimeDuration(part, Date.parse(part.createdAt!) + 5_400);
+    expect(part.toolArgs?.durationMs).toBe(5_400);
+  });
+
+  test("keeps a real Cursor completion duration instead of overwriting it", () => {
+    const part = spawnTaskPart({
+      agentState: "finished",
+      toolArgs: { agentId: "child-wait-1", durationMs: 84 },
+    });
+    const source = ensureAcpToolSource(part);
+    source.agentState = "finished";
+    source.cursorTask = { durationMs: 84 };
+    source.toolArgs = { ...part.toolArgs };
+    source.rawOutput = part.toolOutput;
+    stampSubagentRuntimeDuration(part, Date.parse(part.createdAt!) + 5_400);
+    expect(part.toolArgs?.durationMs).toBe(84);
   });
 });

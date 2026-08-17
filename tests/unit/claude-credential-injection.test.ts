@@ -18,8 +18,11 @@ import { tmpdir } from "node:os";
 const { __testing } = await import("../../apps/backend/src/core/commands");
 const {
   buildSyncContainerClaudeCredentialCommand,
+  getClaudeOAuthAccessToken,
   getHostClaudeCredentials,
+  getHostCursorCredentials,
   resolveContainerClaudeCredentials,
+  syncAgentTestCursorCredentials,
 } = __testing;
 
 function withTempDir<T>(fn: (dir: string) => T): T {
@@ -224,9 +227,16 @@ describe("host Claude credential resolution on macOS", () => {
       stubSecurity(dir, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${argvLog}'\nprintf '%s' '${KEYCHAIN}'\n`);
       await getHostClaudeCredentials("darwin", dir);
       expect(readFileSync(argvLog, "utf8")).toBe(
-        "find-generic-password -s Claude Code-credentials -w\n",
+        `find-generic-password -s Claude Code-credentials -w ${join(dir, "Library", "Keychains", "login.keychain-db")}\n`,
       );
     });
+  });
+
+  test("extracts only the OAuth access token for the Claude bridge process", () => {
+    expect(getClaudeOAuthAccessToken(KEYCHAIN)).toBe("sk-ant-oat01-keychain");
+    expect(getClaudeOAuthAccessToken(JSON.stringify({ claudeAiOauth: { refreshToken: "refresh" } })))
+      .toBeUndefined();
+    expect(getClaudeOAuthAccessToken("not-json")).toBeUndefined();
   });
 
   test("falls back to disk when the Keychain lookup fails", async () => {
@@ -261,6 +271,96 @@ describe("host Claude credential resolution on macOS", () => {
       await writeOnDisk(dir, ON_DISK);
       expect(await getHostClaudeCredentials("linux", dir)).toBe(ON_DISK);
       expect(() => statSync(argvLog)).toThrow();
+    });
+  });
+});
+
+describe("provider-scoped Cursor credential import", () => {
+  const originalPath = process.env.PATH;
+  afterEach(() => {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  });
+
+  test("queries only Cursor's named services in the explicit host login Keychain", async () => {
+    await withTempDirAsync(async (dir) => {
+      const binDir = join(dir, "bin");
+      const argvLog = join(dir, "argv.log");
+      mkdirSync(binDir, { recursive: true });
+      writeFileSync(join(binDir, "security"), `#!/bin/sh
+printf '%s\\n' "$*" >> '${argvLog}'
+case "$*" in
+  *cursor-access-token*) printf '%s' 'cursor-access' ;;
+  *cursor-refresh-token*) printf '%s' 'cursor-refresh' ;;
+  *cursor-api-key*) exit 1 ;;
+  *) exit 99 ;;
+esac
+`);
+      chmodSync(join(binDir, "security"), 0o755);
+      process.env.PATH = `${binDir}${delimiter}${originalPath ?? ""}`;
+
+      expect(await getHostCursorCredentials("darwin", dir)).toEqual({
+        accessToken: "cursor-access",
+        refreshToken: "cursor-refresh",
+      });
+      const keychain = join(dir, "Library", "Keychains", "login.keychain-db");
+      expect(readFileSync(argvLog, "utf8").trim().split("\n")).toEqual([
+        `find-generic-password -a cursor-user -s cursor-access-token -w ${keychain}`,
+        `find-generic-password -a cursor-user -s cursor-refresh-token -w ${keychain}`,
+        `find-generic-password -a cursor-user -s cursor-api-key -w ${keychain}`,
+      ]);
+    });
+  });
+
+  test("writes and revokes Cursor's owner-only process-specific file store", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cursorHome = join(dir, "cursor-home");
+      const target = join(cursorHome, ".cursor", "auth.json");
+      await syncAgentTestCursorCredentials(cursorHome, {
+        accessToken: "cursor-access",
+        refreshToken: "cursor-refresh",
+      });
+
+      expect(JSON.parse(await fs.readFile(target, "utf8"))).toEqual({
+        accessToken: "cursor-access",
+        refreshToken: "cursor-refresh",
+      });
+      expect((await fs.stat(target)).mode & 0o777).toBe(0o600);
+      expect((await fs.stat(join(cursorHome, ".cursor"))).mode & 0o777).toBe(0o700);
+
+      await syncAgentTestCursorCredentials(cursorHome, undefined);
+      expect(await fs.access(target).then(() => true, () => false)).toBe(false);
+    });
+  });
+
+  test("refuses to write through a replaced Cursor credential directory", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cursorHome = join(dir, "cursor-home");
+      const outside = join(dir, "outside");
+      await fs.mkdir(cursorHome, { recursive: true });
+      await fs.mkdir(outside, { recursive: true });
+      await fs.symlink(outside, join(cursorHome, ".cursor"));
+
+      await expect(syncAgentTestCursorCredentials(cursorHome, { accessToken: "token" }))
+        .rejects.toThrow("not a real directory");
+      expect(await fs.access(join(outside, "auth.json")).then(() => true, () => false)).toBe(false);
+    });
+  });
+
+  test("revokes a replaced Cursor credential directory without deleting its target", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cursorHome = join(dir, "cursor-home");
+      const outside = join(dir, "outside");
+      const outsideAuth = join(outside, "auth.json");
+      await fs.mkdir(cursorHome, { recursive: true });
+      await fs.mkdir(outside, { recursive: true });
+      await fs.writeFile(outsideAuth, "unrelated-host-data");
+      await fs.symlink(outside, join(cursorHome, ".cursor"));
+
+      await syncAgentTestCursorCredentials(cursorHome, undefined);
+
+      expect(await fs.readFile(outsideAuth, "utf8")).toBe("unrelated-host-data");
+      expect(await fs.lstat(join(cursorHome, ".cursor")).then(() => true, () => false)).toBe(false);
     });
   });
 });

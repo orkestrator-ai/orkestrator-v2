@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { constants, type Stats } from "node:fs";
-import { chmod, link, lstat, mkdir, open, readFile, rename, rm, writeFile, type FileHandle } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, open, readFile, readdir, rename, rm, writeFile, type FileHandle } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import process from "node:process";
@@ -52,6 +52,33 @@ export async function initializeProfile(profile: RuntimeProfile): Promise<string
     profile: profile.id,
   });
   return profilePath;
+}
+
+/**
+ * Delete disposable profile state without ever following directory symlinks.
+ * Kept as one tested production helper so both reset modes retain that safety
+ * property when provider-owned credential paths are added or changed.
+ */
+export async function removeProfileState(
+  profile: RuntimeProfile,
+  keepToolchains: boolean,
+): Promise<void> {
+  if (!keepToolchains) {
+    await rm(profile.profileRoot, { recursive: true, force: true });
+    return;
+  }
+  for (const child of await readdir(profile.profileRoot)) {
+    if (child === "profile.json" || child === ".orkestrator-dev-profile") continue;
+    if (child === "data") {
+      for (const dataChild of await readdir(profile.dataDir).catch(() => [])) {
+        if (dataChild !== "toolchains") {
+          await rm(path.join(profile.dataDir, dataChild), { recursive: true, force: true });
+        }
+      }
+    } else {
+      await rm(path.join(profile.profileRoot, child), { recursive: true, force: true });
+    }
+  }
 }
 
 type ModelCacheSeedOptions = {

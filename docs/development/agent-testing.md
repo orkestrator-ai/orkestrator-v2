@@ -41,10 +41,11 @@ disabled. Live agent requests can incur external effects or cost, so use only
 the seeded fixture and do not put credentials in test output.
 
 On macOS, Claude's and Cursor's logins live in the login Keychain rather than on
-disk, and macOS finds that Keychain through `$HOME`. A profile authorized for
-either provider therefore links the host Keychain directory into its isolated
-`HOME`; a profile authorized for neither, or started with
-`--no-agent-credentials`, does not. If an authorized profile still reports Claude
+disk. Startup reads only the explicitly authorized provider's named Keychain
+records: Claude receives its access token only in the Claude bridge process,
+while Cursor receives an owner-only `auth.json` in a Cursor-specific HOME using
+its supported file credential store. The host Keychain directory is never linked
+into the backend or terminal HOME. If an authorized profile still reports Claude
 as signed out, confirm the host itself is logged in with `claude auth status`
 before treating it as a profile problem.
 

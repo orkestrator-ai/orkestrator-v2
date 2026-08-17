@@ -21,7 +21,21 @@ history rather than two partial ones.
 - **Suite counts:** 54 passed, 1 failed; 55 tests across 2 files.
 - **Isolated rerun:** `bun test tests/unit/electron/backend-process.test.ts -t "reports backend readiness before slow managed Serve initialization finishes"` → also failed (7,439.62 ms), and failed identically on a stashed clean tree (8,964.33 ms), confirming it is not caused by the credential-injection change on this branch.
 - **Follow-up:** after the live `dev:test` profile finished starting, the owning file passed alone (32 passed, 14.18 s) and the complete aggregate `bun run test` passed in 104.9 s.
+- **Recurrence:** during credential-isolation follow-up on the same date, `bun test tests/unit/electron/backend-process.test.ts --parallel=2 --only-failures` failed at `waitForPath(.../status-started)` after 7,182.99 ms (27 passed, 1 failed); an immediate single-test rerun with `-t "reports backend readiness before slow managed Serve initialization finishes"` passed in 7.1 s.
+- **Aggregate recurrence:** `bun run test` at `ea9d79bdfdd3b2d4f5e0754b1ed6d2adf619e98e` timed out at the same `status-started` wait after 5,497.76 ms; the exact test passed alone in 3.1 s.
 - **Hypothesis:** the case drives real backend startup against a fake `tailscale` shim in a temp directory. Concurrent process pressure from a starting `dev:test` profile appears to make the shim invocation fail rather than merely run slowly, so the failure is contention-shaped like the existing "Standalone backend shutdown and Tailscale Serve lifecycle" family. A recurrence should capture whether the shim was ever created and whether the failure is a spawn error or a non-zero exit before changing the Serve assertions.
+
+## Aggregate process-contention recurrences (credential-isolation follow-up)
+
+- **Status:** open
+- **Date observed:** 2026-08-17
+- **Original command:** `bun run test:logged -- --name final-full-test -- bun run test`
+- **Worker configuration:** `scripts/test-all.ts` ran workspace, root/agent-support, bridges, and protocol-lockfile groups concurrently; the root group used four Bun workers and the bridges group used two.
+- **Failures:** `agent completion immediately rechecks and clears a resolved conflict` timed out after 3,028.60 ms waiting for the immediate PR recheck; `runtime helper preserves caller PATH additions in non-interactive bash` timed out after 5,662.98 ms; `rejects malformed container status framing and invalid encoded sections` timed out after 5,009.79 ms and its interrupted fixture produced a follow-on assertion error; `hard-kills a process that exceeds stdout and file-output limits` timed out after 5,511.94 ms.
+- **Suite counts:** backend workspace: 1,892 passed and 1 failed across 73 files; root/agent-support: 3,742 passed and 4 failed across 180 files (two are listed here, one is the separately recorded backend-readiness recurrence, and one was an outdated changed-code fixture corrected in this follow-up); bridges: 2,649 passed and 1 failed across 91 files.
+- **Isolated reruns:** each exact failed test passed alone through `test:logged`: PR recheck in 0.6 s, runtime environment in 0.7 s, malformed framing in 2.1 s, and Codex title limit in 0.5 s.
+- **Second aggregate run:** `bun run test` at `26c100220c905c67fa8efe3a12f606c90e610d1a` passed the complete workspace group, then the six-worker root group reported 3,742 passed and 4 timed-out tests after 268.8 s. The malformed-framing and backend-readiness cases recurred; `stops local merges when draft inspection or readiness fails` and `treats empty, null, and non-boolean draft output as non-draft` were newly observed at 5,017.69 ms and 5,001.10 ms. Those two exact PR tests passed alone in 2.4 s and 3.4 s respectively.
+- **Hypothesis:** these cases cross real timer or subprocess boundaries and exhausted generic aggregate budgets while the independently scheduled groups competed for process startup. The isolated passes confirm this observation as contention-shaped; recurrence counts should be gathered before changing product assertions.
 
 ## `ACP bridge > quarantines an unusable state file instead of refusing to start` (`bridges/acp-bridge/src/acp-persistence.test.ts:448`)
 

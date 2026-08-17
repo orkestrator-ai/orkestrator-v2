@@ -1,7 +1,7 @@
-import { fsConstants, fs, os, path, inferLanguage, runCommand, MAX_BINARY_FILE_BYTES, validateRelativeFilePath, writeConfinedFile, INITIAL_PROMPT_STAGING_DIRECTORY } from "./commands-dependencies.js";
+import { fsConstants, fs, os, path, randomUUID, inferLanguage, runCommand, MAX_BINARY_FILE_BYTES, validateRelativeFilePath, writeConfinedFile, INITIAL_PROMPT_STAGING_DIRECTORY } from "./commands-dependencies.js";
 import { WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS } from "./commands-runtime-state.js";
 import type { Environment, AppConfig, StorageService } from "./commands-dependencies.js";
-import { CONTAINER_GITHUB_CREDENTIAL_FILE, CONTAINER_CLAUDE_CREDENTIAL_FILE, CONTAINER_CURSOR_API_KEY_FILE, CONTAINER_CURSOR_CREDENTIAL_DIR, HOST_CLAUDE_KEYCHAIN_SERVICE, CONTAINER_UNTRACKED_STATS_SCANNER, gitFetchScheduler } from "./commands-runtime-state.js";
+import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV, CONTAINER_GITHUB_CREDENTIAL_FILE, CONTAINER_CLAUDE_CREDENTIAL_FILE, CONTAINER_CURSOR_API_KEY_FILE, CONTAINER_CURSOR_CREDENTIAL_DIR, HOST_CLAUDE_KEYCHAIN_SERVICE, CONTAINER_UNTRACKED_STATS_SCANNER, gitFetchScheduler } from "./commands-runtime-state.js";
 import { UNTRACKED_SCAN_CONCURRENCY, UNTRACKED_SCAN_MAX_FILES, FILE_LINE_COUNT_CHUNK_BYTES } from "./commands-validation.js";
 import { quoteShell, validateGitRefName } from "./commands-agent-support.js";
 import { dockerExec } from "./commands-container-exec.js";
@@ -1156,6 +1156,37 @@ export function buildSyncContainerClaudeCredentialCommand(
 export const SYNC_CONTAINER_CLAUDE_CREDENTIAL_COMMAND =
   buildSyncContainerClaudeCredentialCommand();
 
+const MAX_HOST_AGENT_CREDENTIAL_BYTES = 1024 * 1024;
+const HOST_CURSOR_KEYCHAIN_ACCOUNT = "cursor-user";
+const HOST_CURSOR_KEYCHAIN_SERVICES = {
+  accessToken: "cursor-access-token",
+  refreshToken: "cursor-refresh-token",
+  apiKey: "cursor-api-key",
+} as const;
+
+async function readMacKeychainPassword(
+  service: string,
+  homeDir: string,
+  account?: string,
+): Promise<string | undefined> {
+  const args = ["find-generic-password"];
+  if (account) args.push("-a", account);
+  args.push(
+    "-s",
+    service,
+    "-w",
+    path.join(homeDir, "Library", "Keychains", "login.keychain-db"),
+  );
+  try {
+    const { stdout } = await runCommand("security", args, { timeoutMs: 10_000 });
+    const value = stdout.trim();
+    if (!value || Buffer.byteLength(value) > MAX_HOST_AGENT_CREDENTIAL_BYTES) return undefined;
+    return value;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Reads the host's Claude Code credential, preferring the macOS Keychain.
  *
@@ -1185,18 +1216,10 @@ export async function getHostClaudeCredentials(
   };
 
   if (platform === "darwin") {
-    try {
-      const { stdout } = await runCommand(
-        "security",
-        ["find-generic-password", "-s", HOST_CLAUDE_KEYCHAIN_SERVICE, "-w"],
-        { timeoutMs: 10_000 },
-      );
-      const fromKeychain = isUsable(stdout);
-      if (fromKeychain) return fromKeychain;
-    } catch {
-      // No Keychain entry, or the user declined the access prompt. Fall through
-      // to the on-disk credential, which is where Linux hosts keep it anyway.
-    }
+    const fromKeychain = isUsable(
+      await readMacKeychainPassword(HOST_CLAUDE_KEYCHAIN_SERVICE, homeDir),
+    );
+    if (fromKeychain) return fromKeychain;
   }
 
   // `CLAUDE_CONFIG_DIR` first, because that is where Claude Code itself keeps
@@ -1213,6 +1236,95 @@ export async function getHostClaudeCredentials(
     }
   }
   return undefined;
+}
+
+export function getClaudeOAuthAccessToken(credentials: string | undefined): string | undefined {
+  if (!credentials) return undefined;
+  try {
+    const parsed = JSON.parse(credentials) as {
+      claudeAiOauth?: { accessToken?: unknown };
+    };
+    const accessToken = parsed.claudeAiOauth?.accessToken;
+    if (typeof accessToken !== "string") return undefined;
+    const trimmed = accessToken.trim();
+    return trimmed && Buffer.byteLength(trimmed) <= MAX_HOST_AGENT_CREDENTIAL_BYTES
+      ? trimmed
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export type HostCursorCredentials = {
+  accessToken?: string;
+  refreshToken?: string;
+  apiKey?: string;
+};
+
+export async function getHostCursorCredentials(
+  platform: NodeJS.Platform = process.platform,
+  homeDir: string = os.homedir(),
+): Promise<HostCursorCredentials | undefined> {
+  if (platform !== "darwin") return undefined;
+  const credentials: HostCursorCredentials = {};
+  for (const [key, service] of Object.entries(HOST_CURSOR_KEYCHAIN_SERVICES) as Array<
+    [keyof HostCursorCredentials, string]
+  >) {
+    const value = await readMacKeychainPassword(service, homeDir, HOST_CURSOR_KEYCHAIN_ACCOUNT);
+    if (value) credentials[key] = value;
+  }
+  return Object.keys(credentials).length > 0 ? credentials : undefined;
+}
+
+/**
+ * Store only Cursor's explicitly authorized records in its process-specific
+ * HOME. Cursor CLI's file credential store owns this exact owner-only format.
+ * A missing snapshot removes any prior host import so logout and opt-out revoke
+ * access on the next bridge start.
+ */
+export async function syncAgentTestCursorCredentials(
+  cursorHome: string,
+  credentials: HostCursorCredentials | undefined,
+): Promise<void> {
+  const directory = path.join(cursorHome, ".cursor");
+  const target = path.join(directory, "auth.json");
+  const existingDirectory = await fs.lstat(directory).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (existingDirectory?.isSymbolicLink()) {
+    if (!credentials) {
+      await fs.rm(directory, { force: true });
+      return;
+    }
+    throw new Error("Cursor credential directory is not a real directory");
+  }
+  if (existingDirectory && !existingDirectory.isDirectory()) {
+    throw new Error("Cursor credential directory is not a real directory");
+  }
+  if (!credentials) {
+    await fs.rm(target, { force: true });
+    return;
+  }
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  const info = await fs.lstat(directory);
+  if (!info.isDirectory() || info.isSymbolicLink()) {
+    throw new Error("Cursor credential directory is not a real directory");
+  }
+  await fs.chmod(directory, 0o700);
+  const temporary = path.join(directory, `.auth.${randomUUID()}.tmp`);
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    handle = await fs.open(temporary, "wx", 0o600);
+    await handle.writeFile(`${JSON.stringify(credentials, null, 2)}\n`, "utf8");
+    await handle.close();
+    handle = undefined;
+    await fs.rename(temporary, target);
+    await fs.chmod(target, 0o600);
+  } finally {
+    await handle?.close().catch(() => undefined);
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
+  }
 }
 
 export async function syncContainerClaudeCredential(
@@ -1281,10 +1393,13 @@ export async function resolveContainerClaudeCredentials(
   globalConfig: AppConfig["global"],
 ): Promise<string | undefined> {
   if (globalConfig.useHostClaudeCredentials === false) return undefined;
+  const agentTestHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME?.trim();
   return getHostClaudeCredentials(
     process.platform,
-    os.homedir(),
-    process.env.CLAUDE_CONFIG_DIR?.trim() || undefined,
+    agentTestHostHome || os.homedir(),
+    process.env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]?.trim()
+      || process.env.CLAUDE_CONFIG_DIR?.trim()
+      || undefined,
   );
 }
 

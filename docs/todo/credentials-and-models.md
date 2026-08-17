@@ -279,9 +279,9 @@ from the rest of `HOME`:
 
 | Platform | Agent-test host state exposed |
 | --- | --- |
-| Claude | Host `CLAUDE_CONFIG_DIR`/`~/.claude`, the host login Keychain, and `ANTHROPIC_API_KEY` when inherited |
+| Claude | Host `CLAUDE_CONFIG_DIR`/`~/.claude`, process-scoped OAuth access token, and `ANTHROPIC_API_KEY` when inherited |
 | Codex | Host `CODEX_HOME`/`~/.codex` and `OPENAI_API_KEY` when inherited |
-| Cursor | `CURSOR_API_KEY` when inherited; host Cursor configuration is mounted read-only for containers |
+| Cursor | Provider-scoped owner-only `auth.json` copied from named Keychain records, or `CURSOR_API_KEY` when inherited; host Cursor configuration is mounted read-only for containers |
 | Grok | Owner-only snapshot of host `~/.grok/auth.json` for local runs; bounded read-only host imports for containers |
 | OpenCode | Host XDG config/data/state directories and `OPENCODE_API_KEY` when inherited |
 
@@ -311,37 +311,32 @@ expose unrelated credentials. Startup instead copies only `auth.json` through a
 bounded, no-final-symlink, stable-descriptor path into the isolated home. It is
 refreshed from the host on each profile start and installed mode `0600`.
 
-### macOS Keychain reachability
+### macOS Keychain credential brokering
 
-Claude's and Cursor's host logins normally live in the macOS login Keychain, not
-on disk, and macOS resolves that Keychain through `$HOME/Library/Keychains`. An
-isolated `HOME` therefore hides it: `security find-generic-password` reports the
-item as missing and both providers read as signed out, which no provider-specific
-variable can repair because there is no on-disk credential to point at.
+Claude's and Cursor's host logins normally live in the macOS login Keychain. The
+backend and its terminals keep an isolated `HOME`; startup never links the host
+Keychain directory or its writable database into that tree. Instead, each
+authorized provider uses an explicit lookup against the host login Keychain path
+and its own fixed service names.
 
-When a profile is authorized for Claude or Cursor, startup symlinks
-`<isolated HOME>/Library/Keychains` at the host directory. Nothing else under
-`HOME` is shared, the link is skipped entirely on other platforms and for
-profiles that authorized neither provider, and real state already present at that
-path is left alone rather than replaced. Because the link is writable, a provider
-that refreshes its token updates the host Keychain — the same thing the host CLI
-does, and the reason a refreshed login stays valid in both places.
+Claude's credential JSON is parsed and only its OAuth access token is added to
+the Claude bridge process as `ANTHROPIC_AUTH_TOKEN`. The general backend and
+terminal environments receive no Keychain path or OAuth token. Container sync
+uses the same explicit Claude service lookup and still sends the complete JSON
+over stdin so the container can retain refresh information. On hosts that keep
+credentials on disk, lookup prefers the recorded host `CLAUDE_CONFIG_DIR` before
+the host home fallback.
 
-Claude needs one further variable. Claude Code namespaces its Keychain service by
-configuration directory as soon as `CLAUDE_CONFIG_DIR` is set at all, using
-`Claude Code-credentials-<sha256(dir)[0:8]>`; the host login was never written
-under that name, so merely pointing at the host configuration signs the profile
-out. An authorized profile therefore also exports an empty
-`CLAUDE_SECURESTORAGE_CONFIG_DIR`, which takes precedence and pins the
-unsuffixed service. A profile that was denied Claude keeps its own namespace and
-must not inherit that override. This was verified against Claude Code 2.1.233;
-if a release removes the variable the profile degrades to the signed-out
-behaviour it had before, never to a different account's credential.
+Cursor's supported `AGENT_CLI_CREDENTIAL_STORE=file` mode provides a narrower
+path. Startup reads only `cursor-access-token`, `cursor-refresh-token`, and
+`cursor-api-key` for account `cursor-user`, then atomically writes those fields
+mode `0600` beneath a Cursor-specific process HOME. The Cursor bridge alone gets
+that HOME. A missing host record or disabled Cursor source removes the prior
+snapshot before launch, so host logout and profile opt-out revoke access.
 
-The same link is what lets the backend read the Keychain for the container
-credential sync described above. On hosts that keep the credential on disk, the
-lookup prefers `CLAUDE_CONFIG_DIR` over the home directory, because an
-agent-test profile's home is isolated and empty.
+Startup also removes the legacy `<isolated HOME>/Library/Keychains` symlink from
+profiles created by earlier builds. Real profile-owned directories at that path
+are left untouched.
 
 ## Agent-test model-cache seeding
 
@@ -424,13 +419,11 @@ gateway token does not enter browser history or persistent browser state.
    Cursor expose optional write-only API-key overrides because those are needed
    for headless/container paths. Codex, OpenCode, and Grok continue to use their
    own login state rather than accumulating duplicate secrets in Orkestrator.
-4. **A fully deterministic signed-out Cursor run is platform-limited.** The
-   agent-test gate removes inherited Cursor keys and withholds the host Cursor
-   configuration when Cursor is not authorized, but a local macOS Cursor binary
-   may independently consult its login Keychain. Cursor does not expose a
-   portable provider-home override comparable to the paths used by the other
-   agents; container runs remain deterministic because that Keychain is not
-   available inside Linux.
+4. **Signed-out Cursor runs use the provider's file-store control.** The
+   agent-test gate removes inherited Cursor keys, assigns a Cursor-specific HOME,
+   selects `AGENT_CLI_CREDENTIAL_STORE=file`, and removes any prior imported
+   `auth.json` when Cursor is not authorized. The CLI therefore cannot fall back
+   to the host macOS Keychain.
 
 These are descriptions of current behavior, not assumptions that a visible
 cached model implies a usable credential.

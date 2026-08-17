@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { access, chmod, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -12,7 +12,7 @@ import {
   createBackendProcessEnvironment,
   getBrowserGatewayStatus,
   hostDockerConfigDir,
-  linkAgentTestHostKeychains,
+  removeAgentTestHostKeychainLink,
   seedAgentTestDockerConfig,
 } from "../../../apps/desktop/electron/backend-process";
 
@@ -190,11 +190,7 @@ describe("Electron backend process supervisor", () => {
     expect(isolated.CLAUDE_CONFIG_DIR).toBe("/profiles/qa/credentials/claude");
   });
 
-  test("an authorized Claude source keeps the unsuffixed Keychain service", () => {
-    // Claude Code derives its Keychain service from the config directory as soon
-    // as CLAUDE_CONFIG_DIR is set, so pointing at the host configuration without
-    // this override looks for a service the host login was never written under
-    // and reports the profile as signed out.
+  test("keeps host Claude configuration provider-scoped", () => {
     const isolated = createBackendProcessEnvironment({
       HOME: "/Users/tester",
     }, true, "/resources", "2.8.2", {
@@ -203,24 +199,26 @@ describe("Electron backend process supervisor", () => {
       isolatedCredentialRoot: "/profiles/qa/credentials",
     });
 
-    expect(isolated.CLAUDE_CONFIG_DIR).toBe("/Users/tester/.claude");
-    expect(isolated.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBe("");
+    expect(isolated.CLAUDE_CONFIG_DIR).toBe("/profiles/qa/credentials/claude");
+    expect(isolated.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR)
+      .toBe("/Users/tester/.claude");
+    expect(isolated.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBeUndefined();
   });
 
-  test("a profile without a Claude source keeps its own Keychain namespace", () => {
+  test("a profile without a Claude source receives no host Claude path", () => {
     const isolated = createBackendProcessEnvironment({
       HOME: "/Users/tester",
       CLAUDE_SECURESTORAGE_CONFIG_DIR: "",
+      ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR: "/tmp/injected-host-config",
     }, true, "/resources", "2.8.2", {
       flavor: "agent-test",
       credentialSources: ["codex"],
       isolatedCredentialRoot: "/profiles/qa/credentials",
     });
 
-    // Inheriting the override here would hand the host login to a profile that
-    // was explicitly denied it.
     expect(isolated.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBeUndefined();
     expect(isolated.CLAUDE_CONFIG_DIR).toBe("/profiles/qa/credentials/claude");
+    expect(isolated.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR).toBeUndefined();
   });
 
   test("agent-test environments keep the Docker daemon endpoint while isolating its credentials", () => {
@@ -274,135 +272,38 @@ describe("Electron backend process supervisor", () => {
     expect(Object.keys(seeded)).not.toContain("credsStore");
   });
 
-  test("links the host login Keychain into an isolated HOME for Keychain-backed sources", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "orkestrator-keychain-"));
-    directories.push(root);
-    const hostHome = path.join(root, "host-home");
-    await mkdir(path.join(hostHome, "Library", "Keychains"), { recursive: true });
-    await writeFile(path.join(hostHome, "Library", "Keychains", "login.keychain-db"), "keychain");
-    const isolatedCredentialRoot = path.join(root, "credentials");
-
-    await expect(linkAgentTestHostKeychains({
-      isolatedCredentialRoot,
-      hostHome,
-      credentialSources: ["claude"],
-      platform: "darwin",
-    })).resolves.toBe(true);
-
-    // Reading through the isolated HOME is what `security` — and therefore every
-    // Keychain-backed agent login — actually does.
-    await expect(readFile(
-      path.join(agentTestKeychainDir(isolatedCredentialRoot), "login.keychain-db"),
-      "utf8",
-    )).resolves.toBe("keychain");
-  });
-
-  test("repeating the Keychain link is idempotent and repairs a stale target", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "orkestrator-keychain-relink-"));
-    directories.push(root);
-    const hostHome = path.join(root, "host-home");
-    await mkdir(path.join(hostHome, "Library", "Keychains"), { recursive: true });
-    const isolatedCredentialRoot = path.join(root, "credentials");
-    const target = agentTestKeychainDir(isolatedCredentialRoot);
-    // A profile that moved between host accounts must not keep the old link.
-    await mkdir(path.dirname(target), { recursive: true });
-    await symlink(path.join(root, "previous-host", "Library", "Keychains"), target);
-
-    const link = () => linkAgentTestHostKeychains({
-      isolatedCredentialRoot,
-      hostHome,
-      credentialSources: ["cursor"],
-      platform: "darwin",
-    });
-    await expect(link()).resolves.toBe(true);
-    await expect(link()).resolves.toBe(true);
-
-    expect(await readlink(target)).toBe(path.join(hostHome, "Library", "Keychains"));
-  });
-
-  test("does not link the host Keychain without an authorized Keychain-backed source", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "orkestrator-keychain-denied-"));
-    directories.push(root);
-    const hostHome = path.join(root, "host-home");
-    await mkdir(path.join(hostHome, "Library", "Keychains"), { recursive: true });
-    const isolatedCredentialRoot = path.join(root, "credentials");
-
-    // Codex keeps its login on disk, so it is no reason to expose the Keychain.
-    await expect(linkAgentTestHostKeychains({
-      isolatedCredentialRoot,
-      hostHome,
-      credentialSources: ["codex"],
-      platform: "darwin",
-    })).resolves.toBe(false);
-    await expect(linkAgentTestHostKeychains({
-      isolatedCredentialRoot,
-      hostHome,
-      credentialSources: [],
-      platform: "darwin",
-    })).resolves.toBe(false);
-
-    expect(await access(agentTestKeychainDir(isolatedCredentialRoot)).then(() => true, () => false))
-      .toBe(false);
-  });
-
-  test("leaves real Keychain state in the isolated HOME untouched", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "orkestrator-keychain-existing-"));
-    directories.push(root);
-    const hostHome = path.join(root, "host-home");
-    await mkdir(path.join(hostHome, "Library", "Keychains"), { recursive: true });
-    const isolatedCredentialRoot = path.join(root, "credentials");
-    const target = agentTestKeychainDir(isolatedCredentialRoot);
-    await mkdir(target, { recursive: true });
-    await writeFile(path.join(target, "login.keychain-db"), "profile-owned");
-
-    await expect(linkAgentTestHostKeychains({
-      isolatedCredentialRoot,
-      hostHome,
-      credentialSources: ["claude"],
-      platform: "darwin",
-    })).resolves.toBe(false);
-
-    await expect(readFile(path.join(target, "login.keychain-db"), "utf8"))
-      .resolves.toBe("profile-owned");
-  });
-
-  test("profile teardown unlinks the host Keychain instead of deleting through it", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "orkestrator-keychain-reset-"));
+  test("removes a legacy host Keychain link when a persistent profile is reused", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "orkestrator-keychain-revoke-"));
     directories.push(root);
     const hostHome = path.join(root, "host-home");
     const hostKeychains = path.join(hostHome, "Library", "Keychains");
     await mkdir(hostKeychains, { recursive: true });
     await writeFile(path.join(hostKeychains, "login.keychain-db"), "host-login");
-    const profileRoot = path.join(root, "profile");
-    const isolatedCredentialRoot = path.join(profileRoot, "data", "agent-credentials");
-    await linkAgentTestHostKeychains({
-      isolatedCredentialRoot,
-      hostHome,
-      credentialSources: ["claude"],
-      platform: "darwin",
-    });
+    const isolatedCredentialRoot = path.join(root, "credentials");
+    const target = agentTestKeychainDir(isolatedCredentialRoot);
+    await mkdir(path.dirname(target), { recursive: true });
+    await symlink(hostKeychains, target);
 
-    // `dev:reset` removes the profile tree this link lives in. Descending
-    // through it would destroy the user's real login Keychain.
-    await rm(profileRoot, { recursive: true, force: true });
+    await expect(removeAgentTestHostKeychainLink(isolatedCredentialRoot)).resolves.toBe(true);
+    await expect(removeAgentTestHostKeychainLink(isolatedCredentialRoot)).resolves.toBe(false);
 
-    expect(await access(profileRoot).then(() => true, () => false)).toBe(false);
+    expect(await access(target).then(() => true, () => false)).toBe(false);
     await expect(readFile(path.join(hostKeychains, "login.keychain-db"), "utf8"))
       .resolves.toBe("host-login");
   });
 
-  test("skips the Keychain link on platforms that have no login Keychain", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "orkestrator-keychain-linux-"));
+  test("legacy-link cleanup leaves real profile-owned Keychain state untouched", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "orkestrator-keychain-existing-"));
     directories.push(root);
-    const hostHome = path.join(root, "host-home");
-    await mkdir(path.join(hostHome, "Library", "Keychains"), { recursive: true });
+    const isolatedCredentialRoot = path.join(root, "credentials");
+    const target = agentTestKeychainDir(isolatedCredentialRoot);
+    await mkdir(target, { recursive: true });
+    await writeFile(path.join(target, "login.keychain-db"), "profile-owned");
 
-    await expect(linkAgentTestHostKeychains({
-      isolatedCredentialRoot: path.join(root, "credentials"),
-      hostHome,
-      credentialSources: ["claude"],
-      platform: "linux",
-    })).resolves.toBe(false);
+    await expect(removeAgentTestHostKeychainLink(isolatedCredentialRoot)).resolves.toBe(false);
+
+    await expect(readFile(path.join(target, "login.keychain-db"), "utf8"))
+      .resolves.toBe("profile-owned");
   });
 
   test("still produces a usable isolated Docker config when the host has none", async () => {

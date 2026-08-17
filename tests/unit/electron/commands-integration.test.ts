@@ -2398,6 +2398,7 @@ exit 1
       const appRoot = await createTempDir(`ork-electron-acp-${provider}-`);
       const toolchainBinDir = await createTempDir(`ork-electron-acp-bin-${provider}-`);
       const worktreePath = await createTempDir(`ork-electron-acp-worktree-${provider}-`);
+      const dataDir = await createTempDir(`ork-electron-acp-data-${provider}-`);
       const markerPath = path.join(appRoot, "acp-env.log");
       const bridgeDist = path.join(appRoot, "bridges", "acp-bridge", "dist");
       await fs.mkdir(bridgeDist, { recursive: true });
@@ -2413,6 +2414,8 @@ exit 1
             hostname: process.env.HOSTNAME ?? "",
             hasToken: Boolean(process.env.ACP_BRIDGE_TOKEN),
             hasCursorApiKey: Boolean(process.env.CURSOR_API_KEY),
+            home: process.env.HOME ?? "",
+            credentialStore: process.env.AGENT_CLI_CREDENTIAL_STORE ?? "",
             cursorApiKeyFingerprint: require("node:crypto")
               .createHash("sha256")
               .update(process.env.CURSOR_API_KEY ?? "")
@@ -2453,7 +2456,10 @@ exit 1
         : {};
       const { context } = createContext(environment, {
         globalConfig,
+        dataDir,
       });
+      context.runtimeFlavor = "agent-test";
+      context.credentialSources = new Set([provider]);
       context.appRoot = appRoot;
       context.resourceRoot = appRoot;
       context.toolchainBinDir = toolchainBinDir;
@@ -2507,6 +2513,22 @@ exit 1
         expect(marker.approveProjectMcps).toBe("0");
         expect(marker.hasToken).toBe(true);
         expect(marker.hasCursorApiKey).toBe(provider === "cursor");
+        if (provider === "cursor") {
+          expect(marker.home).toBe(path.join(
+            dataDir,
+            "agent-credentials",
+            "provider-homes",
+            "cursor",
+          ));
+          expect(marker.credentialStore).toBe("file");
+          expect(await fs.access(path.join(
+            dataDir,
+            "agent-credentials",
+            "home",
+            "Library",
+            "Keychains",
+          )).then(() => true, () => false)).toBe(false);
+        }
         expect(marker.cursorApiKeyFingerprint).toBe(
           createHash("sha256")
             .update(provider === "cursor" ? "configured-cursor-key" : "")
@@ -2587,6 +2609,28 @@ exit 1
           ) as { wasRunning: boolean; authToken: string };
           expect(stillCleared.wasRunning).toBe(true);
           expect(stillCleared.authToken).toBe(cleared.authToken);
+
+          // Reusing a persistent profile with host credentials disabled must
+          // restart any credential-bearing bridge and revoke its file snapshot,
+          // even when the host lookup currently returns no records.
+          const cursorAuthFile = path.join(
+            dataDir,
+            "agent-credentials",
+            "provider-homes",
+            "cursor",
+            ".cursor",
+            "auth.json",
+          );
+          await fs.mkdir(path.dirname(cursorAuthFile), { recursive: true });
+          await fs.writeFile(cursorAuthFile, JSON.stringify({ accessToken: "stale-token" }));
+          context.credentialSources = new Set();
+          const denied = await commands.get("start_local_cursor_server_cmd")?.(
+            { environmentId: environment.id },
+            context,
+          ) as { wasRunning: boolean; authToken: string };
+          expect(denied.wasRunning).toBe(false);
+          expect(denied.authToken).not.toBe(stillCleared.authToken);
+          expect(await fs.access(cursorAuthFile).then(() => true, () => false)).toBe(false);
         }
       } finally {
         await commands.get(`stop_local_${provider}_server_cmd`)?.(
@@ -2596,6 +2640,119 @@ exit 1
       }
     },
   );
+
+
+  test("brokers only Claude's macOS credential into the local Claude bridge", async () => {
+    if (process.platform !== "darwin") return;
+
+    const appRoot = await createTempDir("ork-electron-claude-credential-bridge-");
+    const worktreePath = await createTempDir("ork-electron-claude-credential-worktree-");
+    const dataDir = await createTempDir("ork-electron-claude-credential-data-");
+    const hostHome = await createTempDir("ork-electron-claude-credential-host-");
+    const hostConfigDir = path.join(hostHome, ".claude-custom");
+    const binDir = path.join(appRoot, "bin-stub");
+    const markerPath = path.join(appRoot, "claude-env.json");
+    const securityArgvPath = path.join(appRoot, "security-argv.txt");
+    const fakeAccessToken = "test-claude-oauth-token";
+    await fs.mkdir(hostConfigDir, { recursive: true });
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.writeFile(
+      path.join(binDir, "security"),
+      `#!/bin/sh
+printf '%s\\n' "$*" >> ${JSON.stringify(securityArgvPath)}
+printf '%s' ${JSON.stringify(JSON.stringify({
+  claudeAiOauth: { accessToken: fakeAccessToken },
+}))}
+`,
+    );
+    await fs.chmod(path.join(binDir, "security"), 0o755);
+    await writeBridgeEntrypoint(
+      appRoot,
+      "claude-bridge",
+      `
+        const fs = require("node:fs");
+        const http = require("node:http");
+        const path = require("node:path");
+        fs.writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({
+          configDir: process.env.CLAUDE_CONFIG_DIR ?? "",
+          hasAuthToken: Boolean(process.env.ANTHROPIC_AUTH_TOKEN),
+          authTokenFingerprint: require("node:crypto")
+            .createHash("sha256")
+            .update(process.env.ANTHROPIC_AUTH_TOKEN ?? "")
+            .digest("hex"),
+          home: process.env.HOME ?? "",
+          keychainsVisible: fs.existsSync(path.join(
+            process.env.HOME ?? "",
+            "Library",
+            "Keychains",
+          )),
+        }));
+        http.createServer((req, res) => {
+          res.writeHead(req.url === "/global/health" ? 200 : 404);
+          res.end();
+        }).listen(Number(process.env.PORT), "127.0.0.1");
+      `,
+    );
+
+    const environment = createEnvironment({ id: "env-claude-credential", worktreePath });
+    const { context } = createContext(environment, { dataDir });
+    context.runtimeFlavor = "agent-test";
+    context.credentialSources = new Set(["claude"]);
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    const commands = createCommandRegistry();
+    const previousPath = process.env.PATH;
+    const previousHome = process.env.HOME;
+    const previousHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
+    const previousHostConfig = process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR;
+    const previousAnthropicApiKey = process.env.ANTHROPIC_API_KEY;
+    process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
+    process.env.HOME = path.join(dataDir, "agent-credentials", "home");
+    process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
+    process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = hostConfigDir;
+    delete process.env.ANTHROPIC_API_KEY;
+
+    try {
+      await commands.get("start_local_claude_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      );
+      const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as Record<string, unknown>;
+      expect(marker).toMatchObject({
+        configDir: hostConfigDir,
+        hasAuthToken: true,
+        authTokenFingerprint: createHash("sha256").update(fakeAccessToken).digest("hex"),
+        keychainsVisible: false,
+      });
+      expect(marker.home).not.toBe(hostHome);
+      expect(await fs.readFile(securityArgvPath, "utf8")).toBe(
+        `find-generic-password -s Claude Code-credentials -w ${path.join(
+          hostHome,
+          "Library",
+          "Keychains",
+          "login.keychain-db",
+        )}\n`,
+      );
+    } finally {
+      await commands.get("stop_local_claude_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      );
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousHostHome === undefined) delete process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
+      else process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = previousHostHome;
+      if (previousHostConfig === undefined) {
+        delete process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR;
+      } else {
+        process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = previousHostConfig;
+      }
+      if (previousAnthropicApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = previousAnthropicApiKey;
+    }
+  }, ASYNC_TEST_BUDGET_MS);
 
 
 

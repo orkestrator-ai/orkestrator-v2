@@ -67,7 +67,7 @@ verified. **partial** = present but weaker, different, or vendor-dependent.
 | File attachments | full | **none** (image paths typed into pane) | none | none | none | full |
 | Images | full (SDK blocks) | **partial** (workspace path prose) | full | full | full | full |
 | Queue | full (backend) | full (own `PromptQueueDrainer`) | full | full | full | full |
-| Resume | full | full (own picker + `--resume`) | full | **partial** (410 if no `loadSession`) | **partial** | full |
+| Resume | full | full (own picker + `--resume`) | full | full (verified) | full (verified) | full |
 | Fork | full | **none** | full | none | none | full |
 | Slash commands | full (discovered) | **partial** (hardcoded TUI list) | full | none | none | full |
 | Background tasks UI | full | **none** | none | none* | none | none |
@@ -99,10 +99,40 @@ turn (up to four continuation prompts). There is no Claude-style hold/stop card.
 Grok lets the parent go idle with live children and reports `/activity` as
 `working` while `activeSubagentToolIds` is non-empty.
 
-Cursor/Grok resume is partial because the table and UI advertise it, dispatch
-calls `/session/list` + `/session/resume`, but ACP returns **410** when the
-vendor does not announce `session/list` **and** `loadSession`. That is “unknown /
-not exposed by this agent build”, not “Orkestrator forbids it”.
+Cursor/Grok resume was previously recorded here as partial, on the assumption
+that ACP would answer **410** because the vendor might not announce
+`session/list` **and** `loadSession`. Probing the shipping agents directly
+disproves that for both:
+
+| Agent | `loadSession` | `sessionCapabilities` |
+| --- | --- | --- |
+| `cursor-agent` 2026.08.11-e8db854 | `true` | `list` |
+| `grok` 1.0.4 | `true` | `list`, `resume`, `close` |
+
+Both return well-formed rows (`sessionId`, `cwd`, `title`, `updatedAt`) from
+`session/list` for a cwd with history, and both replay the full conversation
+through `session/update` on `session/load`. Driving the real bridge against the
+real binaries, `GET /session/list` answers 200 with signed session tokens and
+`POST /session/resume` answers a hydrated transcript — user turns, assistant
+turns, thinking parts — plus the model/mode catalog. Listing keeps working while
+a session is live on the bridge. So the whole path (capability table → UI →
+`listResumableSessions`/`resumeSession` → bridge → vendor) is real for both.
+
+Two caveats this does **not** retire:
+
+- The 410 branch in `acp-session.ts:106` and `:221` is still correct defensive
+  code, and `acp-session.test.ts` still covers it through the fake agent. It
+  simply does not fire for either shipping agent, so there is no dead Resume
+  control today.
+- If a future build did drop the capability, `NativeResumeSessionDialog.tsx:95`
+  collapses the bridge’s specific reason into a generic “Failed to load
+  sessions”, so the user would see a broken-looking control rather than an
+  explanation. That is the residual defect — mis-reporting, not mis-capability.
+
+Note on method: reading `session/list` out of the Grok binary’s dispatch strings
+suggests the method is absent. That is wrong — the live agent advertises and
+serves it. Capability claims here should come from an `initialize` probe, not
+from static inspection.
 
 Cursor/Grok speed is partial: the table always says `speed: true`; the toggle
 only appears if the ACP composer reports `fastModeAvailable`.
@@ -331,7 +361,11 @@ cheap to fix relative to vendor protocol work.
    vs Agent Info vs generator are three different gates.
 5. `composer.provider: true` for everyone; native picker is
    `platformSelectionLocked`.
-6. Resume advertised for ACP even when the vendor cannot list sessions (410).
+6. ~~Resume advertised for ACP even when the vendor cannot list sessions
+   (410).~~ Not a live mismatch: both shipping ACP agents announce
+   `loadSession` + `session/list`, so the advertised capability is accurate
+   (see §2). What remains is that a 410 surfaces as a generic “Failed to load
+   sessions”, hiding the bridge’s reason.
 7. Agent Info dual-gates on provider string, not only capabilities.
 8. Slash menu is wired for every native tab; `slashCommands: false` only empties
    the list.
@@ -369,7 +403,11 @@ cheap to fix relative to vendor protocol work.
 7. Gate `useSlashCommandMenu` on `capabilities.slashCommands` (plus injected
    `/steer`).
 8. Resume button for ACP: if `/session/list` 410s, hide/disable with the bridge
-   reason rather than leaving a dead Resume control.
+   reason rather than leaving a dead Resume control. Lower priority than first
+   recorded — no shipping agent 410s (see §2), so this is graceful degradation
+   for a future build, not a fix for a control that is dead today. The concrete
+   change is to stop discarding the bridge’s error text in
+   `NativeResumeSessionDialog.tsx:95-102`.
 9. Re-check attachments in dispatch against `nativeCapabilities(agent).attachments`
    so queue/retry cannot send files the table forbids.
 10. Change the native attachment menu copy on image-only agents so it does not
@@ -377,9 +415,9 @@ cheap to fix relative to vendor protocol work.
 
 ### 5.2 Shared surface that already exists — wire it, don’t invent RPCs
 
-Queue, resume (when the vendor lists sessions), interrupt, chat-find, @mentions,
-model/reasoning pickers, interaction cards, and parked-dispatch retry/discard
-are already shared. Remaining cheap product work:
+Queue, resume, interrupt, chat-find, @mentions, model/reasoning pickers,
+interaction cards, and parked-dispatch retry/discard are already shared.
+Remaining cheap product work:
 
 - Surface OpenCode undo / redo / share in transcript chrome, not only Agent
   Info.
@@ -401,7 +439,7 @@ review. Cheap work is UI wiring, not new vendor RPCs.
 | Cursor/Grok fork | Not exposed on the ACP bridge. Do not claim the vendor lacks `session/fork`. |
 | Cursor/Grok slash discovery | Bridge returns `[]`. Unknown whether Cursor/Grok ACP has a command list. |
 | Cursor/Grok session actions | Provider rejects all. Compact/steer/review would need ACP methods. |
-| Cursor/Grok resume | Needs vendor `session/list` + `loadSession`. |
+| ~~Cursor/Grok resume~~ | **Not blocked.** Both agents already announce `session/list` + `loadSession`, and the full path is verified working (see §2). |
 | Cursor/Grok speed | Needs vendor config option / `supportsSpeed`. |
 | Cursor background-task UI | Tasks already run; a hold/stop card would be product work on existing continuation. |
 | OpenCode conversation mode | SDK has agents, not Claude-style permission mode. Don’t fake it with Build/Plan. |
@@ -469,8 +507,9 @@ research. Close the honesty gaps first.
 
 1. **Document or align Claude Native vs Tmux permissions and tab-close.** Same
    label, different safety and resume story. Product decision before code.
-2. **Stop overclaiming composer/resume flags** (OpenCode mode, ACP resume,
-   `provider: true`, Agent Info provider-string fallbacks).
+2. **Stop overclaiming composer flags** (OpenCode mode, `provider: true`, Agent
+   Info provider-string fallbacks). ACP resume is no longer part of this item —
+   the flag is accurate (see §2).
 3. **Attachment honesty** (menu copy + dispatch re-check) for Codex / ACP /
    Tmux.
 4. **Decide whether Cursor/Grok should grow compact / slash / fork** after

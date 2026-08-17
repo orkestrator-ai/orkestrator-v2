@@ -544,6 +544,44 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(dockerfile).toContain('&& "$OPENCODE_CLI_PATH" --version');
   });
 
+  test("Playwright: the container pin tracks the repo's own Playwright minor", () => {
+    // Browser revisions are tied to the Playwright minor, so a container pinned
+    // to a different minor than the repo's harness downloads a second Chromium
+    // at runtime — over a firewall that only allowlists the CDN as a fallback.
+    const dockerfilePin = getDockerfileArg("PLAYWRIGHT_VERSION");
+    const pkg = JSON.parse(read("package.json")) as {
+      devDependencies?: Record<string, string>;
+    };
+    const range = pkg.devDependencies?.playwright;
+
+    expect(range).toBeDefined();
+    expect(dockerfilePin).toMatch(/^\d+\.\d+\.\d+$/);
+    const minor = (version: string) => version.split(".").slice(0, 2).join(".");
+    expect(minor(dockerfilePin)).toBe(minor(range!.replace(/^[\^~]/, "")));
+  });
+
+  test("Docker: Playwright ships a usable browser, and never branded Chrome", () => {
+    const dockerfile = read("docker/Dockerfile");
+
+    // Baked in because the restricted-network firewall is not a reliable path to
+    // Playwright's CDN: a container that had to install its own browser on first
+    // use would fail there.
+    expect(dockerfile).toContain("ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright");
+    expect(dockerfile).toContain("playwright install --with-deps chromium");
+    // Both container users must be able to read the shared browser root, and
+    // `node` must be able to add a browser to it.
+    expect(dockerfile).toContain("chown -R node:node /ms-playwright");
+
+    // `playwright install chrome` pulls Google's own package, which has no
+    // linux/arm64 build — it would break the image build on Apple Silicon.
+    // The comment above that line says so, so only instructions are checked.
+    const instructions = dockerfile
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("#"))
+      .join("\n");
+    expect(instructions).not.toMatch(/playwright install[^\n]*\bchrome\b/);
+  });
+
   test("managed manifest covers every supported platform and architecture with immutable checksums", () => {
     const expected = new Set<string>();
     for (const platform of ["darwin", "linux"]) {

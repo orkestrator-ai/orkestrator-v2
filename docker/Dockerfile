@@ -181,6 +181,47 @@ RUN "$CLAUDE_CLI_PATH" --version \
 RUN find /usr/local/share/npm-global/lib/node_modules/@openai \
       -type f -name codex-code-mode-host | grep -q .
 
+# Playwright, with its browser bundle baked into the image. Agents cannot fetch
+# it themselves at runtime: the restricted-network firewall does not allow
+# Playwright's CDN, so an unprepared container fails at `playwright install`.
+#
+# Chromium (Playwright's own build) rather than branded Google Chrome: Google
+# publishes no linux/arm64 Chrome package, so `playwright install chrome` cannot
+# build this image on Apple Silicon. Chromium is Playwright's default browser and
+# `playwright install chromium` also brings the headless shell that
+# `channel: "chromium-headless-shell"` and headless runs resolve.
+#
+# Playwright's default `chromiumSandbox: false` is load-bearing here and must not
+# be overridden: the container has neither CAP_SYS_ADMIN nor unprivileged user
+# namespaces (the default seccomp profile blocks them), so an explicit
+# `chromiumSandbox: true` dies with "Chromium sandboxing failed!". The container
+# is the isolation boundary.
+ARG PLAYWRIGHT_VERSION=1.61.1
+# One shared browser root, readable by `node` and by the uid-0 `orkroot` used for
+# root terminals, instead of a per-user ~/.cache/ms-playwright copy.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN npm install -g "playwright@${PLAYWRIGHT_VERSION}"
+USER root
+RUN playwright install --with-deps chromium \
+  && chown -R node:node /ms-playwright \
+  && apt-get clean && rm -rf /var/lib/apt/lists/*
+USER node
+
+# Fail the build if the browser cannot actually start — a missing shared library
+# is the usual way this install "succeeds" and then fails on first use. Launched
+# with default options, which is how an agent will launch it.
+RUN playwright --version \
+  && NODE_PATH=/usr/local/share/npm-global/lib/node_modules node -e "\
+const { chromium } = require('playwright'); \
+chromium.launch().then(async (browser) => { \
+  const page = await browser.newPage(); \
+  await page.setContent('<h1>playwright-ok</h1>'); \
+  const text = await page.textContent('h1'); \
+  await browser.close(); \
+  if (text !== 'playwright-ok') throw new Error('unexpected page content'); \
+  console.log('chromium launch verified'); \
+});"
+
 # Build both bridge servers from a filtered monorepo install. They import the
 # shared @orkestrator/protocol workspace package, so copying either bridge as a
 # standalone package leaves its `workspace:*` dependency impossible to resolve.

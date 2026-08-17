@@ -143,6 +143,9 @@ else
         "github.com"
         "mcp.context7.com"
         "cdn.jsdelivr.net"
+        # Playwright browser downloads. The image ships its own pinned Chromium,
+        # so this only matters when a project pins a different Playwright version.
+        "cdn.playwright.dev"
     )
 fi
 

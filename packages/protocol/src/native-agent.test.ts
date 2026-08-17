@@ -64,8 +64,8 @@ describe("native agent capability table", () => {
     });
 
     expect(nativeAgentCapabilities("opencode").composer.speed).toBe(false);
-    // OpenCode's Build/Plan pair was a second execution-profile picker sent as
-    // the SDK `agent` name, not a Claude/Codex permission mode.
+    // OpenCode's Plan/Build pair is an execution-profile picker sent as the SDK
+    // `agent` name, not a Claude/Codex permission mode.
     expect(nativeAgentCapabilities("opencode").composer.mode).toBe(false);
     expect(nativeAgentCapabilities("opencode").composer.executionProfile).toBe(true);
 

@@ -546,9 +546,9 @@ describe("AgentNativeTab", () => {
 
     expect(screen.queryByRole("button", { name: "Conversation mode" }) === null).toBe(true);
     const profileButton = await screen.findByRole("button", { name: "Execution profile" });
-    expect(profileButton.textContent).toContain("Build agent");
+    expect(profileButton.textContent).toContain("Build");
     fireEvent.pointerDown(profileButton);
-    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Plan agent" }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Plan" }));
 
     const input = screen.getByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Plan the change" } });
@@ -2229,6 +2229,9 @@ describe("AgentNativeTab", () => {
       recoverableDispatch?: NativeAgentSessionProjection["recoverableDispatch"];
       notices?: NativeAgentSessionProjection["notices"];
       composer?: Partial<NonNullable<NativeAgentSessionProjection["composer"]>>;
+      composerCapabilities?: Partial<
+        NativeAgentSessionProjection["capabilities"]["composer"]
+      >;
       contextUsage?: NativeAgentSessionProjection["contextUsage"];
       backgroundTasks?: NativeAgentSessionProjection["backgroundTasks"];
     } = {}) {
@@ -2296,6 +2299,7 @@ describe("AgentNativeTab", () => {
             ...(overrides.promptSuggestions === undefined
               ? {}
               : { promptSuggestions: true }),
+            ...overrides.composerCapabilities,
           },
           ...(overrides.actions ? { actions: overrides.actions } : {}),
         },
@@ -3051,6 +3055,73 @@ describe("AgentNativeTab", () => {
       await waitFor(() => expect(updateNativeAgentControlsMock).toHaveBeenCalled());
       expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
         update: { mode: "plan" },
+      });
+    });
+
+    test("lets an existing OpenCode session switch Plan/Build from the compose bar", async () => {
+      seedProjection({
+        composer: {
+          modes: [],
+          selectedModeId: undefined,
+          fastModeEnabled: null,
+          fastModeAvailable: false,
+          executionProfiles: [
+            { id: "build", label: "build" },
+            { id: "plan", label: "plan" },
+            { id: "reviewer", label: "Reviewer" },
+          ],
+          selectedExecutionProfileId: "build",
+        },
+        composerCapabilities: {
+          speed: false,
+          mode: false,
+          executionProfile: true,
+        },
+      });
+      render(<AgentNativeTab tabId="tab-opencode-mode" data={identity("opencode")} isActive />);
+
+      const trigger = await screen.findByTitle("Choose mode");
+      expect(trigger.textContent).toContain("Build");
+      expect(screen.getByTitle(/Choose model/).textContent).not.toContain("speed");
+
+      const input = screen.getByRole("textbox");
+      fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+      await waitFor(() => expect(updateNativeAgentControlsMock).toHaveBeenCalled());
+      expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        update: { executionProfileId: "plan" },
+      });
+
+      fireEvent.pointerDown(trigger);
+      fireEvent.click(await screen.findByRole("menuitemradio", { name: "Reviewer" }));
+      await waitFor(() => expect(updateNativeAgentControlsMock.mock.calls.length).toBeGreaterThan(1));
+      expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        update: { executionProfileId: "reviewer" },
+      });
+    });
+
+    test("keeps Plan/Build on an OpenCode session whose agent list has not arrived", async () => {
+      seedProjection({
+        composer: {
+          modes: [],
+          selectedModeId: undefined,
+          executionProfiles: [],
+          selectedExecutionProfileId: undefined,
+        },
+        composerCapabilities: {
+          speed: false,
+          mode: false,
+          executionProfile: true,
+        },
+      });
+      render(<AgentNativeTab tabId="tab-opencode-fallback-mode" data={identity("opencode")} isActive />);
+
+      const trigger = await screen.findByTitle("Choose mode");
+      expect(trigger.textContent).toContain("Build");
+      fireEvent.pointerDown(trigger);
+      fireEvent.click(await screen.findByRole("menuitemradio", { name: "Plan" }));
+      await waitFor(() => expect(updateNativeAgentControlsMock).toHaveBeenCalled());
+      expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        update: { executionProfileId: "plan" },
       });
     });
 

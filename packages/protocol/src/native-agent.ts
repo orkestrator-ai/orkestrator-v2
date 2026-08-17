@@ -424,10 +424,9 @@ export function nativeAgentCapabilities(
         // No fast surface anywhere in the SDK; both OpenCode catalogues report
         // `supportsSpeed: false` for every model.
         speed: false,
-        // OpenCode has primary agents, not a Claude/Codex permission mode. A
-        // Build/Plan pair here would be a second execution-profile picker whose
-        // selection is sent as the SDK `agent` name and is then overridden by
-        // the real profile (`executionAgent ?? mode`).
+        // OpenCode has primary agents, not a Claude/Codex permission mode.
+        // Plan/Build on the compose bar is the execution-profile picker, whose
+        // selection is sent as the SDK `agent` name.
         mode: false,
         executionProfile: true,
       },

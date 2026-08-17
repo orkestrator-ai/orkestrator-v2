@@ -558,6 +558,7 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     if (
       input.update.executionProfileId !== undefined
       && input.update.executionProfileId !== null
+      && (composer?.executionProfiles?.length ?? 0) > 0
       && !composer?.executionProfiles?.some(
         (profile: NonNullable<NativeAgentComposerState["executionProfiles"]>[number]) => profile.id === input.update.executionProfileId,
       )

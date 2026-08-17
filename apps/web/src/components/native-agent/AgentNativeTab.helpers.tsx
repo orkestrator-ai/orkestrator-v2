@@ -65,7 +65,8 @@ import {
 } from "./adapter";
 
 /**
- * Execution profiles offered before a tab is locked to a provider.
+ * Execution profiles offered before a tab is locked to a provider, and the
+ * Plan/Build labels used on the locked OpenCode compose bar for those two ids.
  *
  * The real list is the provider's own primary-agent names, and every source for
  * it is keyed by a provider session id that does not exist until the tab locks:
@@ -76,10 +77,18 @@ import {
  * An id the provider turns out not to have is dropped by `projectionComposer`
  * rather than dispatched as an unknown agent name.
  */
-const LAUNCH_EXECUTION_PROFILES = [
-  { id: "build", label: "Build agent" },
-  { id: "plan", label: "Plan agent" },
+export const LAUNCH_EXECUTION_PROFILES = [
+  { id: "build", label: "Build" },
+  { id: "plan", label: "Plan" },
 ] as const;
+
+/** Title-case the built-in OpenCode agents; leave custom primary agents as listed. */
+export function nativeComposeProfileLabel(id: string, label?: string): string {
+  if (id === "plan") return "Plan";
+  if (id === "build") return "Build";
+  const trimmed = label?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : id;
+}
 
 function activeAgentSummary(snapshots: NativeAgentActivitySnapshot[]): string {
   const summaries: string[] = [];
@@ -560,6 +569,17 @@ export function UnassignedNativeAgentComposer({
             if (event.key === "Tab" && event.shiftKey && canConfigureMode) {
               event.preventDefault();
               updateDraft(sessionKey, { mode: draft.mode === "plan" ? "build" : "plan" });
+              return;
+            }
+            if (event.key === "Tab" && event.shiftKey && canConfigureExecutionProfile) {
+              event.preventDefault();
+              const index = LAUNCH_EXECUTION_PROFILES.findIndex(
+                (profile) => profile.id === selectedLaunchExecutionProfile.id,
+              );
+              const next = LAUNCH_EXECUTION_PROFILES[
+                (index + 1) % LAUNCH_EXECUTION_PROFILES.length
+              ];
+              if (next) updateDraft(sessionKey, { executionProfileId: next.id });
               return;
             }
             if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;

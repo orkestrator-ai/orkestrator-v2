@@ -607,13 +607,16 @@ export function AgentModelPicker({
   const triggerPlatform = selectedPlatform
     ?? models.find((model) => model.id === selectedModelId)?.platform
     ?? models[0]?.platform;
-  const fastModeUnknown = fastModeEnabled === null;
+  const showSpeedControls = Boolean(onFastModeChange);
+  // `fastModeEnabled === null` is an unknown snapshot only when this picker can
+  // actually change speed. OpenCode has no speed surface — it encodes speed in
+  // the model name — so a null flag must not paint "? speed" onto the trigger.
+  const fastModeUnknown = showSpeedControls && fastModeEnabled === null;
   const showReasoningControls = reasoningOptions.length > 0;
   const displayLabel = selectedReasoningLabel
     ? `${selectedModelLabel} (${selectedReasoningLabel}${fastModeEnabled ? " ⚡" : ""}${fastModeUnknown ? "; speed unknown" : ""})`
     : `${selectedModelLabel}${fastModeEnabled ? " (⚡)" : fastModeUnknown ? " (speed unknown)" : ""}`;
   const moreModelCount = Math.max(0, visibleModels.length - VISIBLE_MODEL_ROWS);
-  const showSpeedControls = Boolean(onFastModeChange);
   const canReorderFavorites = catalogView === "favorites"
     && Boolean(onReorderFavorites)
     && !normalizedSearch

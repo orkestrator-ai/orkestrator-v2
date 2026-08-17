@@ -975,6 +975,23 @@ describe("AgentModelPicker", () => {
       .toBe("false");
   });
 
+  test("does not paint speed onto the trigger when the integration has no speed control", () => {
+    setMobileViewport(false);
+    renderPicker({
+      fastModeEnabled: null,
+      fastModeAvailable: false,
+      onFastModeChange: undefined,
+      selectedReasoningLabel: "Default",
+    });
+    const trigger = screen.getByRole("button", {
+      name: "A model name that can become very long (Default)",
+    });
+    expect(trigger.textContent).toContain("Default");
+    expect(trigger.textContent).not.toContain("speed");
+    expect(trigger.textContent).not.toContain("?");
+    expect(trigger.getAttribute("title")).toBe("Choose model and reasoning");
+  });
+
   test("renders the fast-only trigger branch when there is no reasoning label", () => {
     setMobileViewport(false);
     renderPicker({

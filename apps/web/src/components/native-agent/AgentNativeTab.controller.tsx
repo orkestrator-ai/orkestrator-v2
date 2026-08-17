@@ -107,6 +107,8 @@ import {
 } from "./adapter";
 import {
   extractNativePlanContent,
+  LAUNCH_EXECUTION_PROFILES,
+  nativeComposeProfileLabel,
   useNativeAgentActivityAnnouncement,
 } from "./AgentNativeTab.helpers";
 import { NativeAgentInteractionCard } from "./NativeAgentInteractionCard";
@@ -855,17 +857,54 @@ export function SharedNativeAgentController({
       .finally(() => setSuggestionDismissPending(false));
   }, [adapter.capabilities.composer.promptSuggestions, dismissSuggestedPrompt]);
 
+  /**
+   * OpenCode has no conversation-mode list; Plan/Build are primary agents.
+   * Fall back to the built-in pair when the live agent listing has not arrived
+   * yet so an existing session can still switch before `app.agents` returns.
+   */
+  const composeExecutionProfiles = useMemo(() => {
+    if (adapter.capabilities.composer.mode) return [];
+    if (adapter.capabilities.composer.executionProfile !== true) return [];
+    const profiles = composer?.executionProfiles ?? [];
+    return profiles.length > 0 ? profiles : [...LAUNCH_EXECUTION_PROFILES];
+  }, [
+    adapter.capabilities.composer.executionProfile,
+    adapter.capabilities.composer.mode,
+    composer?.executionProfiles,
+  ]);
+  const selectedComposeProfileId = composer?.selectedExecutionProfileId
+    ?? composeExecutionProfiles[0]?.id
+    ?? "build";
+
   const cycleMode = useMemo(() => {
     const modes = composer?.modes ?? [];
-    if (modes.length < 2 || settingsLocked) return undefined;
+    if (modes.length >= 2 && !settingsLocked) {
+      return () => {
+        const index = modes.findIndex(
+          (mode) => mode.id === (composer?.selectedModeId ?? "build"),
+        );
+        const next = modes[(index + 1) % modes.length];
+        if (next) void updateControlsSafely({ mode: next.id });
+      };
+    }
+    if (composeExecutionProfiles.length < 2 || settingsLocked) return undefined;
     return () => {
-      const index = modes.findIndex(
-        (mode) => mode.id === (composer?.selectedModeId ?? "build"),
+      const index = composeExecutionProfiles.findIndex(
+        (profile) => profile.id === selectedComposeProfileId,
       );
-      const next = modes[(index + 1) % modes.length];
-      if (next) void updateControlsSafely({ mode: next.id });
+      const next = composeExecutionProfiles[
+        (index + 1) % composeExecutionProfiles.length
+      ];
+      if (next) void updateControlsSafely({ executionProfileId: next.id });
     };
-  }, [composer?.modes, composer?.selectedModeId, settingsLocked, updateControlsSafely]);
+  }, [
+    composeExecutionProfiles,
+    composer?.modes,
+    composer?.selectedModeId,
+    selectedComposeProfileId,
+    settingsLocked,
+    updateControlsSafely,
+  ]);
 
   const stopSafely = useCallback(async () => {
     try {
@@ -1554,6 +1593,41 @@ export function SharedNativeAgentController({
                       {composer.modes.map((mode) => (
                         <DropdownMenuRadioItem key={mode.id} value={mode.id}>
                           {mode.label}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : composeExecutionProfiles.length > 0 ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      disabled={settingsLocked}
+                      className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                      title="Choose mode"
+                    >
+                      <ChevronDown className="h-3 w-3" />
+                      <span>
+                        {nativeComposeProfileLabel(
+                          selectedComposeProfileId,
+                          composeExecutionProfiles.find(
+                            (profile) => profile.id === selectedComposeProfileId,
+                          )?.label,
+                        )}
+                      </span>
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuRadioGroup
+                      value={selectedComposeProfileId}
+                      onValueChange={(executionProfileId) => {
+                        void updateControlsSafely({ executionProfileId });
+                      }}
+                    >
+                      {composeExecutionProfiles.map((profile) => (
+                        <DropdownMenuRadioItem key={profile.id} value={profile.id}>
+                          {nativeComposeProfileLabel(profile.id, profile.label)}
                         </DropdownMenuRadioItem>
                       ))}
                     </DropdownMenuRadioGroup>

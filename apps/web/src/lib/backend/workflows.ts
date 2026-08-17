@@ -120,6 +120,20 @@ export async function cancelMultiReview(workflowId: string): Promise<BackendMult
   return invoke<BackendMultiReviewWorkflow>("cancel_multi_review", { workflowId });
 }
 
+/**
+ * Retire one reviewer and let the review continue without it. The backend
+ * aborts that reviewer's session best-effort and consolidates from whatever the
+ * remaining reviewers produced.
+ */
+export async function stopMultiReviewReviewer(
+  workflowId: string,
+  reviewerId: string,
+): Promise<BackendMultiReviewWorkflow> {
+  return invoke<BackendMultiReviewWorkflow>(
+    "stop_multi_review_reviewer", { workflowId, reviewerId },
+  );
+}
+
 export async function getMultiReviewWorkflow<T = unknown>(
   workflowId: string,
 ): Promise<PersistedLoopedReviewWorkflow<T> | null> {

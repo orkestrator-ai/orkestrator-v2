@@ -1645,6 +1645,13 @@ describe("backend native agent and looped review wrappers", () => {
       expect(invokeMock).toHaveBeenLastCalledWith(command, { workflowId: "multi-1" });
     }
 
+    // Stopping is reviewer-scoped: the workflow keeps running without it.
+    await expect(backendWrappers.stopMultiReviewReviewer("multi-1", "reviewer-1"))
+      .resolves.toBe(workflow);
+    expect(invokeMock).toHaveBeenLastCalledWith("stop_multi_review_reviewer", {
+      workflowId: "multi-1", reviewerId: "reviewer-1",
+    });
+
     await backendWrappers.getMultiReviewWorkflow("multi-1");
     expect(invokeMock).toHaveBeenLastCalledWith("get_multi_review_workflow", { workflowId: "multi-1" });
     await backendWrappers.listMultiReviewWorkflows("env-1");

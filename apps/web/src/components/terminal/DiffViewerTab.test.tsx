@@ -1226,6 +1226,12 @@ describe("DiffViewerTab path rendering", () => {
       directory: null,
       filenameSegment: "README.md",
     },
+    {
+      name: "dot-directory",
+      filePath: ".playwright-mcp/page-2026-08-16T23-58-53-138Z.yml",
+      directory: ".playwright-mcp",
+      filenameSegment: "/page-2026-08-16T23-58-53-138Z.yml",
+    },
   ])(
     "renders and exposes the complete $name path",
     async ({ filePath, directory, filenameSegment }) => {
@@ -1247,6 +1253,11 @@ describe("DiffViewerTab path rendering", () => {
       expect(visualPath?.children.length).toBe(directory ? 2 : 1);
       if (directory) {
         expect(visualPath?.children[0]?.textContent).toBe(directory);
+        // The directory truncates RTL, which reorders a leading neutral "." to the
+        // visual end unless the text stays in its own LTR bidi isolate.
+        const isolate = visualPath?.children[0]?.querySelector("bdi");
+        expect(isolate?.getAttribute("dir")).toBe("ltr");
+        expect(isolate?.textContent).toBe(directory);
       }
       expect(visualPath?.lastElementChild?.textContent).toBe(filenameSegment);
     },

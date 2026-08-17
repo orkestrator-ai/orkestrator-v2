@@ -3381,7 +3381,12 @@ describe("multi review commands", () => {
     const address = mock(async (id: string) => ({ ...workflow("address"), id }));
     const retry = mock(async (id: string) => ({ ...workflow("retry"), id }));
     const cancel = mock(async (id: string) => ({ ...workflow("cancel"), id }));
-    const supervisor = { start, address, retry, cancel } as unknown as NonNullable<CommandContext["multiReviews"]>;
+    const stopReviewer = mock(async (id: string, _reviewerId: string) => ({
+      ...workflow("stopReviewer"), id,
+    }));
+    const supervisor = {
+      start, address, retry, cancel, stopReviewer,
+    } as unknown as NonNullable<CommandContext["multiReviews"]>;
 
     await withCommands(async (invoke) => {
       const calls: Array<[string, Record<string, unknown>]> = [
@@ -3389,6 +3394,7 @@ describe("multi review commands", () => {
         ["address_multi_review", { workflowId: "multi-1" }],
         ["retry_multi_review", { workflowId: "multi-1" }],
         ["cancel_multi_review", { workflowId: "multi-1" }],
+        ["stop_multi_review_reviewer", { workflowId: "multi-1", reviewerId: "reviewer-1" }],
       ];
       for (const [command, args] of calls) {
         const result = await invoke(command, args) as Record<string, unknown>;
@@ -3399,6 +3405,7 @@ describe("multi review commands", () => {
       expect(address).toHaveBeenCalledWith("multi-1");
       expect(retry).toHaveBeenCalledWith("multi-1");
       expect(cancel).toHaveBeenCalledWith("multi-1");
+      expect(stopReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1");
     }, { multiReviews: supervisor });
   });
 

@@ -556,8 +556,20 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     };
   }
 
-  async messages(sessionId: string): Promise<unknown[]> {
-    return (await this.readTranscript(sessionId)).messages;
+  /**
+   * The bridge transcript route has no tail parameter, so a bounded read is
+   * trimmed here rather than at the wire. The contract still holds — a caller
+   * that asked for the newest `limit` entries never sees, or retains, more than
+   * that — but the response itself is still the full bounded transcript.
+   */
+  async messages(sessionId: string, options?: { limit?: number }): Promise<unknown[]> {
+    const messages = (await this.readTranscript(sessionId)).messages;
+    const limit = options?.limit;
+    if (limit === undefined) return messages;
+    if (!Number.isSafeInteger(limit) || limit <= 0) {
+      throw new RangeError(`${this.agent} transcript limit must be a positive integer`);
+    }
+    return messages.length > limit ? messages.slice(-limit) : messages;
   }
 
   private codexRuntimeSummary(payload: unknown): NativeAgentRuntimeSummary | undefined {

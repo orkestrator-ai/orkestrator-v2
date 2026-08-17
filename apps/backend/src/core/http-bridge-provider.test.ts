@@ -288,6 +288,53 @@ describe("HTTP bridge provider", () => {
     }
   });
 
+  test("returns only the newest messages a bounded read asked for", async () => {
+    const { provider, requests } = httpProvider((url) => {
+      if (url.endsWith("/messages")) {
+        return Response.json({
+          messages: [{ id: "a" }, { id: "b" }, { id: "c" }],
+        });
+      }
+      return Response.json({});
+    });
+
+    // The bridge route has no tail parameter, so a caller that asked for the
+    // newest entry must not be handed the whole transcript to compare or retain.
+    await expect(provider.messages("session-1", { limit: 1 })).resolves.toEqual([{ id: "c" }]);
+    expect(requests[0]!.url).toBe("http://claude.test/session/session-1/messages");
+    expect(requests[0]!.url.includes("limit")).toBe(false);
+    await expect(provider.messages("session-1", { limit: 2 }))
+      .resolves.toEqual([{ id: "b" }, { id: "c" }]);
+    // A limit above the transcript length is satisfied by the whole transcript.
+    await expect(provider.messages("session-1", { limit: 10 }))
+      .resolves.toEqual([{ id: "a" }, { id: "b" }, { id: "c" }]);
+    await expect(provider.messages("session-1", {}))
+      .resolves.toEqual([{ id: "a" }, { id: "b" }, { id: "c" }]);
+    // A nonsensical bound fails loudly rather than silently reading everything.
+    await expect(provider.messages("session-1", { limit: 0 })).rejects.toThrow(RangeError);
+    await expect(provider.messages("session-1", { limit: -1 })).rejects.toThrow(RangeError);
+    await expect(provider.messages("session-1", { limit: 1.5 })).rejects.toThrow(RangeError);
+  });
+
+  test("a bounded messages read still fails when the full wire body is oversized", async () => {
+    const oversized = new Uint8Array(1);
+    Object.defineProperty(oversized, "byteLength", { value: 16 * 1024 * 1024 + 1 });
+    const { provider } = httpProvider(() => new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(oversized);
+          controller.close();
+        },
+      }),
+      { headers: { "Content-Type": "application/json" } },
+    ));
+
+    // limit trims after the transport bound, so an oversized /messages body
+    // cannot be hidden by asking for the newest entry only.
+    await expect(provider.messages("session-1", { limit: 1 }))
+      .rejects.toThrow("transcript read is oversized");
+  });
+
   test("reads status and messages, dispatches prompts, and aborts sessions", async () => {
     const { provider, requests } = httpProvider((url) => {
       if (url.endsWith("/session/session%2F1")) {

@@ -370,6 +370,205 @@ describe("Codex collaboration state", () => {
     expect(interruptedFailure?.toolState).toBe("failure");
   });
 
+  test("resolves an interrupt that no later snapshot reports", () => {
+    // Observed in production: two children were interrupted three seconds
+    // apart, and only the later one was still named by the next `list_agents`
+    // snapshot. Without the interrupt beat as terminal evidence, the earlier
+    // child's card spun for the rest of the session.
+    const [part] = applyCodexCollabStateToSubagentParts(
+      [makeAgent("agent-1")],
+      [
+        {
+          id: "spawn-1",
+          type: "collab_tool_call",
+          tool: "spawn_agent",
+          receiver_thread_ids: ["agent-1"],
+          agents_states: { "agent-1": { status: "running" } },
+        },
+        {
+          id: "interrupt-1",
+          type: "subagent_activity",
+          activity: "interrupted",
+          agent_thread_id: "agent-1",
+          agent_path: "/root/acp_review",
+        },
+        {
+          id: "list-1",
+          type: "collab_tool_call",
+          tool: "list_agents",
+          receiver_thread_ids: ["agent-2"],
+          agents_states: { "agent-2": { status: "running" } },
+        },
+      ],
+    );
+
+    expect(part).toMatchObject({ subagentId: "agent-1", toolState: "failure" });
+  });
+
+  test("reports an interrupted child with no spawn row in this turn", () => {
+    const [part] = applyCodexCollabStateToSubagentParts([], [{
+      id: "interrupt-1",
+      type: "subagent_activity",
+      activity: "interrupted",
+      agent_thread_id: "agent-1",
+      agent_path: "/root/acp_review",
+    }]);
+
+    expect(part).toMatchObject({
+      content: "acp_review",
+      subagentId: "agent-1",
+      subagentRole: "acp_review",
+      toolState: "failure",
+    });
+  });
+
+  test("reopens an interrupted child that is put back to work", () => {
+    const interrupt = {
+      id: "interrupt-1",
+      type: "subagent_activity",
+      activity: "interrupted",
+      agent_thread_id: "agent-1",
+    } as const;
+
+    // A follow-up beat means the child is running again, so the interrupt no
+    // longer describes it.
+    for (const activity of ["started", "interacted"] as const) {
+      const [reopened] = applyCodexCollabStateToSubagentParts(
+        [makeAgent("agent-1")],
+        [interrupt, {
+          id: "resume-1",
+          type: "subagent_activity",
+          activity,
+          agent_thread_id: "agent-1",
+        }],
+      );
+      expect(reopened?.toolState).toBe("pending");
+    }
+
+    // So does a newer authoritative snapshot.
+    const [running] = applyCodexCollabStateToSubagentParts(
+      [makeAgent("agent-1")],
+      [interrupt, {
+        id: "followup-1",
+        type: "collab_tool_call",
+        tool: "followup_task",
+        receiver_thread_ids: ["agent-1"],
+        agents_states: { "agent-1": { status: "running" } },
+      }],
+    );
+    expect(running?.toolState).toBe("pending");
+  });
+
+  test("keeps an unconfirmed interrupt through collab items that report no status", () => {
+    // `receiver_thread_ids` is populated for every collaboration call, but
+    // `agents_states` carries an entry only when the call observed the child.
+    // A later call that merely names the interrupted child — or reports only a
+    // message for it — must not discard the one piece of terminal evidence the
+    // row has, or the card spins for the rest of the session again.
+    const interrupt = {
+      id: "interrupt-1",
+      type: "subagent_activity",
+      activity: "interrupted",
+      agent_thread_id: "agent-1",
+    } as const;
+
+    const silentItems = [
+      {
+        id: "send-1",
+        type: "collab_tool_call",
+        tool: "send_message",
+        receiver_thread_ids: ["agent-1"],
+      },
+      {
+        id: "list-1",
+        type: "collab_tool_call",
+        tool: "list_agents",
+        receiver_thread_ids: ["agent-1"],
+        agents_states: { "agent-1": { message: "Partial findings" } },
+      },
+    ] as const;
+
+    for (const silentItem of silentItems) {
+      const [part] = applyCodexCollabStateToSubagentParts(
+        [makeAgent("agent-1")],
+        [interrupt, silentItem],
+      );
+      expect(part?.toolState).toBe("failure");
+    }
+
+    // The message such an item does carry is still surfaced.
+    const [withMessage] = applyCodexCollabStateToSubagentParts(
+      [makeAgent("agent-1")],
+      [interrupt, silentItems[1]],
+    );
+    expect(withMessage?.subagentActions).toEqual([
+      { type: "text", content: "Partial findings" },
+    ]);
+  });
+
+  test("keeps an interrupt from repainting a child that already finished", () => {
+    // `interrupt_agent` against a completed child is a no-op, so the child's own
+    // transcript outcome must survive the beat it still emits — and the beat
+    // must not cost the child its final message either.
+    const [part] = applyCodexCollabStateToSubagentParts(
+      [makeAgent("agent-1", { toolState: "success" })],
+      [
+        {
+          id: "wait-1",
+          type: "collab_tool_call",
+          tool: "wait",
+          receiver_thread_ids: ["agent-1"],
+          agents_states: {
+            "agent-1": { status: "completed", message: "Review complete" },
+          },
+        },
+        {
+          id: "interrupt-1",
+          type: "subagent_activity",
+          activity: "interrupted",
+          agent_thread_id: "agent-1",
+        },
+      ],
+    );
+
+    expect(part).toMatchObject({
+      subagentId: "agent-1",
+      toolState: "success",
+      subagentActions: [{ type: "text", content: "Review complete" }],
+    });
+  });
+
+  test("keeps a collab-only completed child successful after a no-op interrupt", () => {
+    // Transcript discovery can lag or fail, so the preceding collaboration
+    // snapshot must be sufficient to protect the completed outcome.
+    const [part] = applyCodexCollabStateToSubagentParts(
+      [],
+      [
+        {
+          id: "wait-1",
+          type: "collab_tool_call",
+          tool: "wait",
+          receiver_thread_ids: ["agent-1"],
+          agents_states: {
+            "agent-1": { status: "completed", message: "Review complete" },
+          },
+        },
+        {
+          id: "interrupt-1",
+          type: "subagent_activity",
+          activity: "interrupted",
+          agent_thread_id: "agent-1",
+        },
+      ],
+    );
+
+    expect(part).toMatchObject({
+      subagentId: "agent-1",
+      toolState: "success",
+      subagentActions: [{ type: "text", content: "Review complete" }],
+    });
+  });
+
   test("preserves an earlier-turn final message when an interaction invalidates its status", () => {
     const [part] = applyCodexCollabStateToSubagentParts([], [
       {

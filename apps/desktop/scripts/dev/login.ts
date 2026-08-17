@@ -13,6 +13,25 @@ export type AgentTestLogin = {
 type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
 
 /**
+ * The durable token may only travel to the profile's own loopback gateway.
+ * `localhost` / `127.0.0.1` / `::1` match what agent-test profiles bind;
+ * anything else, including userinfo-shaped URLs, is refused before the auth
+ * file is read.
+ */
+export function isLoopbackBrowserGatewayUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:")
+      && (url.hostname === "127.0.0.1"
+        || url.hostname === "localhost"
+        || url.hostname === "::1"
+        || url.hostname === "[::1]");
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Mints a single-use browser login link for an isolated agent-test profile.
  *
  * The durable gateway token is read here, on the host, and travels no further
@@ -34,10 +53,18 @@ export async function mintAgentTestLoginUrl(options: {
     throw new Error(`Profile ${status.profile} is ${status.status}; start it with bun run dev:test first`);
   }
   if (!status.browserUrl) throw new Error(`Profile ${status.profile} has no browser gateway URL`);
+  if (!isLoopbackBrowserGatewayUrl(status.browserUrl)) {
+    throw new Error(`Profile ${status.profile} browser gateway URL is not loopback; refusing to mint a login link`);
+  }
   if (!status.authFile) throw new Error(`Profile ${status.profile} has no gateway auth file`);
 
   const read = options.readTokenFile ?? ((filePath: string) => readFile(filePath, "utf8"));
-  const parsed = JSON.parse(await read(status.authFile)) as { token?: unknown };
+  let parsed: { token?: unknown };
+  try {
+    parsed = JSON.parse(await read(status.authFile)) as { token?: unknown };
+  } catch {
+    throw new Error(`Gateway auth file is invalid: ${status.authFile}`);
+  }
   if (typeof parsed.token !== "string" || !parsed.token) {
     throw new Error(`Gateway auth file is invalid: ${status.authFile}`);
   }
@@ -46,12 +73,18 @@ export async function mintAgentTestLoginUrl(options: {
   const response = await fetchImpl(new URL("/__orkestrator/agent-test/bootstrap", status.browserUrl).href, {
     method: "POST",
     headers: { authorization: `Bearer ${parsed.token}` },
+    redirect: "error",
   });
   if (!response.ok) {
     throw new Error(`Gateway refused to mint a login link (HTTP ${response.status})`);
   }
   const minted = await response.json() as { code?: unknown; expiresAt?: unknown };
-  if (typeof minted.code !== "string" || typeof minted.expiresAt !== "number") {
+  if (
+    typeof minted.code !== "string"
+    || minted.code.length === 0
+    || typeof minted.expiresAt !== "number"
+    || !Number.isFinite(minted.expiresAt)
+  ) {
     throw new Error("Gateway returned an unexpected bootstrap response");
   }
 

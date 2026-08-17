@@ -1,12 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
-import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
+import { mintAgentTestLoginUrl } from "../../apps/desktop/scripts/dev/login";
 
 type Status = {
   status: string;
+  profile?: string;
+  flavor?: string;
   browserUrl?: string;
   authFile?: string;
   testProject?: string;
@@ -34,26 +36,27 @@ async function profileStatus(): Promise<Status> {
 }
 
 async function authenticatedInvoke(page: Page, status: Status) {
-  const auth = JSON.parse(await readFile(status.authFile!, "utf8")) as { token: string };
-  // Mint outside Playwright so the persistent gateway token can never enter a
-  // browser trace. The exchanged code is short-lived and consumed exactly once.
-  const minted = await fetch(new URL("/__orkestrator/agent-test/bootstrap", status.browserUrl!).href, {
-    method: "POST",
-    headers: { authorization: `Bearer ${auth.token}` },
+  // Mint on the host so the durable token never enters a browser trace, then
+  // sign in by navigating the one-shot login URL the agents are told to use.
+  const login = await mintAgentTestLoginUrl({
+    status: {
+      profile: status.profile ?? profile,
+      flavor: "agent-test",
+      status: "ready",
+      browserUrl: status.browserUrl,
+      authFile: status.authFile,
+    },
   });
-  expect(minted.ok).toBe(true);
-  const { code } = await minted.json() as { code: string };
-  const exchanged = await page.request.post(
-    new URL("/__orkestrator/agent-test/bootstrap/exchange", status.browserUrl!).href,
-    { data: { code } },
-  );
-  expect(exchanged.ok()).toBe(true);
+  const response = await page.goto(login.loginUrl, { waitUntil: "domcontentloaded" });
+  expect(response?.ok() ?? false).toBe(true);
+  expect(page.url()).not.toContain("/__orkestrator/agent-test/login");
+  expect(page.url()).not.toContain("code=");
   return async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
-    const response = await page.request.post(new URL("/__orkestrator/invoke", status.browserUrl!).href, {
+    const invokeResponse = await page.request.post(new URL("/__orkestrator/invoke", status.browserUrl!).href, {
       data: { command, args },
     });
-    expect(response.ok(), `${command}: ${await response.text()}`).toBe(true);
-    return (await response.json() as { result: T }).result;
+    expect(invokeResponse.ok(), `${command}: ${await invokeResponse.text()}`).toBe(true);
+    return (await invokeResponse.json() as { result: T }).result;
   };
 }
 

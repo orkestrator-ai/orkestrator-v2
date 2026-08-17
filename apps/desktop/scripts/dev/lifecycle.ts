@@ -26,7 +26,7 @@ import {
   seedInstalledModelCatalogCaches,
 } from "./profile-io.js";
 import { seedFixture } from "./fixture.js";
-import { formatAgentTestLogin, mintAgentTestLoginUrl } from "./login.js";
+import { formatAgentTestLogin, mintAgentTestLoginUrl, type AgentTestLogin } from "./login.js";
 
 const packageRoot = path.resolve(import.meta.dir, "../..");
 const repositoryRoot = path.resolve(packageRoot, "../..");
@@ -511,15 +511,23 @@ export async function showStatus(args: DevArguments): Promise<number> {
   return status.status === "ready" && live.launcher ? 0 : 1;
 }
 
-export async function loginProfile(args: DevArguments): Promise<number> {
-  const profile = await resolveStoredProfile(args, "agent-test");
-  const status = await readStatus(statusManifestPath(profile));
+export type LoginProfileDependencies = {
+  resolveProfile?: (args: DevArguments, flavor: "agent-test") => Promise<RuntimeProfile>;
+  readStatus?: (statusPath: string) => Promise<RuntimeStatusManifest | null>;
+  liveness?: (status: RuntimeStatusManifest | null) => { launcher: boolean };
+  mint?: (options: { status: RuntimeStatusManifest }) => Promise<AgentTestLogin>;
+  log?: (message: string) => void;
+};
+
+export async function loginProfile(args: DevArguments, deps: LoginProfileDependencies = {}): Promise<number> {
+  const profile = await (deps.resolveProfile ?? resolveStoredProfile)(args, "agent-test");
+  const status = await (deps.readStatus ?? readStatus)(statusManifestPath(profile));
   if (!status) throw new Error(`Profile ${profile.id} has no runtime status. Start it with bun run dev:test.`);
-  if (!liveness(status).launcher) {
+  if (!(deps.liveness ?? liveness)(status).launcher) {
     throw new Error(`Profile ${profile.id} is not running. Start it with bun run dev:test.`);
   }
-  const login = await mintAgentTestLoginUrl({ status });
-  console.log(args.json ? JSON.stringify(login, null, 2) : formatAgentTestLogin(login));
+  const login = await (deps.mint ?? mintAgentTestLoginUrl)({ status });
+  (deps.log ?? console.log)(args.json ? JSON.stringify(login, null, 2) : formatAgentTestLogin(login));
   return 0;
 }
 

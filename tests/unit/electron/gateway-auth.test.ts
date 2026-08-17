@@ -713,6 +713,20 @@ describe("remote gateway", () => {
 
 
 
+  test("rejects the agent-test login link on the control listener", async () => {
+    const { info } = await startGateway({
+      agentTestMode: true,
+      controlBindAddress: "127.0.0.1",
+      controlPort: 0,
+    });
+    expect(info.browserUrl).toBeTruthy();
+    expect(info.url).not.toBe(info.browserUrl);
+    const control = await requestUrl(`${info.url}__orkestrator/agent-test/login?code=anything`);
+    expect(control.status).toBe(404);
+  });
+
+
+
   test("slides an agent-test session on use and stops at its absolute lifetime", async () => {
     const { gateway, info } = await startGateway({ agentTestMode: true });
     const sessions = (gateway as unknown as {

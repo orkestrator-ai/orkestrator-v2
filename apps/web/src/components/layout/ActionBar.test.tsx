@@ -3393,6 +3393,41 @@ describe("ActionBar workflow tabs", () => {
     expect(screen.getByRole("button", { name: "Start 2-model review" })).toBeTruthy();
   });
 
+  /**
+   * The reattach check reads the backend before deciding to launch, so a failed
+   * read has to abort the launch rather than fall through to `startMultiReview`.
+   * Falling through would start a second review that the backend's
+   * one-active-per-environment rule then rejects, leaving the user with a
+   * storage error instead of the real cause.
+   */
+  test("aborts the launch when the active-workflow check cannot be read", async () => {
+    findActiveMultiReviewWorkflowMock.mockImplementation(async () => {
+      throw new Error("backend unavailable");
+    });
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentWorkspaceReady = true;
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not open Multi Review",
+      { description: "backend unavailable" },
+    ));
+    expect(startMultiReviewMock).not.toHaveBeenCalled();
+    expect(createTabMock).not.toHaveBeenCalledWith("multi-review", expect.anything());
+    expect(cancelMultiReviewMock).not.toHaveBeenCalled();
+    // The dialog stays open so the launch can simply be retried once the
+    // backend answers again.
+    expect(screen.getByRole("button", { name: "Start 2-model review" })).toBeTruthy();
+  });
+
   test("keeps a still-cancelling Multi Review recoverable when the tab cannot open", async () => {
     // Cancellation is asynchronous, so the backend answers `cancelling`, not
     // `cancelled`. Deleting there is rejected, which would replace the real

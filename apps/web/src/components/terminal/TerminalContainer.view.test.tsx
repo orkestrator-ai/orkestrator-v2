@@ -7,7 +7,7 @@ import { useEffect,useRef,type ReactNode } from "react";
 import { act,cleanup,render,screen,waitFor } from "@testing-library/react";
 
 
-import { TerminalProvider,useTerminalContext } from "@/contexts";
+import { MAX_TABS,TerminalProvider,useTerminalContext } from "@/contexts";
 
 
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
@@ -6594,6 +6594,83 @@ describe("TerminalContainer", () => {
         .filter((tab) => tab.type === "multi-review")
         .map((tab) => tab.multiReviewTabData?.reviewerId),
     ).toEqual(["reviewer-1"]);
+  });
+
+  /**
+   * Reuse is deliberately resolved *before* the tab limit, because surfacing a
+   * tab that already exists adds nothing to the count. A full workspace is
+   * exactly when reattaching matters most, so pin both halves: the open
+   * workflow is still reachable at MAX_TABS, and a genuinely new one is still
+   * refused there.
+   */
+  test("reattaches to an open Multi Review at the tab limit but still refuses a new one", async () => {
+    const results: boolean[] = [];
+    function TabLimitHarness() {
+      const { createTab } = useTerminalContext();
+      const didRunRef = useRef(false);
+      useEffect(() => {
+        if (!createTab || didRunRef.current) return;
+        didRunRef.current = true;
+        results.push(createTab("multi-review", { multiReviewId: "workflow-1" }));
+        results.push(createTab("multi-review", { multiReviewId: "workflow-2" }));
+      }, [createTab]);
+      return null;
+    }
+
+    const filler = Array.from({ length: MAX_TABS - 1 }, (_unused, index) => ({
+      id: `filler-${index}`,
+      type: "plain" as const,
+    }));
+    usePaneLayoutStore.setState((state) => ({
+      environments: new Map(state.environments).set("env-full", {
+        root: {
+          kind: "leaf",
+          id: "only",
+          tabs: [
+            {
+              id: "open-multi-review",
+              type: "multi-review",
+              multiReviewTabData: { environmentId: "env-full", workflowId: "workflow-1" },
+            },
+            ...filler,
+          ],
+          activeTabId: "filler-0",
+        },
+        activePaneId: "only",
+        containerId: "container-full",
+      }),
+    }));
+    mockToastError.mockClear();
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-full"
+          containerId="container-full"
+          isContainerRunning
+          isActive
+        />
+        <TabLimitHarness />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => expect(results).toEqual([true, false]));
+    const layout = usePaneLayoutStore.getState();
+    const pane = layout.getPane("only", "env-full");
+    // Nothing was added: the reuse focused the existing tab and the second
+    // request was rejected by the limit.
+    expect(pane?.tabs).toHaveLength(MAX_TABS);
+    expect(pane?.tabs.filter((tab) => tab.type === "multi-review")
+      .map((tab) => tab.multiReviewTabData?.workflowId)).toEqual(["workflow-1"]);
+    expect(pane?.activeTabId).toBe("open-multi-review");
+    // Reuse must stay silent; only the refused request warns.
+    expect(mockToastError).toHaveBeenCalledTimes(1);
+    expect(mockToastError).toHaveBeenLastCalledWith(
+      "Tab limit reached",
+      expect.objectContaining({
+        description: `You can have up to ${MAX_TABS} tabs open. Close a tab and try again.`,
+      }),
+    );
   });
 
 });

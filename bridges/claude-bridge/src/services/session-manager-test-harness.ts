@@ -86,20 +86,12 @@ export const sessionManagerTestHome = mkdtempSync(
 setClaudeHomeForTesting(sessionManagerTestHome);
 
 
-import type {
-  BackgroundTaskSnapshot,
-  MessagePatchEventData,
-  NormalizedPart,
-  SessionUsageSnapshot,
-  SSEEvent,
-} from "../types/index.js";
-
-
-import {
-  MAX_DIFF_SIDE_BYTES,
-  MAX_TOOL_TEXT_BYTES,
-  TRUNCATED_NOTICE,
-} from "./part-budget.js";
+// Only `captureEvents` below needs a type from here. The suites that assert on
+// patches, parts, usage, background tasks or the part-budget constants import
+// those from their own source, so the harness must not re-import them: it is
+// not a re-export surface for them, and `part-budget.js` was being pulled in at
+// runtime for nothing.
+import type { SSEEvent } from "../types/index.js";
 
 
 

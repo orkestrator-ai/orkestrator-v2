@@ -6,11 +6,21 @@
     "lib": ["ES2022"],
     "outDir": "dist",
     "rootDir": "src",
-    "types": ["node", "bun"],
+    "types": ["node"],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
+  // The bridge builds with `--target=node` and runs under `node dist/index.js`,
+  // so Bun's ambient globals must stay out of this project: a `Bun.*` call in
+  // shipped source has to fail here rather than at runtime. `acp-test-harness.ts`
+  // is the one non-`.test.ts` file that legitimately needs them, and it is
+  // typechecked by `tsconfig.test.json` instead.
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/**/*.test.ts",
+    "src/acp-test-harness.ts"
+  ]
 }

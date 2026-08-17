@@ -10,6 +10,28 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `Electron backend command registry > rejects malformed container status framing and invalid encoded sections` (`tests/unit/electron/commands-registry-terminal.test.ts:1418`)
+
+- **Status:** open
+- **Date observed:** 2026-08-17
+- **Original command:** `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures`
+- **Worker configuration:** root group only, four Bun workers.
+- **Failure:** `this test timed out after 5000ms` (duration: 5,002.30 ms). The paired unhandled error reported between tests was `expect(received).toThrow(expected)` with expected substring `"Malformed"` but received `"Command failed: docker exec container-1 bash -lc ..."` — the fake `docker exec` echoing the whole git-status script back as a failure. The file also logged `killed 1 dangling process`.
+- **Suite counts:** 3,726 passed, 1 skipped, 2 failed, 2 errors, 16,592 `expect()` calls; 3,729 tests across 178 files in 359.91 s.
+- **Isolated rerun:** `bun run test:logged -- --name rerun-terminal -- bun test tests/unit/electron/commands-registry-terminal.test.ts` → passed in 25.6 s.
+- **Hypothesis:** The case drives a real fake-`docker` child process against the generic 5-second outer budget. Under four-worker contention the fixture had not produced its framed status output before the budget expired, so the assertion observed the fixture's own command-failure message instead of the malformed-framing rejection. This matches the 2026-08-16 sweep's command-registry row, which gave sibling cases explicit budgets; this case appears not to have received one. A recurrence should capture the fixture's process timing before changing the framing assertions.
+
+## `Electron backend command registry > treats empty, null, and non-boolean draft output as non-draft` (`tests/unit/electron/commands-registry-pr.test.ts:650`)
+
+- **Status:** open
+- **Date observed:** 2026-08-17
+- **Original command:** `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures`
+- **Worker configuration:** root group only, four Bun workers.
+- **Failure:** `this test timed out after 5000ms` (duration: 5,021.67 ms). The paired unhandled error reported between tests was an expected-to-resolve promise rejecting: `commands.get("merge_pr_local")?.({ environmentId, method: "squash", deleteBranch: false })` was expected to resolve to `{ outcome: "merged" }`. The file also logged `killed 1 dangling process`.
+- **Suite counts:** as above — the two failures and two errors in that run are these entries.
+- **Isolated rerun:** `bun run test:logged -- --name rerun-pr -- bun test tests/unit/electron/commands-registry-pr.test.ts` → passed in 32.5 s.
+- **Hypothesis:** Same shape as the terminal entry — a real fake-`gh`/Git fixture racing the generic 5-second budget under contention, with the paired `merge_pr_local` rejection being the fixture failing rather than the draft-parsing behavior under test. Both entries were observed while reviewing `model-platform-detection`, whose diff touches only `apps/web`, an ACP bridge tsconfig, and Claude bridge test fixtures — nothing either file imports. Because these are timeouts rather than assertion mismatches, an isolated rerun alone does not fully exclude a genuine slowdown; a recurrence should time the fixture's process startup before adjusting budgets.
+
 ## `ACP bridge > quarantines an unusable state file instead of refusing to start` (`bridges/acp-bridge/src/acp-persistence.test.ts:448`)
 
 - **Status:** open

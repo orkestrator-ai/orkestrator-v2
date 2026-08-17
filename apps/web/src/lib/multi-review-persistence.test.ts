@@ -151,6 +151,36 @@ describe("findActiveMultiReviewWorkflow", () => {
     expect(await findActiveMultiReviewWorkflow(ENVIRONMENT_ID)).toBeNull();
   });
 
+  /**
+   * The launcher runs this before deciding whether to start a workflow, so a
+   * failed read must not be answered as "nothing active" — that would start a
+   * second review the backend then refuses. Rejecting is what keeps the launch
+   * fail-closed, and it must reach the caller rather than be swallowed here.
+   */
+  test("propagates a failed backend read instead of reporting no active workflow", async () => {
+    listMultiReviewWorkflowsMock.mockImplementation(async () => {
+      throw new Error("backend unavailable");
+    });
+    await expect(findActiveMultiReviewWorkflow(ENVIRONMENT_ID))
+      .rejects.toThrow("backend unavailable");
+  });
+
+  /**
+   * A failed read must also leave the projection alone. Pruning the store on the
+   * way to an error would drop a workflow whose tab is open and rendering.
+   */
+  test("leaves the store untouched when the backend read fails", async () => {
+    listMultiReviewWorkflowsMock.mockImplementation(async () => [entry("wf-live", "reviewing", 3)]);
+    await findActiveMultiReviewWorkflow(ENVIRONMENT_ID);
+    listMultiReviewWorkflowsMock.mockImplementation(async () => {
+      throw new Error("backend unavailable");
+    });
+    await findActiveMultiReviewWorkflow(ENVIRONMENT_ID).catch(() => undefined);
+    expect(useMultiReviewStore.getState().workflows.get("wf-live")).toMatchObject({
+      id: "wf-live", phase: "reviewing", backendRevision: 3,
+    });
+  });
+
   test("stamps the authoritative revision onto the store", async () => {
     listMultiReviewWorkflowsMock.mockImplementation(async () => [
       entry("wf-live", "reviewing", 12),

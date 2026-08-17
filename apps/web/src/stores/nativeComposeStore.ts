@@ -15,7 +15,12 @@ export interface NativeComposeDraft {
   requestId?: string;
   fastMode: boolean;
   mode: AgentConversationMode;
-  executionProfileId?: "build" | "plan";
+  /**
+   * Provider primary-agent name, so it is not a closed set: OpenCode users can
+   * rename or add agents. Bounded like the other free-form ids rather than
+   * narrowed to the two the launcher offers by default.
+   */
+  executionProfileId?: string;
 }
 
 const EMPTY_DRAFT: NativeComposeDraft = {
@@ -90,8 +95,9 @@ function restoreDraftMetadata(value: unknown): Partial<NativeComposeDraft> | und
     : undefined;
   const fastMode = typeof metadata.fastMode === "boolean" ? metadata.fastMode : undefined;
   const mode = metadata.mode === "build" || metadata.mode === "plan" ? metadata.mode : undefined;
-  const executionProfileId = metadata.executionProfileId === "build"
-    || metadata.executionProfileId === "plan"
+  const executionProfileId = typeof metadata.executionProfileId === "string"
+    && metadata.executionProfileId.trim().length > 0
+    && metadata.executionProfileId.length <= 256
     ? metadata.executionProfileId
     : undefined;
   if (

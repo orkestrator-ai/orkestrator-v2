@@ -472,13 +472,16 @@ describe("AgentNativeTab", () => {
     const tabId = "tab-opencode-initial-profile";
     seedUnassignedPane(tabId);
     const sessionKey = createSessionKey("env-1", tabId);
-    // Simulate a persisted Plan conversation-mode draft from Codex. OpenCode's
-    // execution profile has its own field, so this must start at Build instead
-    // of displaying Plan while dispatching Build.
+    // Simulate a persisted Plan conversation-mode draft from Codex, with fast
+    // mode on. OpenCode's execution profile has its own field, so this must
+    // start at Build instead of displaying Plan while dispatching Build — and
+    // neither the mode nor the fast toggle may follow the draft across to a
+    // platform whose capability table has no surface to apply them.
     useNativeComposeStore.getState().updateDraft(sessionKey, {
       platform: "codex",
       modelId: "codex-m",
       mode: "plan",
+      fastMode: true,
     });
     useNativeComposeStore.getState().updateDraft(sessionKey, {
       platform: "opencode",
@@ -529,6 +532,8 @@ describe("AgentNativeTab", () => {
         agent: "opencode",
         executionProfileId: "plan",
         sessionMode: undefined,
+        // Not the stale `true` the Codex draft left behind.
+        fastMode: false,
       }),
     ));
     await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledWith(
@@ -1175,6 +1180,32 @@ describe("AgentNativeTab", () => {
     await waitFor(() => expect(adoptNativeAgentSessionMock).toHaveBeenCalled());
     expect(adoptNativeAgentSessionMock.mock.calls.at(-1)?.[0])
       .not.toHaveProperty("sessionMode");
+  });
+
+  test("consumes an execution-profile launch option before a resumed tab remounts", async () => {
+    // The profile is pinned by the unassigned launcher and has to survive the
+    // hand-off to the locked tab, which adopts rather than creates. Leaving it
+    // on the pane would re-apply it to a later session the user never chose it
+    // for, so the second mount must adopt without it.
+    const tabId = "tab-profile-only";
+    seedAssignedPane(tabId, { initialExecutionProfileId: "plan" });
+    const first = render(<PaneBackedAgentNativeTab tabId={tabId} />);
+
+    await waitFor(() => {
+      const tab = usePaneLayoutStore.getState().getAllTabs("env-1")
+        .find((candidate) => candidate.id === tabId);
+      expect(tab?.initialExecutionProfileId).toBeUndefined();
+    });
+    expect(adoptNativeAgentSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      executionProfileId: "plan",
+    });
+
+    first.unmount();
+    adoptNativeAgentSessionMock.mockClear();
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    await waitFor(() => expect(adoptNativeAgentSessionMock).toHaveBeenCalled());
+    expect(adoptNativeAgentSessionMock.mock.calls.at(-1)?.[0])
+      .not.toHaveProperty("executionProfileId");
   });
 
   test("consumes an explicit false fast-mode option", async () => {

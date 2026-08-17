@@ -64,6 +64,23 @@ import {
   nativeAgentAdapters,
 } from "./adapter";
 
+/**
+ * Execution profiles offered before a tab is locked to a provider.
+ *
+ * The real list is the provider's own primary-agent names, and every source for
+ * it is keyed by a provider session id that does not exist until the tab locks:
+ * the backend reads them from interactive session metadata, so there is no
+ * session-free command to ask. The launcher therefore offers the pair OpenCode —
+ * the only platform that reaches this control today — ships by default, and the
+ * locked composer replaces them with the advertised list on first projection.
+ * An id the provider turns out not to have is dropped by `projectionComposer`
+ * rather than dispatched as an unknown agent name.
+ */
+const LAUNCH_EXECUTION_PROFILES = [
+  { id: "build", label: "Build agent" },
+  { id: "plan", label: "Plan agent" },
+] as const;
+
 function activeAgentSummary(snapshots: NativeAgentActivitySnapshot[]): string {
   const active = snapshots.filter((snapshot) => snapshot.status === "active");
   if (active.length === 0) return "";
@@ -318,8 +335,17 @@ export function UnassignedNativeAgentComposer({
     ?? platformModels[0];
   const canConfigureReasoning = selectedAdapter?.capabilities.composer.reasoning === true;
   const canConfigureMode = selectedAdapter?.capabilities.composer.mode === true;
-  const canConfigureExecutionProfile = platform === "opencode"
+  // Capability, not platform: a tab that has no conversation mode but does have
+  // execution profiles needs *some* way to pick one, because the opening prompt
+  // is dispatched before the user can reach the locked composer.
+  const canConfigureExecutionProfile = !canConfigureMode
     && selectedAdapter?.capabilities.composer.executionProfile === true;
+  // A draft restored from a platform whose profiles differ, or persisted before
+  // this list changed, can name a profile the launcher cannot show. Fall back to
+  // the default rather than rendering a radio group with nothing selected.
+  const selectedLaunchExecutionProfile = LAUNCH_EXECUTION_PROFILES.find(
+    (profile) => profile.id === draft.executionProfileId,
+  ) ?? LAUNCH_EXECUTION_PROFILES[0];
   // The catalogue's `supportsSpeed` describes the model; the table describes the
   // platform. Both have to allow it, so a catalogue entry cannot reintroduce a
   // toggle the platform has no way to apply.
@@ -443,8 +469,11 @@ export function UnassignedNativeAgentComposer({
       // A platform with no conversation mode must not pin one on the locked
       // tab. OpenCode would receive it as the SDK `agent` name.
       ...(canConfigureMode ? { mode: draft.mode } : {}),
+      // Read from the resolved selection, not the raw draft: the trigger renders
+      // the same value, and dispatching an id the launcher never displayed is
+      // exactly the display/dispatch split this control exists to close.
       ...(canConfigureExecutionProfile ? {
-        executionProfileId: draft.executionProfileId ?? "build",
+        executionProfileId: selectedLaunchExecutionProfile.id,
       } : {}),
     });
   };
@@ -619,19 +648,22 @@ export function UnassignedNativeAgentComposer({
                       aria-label="Execution profile"
                       className="h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground"
                     >
-                      {(draft.executionProfileId ?? "build") === "plan" ? "Plan agent" : "Build agent"}
+                      {selectedLaunchExecutionProfile.label}
                       <ChevronDown className="size-3" />
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="start">
                     <DropdownMenuRadioGroup
-                      value={draft.executionProfileId ?? "build"}
+                      value={selectedLaunchExecutionProfile.id}
                       onValueChange={(executionProfileId) => updateDraft(sessionKey, {
-                        executionProfileId: executionProfileId as "build" | "plan",
+                        executionProfileId,
                       })}
                     >
-                      <DropdownMenuRadioItem value="build">Build agent</DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="plan">Plan agent</DropdownMenuRadioItem>
+                      {LAUNCH_EXECUTION_PROFILES.map((profile) => (
+                        <DropdownMenuRadioItem key={profile.id} value={profile.id}>
+                          {profile.label}
+                        </DropdownMenuRadioItem>
+                      ))}
                     </DropdownMenuRadioGroup>
                   </DropdownMenuContent>
                 </DropdownMenu>

@@ -390,7 +390,17 @@ cheap to fix relative to vendor protocol work.
 2. **Done.** OpenCode is `composer.mode: false`; execution-profile pickers are
    its only agent selectors. The pre-session picker carries Build/Plan into
    durable session controls, while the connected-session picker lists every
-   primary agent the SDK reports.
+   primary agent the SDK reports. Two consequences of flipping the flag are
+   handled in `projectionComposer` rather than left to the user:
+   - A session created before the flip still holds `controls.mode`, and that
+     value was already being dispatched as the SDK `agent` name. It is projected
+     as the execution profile, so an upgraded session keeps running the agent
+     the user picked instead of silently dropping to the provider default.
+   - The pre-session picker cannot know the real agent names, so a pinned id is
+     reconciled against the profiles the provider reports and dropped when that
+     list is non-empty and omits it. An *empty* list means the agent listing
+     failed or has not arrived, so the stored id survives there — discarding it
+     on a transient read would swap the user's agent for the default.
 3. Set `composer.provider: false` except OpenCode, or document it as
    launch-dialog only.
 4. **Decided: keep the flag as “may offer”.** Cursor and Grok both really do own

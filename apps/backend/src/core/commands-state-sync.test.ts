@@ -2673,6 +2673,32 @@ describe("native agent and looped-review controller commands", () => {
         executionProfileId: "plan",
       });
 
+      // A blank profile would be persisted into the session controls and later
+      // dispatched as the provider's agent name, so it is refused at the edge
+      // rather than normalised to the provider default further in.
+      for (const executionProfileId of ["", "   ", 7, null]) {
+        await expect(invoke("ensure_native_agent_session", {
+          environmentId: "e1",
+          agent: "opencode",
+          logicalSessionKey: "env-e1:tab-blank-profile",
+          origin: "interactive-native",
+          executionProfileId,
+        })).rejects.toThrow(/executionProfileId/);
+        await expect(invoke("adopt_native_agent_session", {
+          environmentId: "e1",
+          agent: "opencode",
+          logicalSessionKey: "env-e1:tab-blank-profile",
+          origin: "interactive-native",
+          providerSessionId: "provider-new",
+          executionProfileId,
+        })).rejects.toThrow(/executionProfileId/);
+      }
+      // Omitting it stays legal — the `ensure` above passes no profile and is
+      // forwarded with `executionProfileId: undefined` — so validation rejects
+      // only a value that is present and unusable.
+      expect(ensureSession.mock.calls[0]?.[0])
+        .toMatchObject({ executionProfileId: undefined });
+
       const schema = { type: "object" };
       const images = [{ filename: "reference.png", data: "cG5n" }];
       await expect(invoke("dispatch_native_agent_prompt", {

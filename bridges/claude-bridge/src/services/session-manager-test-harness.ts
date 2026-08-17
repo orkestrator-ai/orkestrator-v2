@@ -88,21 +88,10 @@ export const sessionManagerTestHome = mkdtempSync(
 setClaudeHomeForTesting(sessionManagerTestHome);
 
 
-import type {
-  BackgroundTaskSnapshot,
-  MessagePatchEventData,
-  NormalizedPart,
-  SessionUsageSnapshot,
-  SSEEvent,
-} from "../types/index.js";
-
-
-import {
-  MAX_DIFF_SIDE_BYTES,
-  MAX_TOOL_TEXT_BYTES,
-  TRUNCATED_NOTICE,
-} from "./part-budget.js";
-
+// The types from `../types/index.js` and the budget constants from
+// `./part-budget.js` are already imported at the top of this file. A second
+// copy of both blocks was left here by the 2026-08-16 split and fails
+// `bun run typecheck` with TS2300 on all eight identifiers.
 
 
 export const {

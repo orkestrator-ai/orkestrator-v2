@@ -13,6 +13,7 @@ import {
   Eye,
   Sparkles,
   Boxes,
+  SlidersHorizontal,
 } from "lucide-react";
 import { ClaudeIcon, CodexIcon, CursorAgentIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { GlobalSettings } from "./GlobalSettings";
@@ -21,6 +22,7 @@ import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSet
 
 const MENU_ITEMS: SettingsMenuItem[] = [
   { id: "general", label: "General", icon: <Settings2 className="h-4 w-4" /> },
+  { id: "defaults", label: "Defaults", icon: <SlidersHorizontal className="h-4 w-4" /> },
   { id: "platforms", label: "Platforms", icon: <Boxes className="h-4 w-4" /> },
   { id: "review", label: "Review", icon: <Eye className="h-4 w-4" /> },
   { id: "claude", label: "Claude", icon: <ClaudeIcon className="h-4 w-4" /> },

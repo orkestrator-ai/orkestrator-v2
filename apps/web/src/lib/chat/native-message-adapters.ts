@@ -12,6 +12,10 @@ import type {
   NativeTaskGroupPart,
   NativeToolGroupPart,
 } from "./native-message-types";
+import {
+  isBackgroundCapableShellTool,
+  recoverBackgroundTaskLaunchId,
+} from "@orkestrator/protocol/native-agent";
 import { parseLocalFilePathFromUrl } from "./file-url";
 import type { AcpMessage } from "@/lib/acp-client";
 
@@ -92,8 +96,16 @@ export function parseNativeAttachmentsFromContent(
   return { cleanContent, attachments };
 }
 
-function isTaskTool(toolName?: string): boolean {
-  const normalized = toolName?.toLowerCase();
+/**
+ * True for a tool whose call launches a subagent.
+ *
+ * Exported because the renderer routes a promoted launch on the same answer:
+ * a subagent card renders the group's captured child tools, a background-task
+ * card has none to render. Two copies of this list would let those decisions
+ * disagree and silently drop a child's captured activity.
+ */
+export function isTaskTool(toolName?: string): boolean {
+  const normalized = toolName?.trim().toLowerCase();
   return normalized === "task"
     || normalized === "agent"
     || normalized === "spawn_subagent";
@@ -127,9 +139,29 @@ export function normalizeClaudePart(part: ClaudeMessagePart): NativeMessagePart 
   }
 }
 
+/**
+ * A tool row that launched a provider-owned background task.
+ *
+ * Only a resolved task qualifies. An unresolved launch — its snapshot aged out
+ * of the provider's bounded history, or the id was never recoverable — has no
+ * lifecycle and no stop target, so it stays an ordinary tool row rather than a
+ * card promising controls it cannot offer.
+ */
+function isBackgroundTaskLaunchPart(
+  part: Extract<NativeMessagePart, { type: "tool-invocation" }>,
+): boolean {
+  if (part.backgroundTask === undefined) return false;
+  // A row that merely acts on a task by id — TaskOutput, TaskStop — is
+  // decorated with the same lifecycle but launched nothing, so it stays an
+  // ordinary tool row rather than becoming a second card for one task.
+  if (isBackgroundTaskActionTool(part.toolName)) return false;
+  return part.toolArgs?.run_in_background === true
+    || isBackgroundCapableShellTool(part.toolName);
+}
+
 function groupTaskParts(
   parts: NativeMessagePart[],
-  shouldGroup: (part: Extract<NativeMessagePart, { type: "tool-invocation" }>) => boolean,
+  shouldPromote: (part: Extract<NativeMessagePart, { type: "tool-invocation" }>) => boolean,
   options: { implicitSequentialParenting: boolean },
 ): NativeMessagePart[] {
   const result: NativeMessagePart[] = [];
@@ -140,7 +172,7 @@ function groupTaskParts(
     const explicitParent = part.parentTaskUseId
       ? taskGroups.get(part.parentTaskUseId)
       : undefined;
-    if (explicitParent && !(part.type === "tool-invocation" && isTaskTool(part.toolName))) {
+    if (explicitParent && !(part.type === "tool-invocation" && shouldPromote(part))) {
       explicitParent.childTools.push(part);
       currentTask = explicitParent;
       continue;
@@ -165,7 +197,7 @@ function groupTaskParts(
       continue;
     }
 
-    if (isTaskTool(part.toolName) && shouldGroup(part)) {
+    if (shouldPromote(part)) {
       const taskGroup: NativeTaskGroupPart = {
         type: "task-group",
         content: part.content,
@@ -176,7 +208,10 @@ function groupTaskParts(
       if (part.toolUseId) {
         taskGroups.set(part.toolUseId, taskGroup);
       }
-      currentTask = taskGroup;
+      // A background shell task reports no nested activity, so it must not
+      // adopt whatever the agent happens to run next. Only a real subagent
+      // launch opens a positional parent.
+      currentTask = isTaskTool(part.toolName) ? taskGroup : null;
       continue;
     }
 
@@ -199,11 +234,16 @@ function groupTaskParts(
  * supplied an explicit child lifecycle. A plain task-named tool may be an
  * ordinary foreground operation, so its name alone is not enough outside the
  * Claude adapter.
+ *
+ * Resolved background-task launches are promoted too. They render as the same
+ * agent card rather than a provider-specific list beside the transcript, so
+ * one long-running child reads the same way whichever provider owns it.
  */
 function groupNativeSubagentTaskParts(parts: NativeMessagePart[]): NativeMessagePart[] {
   return groupTaskParts(
     parts,
-    (part) => part.agentState !== undefined,
+    (part) => (isTaskTool(part.toolName) && part.agentState !== undefined)
+      || isBackgroundTaskLaunchPart(part),
     { implicitSequentialParenting: false },
   );
 }
@@ -567,7 +607,11 @@ function normalizeClaudeMessageUncached(message: ClaudeMessage): NativeMessage {
         .filter((part): part is NativeMessagePart => part !== null);
 
   const taskGroupedParts = message.role === "assistant"
-    ? groupTaskParts(rawParts, () => true, { implicitSequentialParenting: true })
+    ? groupTaskParts(
+        rawParts,
+        (part) => isTaskTool(part.toolName) || isBackgroundTaskLaunchPart(part),
+        { implicitSequentialParenting: true },
+      )
     : rawParts;
 
   return {
@@ -644,37 +688,40 @@ export function isBackgroundTaskActionTool(toolName?: string): boolean {
   return normalized !== undefined && BACKGROUND_TASK_ACTION_TOOL_NAMES.has(normalized);
 }
 
-function isBackgroundTaskLaunch(part: ClaudeMessagePart): boolean {
-  return (
-    part.type === "tool-invocation"
-    && part.toolArgs?.run_in_background === true
-  );
+/**
+ * The id of the background task this row launched, if it launched one.
+ *
+ * `backgroundTaskId` is the projection's recovery, performed before the result
+ * moved behind a detail reference — which is every projected row, so it is the
+ * path that actually fires in the app. The output scan still matters for
+ * optimistic and bridge-direct messages that carry their result inline.
+ */
+function backgroundTaskIdFromLaunchOutput(
+  part: Pick<
+    ClaudeMessagePart,
+    "backgroundTaskId" | "toolArgs" | "toolName" | "toolOutput"
+  >,
+): string | undefined {
+  if (part.backgroundTaskId) return part.backgroundTaskId;
+  return recoverBackgroundTaskLaunchId(part);
 }
 
-/*
- * Claude emits three different notes when a command ends up in the background,
- * and all three carry the same durable id:
- *   "Command running in background with ID: <id>. …"
- *   "Command was manually backgrounded by user with ID: <id>"
- *   "…timeout and was moved to the background (ID: <id>). …"
- * Matching only the first would leave Ctrl+B and timeout-backgrounded commands
- * unnamed and unlabelled after a transcript rehydration.
+/**
+ * True for a tool row that owns a background task.
+ *
+ * An explicit `run_in_background` argument is the common case. A shell row
+ * whose result named a task id is the other one: Claude backgrounds a running
+ * command on Ctrl+B and on a foreground timeout, and neither can change the
+ * arguments the command was launched with, so the argument alone would leave
+ * both unlabelled and uncontrollable.
  */
-const LAUNCH_TASK_ID_PATTERN =
-  /\bbackground(?:ed by user)?\s*(?:with ID:|\(ID:)\s*([^\s.)]+)/i;
-
-function backgroundTaskIdFromLaunchOutput(output?: string): string | undefined {
-  if (!output) return undefined;
-
-  const textMatch = output.match(LAUNCH_TASK_ID_PATTERN);
-  if (textMatch?.[1]) return textMatch[1];
-
-  try {
-    const parsed = JSON.parse(output) as Record<string, unknown>;
-    return stringArgument(parsed, "backgroundTaskId", "task_id", "taskId");
-  } catch {
-    return undefined;
-  }
+function isBackgroundTaskLaunch(
+  part: ClaudeMessagePart,
+  recoveredId: string | undefined,
+): boolean {
+  if (part.type !== "tool-invocation") return false;
+  return part.toolArgs?.run_in_background === true
+    || (recoveredId !== undefined && isBackgroundCapableShellTool(part.toolName));
 }
 
 function sameBackgroundTask(
@@ -690,16 +737,17 @@ function sameBackgroundTask(
 
 /**
  * Join Claude's authoritative background-task lifecycle onto the Task/Agent
- * or background command that launched it, plus later task action rows.
+ * or background command that launched it, plus later task action rows, and
+ * state the lifecycle of every subagent the transcript launched.
  *
  * A background tool_result means "launched successfully", not "the task
  * finished". SDK events use `tool_use_id` as the stable launch correlation;
  * persisted Bash results provide a durable task-id fallback after restart.
  */
-export function applyClaudeBackgroundTaskStates(
-  messages: ClaudeMessage[],
+export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
+  messages: TMessage[],
   backgroundTasks: Record<string, ClaudeBackgroundTask>,
-): ClaudeMessage[] {
+): TMessage[] {
   const tasksById = new Map<string, ClaudeBackgroundTask>();
   const tasksByToolUseId = new Map<string, ClaudeBackgroundTask>();
   for (const task of Object.values(backgroundTasks)) {
@@ -716,15 +764,18 @@ export function applyClaudeBackgroundTaskStates(
     string,
     { id: string; description?: string; status?: ClaudeBackgroundTask["status"] }
   >();
+  let hasSubagentLaunch = false;
   for (const message of messages) {
     for (const part of message.parts) {
       if (part.type !== "tool-invocation") continue;
-      const authoritative = part.toolUseId
+      if (isTaskTool(part.toolName) && part.agentState === undefined) {
+        hasSubagentLaunch = true;
+      }
+      const recoveredId = backgroundTaskIdFromLaunchOutput(part);
+      const authoritative = (part.toolUseId
         ? tasksByToolUseId.get(part.toolUseId)
-        : undefined;
-      const recoveredId = isBackgroundTaskLaunch(part)
-        ? backgroundTaskIdFromLaunchOutput(part.toolOutput)
-        : undefined;
+        : undefined)
+        ?? (recoveredId ? tasksById.get(recoveredId) : undefined);
       const taskId = authoritative?.id ?? recoveredId;
       if (!taskId) continue;
       launchesByTaskId.set(taskId, {
@@ -738,12 +789,15 @@ export function applyClaudeBackgroundTaskStates(
   }
 
   /*
-   * Nothing to join: no authoritative snapshot and no launch recoverable from
-   * the transcript. Bail before the rewrite so the common case (a session with
-   * no background work at all) stays allocation-free — this memo recomputes on
-   * every streamed message update.
+   * Nothing to join and no child to describe: no authoritative snapshot, no
+   * launch recoverable from the transcript, and no subagent awaiting a
+   * lifecycle. Bail before the rewrite so the common case (a session that
+   * delegates nothing) stays allocation-free — this memo recomputes on every
+   * streamed message update.
    */
-  if (tasksById.size === 0 && launchesByTaskId.size === 0) return messages;
+  if (tasksById.size === 0 && launchesByTaskId.size === 0 && !hasSubagentLaunch) {
+    return messages;
+  }
 
   let messagesChanged = false;
   const nextMessages = messages.map((message) => {
@@ -752,18 +806,39 @@ export function applyClaudeBackgroundTaskStates(
       if (part.type !== "tool-invocation") return part;
 
       const isAgentTool = isTaskTool(part.toolName);
-      const authoritativeLaunch = part.toolUseId
+      const recoveredId = backgroundTaskIdFromLaunchOutput(part);
+      const authoritativeLaunch = (part.toolUseId
         ? tasksByToolUseId.get(part.toolUseId)
-        : undefined;
+        : undefined)
+        ?? (recoveredId ? tasksById.get(recoveredId) : undefined);
 
       let agentState = part.agentState;
+      let backgroundTask = part.backgroundTask;
       if (isAgentTool && authoritativeLaunch) {
         agentState = backgroundTaskAgentState(authoritativeLaunch.status);
+        backgroundTask = {
+          id: authoritativeLaunch.id,
+          description:
+            authoritativeLaunch.description
+            ?? stringArgument(part.toolArgs, "description"),
+          status: authoritativeLaunch.status,
+        };
+      } else if (isAgentTool && agentState === undefined) {
+        /*
+         * A foreground subagent has no background-task record, so its own tool
+         * result is the whole lifecycle. Stating it explicitly is what promotes
+         * the row to the shared agent card: the grouper deliberately refuses to
+         * infer a child from a task-shaped tool name alone, since other
+         * providers use those names for ordinary foreground work.
+         */
+        agentState = part.toolState === "failure"
+          ? "failed"
+          : part.toolState === "success"
+            ? "finished"
+            : "active";
       }
 
-      let backgroundTask = part.backgroundTask;
-      if (!isAgentTool && isBackgroundTaskLaunch(part)) {
-        const recoveredId = backgroundTaskIdFromLaunchOutput(part.toolOutput);
+      if (!isAgentTool && isBackgroundTaskLaunch(part, recoveredId)) {
         const launch =
           authoritativeLaunch
           ?? (recoveredId ? tasksById.get(recoveredId) : undefined)
@@ -776,6 +851,15 @@ export function applyClaudeBackgroundTaskStates(
               ?? stringArgument(part.toolArgs, "description"),
             status: launch.status,
           };
+          /*
+           * The launch row's own result says the command was *accepted*, so it
+           * reads "success" for the task's entire life. State the child's
+           * lifecycle separately, as an agent launch does — this is what keeps
+           * a running task pinned instead of scrolling away as finished work.
+           */
+          if (launch.status) {
+            agentState = backgroundTaskAgentState(launch.status);
+          }
         }
       } else if (isBackgroundTaskActionTool(part.toolName)) {
         const taskId = stringArgument(part.toolArgs, "task_id", "taskId");
@@ -814,10 +898,42 @@ export function applyClaudeBackgroundTaskStates(
 
     if (!partsChanged) return message;
     messagesChanged = true;
-    return { ...message, parts };
+    return { ...message, parts } as TMessage;
   });
 
   return messagesChanged ? nextMessages : messages;
+}
+
+function collectBackgroundTaskIds(
+  parts: readonly NativeMessagePart[],
+  ids: Set<string>,
+): void {
+  for (const part of parts) {
+    if (part.type === "task-group") {
+      const id = part.task.backgroundTask?.id;
+      if (id) ids.add(id);
+      continue;
+    }
+    if (part.type === "agent-group" || part.type === "tool-group") {
+      collectBackgroundTaskIds(part.parts, ids);
+    }
+  }
+}
+
+/**
+ * Every background task the rendered transcript already shows a card for.
+ *
+ * A live task whose launch row fell outside the transcript window has no card
+ * and therefore no stop control, so the tab must surface it from the
+ * authoritative snapshot instead. Only promoted launches count: an action row
+ * that merely names a task offers nothing to act on.
+ */
+export function collectRenderedBackgroundTaskIds(
+  messages: readonly NativeMessage[],
+): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) collectBackgroundTaskIds(message.parts, ids);
+  return ids;
 }
 
 interface TranscriptBlockSegment {

@@ -1,4 +1,5 @@
 import * as shared from "./native-agent-service-shared.js";
+import { recoverBackgroundTaskLaunchId } from "@orkestrator/protocol/native-agent";
 import {
   NATIVE_DISCOVERY_RETRY_MS,
   NATIVE_MODEL_CATALOG_CACHE_LIMIT,
@@ -120,6 +121,23 @@ export type NativeAgentServiceLayerTypes = [
 
 import { NativeAgentServiceDispatch } from "./native-agent-service-dispatch.ts";
 
+/**
+ * Preserve only the opaque launch id before the full result moves behind a
+ * detail reference.
+ *
+ * This is the renderer's only chance to see the text: `projectionPart` strips
+ * `toolOutput` from every part it sends. The recovery rule itself lives in
+ * `@orkestrator/protocol` so both sides of the boundary agree on which rows
+ * own a task — a command backgrounded with Ctrl+B or by a foreground timeout
+ * carries no `run_in_background` argument, and would otherwise be invisible.
+ */
+function backgroundTaskIdFromProjectedLaunch(
+  part: Record<string, unknown>,
+): string | undefined {
+  if (part.type !== "tool-invocation") return undefined;
+  return recoverBackgroundTaskLaunchId(part);
+}
+
 export abstract class NativeAgentServiceProjection extends NativeAgentServiceDispatch {
   protected cacheToolDetails(
     sessionKey: string,
@@ -177,6 +195,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
     const part = raw as Record<string, unknown>;
     const projected: Record<string, unknown> = { ...part };
+    const backgroundTaskId = backgroundTaskIdFromProjectedLaunch(part);
+    if (backgroundTaskId) projected.backgroundTaskId = backgroundTaskId;
 
     // A staged path is the durable image reference. Re-sending the same image
     // as an inline data URL on every snapshot only duplicates transport bytes.

@@ -7,7 +7,10 @@ import {
   type ReactNode,
 } from "react";
 import { ChevronDown, X } from "lucide-react";
-import { resolveReasoningId } from "@orkestrator/protocol/native-agent";
+import {
+  resolveReasoningId,
+  type NativeAgentBackgroundTaskSummary,
+} from "@orkestrator/protocol/native-agent";
 import {
   isProviderSlashCommand,
   resolveSessionActionCommand,
@@ -54,7 +57,11 @@ import {
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
 import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
-import { normalizeNativeMessages } from "@/lib/chat/native-message-adapters";
+import {
+  applyClaudeBackgroundTaskStates,
+  collectRenderedBackgroundTaskIds,
+  normalizeNativeMessages,
+} from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import {
   createOptimisticNativeMessage,
@@ -104,7 +111,7 @@ import {
 } from "./AgentNativeTab.helpers";
 import { NativeAgentInteractionCard } from "./NativeAgentInteractionCard";
 import { CodexPlanModeCard } from "@/components/codex/CodexPlanModeCard";
-import { ClaudeBackgroundTaskHoldCard } from "@/components/claude/ClaudeBackgroundTaskHoldCard";
+import { BackgroundTaskCard } from "@/components/chat/NativeMessage.agent-parts";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
 import {
   findLatestBackendTurnElapsedSeconds,
@@ -112,6 +119,32 @@ import {
 } from "@/lib/session-timer";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { isSetupBlocked } from "@/lib/setup-commands";
+
+/** Stable identity so the transcript decoration memo cannot churn. */
+const EMPTY_BACKGROUND_TASKS: Record<string, never> = {};
+
+/**
+ * The same background-task card the transcript renders, for a live task the
+ * transcript itself cannot show. It owns its disclosure locally because it has
+ * no message part to key persisted expansion against.
+ */
+function PinnedBackgroundTaskCard({
+  task,
+  onStop,
+}: {
+  task: NativeAgentBackgroundTaskSummary;
+  onStop: (taskId: string) => Promise<boolean>;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <BackgroundTaskCard
+      task={task}
+      open={open}
+      onOpenChange={setOpen}
+      onStop={onStop}
+    />
+  );
+}
 
 export function SharedNativeAgentController({
   tabId,
@@ -284,9 +317,27 @@ export function SharedNativeAgentController({
       stickToBottomOnActivation: true,
     });
 
+  /*
+   * Claude reports subagents and background tasks as ordinary tool rows plus a
+   * separate authoritative task snapshot. Joining them here is what lets both
+   * render as the shared agent card, rather than as a provider-specific list
+   * beside the transcript. Every other provider already states the lifecycle on
+   * the part itself, so this pass is a no-op for them.
+   */
+  const claudeBackgroundTasksById = useMemo(() => {
+    const tasks = platform === "claude" ? projection?.backgroundTasks ?? [] : [];
+    if (tasks.length === 0) return EMPTY_BACKGROUND_TASKS;
+    return Object.fromEntries(tasks.map((task) => [task.id, task]));
+  }, [platform, projection?.backgroundTasks]);
+  const decoratedMessages = useMemo(() => {
+    const source = projection?.messages ?? [];
+    return platform === "claude"
+      ? applyClaudeBackgroundTaskStates(source, claudeBackgroundTasksById)
+      : source;
+  }, [claudeBackgroundTasksById, platform, projection?.messages]);
   const normalizedMessages = useMemo(
-    () => normalizeNativeMessages(projection?.messages ?? []),
-    [projection?.messages],
+    () => normalizeNativeMessages(decoratedMessages),
+    [decoratedMessages],
   );
   const handoff = useAgentHandoff(
     agentHandoffId,
@@ -499,6 +550,28 @@ export function SharedNativeAgentController({
     ),
     [projection?.backgroundTasks],
   );
+  const stopBackgroundTaskFromCard = useCallback(async (taskId: string) => {
+    try {
+      await stopBackgroundTask(taskId);
+      return true;
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to stop background task",
+      );
+      return false;
+    }
+  }, [stopBackgroundTask]);
+  /*
+   * A live task the transcript cannot show: its launch fell outside the loaded
+   * window, or the tab resumed a session whose earlier turns were trimmed.
+   * The snapshot still says it is running and still accepts a stop, so the
+   * control has to exist somewhere — pinned, as the same card.
+   */
+  const unrenderedLiveBackgroundTasks = useMemo(() => {
+    if (liveBackgroundTasks.length === 0) return [];
+    const rendered = collectRenderedBackgroundTaskIds(messages);
+    return liveBackgroundTasks.filter((task) => !rendered.has(task.id));
+  }, [liveBackgroundTasks, messages]);
   const discardProvisionalDraft = useCallback(() => {
     void discardComposeDraft(
       composeDraftKey("agent-native", data.environmentId, sessionKey),
@@ -1108,23 +1181,13 @@ export function SharedNativeAgentController({
         )}
       />
     ) : null,
-    platform === "claude" && liveBackgroundTasks.length > 0 ? (
-      <ClaudeBackgroundTaskHoldCard
-        key="background-tasks"
-        tasks={liveBackgroundTasks}
-        responseInProgress={isTurnActive}
-        responseFailed={phase === "error"}
-        onStopTask={async (taskId) => {
-          try {
-            await stopBackgroundTask(taskId);
-            return true;
-          } catch (error) {
-            toast.error(error instanceof Error ? error.message : "Failed to stop background task");
-            return false;
-          }
-        }}
+    ...unrenderedLiveBackgroundTasks.map((task) => (
+      <PinnedBackgroundTaskCard
+        key={`background-task:${task.id}`}
+        task={task}
+        onStop={stopBackgroundTaskFromCard}
       />
-    ) : null,
+    )),
     ...(projection?.notices ?? []).map((notice, index) => (
       <div
         key={`notice:${notice.kind}:${index}`}
@@ -1217,6 +1280,11 @@ export function SharedNativeAgentController({
       agentActivityAnnouncement={agentActivityAnnouncement}
       resolveModelLabel={resolveModelLabel}
       loadToolDetails={loadToolDetails}
+      stopBackgroundTask={
+        adapter.capabilities.backgroundTasks
+          ? stopBackgroundTaskFromCard
+          : undefined
+      }
       isLoading={isTurnActive}
       statusLabel={phaseStatusLabel}
       elapsedSeconds={elapsedSeconds}

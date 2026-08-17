@@ -158,6 +158,7 @@ export function DraggableTabBar({
     (type: PaneLeaf["tabs"][number]["type"]) =>
       type === "agent-native" ||
       type === "claude-tmux" ||
+      type === "multi-review" ||
       type === "browser",
     [],
   );
